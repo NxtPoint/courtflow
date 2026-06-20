@@ -116,16 +116,58 @@ def _settlement_allowed(mode, policy, role):
     return False
 
 
-def _create_order_guarded(session, **kwargs):
-    """Call Agent C's billing.orders.create_order_for_booking if present; else a no-op
-    stub so this lane self-verifies. Returns the order result dict (or a stub)."""
+# booking_type -> billing.product.kind (docs/02 §5). The diary speaks booking types;
+# billing speaks product kinds. This adapter is the single translation point.
+_KIND_BY_BOOKING_TYPE = {"court": "court_booking", "lesson": "lesson", "class": "class"}
+
+
+def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking_type="court",
+                          settlement_mode="at_court", parties=None, resource_id=None,
+                          starts_at=None, ends_at=None, linked_booking_id=None,
+                          audience="member", enrolment_id=None):
+    """Adapter between the diary and Agent C's billing.orders.create_order_for_booking.
+
+    The diary speaks bookings; billing speaks order *lines*. We translate here: price each
+    party (or the booking) via diary.pricing.price_for, assemble C's `lines`, call C (which
+    returns an order_id str), and return the dict the diary callers expect
+    {order_id, status, checkout, amount_minor}.
+
+    Guarded: if billing isn't present (self-verify mode) the booking still succeeds with no
+    order; if pricing isn't seeded yet, lines carry amount 0 (admin sets price later)."""
     try:
-        from billing.orders import create_order_for_booking  # lazy: Agent C's lane
+        from billing.orders import create_order_for_booking, booking_status_for_mode
     except Exception:
         log.debug("billing.orders absent — booking proceeds without an order (self-verify mode)")
         return {"order_id": None, "status": "open", "checkout": None, "amount_minor": None}
+
+    from diary.pricing import price_for
+    kind = _KIND_BY_BOOKING_TYPE.get(booking_type, "court_booking")
+    ref = {"booking_id": booking_id, "enrolment_id": enrolment_id}
+    parties = parties or []
+
+    # One billing line per party (priced by that party's audience), else a single line for
+    # the booker's audience. The linked lesson court shares the order but isn't billed twice.
+    lines = []
+    if parties:
+        for p in parties:
+            aud = "guest" if (p.get("party_role") == "guest" or p.get("guest_name")) else "member"
+            pr = price_for(session, club_id=club_id, audience=aud, kind=kind) or {}
+            lines.append({"description": f"{booking_type} ({aud})", "price_id": pr.get("price_id"),
+                          "qty": 1, "amount_minor": pr.get("amount_minor") or 0, **ref})
+    else:
+        pr = price_for(session, club_id=club_id, audience=audience, kind=kind) or {}
+        lines.append({"description": booking_type, "price_id": pr.get("price_id"),
+                      "qty": 1, "amount_minor": pr.get("amount_minor") or 0, **ref})
+
     try:
-        return create_order_for_booking(session, **kwargs)
+        order_id = create_order_for_booking(
+            session, club_id=club_id, user_id=user_id, lines=lines,
+            settlement_mode=settlement_mode)
+        total = sum(int(l["amount_minor"]) * int(l.get("qty") or 1) for l in lines)
+        return {"order_id": str(order_id) if order_id else None,
+                "status": booking_status_for_mode(settlement_mode),
+                "checkout": None,  # gateway checkout intent comes later (Phase 7, online mode)
+                "amount_minor": total}
     except Exception:
         log.warning("create_order_for_booking failed — booking kept, order deferred", exc_info=False)
         return {"order_id": None, "status": "open", "checkout": None, "amount_minor": None}

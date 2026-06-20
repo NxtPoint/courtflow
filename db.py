@@ -90,8 +90,8 @@ BOOT_MODULES = [
     "club.schema",
     "iam.schema",
     "core.schema",
-    # "diary.schema",    # Agent B
-    # "billing.schema",  # Agent C
+    "billing.schema",  # Agent C — products/prices/orders/payments/ledger
+    "diary.schema",    # Agent B — resources/bookings (GiST exclusion)/classes; reads billing.price
 ]
 
 # Extensions every schema depends on. pgcrypto -> gen_random_uuid(); btree_gist ->

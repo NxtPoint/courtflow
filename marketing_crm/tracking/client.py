@@ -22,6 +22,18 @@ log = logging.getLogger("marketing_crm.tracking")
 _RESERVED = {"club_id", "email", "account_id", "user_id", "person_id", "ref_type", "ref_id"}
 
 
+def _core_id(v):
+    """core.* identity (account/app_user/person) is BIGINT. Producers (diary/billing) speak the
+    platform's iam.user UUID — a DIFFERENT identity space, bridged by email. Accept a value as a
+    core id only if it's int-like; a UUID is NOT a core id (it's handled via email + metadata)."""
+    if v is None:
+        return None
+    if isinstance(v, int):
+        return v
+    s = str(v)
+    return int(s) if s.isdigit() else None
+
+
 def emit(event, payload=None):
     """Record a booking-domain product event. Fire-and-forget — safe from any request handler,
     cron, or service path. Writes core.usage_event then forwards to Klaviyo (transactional always,
@@ -41,15 +53,20 @@ def emit(event, payload=None):
 
 
 def _emit(event, payload):
-    club_id = payload.get("club_id")
+    club_id = payload.get("club_id")               # UUID — usage_event.club_id is UUID (matches)
     email = (payload.get("email") or "").strip().lower() or None
-    account_id = payload.get("account_id")
-    user_id = payload.get("user_id")
-    person_id = payload.get("person_id")
+    # core ids are bigints; producers pass iam UUIDs. Only int-like values are real core ids.
+    account_id = _core_id(payload.get("account_id"))
+    user_id = _core_id(payload.get("user_id"))
+    person_id = _core_id(payload.get("person_id"))
     ref_type = payload.get("ref_type")
     ref_id = payload.get("ref_id")
     # Everything not reserved becomes non-PII event metadata.
     meta = {k: v for k, v in payload.items() if k not in _RESERVED}
+    # Preserve the platform (iam.user) UUID for later linkage — it's not a core bigint id.
+    iam_user_id = payload.get("user_id")
+    if iam_user_id is not None and user_id is None:
+        meta["iam_user_id"] = str(iam_user_id)
 
     # 1) Durable: core.usage_event (the SoR). Resolve account/user by email best-effort.
     try:

@@ -65,8 +65,12 @@ def create_app():
     _register_health(app)
     # Lanes attach their blueprints here as they land (each try/except-wrapped):
     #   B-Diary: diary.routes ;  C-Billing: billing.routes ;  D-CRM: marketing_crm.*
-    _try_register(app, "diary.routes", "diary_bp")
-    _try_register(app, "billing.routes", "billing_bp")
+    _try_register(app, "diary.routes", "diary_bp")          # B: /api/diary/*
+    _try_register(app, "diary.routes", "cron_bp")           # B: /api/cron/* (reminders, sweep)
+    _try_register(app, "billing.routes", "billing_bp")      # C: /api/billing/* + monthly-invoice cron
+    _try_register(app, "marketing_crm.tracking", "page_bp")            # D: POST /api/track/page
+    _try_register(app, "marketing_crm.consent.blueprint", "consent_bp")    # D: /api/consent/*
+    _try_register(app, "marketing_crm.backoffice.blueprint", "cockpit_bp")  # D: /api/admin/cockpit/*
 
     return app
 
