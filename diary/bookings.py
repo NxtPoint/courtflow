@@ -568,9 +568,12 @@ def list_bookings(session, *, club_id, role, user_id, date_from=None, date_to=No
     if role in ("member", "guest"):
         where.append("b.booked_by_user_id = :uid")
         params["uid"] = user_id
-    elif role == "coach" and as_coach:
-        where.append("b.coach_user_id = :uid")
+    elif role == "coach":
+        # as_coach -> the lessons/sessions this coach RUNS; otherwise the coach's OWN
+        # bookings (as a person). Never the whole club — only admins see everything.
+        where.append("b.coach_user_id = :uid" if as_coach else "b.booked_by_user_id = :uid")
         params["uid"] = user_id
+    # club_admin / platform_admin -> no user filter (all bookings in the club).
     if date_from:
         where.append("b.starts_at >= :df"); params["df"] = _parse_dt(date_from)
     if date_to:
