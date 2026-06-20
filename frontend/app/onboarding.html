@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>NextPoint · Set up your club</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/_shared/portal.css" onerror="this.remove()">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="cf-shell">
+  <header id="cf-topbar" class="cf-topbar"></header>
+  <main id="cf-main" class="cf-main">
+    <div class="cf-card">
+      <h2>Welcome — let's set up your club</h2>
+      <p class="cf-muted">A few quick steps and you'll be ready to take bookings. You can change anything later in Settings.</p>
+    </div>
+    <div id="cf-wizard"><div class="cf-loading">Loading…</div></div>
+  </main>
+</div>
+
+<script src="../js/auth_client.js"></script>
+<script src="../js/ui.js"></script>
+<script src="../js/api.js"></script>
+<script src="../js/admin_api.js"></script>
+<script src="../js/portal.js"></script>
+<script src="../js/onboarding.js"></script>
+<script>
+Portal.boot({
+  active: "onboarding.html",
+  requireRoles: ["club_admin", "platform_admin"],
+  onReady: function (p) { window.Onboarding.start(p); },
+});
+</script>
+</body>
+</html>

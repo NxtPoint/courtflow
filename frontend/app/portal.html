@@ -20,12 +20,22 @@
 <script src="../js/auth_client.js"></script>
 <script src="../js/ui.js"></script>
 <script src="../js/api.js"></script>
+<script src="../js/admin_api.js"></script>
 <script src="../js/portal.js"></script>
 <script>
 Portal.boot({
   active: "portal.html",
   onReady: async function (p) {
     var UI = window.UI, el = UI.el, main = document.getElementById("cf-main");
+
+    // First-run gate: a club admin who hasn't finished onboarding is sent to the wizard.
+    if (p.role === "club_admin" || p.role === "platform_admin") {
+      try {
+        var ob = await window.AdminAPI.onboarding();
+        if (ob && !ob.completed) { window.location.replace("onboarding.html"); return; }
+      } catch (e) { /* non-blocking: fall through to the dashboard */ }
+    }
+
     UI.clear(main);
 
     var roleLabel = ({ club_admin: "Club admin", platform_admin: "Platform admin",
@@ -43,6 +53,7 @@ Portal.boot({
       { href: "my.html", t: "My bookings & statement", roles: ["*"] },
       { href: "coach.html", t: "Coach console — my week & rosters", roles: ["coach", "club_admin", "platform_admin"] },
       { href: "admin.html", t: "Master diary & club admin", roles: ["club_admin", "platform_admin"] },
+      { href: "settings.html", t: "Settings — club profile, hours, courts, pricing, coaches", roles: ["club_admin", "platform_admin"] },
     ];
     var grid = el("div", { class: "cf-grid cf-grid-2" });
     links.forEach(function (l) {
