@@ -7,7 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Agent F serves frontend/_shared/portal.css; this page also ships a self-contained fallback. -->
 <link rel="stylesheet" href="/_shared/portal.css" onerror="this.remove()">
-<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="/app.css">
 </head>
 <body>
 <div class="cf-shell">
@@ -17,15 +17,15 @@
   </main>
 </div>
 
-<script src="../js/auth_client.js"></script>
-<script src="../js/ui.js"></script>
-<script src="../js/api.js"></script>
-<script src="../js/admin_api.js"></script>
-<script src="../js/coach_api.js"></script>
-<script src="../js/portal.js"></script>
+<script src="/js/auth_client.js"></script>
+<script src="/js/ui.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/admin_api.js"></script>
+<script src="/js/coach_api.js"></script>
+<script src="/js/portal.js"></script>
 <script>
 Portal.boot({
-  active: "portal.html",
+  active: "/portal.html",
   onReady: async function (p) {
     var UI = window.UI, el = UI.el, main = document.getElementById("cf-main");
 
@@ -35,12 +35,12 @@ Portal.boot({
     if (p.role === "club_admin" || p.role === "platform_admin") {
       try {
         var ob = await window.AdminAPI.onboarding();
-        if (ob && !ob.completed) { window.location.replace("onboarding.html"); return; }
+        if (ob && !ob.completed) { window.location.replace("/onboarding.html"); return; }
       } catch (e) { /* non-blocking: fall through to the dashboard */ }
     } else if (p.role === "coach") {
       try {
         var cob = await window.CoachAPI.onboarding();
-        if (cob && !cob.completed) { window.location.replace("coach-onboarding.html"); return; }
+        if (cob && !cob.completed) { window.location.replace("/coach-onboarding.html"); return; }
       } catch (e) { /* non-blocking: fall through to the dashboard */ }
     }
 
@@ -59,18 +59,18 @@ Portal.boot({
       el("div", { class: "cf-hero-in" }, [
         el("h1", { text: greet + "," }),
         el("p", { text: (p.email || "") + " · " + roleLabel }),
-        el("a", { class: "cf-btn cf-btn-accent", href: "book.html", text: "Book a court →" }),
+        el("a", { class: "cf-btn cf-btn-accent", href: "/book.html", text: "Book a court →" }),
       ]),
     ]);
     main.appendChild(hero);
 
     // Quick links, role-aware — rendered as cf-tiles.
     var links = [
-      { href: "book.html", t: "Book", s: "Court, lesson or class", roles: ["*"] },
-      { href: "my.html", t: "My bookings", s: "Upcoming & statement", roles: ["*"] },
-      { href: "coach.html", t: "Coach console", s: "My week & rosters", roles: ["coach", "club_admin", "platform_admin"] },
-      { href: "admin.html", t: "Master diary", s: "Club admin & desk", roles: ["club_admin", "platform_admin"] },
-      { href: "settings.html", t: "Settings", s: "Club, hours, courts, pricing", roles: ["club_admin", "platform_admin"] },
+      { href: "/book.html", t: "Book", s: "Court, lesson or class", roles: ["*"] },
+      { href: "/my.html", t: "My bookings", s: "Upcoming & statement", roles: ["*"] },
+      { href: "/coach.html", t: "Coach console", s: "My week & rosters", roles: ["coach", "club_admin", "platform_admin"] },
+      { href: "/admin.html", t: "Master diary", s: "Club admin & desk", roles: ["club_admin", "platform_admin"] },
+      { href: "/settings.html", t: "Settings", s: "Club, hours, courts, pricing", roles: ["club_admin", "platform_admin"] },
     ];
     var grid = el("div", { class: "cf-tiles" });
     links.forEach(function (l) {

@@ -313,7 +313,7 @@
       el("p", { text: msg }),
       el("p", { class: "cf-muted", style: "margin-top:6px", text: "We send confirmations via email (Klaviyo)." }),
       el("div", { class: "cf-row", style: "margin-top:14px" }, [
-        el("a", { class: "cf-btn cf-btn-primary", href: "my.html", text: "View my bookings" }),
+        el("a", { class: "cf-btn cf-btn-primary", href: "/my.html", text: "View my bookings" }),
         el("button", { class: "cf-btn", text: "Book another", onclick: function () {
           state.type = null; state.slot = null; state.selResource = null; state.selClass = null; state.guest = null; stepType();
         } }),

@@ -93,10 +93,10 @@
       card.appendChild(el("h2", { text: "✓ You're all set" }));
       card.appendChild(el("p", { text: "Your club is configured. You can change anything later in Settings." }));
       card.appendChild(el("div", { class: "cf-row", style: "margin-top:14px" }, [
-        el("a", { class: "cf-btn cf-btn-primary", href: "portal.html", text: "Go to dashboard" }),
-        el("a", { class: "cf-btn", href: "settings.html", text: "Open Settings" }),
+        el("a", { class: "cf-btn cf-btn-primary", href: "/portal.html", text: "Go to dashboard" }),
+        el("a", { class: "cf-btn", href: "/settings.html", text: "Open Settings" }),
       ]));
-      setTimeout(function () { window.location.replace("portal.html"); }, 1500);
+      setTimeout(function () { window.location.replace("/portal.html"); }, 1500);
     } catch (e) {
       UI.clear(card);
       card.appendChild(el("h2", { text: "Almost there" }));
@@ -120,7 +120,7 @@
         UI.toast(UI.errMsg(e), "error");
       }
       // If already completed, drop straight into the dashboard.
-      if (state.data && state.data.completed) { window.location.replace("portal.html"); return; }
+      if (state.data && state.data.completed) { window.location.replace("/portal.html"); return; }
       state.step = 0;
       render();
     },

@@ -85,10 +85,10 @@
       card.appendChild(el("h2", { text: "✓ You're all set" }));
       card.appendChild(el("p", { text: "Your coaching profile is live. You can change anything later from the Coach console." }));
       card.appendChild(el("div", { class: "cf-row", style: "margin-top:14px" }, [
-        el("a", { class: "cf-btn cf-btn-primary", href: "coach.html", text: "Go to Coach console" }),
-        el("a", { class: "cf-btn", href: "portal.html", text: "Dashboard" }),
+        el("a", { class: "cf-btn cf-btn-primary", href: "/coach.html", text: "Go to Coach console" }),
+        el("a", { class: "cf-btn", href: "/portal.html", text: "Dashboard" }),
       ]));
-      setTimeout(function () { window.location.replace("coach.html"); }, 1500);
+      setTimeout(function () { window.location.replace("/coach.html"); }, 1500);
     } catch (e) {
       UI.clear(card);
       card.appendChild(el("h2", { text: "Almost there" }));
@@ -112,7 +112,7 @@
         UI.toast(UI.errMsg(e), "error");
       }
       // If already completed, drop straight into the coach console.
-      if (state.data && state.data.completed) { window.location.replace("coach.html"); return; }
+      if (state.data && state.data.completed) { window.location.replace("/coach.html"); return; }
       state.step = 0;
       render();
     },

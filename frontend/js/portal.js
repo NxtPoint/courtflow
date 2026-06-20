@@ -23,12 +23,14 @@
     return principalP;
   }
 
+  // Absolute hrefs so nav works at any URL depth (e.g. /book/court, a sub-path, would
+  // break relative links). Pages still pass `active` as a bare filename ("/book.html").
   var NAV = [
-    { href: "portal.html",  label: "Dashboard", roles: ["*"] },
-    { href: "book.html",    label: "Book",      roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
-    { href: "my.html",      label: "My Bookings", roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
-    { href: "coach.html",   label: "Coach",     roles: ["coach", "club_admin", "platform_admin"] },
-    { href: "admin.html",   label: "Admin",     roles: ["club_admin", "platform_admin"] },
+    { href: "/portal.html", label: "Dashboard", roles: ["*"] },
+    { href: "/book.html",   label: "Book",      roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
+    { href: "/my.html",     label: "My Bookings", roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
+    { href: "/coach.html",  label: "Coach",     roles: ["coach", "club_admin", "platform_admin"] },
+    { href: "/admin.html",  label: "Admin",     roles: ["club_admin", "platform_admin"] },
   ];
 
   function allowed(item, role) {
@@ -51,7 +53,8 @@
     NAV.forEach(function (item) {
       if (!p || !allowed(item, p.role)) return;
       var a = el("a", { href: item.href, text: item.label });
-      if (item.href === active) a.classList.add("active");
+      // Normalise both sides (strip leading "/") so "/book.html" matches active "book.html".
+      if (item.href.replace(/^\//, "") === String(active || "").replace(/^\//, "")) a.classList.add("active");
       nav.appendChild(a);
     });
 

@@ -6,7 +6,7 @@
 <title>NextPoint · Admin</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/_shared/portal.css" onerror="this.remove()">
-<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="/app.css">
 </head>
 <body>
 <div class="cf-shell">
@@ -16,14 +16,14 @@
   </main>
 </div>
 
-<script src="../js/auth_client.js"></script>
-<script src="../js/ui.js"></script>
-<script src="../js/api.js"></script>
-<script src="../js/portal.js"></script>
-<script src="../js/admin.js"></script>
+<script src="/js/auth_client.js"></script>
+<script src="/js/ui.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/portal.js"></script>
+<script src="/js/admin.js"></script>
 <script>
 Portal.boot({
-  active: "admin.html",
+  active: "/admin.html",
   requireRoles: ["club_admin", "platform_admin"],
   onReady: function (p) { window.AdminConsole.start(p); },
 });
