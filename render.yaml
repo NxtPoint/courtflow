@@ -18,7 +18,6 @@ services:
   - type: web
     name: courtflow-api
     env: python
-    pythonVersion: 3.12.3
     plan: starter
     buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
     # 120s timeout (no long ML jobs here, unlike 1050's 1800s).
@@ -90,7 +89,6 @@ services:
   - type: web
     name: courtflow-web
     env: python
-    pythonVersion: 3.12.3
     plan: starter
     buildCommand: "pip install --upgrade pip && pip install flask gunicorn requests"
     startCommand: "gunicorn web_wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120"
@@ -118,7 +116,6 @@ services:
   - type: cron
     name: courtflow-cron-reminders
     env: python
-    pythonVersion: 3.12.3
     plan: starter
     schedule: "0 6 * * *"        # daily 06:00 UTC (08:00 SAST) — booking/lesson reminders
     buildCommand: "pip install --upgrade pip && pip install requests"
@@ -134,7 +131,6 @@ services:
   - type: cron
     name: courtflow-cron-capacity-sweep
     env: python
-    pythonVersion: 3.12.3
     plan: starter
     schedule: "*/15 * * * *"     # every 15 min — release expired holds, promote waitlist
     buildCommand: "pip install --upgrade pip && pip install requests"
@@ -150,7 +146,6 @@ services:
   - type: cron
     name: courtflow-cron-monthly-invoice
     env: python
-    pythonVersion: 3.12.3
     plan: starter
     schedule: "0 5 1 * *"        # 1st of month 05:00 UTC — monthly-account invoice run
     buildCommand: "pip install --upgrade pip && pip install requests"
@@ -166,7 +161,6 @@ services:
   - type: cron
     name: courtflow-cron-membership-refill
     env: python
-    pythonVersion: 3.12.3
     plan: starter
     schedule: "0 4 * * *"        # daily 04:00 UTC — membership period refill/rollover
     buildCommand: "pip install --upgrade pip && pip install requests"
