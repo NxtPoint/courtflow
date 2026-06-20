@@ -107,9 +107,11 @@ services:
       # Backend that verifies the Clerk token from /login (the whoami check).
       - key: AUTH_API_BASE
         value: "https://courtflow-api.onrender.com"
-      # MARKETING_HOSTS default comes from club.branding; override only if needed.
-      # - key: MARKETING_HOSTS
-      #   value: "nextpointtennis.com,www.nextpointtennis.com"
+      # Marketing hosts → these serve the public site at "/" (app stays at /portal).
+      # Includes the onrender URL so the public site is viewable before DNS cutover;
+      # the real domains are here too (also in branding.py registry) for go-live.
+      - key: MARKETING_HOSTS
+        value: "courtflow-web.onrender.com,nextpointtennis.com,www.nextpointtennis.com"
 
   # =========================================
   # Crons — DEFERRED (not created at launch; nothing depends on them yet).
