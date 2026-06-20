@@ -61,6 +61,27 @@ def _body():
     return request.get_json(silent=True) or {}
 
 
+# Roles permitted to book ON BEHALF of someone else (docs/08). A member/guest may only
+# ever book for themselves, so for_email/for_guest_name are silently ignored for them.
+_ON_BEHALF_ROLES = ("coach", "club_admin", "platform_admin")
+
+
+def _member_by_email(session, club_id, email):
+    """Resolve an email to an iam.user that has ANY membership in this club (case-
+    insensitive). Returns the user id (str) or None. Club-scoped — we never resolve a user
+    who isn't a member of the actor's club. Used by the on-behalf booking flow only."""
+    if not email:
+        return None
+    from sqlalchemy import text
+    row = session.execute(
+        text("SELECT u.id FROM iam.user u "
+             "JOIN iam.membership m ON m.user_id = u.id AND m.club_id = :c "
+             "WHERE lower(u.email) = lower(:e) LIMIT 1"),
+        {"c": club_id, "e": email.strip()},
+    ).mappings().first()
+    return str(row["id"]) if row else None
+
+
 # ---------------------------------------------------------------------------
 # availability + resources (read)
 # ---------------------------------------------------------------------------
@@ -123,6 +144,23 @@ def create_booking():
     b = _body()
     audience = b.get("audience") or ("member" if p.role in ("member", "coach", "club_admin")
                                      else "visitor")
+    parties = list(b.get("parties") or [])
+    # On-behalf booking (docs/08): a coach/admin may book FOR a client. The owner override
+    # is the ONLY booking field the actor can set away from themselves, and ONLY when their
+    # role allows it (the club_id + actor stay from the principal — never the body).
+    booked_for_user_id = None
+    for_email = (b.get("for_email") or "").strip()
+    for_guest_name = (b.get("for_guest_name") or "").strip()
+    for_guest_email = (b.get("for_guest_email") or "").strip()
+    if p.role in _ON_BEHALF_ROLES and (for_email or for_guest_name):
+        with session_scope() as s:
+            booked_for_user_id = _member_by_email(s, p.club_id, for_email)
+        if booked_for_user_id is None:
+            # Not a club member -> treat as a walk-in: actor stays booked_by, the client
+            # rides along as a guest player party (no member host required for a player).
+            guest_name = for_guest_name or (for_email or "Guest")
+            parties.append({"party_role": "player", "guest_name": guest_name,
+                            "guest_email": for_guest_email or for_email or None})
     with session_scope() as s:
         res = bookings_mod.create_booking(
             s, club_id=p.club_id, booked_by_user_id=p.user_id, role=p.role,
@@ -130,11 +168,12 @@ def create_booking():
             resource_id=b.get("resource_id"),
             starts_at=b.get("starts_at"), ends_at=b.get("ends_at"),
             settlement_mode=b.get("settlement_mode", "at_court"),
-            parties=b.get("parties") or [],
+            parties=parties,
             coach_user_id=b.get("coach_user_id"),
             court_resource_id=b.get("court_resource_id"),
             audience=audience, notes=b.get("notes"),
             recurrence_id=b.get("recurrence_id"),
+            booked_for_user_id=booked_for_user_id,
         )
     return _result(res)
 

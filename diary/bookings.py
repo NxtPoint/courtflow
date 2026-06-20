@@ -181,15 +181,24 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                    starts_at, ends_at, settlement_mode="at_court", parties=None,
                    coach_user_id=None, court_resource_id=None, audience="member",
                    notes=None, recurrence_id=None, hold_minutes=HOLD_MINUTES_DEFAULT,
-                   now=None):
+                   booked_for_user_id=None, now=None):
     """Create a court/lesson/class booking, concurrency-safe (docs/03 §4).
 
     For a lesson, pass court_resource_id to auto-hold a court in the SAME transaction (two
     diary.booking rows sharing one order_id). The whole thing is one tx: if EITHER hold
     overlaps, the exclusion constraint aborts the tx -> we report SLOT_TAKEN and nothing
     is persisted (the original/other slot is untouched).
+
+    `booked_for_user_id` — on-behalf booking (docs/08): a coach/admin creating a booking FOR
+    a client. When set, the persisted booking.booked_by_user_id is the CLIENT (so it appears
+    in their "my bookings"), not the actor. The actor is still linked as coach_user_id for a
+    lesson. The route is the ONLY place that authorises this override (role-gated) — by the
+    time it reaches here the value is already trusted. Default (None) keeps the original
+    behaviour: the booking is owned by booked_by_user_id (the actor).
     """
     now = now or datetime.now(timezone.utc)
+    # On-behalf override: persist the booking under the client, not the actor.
+    owner_user_id = booked_for_user_id or booked_by_user_id
     parties = parties or []
     starts = _parse_dt(starts_at)
     ends = _parse_dt(ends_at)
@@ -218,13 +227,16 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=settlement_mode)
 
     # Member-guest guard (docs/03 §10): if a guest party is present and the club requires a
-    # member host, exactly one party must be party_role='host'.
-    has_guest = any((p.get("party_role") == "guest") or p.get("guest_name") for p in parties)
-    if has_guest and policy.get("guest_requires_member", True):
-        has_host = any(p.get("party_role") == "host" for p in parties)
-        if not has_host:
-            return _err("GUEST_REQUIRES_HOST", 422,
-                        message="a member host is required for a guest booking")
+    # member host, exactly one party must be party_role='host'. Members/guests are held to
+    # this; admins/coaches relax it (same as the window/min-duration/settlement relaxations
+    # above) — they legitimately book walk-ins on a client's behalf (docs/08).
+    if role in ("member", "guest"):
+        has_guest = any((p.get("party_role") == "guest") or p.get("guest_name") for p in parties)
+        if has_guest and policy.get("guest_requires_member", True):
+            has_host = any(p.get("party_role") == "host" for p in parties)
+            if not has_host:
+                return _err("GUEST_REQUIRES_HOST", 422,
+                            message="a member host is required for a guest booking")
 
     online = (settlement_mode == "online")
     status = "held" if online else "confirmed"
@@ -237,7 +249,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
             booking_id = _insert_booking(
                 session, club_id=club_id, booking_type=booking_type, resource_id=resource_id,
                 coach_user_id=coach_uid, starts_at=starts, ends_at=ends, status=status,
-                held_until=held_until, booked_by_user_id=booked_by_user_id,
+                held_until=held_until, booked_by_user_id=owner_user_id,
                 recurrence_id=recurrence_id, settlement_mode=settlement_mode, notes=notes,
             )
             linked_court_id = None
@@ -249,7 +261,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                     session, club_id=club_id, booking_type="court",
                     resource_id=court_resource_id, coach_user_id=coach_uid,
                     starts_at=starts, ends_at=ends, status=status, held_until=held_until,
-                    booked_by_user_id=booked_by_user_id, recurrence_id=recurrence_id,
+                    booked_by_user_id=owner_user_id, recurrence_id=recurrence_id,
                     settlement_mode=settlement_mode, notes="(court held for lesson)",
                 )
             for p in parties:
@@ -263,7 +275,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
 
     # --- order / settlement (guarded billing call) ----------------------
     order = _create_order_guarded(
-        session, club_id=club_id, user_id=booked_by_user_id, booking_id=booking_id,
+        session, club_id=club_id, user_id=owner_user_id, booking_id=booking_id,
         booking_type=booking_type, settlement_mode=settlement_mode, parties=parties,
         resource_id=resource_id, starts_at=starts, ends_at=ends,
         linked_booking_id=linked_court_id, audience=audience,
