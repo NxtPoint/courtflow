@@ -1,192 +1,213 @@
-/* app.css — portal SPA styling for CourtFlow/NextPoint.
- *
- * This is a SELF-CONTAINED fallback design system so the portal renders standalone
- * before Agent F's frontend/_shared/ lands. It mirrors 1050's CSS-var names and green
- * palette (see SELF-VERIFY report). When F's shared sheet is linked first, these :root
- * vars are simply re-declared identically; component classes here are prefixed cf- to
- * avoid clobbering shared utilities. Mobile-first.
- */
-:root {
-  --bg: #f5f5f5;
-  --white: #ffffff;
-  --green: #1a5c2e;
-  --green-light: #22783c;
-  --green-bg: rgba(26, 92, 46, 0.08);
-  --text: #1a1a1a;
-  --text-sec: #6b7280;
-  --text-dim: #9ca3af;
-  --border: #e5e5e5;
-  --amber: #d97706;
-  --red: #dc2626;
-  --blue: #2563eb;
-  --radius: 6px;
-  --transition: 0.2s ease;
-}
-*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
-body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: var(--bg); color: var(--text); line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
+/* app.css — NextPoint portal design system (single source of truth).
+   Bright & modern · refreshed palette. EVERY app page (portal/book/my/coach/admin/
+   onboarding/settings) links this and uses these cf-* classes, so the whole app is
+   visually consistent by construction. Do not inline component styles in pages —
+   extend a class here instead. */
+
+:root{
+  --green:#0E7A47; --green-600:#0B5C36; --green-700:#08431F; --green-050:#E8F4EE;
+  --lime:#C8E85C; --lime-700:#5F7A14;
+  --ink:#10231A; --muted:#5F7268; --dim:#93A39A;
+  --canvas:#F5F8F6; --surface:#FFFFFF; --border:#E2E9E5; --border-2:#EDF2EF;
+  --success:#16A34A; --success-bg:#E6F6EC;
+  --warning:#E0A526; --warning-bg:#FBF1DC;
+  --danger:#E0483D;  --danger-bg:#FBE7E5;
+  --info:#2D74D6;    --info-bg:#E6EFFB;
+  --radius:14px; --radius-sm:10px; --radius-pill:999px;
+  --shadow-sm:0 1px 2px rgba(16,35,26,.05),0 1px 3px rgba(16,35,26,.07);
+  --shadow-md:0 10px 30px rgba(16,35,26,.10);
+  --ring:0 0 0 3px var(--green-050);
 }
 
-/* ---- layout shell --------------------------------------------------------- */
-.cf-shell { display: flex; flex-direction: column; min-height: 100vh; }
-.cf-topbar {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 16px; background: var(--white);
-  border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 40;
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--canvas);color:var(--ink);
+  font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;
 }
-.cf-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--green); }
-.cf-brand .cf-logo {
-  width: 30px; height: 30px; border-radius: var(--radius); background: var(--green);
-  color: #fff; display: flex; align-items: center; justify-content: center; font-size: .8rem;
-}
-.cf-spacer { flex: 1; }
-.cf-nav { display: flex; gap: 4px; overflow-x: auto; }
-.cf-nav a {
-  padding: 8px 12px; border-radius: var(--radius); color: var(--text-sec);
-  text-decoration: none; font-size: .9rem; white-space: nowrap; font-weight: 500;
-}
-.cf-nav a:hover { background: var(--green-bg); color: var(--green); }
-.cf-nav a.active { background: var(--green); color: #fff; }
-.cf-main { flex: 1; padding: 16px; max-width: 1100px; width: 100%; margin: 0 auto; }
-.cf-user { font-size: .8rem; color: var(--text-sec); display: flex; align-items: center; gap: 8px; }
+a{color:var(--green);text-decoration:none;font-weight:500}
+a:hover{text-decoration:underline}
+h1,h2,h3,h4{margin:0;letter-spacing:-.01em;color:var(--ink);font-weight:700}
+h1{font-size:1.8rem;font-weight:800;letter-spacing:-.02em}
+h2{font-size:1.15rem}
+h3{font-size:1rem}
+p{margin:0 0 10px}
+.cf-muted{color:var(--muted)}
 
-/* ---- cards / sections ----------------------------------------------------- */
-.cf-card {
-  background: var(--white); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+/* ---- app shell + top bar + nav -------------------------------------------- */
+.cf-shell{min-height:100vh;display:flex;flex-direction:column}
+.cf-main{max-width:1080px;width:100%;margin:0 auto;padding:24px 20px 80px;flex:1}
+.cf-topbar{
+  position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:18px;
+  padding:0 20px;height:62px;background:rgba(255,255,255,.9);backdrop-filter:saturate(1.4) blur(8px);
+  border-bottom:1px solid var(--border);
 }
-.cf-card h2 { font-size: 1.05rem; margin-bottom: 12px; }
-.cf-card h3 { font-size: .95rem; margin-bottom: 8px; color: var(--text-sec); }
-.cf-muted { color: var(--text-sec); font-size: .85rem; }
-.cf-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.cf-grid { display: grid; gap: 10px; }
-@media (min-width: 640px) { .cf-grid-2 { grid-template-columns: 1fr 1fr; } }
+.cf-brand{display:flex;align-items:center;gap:9px;font-weight:800;letter-spacing:-.01em;font-size:1.05rem}
+.cf-logo{width:30px;height:30px;border-radius:9px;background:var(--green);color:#fff;display:flex;
+  align-items:center;justify-content:center;font-size:.8rem;font-weight:800;box-shadow:var(--shadow-sm)}
+.cf-nav{display:flex;align-items:center;gap:4px}
+.cf-nav a{
+  color:var(--muted);font-weight:600;font-size:.9rem;padding:8px 13px;border-radius:var(--radius-pill);
+  text-decoration:none;transition:background .12s,color .12s;
+}
+.cf-nav a:hover{background:var(--green-050);color:var(--green-600);text-decoration:none}
+.cf-nav a.active{background:var(--green);color:#fff}
+.cf-spacer{flex:1}
+.cf-user{display:flex;align-items:center;gap:12px;font-size:.88rem;color:var(--muted)}
+
+/* ---- cards, grids, rows --------------------------------------------------- */
+.cf-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  box-shadow:var(--shadow-sm);padding:20px;margin-bottom:16px}
+.cf-card h2{margin-bottom:12px}
+.cf-grid{display:grid;gap:14px}
+.cf-grid-2{grid-template-columns:repeat(2,1fr)}
+.cf-grid-3{grid-template-columns:repeat(3,1fr)}
+.cf-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+@media(max-width:760px){.cf-grid-2,.cf-grid-3{grid-template-columns:1fr}}
+
+/* ---- hero (dashboard / section) ------------------------------------------- */
+.cf-hero{position:relative;overflow:hidden;border-radius:18px;min-height:220px;display:flex;
+  align-items:flex-end;color:#fff;margin-bottom:18px;box-shadow:var(--shadow-md);
+  background:linear-gradient(120deg,rgba(8,67,31,.88),rgba(14,122,71,.5)),var(--canvas);background-size:cover;background-position:center}
+.cf-hero-in{padding:26px 28px}
+.cf-hero h1,.cf-hero h2{color:#fff}
+.cf-hero h1{font-size:1.7rem}
+.cf-hero p{opacity:.92;margin:6px 0 16px}
+
+/* ---- quick-book tiles ----------------------------------------------------- */
+.cf-tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media(max-width:760px){.cf-tiles{grid-template-columns:1fr}}
+.cf-tile{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:18px;box-shadow:var(--shadow-sm);cursor:pointer;transition:transform .12s,box-shadow .12s,border-color .12s;
+  text-decoration:none;color:inherit;display:block}
+.cf-tile:hover{transform:translateY(-2px);box-shadow:var(--shadow-md);border-color:#cfe0d6;text-decoration:none}
+.cf-tile.sel{border-color:var(--green);box-shadow:var(--ring)}
+.cf-tile-t{font-weight:700;font-size:1rem;margin-bottom:2px}
+.cf-tile-s{color:var(--muted);font-size:.86rem}
+
+/* ---- lists / items -------------------------------------------------------- */
+.cf-list{display:flex;flex-direction:column;gap:8px}
+.cf-item{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border);
+  border-radius:var(--radius-sm);background:var(--surface)}
+.cf-item-main{flex:1;min-width:0}
+.cf-item-t{font-weight:600}
+.cf-item-s{color:var(--muted);font-size:.85rem}
 
 /* ---- buttons -------------------------------------------------------------- */
-.cf-btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 10px 16px; border-radius: var(--radius); border: 1px solid var(--border);
-  background: var(--white); color: var(--text); font-size: .9rem; font-weight: 600;
-  cursor: pointer; transition: var(--transition); font-family: inherit;
-}
-.cf-btn:hover { border-color: var(--green); color: var(--green); }
-.cf-btn:disabled { opacity: .5; cursor: not-allowed; }
-.cf-btn-primary { background: var(--green); color: #fff; border-color: var(--green); }
-.cf-btn-primary:hover { background: var(--green-light); color: #fff; }
-.cf-btn-danger { color: var(--red); border-color: #f3c2c2; }
-.cf-btn-danger:hover { background: var(--red); color: #fff; border-color: var(--red); }
-.cf-btn-sm { padding: 6px 10px; font-size: .8rem; }
-
-/* ---- chips / status ------------------------------------------------------- */
-.cf-chip {
-  display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px;
-  border-radius: 999px; font-size: .72rem; font-weight: 600; text-transform: uppercase;
-  letter-spacing: .03em; background: var(--green-bg); color: var(--green);
-}
-.cf-chip.held { background: rgba(217,119,6,.12); color: var(--amber); }
-.cf-chip.confirmed { background: var(--green-bg); color: var(--green); }
-.cf-chip.completed { background: rgba(37,99,235,.12); color: var(--blue); }
-.cf-chip.cancelled, .cf-chip.no_show { background: rgba(220,38,38,.1); color: var(--red); }
-.cf-chip.court { background: rgba(37,99,235,.1); color: var(--blue); }
-.cf-chip.coach { background: rgba(26,92,46,.1); color: var(--green); }
-.cf-chip.class { background: rgba(217,119,6,.12); color: var(--amber); }
+.cf-btn{border:0;border-radius:var(--radius-pill);padding:10px 18px;font:600 .9rem Inter;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;text-decoration:none;
+  background:var(--green-050);color:var(--green-600);transition:background .12s,transform .05s,filter .12s;white-space:nowrap}
+.cf-btn:hover{filter:brightness(.98);text-decoration:none}
+.cf-btn:active{transform:translateY(1px)}
+.cf-btn:disabled{opacity:.55;cursor:default}
+.cf-btn-primary{background:var(--green);color:#fff}
+.cf-btn-primary:hover{background:var(--green-600);filter:none}
+.cf-btn-accent{background:var(--lime);color:#26330a}
+.cf-btn-danger{background:var(--danger-bg);color:var(--danger)}
+.cf-btn-danger:hover{background:var(--danger);color:#fff}
+.cf-btn-ghost{background:transparent;color:var(--green);border:1.5px solid var(--border)}
+.cf-btn-sm{padding:6px 13px;font-size:.82rem}
+.cf-btn-block{width:100%}
 
 /* ---- forms ---------------------------------------------------------------- */
-.cf-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-.cf-field label { font-size: .8rem; font-weight: 600; color: var(--text-sec); }
-.cf-input, .cf-select, .cf-textarea {
-  padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius);
-  font-size: .9rem; font-family: inherit; background: var(--white); width: 100%;
-}
-.cf-input:focus, .cf-select:focus, .cf-textarea:focus { border-color: var(--green); outline: none; }
+.cf-field{margin-bottom:14px}
+.cf-field>label,label.cf-label{display:block;font-size:.8rem;font-weight:600;color:var(--muted);margin-bottom:5px}
+.cf-input,.cf-select,input[type=text],input[type=email],input[type=tel],input[type=number],input[type=date],input[type=time],textarea,select{
+  width:100%;border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;
+  font:500 .92rem Inter;color:var(--ink);background:var(--surface)}
+.cf-input:focus,.cf-select:focus,input:focus,textarea:focus,select:focus{outline:0;border-color:var(--green);box-shadow:var(--ring)}
 
-/* ---- option tiles (wizard) ------------------------------------------------ */
-.cf-tiles { display: grid; gap: 10px; }
-@media (min-width: 560px) { .cf-tiles { grid-template-columns: repeat(3, 1fr); } }
-.cf-tile {
-  border: 1.5px solid var(--border); border-radius: var(--radius); padding: 16px;
-  text-align: center; cursor: pointer; background: var(--white); transition: var(--transition);
-}
-.cf-tile:hover { border-color: var(--green); }
-.cf-tile.sel { border-color: var(--green); background: var(--green-bg); }
-.cf-tile .cf-tile-t { font-weight: 700; margin-bottom: 4px; }
-.cf-tile .cf-tile-s { font-size: .8rem; color: var(--text-sec); }
+/* ---- chips ---------------------------------------------------------------- */
+.cf-chip{display:inline-flex;align-items:center;gap:6px;border-radius:var(--radius-pill);
+  padding:4px 11px;font-size:.74rem;font-weight:600;background:var(--green-050);color:var(--green-600);white-space:nowrap}
+.cf-chip.court{background:var(--green-050);color:var(--green-600)}
+.cf-chip.lesson{background:var(--info-bg);color:#1f5bab}
+.cf-chip.class{background:#F1F8D6;color:var(--lime-700)}
+.cf-chip.confirmed,.cf-chip.ok{background:var(--success-bg);color:var(--success)}
+.cf-chip.cancelled,.cf-chip.no_show{background:var(--danger-bg);color:var(--danger)}
+.cf-chip.held,.cf-chip.waitlisted{background:var(--warning-bg);color:#946017}
 
-/* ---- slot picker ---------------------------------------------------------- */
-.cf-slots { display: flex; flex-wrap: wrap; gap: 8px; }
-.cf-slot {
-  padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--white); cursor: pointer; font-size: .85rem; font-weight: 600;
-  transition: var(--transition);
-}
-.cf-slot:hover { border-color: var(--green); color: var(--green); }
-.cf-slot.sel { background: var(--green); color: #fff; border-color: var(--green); }
-.cf-day-h { font-weight: 700; margin: 14px 0 6px; font-size: .9rem; }
+/* ---- tables (ONE consistent table everywhere) ----------------------------- */
+.cf-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.9rem;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.cf-table th{text-align:left;font-weight:600;font-size:.74rem;letter-spacing:.03em;text-transform:uppercase;
+  color:var(--muted);background:var(--canvas);padding:11px 14px;border-bottom:1px solid var(--border)}
+.cf-table td{padding:12px 14px;border-bottom:1px solid var(--border-2)}
+.cf-table tr:last-child td{border-bottom:0}
+.cf-table tbody tr:hover{background:var(--green-050)}
+.cf-table .num{text-align:right;font-variant-numeric:tabular-nums}
 
-/* ---- lists / tables ------------------------------------------------------- */
-.cf-list { display: flex; flex-direction: column; gap: 8px; }
-.cf-item {
-  display: flex; align-items: center; gap: 12px; padding: 12px;
-  border: 1px solid var(--border); border-radius: var(--radius); background: var(--white);
-}
-.cf-item .cf-item-main { flex: 1; min-width: 0; }
-.cf-item .cf-item-t { font-weight: 600; }
-.cf-item .cf-item-s { font-size: .8rem; color: var(--text-sec); }
-.cf-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
-.cf-table th, .cf-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
-.cf-table th { color: var(--text-sec); font-weight: 600; }
+/* ---- states --------------------------------------------------------------- */
+.cf-empty{color:var(--muted);text-align:center;padding:26px 16px;background:var(--canvas);
+  border:1px dashed var(--border);border-radius:var(--radius-sm);font-size:.9rem}
+.cf-loading{color:var(--dim);padding:22px 8px;text-align:center;font-size:.9rem}
+.cf-loading::before{content:"";display:inline-block;width:15px;height:15px;margin-right:9px;vertical-align:-2px;
+  border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:cf-spin .7s linear infinite}
+@keyframes cf-spin{to{transform:rotate(360deg)}}
 
-/* ---- wizard steps --------------------------------------------------------- */
-.cf-steps { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
-.cf-step { font-size: .75rem; color: var(--text-dim); display: flex; align-items: center; gap: 4px; }
-.cf-step.on { color: var(--green); font-weight: 700; }
-.cf-step .n {
-  width: 20px; height: 20px; border-radius: 50%; background: var(--border); color: #fff;
-  display: inline-flex; align-items: center; justify-content: center; font-size: .7rem;
-}
-.cf-step.on .n { background: var(--green); }
-.cf-hide { display: none !important; }
+/* ---- wizard (onboarding + booking) --------------------------------------- */
+.cf-steps{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+.cf-step{display:flex;align-items:center;gap:8px;padding:7px 13px;border-radius:var(--radius-pill);
+  background:var(--surface);border:1px solid var(--border);color:var(--muted);font-size:.84rem;font-weight:600;cursor:pointer}
+.cf-step .n{width:21px;height:21px;border-radius:50%;background:var(--border);color:var(--muted);
+  display:flex;align-items:center;justify-content:center;font-size:.74rem}
+.cf-step.on{border-color:var(--green);color:var(--green-600);background:var(--green-050)}
+.cf-step.on .n{background:var(--green);color:#fff}
+.cf-step.done .n{background:var(--success);color:#fff}
+
+/* ---- booking slots -------------------------------------------------------- */
+.cf-slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+.cf-slot{border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:11px 8px;text-align:center;
+  cursor:pointer;font-weight:600;font-size:.86rem;background:var(--surface);transition:border-color .12s,background .12s}
+.cf-slot:hover{border-color:var(--green);background:var(--green-050)}
+.cf-slot.sel{border-color:var(--green);background:var(--green);color:#fff}
+.cf-slot small{display:block;font-weight:500;opacity:.75;font-size:.74rem}
 
 /* ---- toasts --------------------------------------------------------------- */
-.cf-toasts { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 100;
-  display: flex; flex-direction: column; gap: 8px; align-items: center; }
-.cf-toast {
-  padding: 10px 16px; border-radius: var(--radius); color: #fff; font-size: .85rem;
-  font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,.15); background: var(--text);
-  transition: opacity .3s ease, transform .3s ease;
-}
-.cf-toast-info { background: var(--green); }
-.cf-toast-error { background: var(--red); }
-.cf-toast-warn { background: var(--amber); }
-.cf-toast-out { opacity: 0; transform: translateY(8px); }
-
-/* ---- master diary grid ---------------------------------------------------- */
-.cf-cal-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
-.cf-cal { display: grid; min-width: 600px; }
-.cf-cal-head, .cf-cal-cell { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.cf-cal-head { padding: 8px; font-weight: 600; font-size: .8rem; background: var(--bg); position: sticky; top: 0; }
-.cf-cal-time { padding: 4px 8px; font-size: .72rem; color: var(--text-dim); border-bottom: 1px solid var(--border); }
-.cf-cal-cell { min-height: 34px; padding: 2px; cursor: pointer; position: relative; }
-.cf-cal-cell:hover { background: var(--green-bg); }
-.cf-ev {
-  font-size: .72rem; padding: 3px 6px; border-radius: 4px; margin-bottom: 2px;
-  background: var(--green-bg); color: var(--green); cursor: pointer; overflow: hidden;
-  white-space: nowrap; text-overflow: ellipsis;
-}
-.cf-ev.held { background: rgba(217,119,6,.14); color: var(--amber); }
-.cf-ev.completed { background: rgba(37,99,235,.12); color: var(--blue); }
+.cf-toasts{position:fixed;right:18px;bottom:18px;z-index:90;display:flex;flex-direction:column;gap:8px}
+.cf-toast{background:var(--ink);color:#fff;padding:11px 16px;border-radius:var(--radius-sm);
+  box-shadow:var(--shadow-md);font-size:.88rem;font-weight:500;max-width:340px;animation:cf-toast-in .2s ease}
+.cf-toast.error{background:var(--danger)}
+.cf-toast.info{background:var(--green-600)}
+.cf-toast-out{opacity:0;transform:translateY(6px);transition:opacity .2s,transform .2s}
+@keyframes cf-toast-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 
 /* ---- modal ---------------------------------------------------------------- */
-.cf-modal-bg {
-  position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 90;
-  display: flex; align-items: center; justify-content: center; padding: 16px;
-}
-.cf-modal { background: var(--white); border-radius: var(--radius); padding: 20px;
-  max-width: 460px; width: 100%; max-height: 90vh; overflow-y: auto; }
-.cf-modal h2 { margin-bottom: 12px; }
+.cf-modal-bg{position:fixed;inset:0;background:rgba(16,35,26,.45);z-index:80;display:flex;
+  align-items:center;justify-content:center;padding:18px;animation:cf-toast-in .15s ease}
+.cf-modal{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-md);
+  width:100%;max-width:460px;padding:22px;max-height:90vh;overflow:auto}
 
-.cf-empty { text-align: center; padding: 32px; color: var(--text-dim); }
-.cf-loading { text-align: center; padding: 24px; color: var(--text-sec); }
+/* ---- settings tabs -------------------------------------------------------- */
+.cf-settings{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px}
+.cf-settings a,.cf-settings .tab{padding:8px 14px;border-radius:var(--radius-pill);font-weight:600;
+  font-size:.88rem;color:var(--muted);cursor:pointer;border:1px solid transparent;text-decoration:none}
+.cf-settings .tab.on{background:var(--green-050);color:var(--green-600);border-color:var(--green-050)}
+
+/* ---- master-diary calendar (resource timeline) ---------------------------- */
+.cf-cal-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  overflow:auto;box-shadow:var(--shadow-sm);max-height:72vh}
+.cf-cal{display:grid;position:relative;min-width:640px}
+.cf-cal-head,.cf-day-h{position:sticky;top:0;z-index:5;background:var(--surface);
+  padding:11px 8px;text-align:center;font-weight:700;font-size:.82rem;border-bottom:1px solid var(--border);
+  border-left:1px solid var(--border-2)}
+.cf-cal-time{padding:6px 10px 0;text-align:right;color:var(--muted);font-size:.74rem;
+  border-right:1px solid var(--border);border-bottom:1px solid var(--border-2);min-height:46px}
+.cf-cal-cell{border-bottom:1px solid var(--border-2);border-left:1px solid var(--border-2);
+  min-height:46px;position:relative;cursor:pointer;transition:background .1s}
+.cf-cal-cell:hover{background:var(--green-050)}
+.cf-ev{position:absolute;left:3px;right:3px;border-radius:7px;padding:4px 7px;font-size:.74rem;
+  font-weight:600;color:#fff;overflow:hidden;cursor:pointer;box-shadow:var(--shadow-sm);z-index:2}
+.cf-ev.court{background:var(--green)}
+.cf-ev.lesson{background:var(--info)}
+.cf-ev.class{background:var(--lime);color:#26330a}
+.cf-ev.cancelled{background:var(--dim);text-decoration:line-through}
+
+/* ---- responsive nav ------------------------------------------------------- */
+@media(max-width:680px){
+  .cf-topbar{gap:10px;padding:0 14px}
+  .cf-nav a{padding:7px 10px;font-size:.84rem}
+  .cf-user span{display:none}
+  .cf-main{padding:18px 14px 70px}
+}
