@@ -11,7 +11,24 @@
   var DAY_START = 6, DAY_END = 22;            // 06:00–22:00 club hours
   var SLOT_MIN = 30;                          // 30-min rows on the time axis
   var ROW_H = 46;                             // px per slot row (matches cf-cal-cell min-height)
-  var state = { date: new Date(), resources: [], events: [], billing: { currency: "ZAR" } };
+  var state = { date: new Date(), resources: [], events: [], billing: { currency: "ZAR" },
+    classes: [], coaches: [] };
+
+  // admin.html loads api.js but not admin_api.js / class_ui.js (those power onboarding/
+  // settings + the shared class components). Lazy-load them once so the Classes tab and
+  // the master-diary class events work without touching the HTML shell.
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      if (document.querySelector('script[src="' + src + '"]')) return resolve();
+      var s = document.createElement("script");
+      s.src = src; s.onload = resolve; s.onerror = function () { reject(new Error("Failed to load " + src)); };
+      document.head.appendChild(s);
+    });
+  }
+  async function ensureClassDeps() {
+    if (!window.AdminAPI) await loadScript("/js/admin_api.js");
+    if (!window.ClassUI) await loadScript("/js/class_ui.js");
+  }
 
   // Minutes from the visible window start (DAY_START) for an ISO time, in the browser tz.
   function minsFromDayStart(iso) {
@@ -24,7 +41,7 @@
     var main = document.getElementById("cf-main"); UI.clear(main);
 
     var tabs = el("div", { class: "cf-nav", style: "margin-bottom:12px" });
-    [["diary", "Master diary"], ["resources", "Resources"], ["people", "People"],
+    [["diary", "Master diary"], ["classes", "Classes"], ["resources", "Resources"], ["people", "People"],
      ["billing", "Billing"], ["cockpit", "Cockpit"]].forEach(function (t) {
       tabs.appendChild(el("a", { href: "#", text: t[1], "data-tab": t[0],
         onclick: function (e) { e.preventDefault(); showTab(t[0]); } }));
@@ -40,6 +57,7 @@
     });
     var p = document.getElementById("admin-panel"); UI.clear(p);
     if (tab === "diary") return renderDiary(p);
+    if (tab === "classes") return renderClasses(p);
     if (tab === "resources") return renderResources(p);
     if (tab === "people") return renderPeople(p);
     if (tab === "billing") return renderBilling(p);
@@ -89,25 +107,34 @@
     var cols = state.resources.filter(function (x) {
       return x.is_active && (x.kind === "court" || x.kind === "coach");
     });
-    if (!cols.length) { cal.appendChild(el("div", { class: "cf-empty", text: "No resources configured." })); return; }
+    // Class sessions aren't a court/coach resource — they get their own "Classes"
+    // column (shown only when there are class events on the visible day).
+    var classEvents = state.events.filter(function (ev) {
+      return (ev.booking_type || "").toLowerCase() === "class";
+    });
+    var hasClasses = classEvents.length > 0;
+    if (!cols.length && !hasClasses) { cal.appendChild(el("div", { class: "cf-empty", text: "No resources configured." })); return; }
 
     var slots = ((DAY_END - DAY_START) * 60) / SLOT_MIN;     // number of time rows
+    var totalCols = cols.length + (hasClasses ? 1 : 0);
 
     var wrap = el("div", { class: "cf-cal-wrap" });
     var grid = el("div", { class: "cf-cal" });
-    grid.style.gridTemplateColumns = "62px repeat(" + cols.length + ", minmax(120px, 1fr))";
+    grid.style.gridTemplateColumns = "62px repeat(" + totalCols + ", minmax(120px, 1fr))";
     // Header row + one row per slot, each ROW_H tall so event geometry is exact.
     grid.style.gridTemplateRows = "auto repeat(" + slots + ", " + ROW_H + "px)";
 
-    // Header: empty corner + one head per resource (sticky via cf-cal-head).
+    // Header: empty corner + one head per resource (sticky via cf-cal-head) + Classes.
     grid.appendChild(el("div", { class: "cf-cal-head" }));
     cols.forEach(function (c) {
       grid.appendChild(el("div", { class: "cf-cal-head", title: c.surface || c.kind,
         text: c.name + (c.kind === "coach" ? " (coach)" : "") }));
     });
+    if (hasClasses) grid.appendChild(el("div", { class: "cf-cal-head", title: "Group classes", text: "Classes" }));
 
     // Build the time axis + empty clickable cells, keeping a handle on each column
     // cell so we can append absolutely-positioned events afterwards.
+    var CLASS_COL = "__classes__";
     var cellByCol = {};                                       // resource_id -> first cell node (positioning anchor)
     for (var s = 0; s < slots; s++) {
       var mins = s * SLOT_MIN;
@@ -123,34 +150,54 @@
         if (s === 0) cellByCol[c.id] = cell;                  // first row of each column anchors its events
         grid.appendChild(cell);
       });
+      if (hasClasses) {
+        // Classes column cells are read-only (scheduling happens in the Classes tab).
+        var ccell = el("div", { class: "cf-cal-cell", style: "cursor:default" });
+        if (s === 0) cellByCol[CLASS_COL] = ccell;
+        grid.appendChild(ccell);
+      }
     }
 
     // Place events as cf-ev blocks. Each event lives in its column's first cell
     // (position:relative), offset by its start time and sized by its duration.
     state.events.forEach(function (ev) {
-      var anchor = cellByCol[ev.resource_id];
-      if (!anchor) return;                                    // event for a non-displayed resource (e.g. class room)
+      var type = (ev.booking_type || "court").toLowerCase();
+      var isClass = type === "class";
+      var anchor = isClass ? cellByCol[CLASS_COL] : cellByCol[ev.resource_id];
+      if (!anchor) return;                                    // event for a non-displayed resource
       var startMin = minsFromDayStart(ev.starts_at);
       var endMin = minsFromDayStart(ev.ends_at);
       if (endMin <= 0 || startMin >= (DAY_END - DAY_START) * 60) return;  // outside the visible window
       var top = Math.max(0, startMin) / SLOT_MIN * ROW_H;
       var height = Math.max(18, (Math.min(endMin, (DAY_END - DAY_START) * 60) - Math.max(0, startMin)) / SLOT_MIN * ROW_H - 2);
-      var type = (ev.booking_type || "court").toLowerCase();
       var klass = ["court", "lesson", "class"].indexOf(type) >= 0 ? type : "court";
       var cancelled = ev.status === "cancelled" || ev.status === "no_show";
       var who = ev.resource_name || ev.booking_type || "Booking";
+      var capTxt = isClass && ev.capacity != null
+        ? " · " + (ev.enrolled != null ? ev.enrolled : 0) + "/" + ev.capacity : "";
       var block = el("div", {
         class: "cf-ev " + klass + (cancelled ? " cancelled" : ""),
         style: "top:" + top + "px;height:" + height + "px",
-        title: who + " · " + UI.fmtRange(ev.starts_at, ev.ends_at) + " · " + (ev.status || ""),
-        onclick: function (e) { e.stopPropagation(); openEvent(ev); },
+        title: who + " · " + UI.fmtRange(ev.starts_at, ev.ends_at) + " · " + (ev.status || "") + capTxt,
+        onclick: function (e) { e.stopPropagation(); if (isClass) openClassEvent(ev); else openEvent(ev); },
       }, [
-        el("div", { text: UI.fmtTime(ev.starts_at) + " " + type }),
+        el("div", { text: UI.fmtTime(ev.starts_at) + (isClass ? " " + who : " " + type) + capTxt }),
       ]);
       anchor.appendChild(block);
     });
 
     wrap.appendChild(grid); cal.appendChild(wrap);
+  }
+
+  // A class-session event on the master diary -> open its roster (and offer cancel).
+  // The master feed carries session_id (diary lane) for class events.
+  async function openClassEvent(ev) {
+    try { await ensureClassDeps(); } catch (e) { UI.toast(UI.errMsg(e), "error"); return; }
+    var sessionId = ev.session_id || ev.class_session_id || ev.id;
+    var cls = { name: ev.resource_name || "Class", resource_id: ev.resource_id, capacity: ev.capacity };
+    var session = { session_id: sessionId, starts_at: ev.starts_at, ends_at: ev.ends_at,
+      status: ev.status, enrolled: ev.enrolled, capacity: ev.capacity };
+    window.ClassUI.openRoster({ api: window.AdminAPI, cls: cls, session: session });
   }
 
   // ---- click-to-create / block ---------------------------------------------
@@ -306,6 +353,76 @@
     });
   }
 
+  // ---- classes tab ----------------------------------------------------------
+  // List class types (cf-table) + "New class" -> ClassUI form; per class ->
+  // "Schedule sessions" (recurring/one-off) + view/cancel sessions + open roster.
+  // Reuses the shared ClassUI components (same ones the coach console uses).
+  async function renderClasses(panel) {
+    var card = el("div", { class: "cf-card" }, [
+      el("div", { class: "cf-row", style: "margin-bottom:6px" }, [
+        el("h2", { text: "Classes", style: "margin:0" }),
+        el("span", { class: "cf-spacer" }),
+        el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "New class",
+          onclick: function () { openNewClass(); } }),
+      ]),
+      el("p", { class: "cf-muted", style: "margin:-2px 0 12px",
+        text: "Create class types, schedule recurring or one-off sessions, and manage rosters & attendance." }),
+      el("div", { id: "cls-list", class: "cf-loading", text: "Loading classes…" }),
+      el("div", { id: "cls-sessions" }),
+    ]);
+    panel.appendChild(card);
+    try { await ensureClassDeps(); } catch (e) {
+      document.getElementById("cls-list").textContent = UI.errMsg(e); return;
+    }
+    // Coaches power the admin-only coach selector on the class form.
+    try { var cr = await window.AdminAPI.coaches(); state.coaches = (cr.coaches || []).map(function (c) {
+      return { user_id: c.user_id || c.id, name: c.display_name || c.email || "Coach" }; }); }
+    catch (e) { state.coaches = []; }
+    loadClasses();
+  }
+
+  function loadClasses() {
+    var box = document.getElementById("cls-list"); if (!box) return;
+    UI.clear(box); box.appendChild(el("div", { class: "cf-loading", text: "Loading classes…" }));
+    window.AdminAPI.classes().then(function (r) {
+      state.classes = r.classes || [];
+      window.ClassUI.renderClassList({
+        host: box, classes: state.classes, currency: state.billing.currency,
+        onSchedule: function (c) { openSchedule(c); },
+        onSessions: function (c) { showSessions(c); },
+      });
+    }).catch(function (e) {
+      UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) }));
+    });
+  }
+
+  function openNewClass() {
+    window.ClassUI.openClassForm({
+      api: window.AdminAPI, coaches: state.coaches, title: "New class",
+      onSaved: function () { loadClasses(); },
+    });
+  }
+  function openSchedule(c) {
+    window.ClassUI.openScheduleForm({
+      api: window.AdminAPI,
+      cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity, duration_minutes: c.duration_minutes },
+      onSaved: function () { loadClasses(); showSessions(c); },
+    });
+  }
+  function showSessions(c) {
+    var host = document.getElementById("cls-sessions"); if (!host) return;
+    UI.clear(host);
+    host.appendChild(el("div", { class: "cf-card" }, [
+      el("h3", { text: "Sessions · " + (c.name || "Class"), style: "margin-top:0" }),
+      el("div", { id: "cls-sessions-body" }),
+    ]));
+    window.ClassUI.renderSessions({
+      api: window.AdminAPI,
+      cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity },
+      host: document.getElementById("cls-sessions-body"),
+    });
+  }
+
   // ---- console section reads (live where available) ------------------------
   async function renderResources(panel) {
     panel.appendChild(el("div", { class: "cf-card" }, [ el("h2", { text: "Resources" }), el("div", { id: "res-list", class: "cf-loading", text: "Loading…" }) ]));
@@ -400,6 +517,9 @@
     start: async function (p) {
       UI = window.UI; el = UI.el; principal = p;
       try { state.billing = await window.API.billingConfig(p.club_id); } catch (e) {}
+      // Preload the class deps so master-diary class events can open their roster on
+      // first click without a load hitch; ignore failures (the Classes tab retries).
+      ensureClassDeps().catch(function () {});
       shell();
     },
   };

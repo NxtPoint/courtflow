@@ -112,6 +112,46 @@
     inviteCoach: function (body) {
       return A().apiJSON("/api/admin/coaches/invite", { method: "POST", body: body });
     },
+
+    // ---- classes (management) -------------------------------------------
+    // GET /api/admin/classes -> {classes:[{resource_id,name,coach_user_id,coach_name,
+    //   capacity,price_amount_minor,duration_minutes,upcoming_sessions}]}
+    classes: function () { return A().apiJSON("/api/admin/classes"); },
+    // POST /api/admin/classes  body: {name,coach_user_id?,capacity,price_amount_minor,
+    //   duration_minutes,description?} -> {resource_id,...}
+    createClass: function (body) {
+      return A().apiJSON("/api/admin/classes", { method: "POST", body: body });
+    },
+    // POST /api/admin/classes/:resource_id/schedule
+    //   recurring: {weekdays:[0-6],start_time,duration_minutes?,date_from,date_until,capacity?}
+    //   one-off:   {dates:[...],start_time,duration_minutes?,capacity?}
+    //   -> {created, skipped}
+    scheduleClass: function (resourceId, body) {
+      return A().apiJSON("/api/admin/classes/" + enc(resourceId) + "/schedule",
+        { method: "POST", body: body });
+    },
+    // GET /api/admin/classes/:resource_id/sessions?date_from=&date_to=
+    //   -> {sessions:[{session_id,starts_at,ends_at,capacity,enrolled,waitlisted,spots_left,status}]}
+    classSessions: function (resourceId, opts) {
+      return A().apiJSON("/api/admin/classes/" + enc(resourceId) + "/sessions" + qs(opts));
+    },
+    // POST /api/admin/classes/sessions/:session_id/cancel
+    cancelClassSession: function (sessionId, body) {
+      return A().apiJSON("/api/admin/classes/sessions/" + enc(sessionId) + "/cancel",
+        { method: "POST", body: body || {} });
+    },
+
+    // ---- class rosters / attendance (shared diary lane) -----------------
+    // GET /api/diary/classes/:session_id/roster
+    //   -> {enrolled:[{user_id,name,email,status}], waitlisted:[...]}
+    classRoster: function (sessionId) {
+      return A().apiJSON("/api/diary/classes/" + enc(sessionId) + "/roster");
+    },
+    // POST /api/diary/classes/:session_id/attendance  body: {user_id, attended}
+    classAttendance: function (sessionId, body) {
+      return A().apiJSON("/api/diary/classes/" + enc(sessionId) + "/attendance",
+        { method: "POST", body: body });
+    },
   };
 
   window.AdminAPI = AdminAPI;
