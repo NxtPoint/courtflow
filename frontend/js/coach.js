@@ -141,10 +141,69 @@
     } catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
+  // ---- my profile editor ----------------------------------------------------
+  // A tabbed editor (Profile · Hours · Services) reusing the CoachUI section
+  // components from coach_api.js — the same builders the onboarding wizard uses, so
+  // the wizard and the console stay 1:1. Lets a coach edit everything anytime.
+  var profileState = { data: null, tab: "profile" };
+  var PROFILE_TABS = [
+    { k: "profile", t: "Profile" },
+    { k: "hours", t: "Hours" },
+    { k: "services", t: "Services" },
+  ];
+
+  function profileRoot() { return document.getElementById("coach-profile"); }
+
+  function profileTabBar() {
+    var nav = el("nav", { class: "cf-nav", style: "margin-bottom:16px" });
+    PROFILE_TABS.forEach(function (tab) {
+      var a = el("a", { href: "#" + tab.k, text: tab.t });
+      if (tab.k === profileState.tab) a.classList.add("active");
+      a.addEventListener("click", function (ev) { ev.preventDefault(); selectProfileTab(tab.k); });
+      nav.appendChild(a);
+    });
+    return nav;
+  }
+
+  function selectProfileTab(k) { profileState.tab = k; renderProfile(); }
+
+  function renderProfile() {
+    var host = profileRoot(); if (!host) return;
+    UI.clear(host);
+    host.appendChild(el("div", { class: "cf-card" }, [
+      el("h2", { text: "My profile" }),
+      el("p", { class: "cf-muted", text: "Edit your coaching profile, working hours and services. Changes save per section." }),
+    ]));
+    host.appendChild(profileTabBar());
+    var sectionHost = el("div");
+    host.appendChild(sectionHost);
+
+    var d = profileState.data || {};
+    if (profileState.tab === "profile") {
+      window.CoachUI.profile(sectionHost, d.profile || {}, { saveLabel: "Save changes" });
+    } else if (profileState.tab === "hours") {
+      window.CoachUI.hours(sectionHost, d.hours || {}, { saveLabel: "Save hours" });
+    } else if (profileState.tab === "services") {
+      window.CoachUI.services(sectionHost, {});
+    }
+  }
+
+  async function loadProfile() {
+    var host = profileRoot(); if (!host) return;
+    UI.clear(host); host.appendChild(el("div", { class: "cf-card" }, [el("div", { class: "cf-loading", text: "Loading your profile…" })]));
+    try {
+      profileState.data = await window.CoachAPI.onboarding();
+    } catch (e) {
+      profileState.data = {};
+      UI.toast(UI.errMsg(e), "error");
+    }
+    renderProfile();
+  }
+
   window.CoachConsole = {
     start: function (p) {
       UI = window.UI; el = UI.el; principal = p;
-      loadWeek(); loadResources();
+      loadWeek(); loadResources(); loadProfile();
       document.getElementById("to-submit").addEventListener("click", submitTimeOff);
     },
   };

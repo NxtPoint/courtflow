@@ -21,6 +21,7 @@
 <script src="../js/ui.js"></script>
 <script src="../js/api.js"></script>
 <script src="../js/admin_api.js"></script>
+<script src="../js/coach_api.js"></script>
 <script src="../js/portal.js"></script>
 <script>
 Portal.boot({
@@ -28,11 +29,18 @@ Portal.boot({
   onReady: async function (p) {
     var UI = window.UI, el = UI.el, main = document.getElementById("cf-main");
 
-    // First-run gate: a club admin who hasn't finished onboarding is sent to the wizard.
+    // First-run gate: owners (club_admin / platform_admin) get the club owner wizard;
+    // a pure coach gets the coach onboarding wizard. Each runs only its own check so
+    // an owner is never sent to the coach wizard, and vice versa.
     if (p.role === "club_admin" || p.role === "platform_admin") {
       try {
         var ob = await window.AdminAPI.onboarding();
         if (ob && !ob.completed) { window.location.replace("onboarding.html"); return; }
+      } catch (e) { /* non-blocking: fall through to the dashboard */ }
+    } else if (p.role === "coach") {
+      try {
+        var cob = await window.CoachAPI.onboarding();
+        if (cob && !cob.completed) { window.location.replace("coach-onboarding.html"); return; }
       } catch (e) { /* non-blocking: fall through to the dashboard */ }
     }
 
