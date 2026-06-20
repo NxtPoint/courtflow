@@ -65,6 +65,7 @@ def get_onboarding():
         branding = repo.get_branding(s, club_id=p.club_id)
         policy = repo.get_policy(s, club_id=p.club_id)
         steps, counts = repo.onboarding_counts_and_steps(s, club_id=p.club_id)
+        hours = repo.hours_week(s, club_id=p.club_id)
     completed = bool(club and club.get("onboarding_completed"))
     return jsonify(
         completed=completed,
@@ -74,6 +75,7 @@ def get_onboarding():
         branding=branding,
         policy=policy,
         counts=counts,
+        hours=hours,
     ), 200
 
 

@@ -647,3 +647,38 @@ def onboarding_counts_and_steps(session, *, club_id):
     }
     counts = {"courts": courts, "products": products, "coaches": coaches}
     return steps, counts
+
+
+def hours_week(session, *, club_id):
+    """Collapse the courts' availability_rule into one representative week for UI pre-fill:
+    {week:[{weekday,open,start_time'HH:MM',end_time'HH:MM',slot_minutes}]} for weekdays 0-6.
+    A weekday with at least one court rule is 'open' (with that rule's times); others 'closed'
+    with sensible defaults. Guarded: returns a default closed week if diary.* isn't present."""
+    default = {"week": [
+        {"weekday": wd, "open": False, "start_time": "06:00", "end_time": "22:00",
+         "slot_minutes": 60} for wd in range(7)]}
+    try:
+        rows = session.execute(
+            text("SELECT DISTINCT ON (ar.weekday) ar.weekday, "
+                 "to_char(ar.start_time,'HH24:MI') AS start_time, "
+                 "to_char(ar.end_time,'HH24:MI') AS end_time, ar.slot_minutes "
+                 "FROM diary.availability_rule ar "
+                 "JOIN diary.resource r ON r.id = ar.resource_id AND r.kind = 'court' "
+                 "WHERE ar.club_id = :c "
+                 "ORDER BY ar.weekday, ar.start_time"),
+            {"c": club_id},
+        ).mappings().all()
+    except Exception:
+        session.rollback()
+        return default
+    by_wd = {int(r["weekday"]): r for r in rows}
+    week = []
+    for wd in range(7):
+        r = by_wd.get(wd)
+        if r:
+            week.append({"weekday": wd, "open": True, "start_time": r["start_time"],
+                         "end_time": r["end_time"], "slot_minutes": int(r["slot_minutes"])})
+        else:
+            week.append({"weekday": wd, "open": False, "start_time": "06:00",
+                         "end_time": "22:00", "slot_minutes": 60})
+    return {"week": week}
