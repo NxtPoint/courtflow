@@ -66,6 +66,16 @@ def _body():
 _ON_BEHALF_ROLES = ("coach", "club_admin", "platform_admin")
 
 
+def _can_manage_class(p, coach_user_id):
+    """Admins manage any class; a coach manages only their OWN classes (the class resource's
+    coach_user_id == the coach). Mirrors the ownership gate used for lessons."""
+    if p.role in ("club_admin", "platform_admin"):
+        return True
+    if p.role == "coach":
+        return coach_user_id is not None and str(coach_user_id) == str(p.user_id)
+    return False
+
+
 def _member_by_email(session, club_id, email):
     """Resolve an email to an iam.user that has ANY membership in this club (case-
     insensitive). Returns the user id (str) or None. Club-scoped — we never resolve a user
@@ -311,6 +321,46 @@ def enrol(class_session_id):
     return _result(res)
 
 
+@diary_bp.get("/classes/<session_id>/roster")
+def class_roster(session_id):
+    """Coach (own class) / admin: the enrolled + waitlisted players for a session."""
+    p = _principal()
+    if not p or not _need_club(p):
+        return jsonify(error="unauthorized"), 401
+    with session_scope() as s:
+        coach_uid, cs = classes_mod.session_owner_coach(s, club_id=p.club_id,
+                                                        session_id=session_id)
+        if cs is None:
+            return jsonify(error="SESSION_NOT_FOUND"), 404
+        if not _can_manage_class(p, coach_uid):
+            return jsonify(error="forbidden"), 403
+        res = classes_mod.roster(s, club_id=p.club_id, session_id=session_id)
+    return _result(res)
+
+
+@diary_bp.post("/classes/<session_id>/attendance")
+def class_attendance(session_id):
+    """Coach (own class) / admin: mark a player's enrolment attended / no-show."""
+    p = _principal()
+    if not p or not _need_club(p):
+        return jsonify(error="unauthorized"), 401
+    b = _body()
+    user_id = b.get("user_id")
+    if not user_id:
+        return jsonify(error="user_id required"), 400
+    with session_scope() as s:
+        coach_uid, cs = classes_mod.session_owner_coach(s, club_id=p.club_id,
+                                                        session_id=session_id)
+        if cs is None:
+            return jsonify(error="SESSION_NOT_FOUND"), 404
+        if not _can_manage_class(p, coach_uid):
+            return jsonify(error="forbidden"), 403
+        res = classes_mod.mark_attendance(
+            s, club_id=p.club_id, session_id=session_id, user_id=user_id,
+            attended=bool(b.get("attended", True)))
+    return _result(res)
+
+
 @diary_bp.post("/classes/<class_session_id>/cancel-enrolment")
 def cancel_enrolment(class_session_id):
     p = _principal()
@@ -384,6 +434,9 @@ def master_diary():
                  "ORDER BY b.starts_at"),
             {"c": p.club_id, "df": q.get("date_from"), "dt": q.get("date_to")},
         ).mappings().all()
+        # Class sessions render on the same calendar as bookings (docs/03 §1: one diary).
+        class_events = classes_mod.master_class_events(
+            s, club_id=p.club_id, date_from=q.get("date_from"), date_to=q.get("date_to"))
     out = []
     for r in rows:
         d = dict(r)
@@ -394,6 +447,8 @@ def master_diary():
             if d.get(k) is not None:
                 d[k] = d[k].isoformat()
         out.append(d)
+    out.extend(class_events)
+    out.sort(key=lambda e: e.get("starts_at") or "")
     return jsonify(events=out, count=len(out)), 200
 
 

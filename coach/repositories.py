@@ -401,3 +401,28 @@ def onboarding_steps(session, *, club_id, user_id):
         "hours":    hours_count >= 1,
         "services": services_count >= 1,
     }
+
+
+# ---------------------------------------------------------------------------
+# class ownership checks (the coach owns a class type / session iff its
+# diary.resource(kind='class').coach_user_id == the coach's user_id)
+# ---------------------------------------------------------------------------
+
+def owns_class_resource(session, *, club_id, user_id, resource_id):
+    """True iff resource_id is a class resource in this club owned by this coach."""
+    return session.execute(
+        text("SELECT 1 FROM diary.resource "
+             "WHERE club_id = :c AND id = :r AND kind = 'class' AND coach_user_id = :u"),
+        {"c": club_id, "r": resource_id, "u": user_id},
+    ).first() is not None
+
+
+def owns_class_session(session, *, club_id, user_id, session_id):
+    """True iff session_id is a class_session whose class resource is owned by this coach."""
+    return session.execute(
+        text("SELECT 1 FROM diary.class_session cs "
+             "JOIN diary.resource r ON r.id = cs.resource_id "
+             "WHERE cs.club_id = :c AND cs.id = :s AND r.kind = 'class' "
+             "  AND r.coach_user_id = :u"),
+        {"c": club_id, "s": session_id, "u": user_id},
+    ).first() is not None
