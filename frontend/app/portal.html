@@ -41,32 +41,41 @@ Portal.boot({
     var roleLabel = ({ club_admin: "Club admin", platform_admin: "Platform admin",
                        coach: "Coach", member: "Member", guest: "Guest" })[p.role] || p.role;
 
-    var hero = el("div", { class: "cf-card" }, [
-      el("h2", { text: "Welcome back" }),
-      el("p", { class: "cf-muted", text: (p.email || "") + " · " + roleLabel }),
+    // Time-aware greeting + courtside hero. The gradient overlay keeps the white
+    // text legible even if the Unsplash photo is slow or fails to load.
+    var hr = new Date().getHours();
+    var greet = hr < 12 ? "Good morning" : (hr < 18 ? "Good afternoon" : "Good evening");
+    var heroBg = "linear-gradient(120deg,rgba(8,67,31,.86),rgba(14,122,71,.5))," +
+      "url('https://images.unsplash.com/photo-1595435934249-5df7ed86e1c0?auto=format&fit=crop&w=1400&q=70')";
+    var hero = el("div", { class: "cf-hero", style: "background-image:" + heroBg }, [
+      el("div", { class: "cf-hero-in" }, [
+        el("h1", { text: greet + "," }),
+        el("p", { text: (p.email || "") + " · " + roleLabel }),
+        el("a", { class: "cf-btn cf-btn-accent", href: "book.html", text: "Book a court →" }),
+      ]),
     ]);
     main.appendChild(hero);
 
-    // Quick links, role-aware.
+    // Quick links, role-aware — rendered as cf-tiles.
     var links = [
-      { href: "book.html", t: "Book a court, lesson or class", roles: ["*"] },
-      { href: "my.html", t: "My bookings & statement", roles: ["*"] },
-      { href: "coach.html", t: "Coach console — my week & rosters", roles: ["coach", "club_admin", "platform_admin"] },
-      { href: "admin.html", t: "Master diary & club admin", roles: ["club_admin", "platform_admin"] },
-      { href: "settings.html", t: "Settings — club profile, hours, courts, pricing, coaches", roles: ["club_admin", "platform_admin"] },
+      { href: "book.html", t: "Book", s: "Court, lesson or class", roles: ["*"] },
+      { href: "my.html", t: "My bookings", s: "Upcoming & statement", roles: ["*"] },
+      { href: "coach.html", t: "Coach console", s: "My week & rosters", roles: ["coach", "club_admin", "platform_admin"] },
+      { href: "admin.html", t: "Master diary", s: "Club admin & desk", roles: ["club_admin", "platform_admin"] },
+      { href: "settings.html", t: "Settings", s: "Club, hours, courts, pricing", roles: ["club_admin", "platform_admin"] },
     ];
-    var grid = el("div", { class: "cf-grid cf-grid-2" });
+    var grid = el("div", { class: "cf-tiles" });
     links.forEach(function (l) {
       if (l.roles.indexOf("*") < 0 && l.roles.indexOf(p.role) < 0) return;
-      grid.appendChild(el("a", { href: l.href, class: "cf-card", style: "text-decoration:none;color:inherit;display:block" }, [
-        el("div", { class: "cf-item-t", text: l.t }),
-        el("div", { class: "cf-muted", text: "Open →" }),
+      grid.appendChild(el("a", { href: l.href, class: "cf-tile" }, [
+        el("div", { class: "cf-tile-t", text: l.t }),
+        el("div", { class: "cf-tile-s", text: l.s }),
       ]));
     });
     main.appendChild(grid);
 
     // Upcoming bookings preview (member lens).
-    var up = el("div", { class: "cf-card" }, [ el("h2", { text: "Upcoming" }), el("div", { id: "up", class: "cf-loading", text: "Loading…" }) ]);
+    var up = el("div", { class: "cf-card", style: "margin-top:16px" }, [ el("h2", { text: "Upcoming" }), el("div", { id: "up", class: "cf-loading", text: "Loading…" }) ]);
     main.appendChild(up);
     try {
       var today = UI.dateKey(new Date());
