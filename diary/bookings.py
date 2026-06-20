@@ -116,6 +116,16 @@ def _settlement_allowed(mode, policy, role):
     return False
 
 
+def _has_active_membership_guarded(session, *, club_id, user_id):
+    """True if the user holds an active membership (delegates to diary.pricing, which guards
+    against billing.* being absent in isolation). Never raises."""
+    try:
+        from diary.pricing import has_active_membership
+        return has_active_membership(session, club_id=club_id, user_id=user_id)
+    except Exception:
+        return False
+
+
 def release_expired_holds(session, club_id, now=None):
     """Lazy expiry (NO cron): cancel 'held' bookings whose held_until has passed, freeing the
     slot. Called opportunistically at the start of availability + booking creation, so an
@@ -139,13 +149,15 @@ _KIND_BY_BOOKING_TYPE = {"court": "court_booking", "lesson": "lesson", "class": 
 def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking_type="court",
                           settlement_mode="at_court", parties=None, resource_id=None,
                           starts_at=None, ends_at=None, linked_booking_id=None,
-                          audience="member", enrolment_id=None):
+                          audience="member", enrolment_id=None, duration_minutes=None):
     """Adapter between the diary and Agent C's billing.orders.create_order_for_booking.
 
     The diary speaks bookings; billing speaks order *lines*. We translate here: price each
-    party (or the booking) via diary.pricing.price_for, assemble C's `lines`, call C (which
-    returns an order_id str), and return the dict the diary callers expect
-    {order_id, status, checkout, amount_minor}.
+    party (or the booking) via diary.pricing.price_for for the booking's DURATION (per-duration
+    pricing), assemble C's `lines`, call C (which returns an order_id str), and return the dict
+    the diary callers expect {order_id, status, checkout, amount_minor}.
+
+    membership_covered -> the order is free: lines carry amount 0 (the membership pays for it).
 
     Guarded: if billing isn't present (self-verify mode) the booking still succeeds with no
     order; if pricing isn't seeded yet, lines carry amount 0 (admin sets price later)."""
@@ -159,20 +171,26 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
     kind = _KIND_BY_BOOKING_TYPE.get(booking_type, "court_booking")
     ref = {"booking_id": booking_id, "enrolment_id": enrolment_id}
     parties = parties or []
+    covered = (settlement_mode == "membership_covered")  # free — the membership pays
 
-    # One billing line per party (priced by that party's audience), else a single line for
-    # the booker's audience. The linked lesson court shares the order but isn't billed twice.
+    def _amount(pr):
+        return 0 if covered else (pr.get("amount_minor") or 0)
+
+    # One billing line per party, else a single line for the booking — priced per DURATION.
+    # The linked lesson court shares the order but isn't billed twice.
     lines = []
     if parties:
         for p in parties:
             aud = "guest" if (p.get("party_role") == "guest" or p.get("guest_name")) else "member"
-            pr = price_for(session, club_id=club_id, audience=aud, kind=kind) or {}
+            pr = price_for(session, club_id=club_id, audience=aud, kind=kind,
+                           duration_minutes=duration_minutes) or {}
             lines.append({"description": f"{booking_type} ({aud})", "price_id": pr.get("price_id"),
-                          "qty": 1, "amount_minor": pr.get("amount_minor") or 0, **ref})
+                          "qty": 1, "amount_minor": _amount(pr), **ref})
     else:
-        pr = price_for(session, club_id=club_id, audience=audience, kind=kind) or {}
+        pr = price_for(session, club_id=club_id, audience=audience, kind=kind,
+                       duration_minutes=duration_minutes) or {}
         lines.append({"description": booking_type, "price_id": pr.get("price_id"),
-                      "qty": 1, "amount_minor": pr.get("amount_minor") or 0, **ref})
+                      "qty": 1, "amount_minor": _amount(pr), **ref})
 
     try:
         order_id = create_order_for_booking(
@@ -228,6 +246,17 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         return _err("RESOURCE_NOT_FOUND", 404)
 
     policy = _policy(session, club_id)
+
+    # Membership-covered guard: 'membership_covered' (free) is ONLY honoured for a COURT booking
+    # by a user with an active membership. Anyone else who asks for it (no membership, or a
+    # lesson/class) falls back to per-duration PAYG at the court — the booking still succeeds,
+    # just billed normally. We never trust the client's claim of being covered.
+    if settlement_mode == "membership_covered":
+        if booking_type == "court" and _has_active_membership_guarded(
+                session, club_id=club_id, user_id=owner_user_id):
+            pass  # legitimately covered
+        else:
+            settlement_mode = "at_court"
 
     # Booking window + min duration (members; admins/coaches relax).
     if role in ("member", "guest"):
@@ -290,11 +319,13 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         return _err("INTEGRITY_ERROR", 409)
 
     # --- order / settlement (guarded billing call) ----------------------
+    duration_minutes = int((ends - starts).total_seconds() // 60)
     order = _create_order_guarded(
         session, club_id=club_id, user_id=owner_user_id, booking_id=booking_id,
         booking_type=booking_type, settlement_mode=settlement_mode, parties=parties,
         resource_id=resource_id, starts_at=starts, ends_at=ends,
         linked_booking_id=linked_court_id, audience=audience,
+        duration_minutes=duration_minutes,
     )
     order_id = order.get("order_id")
     if order_id:

@@ -20,6 +20,7 @@ from diary import availability as availability_mod
 from diary import bookings as bookings_mod
 from diary import classes as classes_mod
 from diary import crons as crons_mod
+from diary import pricing as pricing_mod
 
 log = logging.getLogger("diary.routes")
 
@@ -104,17 +105,51 @@ def availability():
     q = request.args
     audience = q.get("audience") or ("member" if p.role in ("member", "coach", "club_admin")
                                      else "visitor")
+    kind = q.get("kind")
     with session_scope() as s:
+        # A COURT booking by a member with an active membership is free — surface 0 on the
+        # slots so the schedule step shows "R0 · covered". (Lessons/classes are never auto-covered.)
+        covered = bool(kind == "court" and pricing_mod.has_active_membership(
+            s, club_id=p.club_id, user_id=p.user_id))
         slots = availability_mod.compute_availability(
             s, club_id=p.club_id,
-            resource_id=q.get("resource_id"), kind=q.get("kind"),
+            resource_id=q.get("resource_id"), kind=kind,
             coach_user_id=q.get("coach_id"), surface=q.get("surface"),
             date_from=q.get("date_from"), date_to=q.get("date_to"),
             duration_minutes=q.get("duration", type=int),
             audience=audience,
             any_resource=(q.get("any") in ("1", "true", "yes")),
+            membership_covered=covered,
         )
     return jsonify(slots=slots, count=len(slots)), 200
+
+
+@diary_bp.get("/durations")
+def durations():
+    """Priced durations for a service + whether the caller's COURT bookings are membership-
+    covered. Powers the booking wizard's Duration step (Service → Duration → Schedule).
+        GET /api/diary/durations?kind=court|lesson&coach_id=&audience=
+        -> {durations:[{duration_minutes, amount_minor, price_id}], membership_covered, currency}
+    membership_covered is true only for kind=court when the caller holds an active membership."""
+    p = _principal()
+    if not p or not _need_club(p):
+        return jsonify(error="unauthorized"), 401
+    q = request.args
+    kind = q.get("kind") or "court"
+    audience = q.get("audience") or ("member" if p.role in ("member", "coach", "club_admin")
+                                     else "visitor")
+    # The booking 'court'/'lesson' kind maps to the billing product kind (court_booking/lesson).
+    price_kind = {"court": "court_booking", "lesson": "lesson", "coach": "lesson"}.get(kind, kind)
+    with session_scope() as s:
+        rows = pricing_mod.durations_for(
+            s, club_id=p.club_id, kind=price_kind,
+            coach_user_id=q.get("coach_id"), audience=audience)
+        covered = bool(kind == "court" and pricing_mod.has_active_membership(
+            s, club_id=p.club_id, user_id=p.user_id))
+    currency = rows[0]["currency_code"] if rows else None
+    out = [{"duration_minutes": r["duration_minutes"], "amount_minor": r["amount_minor"],
+            "price_id": r["price_id"]} for r in rows]
+    return jsonify(durations=out, membership_covered=covered, currency=currency), 200
 
 
 @diary_bp.get("/resources")

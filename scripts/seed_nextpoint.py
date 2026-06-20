@@ -78,17 +78,23 @@ ADMINS = [
 ]
 
 # --- billing price catalogue (ZAR, amount_minor = cents; docs/02 §5/§7) ----
-# Audiences match how diary.pricing.price_for queries (by product kind + audience). Member
-# court is R0 (covered by the R220/mo membership); visitor/guest pay per booking. Editable
-# in the admin console later — these are sensible launch defaults from the Wix site.
+# PER-DURATION pricing (PAYG): a service carries ONE billing.price row per offered duration
+# (duration_minutes set, unit='per_booking', audience='any', the fixed price). Everyone pays
+# the per-duration price; an ACTIVE membership makes COURT bookings free (resolved at booking
+# time via has_active_membership — NOT a R0 price row). The Wix-era "member R0 court" tier is
+# REMOVED. Editable in the admin console later — these are sensible launch defaults.
 PRICES_ZAR = [
     # (kind, product name, [ (audience, amount_minor, unit, duration_minutes), ... ])
     ("court_booking", "Court Hire", [
-        ("member", 0, "per_booking", None),       # covered by membership
-        ("visitor", 15000, "per_booking", None),  # R150
-        ("guest", 8000, "per_booking", None),     # R80 member-guest
+        ("any", 9000, "per_booking", 30),    # R90  / 30 min
+        ("any", 15000, "per_booking", 60),   # R150 / 60 min
+        ("any", 21000, "per_booking", 90),   # R210 / 90 min
+        ("any", 28000, "per_booking", 120),  # R280 / 120 min
     ]),
-    ("lesson", "Private Lesson", [("any", 35000, "per_hour", 60)]),                  # R350/hr
+    ("lesson", "Private Lesson", [
+        ("any", 25000, "per_booking", 30),   # R250 / 30 min
+        ("any", 40000, "per_booking", 60),   # R400 / 60 min
+    ]),
     ("membership", "Unlimited Courts Membership", [("member", 22000, "per_month", None)]),  # R220/mo
     ("class", "Cardio Tennis", [("any", 12000, "per_session", 45)]),                 # R120
     ("class", "Junior Beginner", [("any", 12000, "per_session", 30)]),               # R120/30min
@@ -230,7 +236,8 @@ def _seed_availability_if_possible(session, *, club_id):
 def _seed_billing_if_possible(session, *, club_id, currency_code):
     """Seed the NextPoint product/price catalogue (PRICES_ZAR) as billing.product +
     billing.price rows IF billing.* exists. Idempotent: products keyed by (club, kind, name),
-    prices by (club, product, audience, unit). Skips cleanly if Agent C's schema isn't present."""
+    prices by (club, product, audience, unit, duration_minutes) — duration is part of the key now
+    that a service carries one PER-DURATION price row. Skips cleanly if Agent C's schema isn't present."""
     if not _table_exists(session, "billing", "price"):
         log.info("TODO(billing): billing.product/price not present yet — skipping price seed.")
         return 0
@@ -249,8 +256,9 @@ def _seed_billing_if_possible(session, *, club_id, currency_code):
         for audience, amount_minor, unit, duration in tiers:
             exists = session.execute(
                 text("SELECT 1 FROM billing.price WHERE club_id=:c AND product_id=:p "
-                     "AND audience=:a AND unit=:u"),
-                {"c": club_id, "p": prod_id, "a": audience, "u": unit},
+                     "AND audience=:a AND unit=:u "
+                     "AND duration_minutes IS NOT DISTINCT FROM :dur"),
+                {"c": club_id, "p": prod_id, "a": audience, "u": unit, "dur": duration},
             ).first()
             if exists:
                 continue

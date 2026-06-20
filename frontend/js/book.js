@@ -25,6 +25,10 @@
     selCoach: "ANY",         // lesson: chosen coach resource or "ANY"
     selCourt: "ANY",         // court/lesson: chosen court resource or "ANY"
     selClass: null,          // chosen class session
+    durations: [],           // [{duration_minutes, amount_minor, price_id}] for the chosen service
+    selDuration: null,       // chosen duration in minutes (court/lesson)
+    selDurationPrice: null,  // amount_minor for the chosen duration (null when covered/unpriced)
+    membershipCovered: false,// court + active membership -> free (set from /durations)
     calMonth: null,          // Date pinned to the 1st of the visible calendar month
     day: null,               // Date — chosen day in the calendar
     slotsCache: {},          // cacheKey -> slots[] (per-day availability cache)
@@ -33,25 +37,56 @@
     settlement: "at_court",
   };
 
+  // Priced durations + membership-covered flag for the current service (Duration step).
+  // Calls GET /api/diary/durations directly via TFAuth (book.js owns this small wrapper).
+  function qs(params) {
+    var parts = [];
+    Object.keys(params || {}).forEach(function (k) {
+      var v = params[k];
+      if (v !== undefined && v !== null && v !== "") parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(v));
+    });
+    return parts.length ? ("?" + parts.join("&")) : "";
+  }
+  function fetchDurations(q) {
+    return window.TFAuth.apiJSON("/api/diary/durations" + qs(q));
+  }
+
   // ---- step rendering -------------------------------------------------------
-  function steps(active) {
-    var labels = ["Service", "Schedule", "Confirm"];
+  // The wizard has a Duration step for court/lesson (Service → Duration → Schedule → Confirm);
+  // a class skips it (sessions have fixed times): Service → Schedule → Confirm. We model steps
+  // by NAME so the indices stay correct whichever flow is active.
+  function stepNames() {
+    return state.type === "class"
+      ? ["service", "schedule", "confirm"]
+      : ["service", "duration", "schedule", "confirm"];
+  }
+  var STEP_LABELS = { service: "Service", duration: "Duration", schedule: "Schedule", confirm: "Confirm" };
+
+  function steps(activeName) {
+    var names = stepNames();
+    var active = names.indexOf(activeName);
     var wrap = el("div", { class: "cf-steps" });
-    labels.forEach(function (l, i) {
+    names.forEach(function (name, i) {
       var done = i < active;
       var s = el("div", {
         class: "cf-step" + (i === active ? " on" : "") + (done ? " done" : ""),
-        onclick: function () { goToStep(i); },
-      }, [ el("span", { class: "n", text: done ? "✓" : String(i + 1) }), el("span", { text: l }) ]);
+        onclick: function () { goToStep(name); },
+      }, [ el("span", { class: "n", text: done ? "✓" : String(i + 1) }),
+           el("span", { text: STEP_LABELS[name] }) ]);
       wrap.appendChild(s);
     });
     return wrap;
   }
-  function goToStep(i) {
-    // Allow jumping back to a completed step; never skip forward.
-    if (i === 0) return stepService();
-    if (i === 1 && state.type) return stepSchedule();
-    if (i === 2 && ((state.slot && state.type !== "class") || (state.type === "class" && state.selClass))) {
+  function goToStep(name) {
+    // Allow jumping back to a completed/reachable step; never skip forward past prerequisites.
+    if (name === "service") return stepService();
+    if (name === "duration" && state.type && state.type !== "class") return stepDuration();
+    if (name === "schedule" && state.type) {
+      if (state.type !== "class" && !state.selDuration) return stepDuration();
+      return stepSchedule();
+    }
+    if (name === "confirm" &&
+        ((state.slot && state.type !== "class") || (state.type === "class" && state.selClass))) {
       return stepConfirm();
     }
   }
@@ -78,9 +113,12 @@
           if (changed) {
             state.slot = null; state.selClass = null;
             state.selCoach = "ANY"; state.selCourt = "ANY";
+            state.durations = []; state.selDuration = null; state.selDurationPrice = null;
+            state.membershipCovered = false;
             state.slotsCache = {}; state.day = null; state.calMonth = null;
           }
-          stepSchedule();
+          // Court/lesson go through Duration first (live per-duration price); class skips it.
+          if (o.k === "class") stepSchedule(); else stepDuration();
         },
       }, [
         el("div", { class: "cf-tile-icon", text: o.icon }),
@@ -90,14 +128,77 @@
         ]),
       ]));
     });
-    render(0, el("div", { class: "cf-card" }, [
+    render("service", el("div", { class: "cf-card" }, [
       el("h2", { text: "What would you like to book?" }),
       el("p", { class: "cf-muted", style: "margin-top:-4px", text: "Pick a service to get started." }),
       tiles,
     ]));
   }
 
-  // ---- Step 2: Schedule your service (3-column) -----------------------------
+  // ---- Step 2: choose a duration (court/lesson) -----------------------------
+  // Loads the priced durations for the service. Each tile shows its per-duration price via
+  // UI.money — OR, when the caller's court bookings are membership-covered, "Covered by your
+  // membership · R0". The chosen duration drives the Schedule step (slot length) + checkout.
+  async function stepDuration() {
+    if (state.type === "class") return stepSchedule();
+    var card = el("div", { class: "cf-card" }, [
+      el("h2", { text: state.type === "lesson" ? "How long a lesson?" : "How long do you need the court?" }),
+      el("p", { class: "cf-muted", style: "margin-top:-4px",
+        text: "Pick a duration — the price updates live." }),
+      el("div", { id: "cf-durations", class: "cf-loading", text: "Loading durations…" }),
+    ]);
+    card.appendChild(el("div", { class: "cf-row", style: "margin-top:16px" }, [
+      el("button", { class: "cf-btn cf-btn-ghost", text: "← Back", onclick: stepService }),
+    ]));
+    render("duration", card);
+
+    // Fetch (court|lesson) priced durations + membership_covered for the caller.
+    try {
+      var q = { kind: state.type, audience: "member" };
+      if (state.type === "lesson" && state.selCoach !== "ANY" && state.selCoach.coach_user_id) {
+        q.coach_id = state.selCoach.coach_user_id;
+      }
+      var r = await fetchDurations(q);
+      state.durations = r.durations || [];
+      state.membershipCovered = !!r.membership_covered;
+      renderDurations();
+    } catch (e) {
+      var b = document.getElementById("cf-durations");
+      if (b) { b.className = ""; b.textContent = UI.errMsg(e); }
+    }
+  }
+
+  function renderDurations() {
+    var box = document.getElementById("cf-durations"); if (!box) return;
+    box.className = ""; UI.clear(box);
+    if (!state.durations.length) {
+      box.appendChild(el("div", { class: "cf-empty",
+        text: "No durations are priced for this service yet. Please contact the club." }));
+      return;
+    }
+    var tiles = el("div", { class: "cf-tiles" });
+    state.durations.forEach(function (d) {
+      var on = state.selDuration === d.duration_minutes;
+      var priceText = state.membershipCovered
+        ? "Covered by your membership · R0"
+        : UI.money(d.amount_minor, state.billing.currency);
+      tiles.appendChild(el("div", {
+        class: "cf-tile cf-tile-tap" + (on ? " sel" : ""),
+        onclick: function () {
+          state.selDuration = d.duration_minutes;
+          state.selDurationPrice = state.membershipCovered ? 0 : d.amount_minor;
+          state.slot = null; state.slotsCache = {};   // duration changed -> re-fetch slots
+          stepSchedule();
+        },
+      }, [
+        el("div", { class: "cf-tile-t", text: d.duration_minutes + " min" }),
+        el("div", { class: "cf-tile-s", text: priceText }),
+      ]));
+    });
+    box.appendChild(tiles);
+  }
+
+  // ---- Step 3: Schedule your service (3-column) -----------------------------
   async function stepSchedule() {
     // Load resources for court/lesson before laying out the panel.
     if (state.type !== "class" && !state.resources.length) {
@@ -118,9 +219,11 @@
 
     var card = el("div", { class: "cf-card cf-sched-card" }, [ grid ]);
     card.appendChild(el("div", { class: "cf-row", style: "margin-top:16px" }, [
-      el("button", { class: "cf-btn cf-btn-ghost", text: "← Back", onclick: stepService }),
+      // Back to Duration for court/lesson; back to Service for a class (no duration step).
+      el("button", { class: "cf-btn cf-btn-ghost", text: "← Back",
+        onclick: state.type === "class" ? stepService : stepDuration }),
     ]));
-    render(1, card);
+    render("schedule", card);
 
     loadSlots(); // kick off availability for the selected day
   }
@@ -278,13 +381,22 @@
         : (state.selCoach && state.selCoach.name));
     }
     row("Court", courtSummaryLabel());
+    if (state.selDuration) row("Duration", state.selDuration + " min");
     if (state.slot) {
       row("When", UI.fmtRange(state.slot.start, state.slot.end));
-      if (state.slot.price != null) row("Price", UI.money(state.slot.price, state.billing.currency));
+      row("Price", priceLabel());
     } else {
       row("When", "Pick a time →");
     }
     return box;
+  }
+
+  // Price label for the summary: membership-covered courts read "Covered…", else the chosen
+  // duration's price (slot price when a slot is picked, else the duration tile price).
+  function priceLabel() {
+    if (state.membershipCovered && state.type === "court") return "Covered by your membership · R0";
+    var minor = (state.slot && state.slot.price != null) ? state.slot.price : state.selDurationPrice;
+    return minor != null ? UI.money(minor, state.billing.currency) : "—";
   }
 
   // The court that will actually be reserved (resolved from the slot for "Any").
@@ -299,7 +411,7 @@
 
   // ---- availability load + time blocks --------------------------------------
   function slotCacheKey() {
-    var parts = [state.type, UI.dateKey(state.day)];
+    var parts = [state.type, UI.dateKey(state.day), "d" + (state.selDuration || "")];
     if (state.type === "lesson") parts.push(state.selCoach === "ANY" ? "anycoach" : state.selCoach.id);
     parts.push(state.selCourt === "ANY" ? "anycourt" : state.selCourt.id);
     return parts.join("|");
@@ -311,7 +423,10 @@
     if (state.slotsCache[ck]) { renderSlots(state.slotsCache[ck]); return; }
     var dk = UI.dateKey(state.day);
     try {
+      // Slots are the chosen duration's length; the server prices them per-duration (0 when
+      // membership-covered), so the price shown on each block matches the duration step.
       var q = { date_from: dk, date_to: dk, audience: "member" };
+      if (state.selDuration) q.duration = state.selDuration;
       if (state.type === "lesson") {
         q.kind = "coach";
         if (state.selCoach !== "ANY" && state.selCoach.id) q.coach_id = state.selCoach.id;
@@ -406,10 +521,12 @@
     return modes.filter(function (m) { return UI.SETTLEMENT[m]; });
   }
 
-  // ---- Step 3: pay & confirm ------------------------------------------------
+  // ---- Step 4: pay & confirm ------------------------------------------------
   function stepConfirm() {
     captureGuest(); // preserve typed guest details across settlement re-renders
-    var modes = allowedModes();
+    // Membership-covered court booking -> free: settlement is fixed to membership_covered.
+    var modes = state.membershipCovered && state.type === "court"
+      ? ["membership_covered"] : allowedModes();
     if (modes.indexOf(state.settlement) < 0) state.settlement = modes[0] || "at_court"; // smart default
 
     var card = el("div", { class: "cf-card" });
@@ -454,7 +571,7 @@
     card.appendChild(el("button", { class: "cf-btn cf-btn-ghost cf-btn-block", style: "margin-top:8px",
       text: "← Back", onclick: stepSchedule }));
 
-    render(2, card);
+    render("confirm", card);
   }
 
   function confirmLabel() {
@@ -481,8 +598,9 @@
       } else {
         rows.push(["Court", courtSummaryLabel()]);
       }
+      if (state.selDuration) rows.push(["Duration", state.selDuration + " min"]);
       if (state.slot) rows.push(["When", UI.fmtRange(state.slot.start, state.slot.end)]);
-      if (state.slot && state.slot.price != null) rows.push(["Price", UI.money(state.slot.price, state.billing.currency)]);
+      rows.push(["Price", priceLabel()]);
     }
     var box = el("div", { class: "cf-summary" });
     rows.forEach(function (r) {
@@ -607,6 +725,8 @@
         el("button", { class: "cf-btn cf-btn-ghost cf-btn-lg", text: "Book another", onclick: function () {
           state.type = null; state.slot = null; state.selClass = null;
           state.selCoach = "ANY"; state.selCourt = "ANY";
+          state.durations = []; state.selDuration = null; state.selDurationPrice = null;
+          state.membershipCovered = false;
           state.guest = null; state.day = null; state.calMonth = null; state.slotsCache = {};
           stepService();
         } }),
