@@ -6,23 +6,45 @@ This repo is the **multi-tenant tennis club management platform** (working name 
 NextPoint Tennis is club #1, migrating off Wix.
 
 ## Current state (read this first)
-- **Spec only — no product code yet.** The repo today is `README.md`, `BUILD_PROMPT.md`, and
-  `docs/00`→`docs/09`. There is no app, no `render.yaml`, no tests. The commands and module paths
-  below describe what you will *create*, not what exists.
-- **Not yet a real git repo.** A partial `.git/` exists but is broken — `git status`/`git log` fail
-  with *"not a git repository"*. You must run Step 0 before any git operation.
-- **Source of truth:** `docs/` (read `00`→`09` in order). `BUILD_PROMPT.md` is the build kickoff
-  (master orchestrator prompt + per-agent lane briefs). When a decision isn't in `docs/`, ask.
+- **Backend + frontend built, integration-verified, NOT yet run against live infra.** Phases 0–6 are
+  scaffolded on `master`. The genuinely-new code (diary engine, multi-tenancy, settlement) is done;
+  Yoco online pay (Phase 7) and the supervised DNS/SEO cutover (Phase 6 execution) remain.
+- **Source of truth:** `docs/` (`00`→`11`). `docs/11-build-readiness-and-decisions.md` has the locked
+  decisions + the validated 1050 reuse map. When a decision isn't in `docs/`, ask.
+- **What exists now (lane → modules):**
+  - **A Foundation:** `app.py` (api factory), `wsgi.py`, `db.py` (lazy engine + idempotent boot runner,
+    `BOOT_MODULES`), `auth/` (Clerk JWKS verifier + club-scoped `Principal`), `iam/` (user/membership/
+    permissions), `club/` (tenant schemas), `core/` (CRM identity + consent), `scripts/` (seed/provision),
+    `render.yaml`.
+  - **B Diary:** `diary/` — schema (the GiST no-double-book `EXCLUDE` constraint), `bookings.py`,
+    `classes.py`, `availability.py`, `recurrence.py`, `crons.py`, `routes.py` (`/api/diary/*`).
+  - **C Billing:** `billing/` — schema, `events.py` (`apply_payment_event`, idempotent), `gateway.py`
+    (`PaymentGateway` Protocol + `ManualGateway`; Yoco/PayPal adapters are the Phase-7 extension point),
+    `orders.py`, `ledger.py`, `routes.py` (`/api/billing/*`).
+  - **D CRM:** `marketing_crm/` — `tracking/` (`emit()`→`core.usage_event`), `crm_sync/` (Klaviyo,
+    dark until `KLAVIYO_API_KEY`), `consent/`, `backoffice/` (cockpit), `email/` (SES fallback);
+    `contracts/events.md` is the producer/consumer contract.
+  - **E Frontend:** `frontend/app/` + `frontend/js/` — booking wizard, my-bookings, coach console,
+    admin master diary, `auth_client.js` (Clerk Bearer helper).
+  - **F Web/SEO:** `web_app.py` + `web_wsgi.py` (the **`courtflow-web`** host-switched, DB-less service),
+    `frontend/marketing/`, `frontend/_shared/` (per-club theme), `build_blog.py`, `frontend/login.html`,
+    `migration/` (301 map + cutover runbook — never auto-executed).
+- **Two services:** `courtflow-api` (`wsgi:app`, has DB) and `courtflow-web` (`web_wsgi:app`, no DB,
+  serves marketing + portal shells + `/login`).
 
-## Step 0 — initialize git (do this once, first)
-On Windows, reset the broken `.git/` cleanly, then init:
-```
-Remove-Item -Recurse -Force .git    # ignore if .git absent
-git init
-git add -A
-git commit -m "NextPoint/CourtFlow platform spec + build plan (v1)"
-```
-Then create the GitHub remote and push when ready.
+## Verifying (no live infra needed)
+- **Compile:** `python -m py_compile` over the tree (CI-style gate; there is no pytest suite — match 1050).
+- **Backend integration:** boot all schemas + a booking→order→event chain against a throwaway Postgres
+  (`docker run postgres:16`, set `DATABASE_URL`, `python -m db` twice for the idempotency gate, then
+  `python -m scripts.seed_nextpoint`). The cross-lane flow (diary→billing→CRM), the double-book refusal,
+  and desk-payment idempotency were proven this way (12/12).
+- **Web service:** Flask test client against `web_app.py` (DB-less) — host-switch, portal-shell serving,
+  robots/sitemap, branded 404 (14/14).
+
+## Still needs Tomo before it can RUN/deploy
+New Postgres `DATABASE_URL`; new Clerk app (`AUTH_JWKS_URL`/`AUTH_ISSUER`/`CLERK_PUBLISHABLE_KEY` + an
+`email` JWT-template claim); then Klaviyo sender, Yoco keys, S3/SES, and the supervised DNS cutover at
+their phases. See `docs/11 §5`. **git is already initialized** (history starts at the spec commit).
 
 ## Architecture (big picture — from docs/01, docs/02, docs/09)
 The platform re-assembles ~80% of the proven **Ten-Fifty5 (1050)** architecture around one new
