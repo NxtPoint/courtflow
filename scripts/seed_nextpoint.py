@@ -241,6 +241,16 @@ def _seed_billing_if_possible(session, *, club_id, currency_code):
     if not _table_exists(session, "billing", "price"):
         log.info("TODO(billing): billing.product/price not present yet — skipping price seed.")
         return 0
+    # One-time migration: deactivate the legacy no-duration COURT prices (the Wix-era
+    # member-R0 / visitor / guest tiers). Court is now priced PER DURATION; an active
+    # membership makes courts free at booking time (not via a R0 row). Idempotent.
+    session.execute(
+        text("UPDATE billing.price p SET active=false, updated_at=now() "
+             "FROM billing.product pr "
+             "WHERE p.product_id = pr.id AND pr.club_id = :c "
+             "  AND pr.kind = 'court_booking' AND p.duration_minutes IS NULL AND p.active = true"),
+        {"c": club_id},
+    )
     n = 0
     for kind, name, tiers in PRICES_ZAR:
         prod_id = session.execute(
