@@ -34,18 +34,20 @@ services:
       - key: OPS_KEY
         sync: false
 
-      # --- Auth: per-user IdP. REUSES 1050's existing Clerk (clerk.ten-fifty5.com) per
-      # Tomo 2026-06-20 — no new Clerk app. Its session token already carries an `email`
-      # claim, and default tokens set `iss` but NOT `aud` (so AUTH_AUDIENCE stays blank).
-      # Public values, committed inline (mirrors 1050). DARK until AUTH_ENABLED=1.
+      # --- Auth: per-user IdP — NEW CourtFlow Clerk DEV app (settling-alien-23), created
+      # 2026-06-20. (The reused 1050 production Clerk was domain-locked to ten-fifty5 hosts
+      # and rejected the onrender origin; a dev instance's pk_test key works on any origin.)
+      # Session token carries an `email` claim; default tokens set `iss` not `aud` (AUTH_AUDIENCE
+      # blank). Public values, committed inline. LIVE. Swap to a production instance + custom
+      # domain when nextpointtennis.com cuts over.
       - key: AUTH_ENABLED
-        value: "0"           # flip to "1" once DATABASE_URL is set + boot verified
+        value: "1"
       - key: AUTH_PROVIDER
         value: "clerk"
       - key: AUTH_JWKS_URL
-        value: "https://clerk.ten-fifty5.com/.well-known/jwks.json"
+        value: "https://settling-alien-23.clerk.accounts.dev/.well-known/jwks.json"
       - key: AUTH_ISSUER
-        value: "https://clerk.ten-fifty5.com"
+        value: "https://settling-alien-23.clerk.accounts.dev"
       - key: AUTH_AUDIENCE
         value: ""            # blank — Clerk default session tokens set no aud
 
@@ -97,14 +99,14 @@ services:
         value: "3.12.3"
       # The /login page (Clerk widget). DARK until AUTH_ENABLED=1 + key set.
       - key: AUTH_ENABLED
-        value: "0"
+        value: "1"
       - key: CLERK_PUBLISHABLE_KEY
-        value: "pk_live_Y2xlcmsudGVuLWZpZnR5NS5jb20k"  # 1050's existing Clerk (reused); public by design
+        value: "pk_test_c2V0dGxpbmctYWxpZW4tMjMuY2xlcmsuYWNjb3VudHMuZGV2JA"  # CourtFlow Clerk dev app; public
       - key: AUTH_AFTER_LOGIN_URL
         value: "/portal"
       # Backend that verifies the Clerk token from /login (the whoami check).
       - key: AUTH_API_BASE
-        sync: false          # https://api.courtflow.app
+        value: "https://courtflow-api.onrender.com"
       # MARKETING_HOSTS default comes from club.branding; override only if needed.
       # - key: MARKETING_HOSTS
       #   value: "nextpointtennis.com,www.nextpointtennis.com"
