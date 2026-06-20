@@ -85,6 +85,7 @@ def create_app():
     _try_register(app, "marketing_crm.consent.blueprint", "consent_bp")    # D: /api/consent/*
     _try_register(app, "marketing_crm.backoffice.blueprint", "cockpit_bp")  # D: /api/admin/cockpit/*
     _try_register(app, "admin.routes", "admin_bp")          # Admin: /api/admin/* (onboarding + settings)
+    _try_register(app, "coach.routes", "coach_bp")          # Coach: /api/coach/* (self-service profile/hours/services)
 
     return app
 
