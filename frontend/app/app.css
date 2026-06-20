@@ -350,3 +350,21 @@ p{margin:0 0 10px}
 .cf-svc-k{color:var(--muted);font-size:.8rem;font-weight:600}
 .cf-svc-v{font-weight:600;font-size:.84rem;text-align:right}
 .cf-item.sel{border-color:var(--green);box-shadow:var(--ring)}
+
+/* -- membership (self-serve purchase) -- */
+.cf-membership-card{max-width:520px;margin:0 auto}
+.cf-membership-active{border-color:var(--green);box-shadow:var(--ring)}
+.cf-membership-badge{display:inline-block;font-size:.72rem;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--muted);background:var(--green-050);
+  padding:5px 11px;border-radius:var(--radius-pill);margin-bottom:12px}
+.cf-membership-badge-on{color:#fff;background:var(--green)}
+.cf-membership-price{font-size:1.7rem;font-weight:700;color:var(--ink);margin:6px 0 14px}
+.cf-membership-per{font-size:.95rem;font-weight:500;color:var(--muted)}
+.cf-membership-sub{color:var(--muted);margin:4px 0 14px}
+.cf-membership-perks{list-style:none;margin:0 0 16px;padding:0}
+.cf-membership-perks li{position:relative;padding:7px 0 7px 26px;color:var(--ink);font-size:.92rem;
+  border-bottom:1px solid var(--border-2)}
+.cf-membership-perks li:last-child{border-bottom:0}
+.cf-membership-perks li::before{content:"✓";position:absolute;left:0;top:7px;color:var(--green);font-weight:700}
+.cf-membership-buy{width:100%;padding:13px 22px;font-size:1rem;margin-top:4px}
+.cf-membership-note{color:var(--dim);font-size:.78rem;margin-top:12px;line-height:1.5}

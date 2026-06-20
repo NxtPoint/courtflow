@@ -15,6 +15,13 @@
 #   GET  /order/<id>      AUTH'd. Order status probe for the pay-return page (UX only; the booking
 #                         is confirmed by the webhook, not by this read).
 #
+# Self-serve membership (v1: one month per purchase via the one-off checkout):
+#   POST /api/billing/membership/checkout  AUTH'd member. Creates an online membership order +
+#                         a pending linked subscription; returns {order_id} for Pay.startYocoCheckout.
+#   GET  /api/billing/membership/status    AUTH'd member. {active, current_period_end, price_minor,
+#                         currency}. The webhook handler activates the membership AFTER
+#                         apply_payment_event marks the order paid (membership.activate_membership_for_order).
+#
 # Importing yoco_billing.adapter (below) registers the gateway as a side-effect. DB-touching
 # imports stay lazy so the module imports clean with no DATABASE_URL (app.py boot discipline).
 
@@ -171,8 +178,23 @@ def yoco_webhook():
         log.warning("yoco parse_event failed: %s", e)
         return jsonify(error="parse_failed"), 400
 
+    from db import session_scope
     try:
-        result = apply_payment_event(event)
+        # Settlement + membership activation in ONE transaction. apply_payment_event keeps its
+        # OWN idempotency intact: passing `session` joins (doesn't change) its logic, and on a
+        # replay it returns {ignored:True} WITHOUT re-marking the order — so we only activate a
+        # membership on a genuinely NEW charge_succeeded. The activation helper is itself
+        # idempotent (already_active guard), giving belt-and-braces.
+        with session_scope() as s:
+            result = apply_payment_event(event, session=s)
+            if (not result.get("ignored")
+                    and (event.kind or "").strip().lower() == "charge_succeeded"
+                    and result.get("order_id")):
+                from billing import membership as membership_repo
+                if membership_repo.is_membership_order(s, order_id=result["order_id"]):
+                    act = membership_repo.activate_membership_for_order(
+                        s, order_id=result["order_id"], provider="yoco", months=1)
+                    result["membership"] = act
     except Exception:
         # Transient (e.g. DB) error — 500 so Yoco retries the delivery.
         log.exception("apply_payment_event failed for yoco webhook")
@@ -180,6 +202,72 @@ def yoco_webhook():
 
     # 200 for accepted / duplicate / unknown so Yoco stops retrying.
     return jsonify(result), 200
+
+
+# ---------------------------------------------------------------------------
+# Self-serve membership purchase (v1: ONE MONTH per purchase via the one-off checkout).
+# Auto-renewing Yoco subscription is the NEXT iteration — this buys a single month and the
+# member re-buys when it lapses. Reuses the SAME hosted-checkout + webhook seam as bookings.
+# ---------------------------------------------------------------------------
+
+@yoco_bp.post("/api/billing/membership/checkout")
+def membership_checkout():
+    """AUTH'd member. Create an online order for THIS member's club membership + a pending
+    subscription row linked to it, then return {order_id} so the page calls
+    Pay.startYocoCheckout(order_id). Same gates as a booking online payment."""
+    from auth import resolve_principal
+
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(error="unauthorized"), 401
+    if not p.club_id:
+        return jsonify(error="no_club"), 403
+    if not p.user_id:
+        return jsonify(error="no_user"), 403
+
+    if not _truthy("PAYMENTS_ENABLED"):
+        return jsonify(error="online_payments_disabled"), 403
+
+    from db import session_scope
+    from billing import membership as membership_repo
+
+    with session_scope() as s:
+        if not _club_allows_online(s, p.club_id):
+            return jsonify(error="online_payments_not_enabled_for_club"), 403
+        try:
+            res = membership_repo.create_membership_order(s, club_id=p.club_id, user_id=p.user_id)
+        except Exception as e:
+            log.warning("create_membership_order failed club=%s: %s", p.club_id, e)
+            return jsonify(error="membership_order_failed"), 500
+        if not res:
+            return jsonify(error="no_membership_offered"), 404
+        if int(res.get("amount_minor") or 0) <= 0:
+            return jsonify(error="membership_has_no_price"), 400
+
+    return jsonify(order_id=res["order_id"], amount_minor=res["amount_minor"],
+                   currency=res["currency"], provider="yoco"), 200
+
+
+@yoco_bp.get("/api/billing/membership/status")
+def membership_status():
+    """AUTH'd member. Their membership status for the Membership page:
+    {active, current_period_end, price_minor, currency, sold}."""
+    from auth import resolve_principal
+
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(error="unauthorized"), 401
+    if not p.club_id:
+        return jsonify(error="no_club"), 403
+
+    from db import session_scope
+    from billing import membership as membership_repo
+
+    with session_scope() as s:
+        st = membership_repo.membership_status(s, club_id=p.club_id, user_id=p.user_id)
+        # Surface whether the club has online pay on, so the page can disable the Buy button.
+        st["online_enabled"] = bool(_truthy("PAYMENTS_ENABLED") and _club_allows_online(s, p.club_id))
+    return jsonify(st), 200
 
 
 # ---------------------------------------------------------------------------

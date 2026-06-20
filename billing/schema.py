@@ -194,6 +194,15 @@ _DDL = [
     f"CREATE INDEX IF NOT EXISTS ix_account_ledger_club ON {SCHEMA}.account_ledger (club_id);",
     f"CREATE INDEX IF NOT EXISTS ix_account_ledger_user "
     f"ON {SCHEMA}.account_ledger (club_id, user_id, created_at);",
+
+    # --- self-serve membership purchase link (runs AFTER billing.order exists) ----
+    # A membership bought online ties to its billing.order so the Yoco webhook can recognise
+    # the paid order as a membership purchase and activate it idempotently (keyed off order_id).
+    # NULL for admin-granted / future recurring rows. ADD COLUMN IF NOT EXISTS — safe on every boot.
+    f"ALTER TABLE {SCHEMA}.membership_subscription "
+    f'ADD COLUMN IF NOT EXISTS order_id uuid REFERENCES {SCHEMA}."order"(id) ON DELETE SET NULL;',
+    f"CREATE INDEX IF NOT EXISTS ix_membership_sub_order "
+    f"ON {SCHEMA}.membership_subscription (order_id) WHERE order_id IS NOT NULL;",
 ]
 
 
