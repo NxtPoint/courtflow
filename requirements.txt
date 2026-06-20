@@ -1,0 +1,31 @@
+# CourtFlow / NextPoint platform — runtime deps.
+# Versions mirror the Ten-Fifty5 (1050) stack so the port is clean (Python 3.12).
+# Trimmed: no pandas/numpy/anthropic (those are 1050 ML deps we do not port).
+blinker==1.9.0
+boto3==1.40.30
+botocore==1.40.30
+certifi==2025.8.3
+charset-normalizer==3.4.3
+click==8.2.1
+colorama==0.4.6
+Flask==3.1.2
+greenlet==3.2.4
+idna==3.10
+itsdangerous==2.2.0
+Jinja2==3.1.6
+jmespath==1.0.1
+MarkupSafe==3.0.2
+psycopg[binary]==3.2.13
+python-dateutil==2.9.0.post0
+requests==2.32.5
+s3transfer==0.14.0
+six==1.17.0
+SQLAlchemy==2.0.43
+typing_extensions==4.14.1
+urllib3==2.5.0
+Werkzeug==3.1.3
+Flask-Cors==4.0.1
+
+gunicorn==22.0.0
+sqlparse==0.5.5
+PyJWT[crypto]==2.10.1  # per-user IdP (Clerk) token verification — auth/ (dark until AUTH_ENABLED=1)

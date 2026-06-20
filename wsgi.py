@@ -1,0 +1,3 @@
+# wsgi.py — Gunicorn entrypoint for courtflow-api.
+#   startCommand: gunicorn wsgi:app --bind 0.0.0.0:$PORT ...
+from app import app  # noqa: F401

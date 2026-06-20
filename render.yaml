@@ -1,0 +1,179 @@
+# render.yaml — CourtFlow / NextPoint platform blueprint.
+#
+# Env discipline ported from 1050 (decision D6, docs/10 §8):
+#   - secrets are `sync: false` (filled in the Render dashboard, never committed)
+#   - go-live flags are committed INLINE so a blueprint sync can't wipe them
+#   - the public Clerk publishable key is inline (browser-exposed by design)
+# DROPPED from 1050: all ingest/video/Batch/GPU services and their env.
+#
+# IMPORTANT (docs/CLAUDE.md gotcha): api.nextpointtennis.com is LIVE on the 1050
+# service. This platform gets its OWN API host (e.g. api.courtflow.app), set via the
+# Render dashboard custom domain — NOT here (changing a custom domain can recreate a
+# service). Service `name`s are new slugs (no collision with 1050's blueprint).
+
+services:
+  # =========================================
+  # 1) courtflow-api — booking/diary/billing API (Flask + Gunicorn)
+  # =========================================
+  - type: web
+    name: courtflow-api
+    env: python
+    pythonVersion: 3.12.3
+    plan: starter
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    # 120s timeout (no long ML jobs here, unlike 1050's 1800s).
+    startCommand: "gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.3"
+
+      # --- Database (new Postgres for the platform) ---
+      - key: DATABASE_URL
+        sync: false
+
+      # --- Server-to-server / cron / admin guard (replaces 1050 CLIENT_API_KEY client path) ---
+      - key: OPS_KEY
+        sync: false
+
+      # --- Auth: per-user IdP (NEW Clerk app). DARK until AUTH_ENABLED=1. ---
+      # Clerk note: default session tokens set `iss` (Frontend API URL) but NOT `aud`,
+      # so leave AUTH_AUDIENCE blank; add an `email` claim via a Clerk JWT template.
+      - key: AUTH_ENABLED
+        value: "0"           # flip to "1" once the new Clerk app exists + is tested
+      - key: AUTH_PROVIDER
+        value: "clerk"
+      - key: AUTH_JWKS_URL
+        sync: false          # https://<new-frontend-api>/.well-known/jwks.json
+      - key: AUTH_ISSUER
+        sync: false          # https://<new-frontend-api>
+      - key: AUTH_AUDIENCE
+        value: ""            # leave blank for Clerk default session tokens
+
+      # --- Payments: provider-agnostic, OFF at launch (decision D8). ---
+      - key: PAYMENTS_ENABLED
+        value: "0"
+      - key: YOCO_ENABLED
+        value: "0"
+      - key: YOCO_SECRET_KEY
+        sync: false
+      - key: YOCO_WEBHOOK_SECRET
+        sync: false
+
+      # --- CRM / Klaviyo (one Klaviyo, NextPoint brand — decision D3). ---
+      - key: TRACKING_ENABLED      # core.usage_event + page-view beacon
+        value: "1"
+      - key: CONSENT_ENABLED       # consent capture endpoints + screens
+        value: "1"
+      - key: CRM_SYNC_ENABLED      # forward to Klaviyo (self-gates on KLAVIYO_API_KEY)
+        value: "0"
+      - key: KLAVIYO_API_KEY
+        sync: false
+
+      # --- AWS S3 (assets) + SES (transactional fallback to Klaviyo) ---
+      - key: S3_BUCKET
+        sync: false
+      - key: AWS_REGION
+        value: "af-south-1"
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: SES_SENDER
+        sync: false
+
+  # =========================================
+  # 2) courtflow-web — host-switched marketing site + portal SPAs (NO DB)
+  #    Per-club theming by host reads club.branding (mirrors 1050 locker_room_app).
+  #    Custom domains (nextpointtennis.com etc.) attached via the Render dashboard.
+  # =========================================
+  - type: web
+    name: courtflow-web
+    env: python
+    pythonVersion: 3.12.3
+    plan: starter
+    buildCommand: "pip install --upgrade pip && pip install flask gunicorn requests"
+    startCommand: "gunicorn web_wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.3"
+      # The /login page (Clerk widget). DARK until AUTH_ENABLED=1 + key set.
+      - key: AUTH_ENABLED
+        value: "0"
+      - key: CLERK_PUBLISHABLE_KEY
+        value: ""            # pk_live_... for the NEW Clerk app (public by design)
+      - key: AUTH_AFTER_LOGIN_URL
+        value: "/portal"
+      # Backend that verifies the Clerk token from /login (the whoami check).
+      - key: AUTH_API_BASE
+        sync: false          # https://api.courtflow.app
+      # MARKETING_HOSTS default comes from club.branding; override only if needed.
+      # - key: MARKETING_HOSTS
+      #   value: "nextpointtennis.com,www.nextpointtennis.com"
+
+  # =========================================
+  # Crons — thin HTTP triggers; the endpoint owns the logic (1050 pattern, docs/10 §7).
+  # Each calls courtflow-api with the OPS_KEY header. Schedules are UTC; tune later.
+  # =========================================
+  - type: cron
+    name: courtflow-cron-reminders
+    env: python
+    pythonVersion: 3.12.3
+    plan: starter
+    schedule: "0 6 * * *"        # daily 06:00 UTC (08:00 SAST) — booking/lesson reminders
+    buildCommand: "pip install --upgrade pip && pip install requests"
+    startCommand: "python -m crons.trigger reminders"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.3"
+      - key: CRON_API_BASE
+        sync: false
+      - key: OPS_KEY
+        sync: false
+
+  - type: cron
+    name: courtflow-cron-capacity-sweep
+    env: python
+    pythonVersion: 3.12.3
+    plan: starter
+    schedule: "*/15 * * * *"     # every 15 min — release expired holds, promote waitlist
+    buildCommand: "pip install --upgrade pip && pip install requests"
+    startCommand: "python -m crons.trigger capacity-sweep"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.3"
+      - key: CRON_API_BASE
+        sync: false
+      - key: OPS_KEY
+        sync: false
+
+  - type: cron
+    name: courtflow-cron-monthly-invoice
+    env: python
+    pythonVersion: 3.12.3
+    plan: starter
+    schedule: "0 5 1 * *"        # 1st of month 05:00 UTC — monthly-account invoice run
+    buildCommand: "pip install --upgrade pip && pip install requests"
+    startCommand: "python -m crons.trigger monthly-invoice"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.3"
+      - key: CRON_API_BASE
+        sync: false
+      - key: OPS_KEY
+        sync: false
+
+  - type: cron
+    name: courtflow-cron-membership-refill
+    env: python
+    pythonVersion: 3.12.3
+    plan: starter
+    schedule: "0 4 * * *"        # daily 04:00 UTC — membership period refill/rollover
+    buildCommand: "pip install --upgrade pip && pip install requests"
+    startCommand: "python -m crons.trigger membership-refill"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.3"
+      - key: CRON_API_BASE
+        sync: false
+      - key: OPS_KEY
+        sync: false

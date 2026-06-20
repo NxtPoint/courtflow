@@ -6,4 +6,6 @@ __pycache__/
 .env.*
 node_modules/
 .DS_Store
+*.egg-info/
+.pytest_cache/
 migration/url_inventory.csv
