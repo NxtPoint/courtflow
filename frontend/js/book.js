@@ -540,11 +540,15 @@
           body.resource_id = state.slot.resource_id; // the actual court resolved by availability
         }
         res = await window.API.createBooking(body);
-        // Online: the booking is created 'held' with an order_id; kick off the Yoco hosted
-        // checkout (redirects to Yoco). The webhook confirms the held booking server-side;
-        // /pay-return.html shows the outcome. (pay.js is loaded by book.html.)
-        if (state.settlement === "online" && res.order_id && window.Pay) {
-          await window.Pay.startYocoCheckout(res.order_id); return;
+        // The booking API returns {booking:{...order_id,status}, checkout}. For an online
+        // booking the order is 'awaiting_payment' + the booking is 'held' → kick off the Yoco
+        // hosted checkout (redirects to Yoco; the webhook confirms the booking server-side;
+        // /pay-return.html shows the outcome). pay.js is loaded by book.html.
+        var orderId = res.order_id || (res.booking && res.booking.order_id);
+        if (state.settlement === "online" && orderId) {
+          if (window.Pay) { await window.Pay.startYocoCheckout(orderId); return; }
+          UI.toast("Couldn't open the payment page — please refresh and try again.", "error");
+          return;
         }
         // Fallback: an inline checkout intent on the response (older path).
         if (res.checkout && res.checkout.redirect_url) {
@@ -572,11 +576,13 @@
   // ---- slick success state --------------------------------------------------
   function success(kind, res) {
     var h = host(); UI.clear(h);
+    // class enrol returns status at the top level; court/lesson nest it under booking.
+    var st = res.status || (res.booking && res.booking.status);
     var title, msg;
     if (kind === "class") {
-      if (res.status === "waitlisted") { title = "You're on the waitlist"; msg = "We'll email you the moment a spot opens."; }
+      if (st === "waitlisted") { title = "You're on the waitlist"; msg = "We'll email you the moment a spot opens."; }
       else { title = "You're enrolled!"; msg = "A confirmation email is on its way."; }
-    } else if (res.status === "held") {
+    } else if (st === "held") {
       title = "Booking held"; msg = "We're holding your slot until payment completes.";
     } else {
       title = "You're booked!"; msg = "A confirmation email is on its way.";
