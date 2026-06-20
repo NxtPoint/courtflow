@@ -313,10 +313,39 @@
     } catch (e) { document.getElementById("res-list").textContent = UI.errMsg(e); }
   }
 
-  function renderPeople(panel) {
-    panel.appendChild(el("div", { class: "cf-card cf-empty", html:
-      "People management (members, coaches, guests, juniors/guardians, Clerk invites) consumes the IAM/club admin API. " +
-      "No read endpoint is exposed to the frontend yet — flagged for the IAM/club lane. See report." }));
+  async function renderPeople(panel) {
+    var card = el("div", { class: "cf-card" }, [ el("h2", { text: "People" }) ]);
+    card.appendChild(el("p", { class: "cf-muted", style: "margin:-4px 0 12px",
+      text: "Everyone in the club. To invite a coach, go to Settings → Coaches; the coach completes their own profile when they first log in with that email." }));
+    var box = el("div", { id: "ppl-list", class: "cf-loading", text: "Loading people…" });
+    card.appendChild(box);
+    panel.appendChild(card);
+    try {
+      var r = await window.TFAuth.apiJSON("/api/admin/people");
+      UI.clear(box);
+      if (!r.people || !r.people.length) {
+        box.appendChild(el("div", { class: "cf-empty", text: "No members or coaches yet — invite a coach from Settings → Coaches." }));
+        return;
+      }
+      var roleChip = { platform_admin: "confirmed", club_admin: "confirmed", coach: "lesson", member: "court", guest: "class" };
+      var t = el("table", { class: "cf-table" });
+      t.appendChild(el("thead", {}, [ el("tr", {}, ["Name", "Email", "Phone", "Role", "Status"].map(function (h) {
+        return el("th", { text: h }); })) ]));
+      var tb = el("tbody");
+      r.people.forEach(function (pp) {
+        var name = pp.display_name || [pp.first_name, pp.surname].filter(Boolean).join(" ") || "—";
+        var status = (pp.role === "coach" && pp.invite_status) ? pp.invite_status : (pp.member_status || "—");
+        tb.appendChild(el("tr", {}, [
+          el("td", { text: name }),
+          el("td", { text: pp.email || "—" }),
+          el("td", { text: pp.phone || "—" }),
+          el("td", {}, [ el("span", { class: "cf-chip " + (roleChip[pp.role] || "court"), text: (pp.role || "").replace("_", " ") }) ]),
+          el("td", { text: status }),
+        ]));
+      });
+      t.appendChild(tb);
+      box.appendChild(t);
+    } catch (e) { box.textContent = UI.errMsg(e); }
   }
 
   async function renderBilling(panel) {

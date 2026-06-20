@@ -618,6 +618,32 @@ def get_coach(session, *, club_id, user_id):
 # onboarding step derivation
 # ---------------------------------------------------------------------------
 
+def list_people(session, *, club_id):
+    """Everyone with a membership in the club (members, coaches, guests, admins): iam.user
+    JOIN membership with role + status, coach display_name where applicable, and the latest
+    coach-invite status. Scoped to the club. Ordered by role then name."""
+    rows = session.execute(
+        text("""
+            SELECT u.id AS user_id, u.email, u.first_name, u.surname, u.phone,
+                   m.role, m.member_status,
+                   cp.display_name,
+                   ci.status AS invite_status
+            FROM iam.membership m
+            JOIN iam.user u ON u.id = m.user_id
+            LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id AND cp.club_id = m.club_id
+            LEFT JOIN LATERAL (
+                SELECT status FROM iam.coach_invite
+                WHERE club_id = m.club_id AND user_id = u.id
+                ORDER BY created_at DESC LIMIT 1
+            ) ci ON true
+            WHERE m.club_id = :c
+            ORDER BY m.role, u.surname NULLS LAST, u.first_name NULLS LAST
+        """),
+        {"c": club_id},
+    ).mappings().all()
+    return _rows(rows)
+
+
 def onboarding_counts_and_steps(session, *, club_id):
     """Derive the onboarding step booleans + counts in one pass (each guarded so a not-yet-
     present lane table degrades to False/0 rather than erroring)."""

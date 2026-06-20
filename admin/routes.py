@@ -382,6 +382,17 @@ def get_coaches():
     return jsonify(coaches=rows, count=len(rows)), 200
 
 
+@admin_bp.get("/people")
+def get_people():
+    """Everyone in the club (members/coaches/guests/admins) for the admin People tab."""
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        rows = repo.list_people(s, club_id=p.club_id)
+    return jsonify(people=rows, count=len(rows)), 200
+
+
 def _send_coach_invite_email(*, to_email, club_id, display_name):
     """Best-effort: emit a coach_invited event + send an SES invite email. Guarded imports
     so the admin lane never hard-depends on marketing_crm being present/configured."""
