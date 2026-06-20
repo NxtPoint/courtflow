@@ -481,9 +481,6 @@
     panel.appendChild(el("div", { class: "cf-card" }, [
       el("h2", { text: "Billing & settlement" }),
       el("div", { id: "bill-cfg", class: "cf-loading", text: "Loading config…" }),
-      el("p", { class: "cf-muted", style: "margin-top:8px", text:
-        "Open orders / monthly balances / statement preview need C-lane read endpoints (build_statements is server-side via cron). " +
-        "Desk payments are taken inline from the master diary (Take payment on an at-court booking)." }),
     ]));
     try {
       var cfg = await window.API.billingConfig(principal.club_id);
@@ -491,6 +488,57 @@
       box.appendChild(el("p", { text: "Online payments: " + (cfg.online_enabled ? "ENABLED (" + cfg.provider + ")" : "disabled (pay-at-court)") +
         " · Currency: " + cfg.currency }));
     } catch (e) { document.getElementById("bill-cfg").textContent = UI.errMsg(e); }
+
+    // Recent online payments + refunds.
+    panel.appendChild(el("div", { class: "cf-card" }, [
+      el("h2", { text: "Recent online payments" }),
+      el("p", { class: "cf-muted", style: "margin:-4px 0 12px", text:
+        "Card payments taken via Yoco. A refund returns the money to the customer (record-only — " +
+        "cancel the booking separately if you also want to release the slot)." }),
+      el("div", { id: "bill-pay", class: "cf-loading", text: "Loading payments…" }),
+    ]));
+    loadPayments();
+  }
+
+  async function loadPayments() {
+    var box = document.getElementById("bill-pay");
+    if (!box) return;
+    try {
+      var r = await window.TFAuth.apiJSON("/api/admin/payments");
+      UI.clear(box);
+      if (!r.payments || !r.payments.length) {
+        box.appendChild(el("div", { class: "cf-empty", text: "No online payments yet." })); return;
+      }
+      var t = el("table", { class: "cf-table" });
+      t.appendChild(el("thead", {}, [ el("tr", {}, ["When", "Payer", "Amount", "Status", ""].map(function (h) {
+        return el("th", { text: h }); })) ]));
+      var tb = el("tbody");
+      r.payments.forEach(function (pay) {
+        var refunded = !!pay.refunded;
+        var btn = el("button", { class: "cf-btn cf-btn-sm" + (refunded ? "" : " cf-btn-danger"),
+          text: refunded ? "Refunded" : "Refund" });
+        btn.disabled = refunded;
+        if (!refunded) btn.addEventListener("click", function () { doRefund(pay, btn); });
+        tb.appendChild(el("tr", {}, [
+          el("td", { text: String(pay.created_at || "").replace("T", " ").slice(0, 16) }),
+          el("td", { text: pay.payer_email || "—" }),
+          el("td", { class: "num", text: UI.money(pay.amount_minor, pay.currency_code) }),
+          el("td", {}, [ el("span", { class: "cf-chip " + (refunded ? "cancelled" : "confirmed"),
+            text: refunded ? "refunded" : "paid" }) ]),
+          el("td", {}, [ btn ]),
+        ]));
+      });
+      t.appendChild(tb); box.appendChild(t);
+    } catch (e) { box.textContent = UI.errMsg(e); }
+  }
+
+  function doRefund(pay, btn) {
+    if (!window.confirm("Refund " + UI.money(pay.amount_minor, pay.currency_code) +
+        " to " + (pay.payer_email || "the customer") + "?")) return;
+    btn.disabled = true; btn.textContent = "Refunding…";
+    window.TFAuth.apiJSON("/api/billing/yoco/refund", { method: "POST", body: { order_id: pay.order_id } })
+      .then(function () { UI.toast("Refund issued.", "info"); loadPayments(); })
+      .catch(function (e) { UI.toast(UI.errMsg(e), "error"); btn.disabled = false; btn.textContent = "Refund"; });
   }
 
   async function renderCockpit(panel) {

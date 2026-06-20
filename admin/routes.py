@@ -462,6 +462,17 @@ def get_coaches():
     return jsonify(coaches=rows, count=len(rows)), 200
 
 
+@admin_bp.get("/payments")
+def get_payments():
+    """Recent successful online payments for the admin Billing view (with refund status)."""
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        rows = repo.list_payments(s, club_id=p.club_id)
+    return jsonify(payments=rows, count=len(rows)), 200
+
+
 @admin_bp.get("/people")
 def get_people():
     """Everyone in the club (members/coaches/guests/admins) for the admin People tab."""

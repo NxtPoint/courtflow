@@ -618,6 +618,27 @@ def get_coach(session, *, club_id, user_id):
 # onboarding step derivation
 # ---------------------------------------------------------------------------
 
+def list_payments(session, *, club_id):
+    """Recent successful CHARGE payments for the club, with the payer email + whether the
+    order has since been refunded. Powers the admin Billing view's refund action."""
+    rows = session.execute(
+        text("""
+            SELECT p.id, p.order_id, p.provider, p.amount_minor, p.currency_code, p.status,
+                   p.created_at, o.settlement_mode, u.email AS payer_email,
+                   EXISTS(SELECT 1 FROM billing.payment r
+                          WHERE r.order_id = p.order_id AND r.direction = 'refund') AS refunded
+            FROM billing.payment p
+            JOIN billing."order" o ON o.id = p.order_id
+            LEFT JOIN iam."user" u ON u.id = o.user_id
+            WHERE p.club_id = :c AND p.direction = 'charge' AND p.status = 'succeeded'
+            ORDER BY p.created_at DESC
+            LIMIT 50
+        """),
+        {"c": club_id},
+    ).mappings().all()
+    return _rows(rows)
+
+
 def list_people(session, *, club_id):
     """Everyone with a membership in the club (members, coaches, guests, admins): iam.user
     JOIN membership with role + status, coach display_name where applicable, and the latest
