@@ -47,27 +47,48 @@ NextPoint Tennis is club #1, migrating off Wix.
   - **Web/SEO:** `web_app.py` (+ `web_wsgi.py`), `frontend/marketing/` (restyled to the design system, stock
     court imagery), `frontend/_shared/` (`theme.css` + `chrome.py` + `branding.py` host→club resolver),
     `build_blog.py`, `frontend/login.html`, `migration/`.
-- **Shipped & working:** owner onboarding · coach invite→onboarding · members book courts + named coaches ·
-  coaches/admins book on behalf of a client · unified master diary · consistent bright/modern UI + public site.
+- **Shipped & working:** owner onboarding · coach invite→onboarding · members book courts + named coaches
+  (coach∩court availability) · **classes** (create + recurring/one-off scheduling, capacity + waitlists,
+  rosters + attendance, on the master diary) · coaches/admins book on behalf of a client · **online card
+  payments (Yoco) end-to-end + admin refunds** · **per-duration PAYG pricing + membership-covered courts
+  (admin grant/revoke)** · unified master diary · consistent bright/modern UI + public site.
 
-## Yoco payments — built, wired & live-configured (end-to-end)
-The Yoco online-payment integration is **done** and verified (see Verifying). It lives in `yoco_billing/`
-(new package; `billing/` core untouched — pure adapter behind `register_gateway`/`get_gateway`).
-**Flow:** an `online` booking creates an `awaiting_payment` order + `held` booking → `POST /api/billing/yoco/checkout
-{order_id}` returns Yoco's `redirect_url` → hosted page (card + Apple/Google/Samsung Pay) → `POST
-/api/billing/yoco/webhook` (Standard-Webhooks signature-verified) → `apply_payment_event` → order `paid` +
-booking `confirmed` + `payment_succeeded` receipt emitted. **Refund** = `POST /api/billing/yoco/refund` (admin;
-record-only, booking NOT reversed — docs/05 §8). **Two gates, both must be on:** `PAYMENTS_ENABLED=1` (global)
-AND `club.policy.allow_online_payment` (per-club rollback; set via the Settings toggle below).
-- **Payment-owned frontend (shipped — use, don't duplicate):** `frontend/js/pay.js`
-  (`Pay.startYocoCheckout(orderId)` → POST checkout + redirect), `frontend/app/pay-return.html` +
-  `frontend/js/pay_return.js` (post-payment landing, auto-served at `/pay-return.html`, polls order status).
-- **Wired end-to-end (commit 957e58b):** `book.html` loads `/js/pay.js`; `book.js` calls
-  `Pay.startYocoCheckout(res.order_id)` on the confirm step for an `online` booking; **Admin → Settings** has
-  the "Accept online card payments" toggle (`settings.js` → `AdminAPI.patchPolicy {allow_online_payment}`,
-  insert-only upsert so it persists). **Remaining to take a club live:** flip that toggle ON (the per-club
-  gate) and run a real payment. (Not yet built: an admin Refund button — the `/api/billing/yoco/refund`
-  endpoint exists and is callable.)
+## Payments, pricing & booking flow — LIVE end-to-end
+**Online payments (Yoco) — wired & verified.** `yoco_billing/` is a pure adapter behind
+`register_gateway`/`get_gateway` (`billing/` core untouched). An `online` booking creates an
+`awaiting_payment` order + `held` booking → `book.js` calls `Pay.startYocoCheckout(order_id)` →
+`POST /api/billing/yoco/checkout` returns Yoco's `redirect_url` → hosted page (card + Apple/Google/Samsung
+Pay) → `POST /api/billing/yoco/webhook` (Standard-Webhooks verified) → `apply_payment_event` → order `paid`
++ booking `confirmed`. **GOTCHA the booking API returns `{booking:{order_id,status}, checkout}` — read
+`res.booking.order_id`, NOT `res.order_id`** (that bug silently confirmed online bookings without
+redirecting; fixed). **Two gates, both on:** `PAYMENTS_ENABLED=1`/`YOCO_ENABLED=1` (global, in `render.yaml`)
++ per-club `club.policy.allow_online_payment` (**Admin → Settings → Payments** toggle; the policy upsert is
+**INSERT-ONLY** so the boot re-seed can't reset it). Frontend: `frontend/js/pay.js` + `pay-return.html` +
+`pay_return.js` (auto-served at `/pay-return.html`).
+- **Refunds (built):** **Admin → Billing & settlement → "Recent online payments" → Refund.**
+  `GET /api/admin/payments` lists succeeded charges + refund status; the button → `POST /api/billing/yoco/refund`
+  (record-only, booking NOT reversed — docs/05 §8).
+
+**Pricing model — per-duration PAYG + membership-covered courts.** A service carries ONE `billing.price`
+row per offered duration (`duration_minutes` set, `unit='per_booking'`, `audience='any'`). `diary/pricing.py`:
+`price_for(kind, duration_minutes)` (exact→nearest≤→any), `durations_for(kind[,coach])`, `has_active_membership`.
+Seed: Court Hire 30/60/90/120 = R90/150/210/280; Private Lesson 30/60 = R250/400; classes per_session. **The
+Wix-era "member R0" court tier is GONE** (the seed deactivates legacy no-duration court prices). An **active
+membership makes COURT bookings free** (`settlement_mode=membership_covered`, resolved server-side via
+`has_active_membership` — guarded: courts only, never lessons). Admin grants/revokes in **People**
+(`POST|DELETE /api/admin/members/<user_id>/membership` → `billing.membership_subscription`, provider='manual').
+Self-serve membership purchase (a Yoco subscription) is the next piece.
+
+**Booking flow (`book.js`, Wix "Schedule your service" style):** Service → **Duration** (court/lesson; live
+per-duration price, or "Covered by your membership") → **Schedule** (month calendar | 2-col time blocks |
+coach/court dropdowns with "Any" defaults) → **Pay & confirm** (at court / monthly / membership / online) →
+slick animated success. Class flow skips Duration (sessions have fixed times): Service → Schedule (pick a
+session) → enrol. **When editing `book.js`, PRESERVE** the `createBooking` call + the online seam
+(`res.booking.order_id` → `Pay.startYocoCheckout`).
+
+**Capacity-sweep WITHOUT a cron:** abandoned `held` bookings are released by **lazy expiry** —
+`diary.bookings.release_expired_holds` runs at the top of `compute_availability` + `create_booking` (cancels
+`held` rows past `held_until`). No paid cron needed; the four `render.yaml` crons stay commented out.
 
 ## Commands
 - **Compile gate (CI-style, no infra):** `python -m py_compile $(git ls-files '*.py')` — there is no
@@ -98,7 +119,8 @@ AND `club.policy.allow_online_payment` (per-club rollback; set via the Settings 
 - **S3** (`S3_BUCKET` + AWS keys) for coach **photo uploads** — until set, coaches paste a photo URL.
 - **SES** verified sender for **invite/confirmation emails** — until then coach invite links are shared
   manually; Klaviyo marketing also dark until `KLAVIYO_API_KEY`.
-- **Yoco keys** (`YOCO_*`) for online payments (the parallel build).
+- **Yoco keys** (`YOCO_*`) — DONE (set in Render; payments live). Each club still opts in via the
+  Settings → Payments toggle.
 - **DNS / SEO cutover** for `nextpointtennis.com` (supervised — never an agent). See `docs/11 §5`, `docs/07`.
 
 ## Architecture (big picture — from docs/01, docs/02, docs/09)
