@@ -116,6 +116,21 @@ def _settlement_allowed(mode, policy, role):
     return False
 
 
+def release_expired_holds(session, club_id, now=None):
+    """Lazy expiry (NO cron): cancel 'held' bookings whose held_until has passed, freeing the
+    slot. Called opportunistically at the start of availability + booking creation, so an
+    abandoned online checkout (held → never paid) is released the moment anyone looks at that
+    diary again. Cheap, indexed UPDATE; safe to run on every request."""
+    session.execute(
+        text("UPDATE diary.booking "
+             "SET status='cancelled', cancellation_reason='hold_expired', "
+             "    cancelled_at=now(), updated_at=now() "
+             "WHERE club_id=:c AND status='held' "
+             "  AND held_until IS NOT NULL AND held_until < now()"),
+        {"c": club_id},
+    )
+
+
 # booking_type -> billing.product.kind (docs/02 §5). The diary speaks booking types;
 # billing speaks product kinds. This adapter is the single translation point.
 _KIND_BY_BOOKING_TYPE = {"court": "court_booking", "lesson": "lesson", "class": "class"}
@@ -197,6 +212,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     behaviour: the booking is owned by booked_by_user_id (the actor).
     """
     now = now or datetime.now(timezone.utc)
+    release_expired_holds(session, club_id, now=now)  # lazy expiry: free abandoned holds (no cron)
     # On-behalf override: persist the booking under the client, not the actor.
     owner_user_id = booked_for_user_id or booked_by_user_id
     parties = parties or []

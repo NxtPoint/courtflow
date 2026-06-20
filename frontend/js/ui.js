@@ -31,9 +31,10 @@
 
   // amount_minor (cents) -> "R123.45". Currency from billing config.
   function money(minor, currency) {
-    if (minor === null || minor === undefined) return "—";
+    var n = Number(minor);
+    if (minor === null || minor === undefined || isNaN(n)) return "—";
     var sym = ({ ZAR: "R", USD: "$", GBP: "£", EUR: "€" })[currency] || (currency ? currency + " " : "R");
-    return sym + (minor / 100).toFixed(2);
+    return sym + (n / 100).toFixed(2);
   }
 
   // ---- settlement modes (docs/05 §5) — what the wizard offers per club policy ----

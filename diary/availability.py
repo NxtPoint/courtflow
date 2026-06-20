@@ -183,6 +183,13 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
     availability are unchanged.
     """
     now = now or datetime.now(timezone.utc)
+    # Lazy expiry (no cron): free abandoned 'held' slots before computing availability, so an
+    # unpaid online checkout doesn't block the slot once its hold window passes.
+    try:
+        from diary.bookings import release_expired_holds
+        release_expired_holds(session, club_id, now=now)
+    except Exception:
+        pass
     tz = _club_tz(session, club_id)
     policy = _policy(session, club_id)
     duration_min = int(duration_minutes or policy["min_booking_minutes"] or 60)
