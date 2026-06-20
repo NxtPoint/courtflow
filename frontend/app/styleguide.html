@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow">
+<title>NextPoint · Design preview</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --green:#0E7A47; --green-600:#0B5C36; --green-050:#E8F4EE;
+    --lime:#C8E85C; --lime-700:#7C9A1E;
+    --ink:#10231A; --muted:#5F7268;
+    --canvas:#F5F8F6; --surface:#FFFFFF; --border:#E2E9E5;
+    --success:#16A34A; --warning:#E0A526; --danger:#E0483D; --info:#2D74D6;
+    --radius:14px; --radius-sm:10px;
+    --shadow-sm:0 1px 2px rgba(16,35,26,.06),0 1px 3px rgba(16,35,26,.08);
+    --shadow-md:0 10px 30px rgba(16,35,26,.10);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--canvas);color:var(--ink);font-family:Inter,system-ui,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 20px 80px}
+  h1{font-size:2rem;font-weight:800;letter-spacing:-.02em;margin:0 0 4px}
+  h2{font-size:1.05rem;font-weight:700;margin:40px 0 14px;color:var(--ink)}
+  .sub{color:var(--muted);margin:0 0 8px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-sm);padding:20px}
+  .row{display:flex;gap:14px;flex-wrap:wrap}
+  .grid{display:grid;gap:14px}
+  .g3{grid-template-columns:repeat(3,1fr)} .g4{grid-template-columns:repeat(4,1fr)} .g2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:720px){.g3,.g4,.g2{grid-template-columns:1fr 1fr}}
+
+  /* swatches */
+  .sw{border-radius:var(--radius-sm);height:78px;display:flex;align-items:flex-end;padding:8px 10px;color:#fff;font-size:.72rem;font-weight:600;box-shadow:var(--shadow-sm)}
+  .sw small{display:block;opacity:.85;font-weight:500}
+  .sw.ink-t{color:var(--ink)}
+
+  /* buttons */
+  .btn{border:0;border-radius:999px;padding:11px 20px;font:600 .92rem Inter;cursor:pointer;display:inline-flex;align-items:center;gap:8px;text-decoration:none}
+  .btn-primary{background:var(--green);color:#fff} .btn-primary:hover{background:var(--green-600)}
+  .btn-accent{background:var(--lime);color:#26330a} .btn-accent:hover{filter:brightness(.97)}
+  .btn-ghost{background:transparent;color:var(--green);border:1.5px solid var(--border)}
+  .btn-sm{padding:7px 14px;font-size:.82rem}
+
+  /* chips */
+  .chip{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 11px;font-size:.76rem;font-weight:600}
+  .chip-green{background:var(--green-050);color:var(--green-600)}
+  .chip-lime{background:#F1F8D6;color:var(--lime-700)}
+  .chip-warn{background:#FBF0DA;color:#946017}
+  .chip-info{background:#E5EFFB;color:#1f5bab}
+
+  /* booking tiles */
+  .tile{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow-sm);cursor:pointer;transition:transform .12s,box-shadow .12s}
+  .tile:hover{transform:translateY(-2px);box-shadow:var(--shadow-md);border-color:#cfe0d6}
+  .tile .ic{width:42px;height:42px;border-radius:12px;background:var(--green-050);display:flex;align-items:center;justify-content:center;font-size:1.3rem;margin-bottom:12px}
+  .tile h3{margin:0 0 2px;font-size:1rem} .tile p{margin:0;color:var(--muted);font-size:.85rem}
+
+  /* hero */
+  .hero{border-radius:18px;overflow:hidden;position:relative;min-height:230px;display:flex;align-items:flex-end;color:#fff;
+    background:linear-gradient(120deg,rgba(11,92,54,.86),rgba(14,122,71,.55)),url('https://images.unsplash.com/photo-1595435934249-5df7ed86e1c0?auto=format&fit=crop&w=1400&q=70') center/cover}
+  .hero .h-in{padding:26px}
+  .hero h2{color:#fff;margin:0 0 6px;font-size:1.6rem;font-weight:800}
+  .hero p{margin:0 0 16px;opacity:.92}
+
+  /* list */
+  .item{display:flex;align-items:center;gap:12px;padding:13px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+  .item+.item{margin-top:8px}
+  .item .when{margin-left:auto;color:var(--muted);font-size:.85rem}
+
+  /* inputs */
+  label.f{display:block;font-size:.8rem;font-weight:600;color:var(--muted);margin:0 0 5px}
+  .inp{width:100%;border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font:500 .92rem Inter;color:var(--ink)}
+  .inp:focus{outline:0;border-color:var(--green);box-shadow:0 0 0 3px var(--green-050)}
+
+  /* calendar mock */
+  .cal{display:grid;grid-template-columns:56px repeat(4,1fr);font-size:.78rem}
+  .cal .hd{padding:8px;font-weight:600;color:var(--muted);text-align:center;border-bottom:1px solid var(--border)}
+  .cal .tm{padding:8px;color:var(--muted);text-align:right;border-right:1px solid var(--border)}
+  .cal .cell{border-bottom:1px solid var(--border);border-right:1px solid var(--border);min-height:34px;position:relative}
+  .ev{position:absolute;inset:3px;border-radius:7px;padding:3px 6px;font-weight:600;font-size:.72rem;color:#fff;overflow:hidden}
+  .ev.court{background:var(--green)} .ev.lesson{background:#2D74D6} .ev.class{background:var(--lime);color:#26330a}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>NextPoint — design preview</h1>
+  <p class="sub">Bright &amp; modern · refreshed palette · stock court photography. This is the look I'll roll across every page + the new calendar. Approve or tell me what to tweak.</p>
+
+  <h2>Colour palette</h2>
+  <div class="grid g4">
+    <div class="sw" style="background:#0E7A47">Primary green<small>#0E7A47</small></div>
+    <div class="sw" style="background:#0B5C36">Green hover<small>#0B5C36</small></div>
+    <div class="sw ink-t" style="background:#E8F4EE;color:#0B5C36">Green tint<small>#E8F4EE</small></div>
+    <div class="sw ink-t" style="background:#C8E85C;color:#26330a">Tennis-ball lime<small>#C8E85C</small></div>
+    <div class="sw" style="background:#10231A">Ink (text)<small>#10231A</small></div>
+    <div class="sw" style="background:#5F7268">Muted<small>#5F7268</small></div>
+    <div class="sw ink-t" style="background:#F5F8F6;color:#10231A;border:1px solid var(--border)">Canvas<small>#F5F8F6</small></div>
+    <div class="sw ink-t" style="background:#FFFFFF;color:#10231A;border:1px solid var(--border)">Surface<small>#FFFFFF</small></div>
+    <div class="sw" style="background:#16A34A">Success<small>#16A34A</small></div>
+    <div class="sw" style="background:#E0A526">Warning<small>#E0A526</small></div>
+    <div class="sw" style="background:#E0483D">Danger<small>#E0483D</small></div>
+    <div class="sw" style="background:#2D74D6">Info<small>#2D74D6</small></div>
+  </div>
+
+  <h2>Typography — Inter</h2>
+  <div class="card">
+    <div style="font-size:2.2rem;font-weight:800;letter-spacing:-.02em">Book a court in seconds</div>
+    <div style="font-size:1.3rem;font-weight:700;margin-top:6px">Section heading</div>
+    <p style="margin:8px 0 0">Body copy is Inter at a comfortable 16px with relaxed line-height. <a href="#" style="color:var(--green);font-weight:600">Links look like this.</a> <span class="muted" style="color:var(--muted)">Muted secondary text sits a step back.</span></p>
+  </div>
+
+  <h2>Buttons &amp; chips</h2>
+  <div class="card">
+    <div class="row" style="align-items:center">
+      <button class="btn btn-primary">Confirm booking</button>
+      <button class="btn btn-accent">Quick book</button>
+      <button class="btn btn-ghost">Cancel</button>
+      <button class="btn btn-primary btn-sm">Small</button>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <span class="chip chip-green"><span class="dot" style="background:var(--green)"></span> Confirmed</span>
+      <span class="chip chip-lime">Court</span>
+      <span class="chip chip-info">Lesson</span>
+      <span class="chip chip-warn">Pay at court</span>
+    </div>
+  </div>
+
+  <h2>Dashboard hero + quick-book tiles</h2>
+  <div class="hero"><div class="h-in">
+    <h2>Good evening, Tomo</h2>
+    <p>You have 4 bookings this week at Killarney.</p>
+    <button class="btn btn-accent">Book a court →</button>
+  </div></div>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="tile"><div class="ic">🎾</div><h3>Court</h3><p>Book a court</p></div>
+    <div class="tile"><div class="ic">🏆</div><h3>Lesson</h3><p>Book a named coach</p></div>
+    <div class="tile"><div class="ic">👥</div><h3>Class</h3><p>Cardio, juniors, socials</p></div>
+  </div>
+
+  <h2>Upcoming list + a form field</h2>
+  <div class="grid g2">
+    <div class="card">
+      <div class="item"><span class="chip chip-green">Court</span><div><b>Court 1</b><div style="color:var(--muted);font-size:.85rem">Hard</div></div><span class="when">Sat 09:00</span></div>
+      <div class="item"><span class="chip chip-info">Lesson</span><div><b>Neville Godwin</b><div style="color:var(--muted);font-size:.85rem">1 hour</div></div><span class="when">Sun 16:00</span></div>
+      <div class="item"><span class="chip chip-lime">Class</span><div><b>Cardio Tennis</b><div style="color:var(--muted);font-size:.85rem">45 min</div></div><span class="when">Tue 18:00</span></div>
+    </div>
+    <div class="card">
+      <label class="f">Your name</label>
+      <input class="inp" value="Tomo Stojakovic">
+      <label class="f" style="margin-top:14px">Settlement</label>
+      <input class="inp" value="Pay at court">
+      <button class="btn btn-primary" style="margin-top:16px;width:100%">Save</button>
+    </div>
+  </div>
+
+  <h2>Master diary — the new calendar (resource timeline)</h2>
+  <div class="card" style="padding:0;overflow:hidden">
+    <div class="cal">
+      <div class="hd"></div><div class="hd">Court 1</div><div class="hd">Court 2</div><div class="hd">Clay</div><div class="hd">Neville</div>
+      <div class="tm">08:00</div><div class="cell"><div class="ev court">M. Smith</div></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+      <div class="tm">09:00</div><div class="cell"></div><div class="cell"><div class="ev court">Guest</div></div><div class="cell"></div><div class="cell"><div class="ev lesson">Lesson · J.D.</div></div>
+      <div class="tm">10:00</div><div class="cell"></div><div class="cell"></div><div class="cell"><div class="ev class">Cardio</div></div><div class="cell"></div>
+      <div class="tm">11:00</div><div class="cell"><div class="ev court">Member</div></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+    </div>
+  </div>
+  <p class="sub" style="margin-top:10px">The real one will be FullCalendar resource-timeline: drag-to-create, snap-to-slot, scrollable time axis, click-to-edit, colour by type (green court · blue lesson · lime class).</p>
+
+</div>
+</body>
+</html>
