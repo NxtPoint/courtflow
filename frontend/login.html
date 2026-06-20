@@ -11,37 +11,67 @@
 <!-- Themed by host: web_app injects #cf-theme with --primary/--accent/--ink. -->
 <link rel="stylesheet" href="/shared/theme.css">
 <style>
-  body { display:flex; align-items:center; justify-content:center; min-height:100vh;
-         background:var(--bg); padding:24px 24px 80px; }
-  .wrap { width:100%; max-width:440px; }
-  .brand { text-align:center; margin-bottom:22px; }
-  .brand .logo { font-size:22px; font-weight:800; letter-spacing:-.02em; color:var(--primary-d); }
-  .brand .tag { margin-top:4px; font-size:13px; color:var(--muted); }
-  .card { background:var(--surface); border:1px solid var(--line); border-radius:16px;
-          box-shadow:0 8px 30px rgba(20,60,40,.06); padding:28px; }
+  body { min-height:100vh; background:var(--bg); }
+  /* Split layout: court-photo panel + sign-in column. */
+  .login-shell { display:grid; grid-template-columns:1.05fr .95fr; min-height:100vh; }
+  .login-aside {
+    position:relative; color:#fff; padding:48px; display:flex; flex-direction:column; justify-content:space-between;
+    background:
+      linear-gradient(150deg, rgba(8,67,31,.92), rgba(14,122,71,.55)),
+      url('https://images.unsplash.com/photo-1554068865-24cecd4e34b8?auto=format&fit=crop&w=1400&q=70') center/cover no-repeat;
+  }
+  .login-aside .a-logo { font-size:20px; font-weight:800; letter-spacing:-.02em; }
+  .login-aside .a-eyebrow { display:inline-flex; align-items:center; gap:10px; font-size:.74rem; font-weight:700; text-transform:uppercase; letter-spacing:.14em; color:var(--accent); }
+  .login-aside .a-eyebrow::before { content:""; width:22px; height:2px; border-radius:2px; background:var(--accent); }
+  .login-aside h1 { font-size:clamp(1.7rem,2.6vw,2.4rem); font-weight:800; letter-spacing:-.02em; line-height:1.1; margin:14px 0 12px; color:#fff; }
+  .login-aside p { color:rgba(255,255,255,.9); max-width:380px; }
+  .login-main { display:flex; align-items:center; justify-content:center; padding:40px 24px 80px; }
+  .wrap { width:100%; max-width:420px; }
+  .brand { text-align:center; margin-bottom:24px; }
+  .brand .logo { font-size:22px; font-weight:800; letter-spacing:-.02em; color:var(--ink); }
+  .brand .tag { margin-top:6px; font-size:14px; color:var(--muted); }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+          box-shadow:var(--shadow); padding:28px; }
   #clerk-auth { min-height:360px; display:flex; align-items:center; justify-content:center; }
   .state { text-align:center; color:var(--muted); font-size:14px; line-height:1.6; padding:24px 8px; }
   .state h2 { color:var(--ink); font-size:17px; margin:0 0 8px; }
-  .state a { color:var(--primary-d); font-weight:600; }
+  .state a { color:var(--primary); font-weight:600; }
   .spinner { width:26px; height:26px; border:3px solid var(--line); border-top-color:var(--primary);
              border-radius:50%; animation:spin .8s linear infinite; margin:0 auto 14px; }
   @keyframes spin { to { transform:rotate(360deg); } }
   .foot { text-align:center; margin-top:18px; font-size:12px; color:var(--muted); }
-  .foot a { color:var(--muted); }
+  .foot a { color:var(--muted); font-weight:600; }
+  @media (max-width: 860px) {
+    .login-shell { grid-template-columns:1fr; }
+    .login-aside { display:none; }
+  }
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="brand">
-      <div class="logo">__CLUB_NAME__</div>
-      <div class="tag">Sign in to book courts, lessons and classes</div>
-    </div>
-    <div class="card">
-      <div id="clerk-auth">
-        <div class="state"><div class="spinner"></div>Loading sign-in…</div>
+  <div class="login-shell">
+    <aside class="login-aside">
+      <div class="a-logo">__CLUB_NAME__</div>
+      <div>
+        <div class="a-eyebrow">Members &amp; visitors</div>
+        <h1>Book courts, coaches &amp; classes — in seconds.</h1>
+        <p>Sign in to see live court availability, book a lesson with a named coach, and manage your bookings at NextPoint Tennis.</p>
       </div>
-    </div>
-    <div class="foot">Trouble signing in? <a href="mailto:__SUPPORT_EMAIL__">__SUPPORT_EMAIL__</a></div>
+      <div style="font-size:.82rem;color:rgba(255,255,255,.7)">Killarney Country Club · Houghton, Johannesburg</div>
+    </aside>
+    <main class="login-main">
+      <div class="wrap">
+        <div class="brand">
+          <div class="logo">__CLUB_NAME__</div>
+          <div class="tag">Sign in to book courts, lessons and classes</div>
+        </div>
+        <div class="card">
+          <div id="clerk-auth">
+            <div class="state"><div class="spinner"></div>Loading sign-in…</div>
+          </div>
+        </div>
+        <div class="foot">Trouble signing in? <a href="mailto:__SUPPORT_EMAIL__">__SUPPORT_EMAIL__</a></div>
+      </div>
+    </main>
   </div>
 
 <script>
