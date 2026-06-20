@@ -1,0 +1,25 @@
+old_path,new_path,status
+# 301 REDIRECT MAP — old Wix path -> new courtflow-web path (docs/07 §3).
+# Generated/curated from url_inventory.csv. EVERY old URL with traffic or backlinks
+# must 301 to its exact new equivalent (docs/07 §5). No redirect chains: each old
+# path points STRAIGHT to the final new path. Self-canonicals live on the new pages.
+# This file is DATA ONLY — it is not auto-applied. To activate, import
+# migration/redirects.py and register the blueprint in web_app (see that file's
+# header). Supervised cutover only (CLAUDE.md: agents never change DNS).
+/solutions,/services,301
+/copy-2-of-offering,/services,301
+/copy-of-booking-services,/book/court,301
+/booking-calendar/hard-court-member-bookings,/book/court,301
+/booking-calendar/hard-court-visitor-bookings,/book/court,301
+/service-page/hard-court-visitor-bookings,/book/court,301
+/service-page/hard-court-member-bookings,/book/court,301
+/copy-of-high-performance-program-1,/book/lesson,301
+/copy-of-book-a-lesson,/book/class,301
+/high-performance-program,/programs/high-performance,301
+/coaching-team,/coaches,301
+/booking-calendar/complimentary-lesson-1,/free-lesson,301
+/booking-calendar/junior-beginner,/programs/juniors,301
+/booking-calendar/junior-intermediate,/programs/juniors,301
+/service-page/junior-beginner,/programs/juniors,301
+/service-page/junior-intermediate,/programs/juniors,301
+/jobs,/careers,301
