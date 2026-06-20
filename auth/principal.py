@@ -126,6 +126,17 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
 
         memberships = iam_repo.memberships_for_user(s, user["id"])
         host_club_id = iam_repo.resolve_club_by_host(s, host)
+        # Auto-enrol: any authenticated user with NO membership becomes an active 'member' of
+        # the target club (the host's club, else the single club if this deployment has one).
+        # New sign-ups land in the portal as members (they then choose PAYG or buy a
+        # membership) instead of hitting "No active club". Admins/coaches are seeded/invited,
+        # so they already hold a row and skip this.
+        if not memberships:
+            default_club = host_club_id or iam_repo.sole_club_id(s)
+            if default_club:
+                iam_repo.upsert_membership(s, club_id=default_club, user_id=user["id"],
+                                           role="member", member_status="active")
+                memberships = iam_repo.memberships_for_user(s, user["id"])
 
     club_id, role = _resolve_active_club(memberships, host_club_id, x_club)
 

@@ -107,6 +107,16 @@ def resolve_club_by_host(session, host):
     return row["club_id"] if row else None
 
 
+def sole_club_id(session):
+    """The single club's id when this deployment has exactly one real (non-template) club.
+    Used to auto-enrol a brand-new user as a member when the host doesn't map to a club
+    (e.g. the onrender URL). Returns None if there are 0 or >1 clubs (ambiguous)."""
+    rows = session.execute(
+        text("SELECT id FROM club.club WHERE COALESCE(is_template, false) = false LIMIT 2")
+    ).mappings().all()
+    return rows[0]["id"] if len(rows) == 1 else None
+
+
 def upsert_membership(session, *, club_id, user_id, role, member_status="none"):
     """Idempotent on (club_id, user_id, role). Used by signup + the seed/provision scripts."""
     session.execute(
