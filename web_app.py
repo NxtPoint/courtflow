@@ -304,6 +304,35 @@ def app_asset(filename: str):
     abort(404)
 
 
+@app.get("/js/<path:filename>")
+def js_asset(filename: str):
+    """Agent E's portal shells reference shared JS as ../js/<file>, which resolves to
+    /js/<file> from the app routes (/portal, /book, ...). Serve from frontend/js/, with
+    the public auth placeholders substituted in any .js (so auth_client.js works here too).
+    Path-traversal guarded."""
+    if ".." in filename or filename.startswith("/") or filename.startswith("\\"):
+        abort(404)
+    candidate = os.path.normpath(os.path.join(JS_DIR, filename))
+    if not candidate.startswith(os.path.normpath(JS_DIR)) or not os.path.isfile(candidate):
+        abort(404)
+    with open(candidate, "r", encoding="utf-8") as f:
+        js = f.read()
+    js = (js.replace("__CLERK_PUBLISHABLE_KEY__", CLERK_PUBLISHABLE_KEY)
+            .replace("__AUTH_ENABLED__", AUTH_ENABLED)
+            .replace("__AUTH_API_BASE__", API_BASE)
+            .replace("__AUTH_AFTER_LOGIN__", AFTER_LOGIN_URL))
+    return Response(js, mimetype="application/javascript")
+
+
+@app.get("/app.css")
+def app_css():
+    """Agent E's portal shells link app.css relatively -> /app.css from /portal etc."""
+    path = os.path.join(APP_DIR, "app.css")
+    if not os.path.isfile(path):
+        abort(404)
+    return send_file(path, mimetype="text/css")
+
+
 @app.get("/auth_client.js")
 def auth_client_js():
     """Shared auth helper. Content is owned by Agent E (frontend/js/auth_client.js);
