@@ -260,33 +260,45 @@
     });
   }
 
-  // ---- walk-in booking ------------------------------------------------------
+  // ---- walk-in / book-for-a-member booking ----------------------------------
+  // An admin can book for an EXISTING member by email (it shows in that member's bookings)
+  // OR for a walk-in by name (guest player). If the member email resolves to a club member
+  // server-side (via for_email), it's booked for them; otherwise it falls back to a walk-in
+  // guest party — same as before (docs/08).
   async function openWalkIn() {
     if (!state.resources.length) { var r = await window.API.resources(); state.resources = r.resources || []; }
     var courts = state.resources.filter(function (x) { return x.kind === "court" && x.is_active; });
-    var bg = modal("Walk-in booking", function (m) {
+    var bg = modal("Book a court (member or walk-in)", function (m) {
       var court = el("select", { class: "cf-select" }, courts.map(function (c) { return el("option", { value: c.id, text: c.name }); }));
       var when = el("input", { class: "cf-input", type: "datetime-local" });
       var dur = el("select", { class: "cf-select" }, [el("option", { value: "60", text: "60 min" }), el("option", { value: "30", text: "30 min" }), el("option", { value: "90", text: "90 min" })]);
-      var guest = el("input", { class: "cf-input", placeholder: "Player / guest name" });
+      var clientEmail = el("input", { class: "cf-input", type: "email", placeholder: "Existing member email (optional)" });
+      var guest = el("input", { class: "cf-input", placeholder: "…or walk-in player / guest name" });
       m.appendChild(field("Court", court));
       m.appendChild(field("When", when));
       m.appendChild(field("Duration", dur));
-      m.appendChild(field("Guest name", guest));
+      m.appendChild(field("Member email", clientEmail));
+      m.appendChild(field("Walk-in name", guest));
       m.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:12px" }, [
         el("button", { class: "cf-btn", text: "Cancel", onclick: function () { document.body.removeChild(bg); } }),
         el("button", { class: "cf-btn cf-btn-primary", text: "Book", onclick: async function () {
           if (!court.value || !when.value) { UI.toast("Pick a court and time.", "warn"); return; }
+          var em = clientEmail.value.trim(), gn = guest.value.trim();
           var s = new Date(when.value), e2 = new Date(s.getTime() + parseInt(dur.value, 10) * 60000);
+          var body = {
+            booking_type: "court", resource_id: court.value,
+            starts_at: s.toISOString(), ends_at: e2.toISOString(),
+            // member email → "member" billing audience; pure walk-in → visitor.
+            settlement_mode: "at_court", audience: em ? "member" : "visitor", parties: [],
+          };
+          // On-behalf: the server honours these for admins. A member email books FOR that
+          // member; a non-member email or a name becomes a walk-in guest player party
+          // (so the guest_requires_member guard does not reject it).
+          if (em) body.for_email = em;
+          if (gn) body.for_guest_name = gn;
+          if (!em && !gn) { UI.toast("Enter a member email or a walk-in name.", "warn"); return; }
           try {
-            await window.API.createBooking({
-              booking_type: "court", resource_id: court.value,
-              starts_at: s.toISOString(), ends_at: e2.toISOString(),
-              settlement_mode: "at_court", audience: "visitor",
-              // Walk-in has no member host; record the name as a player (not a "guest"
-              // party) so the guest_requires_member guard does not reject it.
-              parties: guest.value ? [{ party_role: "player", guest_name: guest.value }] : [],
-            });
+            await window.API.createBooking(body);
             document.body.removeChild(bg); UI.toast("Booked.", "info"); loadDiary();
           } catch (e3) { UI.toast(UI.errMsg(e3), "error"); }
         } }),

@@ -4,6 +4,7 @@
 // POST /api/diary/bookings/:id/status, POST /api/diary/time-off.
 (function () {
   var UI, el, principal;
+  var resCache = null;   // {coachRes:[...], courts:[...]} — cached resources for the booking modal
 
   async function loadWeek() {
     var box = document.getElementById("coach-week");
@@ -23,6 +24,12 @@
 
   function renderWeek(lessons, classes) {
     var box = document.getElementById("coach-week"); UI.clear(box);
+    // "Book a session for a client" — a coach can create a booking ON BEHALF of a member
+    // (it shows in THAT member's bookings) or a walk-in guest (docs/08).
+    box.appendChild(el("div", { class: "cf-row", style: "margin-bottom:12px" }, [
+      el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Book a session for a client",
+        onclick: function () { openBookForClient(); } }),
+    ]));
     if (!lessons.length && !classes.length) { box.appendChild(el("div", { class: "cf-empty", text: "Nothing scheduled this week." })); return; }
 
     if (lessons.length) {
@@ -67,6 +74,128 @@
   async function setStatus(id, status) {
     try { await window.API.setBookingStatus(id, { status: status }); UI.toast("Updated.", "info"); loadWeek(); }
     catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+
+  // ---- book a session for a client ------------------------------------------
+  // A coach books FOR a client: either an existing member (by email → shows in their
+  // bookings via booked_for_user_id) or a walk-in (name/email → guest player party).
+  // Type: "Lesson with me" (this coach's resource) or "Court". A court may also be
+  // attached to a lesson. Time is a simple datetime-local + duration picker (v1).
+  async function ensureResources() {
+    if (resCache) return resCache;
+    var r = await window.API.resources();
+    var all = r.resources || [];
+    resCache = {
+      coachRes: all.filter(function (x) {
+        return x.kind === "coach" && String(x.coach_user_id) === String(principal.user_id);
+      }),
+      courts: all.filter(function (x) { return x.kind === "court" && x.is_active; }),
+    };
+    return resCache;
+  }
+
+  function fieldEl(label, control) {
+    return el("div", { class: "cf-field" }, [ el("label", { text: label }), control ]);
+  }
+
+  async function openBookForClient() {
+    var rc;
+    try { rc = await ensureResources(); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); return; }
+    var myCoachRes = rc.coachRes[0] || null;
+
+    var bg = el("div", { class: "cf-modal-bg" });
+    function close() { if (bg.parentNode) document.body.removeChild(bg); }
+
+    var email = el("input", { class: "cf-input", type: "email", placeholder: "Existing member email (optional)" });
+    var guestName = el("input", { class: "cf-input", placeholder: "…or walk-in name" });
+    var guestEmail = el("input", { class: "cf-input", type: "email", placeholder: "Walk-in email (optional)" });
+
+    var typeSel = el("select", { class: "cf-select" }, [
+      el("option", { value: "lesson", text: "Lesson with me" }),
+      el("option", { value: "court", text: "Court" }),
+    ]);
+    if (!myCoachRes) { typeSel.value = "court"; }
+
+    function courtOptions(includeNone) {
+      var opts = [];
+      if (includeNone) opts.push(el("option", { value: "", text: "No court" }));
+      rc.courts.forEach(function (c) { opts.push(el("option", { value: c.id, text: c.name })); });
+      return opts;
+    }
+    var courtSel = el("select", { class: "cf-select" }, courtOptions(true));
+
+    var when = el("input", { class: "cf-input", type: "datetime-local" });
+    var dur = el("select", { class: "cf-select" }, [
+      el("option", { value: "60", text: "60 min" }), el("option", { value: "30", text: "30 min" }),
+      el("option", { value: "90", text: "90 min" }),
+    ]);
+    var settle = el("select", { class: "cf-select" }, [
+      el("option", { value: "at_court", text: "Pay at court" }),
+      el("option", { value: "monthly_account", text: "Monthly account" }),
+      el("option", { value: "free", text: "Complimentary" }),
+    ]);
+
+    var courtField = fieldEl("Court (optional, held alongside the lesson)", courtSel);
+    function syncType() {
+      var isLesson = typeSel.value === "lesson";
+      // Lesson: optional court (with "No court"). Court booking: a court is required.
+      UI.clear(courtSel);
+      courtOptions(isLesson).forEach(function (o) { courtSel.appendChild(o); });
+      courtField.querySelector("label").textContent = isLesson
+        ? "Court (optional, held alongside the lesson)" : "Court";
+    }
+    typeSel.addEventListener("change", syncType);
+    syncType();
+
+    var modal = el("div", { class: "cf-modal" }, [
+      el("h2", { text: "Book a session for a client" }),
+      el("p", { class: "cf-muted", text: "Enter a member's email to book for them, or a walk-in name for a guest." }),
+      fieldEl("Member email", email),
+      fieldEl("Walk-in name", guestName),
+      fieldEl("Walk-in email", guestEmail),
+      fieldEl("Type", typeSel),
+      courtField,
+      fieldEl("When", when),
+      fieldEl("Duration", dur),
+      fieldEl("Settlement", settle),
+      el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:12px" }, [
+        el("button", { class: "cf-btn", text: "Cancel", onclick: close }),
+        el("button", { class: "cf-btn cf-btn-primary", text: "Book", onclick: function () { submitBookForClient(); } }),
+      ]),
+    ]);
+    bg.appendChild(modal); document.body.appendChild(bg);
+    bg.addEventListener("click", function (e) { if (e.target === bg) close(); });
+
+    async function submitBookForClient() {
+      var em = email.value.trim(), gn = guestName.value.trim(), ge = guestEmail.value.trim();
+      if (!em && !gn) { UI.toast("Enter a member email or a walk-in name.", "warn"); return; }
+      if (!when.value) { UI.toast("Pick a date and time.", "warn"); return; }
+      var isLesson = typeSel.value === "lesson";
+      if (isLesson && !myCoachRes) { UI.toast("You have no coach resource — pick Court instead.", "warn"); return; }
+      if (!isLesson && !courtSel.value) { UI.toast("Pick a court.", "warn"); return; }
+      var s = new Date(when.value), e2 = new Date(s.getTime() + parseInt(dur.value, 10) * 60000);
+      var body = {
+        booking_type: isLesson ? "lesson" : "court",
+        starts_at: s.toISOString(), ends_at: e2.toISOString(),
+        settlement_mode: settle.value, audience: "member",
+      };
+      if (isLesson) {
+        body.resource_id = myCoachRes.id;
+        body.coach_user_id = myCoachRes.coach_user_id || principal.user_id;
+        if (courtSel.value) body.court_resource_id = courtSel.value;
+      } else {
+        body.resource_id = courtSel.value;
+      }
+      // On-behalf fields — the server only honours these for coach/admin roles, and resolves
+      // for_email to a club member (else treats it as a walk-in guest party).
+      if (em) body.for_email = em;
+      if (gn) { body.for_guest_name = gn; if (ge) body.for_guest_email = ge; }
+      try {
+        await window.API.createBooking(body);
+        close(); UI.toast("Booked for client.", "info"); loadWeek();
+      } catch (e3) { UI.toast(UI.errMsg(e3), "error"); }
+    }
   }
 
   // Roster modal: the class session id maps to its bookings via the booking list
