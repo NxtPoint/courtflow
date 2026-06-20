@@ -162,6 +162,9 @@ def _overlaps(a_start, a_end, busy):
     return False
 
 
+_LESSON_KINDS = ("coach", "lesson")
+
+
 def compute_availability(session, *, club_id, resource_id=None, kind=None,
                          coach_user_id=None, surface=None, date_from=None, date_to=None,
                          duration_minutes=None, audience="member", any_resource=False,
@@ -171,6 +174,13 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
     where price is the guarded audience price (or None). When any_resource=True (or no
     resource_id with a court kind), overlapping resources' slots are unioned and collapsed
     so each distinct (start,end) appears once (the first free resource wins).
+
+    Lesson requests (kind in {coach, lesson}, optional coach_id; "any coach" allowed) are
+    special: a lesson needs BOTH a free coach AND a free court at the same time. We compute
+    the free coach slots, then intersect each with court availability, returning ONLY slots
+    where >=1 court is also free and attaching that court as `court_resource_id` (the default
+    "any available court" — the frontend may override to a specific court). Court and class
+    availability are unchanged.
     """
     now = now or datetime.now(timezone.utc)
     tz = _club_tz(session, club_id)
@@ -190,7 +200,37 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
                            coach_user_id=coach_user_id, surface=surface)
     price = pricing.price_for(session, club_id=club_id, audience=audience, kind=_price_kind(kind))
 
-    collapse = any_resource or (resource_id is None and kind == "court")
+    is_lesson = kind in _LESSON_KINDS
+
+    # For a lesson we need to know which courts are free at a given (start,end). Build a map
+    # keyed by the slot's (start,end) -> the first free court at that time. A court is free if
+    # it has a candidate slot covering the time and no busy overlap. Courts and coaches share
+    # the same slot grid (duration + start_time), so we key on the exact (start,end).
+    court_free = {}  # (start_iso, end_iso) -> {"resource_id", "resource_name"}
+    if is_lesson:
+        courts = _resources(session, club_id=club_id, resource_id=None, kind="court",
+                            coach_user_id=None, surface=None)
+        for court in courts:
+            ccand = _candidate_slots(
+                session, club_id=club_id, resource_id=court["id"], tz=tz,
+                range_start=range_start, range_end=range_end, duration_min=duration_min,
+            )
+            if not ccand:
+                continue
+            cbusy = _busy_ranges(session, club_id=club_id, resource_id=court["id"],
+                                 range_start=range_start, range_end=range_end)
+            for cs, ce in ccand:
+                if cs < now or _overlaps(cs, ce, cbusy):
+                    continue
+                key = (cs.isoformat(), ce.isoformat())
+                if key not in court_free:  # first free court wins (the "any" default)
+                    court_free[key] = {"resource_id": str(court["id"]),
+                                       "resource_name": court.get("name")}
+
+    # Collapse identical (start,end) for "any" unions. For a lesson with "any coach"
+    # (no coach filter) we also collapse so each time appears once (the first free coach).
+    collapse = (any_resource or (resource_id is None and kind == "court")
+                or (is_lesson and not coach_user_id and not resource_id))
 
     seen = set()
     out = []
@@ -208,19 +248,29 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
                 continue
             if _overlaps(s_utc, e_utc, busy):
                 continue
+            key = (s_utc.isoformat(), e_utc.isoformat())
+            court = None
+            if is_lesson:
+                # A lesson slot is only valid when a court is also free at this time.
+                court = court_free.get(key)
+                if not court:
+                    continue
             if collapse:
-                key = (s_utc.isoformat(), e_utc.isoformat())
                 if key in seen:
                     continue
                 seen.add(key)
-            out.append({
+            slot = {
                 "start": s_utc.isoformat(),
                 "end": e_utc.isoformat(),
                 "resource_id": str(res["id"]),
                 "resource_name": res.get("name"),
                 "kind": res.get("kind"),
                 "price": price,
-            })
+            }
+            if court:
+                slot["court_resource_id"] = court["resource_id"]
+                slot["court_resource_name"] = court["resource_name"]
+            out.append(slot)
     out.sort(key=lambda x: (x["start"], x["resource_name"] or ""))
     return out
 

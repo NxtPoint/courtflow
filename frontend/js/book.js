@@ -1,11 +1,17 @@
 // book.js — member booking wizard (docs/03 §9, docs/05 §5).
-// Flow: type (court / lesson / class) -> pick resource/coach/class -> slot
-//       -> confirm (settlement + parties folded in for fewer taps).
+// Flow (3 steps, modelled on Wix "Schedule your service"):
+//   1. Choose a service  — Book a court / Book a lesson / Attend a class (cf-tile cards).
+//   2. Schedule          — 3-column: month calendar | time blocks | preferences (coach +
+//                          court dropdowns, service-details summary, Next). For a class the
+//                          middle column lists that day's class sessions instead.
+//   3. Pay & confirm     — settlement blocks (Pay online / Pay at the court / Pay later) +
+//                          tight summary + slick animated success.
+//
 // Calls GET /api/diary/availability + GET /api/diary/resources + GET /api/diary/classes,
 // then POST /api/diary/bookings (court/lesson) or POST /api/diary/classes/:id/enrol (class).
 //
-// UX goal: Playtomic-class. Court bookable in ~3 taps (court/any -> time -> Confirm).
-// The slot step is a horizontal date strip + a clean time grid fetched per-day.
+// Lessons reserve a court: on submit we send coach_user_id + resource_id (the coach slot)
+// AND court_resource_id (the available/chosen court) so the backend auto-holds the court.
 (function () {
   var UI, el;
   var state = {
@@ -16,19 +22,20 @@
     resources: [],
     coaches: [],
     courts: [],
-    selResource: null,       // chosen resource (court or coach) or "ANY"
+    selCoach: "ANY",         // lesson: chosen coach resource or "ANY"
+    selCourt: "ANY",         // court/lesson: chosen court resource or "ANY"
     selClass: null,          // chosen class session
-    addCourt: false,         // lesson: "also book a court" toggle (presentation hint)
-    day: null,               // Date — chosen day in the date strip
-    slotsCache: {},          // dateKey -> slots[] (per-day availability cache)
-    slot: null,              // {start,end,resource_id,resource_name,kind,price}
+    calMonth: null,          // Date pinned to the 1st of the visible calendar month
+    day: null,               // Date — chosen day in the calendar
+    slotsCache: {},          // cacheKey -> slots[] (per-day availability cache)
+    slot: null,              // {start,end,resource_id,resource_name,kind,price,court_resource_id?}
     guest: null,             // {name,email} optional member-guest
     settlement: "at_court",
   };
 
   // ---- step rendering -------------------------------------------------------
   function steps(active) {
-    var labels = ["Type", "Choose", "Time", "Confirm"];
+    var labels = ["Service", "Schedule", "Confirm"];
     var wrap = el("div", { class: "cf-steps" });
     labels.forEach(function (l, i) {
       var done = i < active;
@@ -42,11 +49,10 @@
   }
   function goToStep(i) {
     // Allow jumping back to a completed step; never skip forward.
-    if (i === 0) return stepType();
-    if (i === 1 && state.type) return stepChoose();
-    if (i === 2 && (state.selResource || state.selClass)) {
-      if (state.type === "class") return stepConfirm();
-      return stepSlot();
+    if (i === 0) return stepService();
+    if (i === 1 && state.type) return stepSchedule();
+    if (i === 2 && ((state.slot && state.type !== "class") || (state.type === "class" && state.selClass))) {
+      return stepConfirm();
     }
   }
   function host() { return document.getElementById("cf-wizard"); }
@@ -56,21 +62,25 @@
     h.appendChild(body);
   }
 
-  // ---- Step 1: type ---------------------------------------------------------
-  function stepType() {
+  // ---- Step 1: choose a service --------------------------------------------
+  function stepService() {
     var tiles = el("div", { class: "cf-tiles" });
     [
-      { k: "court", t: "Court", s: "Book a court · ~3 taps", icon: "🎾" },
-      { k: "lesson", t: "Lesson", s: "Book a named coach", icon: "🏆" },
-      { k: "class", t: "Class", s: "Cardio, juniors, socials", icon: "👥" },
+      { k: "court", t: "Book a court", s: "Reserve a court — find the first one free", icon: "🎾" },
+      { k: "lesson", t: "Book a lesson", s: "A session with one of our coaches", icon: "🏆" },
+      { k: "class", t: "Attend a class", s: "Cardio, juniors, socials & clinics", icon: "👥" },
     ].forEach(function (o) {
       tiles.appendChild(el("div", {
-        class: "cf-tile cf-tile-tap" + (state.type === o.k ? " sel" : ""),
+        class: "cf-tile cf-tile-tap cf-svc-tile" + (state.type === o.k ? " sel" : ""),
         onclick: function () {
+          var changed = state.type !== o.k;
           state.type = o.k;
-          state.slot = null; state.selResource = null; state.selClass = null;
-          state.slotsCache = {}; state.day = null; state.addCourt = false;
-          stepChoose();
+          if (changed) {
+            state.slot = null; state.selClass = null;
+            state.selCoach = "ANY"; state.selCourt = "ANY";
+            state.slotsCache = {}; state.day = null; state.calMonth = null;
+          }
+          stepSchedule();
         },
       }, [
         el("div", { class: "cf-tile-icon", text: o.icon }),
@@ -81,243 +91,308 @@
       ]));
     });
     render(0, el("div", { class: "cf-card" }, [
-      el("h2", { text: "What would you like to book?" }), tiles,
+      el("h2", { text: "What would you like to book?" }),
+      el("p", { class: "cf-muted", style: "margin-top:-4px", text: "Pick a service to get started." }),
+      tiles,
     ]));
   }
 
-  // ---- Step 2: choose resource / coach / class ------------------------------
-  async function stepChoose() {
-    var title = state.type === "lesson" ? "Choose your coach"
-              : state.type === "class" ? "Upcoming classes" : "Choose a court";
-    var card = el("div", { class: "cf-card" }, [
-      el("h2", { text: title }),
-      el("div", { id: "choose", class: "cf-loading", text: "Loading…" }),
-    ]);
-    render(1, card);
-    try {
-      if (state.type === "class") {
-        var today = UI.dateKey(new Date());
-        var to = UI.dateKey(UI.addDays(new Date(), 21));
-        var r = await window.API.classes({ date_from: today, date_to: to });
-        renderClassList(r.classes || []);
-        return;
-      }
-      if (!state.resources.length) {
+  // ---- Step 2: Schedule your service (3-column) -----------------------------
+  async function stepSchedule() {
+    // Load resources for court/lesson before laying out the panel.
+    if (state.type !== "class" && !state.resources.length) {
+      try {
         var rr = await window.API.resources();
         state.resources = rr.resources || [];
         state.courts = state.resources.filter(function (x) { return x.kind === "court"; });
         state.coaches = state.resources.filter(function (x) { return x.kind === "coach"; });
-      }
-      if (state.type === "lesson") renderCoachPicker();
-      else renderCourtPicker();
-    } catch (e) { var b = document.getElementById("choose"); if (b) b.textContent = UI.errMsg(e); }
-  }
-
-  function renderCourtPicker() {
-    var box = document.getElementById("choose"); UI.clear(box);
-    if (!state.courts.length) {
-      box.appendChild(el("div", { class: "cf-empty", text: "No courts available." }));
-      box.appendChild(backRow(stepType));
-      return;
+      } catch (e) { /* fall through — calendar still renders, slots will surface the error */ }
     }
-    box.appendChild(el("p", { class: "cf-muted", text: "Pick a court — or let us find the first one free." }));
-    var tiles = el("div", { class: "cf-tiles" });
-    // "Any available court" — the fast path (smart default for ~3-tap booking).
-    tiles.appendChild(el("div", {
-      class: "cf-tile cf-tile-tap cf-tile-any" + (state.selResource === "ANY" ? " sel" : ""),
-      onclick: function () { state.selResource = "ANY"; afterResource(); },
-    }, [
-      el("div", { class: "cf-tile-icon", text: "⚡" }),
-      el("div", {}, [
-        el("div", { class: "cf-tile-t", text: "Any available court" }),
-        el("div", { class: "cf-tile-s", text: "Fastest — we pick the first free court" }),
-      ]),
-    ]));
-    state.courts.forEach(function (res) {
-      tiles.appendChild(el("div", {
-        class: "cf-tile cf-tile-tap" + (state.selResource && state.selResource.id === res.id ? " sel" : ""),
-        onclick: function () { state.selResource = res; afterResource(); },
-      }, [
-        el("div", { class: "cf-tile-icon", text: "🎾" }),
-        el("div", {}, [
-          el("div", { class: "cf-tile-t", text: res.name }),
-          el("div", { class: "cf-tile-s", text: res.surface || res.kind }),
-        ]),
-      ]));
-    });
-    box.appendChild(tiles);
-    box.appendChild(backRow(stepType));
-  }
-
-  function renderCoachPicker() {
-    var box = document.getElementById("choose"); UI.clear(box);
-    if (!state.coaches.length) {
-      box.appendChild(el("div", { class: "cf-empty", text: "No coaches available." }));
-      box.appendChild(backRow(stepType));
-      return;
-    }
-    box.appendChild(el("p", { class: "cf-muted", text: "Pick your coach:" }));
-    var list = el("div", { class: "cf-coachgrid" });
-    state.coaches.forEach(function (res) {
-      var headline = res.headline || res.specialties || res.bio || "Tennis coach";
-      var rate = res.rate_minor != null ? UI.money(res.rate_minor, state.billing.currency) + " / hr"
-               : (res.price_minor != null ? UI.money(res.price_minor, state.billing.currency) + " / hr" : null);
-      var initials = (res.name || "?").split(/\s+/).map(function (w) { return w[0]; }).join("").slice(0, 2).toUpperCase();
-      var card = el("div", {
-        class: "cf-coach" + (state.selResource && state.selResource.id === res.id ? " sel" : ""),
-        onclick: function () { state.selResource = res; afterResource(); },
-      }, [
-        el("div", { class: "cf-coach-av", text: initials }),
-        el("div", { class: "cf-coach-main" }, [
-          el("div", { class: "cf-coach-name", text: res.name }),
-          el("div", { class: "cf-coach-head", text: headline }),
-          rate ? el("div", { class: "cf-coach-rate", text: rate }) : null,
-        ]),
-      ]);
-      list.appendChild(card);
-    });
-    box.appendChild(list);
-    box.appendChild(backRow(stepType));
-  }
-
-  function afterResource() {
-    // Default the day to today and jump straight into the time grid.
     state.day = state.day || new Date();
-    state.slot = null; state.slotsCache = {};
-    stepSlot();
+    state.calMonth = state.calMonth || firstOfMonth(state.day);
+
+    var grid = el("div", { class: "cf-sched" });
+    grid.appendChild(calColumn());
+    grid.appendChild(midColumn());
+    grid.appendChild(prefColumn());
+
+    var card = el("div", { class: "cf-card cf-sched-card" }, [ grid ]);
+    card.appendChild(el("div", { class: "cf-row", style: "margin-top:16px" }, [
+      el("button", { class: "cf-btn cf-btn-ghost", text: "← Back", onclick: stepService }),
+    ]));
+    render(1, card);
+
+    loadSlots(); // kick off availability for the selected day
+  }
+
+  // -- left column: month calendar -------------------------------------------
+  function firstOfMonth(d) { var x = new Date(d); x.setDate(1); x.setHours(0, 0, 0, 0); return x; }
+  function sameDay(a, b) { return a && b && UI.dateKey(a) === UI.dateKey(b); }
+
+  function inWindow(d) {
+    // Selectable if today..today+window_days (best-effort window; backend re-validates).
+    var t0 = new Date(); t0.setHours(0, 0, 0, 0);
+    var winDays = (state.policy && state.policy.booking_window_days) || 14;
+    var max = UI.addDays(t0, winDays);
+    var dd = new Date(d); dd.setHours(0, 0, 0, 0);
+    return dd >= t0 && dd <= max;
+  }
+
+  function calColumn() {
+    var col = el("div", { class: "cf-sched-col cf-cal-col" });
+    col.appendChild(el("h2", { class: "cf-sched-h", text: "Select a Date and Time" }));
+    col.appendChild(el("p", { class: "cf-cal-tz", text: "Times shown in " + UI.CLUB_TZ.replace(/_/g, " ") }));
+
+    var head = el("div", { class: "cf-cal-nav" }, [
+      el("button", { class: "cf-cal-navbtn", text: "‹", "aria-label": "Previous month",
+        onclick: function () { state.calMonth = addMonths(state.calMonth, -1); stepSchedule(); } }),
+      el("div", { class: "cf-cal-title",
+        text: state.calMonth.toLocaleDateString("en-ZA", { month: "long", year: "numeric", timeZone: UI.CLUB_TZ }) }),
+      el("button", { class: "cf-cal-navbtn", text: "›", "aria-label": "Next month",
+        onclick: function () { state.calMonth = addMonths(state.calMonth, 1); stepSchedule(); } }),
+    ]);
+    col.appendChild(head);
+
+    var dow = el("div", { class: "cf-cal-dow" });
+    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach(function (w) {
+      dow.appendChild(el("span", { text: w }));
+    });
+    col.appendChild(dow);
+
+    var gridEl = el("div", { class: "cf-cal-grid" });
+    var first = firstOfMonth(state.calMonth);
+    var lead = first.getDay(); // 0=Sun
+    for (var i = 0; i < lead; i++) gridEl.appendChild(el("span", { class: "cf-cal-pad" }));
+    var dim = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+    for (var dnum = 1; dnum <= dim; dnum++) {
+      (function (dnum) {
+        var d = new Date(first.getFullYear(), first.getMonth(), dnum);
+        var ok = inWindow(d);
+        var on = sameDay(d, state.day);
+        var cls = "cf-cal-day" + (ok ? "" : " off") + (on ? " sel" : "");
+        var cell = el("button", {
+          class: cls, type: "button", disabled: ok ? null : "disabled",
+          onclick: ok ? function () { state.day = d; stepSchedule(); } : null,
+        }, [
+          el("span", { class: "cf-cal-dnum", text: String(dnum) }),
+          ok ? el("span", { class: "cf-cal-dot" }) : null,
+        ]);
+        gridEl.appendChild(cell);
+      })(dnum);
+    }
+    col.appendChild(gridEl);
+    return col;
+  }
+  function addMonths(d, n) { var x = new Date(d); x.setMonth(x.getMonth() + n); return x; }
+
+  // -- middle column: time blocks (or class list) ----------------------------
+  function midColumn() {
+    var col = el("div", { class: "cf-sched-col cf-mid-col" });
+    var dl = state.day.toLocaleDateString("en-ZA",
+      { weekday: "long", month: "long", day: "numeric", timeZone: UI.CLUB_TZ });
+    var head = state.type === "class" ? "Classes for " + dl : "Availability for " + dl;
+    col.appendChild(el("h3", { class: "cf-mid-h", text: head }));
+    col.appendChild(el("div", { id: "cf-slots", class: "cf-loading", text: "Finding times…" }));
+    return col;
+  }
+
+  // -- right column: preferences + service details + Next ---------------------
+  function prefColumn() {
+    var col = el("div", { class: "cf-sched-col cf-pref-col" });
+    col.appendChild(el("h3", { class: "cf-pref-h", text: "Preferences" }));
+
+    if (state.type === "lesson") {
+      var coachSel = el("select", { class: "cf-select", onchange: function (ev) {
+        state.selCoach = ev.target.value === "ANY" ? "ANY"
+          : state.coaches.filter(function (c) { return c.id === ev.target.value; })[0] || "ANY";
+        state.slot = null; state.slotsCache = {}; stepSchedule();
+      } });
+      coachSel.appendChild(el("option", { value: "ANY", text: "Any coach",
+        selected: state.selCoach === "ANY" ? "selected" : null }));
+      state.coaches.forEach(function (c) {
+        coachSel.appendChild(el("option", { value: c.id, text: c.name,
+          selected: (state.selCoach && state.selCoach.id === c.id) ? "selected" : null }));
+      });
+      col.appendChild(el("div", { class: "cf-field" }, [ el("label", { text: "Coach" }), coachSel ]));
+    }
+
+    if (state.type !== "class") {
+      var courtSel = el("select", { class: "cf-select", onchange: function (ev) {
+        state.selCourt = ev.target.value === "ANY" ? "ANY"
+          : state.courts.filter(function (c) { return c.id === ev.target.value; })[0] || "ANY";
+        state.slot = null; state.slotsCache = {}; stepSchedule();
+      } });
+      courtSel.appendChild(el("option", { value: "ANY", text: "Any available court",
+        selected: state.selCourt === "ANY" ? "selected" : null }));
+      state.courts.forEach(function (c) {
+        courtSel.appendChild(el("option", { value: c.id, text: c.name,
+          selected: (state.selCourt && state.selCourt.id === c.id) ? "selected" : null }));
+      });
+      col.appendChild(el("div", { class: "cf-field" }, [
+        el("label", { text: "Court" }), courtSel,
+        state.type === "lesson"
+          ? el("div", { class: "cf-pref-note", text: "We'll reserve this court for your lesson." }) : null,
+      ]));
+    }
+
+    col.appendChild(el("h3", { class: "cf-pref-h", style: "margin-top:18px", text: "Service Details" }));
+    col.appendChild(serviceDetails());
+
+    var next = el("button", {
+      class: "cf-btn cf-btn-primary cf-btn-block cf-btn-lg", style: "margin-top:14px",
+      text: "Next", disabled: readyForNext() ? null : "disabled",
+      onclick: function () { if (readyForNext()) stepConfirm(); },
+    });
+    col.appendChild(next);
+    return col;
+  }
+
+  function readyForNext() {
+    return state.type === "class" ? !!state.selClass : !!state.slot;
+  }
+
+  function serviceDetails() {
+    var box = el("div", { class: "cf-svc-details" });
+    function row(k, v) {
+      box.appendChild(el("div", { class: "cf-svc-row" }, [
+        el("span", { class: "cf-svc-k", text: k }),
+        el("span", { class: "cf-svc-v", text: v == null ? "—" : String(v) }),
+      ]));
+    }
+    if (state.type === "class") {
+      row("Service", "Class");
+      if (state.selClass) {
+        row("Class", state.selClass.class_name || "Class");
+        row("When", UI.fmtRange(state.selClass.starts_at, state.selClass.ends_at));
+        var cp = state.selClass.price_minor != null ? state.selClass.price_minor : state.selClass.price;
+        if (cp != null) row("Price", UI.money(cp, state.billing.currency));
+      } else {
+        row("When", "Pick a class →");
+      }
+      return box;
+    }
+    row("Service", state.type === "lesson" ? "Lesson" : "Court booking");
+    if (state.type === "lesson") {
+      row("Coach", state.selCoach === "ANY"
+        ? (state.slot && state.slot.resource_name || "Any coach")
+        : (state.selCoach && state.selCoach.name));
+    }
+    row("Court", courtSummaryLabel());
+    if (state.slot) {
+      row("When", UI.fmtRange(state.slot.start, state.slot.end));
+      if (state.slot.price != null) row("Price", UI.money(state.slot.price, state.billing.currency));
+    } else {
+      row("When", "Pick a time →");
+    }
+    return box;
+  }
+
+  // The court that will actually be reserved (resolved from the slot for "Any").
+  function courtSummaryLabel() {
+    if (state.selCourt !== "ANY") return (state.selCourt && state.selCourt.name) || "—";
+    if (state.type === "lesson") {
+      return (state.slot && (state.slot.court_resource_name || "Any available court")) || "Any available court";
+    }
+    // court booking: the slot resolves to a specific free court
+    return (state.slot && state.slot.resource_name) || "Any available court";
+  }
+
+  // ---- availability load + time blocks --------------------------------------
+  function slotCacheKey() {
+    var parts = [state.type, UI.dateKey(state.day)];
+    if (state.type === "lesson") parts.push(state.selCoach === "ANY" ? "anycoach" : state.selCoach.id);
+    parts.push(state.selCourt === "ANY" ? "anycourt" : state.selCourt.id);
+    return parts.join("|");
+  }
+
+  async function loadSlots() {
+    if (state.type === "class") { loadClasses(); return; }
+    var ck = slotCacheKey();
+    if (state.slotsCache[ck]) { renderSlots(state.slotsCache[ck]); return; }
+    var dk = UI.dateKey(state.day);
+    try {
+      var q = { date_from: dk, date_to: dk, audience: "member" };
+      if (state.type === "lesson") {
+        q.kind = "coach";
+        if (state.selCoach !== "ANY" && state.selCoach.id) q.coach_id = state.selCoach.id;
+        else q.any = "1";
+      } else {
+        q.kind = "court";
+        if (state.selCourt === "ANY") q.any = "1";
+        else if (state.selCourt && state.selCourt.id) q.resource_id = state.selCourt.id;
+      }
+      var r = await window.API.availability(q);
+      state.slotsCache[ck] = r.slots || [];
+      if (slotCacheKey() === ck) renderSlots(state.slotsCache[ck]);
+    } catch (e) {
+      var b = document.getElementById("cf-slots");
+      if (b) { b.className = ""; b.textContent = UI.errMsg(e); }
+    }
+  }
+
+  function renderSlots(slots) {
+    var box = document.getElementById("cf-slots"); if (!box) return;
+    box.className = ""; UI.clear(box);
+    if (!slots.length) {
+      box.appendChild(el("div", { class: "cf-empty", text: "No free times on this day. Try another day"
+        + (state.type === "court" ? ", or 'Any available court'." : ".") }));
+      return;
+    }
+    var grid = el("div", { class: "cf-timeblocks" });
+    slots.forEach(function (sl) {
+      var on = state.slot && state.slot.start === sl.start && state.slot.resource_id === sl.resource_id;
+      var kids = [ el("span", { class: "cf-tb-time", text: UI.fmtTime(sl.start) }) ];
+      if (sl.price != null) kids.push(el("span", { class: "cf-tb-price", text: UI.money(sl.price, state.billing.currency) }));
+      grid.appendChild(el("button", {
+        class: "cf-timeblock" + (on ? " sel" : ""), type: "button",
+        onclick: function () { state.slot = sl; stepSchedule(); },
+      }, kids));
+    });
+    box.appendChild(grid);
+  }
+
+  async function loadClasses() {
+    var dk = UI.dateKey(state.day);
+    var ck = "class|" + dk;
+    if (state.slotsCache[ck]) { renderClassList(state.slotsCache[ck]); return; }
+    try {
+      var r = await window.API.classes({ date_from: dk, date_to: dk });
+      state.slotsCache[ck] = r.classes || [];
+      if (UI.dateKey(state.day) === dk) renderClassList(state.slotsCache[ck]);
+    } catch (e) {
+      var b = document.getElementById("cf-slots");
+      if (b) { b.className = ""; b.textContent = UI.errMsg(e); }
+    }
   }
 
   function renderClassList(classes) {
-    var box = document.getElementById("choose"); UI.clear(box);
+    var box = document.getElementById("cf-slots"); if (!box) return;
+    box.className = ""; UI.clear(box);
     if (!classes.length) {
-      box.appendChild(el("div", { class: "cf-empty", text: "No upcoming classes." }));
-      box.appendChild(backRow(stepType));
+      box.appendChild(el("div", { class: "cf-empty", text: "No classes on this day. Try another day." }));
       return;
     }
     var list = el("div", { class: "cf-list" });
     classes.forEach(function (c) {
       var full = c.spots_left === 0;
+      var on = state.selClass && state.selClass.id === c.id;
       var priceMinor = c.price_minor != null ? c.price_minor : c.price;
       var price = priceMinor != null ? UI.money(priceMinor, state.billing.currency) : null;
-      var sub = UI.fmtRange(c.starts_at, c.ends_at);
+      var sub = UI.fmtTime(c.starts_at) + "–" + UI.fmtTime(c.ends_at);
       if (c.spots_left != null) sub += full ? " · Full" : " · " + c.spots_left + " spots left";
       if (price) sub += " · " + price;
-      list.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () {
-        state.selClass = c; stepConfirm();
-      } }, [
-        el("span", { class: "cf-chip class", text: "class" }),
+      list.appendChild(el("div", {
+        class: "cf-item cf-item-tap" + (on ? " sel" : ""),
+        onclick: function () { state.selClass = c; stepSchedule(); },
+      }, [
+        el("span", { class: "cf-chip class", text: full ? "waitlist" : "class" }),
         el("div", { class: "cf-item-main" }, [
           el("div", { class: "cf-item-t", text: c.class_name || "Class" }),
           el("div", { class: "cf-item-s", text: sub }),
         ]),
-        el("button", {
-          class: "cf-btn cf-btn-primary cf-btn-sm", text: full ? "Waitlist" : "Enrol",
-          onclick: function (ev) { ev.stopPropagation(); state.selClass = c; stepConfirm(); },
-        }),
       ]));
     });
     box.appendChild(list);
-    box.appendChild(backRow(stepType));
-  }
-
-  // ---- Step 3: slot — date strip + time grid (per-day, instant feel) --------
-  function dateLabel(d) {
-    var t0 = UI.dateKey(new Date()), t1 = UI.dateKey(UI.addDays(new Date(), 1));
-    var k = UI.dateKey(d);
-    if (k === t0) return "Today";
-    if (k === t1) return "Tomorrow";
-    return d.toLocaleDateString("en-ZA", { weekday: "short", timeZone: UI.CLUB_TZ });
-  }
-
-  function dateStrip() {
-    var strip = el("div", { class: "cf-datestrip" });
-    for (var i = 0; i < 14; i++) {
-      var d = UI.addDays(new Date(), i);
-      (function (d) {
-        var on = state.day && UI.dateKey(state.day) === UI.dateKey(d);
-        strip.appendChild(el("div", {
-          class: "cf-date" + (on ? " sel" : ""),
-          onclick: function () { state.day = d; stepSlot(); },
-        }, [
-          el("span", { class: "cf-date-dow", text: dateLabel(d) }),
-          el("span", { class: "cf-date-num", text: String(d.getDate()) }),
-          el("span", { class: "cf-date-mon", text: d.toLocaleDateString("en-ZA", { month: "short", timeZone: UI.CLUB_TZ }) }),
-        ]));
-      })(d);
-    }
-    return strip;
-  }
-
-  async function stepSlot() {
-    state.day = state.day || new Date();
-    var who = state.type === "lesson"
-      ? "with " + ((state.selResource && state.selResource.name) || "your coach")
-      : (state.selResource === "ANY" ? "any available court"
-         : (state.selResource && state.selResource.name) || "your court");
-
-    var card = el("div", { class: "cf-card" });
-    card.appendChild(el("h2", { text: "Pick a time" }));
-    card.appendChild(el("p", { class: "cf-muted cf-slot-sub", text: who }));
-    card.appendChild(dateStrip());
-
-    // Lesson: optional "also book a court" toggle (presentation hint only).
-    if (state.type === "lesson") {
-      var toggle = el("label", { class: "cf-toggle" }, [
-        el("input", { type: "checkbox", checked: state.addCourt ? "checked" : null,
-          onchange: function (ev) { state.addCourt = !!ev.target.checked; } }),
-        el("span", { text: "Also book a court for this lesson" }),
-      ]);
-      card.appendChild(toggle);
-    }
-
-    var grid = el("div", { id: "slots", class: "cf-loading", text: "Finding slots…" });
-    card.appendChild(grid);
-    card.appendChild(backRow(stepChoose));
-    render(2, card);
-
-    var dk = UI.dateKey(state.day);
-    if (state.slotsCache[dk]) { renderSlots(state.slotsCache[dk]); return; }
-    try {
-      var q = {
-        date_from: dk,
-        date_to: dk,
-        audience: "member",
-      };
-      if (state.type === "lesson") { q.kind = "coach"; if (state.selResource && state.selResource.id) q.coach_id = state.selResource.id; }
-      else if (state.type === "court") {
-        q.kind = "court";
-        if (state.selResource === "ANY") q.any = "1";
-        else if (state.selResource && state.selResource.id) q.resource_id = state.selResource.id;
-      }
-      var r = await window.API.availability(q);
-      state.slotsCache[dk] = r.slots || [];
-      // Guard against a stale response if the user tapped another day meanwhile.
-      if (UI.dateKey(state.day) === dk) renderSlots(state.slotsCache[dk]);
-    } catch (e) { var b = document.getElementById("slots"); if (b) { b.className = ""; b.textContent = UI.errMsg(e); } }
-  }
-
-  function renderSlots(slots) {
-    var box = document.getElementById("slots"); if (!box) return;
-    box.className = ""; UI.clear(box);
-    if (!slots.length) {
-      box.appendChild(el("div", { class: "cf-empty", text: "No free times on this day. Try another day above" +
-        (state.type === "court" ? " or 'Any available court'." : ".") }));
-      return;
-    }
-    var grid = el("div", { class: "cf-slots" });
-    slots.forEach(function (sl) {
-      var on = state.slot && state.slot.start === sl.start && state.slot.resource_id === sl.resource_id;
-      var kids = [ document.createTextNode(UI.fmtTime(sl.start)) ];
-      var sub = [];
-      if (state.selResource === "ANY" && sl.resource_name) sub.push(sl.resource_name);
-      if (sl.price != null) sub.push(UI.money(sl.price, state.billing.currency));
-      if (sub.length) kids.push(el("small", { text: sub.join(" · ") }));
-      grid.appendChild(el("button", {
-        class: "cf-slot" + (on ? " sel" : ""),
-        onclick: function () { state.slot = sl; stepConfirm(); },
-      }, kids));
-    });
-    box.appendChild(grid);
   }
 
   // ---- settlement helpers ---------------------------------------------------
@@ -331,14 +406,14 @@
     return modes.filter(function (m) { return UI.SETTLEMENT[m]; });
   }
 
-  // ---- Step 4: confirm (summary + settlement + guest, one screen) -----------
+  // ---- Step 3: pay & confirm ------------------------------------------------
   function stepConfirm() {
     captureGuest(); // preserve typed guest details across settlement re-renders
     var modes = allowedModes();
     if (modes.indexOf(state.settlement) < 0) state.settlement = modes[0] || "at_court"; // smart default
 
     var card = el("div", { class: "cf-card" });
-    card.appendChild(el("h2", { text: "Confirm booking" }));
+    card.appendChild(el("h2", { text: "Pay & confirm" }));
 
     // --- summary block ---
     card.appendChild(summaryCard());
@@ -361,10 +436,10 @@
       state._gName = null; state._gEmail = null;
     }
 
-    // --- settlement (chips, smart default pre-selected) ---
+    // --- settlement (selectable blocks, smart default pre-selected) ---
     card.appendChild(el("div", { class: "cf-confirm-sec" }, [
-      el("h3", { text: "How would you like to settle?" }),
-      settlementChips(modes),
+      el("h3", { text: "How would you like to pay?" }),
+      settlementBlocks(modes),
     ]));
 
     if (state.settlement === "online" && state.billing.online_enabled) {
@@ -376,11 +451,10 @@
     var btn = el("button", { class: "cf-btn cf-btn-primary cf-btn-block cf-btn-lg", text: confirmLabel() });
     btn.addEventListener("click", function () { submit(btn); });
     card.appendChild(el("div", { style: "margin-top:16px" }, [ btn ]));
-    var backTo = state.type === "class" ? stepChoose : stepSlot;
     card.appendChild(el("button", { class: "cf-btn cf-btn-ghost cf-btn-block", style: "margin-top:8px",
-      text: "← Back", onclick: backTo }));
+      text: "← Back", onclick: stepSchedule }));
 
-    render(3, card);
+    render(2, card);
   }
 
   function confirmLabel() {
@@ -399,11 +473,15 @@
       var cp = state.selClass.price_minor != null ? state.selClass.price_minor : state.selClass.price;
       if (cp != null) rows.push(["Price", UI.money(cp, state.billing.currency)]);
     } else {
-      rows.push([state.type === "lesson" ? "Coach" : "Court",
-        state.selResource === "ANY" ? (state.slot && state.slot.resource_name || "Any available court") :
-          (state.selResource && state.selResource.name) || (state.slot && state.slot.resource_name)]);
+      if (state.type === "lesson") {
+        rows.push(["Coach", state.selCoach === "ANY"
+          ? (state.slot && state.slot.resource_name || "Any coach")
+          : (state.selCoach && state.selCoach.name)]);
+        rows.push(["Court", courtSummaryLabel()]);
+      } else {
+        rows.push(["Court", courtSummaryLabel()]);
+      }
       if (state.slot) rows.push(["When", UI.fmtRange(state.slot.start, state.slot.end)]);
-      if (state.type === "lesson" && state.addCourt) rows.push(["Court", "Also requested"]);
       if (state.slot && state.slot.price != null) rows.push(["Price", UI.money(state.slot.price, state.billing.currency)]);
     }
     var box = el("div", { class: "cf-summary" });
@@ -416,7 +494,7 @@
     return box;
   }
 
-  function settlementChips(modes) {
+  function settlementBlocks(modes) {
     var wrap = el("div", { class: "cf-settlechips" });
     modes.forEach(function (m) {
       var meta = UI.SETTLEMENT[m];
@@ -453,8 +531,11 @@
           settlement_mode: state.settlement, parties: parties, audience: "member",
         };
         if (state.type === "lesson") {
-          body.coach_user_id = (state.selResource && state.selResource.coach_user_id) || null;
+          body.coach_user_id = (state.selCoach !== "ANY" && state.selCoach.coach_user_id) || null;
           body.resource_id = state.slot.resource_id; // the coach resource slot
+          // Lessons reserve a court: pass the chosen court, or the slot's available one ("Any").
+          body.court_resource_id = (state.selCourt !== "ANY" && state.selCourt.id)
+            || state.slot.court_resource_id || null;
         } else {
           body.resource_id = state.slot.resource_id; // the actual court resolved by availability
         }
@@ -467,14 +548,14 @@
       }
     } catch (e) {
       btn.disabled = false; btn.textContent = confirmLabel();
-      // Surface a just-taken slot gracefully and bounce back to the time grid.
+      // Surface a just-taken slot gracefully and bounce back to the schedule step.
       var code = (e && e.body && e.body.error) || "";
       if (e && (e.status === 409 || code === "SLOT_TAKEN")) {
         UI.toast("That slot was just taken — pick another.", "error");
         if (state.type !== "class") {
           state.slot = null;
-          if (state.day) delete state.slotsCache[UI.dateKey(state.day)]; // force a fresh fetch
-          stepSlot();
+          state.slotsCache = {}; // force a fresh fetch
+          stepSchedule();
         }
         return;
       }
@@ -512,9 +593,10 @@
       el("div", { class: "cf-row cf-success-actions" }, [
         el("a", { class: "cf-btn cf-btn-primary cf-btn-lg", href: "/my.html", text: "View my bookings" }),
         el("button", { class: "cf-btn cf-btn-ghost cf-btn-lg", text: "Book another", onclick: function () {
-          state.type = null; state.slot = null; state.selResource = null; state.selClass = null;
-          state.guest = null; state.day = null; state.slotsCache = {}; state.addCourt = false;
-          stepType();
+          state.type = null; state.slot = null; state.selClass = null;
+          state.selCoach = "ANY"; state.selCourt = "ANY";
+          state.guest = null; state.day = null; state.calMonth = null; state.slotsCache = {};
+          stepService();
         } }),
       ]),
     ]));
@@ -526,9 +608,14 @@
       rows.push(["Class", state.selClass.class_name || "Class"]);
       rows.push(["When", UI.fmtRange(state.selClass.starts_at, state.selClass.ends_at)]);
     } else {
-      rows.push([state.type === "lesson" ? "Coach" : "Court",
-        state.selResource === "ANY" ? (state.slot && state.slot.resource_name || "Any available court") :
-          (state.selResource && state.selResource.name) || (state.slot && state.slot.resource_name)]);
+      if (state.type === "lesson") {
+        rows.push(["Coach", state.selCoach === "ANY"
+          ? (state.slot && state.slot.resource_name || "Any coach")
+          : (state.selCoach && state.selCoach.name)]);
+        rows.push(["Court", courtSummaryLabel()]);
+      } else {
+        rows.push(["Court", courtSummaryLabel()]);
+      }
       if (state.slot) rows.push(["When", UI.fmtRange(state.slot.start, state.slot.end)]);
       if (state.guest) rows.push(["Guest", state.guest.name]);
     }
@@ -537,13 +624,7 @@
   }
 
   // ---- small shared bits ----------------------------------------------------
-  function backRow(onBack) {
-    return el("div", { class: "cf-row", style: "margin-top:14px" }, [
-      el("button", { class: "cf-btn cf-btn-ghost", text: "← Back", onclick: onBack }),
-    ]);
-  }
-
-  // Capture guest inputs before re-rendering confirm (settlement chip tap) or leaving.
+  // Capture guest inputs before re-rendering confirm (settlement block tap) or leaving.
   function captureGuest() {
     if (state.type !== "class" && state._gName) {
       var n = state._gName.value.trim(), em = state._gEmail.value.trim();
@@ -559,7 +640,7 @@
       try { state.billing = await window.API.billingConfig(principal.club_id); } catch (e) {}
       // policy: pulled from principal/club if exposed; otherwise defaults apply.
       state.policy = principal.policy || null;
-      stepType();
+      stepService();
     },
   };
 })();

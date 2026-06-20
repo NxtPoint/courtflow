@@ -286,3 +286,67 @@ p{margin:0 0 10px}
 .cf-success-h{margin-bottom:4px}
 .cf-success-detail{text-align:left;max-width:380px;margin:14px auto 0}
 .cf-success-actions{justify-content:center;margin-top:16px}
+
+/* ===========================================================================
+   Schedule-your-service step (ADDITIVE — Wix-style 3-column booking layout).
+   Step 2 of the booking wizard: month calendar | time blocks | preferences.
+   All classes namespaced cf-sched-* / cf-cal-* / cf-timeblock* / cf-svc-* /
+   cf-pref-* so they never touch the existing components above.
+   =========================================================================== */
+.cf-svc-tile{min-height:74px}
+
+/* 3-column grid (stacks on mobile). */
+.cf-sched-card{padding:0;overflow:hidden}
+.cf-sched{display:grid;grid-template-columns:minmax(280px,1fr) minmax(220px,1fr) minmax(240px,1fr)}
+.cf-sched-col{padding:20px}
+.cf-sched-col + .cf-sched-col{border-left:1px solid var(--border)}
+.cf-sched-h{font-size:1.15rem;margin-bottom:4px}
+@media(max-width:900px){
+  .cf-sched{grid-template-columns:1fr}
+  .cf-sched-col + .cf-sched-col{border-left:0;border-top:1px solid var(--border)}
+}
+
+/* -- left: month calendar -- */
+.cf-cal-tz{color:var(--muted);font-size:.78rem;margin:0 0 14px}
+.cf-cal-nav{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.cf-cal-title{font-weight:700;font-size:.96rem}
+.cf-cal-navbtn{width:32px;height:32px;border-radius:50%;border:1px solid var(--border);background:var(--surface);
+  color:var(--ink);font-size:1.1rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:background .12s,border-color .12s}
+.cf-cal-navbtn:hover{background:var(--green-050);border-color:var(--green)}
+.cf-cal-dow{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:6px}
+.cf-cal-dow span{text-align:center;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:var(--dim)}
+.cf-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.cf-cal-pad{aspect-ratio:1}
+.cf-cal-day{position:relative;aspect-ratio:1;border:1px solid transparent;border-radius:var(--radius-sm);
+  background:var(--surface);color:var(--ink);font:600 .9rem Inter;cursor:pointer;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:3px;transition:background .12s,border-color .12s,color .12s}
+.cf-cal-day:hover{background:var(--green-050);border-color:var(--green)}
+.cf-cal-day.off{color:var(--dim);background:transparent;cursor:default;opacity:.45}
+.cf-cal-day.off:hover{background:transparent;border-color:transparent}
+.cf-cal-day.sel{background:var(--green);color:#fff;border-color:var(--green);box-shadow:var(--shadow-sm)}
+.cf-cal-dnum{line-height:1}
+.cf-cal-dot{width:4px;height:4px;border-radius:50%;background:var(--green)}
+.cf-cal-day.sel .cf-cal-dot{background:#fff}
+.cf-cal-day.off .cf-cal-dot{display:none}
+
+/* -- middle: time blocks -- */
+.cf-mid-h{font-size:.92rem;margin-bottom:12px;color:var(--ink)}
+.cf-timeblocks{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.cf-timeblock{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  border:1.5px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);padding:11px 8px;
+  cursor:pointer;transition:border-color .12s,background .12s,color .12s}
+.cf-timeblock:hover{border-color:var(--green);background:var(--green-050)}
+.cf-timeblock.sel{border-color:var(--green);background:var(--green);color:#fff}
+.cf-tb-time{font-weight:700;font-size:.92rem;font-variant-numeric:tabular-nums}
+.cf-tb-price{font-weight:500;font-size:.74rem;opacity:.8}
+
+/* -- right: preferences + service details -- */
+.cf-pref-h{font-size:.92rem;margin-bottom:10px}
+.cf-pref-note{color:var(--muted);font-size:.76rem;margin-top:5px}
+.cf-svc-details{border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--canvas)}
+.cf-svc-row{display:flex;justify-content:space-between;gap:10px;padding:9px 12px;border-bottom:1px solid var(--border-2)}
+.cf-svc-row:last-child{border-bottom:0}
+.cf-svc-k{color:var(--muted);font-size:.8rem;font-weight:600}
+.cf-svc-v{font-weight:600;font-size:.84rem;text-align:right}
+.cf-item.sel{border-color:var(--green);box-shadow:var(--ring)}
