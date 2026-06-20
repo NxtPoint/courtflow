@@ -9,7 +9,15 @@
 (function () {
   var UI, el, principal;
   var DAY_START = 6, DAY_END = 22;            // 06:00–22:00 club hours
+  var SLOT_MIN = 30;                          // 30-min rows on the time axis
+  var ROW_H = 46;                             // px per slot row (matches cf-cal-cell min-height)
   var state = { date: new Date(), resources: [], events: [], billing: { currency: "ZAR" } };
+
+  // Minutes from the visible window start (DAY_START) for an ISO time, in the browser tz.
+  function minsFromDayStart(iso) {
+    var d = new Date(iso);
+    return (d.getHours() - DAY_START) * 60 + d.getMinutes();
+  }
 
   // ---- top controls + tabs --------------------------------------------------
   function shell() {
@@ -40,21 +48,26 @@
 
   // ---- master diary ---------------------------------------------------------
   function renderDiary(panel) {
+    var picker = el("input", { id: "diary-picker", class: "cf-input", type: "date",
+      style: "width:auto", value: UI.dateKey(state.date),
+      onchange: function (e) { if (e.target.value) { state.date = new Date(e.target.value + "T00:00:00"); loadDiary(); } } });
     var bar = el("div", { class: "cf-row", style: "margin-bottom:12px" }, [
       el("button", { class: "cf-btn cf-btn-sm", text: "‹ Prev", onclick: function () { state.date = UI.addDays(state.date, -1); loadDiary(); } }),
-      el("strong", { id: "diary-date", text: UI.fmtDate(state.date.toISOString()) }),
-      el("button", { class: "cf-btn cf-btn-sm", text: "Next ›", onclick: function () { state.date = UI.addDays(state.date, 1); loadDiary(); } }),
-      el("span", { class: "cf-spacer" }),
       el("button", { class: "cf-btn cf-btn-sm", text: "Today", onclick: function () { state.date = new Date(); loadDiary(); } }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "Next ›", onclick: function () { state.date = UI.addDays(state.date, 1); loadDiary(); } }),
+      picker,
+      el("strong", { id: "diary-date", text: UI.fmtDate(state.date.toISOString()) }),
+      el("span", { class: "cf-spacer" }),
       el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Walk-in booking", onclick: function () { openWalkIn(); } }),
     ]);
     panel.appendChild(bar);
-    panel.appendChild(el("div", { class: "cf-card" }, [ el("div", { id: "diary-cal", class: "cf-loading", text: "Loading…" }) ]));
+    panel.appendChild(el("div", { id: "diary-cal", class: "cf-loading", text: "Loading…" }));
     loadDiary();
   }
 
   async function loadDiary() {
     var d = document.getElementById("diary-date"); if (d) d.textContent = UI.fmtDate(state.date.toISOString());
+    var pk = document.getElementById("diary-picker"); if (pk) pk.value = UI.dateKey(state.date);
     var cal = document.getElementById("diary-cal");
     UI.clear(cal); cal.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
     try {
@@ -67,49 +80,86 @@
     } catch (e) { cal.innerHTML = ""; cal.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
   }
 
+  // Resource-timeline: a sticky time axis (col 1) + one column per bookable resource.
+  // Rows are SLOT_MIN-minute slots. Each slot cell is click-to-create; events are
+  // absolutely positioned cf-ev blocks whose top/height map to their start + duration.
   function drawGrid() {
     var cal = document.getElementById("diary-cal"); UI.clear(cal);
-    var cols = state.resources.filter(function (x) { return x.is_active; });
+    // Bookable resources only: courts + coaches that take lessons.
+    var cols = state.resources.filter(function (x) {
+      return x.is_active && (x.kind === "court" || x.kind === "coach");
+    });
     if (!cols.length) { cal.appendChild(el("div", { class: "cf-empty", text: "No resources configured." })); return; }
+
+    var slots = ((DAY_END - DAY_START) * 60) / SLOT_MIN;     // number of time rows
 
     var wrap = el("div", { class: "cf-cal-wrap" });
     var grid = el("div", { class: "cf-cal" });
-    grid.style.gridTemplateColumns = "64px repeat(" + cols.length + ", minmax(110px, 1fr))";
+    grid.style.gridTemplateColumns = "62px repeat(" + cols.length + ", minmax(120px, 1fr))";
+    // Header row + one row per slot, each ROW_H tall so event geometry is exact.
+    grid.style.gridTemplateRows = "auto repeat(" + slots + ", " + ROW_H + "px)";
 
-    grid.appendChild(el("div", { class: "cf-cal-head", text: "Time" }));
-    cols.forEach(function (c) { grid.appendChild(el("div", { class: "cf-cal-head", text: c.name })); });
-
-    // bucket events by resource_id + hour
-    var byCell = {};
-    state.events.forEach(function (ev) {
-      var hr = new Date(ev.starts_at).getHours();
-      var key = ev.resource_id + "|" + hr;
-      (byCell[key] = byCell[key] || []).push(ev);
+    // Header: empty corner + one head per resource (sticky via cf-cal-head).
+    grid.appendChild(el("div", { class: "cf-cal-head" }));
+    cols.forEach(function (c) {
+      grid.appendChild(el("div", { class: "cf-cal-head", title: c.surface || c.kind,
+        text: c.name + (c.kind === "coach" ? " (coach)" : "") }));
     });
 
-    for (var h = DAY_START; h < DAY_END; h++) {
-      grid.appendChild(el("div", { class: "cf-cal-time", text: ("0" + h).slice(-2) + ":00" }));
+    // Build the time axis + empty clickable cells, keeping a handle on each column
+    // cell so we can append absolutely-positioned events afterwards.
+    var cellByCol = {};                                       // resource_id -> first cell node (positioning anchor)
+    for (var s = 0; s < slots; s++) {
+      var mins = s * SLOT_MIN;
+      var hh = DAY_START + Math.floor(mins / 60), mm = mins % 60;
+      var label = ("0" + hh).slice(-2) + ":" + ("0" + mm).slice(-2);
+      // Only label whole hours to keep the axis clean; half-hour rows show blank.
+      grid.appendChild(el("div", { class: "cf-cal-time", text: mm === 0 ? label : "" }));
       cols.forEach(function (c) {
-        var cell = el("div", { class: "cf-cal-cell", title: "Click to create" });
-        (function (col, hour) {
-          cell.addEventListener("click", function (e) {
-            if (e.target === cell) openCreate(col, hour);
-          });
-        })(c, h);
-        (byCell[c.id + "|" + h] || []).forEach(function (ev) {
-          cell.appendChild(el("div", { class: "cf-ev " + ev.status,
-            text: UI.fmtTime(ev.starts_at) + " " + ev.booking_type,
-            onclick: function (e) { e.stopPropagation(); openEvent(ev); } }));
-        });
+        var cell = el("div", { class: "cf-cal-cell", title: "Click to book " + c.name + " at " + label });
+        (function (col, h, m) {
+          cell.addEventListener("click", function (e) { if (e.target === cell) openCreate(col, h, m); });
+        })(c, hh, mm);
+        if (s === 0) cellByCol[c.id] = cell;                  // first row of each column anchors its events
         grid.appendChild(cell);
       });
     }
+
+    // Place events as cf-ev blocks. Each event lives in its column's first cell
+    // (position:relative), offset by its start time and sized by its duration.
+    state.events.forEach(function (ev) {
+      var anchor = cellByCol[ev.resource_id];
+      if (!anchor) return;                                    // event for a non-displayed resource (e.g. class room)
+      var startMin = minsFromDayStart(ev.starts_at);
+      var endMin = minsFromDayStart(ev.ends_at);
+      if (endMin <= 0 || startMin >= (DAY_END - DAY_START) * 60) return;  // outside the visible window
+      var top = Math.max(0, startMin) / SLOT_MIN * ROW_H;
+      var height = Math.max(18, (Math.min(endMin, (DAY_END - DAY_START) * 60) - Math.max(0, startMin)) / SLOT_MIN * ROW_H - 2);
+      var type = (ev.booking_type || "court").toLowerCase();
+      var klass = ["court", "lesson", "class"].indexOf(type) >= 0 ? type : "court";
+      var cancelled = ev.status === "cancelled" || ev.status === "no_show";
+      var who = ev.resource_name || ev.booking_type || "Booking";
+      var block = el("div", {
+        class: "cf-ev " + klass + (cancelled ? " cancelled" : ""),
+        style: "top:" + top + "px;height:" + height + "px",
+        title: who + " · " + UI.fmtRange(ev.starts_at, ev.ends_at) + " · " + (ev.status || ""),
+        onclick: function (e) { e.stopPropagation(); openEvent(ev); },
+      }, [
+        el("div", { text: UI.fmtTime(ev.starts_at) + " " + type }),
+      ]);
+      anchor.appendChild(block);
+    });
+
     wrap.appendChild(grid); cal.appendChild(wrap);
   }
 
   // ---- click-to-create / block ---------------------------------------------
-  function openCreate(resource, hour) {
-    var bg = modal("New on " + resource.name + " @ " + ("0" + hour).slice(-2) + ":00", function (m) {
+  function openCreate(resource, hour, minute) {
+    minute = minute || 0;
+    var at = ("0" + hour).slice(-2) + ":" + ("0" + minute).slice(-2);
+    // Coach columns default to a lesson; court columns to a court booking.
+    var isCoach = resource.kind === "coach";
+    var bg = modal("New on " + resource.name + " · " + at, function (m) {
       var dur = el("select", { class: "cf-select" }, [
         el("option", { value: "60", text: "60 min" }), el("option", { value: "90", text: "90 min" }), el("option", { value: "30", text: "30 min" }),
       ]);
@@ -118,12 +168,13 @@
         el("option", { value: "lesson", text: "Lesson" }),
         el("option", { value: "block", text: "Block time (time-off)" }),
       ]);
+      kind.value = isCoach ? "lesson" : "court";
       m.appendChild(field("Type", kind));
       m.appendChild(field("Duration", dur));
       m.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:12px" }, [
         el("button", { class: "cf-btn", text: "Cancel", onclick: close }),
         el("button", { class: "cf-btn cf-btn-primary", text: "Create", onclick: function () {
-          create(resource, hour, parseInt(dur.value, 10), kind.value);
+          create(resource, hour, minute, parseInt(dur.value, 10), kind.value);
         } }),
       ]));
     });
@@ -131,8 +182,8 @@
     window._closeAdminModal = close;
   }
 
-  async function create(resource, hour, durMin, kind) {
-    var start = new Date(state.date); start.setHours(hour, 0, 0, 0);
+  async function create(resource, hour, minute, durMin, kind) {
+    var start = new Date(state.date); start.setHours(hour, minute || 0, 0, 0);
     var end = new Date(start.getTime() + durMin * 60000);
     try {
       if (kind === "block") {
@@ -153,9 +204,13 @@
   // ---- event detail: cancel / reschedule / take payment --------------------
   function openEvent(ev) {
     var bg = modal(ev.booking_type + " · " + UI.fmtTime(ev.starts_at), function (m) {
+      m.appendChild(el("div", { class: "cf-row", style: "margin-bottom:8px" }, [
+        el("span", { class: "cf-chip " + (ev.booking_type || ""), text: ev.booking_type || "" }),
+        el("span", { class: "cf-chip " + (ev.status || ""), text: ev.status || "" }),
+      ]));
       m.appendChild(el("p", { class: "cf-muted", text:
         (ev.resource_name || "") + " · " + UI.fmtRange(ev.starts_at, ev.ends_at) +
-        " · " + UI.settlementLabel(ev.settlement_mode) + " · " + ev.status }));
+        " · " + UI.settlementLabel(ev.settlement_mode) }));
       var actions = el("div", { class: "cf-row", style: "margin-top:12px;flex-wrap:wrap" });
       if (["held", "confirmed"].indexOf(ev.status) >= 0) {
         actions.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Cancel", onclick: function () { cancelEv(ev); } }));
