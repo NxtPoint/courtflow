@@ -15,14 +15,14 @@ NextPoint Tennis is club #1, migrating off Wix.
   - **A Foundation:** `app.py` (api factory), `wsgi.py`, `db.py` (lazy engine + idempotent boot runner,
     `BOOT_MODULES`), `auth/` (Clerk JWKS verifier + club-scoped `Principal`), `iam/` (user/membership/
     permissions), `club/` (tenant schemas), `core/` (CRM identity + consent), `scripts/` (seed/provision),
-    `render.yaml`.
+    `crons/` (thin cron dispatcher), `render.yaml`.
   - **B Diary:** `diary/` — schema (the GiST no-double-book `EXCLUDE` constraint), `bookings.py`,
     `classes.py`, `availability.py`, `recurrence.py`, `crons.py`, `routes.py` (`/api/diary/*`).
   - **C Billing:** `billing/` — schema, `events.py` (`apply_payment_event`, idempotent), `gateway.py`
     (`PaymentGateway` Protocol + `ManualGateway`; Yoco/PayPal adapters are the Phase-7 extension point),
     `orders.py`, `ledger.py`, `routes.py` (`/api/billing/*`).
-  - **D CRM:** `marketing_crm/` — `tracking/` (`emit()`→`core.usage_event`), `crm_sync/` (Klaviyo,
-    dark until `KLAVIYO_API_KEY`), `consent/`, `backoffice/` (cockpit), `email/` (SES fallback);
+  - **D CRM:** `marketing_crm/` — `tracking/` (`emit()`→`core.usage_event`), `crm_sync/` (Klaviyo +
+    HubSpot adapters, dark until `KLAVIYO_API_KEY`), `consent/`, `backoffice/` (cockpit), `email/` (SES fallback);
     `contracts/events.md` is the producer/consumer contract.
   - **E Frontend:** `frontend/app/` + `frontend/js/` — booking wizard, my-bookings, coach console,
     admin master diary, `auth_client.js` (Clerk Bearer helper).
@@ -31,6 +31,17 @@ NextPoint Tennis is club #1, migrating off Wix.
     `migration/` (301 map + cutover runbook — never auto-executed).
 - **Two services:** `courtflow-api` (`wsgi:app`, has DB) and `courtflow-web` (`web_wsgi:app`, no DB,
   serves marketing + portal shells + `/login`).
+
+## Commands
+- **Compile gate (CI-style, no infra):** `python -m py_compile $(git ls-files '*.py')` — there is no
+  pytest suite; this + the integration script below are the gates (match 1050).
+- **Boot all schemas / idempotency gate:** `python -m db` (run it **twice** → second run must be a no-op).
+- **Seed club #1:** `python -m scripts.seed_nextpoint` · **provision another tenant:** `python -m scripts.provision_club`
+- **Run the API locally:** `gunicorn wsgi:app` (or `python -m app`) — needs `DATABASE_URL`.
+- **Run the web/portal service locally:** `python web_wsgi.py` (DB-less; defaults to `PORT=5060`).
+- **Fire a cron job by hand:** `python -m crons.trigger <reminders|capacity-sweep|monthly-invoice|membership-refill>`
+  (needs `CRON_API_BASE` + `OPS_KEY`; the trigger only POSTs to `/api/cron/*` — see cron note below).
+- **Rebuild the blog/SEO output:** `python build_blog.py`
 
 ## Verifying (no live infra needed)
 - **Compile:** `python -m py_compile` over the tree (CI-style gate; there is no pytest suite — match 1050).
@@ -54,7 +65,12 @@ domain model: the **diary**. Same shape as 1050, fewer services (no ML/GPU/video
   - `courtflow-api` — Flask+Gunicorn booking/diary/billing API; Clerk-JWT auth; every query `club_id`-scoped.
   - `courtflow-web` — host-switched: serves the per-club marketing site **and** the portal SPAs
     (member/coach/admin). Mirrors 1050's `locker_room_app.py` host-switch.
-  - `courtflow-cron` — reminders, no-show sweep, monthly-account invoice run, membership refill.
+  - **crons** — `render.yaml` declares **four** cron services (reminders / capacity-sweep /
+    monthly-invoice / membership-refill), each running `python -m crons.trigger <job>`. The trigger
+    (`crons/trigger.py`) is a **thin dispatcher**: it carries no business logic and no DB access — it
+    makes one authenticated POST to `/api/cron/<job>` (guarded by `OPS_KEY`) and exits non-zero on
+    failure. Lanes own the handlers (B-Diary: reminders/capacity-sweep/membership-refill; C-Billing:
+    monthly-invoice); until a handler exists the job is a visible no-op (404).
 - **One Postgres DB, six schemas** (idempotent boot DDL, no migration framework):
   - `club.*` tenants/config/branding/location/policies · `iam.*` user↔Clerk, membership, coach_profile
   - `diary.*` resources, availability, booking, class_session, enrolment, waitlist, recurrence (**the heart**, `docs/03`)
@@ -125,6 +141,9 @@ There is no test runner yet; create one. Each phase has a concrete "done when":
   Give the new platform its own API host (`api.courtflow.app`) — changing a Render custom domain can
   recreate a service.
 - **Never let an agent change DNS.** The Wix→Render SEO cutover (`docs/07`) is supervised by Tomo.
+- **`marketing/` (untracked) is NOT platform code** — it holds ad-ops notes (adspirer setup, Google Ads
+  audit) and is not in `.gitignore`. Don't commit it with platform changes, and don't confuse it with
+  `frontend/marketing/` (the host-switched marketing site) or `marketing_crm/` (the CRM lane).
 
 ## Needs Tomo (an agent cannot do these)
 See the `BUILD_PROMPT.md` pre-flight checklist: `DATABASE_URL`, a new Clerk app, S3/SES, Klaviyo sender

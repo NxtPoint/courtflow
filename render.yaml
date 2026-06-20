@@ -35,19 +35,20 @@ services:
       - key: OPS_KEY
         sync: false
 
-      # --- Auth: per-user IdP (NEW Clerk app). DARK until AUTH_ENABLED=1. ---
-      # Clerk note: default session tokens set `iss` (Frontend API URL) but NOT `aud`,
-      # so leave AUTH_AUDIENCE blank; add an `email` claim via a Clerk JWT template.
+      # --- Auth: per-user IdP. REUSES 1050's existing Clerk (clerk.ten-fifty5.com) per
+      # Tomo 2026-06-20 — no new Clerk app. Its session token already carries an `email`
+      # claim, and default tokens set `iss` but NOT `aud` (so AUTH_AUDIENCE stays blank).
+      # Public values, committed inline (mirrors 1050). DARK until AUTH_ENABLED=1.
       - key: AUTH_ENABLED
-        value: "0"           # flip to "1" once the new Clerk app exists + is tested
+        value: "0"           # flip to "1" once DATABASE_URL is set + boot verified
       - key: AUTH_PROVIDER
         value: "clerk"
       - key: AUTH_JWKS_URL
-        sync: false          # https://<new-frontend-api>/.well-known/jwks.json
+        value: "https://clerk.ten-fifty5.com/.well-known/jwks.json"
       - key: AUTH_ISSUER
-        sync: false          # https://<new-frontend-api>
+        value: "https://clerk.ten-fifty5.com"
       - key: AUTH_AUDIENCE
-        value: ""            # leave blank for Clerk default session tokens
+        value: ""            # blank — Clerk default session tokens set no aud
 
       # --- Payments: provider-agnostic, OFF at launch (decision D8). ---
       - key: PAYMENTS_ENABLED
@@ -100,7 +101,7 @@ services:
       - key: AUTH_ENABLED
         value: "0"
       - key: CLERK_PUBLISHABLE_KEY
-        value: ""            # pk_live_... for the NEW Clerk app (public by design)
+        value: "pk_live_Y2xlcmsudGVuLWZpZnR5NS5jb20k"  # 1050's existing Clerk (reused); public by design
       - key: AUTH_AFTER_LOGIN_URL
         value: "/portal"
       # Backend that verifies the Clerk token from /login (the whoami check).
