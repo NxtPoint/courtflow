@@ -458,23 +458,61 @@
       }
       var roleChip = { platform_admin: "confirmed", club_admin: "confirmed", coach: "lesson", member: "court", guest: "class" };
       var t = el("table", { class: "cf-table" });
-      t.appendChild(el("thead", {}, [ el("tr", {}, ["Name", "Email", "Phone", "Role", "Status"].map(function (h) {
+      t.appendChild(el("thead", {}, [ el("tr", {}, ["Name", "Email", "Phone", "Role", "Status", "Membership", ""].map(function (h) {
         return el("th", { text: h }); })) ]));
       var tb = el("tbody");
       r.people.forEach(function (pp) {
         var name = pp.display_name || [pp.first_name, pp.surname].filter(Boolean).join(" ") || "—";
         var status = (pp.role === "coach" && pp.invite_status) ? pp.invite_status : (pp.member_status || "—");
+        // Membership (free courts) applies to bookers — members/guests, not coaches/admins.
+        var canHaveMembership = (pp.role === "member" || pp.role === "guest");
+        var chipCell = el("td");
+        chipCell.appendChild(pp.has_membership
+          ? el("span", { class: "cf-chip confirmed", text: "Active" })
+          : el("span", { class: "cf-muted", text: "—" }));
+        var actCell = el("td");
+        if (canHaveMembership) {
+          var ab = el("button", { class: "cf-btn cf-btn-sm" + (pp.has_membership ? " cf-btn-danger" : " cf-btn-primary"),
+            text: pp.has_membership ? "Revoke" : "Grant" });
+          ab.addEventListener("click", function () { toggleMembership(pp, ab, chipCell); });
+          actCell.appendChild(ab);
+        } else {
+          actCell.appendChild(el("span", { class: "cf-muted", text: "—" }));
+        }
         tb.appendChild(el("tr", {}, [
           el("td", { text: name }),
           el("td", { text: pp.email || "—" }),
           el("td", { text: pp.phone || "—" }),
           el("td", {}, [ el("span", { class: "cf-chip " + (roleChip[pp.role] || "court"), text: (pp.role || "").replace("_", " ") }) ]),
           el("td", { text: status }),
+          chipCell,
+          actCell,
         ]));
       });
       t.appendChild(tb);
       box.appendChild(t);
     } catch (e) { box.textContent = UI.errMsg(e); }
+  }
+
+  // Grant / revoke a member's membership (free courts) in place — updates the row, no reload.
+  function toggleMembership(pp, btn, chipCell) {
+    var has = !!pp.has_membership;
+    if (!window.confirm((has ? "Revoke" : "Grant") + " membership for " + (pp.email || "this member") + "?")) return;
+    btn.disabled = true;
+    var path = "/api/admin/members/" + encodeURIComponent(pp.user_id) + "/membership";
+    var req = has ? window.TFAuth.apiJSON(path, { method: "DELETE" })
+                  : window.TFAuth.apiJSON(path, { method: "POST", body: { months: 1 } });
+    req.then(function () {
+      pp.has_membership = !has;
+      UI.clear(chipCell);
+      chipCell.appendChild(pp.has_membership
+        ? el("span", { class: "cf-chip confirmed", text: "Active" })
+        : el("span", { class: "cf-muted", text: "—" }));
+      btn.className = "cf-btn cf-btn-sm" + (pp.has_membership ? " cf-btn-danger" : " cf-btn-primary");
+      btn.textContent = pp.has_membership ? "Revoke" : "Grant";
+      btn.disabled = false;
+      UI.toast(pp.has_membership ? "Membership granted (1 month) — courts now free." : "Membership revoked.", "info");
+    }).catch(function (e) { UI.toast(UI.errMsg(e), "error"); btn.disabled = false; });
   }
 
   async function renderBilling(panel) {

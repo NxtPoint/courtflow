@@ -484,6 +484,30 @@ def get_people():
     return jsonify(people=rows, count=len(rows)), 200
 
 
+@admin_bp.post("/members/<user_id>/membership")
+def grant_membership(user_id):
+    """Grant (or extend) a member's membership → their courts become free until it expires."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        res = repo.grant_membership(s, club_id=p.club_id, user_id=user_id,
+                                    months=b.get("months") or 1)
+    return jsonify(res), 200
+
+
+@admin_bp.delete("/members/<user_id>/membership")
+def revoke_membership(user_id):
+    """Cancel a member's active membership (courts revert to pay-as-you-go)."""
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        res = repo.revoke_membership(s, club_id=p.club_id, user_id=user_id)
+    return jsonify(res), 200
+
+
 def _send_coach_invite_email(*, to_email, club_id, display_name):
     """Best-effort: emit a coach_invited event + send an SES invite email. Guarded imports
     so the admin lane never hard-depends on marketing_crm being present/configured."""

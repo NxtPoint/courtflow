@@ -648,7 +648,12 @@ def list_people(session, *, club_id):
             SELECT u.id AS user_id, u.email, u.first_name, u.surname, u.phone,
                    m.role, m.member_status,
                    cp.display_name,
-                   ci.status AS invite_status
+                   ci.status AS invite_status,
+                   EXISTS(SELECT 1 FROM billing.membership_subscription ms
+                          WHERE ms.club_id = m.club_id AND ms.user_id = u.id
+                            AND ms.status = 'active'
+                            AND (ms.current_period_end IS NULL
+                                 OR ms.current_period_end >= CURRENT_DATE)) AS has_membership
             FROM iam.membership m
             JOIN iam.user u ON u.id = m.user_id
             LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id AND cp.club_id = m.club_id
@@ -663,6 +668,51 @@ def list_people(session, *, club_id):
         {"c": club_id},
     ).mappings().all()
     return _rows(rows)
+
+
+def grant_membership(session, *, club_id, user_id, months=1):
+    """Admin grants a member an active membership (the club's 'membership' product). Makes
+    their COURT bookings free (membership_covered) until current_period_end. Idempotent: an
+    existing active subscription is extended rather than duplicated. provider='manual'."""
+    price_id = session.execute(
+        text("SELECT p.id FROM billing.product pr "
+             "JOIN billing.price p ON p.product_id = pr.id AND p.active = true "
+             "WHERE pr.club_id = :c AND pr.kind = 'membership' "
+             "ORDER BY p.created_at LIMIT 1"),
+        {"c": club_id},
+    ).scalar()
+    existing = session.execute(
+        text("SELECT id FROM billing.membership_subscription "
+             "WHERE club_id = :c AND user_id = :u AND status = 'active' LIMIT 1"),
+        {"c": club_id, "u": user_id},
+    ).scalar()
+    months = max(1, int(months or 1))
+    if existing:
+        session.execute(
+            text("UPDATE billing.membership_subscription "
+                 "SET current_period_end = (CURRENT_DATE + make_interval(months => :m))::date, "
+                 "    price_id = COALESCE(price_id, :pid), updated_at = now() WHERE id = :id"),
+            {"m": months, "pid": price_id, "id": existing},
+        )
+        return {"ok": True, "status": "extended"}
+    session.execute(
+        text("INSERT INTO billing.membership_subscription "
+             "(club_id, user_id, price_id, status, provider, current_period_end) "
+             "VALUES (:c, :u, :pid, 'active', 'manual', "
+             "        (CURRENT_DATE + make_interval(months => :m))::date)"),
+        {"c": club_id, "u": user_id, "pid": price_id, "m": months},
+    )
+    return {"ok": True, "status": "granted"}
+
+
+def revoke_membership(session, *, club_id, user_id):
+    """Admin cancels a member's active membership (their courts revert to PAYG)."""
+    session.execute(
+        text("UPDATE billing.membership_subscription SET status = 'cancelled', updated_at = now() "
+             "WHERE club_id = :c AND user_id = :u AND status = 'active'"),
+        {"c": club_id, "u": user_id},
+    )
+    return {"ok": True}
 
 
 def onboarding_counts_and_steps(session, *, club_id):
