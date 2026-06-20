@@ -25,8 +25,13 @@ NextPoint Tennis is club #1, migrating off Wix.
     **book-on-behalf** via `booked_for_user_id`; role-scoped `list_bookings`), `availability.py`,
     `classes.py`, `recurrence.py`, `routes.py` (`/api/diary/*`).
   - **Billing:** `billing/` — `apply_payment_event` (idempotent), `gateway.py` (`PaymentGateway` Protocol
-    + `ManualGateway`; **Yoco adapter being added in parallel — see the warning below**), `orders.py`,
+    + `ManualGateway` desk settlement + the `register_gateway`/`get_gateway` registry), `orders.py`,
     `ledger.py`, `routes.py`.
+  - **Payments — Yoco (online):** `yoco_billing/` — `client.py` (Yoco REST + Standard-Webhooks signature
+    verify), `adapter.py` (`YocoGateway` implementing `PaymentGateway`, self-registers on import), `routes.py`
+    (`/api/billing/yoco/checkout|webhook|refund` + `/order/<id>`). Hosted-redirect checkout (card +
+    Apple/Google/Samsung Pay). LIVE-configured: `YOCO_*` keys in Render, webhook registered, `PAYMENTS_ENABLED=1`.
+    `billing/` core is untouched — this is a pure adapter behind the registry.
   - **CRM:** `marketing_crm/` — `emit()`→`core.usage_event`, Klaviyo sync (dark w/o `KLAVIYO_API_KEY`),
     consent, cockpit, SES fallback; `contracts/events.md`.
   - **Admin (owner self-service):** `admin/` — `/api/admin/*` write APIs + onboarding; powers the owner
@@ -45,13 +50,24 @@ NextPoint Tennis is club #1, migrating off Wix.
 - **Shipped & working:** owner onboarding · coach invite→onboarding · members book courts + named coaches ·
   coaches/admins book on behalf of a client · unified master diary · consistent bright/modern UI + public site.
 
-## ⚠️ Parallel work in flight — coordinate, don't collide
-A **separate session is building the Yoco payment integration.** Its lane: `yoco_billing/` (new), a
-`YocoGateway` in `billing/gateway.py`, the Yoco webhook + create-checkout routes, the **`online` settlement**
-path (booking `held` → checkout → `apply_payment_event` → `confirmed`), and the checkout UI on the
-booking-confirm step (`frontend/js/book.js`) + `/pricing`. **If you are NOT that session: stay out of
-billing/payments + the online-checkout flow, and prefer a feature branch over pushing `master` directly**
-(avoids races). `frontend/js/book.js` is the shared file — pull latest before editing it.
+## Yoco payments — built, wired & live-configured (end-to-end)
+The Yoco online-payment integration is **done** and verified (see Verifying). It lives in `yoco_billing/`
+(new package; `billing/` core untouched — pure adapter behind `register_gateway`/`get_gateway`).
+**Flow:** an `online` booking creates an `awaiting_payment` order + `held` booking → `POST /api/billing/yoco/checkout
+{order_id}` returns Yoco's `redirect_url` → hosted page (card + Apple/Google/Samsung Pay) → `POST
+/api/billing/yoco/webhook` (Standard-Webhooks signature-verified) → `apply_payment_event` → order `paid` +
+booking `confirmed` + `payment_succeeded` receipt emitted. **Refund** = `POST /api/billing/yoco/refund` (admin;
+record-only, booking NOT reversed — docs/05 §8). **Two gates, both must be on:** `PAYMENTS_ENABLED=1` (global)
+AND `club.policy.allow_online_payment` (per-club rollback; set via the Settings toggle below).
+- **Payment-owned frontend (shipped — use, don't duplicate):** `frontend/js/pay.js`
+  (`Pay.startYocoCheckout(orderId)` → POST checkout + redirect), `frontend/app/pay-return.html` +
+  `frontend/js/pay_return.js` (post-payment landing, auto-served at `/pay-return.html`, polls order status).
+- **Wired end-to-end (commit 957e58b):** `book.html` loads `/js/pay.js`; `book.js` calls
+  `Pay.startYocoCheckout(res.order_id)` on the confirm step for an `online` booking; **Admin → Settings** has
+  the "Accept online card payments" toggle (`settings.js` → `AdminAPI.patchPolicy {allow_online_payment}`,
+  insert-only upsert so it persists). **Remaining to take a club live:** flip that toggle ON (the per-club
+  gate) and run a real payment. (Not yet built: an admin Refund button — the `/api/billing/yoco/refund`
+  endpoint exists and is callable.)
 
 ## Commands
 - **Compile gate (CI-style, no infra):** `python -m py_compile $(git ls-files '*.py')` — there is no
@@ -72,6 +88,11 @@ billing/payments + the online-checkout flow, and prefer a feature branch over pu
   and desk-payment idempotency were proven this way (12/12).
 - **Web service:** Flask test client against `web_app.py` (DB-less) — host-switch, portal-shell serving,
   robots/sitemap, branded 404 (14/14).
+- **Yoco payments:** offline signature verify (valid / tampered / stale / missing / wrong-secret) +
+  `parse_event` mapping (21/21); scratch-DB settlement chain (online order → `charge_succeeded` → order
+  `paid` + booking `held→confirmed` → replay = no-op → `refunded` record-only, booking NOT reversed) (15/15);
+  full HTTP webhook path via Flask test client (bad sig → 401 + order untouched, good sig → 200 paid+confirmed,
+  replay idempotent, config probe advertises yoco without leaking the secret) (10/10). All green.
 
 ## Still needs Tomo (config, not code) — infra is otherwise live
 - **S3** (`S3_BUCKET` + AWS keys) for coach **photo uploads** — until set, coaches paste a photo URL.
