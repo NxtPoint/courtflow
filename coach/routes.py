@@ -19,6 +19,7 @@ from flask import Blueprint, jsonify, request
 from auth import resolve_principal
 from db import session_scope
 from coach import repositories as repo
+from diary import classes as classes_mod
 
 log = logging.getLogger("coach.routes")
 
@@ -211,6 +212,94 @@ def delete_service(price_id):
     if not ok:
         return jsonify(error="NOT_FOUND"), 404
     return jsonify(ok=True), 200
+
+
+# ---------------------------------------------------------------------------
+# classes (a coach's OWN classes: resource(kind='class', coach_user_id=the coach)
+# + product(kind='class') + price). Every route scopes to the coach's user_id.
+# ---------------------------------------------------------------------------
+
+def _class_result(res):
+    if res is None:
+        return jsonify(error="NOT_FOUND"), 404
+    if res.get("ok"):
+        return jsonify({k: v for k, v in res.items() if k != "ok"}), 200
+    return jsonify(error=res.get("error"),
+                   **{k: v for k, v in res.items()
+                      if k not in ("ok", "status", "error")}), res.get("status", 400)
+
+
+@coach_bp.get("/classes")
+def get_classes():
+    p, err = _coach()
+    if err:
+        return err
+    with session_scope() as s:
+        rows = classes_mod.list_class_types(s, club_id=p.club_id, coach_user_id=p.user_id)
+    return jsonify(classes=rows, count=len(rows)), 200
+
+
+@coach_bp.post("/classes")
+def post_class():
+    """Create a class owned by THIS coach (coach_user_id forced to the principal)."""
+    p, err = _coach()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        res = classes_mod.create_class_type(
+            s, club_id=p.club_id, name=b.get("name"), coach_user_id=p.user_id,
+            capacity=b.get("capacity"), price_amount_minor=b.get("price_amount_minor"),
+            duration_minutes=b.get("duration_minutes"), description=b.get("description"))
+    return _class_result(res)
+
+
+@coach_bp.post("/classes/<resource_id>/schedule")
+def post_class_schedule(resource_id):
+    p, err = _coach()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        if not repo.owns_class_resource(s, club_id=p.club_id, user_id=p.user_id,
+                                        resource_id=resource_id):
+            return jsonify(error="forbidden"), 403
+        res = classes_mod.schedule_sessions(
+            s, club_id=p.club_id, resource_id=resource_id,
+            weekdays=b.get("weekdays"), start_time=b.get("start_time"),
+            date_from=b.get("date_from"), date_until=b.get("date_until"),
+            dates=b.get("dates"), duration_minutes=b.get("duration_minutes"),
+            capacity=b.get("capacity"), price_id=b.get("price_id"))
+    return _class_result(res)
+
+
+@coach_bp.get("/classes/<resource_id>/sessions")
+def get_class_sessions(resource_id):
+    p, err = _coach()
+    if err:
+        return err
+    q = request.args
+    with session_scope() as s:
+        if not repo.owns_class_resource(s, club_id=p.club_id, user_id=p.user_id,
+                                        resource_id=resource_id):
+            return jsonify(error="forbidden"), 403
+        rows = classes_mod.list_type_sessions(
+            s, club_id=p.club_id, resource_id=resource_id,
+            date_from=q.get("date_from"), date_to=q.get("date_to"))
+    return jsonify(sessions=rows, count=len(rows)), 200
+
+
+@coach_bp.post("/classes/sessions/<session_id>/cancel")
+def post_class_session_cancel(session_id):
+    p, err = _coach()
+    if err:
+        return err
+    with session_scope() as s:
+        if not repo.owns_class_session(s, club_id=p.club_id, user_id=p.user_id,
+                                       session_id=session_id):
+            return jsonify(error="forbidden"), 403
+        res = classes_mod.cancel_session(s, club_id=p.club_id, session_id=session_id)
+    return _class_result(res)
 
 
 # ---------------------------------------------------------------------------
