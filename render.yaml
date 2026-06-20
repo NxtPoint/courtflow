@@ -18,7 +18,7 @@ services:
   - type: web
     name: courtflow-api
     env: python
-    plan: starter
+    plan: free          # pre-launch = $0 (sleeps when idle, ~30s cold start). Bump to "starter" at go-live.
     buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
     # 120s timeout (no long ML jobs here, unlike 1050's 1800s).
     startCommand: "gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120"
@@ -89,7 +89,7 @@ services:
   - type: web
     name: courtflow-web
     env: python
-    plan: starter
+    plan: free          # pre-launch = $0 (sleeps when idle, ~30s cold start). Bump to "starter" at go-live.
     buildCommand: "pip install --upgrade pip && pip install flask gunicorn requests"
     startCommand: "gunicorn web_wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120"
     envVars:
@@ -110,65 +110,22 @@ services:
       #   value: "nextpointtennis.com,www.nextpointtennis.com"
 
   # =========================================
-  # Crons — thin HTTP triggers; the endpoint owns the logic (1050 pattern, docs/10 §7).
-  # Each calls courtflow-api with the OPS_KEY header. Schedules are UTC; tune later.
+  # Crons — DEFERRED (not created at launch; nothing depends on them yet).
+  # Each only matters once its feature is live: reminders (sending booking reminders),
+  # capacity-sweep (releasing online-payment holds + promoting waitlists), monthly-invoice
+  # (month-end account statements), membership-refill (recurring memberships). Add them back
+  # by uncommenting when those features ship — the handlers + crons/trigger.py already exist.
+  # Render crons run `python -m crons.trigger <job>` with CRON_API_BASE + OPS_KEY set.
   # =========================================
-  - type: cron
-    name: courtflow-cron-reminders
-    env: python
-    plan: starter
-    schedule: "0 6 * * *"        # daily 06:00 UTC (08:00 SAST) — booking/lesson reminders
-    buildCommand: "pip install --upgrade pip && pip install requests"
-    startCommand: "python -m crons.trigger reminders"
-    envVars:
-      - key: PYTHON_VERSION
-        value: "3.12.3"
-      - key: CRON_API_BASE
-        sync: false
-      - key: OPS_KEY
-        sync: false
-
-  - type: cron
-    name: courtflow-cron-capacity-sweep
-    env: python
-    plan: starter
-    schedule: "*/15 * * * *"     # every 15 min — release expired holds, promote waitlist
-    buildCommand: "pip install --upgrade pip && pip install requests"
-    startCommand: "python -m crons.trigger capacity-sweep"
-    envVars:
-      - key: PYTHON_VERSION
-        value: "3.12.3"
-      - key: CRON_API_BASE
-        sync: false
-      - key: OPS_KEY
-        sync: false
-
-  - type: cron
-    name: courtflow-cron-monthly-invoice
-    env: python
-    plan: starter
-    schedule: "0 5 1 * *"        # 1st of month 05:00 UTC — monthly-account invoice run
-    buildCommand: "pip install --upgrade pip && pip install requests"
-    startCommand: "python -m crons.trigger monthly-invoice"
-    envVars:
-      - key: PYTHON_VERSION
-        value: "3.12.3"
-      - key: CRON_API_BASE
-        sync: false
-      - key: OPS_KEY
-        sync: false
-
-  - type: cron
-    name: courtflow-cron-membership-refill
-    env: python
-    plan: starter
-    schedule: "0 4 * * *"        # daily 04:00 UTC — membership period refill/rollover
-    buildCommand: "pip install --upgrade pip && pip install requests"
-    startCommand: "python -m crons.trigger membership-refill"
-    envVars:
-      - key: PYTHON_VERSION
-        value: "3.12.3"
-      - key: CRON_API_BASE
-        sync: false
-      - key: OPS_KEY
-        sync: false
+  # - type: cron
+  #   name: courtflow-cron-reminders
+  #   env: python
+  #   plan: starter
+  #   schedule: "0 6 * * *"
+  #   buildCommand: "pip install --upgrade pip && pip install requests"
+  #   startCommand: "python -m crons.trigger reminders"
+  #   envVars:
+  #     - { key: CRON_API_BASE, sync: false }
+  #     - { key: OPS_KEY, sync: false }
+  # (capacity-sweep "*/15 * * * *", monthly-invoice "0 5 1 * *", membership-refill "0 4 * * *"
+  #  follow the same shape — see git history of this file for the full block.)
