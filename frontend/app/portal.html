@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>NextPoint · Portal</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- Agent F serves frontend/_shared/portal.css; this page also ships a self-contained fallback. -->
+<link rel="stylesheet" href="/_shared/portal.css" onerror="this.remove()">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="cf-shell">
+  <header id="cf-topbar" class="cf-topbar"></header>
+  <main id="cf-main" class="cf-main">
+    <div id="cf-dash" class="cf-loading">Loading…</div>
+  </main>
+</div>
+
+<script src="../js/auth_client.js"></script>
+<script src="../js/ui.js"></script>
+<script src="../js/api.js"></script>
+<script src="../js/portal.js"></script>
+<script>
+Portal.boot({
+  active: "portal.html",
+  onReady: async function (p) {
+    var UI = window.UI, el = UI.el, main = document.getElementById("cf-main");
+    UI.clear(main);
+
+    var roleLabel = ({ club_admin: "Club admin", platform_admin: "Platform admin",
+                       coach: "Coach", member: "Member", guest: "Guest" })[p.role] || p.role;
+
+    var hero = el("div", { class: "cf-card" }, [
+      el("h2", { text: "Welcome back" }),
+      el("p", { class: "cf-muted", text: (p.email || "") + " · " + roleLabel }),
+    ]);
+    main.appendChild(hero);
+
+    // Quick links, role-aware.
+    var links = [
+      { href: "book.html", t: "Book a court, lesson or class", roles: ["*"] },
+      { href: "my.html", t: "My bookings & statement", roles: ["*"] },
+      { href: "coach.html", t: "Coach console — my week & rosters", roles: ["coach", "club_admin", "platform_admin"] },
+      { href: "admin.html", t: "Master diary & club admin", roles: ["club_admin", "platform_admin"] },
+    ];
+    var grid = el("div", { class: "cf-grid cf-grid-2" });
+    links.forEach(function (l) {
+      if (l.roles.indexOf("*") < 0 && l.roles.indexOf(p.role) < 0) return;
+      grid.appendChild(el("a", { href: l.href, class: "cf-card", style: "text-decoration:none;color:inherit;display:block" }, [
+        el("div", { class: "cf-item-t", text: l.t }),
+        el("div", { class: "cf-muted", text: "Open →" }),
+      ]));
+    });
+    main.appendChild(grid);
+
+    // Upcoming bookings preview (member lens).
+    var up = el("div", { class: "cf-card" }, [ el("h2", { text: "Upcoming" }), el("div", { id: "up", class: "cf-loading", text: "Loading…" }) ]);
+    main.appendChild(up);
+    try {
+      var today = UI.dateKey(new Date());
+      var to = UI.dateKey(UI.addDays(new Date(), 30));
+      var r = await window.API.bookings({ date_from: today, date_to: to, status: "confirmed" });
+      var box = document.getElementById("up");
+      UI.clear(box);
+      if (!r.bookings.length) { box.appendChild(el("div", { class: "cf-empty", text: "No upcoming bookings." })); }
+      else {
+        var list = el("div", { class: "cf-list" });
+        r.bookings.slice(0, 5).forEach(function (b) {
+          list.appendChild(el("div", { class: "cf-item" }, [
+            el("span", { class: "cf-chip " + b.booking_type, text: b.booking_type }),
+            el("div", { class: "cf-item-main" }, [
+              el("div", { class: "cf-item-t", text: b.resource_name || b.booking_type }),
+              el("div", { class: "cf-item-s", text: UI.fmtRange(b.starts_at, b.ends_at) }),
+            ]),
+          ]));
+        });
+        box.appendChild(list);
+      }
+    } catch (e) { document.getElementById("up").textContent = UI.errMsg(e); }
+  },
+});
+</script>
+</body>
+</html>

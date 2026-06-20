@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>NextPoint · Coach</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/_shared/portal.css" onerror="this.remove()">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="cf-shell">
+  <header id="cf-topbar" class="cf-topbar"></header>
+  <main id="cf-main" class="cf-main">
+    <div class="cf-card">
+      <h2>My week</h2>
+      <div id="coach-week"><div class="cf-loading">Loading…</div></div>
+    </div>
+    <div class="cf-card">
+      <h2>Block time off</h2>
+      <div class="cf-grid cf-grid-2">
+        <div class="cf-field">
+          <label for="to-resource">Resource</label>
+          <select id="to-resource" class="cf-select"><option>Loading…</option></select>
+        </div>
+        <div class="cf-field">
+          <label for="to-reason">Reason</label>
+          <input id="to-reason" class="cf-input" placeholder="e.g. holiday">
+        </div>
+        <div class="cf-field">
+          <label for="to-start">From</label>
+          <input id="to-start" class="cf-input" type="datetime-local">
+        </div>
+        <div class="cf-field">
+          <label for="to-end">To</label>
+          <input id="to-end" class="cf-input" type="datetime-local">
+        </div>
+      </div>
+      <button id="to-submit" class="cf-btn cf-btn-primary">Block time</button>
+    </div>
+  </main>
+</div>
+
+<script src="../js/auth_client.js"></script>
+<script src="../js/ui.js"></script>
+<script src="../js/api.js"></script>
+<script src="../js/portal.js"></script>
+<script src="../js/coach.js"></script>
+<script>
+Portal.boot({
+  active: "coach.html",
+  requireRoles: ["coach", "club_admin", "platform_admin"],
+  onReady: function (p) { window.CoachConsole.start(p); },
+});
+</script>
+</body>
+</html>
