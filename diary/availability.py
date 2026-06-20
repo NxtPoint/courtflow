@@ -168,12 +168,14 @@ _LESSON_KINDS = ("coach", "lesson")
 def compute_availability(session, *, club_id, resource_id=None, kind=None,
                          coach_user_id=None, surface=None, date_from=None, date_to=None,
                          duration_minutes=None, audience="member", any_resource=False,
-                         now=None):
+                         membership_covered=False, now=None):
     """Return free slots for the resolved resource(s). Each slot:
         {start, end, resource_id, resource_name, kind, price}
-    where price is the guarded audience price (or None). When any_resource=True (or no
-    resource_id with a court kind), overlapping resources' slots are unioned and collapsed
-    so each distinct (start,end) appears once (the first free resource wins).
+    where price is the per-duration price for the chosen duration_minutes (guarded; None if
+    billing absent). When membership_covered=True (a court booking by an active member) the
+    slot price is forced to 0. When any_resource=True (or no resource_id with a court kind),
+    overlapping resources' slots are unioned and collapsed so each distinct (start,end) appears
+    once (the first free resource wins).
 
     Lesson requests (kind in {coach, lesson}, optional coach_id; "any coach" allowed) are
     special: a lesson needs BOTH a free coach AND a free court at the same time. We compute
@@ -205,7 +207,16 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
 
     resources = _resources(session, club_id=club_id, resource_id=resource_id, kind=kind,
                            coach_user_id=coach_user_id, surface=surface)
-    price = pricing.price_for(session, club_id=club_id, audience=audience, kind=_price_kind(kind))
+    # Per-duration price for the chosen slot length. membership_covered (a court booking by an
+    # active member) is free, so we skip the lookup and surface 0. We expose price as a numeric
+    # amount_minor (cents) — the frontend renders it with UI.money — or None when unpriced.
+    if membership_covered:
+        price = 0
+    else:
+        pr = pricing.price_for(session, club_id=club_id, kind=_price_kind(kind),
+                               duration_minutes=duration_min, coach_user_id=coach_user_id,
+                               audience=audience)
+        price = pr.get("amount_minor") if pr else None
 
     is_lesson = kind in _LESSON_KINDS
 
