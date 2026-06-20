@@ -119,7 +119,10 @@ def upsert_branding(session, *, club_id, **fields):
 
 
 def upsert_policy(session, *, club_id, **overrides):
-    """One row per club (club_id PK). Idempotent upsert; merges DEFAULT_POLICY + overrides."""
+    """One row per club (club_id PK). INSERT-ONLY: sets the club's initial policy on first
+    provision, then NEVER overwrites it — so admin edits in Settings (e.g. the online-payments
+    toggle, booking window, cancellation rules) persist across the boot-time re-seed
+    (SEED_NEXTPOINT). After creation the club admin owns these values, not the seed."""
     p = {**DEFAULT_POLICY, **{k: v for k, v in overrides.items() if v is not None}}
     session.execute(
         text("""
@@ -129,16 +132,7 @@ def upsert_policy(session, *, club_id, **overrides):
             VALUES (:club_id, :booking_window_days, :min_booking_minutes,
                 :cancellation_cutoff_hours, :no_show_fee_minor, :guest_requires_member,
                 :allow_pay_at_court, :allow_monthly_account, :allow_online_payment)
-            ON CONFLICT (club_id) DO UPDATE SET
-                booking_window_days = EXCLUDED.booking_window_days,
-                min_booking_minutes = EXCLUDED.min_booking_minutes,
-                cancellation_cutoff_hours = EXCLUDED.cancellation_cutoff_hours,
-                no_show_fee_minor = EXCLUDED.no_show_fee_minor,
-                guest_requires_member = EXCLUDED.guest_requires_member,
-                allow_pay_at_court = EXCLUDED.allow_pay_at_court,
-                allow_monthly_account = EXCLUDED.allow_monthly_account,
-                allow_online_payment = EXCLUDED.allow_online_payment,
-                updated_at = now()
+            ON CONFLICT (club_id) DO NOTHING
         """),
         {"club_id": club_id, **p},
     )

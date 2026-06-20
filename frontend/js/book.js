@@ -540,7 +540,13 @@
           body.resource_id = state.slot.resource_id; // the actual court resolved by availability
         }
         res = await window.API.createBooking(body);
-        // online mode returns a checkout intent (Phase 4) — surface it.
+        // Online: the booking is created 'held' with an order_id; kick off the Yoco hosted
+        // checkout (redirects to Yoco). The webhook confirms the held booking server-side;
+        // /pay-return.html shows the outcome. (pay.js is loaded by book.html.)
+        if (state.settlement === "online" && res.order_id && window.Pay) {
+          await window.Pay.startYocoCheckout(res.order_id); return;
+        }
+        // Fallback: an inline checkout intent on the response (older path).
         if (res.checkout && res.checkout.redirect_url) {
           location.href = res.checkout.redirect_url; return;
         }

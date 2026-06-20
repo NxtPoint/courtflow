@@ -14,6 +14,7 @@
     { k: "courts", t: "Courts" },
     { k: "services", t: "Services & pricing" },
     { k: "coaches", t: "Coaches" },
+    { k: "payments", t: "Payments" },
   ];
 
   function root() { return document.getElementById("cf-settings"); }
@@ -56,7 +57,39 @@
       window.AdminUI.services(sectionHost, {});
     } else if (state.tab === "coaches") {
       window.AdminUI.coaches(sectionHost, {});
+    } else if (state.tab === "payments") {
+      renderPayments(sectionHost, (state.data && state.data.policy) || {});
     }
+  }
+
+  // Per-club online-payments switch. The booking flow offers "Pay online" (Yoco) only when
+  // this is on AND payments are globally enabled — so turning a club live is one toggle.
+  function renderPayments(host, policy) {
+    var card = el("div", { class: "cf-card" }, [
+      el("h2", { text: "Online payments" }),
+      el("p", { class: "cf-muted", text:
+        "When on, members can pay for bookings online by card (Yoco — card + Apple/Google/Samsung Pay). " +
+        "When off, they pay at the court or on a monthly account." }),
+    ]);
+    var lbl = el("label", { class: "cf-row", style: "cursor:pointer;gap:10px" });
+    var cb = el("input", { type: "checkbox" });
+    cb.checked = !!policy.allow_online_payment;
+    cb.style.width = "auto";
+    cb.addEventListener("change", async function () {
+      cb.disabled = true;
+      try {
+        await window.AdminAPI.patchPolicy({ allow_online_payment: cb.checked });
+        if (state.data && state.data.policy) state.data.policy.allow_online_payment = cb.checked;
+        UI.toast(cb.checked ? "Online payments enabled." : "Online payments turned off.", "info");
+      } catch (e) {
+        cb.checked = !cb.checked;
+        UI.toast(UI.errMsg(e), "error");
+      } finally { cb.disabled = false; }
+    });
+    lbl.appendChild(cb);
+    lbl.appendChild(el("span", { style: "font-weight:600", text: "Accept online card payments" }));
+    card.appendChild(lbl);
+    host.appendChild(card);
   }
 
   window.Settings = {

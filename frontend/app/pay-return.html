@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>NextPoint · Payment</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/_shared/portal.css" onerror="this.remove()">
+<link rel="stylesheet" href="/app.css" onerror="this.remove()">
+<style>
+  /* Minimal self-contained styling so the page looks right even before app.css loads. */
+  .cf-pay-wrap { max-width: 540px; margin: 8vh auto; padding: 0 20px;
+    font-family: Inter, system-ui, sans-serif; }
+  .cf-pay-card { background: #fff; border: 1px solid #e6e6ea; border-radius: 14px;
+    padding: 28px 26px; box-shadow: 0 6px 24px rgba(20,20,40,.06); }
+  .cf-pay-card h2 { margin: 0 0 10px; font-size: 1.35rem; }
+  #pay-status { color: #555; line-height: 1.5; }
+  #pay-actions { margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .cf-pay-btn { display: inline-block; padding: 10px 18px; border-radius: 10px;
+    background: #1f6feb; color: #fff; text-decoration: none; font-weight: 600; }
+  .cf-pay-btn-ghost { background: #f1f3f6; color: #1f2430; }
+</style>
+</head>
+<body>
+<div class="cf-pay-wrap">
+  <div class="cf-pay-card">
+    <h2 id="pay-title">Confirming your payment…</h2>
+    <div id="pay-status">Checking with the bank…</div>
+    <div id="pay-actions"></div>
+  </div>
+</div>
+
+<script src="/js/auth_client.js"></script>
+<script src="/js/pay_return.js"></script>
+<script>
+  // No Portal chrome needed here — this is a post-redirect landing. pay_return.js awaits
+  // TFAuth.ready() itself, so a bare start() is enough.
+  window.PayReturn.start();
+</script>
+</body>
+</html>

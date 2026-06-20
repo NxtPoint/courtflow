@@ -51,15 +51,26 @@ services:
       - key: AUTH_AUDIENCE
         value: ""            # blank — Clerk default session tokens set no aud
 
-      # --- Payments: provider-agnostic, OFF at launch (decision D8). ---
+      # --- Payments: provider-agnostic, LIVE (Yoco). Global gate = PAYMENTS_ENABLED=1;
+      # per-club gate = club.policy.allow_online_payment (Settings → Payments toggle). A club
+      # only takes online payments when BOTH are on — so this is safe globally while each club
+      # opts in. Yoco hosted checkout gives card + Apple/Google/Samsung Pay automatically. ---
       - key: PAYMENTS_ENABLED
-        value: "0"
+        value: "1"
+      - key: PAYMENTS_PROVIDER     # which adapter the /api/billing/config probe advertises
+        value: "yoco"
       - key: YOCO_ENABLED
-        value: "0"
-      - key: YOCO_SECRET_KEY
+        value: "1"
+      - key: YOCO_SECRET_KEY       # sk_live_… (server-side checkout + refund calls)
         sync: false
-      - key: YOCO_WEBHOOK_SECRET
+      - key: YOCO_PUBLIC_KEY       # pk_live_… (publishable; surfaced by /api/billing/config)
         sync: false
+      - key: YOCO_WEBHOOK_SECRET   # whsec_… (Standard-Webhooks signing secret)
+        sync: false
+      # Origin of the courtflow-web portal that serves /pay-return.html (Yoco return URLs).
+      # Update to the real domain at DNS cutover.
+      - key: APP_BASE_URL
+        value: "https://courtflow-web.onrender.com"
 
       # --- CRM / Klaviyo (one Klaviyo, NextPoint brand — decision D3). ---
       - key: TRACKING_ENABLED      # core.usage_event + page-view beacon
