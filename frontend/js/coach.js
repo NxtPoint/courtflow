@@ -5,6 +5,21 @@
 (function () {
   var UI, el, principal;
   var resCache = null;   // {coachRes:[...], courts:[...]} — cached resources for the booking modal
+  var classState = { list: [] };
+
+  // coach.html loads coach_api.js but not class_ui.js (the shared class components).
+  // Lazy-load it once so the "My classes" area works without touching the HTML shell.
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      if (document.querySelector('script[src="' + src + '"]')) return resolve();
+      var s = document.createElement("script");
+      s.src = src; s.onload = resolve; s.onerror = function () { reject(new Error("Failed to load " + src)); };
+      document.head.appendChild(s);
+    });
+  }
+  async function ensureClassDeps() {
+    if (!window.ClassUI) await loadScript("/js/class_ui.js");
+  }
 
   async function loadWeek() {
     var box = document.getElementById("coach-week");
@@ -54,7 +69,7 @@
     }
 
     if (classes.length) {
-      box.appendChild(el("h3", { text: "Classes I run", style: "margin-top:16px" }));
+      box.appendChild(el("h3", { text: "Class sessions this week", style: "margin-top:16px" }));
       var cl = el("div", { class: "cf-list" });
       classes.forEach(function (c) {
         cl.appendChild(el("div", { class: "cf-item" }, [
@@ -64,11 +79,23 @@
             el("div", { class: "cf-item-s", text: UI.fmtRange(c.starts_at, c.ends_at) +
               " · " + (c.enrolled || 0) + " enrolled" + (c.waitlisted ? " · " + c.waitlisted + " waitlisted" : "") }),
           ]),
-          el("button", { class: "cf-btn cf-btn-sm", text: "Roster", onclick: function () { openRoster(c); } }),
+          el("button", { class: "cf-btn cf-btn-sm", text: "Roster", onclick: function () { openWeekRoster(c); } }),
         ]));
       });
       box.appendChild(cl);
     }
+  }
+
+  // A class session from this week's /api/diary/classes glance -> open its roster via
+  // the shared ClassUI (the same roster used in the "My classes" management area).
+  async function openWeekRoster(c) {
+    try { await ensureClassDeps(); } catch (e) { UI.toast(UI.errMsg(e), "error"); return; }
+    window.ClassUI.openRoster({
+      api: window.CoachAPI,
+      cls: { name: c.class_name || "Class", resource_id: c.resource_id, capacity: c.capacity },
+      session: { session_id: c.id, starts_at: c.starts_at, ends_at: c.ends_at,
+        status: c.status, enrolled: c.enrolled, capacity: c.capacity },
+    });
   }
 
   async function setStatus(id, status) {
@@ -198,43 +225,78 @@
     }
   }
 
-  // Roster modal: the class session id maps to its bookings via the booking list
-  // filtered by resource. Mark attendance uses POST /status {status:"attended", party_id}.
-  async function openRoster(c) {
-    var bg = el("div", { class: "cf-modal-bg" });
-    var body = el("div", { id: "roster-body", class: "cf-loading", text: "Loading roster…" });
-    var modal = el("div", { class: "cf-modal" }, [
-      el("h2", { text: (c.class_name || "Class") + " roster" }),
-      el("p", { class: "cf-muted", text: UI.fmtRange(c.starts_at, c.ends_at) }),
-      body,
-      el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:12px" }, [
-        el("button", { class: "cf-btn", text: "Close", onclick: function () { document.body.removeChild(bg); } }),
+  // ---- "My classes" management area -----------------------------------------
+  // A coach creates/manages only their OWN classes: create a class type, schedule
+  // recurring/one-off sessions, view/cancel sessions, open rosters + mark attendance.
+  // Reuses the shared ClassUI components (same ones the admin console uses); the coach
+  // form has no coach selector (the server attributes the class to the caller).
+  // Injects its own card into #cf-main after the "My week" card (HTML shell is fixed).
+  async function initMyClasses() {
+    var main = document.getElementById("cf-main"); if (!main) return;
+    var card = el("div", { class: "cf-card", id: "coach-classes-card" }, [
+      el("div", { class: "cf-row", style: "margin-bottom:6px" }, [
+        el("h2", { text: "My classes", style: "margin:0" }),
+        el("span", { class: "cf-spacer" }),
+        el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "New class",
+          onclick: function () { openNewClass(); } }),
       ]),
+      el("p", { class: "cf-muted", style: "margin:-2px 0 12px",
+        text: "Create your classes, schedule sessions, and manage rosters & attendance." }),
+      el("div", { id: "coach-cls-list", class: "cf-loading", text: "Loading classes…" }),
+      el("div", { id: "coach-cls-sessions" }),
     ]);
-    bg.appendChild(modal); document.body.appendChild(bg);
-    try {
-      // Class enrolments surface as bookings on the class resource for attendance marking.
-      var r = await window.API.bookings({ date_from: UI.dateKey(new Date(c.starts_at)),
-        date_to: UI.dateKey(UI.addDays(new Date(c.starts_at), 1)), resource_id: c.resource_id, as_coach: "1" });
-      renderRoster(body, r.bookings || []);
-    } catch (e) { body.textContent = UI.errMsg(e); }
+    // Place it right after the "My week" card (the first cf-card in main).
+    var weekCard = document.getElementById("coach-week");
+    var anchor = weekCard ? weekCard.closest(".cf-card") : null;
+    if (anchor && anchor.nextSibling) main.insertBefore(card, anchor.nextSibling);
+    else main.appendChild(card);
+
+    try { await ensureClassDeps(); } catch (e) {
+      var b = document.getElementById("coach-cls-list"); if (b) b.textContent = UI.errMsg(e); return;
+    }
+    loadClasses();
   }
 
-  function renderRoster(body, bookings) {
-    UI.clear(body);
-    if (!bookings.length) { body.appendChild(el("div", { class: "cf-empty", text: "No enrolments to mark, or the roster is exposed via parties on each booking." })); return; }
-    var list = el("div", { class: "cf-list" });
-    bookings.forEach(function (b) {
-      list.appendChild(el("div", { class: "cf-item" }, [
-        el("div", { class: "cf-item-main" }, [ el("div", { class: "cf-item-t", text: b.resource_name || "Player" }) ]),
-        el("button", { class: "cf-btn cf-btn-sm", text: "Attended", onclick: function () {
-          window.API.setBookingStatus(b.id, { status: "attended", attended: true })
-            .then(function () { UI.toast("Marked.", "info"); })
-            .catch(function (e) { UI.toast(UI.errMsg(e), "error"); });
-        } }),
-      ]));
+  function loadClasses() {
+    var box = document.getElementById("coach-cls-list"); if (!box) return;
+    UI.clear(box); box.appendChild(el("div", { class: "cf-loading", text: "Loading classes…" }));
+    window.CoachAPI.classes().then(function (r) {
+      classState.list = r.classes || [];
+      window.ClassUI.renderClassList({
+        host: box, classes: classState.list,
+        onSchedule: function (c) { openSchedule(c); },
+        onSessions: function (c) { showSessions(c); },
+      });
+    }).catch(function (e) {
+      UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) }));
     });
-    body.appendChild(list);
+  }
+
+  function openNewClass() {
+    window.ClassUI.openClassForm({
+      api: window.CoachAPI, title: "New class",   // no coach selector — it's the caller's own
+      onSaved: function () { loadClasses(); },
+    });
+  }
+  function openSchedule(c) {
+    window.ClassUI.openScheduleForm({
+      api: window.CoachAPI,
+      cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity, duration_minutes: c.duration_minutes },
+      onSaved: function () { loadClasses(); showSessions(c); },
+    });
+  }
+  function showSessions(c) {
+    var host = document.getElementById("coach-cls-sessions"); if (!host) return;
+    UI.clear(host);
+    host.appendChild(el("div", { style: "margin-top:14px" }, [
+      el("h3", { text: "Sessions · " + (c.name || "Class") }),
+      el("div", { id: "coach-cls-sessions-body" }),
+    ]));
+    window.ClassUI.renderSessions({
+      api: window.CoachAPI,
+      cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity },
+      host: document.getElementById("coach-cls-sessions-body"),
+    });
   }
 
   // ---- availability / time-off ---------------------------------------------
@@ -332,7 +394,7 @@
   window.CoachConsole = {
     start: function (p) {
       UI = window.UI; el = UI.el; principal = p;
-      loadWeek(); loadResources(); loadProfile();
+      loadWeek(); loadResources(); loadProfile(); initMyClasses();
       document.getElementById("to-submit").addEventListener("click", submitTimeOff);
     },
   };

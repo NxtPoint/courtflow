@@ -13,6 +13,15 @@
     return window.TFAuth;
   }
   function enc(id) { return encodeURIComponent(id); }
+  function _qs(params) {
+    var p = new URLSearchParams();
+    Object.keys(params || {}).forEach(function (k) {
+      var v = params[k];
+      if (v !== undefined && v !== null && v !== "") p.set(k, v);
+    });
+    var s = p.toString();
+    return s ? ("?" + s) : "";
+  }
 
   var CoachAPI = {
     // ---- onboarding ------------------------------------------------------
@@ -68,6 +77,45 @@
     //      back to a plain "photo URL" text field).
     photoPresign: function (body) {
       return A().apiJSON("/api/coach/photo-presign", { method: "POST", body: body });
+    },
+
+    // ---- classes (a coach manages only their OWN) -----------------------
+    // GET /api/coach/classes -> {classes:[{resource_id,name,coach_user_id,coach_name,
+    //   capacity,price_amount_minor,duration_minutes,upcoming_sessions}]}
+    classes: function () { return A().apiJSON("/api/coach/classes"); },
+    // POST /api/coach/classes  body: {name,capacity,price_amount_minor,duration_minutes,
+    //   description?}  (no coach_user_id — the server uses the caller) -> {resource_id,...}
+    createClass: function (body) {
+      return A().apiJSON("/api/coach/classes", { method: "POST", body: body });
+    },
+    // POST /api/coach/classes/:resource_id/schedule
+    //   recurring: {weekdays:[0-6],start_time,duration_minutes?,date_from,date_until,capacity?}
+    //   one-off:   {dates:[...],start_time,duration_minutes?,capacity?}  -> {created, skipped}
+    scheduleClass: function (resourceId, body) {
+      return A().apiJSON("/api/coach/classes/" + enc(resourceId) + "/schedule",
+        { method: "POST", body: body });
+    },
+    // GET /api/coach/classes/:resource_id/sessions?date_from=&date_to=
+    //   -> {sessions:[{session_id,starts_at,ends_at,capacity,enrolled,waitlisted,spots_left,status}]}
+    classSessions: function (resourceId, opts) {
+      return A().apiJSON("/api/coach/classes/" + enc(resourceId) + "/sessions" + _qs(opts));
+    },
+    // POST /api/coach/classes/sessions/:session_id/cancel
+    cancelClassSession: function (sessionId, body) {
+      return A().apiJSON("/api/coach/classes/sessions/" + enc(sessionId) + "/cancel",
+        { method: "POST", body: body || {} });
+    },
+
+    // ---- class rosters / attendance (shared diary lane) -----------------
+    // GET /api/diary/classes/:session_id/roster
+    //   -> {enrolled:[{user_id,name,email,status}], waitlisted:[...]}
+    classRoster: function (sessionId) {
+      return A().apiJSON("/api/diary/classes/" + enc(sessionId) + "/roster");
+    },
+    // POST /api/diary/classes/:session_id/attendance  body: {user_id, attended}
+    classAttendance: function (sessionId, body) {
+      return A().apiJSON("/api/diary/classes/" + enc(sessionId) + "/attendance",
+        { method: "POST", body: body });
     },
   };
 
