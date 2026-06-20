@@ -196,6 +196,37 @@ def _seed_courts_if_possible(session, *, club_id, location_id):
     return n
 
 
+def _seed_availability_if_possible(session, *, club_id):
+    """Seed default open hours (Mon–Sun 06:00–22:00, 60-min slots) for every court resource
+    so the booking wizard has slots to offer (the availability engine expands these rules).
+    Idempotent per (resource, weekday). Skips if diary.availability_rule isn't present."""
+    if not _table_exists(session, "diary", "availability_rule"):
+        return 0
+    courts = session.execute(
+        text("SELECT id FROM diary.resource WHERE club_id = :c AND kind = 'court'"),
+        {"c": club_id},
+    ).scalars().all()
+    n = 0
+    for rid in courts:
+        for weekday in range(7):   # 0=Mon .. 6=Sun
+            exists = session.execute(
+                text("SELECT 1 FROM diary.availability_rule "
+                     "WHERE club_id = :c AND resource_id = :r AND weekday = :w"),
+                {"c": club_id, "r": rid, "w": weekday},
+            ).first()
+            if exists:
+                continue
+            session.execute(
+                text("INSERT INTO diary.availability_rule "
+                     "(club_id, resource_id, weekday, start_time, end_time, slot_minutes) "
+                     "VALUES (:c, :r, :w, '06:00', '22:00', 60)"),
+                {"c": club_id, "r": rid, "w": weekday},
+            )
+            n += 1
+    log.info("seeded %d new availability rules", n)
+    return n
+
+
 def _seed_billing_if_possible(session, *, club_id, currency_code):
     """Seed the NextPoint product/price catalogue (PRICES_ZAR) as billing.product +
     billing.price rows IF billing.* exists. Idempotent: products keyed by (club, kind, name),
@@ -272,6 +303,7 @@ def seed(session):
 
     # Guarded cross-lane content.
     courts_seeded = _seed_courts_if_possible(session, club_id=club_id, location_id=location_id)
+    hours_seeded = _seed_availability_if_possible(session, club_id=club_id)
     prices_seeded = _seed_billing_if_possible(session, club_id=club_id,
                                               currency_code=CLUB["currency_code"])
 
@@ -281,6 +313,7 @@ def seed(session):
         "coaches": len(coach_ids),
         "admins": len(ADMINS),
         "courts_seeded": courts_seeded,
+        "availability_rules": hours_seeded,
         "prices_seeded": prices_seeded,
     }
 

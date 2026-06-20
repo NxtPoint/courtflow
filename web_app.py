@@ -289,6 +289,19 @@ def dashboard():
     return _app_shell("dashboard.html")
 
 
+@app.get("/<page>.html")
+def app_shell_html(page: str):
+    """Serve portal SPA shells referenced with a `.html` suffix. Agent E's nav + dashboard
+    links use relative hrefs like book.html / my.html / admin.html, which resolve to
+    /book.html etc. — map those to the same frontend/app/<page>.html shells the clean
+    /book, /my, ... routes serve, so every in-app link resolves. App pages only."""
+    if "/" in page or "\\" in page or page.startswith("."):
+        abort(404)
+    if os.path.isfile(os.path.join(APP_DIR, page + ".html")):
+        return _app_shell(page + ".html")
+    abort(404)
+
+
 @app.get("/app/<path:filename>")
 def app_asset(filename: str):
     """Serve SPA assets Agent E ships under frontend/app/ then frontend/js/.
