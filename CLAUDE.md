@@ -5,32 +5,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This repo is the **multi-tenant tennis club management platform** (working name "CourtFlow").
 NextPoint Tennis is club #1, migrating off Wix.
 
-## Current state (read this first)
-- **Backend + frontend built, integration-verified, NOT yet run against live infra.** Phases 0–6 are
-  scaffolded on `master`. The genuinely-new code (diary engine, multi-tenancy, settlement) is done;
-  Yoco online pay (Phase 7) and the supervised DNS/SEO cutover (Phase 6 execution) remain.
-- **Source of truth:** `docs/` (`00`→`11`). `docs/11-build-readiness-and-decisions.md` has the locked
-  decisions + the validated 1050 reuse map. When a decision isn't in `docs/`, ask.
-- **What exists now (lane → modules):**
-  - **A Foundation:** `app.py` (api factory), `wsgi.py`, `db.py` (lazy engine + idempotent boot runner,
-    `BOOT_MODULES`), `auth/` (Clerk JWKS verifier + club-scoped `Principal`), `iam/` (user/membership/
-    permissions), `club/` (tenant schemas), `core/` (CRM identity + consent), `scripts/` (seed/provision),
-    `crons/` (thin cron dispatcher), `render.yaml`.
-  - **B Diary:** `diary/` — schema (the GiST no-double-book `EXCLUDE` constraint), `bookings.py`,
-    `classes.py`, `availability.py`, `recurrence.py`, `crons.py`, `routes.py` (`/api/diary/*`).
-  - **C Billing:** `billing/` — schema, `events.py` (`apply_payment_event`, idempotent), `gateway.py`
-    (`PaymentGateway` Protocol + `ManualGateway`; Yoco/PayPal adapters are the Phase-7 extension point),
-    `orders.py`, `ledger.py`, `routes.py` (`/api/billing/*`).
-  - **D CRM:** `marketing_crm/` — `tracking/` (`emit()`→`core.usage_event`), `crm_sync/` (Klaviyo +
-    HubSpot adapters, dark until `KLAVIYO_API_KEY`), `consent/`, `backoffice/` (cockpit), `email/` (SES fallback);
-    `contracts/events.md` is the producer/consumer contract.
-  - **E Frontend:** `frontend/app/` + `frontend/js/` — booking wizard, my-bookings, coach console,
-    admin master diary, `auth_client.js` (Clerk Bearer helper).
-  - **F Web/SEO:** `web_app.py` + `web_wsgi.py` (the **`courtflow-web`** host-switched, DB-less service),
-    `frontend/marketing/`, `frontend/_shared/` (per-club theme), `build_blog.py`, `frontend/login.html`,
-    `migration/` (301 map + cutover runbook — never auto-executed).
-- **Two services:** `courtflow-api` (`wsgi:app`, has DB) and `courtflow-web` (`web_wsgi:app`, no DB,
-  serves marketing + portal shells + `/login`).
+## Current state (read this first) — LIVE on Render
+- **Deployed and operational end-to-end.** Repo `NxtPoint/courtflow` (Render auto-deploys `master`).
+  Two web services (Render, Frankfurt, **Free** plan pre-launch): **`courtflow-api`** (`wsgi:app`, has DB)
+  `https://courtflow-api.onrender.com`, and **`courtflow-web`** (`web_wsgi:app`, no DB; marketing + portal
+  shells + `/login`) `https://courtflow-web.onrender.com`. Postgres = a separate Render DB (Frankfurt).
+  Auth = a dedicated **CourtFlow Clerk DEV app** (`settling-alien-23.clerk.accounts.dev`, `pk_test_…`,
+  values inline in `render.yaml`); `AUTH_ENABLED=1`. `SEED_NEXTPOINT=1` on the api re-seeds club #1 on
+  boot (idempotent). Platform admin = `info@nextpointtennis.com`.
+- **The onrender host is a marketing host** (`MARKETING_HOSTS`), so `courtflow-web.onrender.com/` serves
+  the **public site** and the app is at `/portal`, `/book`, `/admin`, … (host-switch in `web_app.py`).
+  Real domains (`nextpointtennis.com`) cut over at go-live.
+- **Source of truth:** `docs/` (`00`→`11`); `docs/11` = locked decisions + the 1050 reuse map.
+- **Lanes / modules:**
+  - **Foundation:** `app.py`, `wsgi.py`, `db.py` (boot runner + `BOOT_MODULES`), `auth/` (Clerk JWKS +
+    club-scoped `Principal`; single-membership default, platform_admin wildcard), `iam/`, `club/`, `core/`,
+    `scripts/` (seed/provision), `crons/`, `render.yaml`.
+  - **Diary:** `diary/` — GiST no-double-book constraint; `bookings.py` (court/lesson/class lifecycle +
+    **book-on-behalf** via `booked_for_user_id`; role-scoped `list_bookings`), `availability.py`,
+    `classes.py`, `recurrence.py`, `routes.py` (`/api/diary/*`).
+  - **Billing:** `billing/` — `apply_payment_event` (idempotent), `gateway.py` (`PaymentGateway` Protocol
+    + `ManualGateway`; **Yoco adapter being added in parallel — see the warning below**), `orders.py`,
+    `ledger.py`, `routes.py`.
+  - **CRM:** `marketing_crm/` — `emit()`→`core.usage_event`, Klaviyo sync (dark w/o `KLAVIYO_API_KEY`),
+    consent, cockpit, SES fallback; `contracts/events.md`.
+  - **Admin (owner self-service):** `admin/` — `/api/admin/*` write APIs + onboarding; powers the owner
+    onboarding wizard, Settings, and the People tab. Added `club.onboarding_completed`, `iam.coach_invite`.
+  - **Coach (self-service):** `coach/` — `/api/coach/*`; coach onboarding (profile/photo, weekly hours →
+    creates their `diary.resource(kind=coach)`, services/rates). Added `iam.coach_profile.onboarding_completed`,
+    `billing.product.coach_user_id`.
+  - **Frontend:** `frontend/app/` (shells) + `frontend/js/` — **ONE design system in `frontend/app/app.css`**
+    (bright/modern; every page uses its `cf-*` classes — keep it the single source, do NOT inline component
+    styles). Booking wizard, my-bookings, coach console, **master-diary calendar** (custom resource-timeline),
+    owner/coach onboarding + Settings. **Asset/nav links are ABSOLUTE** (`/app.css`, `/js/…`, `/book.html`)
+    so pages work at sub-paths like `/book/court`.
+  - **Web/SEO:** `web_app.py` (+ `web_wsgi.py`), `frontend/marketing/` (restyled to the design system, stock
+    court imagery), `frontend/_shared/` (`theme.css` + `chrome.py` + `branding.py` host→club resolver),
+    `build_blog.py`, `frontend/login.html`, `migration/`.
+- **Shipped & working:** owner onboarding · coach invite→onboarding · members book courts + named coaches ·
+  coaches/admins book on behalf of a client · unified master diary · consistent bright/modern UI + public site.
+
+## ⚠️ Parallel work in flight — coordinate, don't collide
+A **separate session is building the Yoco payment integration.** Its lane: `yoco_billing/` (new), a
+`YocoGateway` in `billing/gateway.py`, the Yoco webhook + create-checkout routes, the **`online` settlement**
+path (booking `held` → checkout → `apply_payment_event` → `confirmed`), and the checkout UI on the
+booking-confirm step (`frontend/js/book.js`) + `/pricing`. **If you are NOT that session: stay out of
+billing/payments + the online-checkout flow, and prefer a feature branch over pushing `master` directly**
+(avoids races). `frontend/js/book.js` is the shared file — pull latest before editing it.
 
 ## Commands
 - **Compile gate (CI-style, no infra):** `python -m py_compile $(git ls-files '*.py')` — there is no
@@ -52,10 +73,12 @@ NextPoint Tennis is club #1, migrating off Wix.
 - **Web service:** Flask test client against `web_app.py` (DB-less) — host-switch, portal-shell serving,
   robots/sitemap, branded 404 (14/14).
 
-## Still needs Tomo before it can RUN/deploy
-New Postgres `DATABASE_URL`; new Clerk app (`AUTH_JWKS_URL`/`AUTH_ISSUER`/`CLERK_PUBLISHABLE_KEY` + an
-`email` JWT-template claim); then Klaviyo sender, Yoco keys, S3/SES, and the supervised DNS cutover at
-their phases. See `docs/11 §5`. **git is already initialized** (history starts at the spec commit).
+## Still needs Tomo (config, not code) — infra is otherwise live
+- **S3** (`S3_BUCKET` + AWS keys) for coach **photo uploads** — until set, coaches paste a photo URL.
+- **SES** verified sender for **invite/confirmation emails** — until then coach invite links are shared
+  manually; Klaviyo marketing also dark until `KLAVIYO_API_KEY`.
+- **Yoco keys** (`YOCO_*`) for online payments (the parallel build).
+- **DNS / SEO cutover** for `nextpointtennis.com` (supervised — never an agent). See `docs/11 §5`, `docs/07`.
 
 ## Architecture (big picture — from docs/01, docs/02, docs/09)
 The platform re-assembles ~80% of the proven **Ten-Fifty5 (1050)** architecture around one new
