@@ -116,9 +116,9 @@ async function verifyWithBackend(Clerk){
   try {
     const token = await Clerk.session.getToken();
     const base = (CFG.apiBase && CFG.apiBase.indexOf("__")!==0) ? CFG.apiBase : "";
-    const res = await fetch(base + "/api/client/me", { headers: { "Authorization": "Bearer " + token } });
+    const res = await fetch(base + "/api/whoami", { headers: { "Authorization": "Bearer " + token } });
     const data = await res.json().catch(function(){ return {}; });
-    if (res.ok && data && data.ok){
+    if (res.ok && data && data.user_id){
       // Authorised — straight into the portal.
       window.location.replace(CFG.afterLogin || "/portal");
     } else if (res.status === 401 || res.status === 403){
@@ -129,13 +129,13 @@ async function verifyWithBackend(Clerk){
         '<div style="margin-top:14px"><a href="#" id="signout">Sign out</a></div></div>';
     } else {
       mount.innerHTML =
-        '<div class="state"><h2>Couldn't verify</h2><div>Unexpected response (HTTP '+res.status+'). ' +
+        '<div class="state"><h2>Couldn&rsquo;t verify</h2><div>Unexpected response (HTTP '+res.status+'). ' +
         'Please retry, or <a href="mailto:'+CFG.support+'">contact us</a>.</div>' +
         '<div style="margin-top:14px"><a href="#" id="signout">Sign out</a></div></div>';
     }
   } catch (err) {
     mount.innerHTML =
-      '<div class="state"><h2>Couldn't reach the server</h2><div>Signed in as <b>'+email+'</b>, but the ' +
+      '<div class="state"><h2>Couldn&rsquo;t reach the server</h2><div>Signed in as <b>'+email+'</b>, but the ' +
       'verification call failed. Please retry shortly.</div>' +
       '<div style="margin-top:14px"><a href="#" id="signout">Sign out</a></div></div>';
   }
