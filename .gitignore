@@ -1,5 +1,7 @@
 # Local / build artefacts
+.claude/
 .venv/
+.venv-*/
 __pycache__/
 *.pyc
 .env
