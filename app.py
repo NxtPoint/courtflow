@@ -58,6 +58,19 @@ def create_app():
                 app.logger.info("boot init: all schema modules ok")
         except Exception:
             app.logger.exception("run_boot_init() failed on boot — schema may be incomplete")
+
+        # Optional one-time seed of NextPoint (club #1). Handy on Render free tier, which
+        # has no Shell to run `python -m scripts.seed_nextpoint`. Idempotent — safe to leave
+        # on, but you can remove SEED_NEXTPOINT once you see "seeded" in the logs.
+        if _truthy("SEED_NEXTPOINT"):
+            try:
+                from db import session_scope
+                from scripts.seed_nextpoint import seed as _seed_nextpoint
+                with session_scope() as s:
+                    summary = _seed_nextpoint(s)
+                app.logger.info("SEED_NEXTPOINT: seeded NextPoint -> %s", summary)
+            except Exception:
+                app.logger.exception("SEED_NEXTPOINT seed failed on boot")
     else:
         app.logger.warning("DATABASE_URL not set — skipping schema bootstrap (import-only mode)")
 
