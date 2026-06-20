@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>NextPoint · Membership</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/_shared/portal.css" onerror="this.remove()">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="cf-shell">
+  <header id="cf-topbar" class="cf-topbar"></header>
+  <main id="cf-main" class="cf-main">
+    <div id="cf-membership"><div class="cf-loading">Loading…</div></div>
+  </main>
+</div>
+
+<script src="/js/auth_client.js"></script>
+<script src="/js/pay.js"></script>
+<script src="/js/ui.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/portal.js"></script>
+<script src="/js/membership.js"></script>
+<script>
+Portal.boot({
+  active: "/membership.html",
+  onReady: function (p) { window.Membership.start(p); },
+});
+</script>
+</body>
+</html>
