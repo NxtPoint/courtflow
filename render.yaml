@@ -72,26 +72,24 @@ services:
       - key: APP_BASE_URL
         value: "https://courtflow-web.onrender.com"
 
-      # --- Analytics: Ten-Fifty5 (1050) bridge for the Business Overview dashboard. UNSET = the
-      # 1050 column simply shows "not configured". Option A (no 1050 change): set URL + CLIENT_KEY +
-      # ADMIN_EMAIL (1050's shared cockpit key). Option B (later, least-privilege): set URL to a
-      # dedicated /api/ops/metrics endpoint + OPS_KEY instead. All sync:false (secrets). ---
+      # --- Ten-Fifty5 (1050) bridge — CONNECTION DETAILS for the SEPARATE 1050 system (NOT a
+      # feature toggle): powers the dashboard's optional "Ten-Fifty5" column. Like a second
+      # DATABASE_URL — fill all three ONCE to connect; leave blank and the column simply doesn't
+      # appear. (Option B least-privilege later just swaps the key for an OPS one — see docs/12.) ---
       - key: BRIDGE_TENFIFTY5_URL
-        sync: false        # e.g. https://<1050-api-host>
+        sync: false        # https://<1050-api-host>
       - key: BRIDGE_TENFIFTY5_CLIENT_KEY
-        sync: false        # 1050 CLIENT_API_KEY (Option A)
+        sync: false        # 1050's CLIENT_API_KEY
       - key: BRIDGE_TENFIFTY5_ADMIN_EMAIL
-        sync: false        # an ADMIN_EMAILS address on 1050 (Option A)
-      - key: BRIDGE_TENFIFTY5_OPS_KEY
-        sync: false        # only for Option B (dedicated metrics endpoint)
+        sync: false        # an admin email on 1050 (e.g. info@ten-fifty5.com)
 
       # --- CRM / Klaviyo (one Klaviyo, NextPoint brand — decision D3). ---
       - key: TRACKING_ENABLED      # core.usage_event + page-view beacon
         value: "1"
       - key: CONSENT_ENABLED       # consent capture endpoints + screens
         value: "1"
-      - key: CRM_SYNC_ENABLED      # forward to Klaviyo (self-gates on KLAVIYO_API_KEY)
-        value: "0"
+      - key: CRM_SYNC_ENABLED      # forward to Klaviyo — ON (stays safely dark until KLAVIYO_API_KEY is set)
+        value: "1"
       - key: KLAVIYO_API_KEY
         sync: false
 
