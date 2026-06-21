@@ -16,7 +16,10 @@ NextPoint Tennis is club #1, migrating off Wix.
 - **The onrender host is a marketing host** (`MARKETING_HOSTS`), so `courtflow-web.onrender.com/` serves
   the **public site** and the app is at `/portal`, `/book`, `/admin`, … (host-switch in `web_app.py`).
   Real domains (`nextpointtennis.com`) cut over at go-live.
-- **Source of truth:** `docs/` (`00`→`11`); `docs/11` = locked decisions + the 1050 reuse map.
+- **Source of truth:** **`docs/specs/README.md` is the authoritative current-state index — START THERE**
+  (`SYSTEM.md` architecture · `BUSINESS-RULES.md` capabilities · `INVENTORY.md` every endpoint/table/page ·
+  `OUTSTANDING.md` what's left). The original design docs are `docs/` (`00`→`12`); `docs/11` = locked
+  decisions + the 1050 reuse map. Where they differ, `docs/specs/` reflects as-built reality.
 - **Lanes / modules:**
   - **Foundation:** `app.py`, `wsgi.py`, `db.py` (boot runner + `BOOT_MODULES`), `auth/` (Clerk JWKS +
     club-scoped `Principal`; single-membership default, platform_admin wildcard), `iam/`, `club/`, `core/`,
@@ -24,21 +27,29 @@ NextPoint Tennis is club #1, migrating off Wix.
   - **Diary:** `diary/` — GiST no-double-book constraint; `bookings.py` (court/lesson/class lifecycle +
     **book-on-behalf** via `booked_for_user_id`; role-scoped `list_bookings`), `availability.py`,
     `classes.py`, `recurrence.py`, `routes.py` (`/api/diary/*`).
-  - **Billing:** `billing/` — `apply_payment_event` (idempotent), `gateway.py` (`PaymentGateway` Protocol
-    + `ManualGateway` desk settlement + the `register_gateway`/`get_gateway` registry), `orders.py`,
-    `ledger.py`, `routes.py`.
+  - **Billing + commercial engines:** `billing/` — `apply_payment_event` (idempotent), `gateway.py`
+    (`PaymentGateway` Protocol + registry), `orders.py`, `ledger.py`, `routes.py`, **plus the engines
+    built on top:** `membership.py` (configurable term plans), `bundles.py` (generic token/bundle packs:
+    atomic draw-down + idempotent credit-back), `commission.py` (coach rent +/or % split on collection,
+    arrears, ledger), `refunds.py` (client refund-request → admin approve/decline), `me.py` (client
+    financial reads), `events.py` (commission accrual hook).
   - **Payments — Yoco (online):** `yoco_billing/` — `client.py` (Yoco REST + Standard-Webhooks signature
     verify), `adapter.py` (`YocoGateway` implementing `PaymentGateway`, self-registers on import), `routes.py`
     (`/api/billing/yoco/checkout|webhook|refund` + `/order/<id>`). Hosted-redirect checkout (card +
     Apple/Google/Samsung Pay). LIVE-configured: `YOCO_*` keys in Render, webhook registered, `PAYMENTS_ENABLED=1`.
     `billing/` core is untouched — this is a pure adapter behind the registry.
-  - **CRM:** `marketing_crm/` — `emit()`→`core.usage_event`, Klaviyo sync (dark w/o `KLAVIYO_API_KEY`),
-    consent, cockpit, SES fallback; `contracts/events.md`.
+  - **CRM + notifications:** `marketing_crm/` — `emit()`→`core.usage_event` (and drives notifications
+    non-fatally), `notifications.py` (in-app `core.notification` inbox + transactional email; child→guardian
+    routing), Klaviyo sync (dark w/o `KLAVIYO_API_KEY`), consent, cockpit, SES fallback; `contracts/events.md`.
   - **Admin (owner self-service):** `admin/` — `/api/admin/*` write APIs + onboarding; powers the owner
     onboarding wizard, Settings, and the People tab. Added `club.onboarding_completed`, `iam.coach_invite`.
-  - **Coach (self-service):** `coach/` — `/api/coach/*`; coach onboarding (profile/photo, weekly hours →
-    creates their `diary.resource(kind=coach)`, services/rates). Added `iam.coach_profile.onboarding_completed`,
-    `billing.product.coach_user_id`.
+  - **Coach (self-service):** `coach/` — `/api/coach/*`; onboarding (profile/photo, weekly hours →
+    `diary.resource(kind=coach)`, per-duration services/rates); **My Clients** (derived, private); **Dashboard
+    cockpit** (`/cockpit`: lessons/hours/net-of-commission earnings/fill-rate/trend); statement page.
+  - **Client (self-service):** `me/` — `/api/me/*`; profile/demographics (email read-only), **dependents**
+    (`iam.dependent`, login-less child users → booking party), financials, refund-requests, notifications.
+  - **Analytics:** `analytics/` + `/api/analytics/*` + `overview.html` — **page/traffic analytics, owned by a
+    separate agent (in progress)**; do not edit that lane.
   - **Frontend:** `frontend/app/` (shells) + `frontend/js/` — **ONE design system in `frontend/app/app.css`**
     (bright/modern; every page uses its `cf-*` classes — keep it the single source, do NOT inline component
     styles). Booking wizard, my-bookings, coach console, **master-diary calendar** (custom resource-timeline),
@@ -47,11 +58,15 @@ NextPoint Tennis is club #1, migrating off Wix.
   - **Web/SEO:** `web_app.py` (+ `web_wsgi.py`), `frontend/marketing/` (restyled to the design system, stock
     court imagery), `frontend/_shared/` (`theme.css` + `chrome.py` + `branding.py` host→club resolver),
     `build_blog.py`, `frontend/login.html`, `migration/`.
-- **Shipped & working:** owner onboarding · coach invite→onboarding · members book courts + named coaches
-  (coach∩court availability) · **classes** (create + recurring/one-off scheduling, capacity + waitlists,
-  rosters + attendance, on the master diary) · coaches/admins book on behalf of a client · **online card
-  payments (Yoco) end-to-end + admin refunds** · **per-duration PAYG pricing + membership-covered courts
-  (admin grant/revoke)** · unified master diary · consistent bright/modern UI + public site.
+- **Shipped & working (~90%):** owner/coach onboarding + **auto-member** signup · book courts/lessons
+  (coach∩court)/classes (recurring, waitlists, rosters, attendance) · book-on-behalf + **book-for-a-child** ·
+  **three configurable purchasing models — PAYG (per-duration) · membership (term plans) · tokens/bundles
+  (prepaid packs, atomic draw-down + credit-back)** · membership-covered free courts (+ admin grant/revoke) ·
+  **Yoco** online pay + reconcile + receipts + **refunds (admin direct + client request→approve)** ·
+  **commission/coaching-settlement engine** (rent +/or %, split on collection, arrears statement, owner
+  cockpit) · **self-service for all three roles** (client account/family/financials · coach
+  console/clients/cockpit/statement · owner console/config/cockpit) · **in-app notifications** (email-ready) ·
+  unified master diary · bright/modern UI + public site. **Remaining:** see `docs/specs/OUTSTANDING.md`.
 
 ## Payments, pricing & booking flow — LIVE end-to-end
 **Online payments (Yoco) — wired & verified.** `yoco_billing/` is a pure adapter behind
