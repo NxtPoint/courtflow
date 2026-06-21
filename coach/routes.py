@@ -246,6 +246,68 @@ def delete_service(price_id):
 
 
 # ---------------------------------------------------------------------------
+# lesson session packs (a coach's OWN prepaid bundles). Reuses the generic bundle engine,
+# but every plan is service_kind='lesson' + coach_user_id=the coach (scoped to the principal),
+# so a coach can only see/create/edit THEIR OWN packs.
+# ---------------------------------------------------------------------------
+
+@coach_bp.get("/bundle-plans")
+def list_coach_bundle_plans():
+    p, err = _coach()
+    if err:
+        return err
+    from billing import bundles
+    with session_scope() as s:
+        plans = bundles.list_plans(s, club_id=p.club_id, service_kind="lesson",
+                                   coach_user_id=p.user_id, active_only=False)
+    return jsonify(plans=plans, count=len(plans)), 200
+
+
+@coach_bp.post("/bundle-plans")
+def create_coach_bundle_plan():
+    p, err = _coach()
+    if err:
+        return err
+    b = _body()
+    sessions = b.get("sessions_count")
+    if not sessions or int(sessions) < 1:
+        return jsonify(error="sessions_count >= 1 required"), 400
+    from billing import bundles
+    with session_scope() as s:
+        plan = bundles.create_plan(
+            s, club_id=p.club_id, service_kind="lesson", coach_user_id=p.user_id,
+            sessions_count=int(sessions), price_minor=int(b.get("price_minor") or 0),
+            label=b.get("label"), duration_minutes=b.get("duration_minutes"),
+            validity_days=b.get("validity_days"))
+    return jsonify(plan=plan), 201
+
+
+@coach_bp.patch("/bundle-plans/<plan_id>")
+def patch_coach_bundle_plan(plan_id):
+    p, err = _coach()
+    if err:
+        return err
+    b = _body()
+    from billing import bundles
+    with session_scope() as s:
+        # Ownership guard: a coach may only touch their OWN lesson pack.
+        existing = bundles.get_plan(s, club_id=p.club_id, plan_id=plan_id)
+        if not existing or existing.get("coach_user_id") != str(p.user_id) \
+                or existing.get("service_kind") != "lesson":
+            return jsonify(error="NOT_FOUND"), 404
+        plan = bundles.update_plan(
+            s, club_id=p.club_id, plan_id=plan_id,
+            label=b.get("label"), sessions_count=b.get("sessions_count"),
+            duration_minutes=b.get("duration_minutes"), price_minor=b.get("price_minor"),
+            validity_days=b.get("validity_days"), status=b.get("status"),
+            _clear_duration=bool(b.get("clear_duration")),
+            _clear_validity=bool(b.get("clear_validity")))
+    if plan is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(plan=plan), 200
+
+
+# ---------------------------------------------------------------------------
 # classes (a coach's OWN classes: resource(kind='class', coach_user_id=the coach)
 # + product(kind='class') + price). Every route scopes to the coach's user_id.
 # ---------------------------------------------------------------------------

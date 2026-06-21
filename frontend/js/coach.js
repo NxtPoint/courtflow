@@ -714,6 +714,7 @@
     { k: "profile", t: "Profile" },
     { k: "hours", t: "Hours" },
     { k: "services", t: "Services" },
+    { k: "packs", t: "Packs" },
   ];
 
   function profileRoot() { return document.getElementById("coach-profile"); }
@@ -749,6 +750,8 @@
       window.CoachUI.hours(sectionHost, d.hours || {}, { saveLabel: "Save hours" });
     } else if (profileState.tab === "services") {
       window.CoachUI.services(sectionHost, {});
+    } else if (profileState.tab === "packs") {
+      window.CoachUI.packs(sectionHost, {});
     }
   }
 

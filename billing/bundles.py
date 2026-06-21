@@ -76,14 +76,19 @@ def _plan_dict(row) -> Optional[Dict[str, Any]]:
     }
 
 
-def list_plans(session, *, club_id, service_kind=None, active_only=True) -> List[Dict[str, Any]]:
+def list_plans(session, *, club_id, service_kind=None, active_only=True,
+               coach_user_id=None) -> List[Dict[str, Any]]:
     """The club's configured bundle plans (active by default), cheapest-first. Optionally filter to
-    one service_kind. Each plan = the _plan_dict shape."""
+    one service_kind and/or a coach (for the coach console's own lesson packs). Each plan = the
+    _plan_dict shape."""
     where = ["club_id = :c"]
     params: Dict[str, Any] = {"c": str(club_id)}
     if service_kind:
         where.append("service_kind = :sk")
         params["sk"] = service_kind
+    if coach_user_id:
+        where.append("coach_user_id = :coach")
+        params["coach"] = str(coach_user_id)
     if active_only:
         where.append("active = true")
     rows = session.execute(
