@@ -31,7 +31,10 @@
 import os
 import glob
 import json
+import logging
 from flask import Flask, send_file, jsonify, request, Response, abort, redirect
+
+log = logging.getLogger("courtflow.web")
 
 # The shared branding resolver lives in the design-system package. Support both
 # running as a package and as a loose script (Render runs from repo root).
@@ -199,6 +202,51 @@ def pricing():
 @app.get("/contact")
 def contact():
     return _marketing("contact.html")
+
+
+@app.post("/contact")
+def contact_submit():
+    """Marketing contact form. Emails the club inbox via SES (self-gating, DB-less);
+    if SES isn't configured yet the enquiry is logged so a lead is never lost. Uses
+    the Post/Redirect/Get pattern so a refresh can't resubmit; the static page reads
+    ?sent / ?error to show a banner."""
+    name = (request.form.get("name") or "").strip()
+    email = (request.form.get("email") or "").strip()
+    message = (request.form.get("message") or "").strip()
+    # Hidden honeypot: real users never fill it; bots fill everything. Accept + drop.
+    if (request.form.get("company") or "").strip():
+        return redirect("/contact?sent=1", code=303)
+
+    # Minimal validation — no JS required. Bad input bounces back with ?error.
+    if not name or "@" not in email or "." not in email.split("@")[-1] or not message:
+        return redirect("/contact?error=1", code=303)
+
+    # Cap lengths (abuse guard); strip newlines from the subject parts.
+    name, email = name[:120].replace("\r", " ").replace("\n", " "), email[:200]
+    message = message[:4000]
+
+    b = _branding()
+    to_addr = b.email or "info@nextpointtennis.com"
+    subject = f"Website enquiry from {name}"
+    body = (
+        f"New enquiry from the {b.name} website contact form.\n\n"
+        f"Name:  {name}\n"
+        f"Email: {email}\n\n"
+        f"Message:\n{message}\n"
+    )
+    sent = False
+    try:
+        from marketing_crm.email.ses import send_email
+        sent = send_email(to_addr, subject, body)
+    except Exception:  # never let a send failure 500 the form
+        log.exception("contact: SES send raised")
+
+    if not sent:
+        # SES not configured (or send failed). Log the full enquiry at WARNING so it's
+        # recoverable from Render logs until SES_SENDER is verified — never lose a lead.
+        log.warning("CONTACT ENQUIRY (email not sent) to=%s | name=%r email=%r msg=%r",
+                    to_addr, name, email, message.replace("\n", " ")[:500])
+    return redirect("/contact?sent=1", code=303)
 
 
 @app.get("/careers")

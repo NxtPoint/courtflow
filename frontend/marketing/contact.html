@@ -59,12 +59,15 @@
 
     <div class="cf-card cf-reveal">
       <h2 style="font-size:1.3rem;margin-bottom:14px">Send us a message</h2>
+      <div id="contactMsg" role="status" hidden style="border-radius:10px;padding:12px 14px;margin-bottom:14px;font-weight:600"></div>
       <form method="post" action="/contact" style="display:grid;gap:14px">
-        <label>Name<br><input name="name" required style="width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font:inherit;margin-top:4px"></label>
-        <label>Email<br><input name="email" type="email" required style="width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font:inherit;margin-top:4px"></label>
-        <label>Message<br><textarea name="message" rows="5" required style="width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font:inherit;margin-top:4px"></textarea></label>
+        <label>Name<br><input name="name" required maxlength="120" style="width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font:inherit;margin-top:4px"></label>
+        <label>Email<br><input name="email" type="email" required maxlength="200" style="width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font:inherit;margin-top:4px"></label>
+        <label>Message<br><textarea name="message" rows="5" required maxlength="4000" style="width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font:inherit;margin-top:4px"></textarea></label>
+        <!-- Honeypot: hidden from people, irresistible to bots. Leave empty. -->
+        <input type="text" name="company" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
         <button class="cf-btn cf-btn--primary" type="submit">Send message</button>
-        <p style="color:var(--dim);font-size:.82rem">We usually reply within a day. (Form wiring to be confirmed at build.)</p>
+        <p style="color:var(--dim);font-size:.82rem">We usually reply within a day. Or just <a href="/login#/sign-up">create a free account</a> and book online.</p>
       </form>
     </div>
 
@@ -74,6 +77,14 @@
 <!--#include footer-->
 <script>
 (function(){var els=document.querySelectorAll('.cf-reveal');if(!('IntersectionObserver'in window)){els.forEach(function(e){e.classList.add('in');});return;}var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12});els.forEach(function(el){io.observe(el);});})();
+/* Contact form result banner (Post/Redirect/Get -> ?sent / ?error). */
+(function(){
+  var p=new URLSearchParams(location.search), el=document.getElementById('contactMsg');
+  if(!el) return;
+  if(p.has('sent')){el.hidden=false;el.style.background='#E8F4EE';el.style.color='#0B5C36';el.textContent='Thanks — your message is on its way. We usually reply within a day.';}
+  else if(p.has('error')){el.hidden=false;el.style.background='#FBE9E7';el.style.color='#B3261E';el.textContent='Please add your name, a valid email and a message, then try again.';}
+  if((p.has('sent')||p.has('error'))&&window.history.replaceState){history.replaceState({},'',location.pathname);}
+})();
 </script>
 </body>
 </html>
