@@ -319,11 +319,17 @@ def yoco_refund():
         if not can(p, "take_pay_at_court", {"club_id": order["club_id"]}):
             return jsonify(error="forbidden"), 403
 
+        # The refund endpoint is /api/checkouts/{CHECKOUT_id}/refund — it needs the Yoco
+        # CHECKOUT id (ch_…) we stored at checkout-create (status='created'), NOT the most
+        # recent attempt. apply_payment_event also writes an attempt row from the webhook
+        # carrying the PAYMENT id (p_…); refunding that 404s ("Checkout with id p_… not
+        # found"). Filter to the checkout-create row (status='created' / ch_ prefix).
         checkout_id = s.execute(
             text("""
                 SELECT intent_id FROM billing.payment_attempt
                 WHERE order_id = :oid AND provider = 'yoco' AND intent_id IS NOT NULL
-                ORDER BY created_at DESC LIMIT 1
+                  AND (status = 'created' OR intent_id LIKE 'ch_%')
+                ORDER BY created_at ASC LIMIT 1
             """),
             {"oid": order_id},
         ).scalar()
