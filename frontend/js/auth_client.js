@@ -151,14 +151,15 @@
   }
 
   // apiFetch — prepend the API base, attach the Bearer header, return the raw Response.
-  // A 30s AbortController timeout guarantees a hung request rejects (the caller shows an
-  // error) rather than spinning forever — important on the sleepy free tier.
+  // A 70s AbortController timeout lets a free-tier COLD START (~30-60s wake) finish, while
+  // still guaranteeing a truly-hung request rejects (caller shows an error) instead of
+  // spinning forever. (A keep-warm ping or the Starter plan removes the cold start entirely.)
   async function apiFetch(path, opts) {
     opts = opts || {};
     var headers = Object.assign({}, await authHeaders(), opts.headers || {});
     var url = (path.indexOf("http") === 0) ? path : (apiBase + path);
     var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
-    var timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 30000) : null;
+    var timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 70000) : null;
     try {
       return await fetch(url, Object.assign({}, opts, { headers: headers },
         ctrl ? { signal: ctrl.signal } : {}));
