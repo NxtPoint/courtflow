@@ -417,3 +417,48 @@ def cancel_refund_request(request_id):
         status, msg = _REFUND_ERR.get(ecode, (400, "Could not cancel the request."))
         return jsonify(error=ecode, message=msg), status
     return jsonify(ok=True, refund_request=req), 200
+
+
+# ---------------------------------------------------------------------------
+# notifications / in-app inbox  (the notifications engine — core.notification)
+#   GET  /api/me/notifications?unread=  -> {notifications:[…], unread_count}
+#   POST /api/me/notifications/read  body {id?|all:true} -> mark read
+# Always scoped to the caller's own (club_id, user_id) — a member only ever sees + marks
+# their OWN notifications. No new permission verb: any authenticated club member has an inbox.
+# ---------------------------------------------------------------------------
+
+@me_bp.get("/notifications")
+def list_notifications_route():
+    p, err = _principal()
+    if err:
+        return err
+    unread_only = (request.args.get("unread") or "").strip() in ("1", "true", "yes")
+    try:
+        limit = max(1, min(100, int(request.args.get("limit") or 30)))
+    except (TypeError, ValueError):
+        limit = 30
+    from core.repositories import notifications as notif_repo
+    with session_scope() as s:
+        rows = notif_repo.list_notifications(
+            s, club_id=p.club_id, user_id=p.user_id, unread_only=unread_only, limit=limit)
+        count = notif_repo.unread_count(s, club_id=p.club_id, user_id=p.user_id)
+    return jsonify(notifications=rows, unread_count=count, count=len(rows)), 200
+
+
+@me_bp.post("/notifications/read")
+def mark_notifications_read():
+    p, err = _principal()
+    if err:
+        return err
+    b = _body()
+    notif_id = (b.get("id") or "").strip() or None
+    mark_all = bool(b.get("all"))
+    if not notif_id and not mark_all:
+        return jsonify(error="VALIDATION", fields={"id": "id or all:true required"}), 422
+    from core.repositories import notifications as notif_repo
+    with session_scope() as s:
+        updated = notif_repo.mark_read(
+            s, club_id=p.club_id, user_id=p.user_id,
+            notification_id=notif_id, all_unread=mark_all)
+        count = notif_repo.unread_count(s, club_id=p.club_id, user_id=p.user_id)
+    return jsonify(ok=True, updated=updated, unread_count=count), 200

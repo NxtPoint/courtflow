@@ -73,7 +73,32 @@
     host.appendChild(brand);
     host.appendChild(nav);
     host.appendChild(el("span", { class: "cf-spacer" }));
+
+    // Notification bell (only for a signed-in club member — it needs a club-scoped inbox).
+    if (p && p.club_id) {
+      var bell = el("div", { class: "cf-bell-host" });
+      host.appendChild(bell);
+      mountBell(bell);
+    }
+
     host.appendChild(user);
+  }
+
+  // Mount the notification bell, lazy-loading notifications.js once if a shell didn't include it.
+  function mountBell(hostEl) {
+    if (window.Notifications) { window.Notifications.mount(hostEl); return; }
+    var existing = document.querySelector('script[data-cf-notif]');
+    if (existing) {
+      existing.addEventListener("load", function () {
+        if (window.Notifications) window.Notifications.mount(hostEl);
+      });
+      return;
+    }
+    var s = document.createElement("script");
+    s.src = "/js/notifications.js";
+    s.setAttribute("data-cf-notif", "1");
+    s.onload = function () { if (window.Notifications) window.Notifications.mount(hostEl); };
+    document.head.appendChild(s);
   }
 
   // Standard page boot: resolve principal, gate by required roles, render shell.

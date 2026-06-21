@@ -154,6 +154,15 @@
       return A().apiJSON("/api/me/refund-requests/" + encodeURIComponent(id) + "/cancel",
         { method: "POST", body: {} });
     },
+
+    // ---- me: notifications / in-app inbox -------------------------------
+    // GET /api/me/notifications?unread= -> {notifications:[{id,kind,title,body,link,data,
+    //   read_at,email_status,created_at}], unread_count, count}
+    notifications: function (opts) { return A().apiJSON("/api/me/notifications" + qs(opts)); },
+    // POST /api/me/notifications/read  body {id?|all:true} -> {ok, updated, unread_count}
+    markNotificationsRead: function (body) {
+      return A().apiJSON("/api/me/notifications/read", { method: "POST", body: body || {} });
+    },
   };
 
   window.API = API;

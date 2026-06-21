@@ -214,6 +214,22 @@ def yoco_webhook():
                 if bundles_repo.is_bundle_order(s, order_id=result["order_id"]):
                     result["bundle"] = bundles_repo.activate_wallet_for_order(
                         s, order_id=result["order_id"], provider="yoco")
+                    # NEW emit: a pack just activated → drive a "Pack activated" notification.
+                    # (The receipt notification from payment_succeeded covers the payment; this
+                    # covers the grant.) Best-effort + guarded — never affects settlement.
+                    _b = result["bundle"]
+                    if _b and _b.get("status") == "granted":
+                        try:
+                            from marketing_crm.tracking import emit
+                            emit("bundle_activated", {
+                                "club_id": str(event.club_id) if event.club_id else None,
+                                "user_id": _b.get("user_id"),
+                                "ref_type": "order", "ref_id": str(result["order_id"]),
+                                "label": _b.get("label"),
+                                "tokens_total": _b.get("tokens_total"),
+                            })
+                        except Exception:
+                            log.debug("bundle_activated emit skipped (tracking unavailable)")
     except Exception:
         # Transient (e.g. DB) error — 500 so Yoco retries the delivery.
         log.exception("apply_payment_event failed for yoco webhook")

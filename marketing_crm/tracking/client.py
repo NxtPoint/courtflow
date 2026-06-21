@@ -93,6 +93,22 @@ def _emit(event, payload):
     except Exception:
         log.exception("emit: usage_event write failed for %s", event)
 
+    # 1b) Best-effort: notifications / communications engine (the in-app inbox + a transactional
+    #     email fallback). Driven off THIS event stream — for a mapped set of transactional kinds
+    #     (notifications.KIND_MAP) we resolve the recipient (iam.user; child→guardian), render a
+    #     template, ALWAYS write a core.notification row, and attempt an email (SES; 'skipped' with
+    #     no keys). Wrapped + on its OWN session so a delivery failure NEVER affects the producer's
+    #     booking/payment path (it already committed its usage_event above; the caller is on a
+    #     different thread). Non-fatal above all.
+    try:
+        from marketing_crm import notifications
+        if event in notifications.KIND_MAP:
+            from db import session_scope
+            with session_scope() as s2:
+                notifications.deliver_for_event(s2, event, payload)
+    except Exception:
+        log.exception("emit: notification delivery failed for %s (non-fatal)", event)
+
     # 2) Best-effort: forward to Klaviyo so flows can trigger. Self-gates on KLAVIYO_API_KEY,
     #    enforces the transactional-vs-marketing rule, and tags the profile with the club trait.
     try:

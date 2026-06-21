@@ -517,7 +517,7 @@ def activate_wallet_for_order(session, *, order_id, provider="yoco") -> Dict[str
     does NOTHING (no second grant) — mirroring activate_membership_for_order's already-active guard.
     Returns {ok, status: 'granted'|'already_active'|'no_bundle_order'|'order_not_paid', ...}."""
     wallet = session.execute(
-        text("SELECT w.id, w.club_id, w.status, w.bundle_plan_id, w.tokens_total "
+        text("SELECT w.id, w.club_id, w.user_id, w.status, w.bundle_plan_id, w.tokens_total "
              "FROM billing.token_wallet w WHERE w.order_id = :oid "
              "ORDER BY w.created_at LIMIT 1"),
         {"oid": str(order_id)},
@@ -541,7 +541,7 @@ def activate_wallet_for_order(session, *, order_id, provider="yoco") -> Dict[str
                 "tokens_total": int(wallet["tokens_total"] or 0)}
 
     plan = session.execute(
-        text("SELECT sessions_count, validity_days FROM billing.bundle_plan WHERE id = :p"),
+        text("SELECT sessions_count, validity_days, label FROM billing.bundle_plan WHERE id = :p"),
         {"p": str(wallet["bundle_plan_id"])},
     ).mappings().first()
     n = int(plan["sessions_count"]) if plan else 0
@@ -575,5 +575,7 @@ def activate_wallet_for_order(session, *, order_id, provider="yoco") -> Dict[str
 
     exp = row["expires_at"] if row else None
     return {"ok": True, "status": "granted", "wallet_id": str(wallet["id"]),
+            "user_id": str(wallet["user_id"]) if wallet.get("user_id") else None,
+            "label": (plan["label"] if plan else None),
             "tokens_total": n, "tokens_remaining": n,
             "expires_at": exp.isoformat() if hasattr(exp, "isoformat") else exp}
