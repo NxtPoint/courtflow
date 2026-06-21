@@ -32,6 +32,7 @@
     { href: "/membership.html", label: "Membership", roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
     { href: "/account.html", label: "Account",   roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
     { href: "/coach.html",  label: "Coach",     roles: ["coach", "club_admin", "platform_admin"] },
+    { href: "/statement.html", label: "Statement", roles: ["coach"] },
     { href: "/admin.html",  label: "Admin",     roles: ["club_admin", "platform_admin"] },
   ];
 
