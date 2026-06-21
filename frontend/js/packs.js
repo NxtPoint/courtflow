@@ -40,16 +40,20 @@
 
   // ---- "Your packs" (wallets) -------------------------------------------------
   function walletCard(w) {
-    var sub = w.tokens_remaining + " of " + w.tokens_total + " left";
+    // Sessions can be fractional now (a pack covers any duration): "4.5 of 10 left".
+    var left = (w.sessions_remaining != null) ? Math.round(w.sessions_remaining * 10) / 10 : w.tokens_remaining;
+    var minsLeft = (w.minutes_remaining != null) ? w.minutes_remaining : null;
+    var sub = left + " of " + w.tokens_total + " sessions left";
+    if (w.base_minutes && minsLeft != null) sub += " (" + minsLeft + " min)";
     if (w.expires_at) sub += " · expires " + fmtDate(w.expires_at);
-    var exhausted = w.tokens_remaining <= 0 || w.status !== "active";
+    var exhausted = (minsLeft != null ? minsLeft <= 0 : w.tokens_remaining <= 0) || w.status !== "active";
     return el("div", { class: "cf-item" }, [
       el("span", { class: "cf-chip", text: kindLabel(w.service_kind) }),
       el("div", { class: "cf-item-main" }, [
         el("div", { class: "cf-item-t", text: w.label || kindLabel(w.service_kind) }),
         el("div", { class: "cf-item-s", text: sub + (exhausted ? " · " + (w.status === "expired" ? "expired" : "used up") : "") }),
       ]),
-      el("span", { class: "cf-chip" + (exhausted ? "" : " class"), text: String(w.tokens_remaining) }),
+      el("span", { class: "cf-chip" + (exhausted ? "" : " class"), text: String(left) }),
     ]);
   }
 
@@ -64,7 +68,7 @@
       wallets.forEach(function (w) { list.appendChild(walletCard(w)); });
       card.appendChild(list);
       card.appendChild(el("p", { class: "cf-membership-note",
-        text: "At booking, choose “Use 1 token” to spend a session. Cancel in time and it's credited back." }));
+        text: "Your pack applies automatically at booking — longer sessions simply use more of it. Cancel in time and it's credited straight back." }));
     }
     return card;
   }

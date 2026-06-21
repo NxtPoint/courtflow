@@ -398,6 +398,7 @@
   // Price label for the summary: membership-covered courts read "Covered…", else the chosen
   // duration's price (slot price when a slot is picked, else the duration tile price).
   function priceLabel() {
+    if (state.settlement === "token" && state.tokenWallet) return "Covered by your pack · R0";
     if (state.membershipCovered && state.type === "court") return "Covered by your membership · R0";
     var minor = (state.slot && state.slot.price != null) ? state.slot.price : state.selDurationPrice;
     return minor != null ? UI.money(minor, state.billing.currency) : "—";
@@ -539,34 +540,52 @@
     return (state.slot && state.slot.coach_user_id) || null;
   }
 
-  // Find a held wallet matching the current service + duration (+ coach), mirroring match_wallet:
-  // service_kind equal; wallet duration == chosen OR null; wallet coach == chosen OR null. Prefer
-  // the soonest-expiring with tokens left. Caches the result on state.tokenWallet.
+  function walletMinutesLeft(w) {
+    return (w.minutes_remaining != null) ? w.minutes_remaining : (w.tokens_remaining || 0) * 60;
+  }
+
+  // Find a usable wallet for the current service (+ coach), mirroring the unit-model match_wallet:
+  // service_kind equal; ANY positive balance (a pack covers any duration now); wallet coach ==
+  // chosen OR null. Prefer the soonest-expiring with the fewest minutes left. Caches on tokenWallet.
   function matchTokenWallet() {
     var kind = bookingServiceKind();
     var wallets = state.walletsByKind[kind] || [];
-    var dur = state.type === "class" ? null : state.selDuration;
     var coach = chosenCoachUserId();
     var hit = wallets.filter(function (w) {
-      if (w.status !== "active" || w.tokens_remaining <= 0) return false;
-      if (w.duration_minutes != null && dur != null && w.duration_minutes !== dur) return false;
+      if (w.status !== "active" || walletMinutesLeft(w) <= 0) return false;
       if (w.coach_user_id != null && coach != null && String(w.coach_user_id) !== String(coach)) return false;
       // a coach-specific wallet can't be matched when we don't know the coach yet
       if (w.coach_user_id != null && coach == null) return false;
       return true;
     }).sort(function (a, b) {
       var ax = a.expires_at || "9999", bx = b.expires_at || "9999";
-      return ax < bx ? -1 : (ax > bx ? 1 : a.tokens_remaining - b.tokens_remaining);
+      return ax < bx ? -1 : (ax > bx ? 1 : walletMinutesLeft(a) - walletMinutesLeft(b));
     })[0] || null;
     state.tokenWallet = hit;
     return hit;
   }
 
-  // Settlement chip meta for 'token' (built dynamically — the remaining count is live).
+  // True if the member HAS a pack for this service but it's run dry (status not active / 0 left) and
+  // none is usable — the trigger to gently offer a re-buy.
+  function emptyPackForKind() {
+    var kind = bookingServiceKind();
+    var wallets = state.walletsByKind[kind] || [];
+    if (!wallets.length || matchTokenWallet()) return false;
+    return wallets.some(function (w) { return walletMinutesLeft(w) <= 0 || w.status !== "active"; });
+  }
+
+  // Friendly count of sessions left (fractional, e.g. 4.5 of 10).
+  function walletSessionsLeft(w) {
+    var n = (w.sessions_remaining != null) ? w.sessions_remaining : (w.tokens_remaining || 0);
+    return Math.round(n * 10) / 10;
+  }
+
+  // Settlement chip meta for 'token' — reassuring, seamless (the pack just nets off; live count).
   function tokenChipMeta() {
     var w = state.tokenWallet;
-    var n = w ? w.tokens_remaining : 0;
-    return { label: "Use 1 token", hint: n + " session" + (n === 1 ? "" : "s") + " left in your pack" };
+    if (!w) return { label: "Use your pack", hint: "" };
+    return { label: "Covered by your pack",
+             hint: walletSessionsLeft(w) + " of " + (w.tokens_total || 0) + " sessions left · this booking is free" };
   }
 
   // ---- "Who's playing?" dropdown (My Account dependents) --------------------
@@ -633,11 +652,20 @@
       state._gName = null; state._gEmail = null;
     }
 
-    // --- settlement (selectable blocks, smart default pre-selected) ---
+    // --- settlement (selectable blocks; a usable pack is pre-selected as the default) ---
     card.appendChild(el("div", { class: "cf-confirm-sec" }, [
       el("h3", { text: "How would you like to pay?" }),
       settlementBlocks(modes),
     ]));
+
+    // Re-buy nudge: the member had a pack for this service but it's run dry. Offer the options again.
+    if (emptyPackForKind()) {
+      card.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:10px" }, [
+        el("span", { text: "Your pack is finished — " }),
+        el("a", { href: "/packs.html", style: "color:var(--primary);font-weight:700",
+                  text: "buy another to keep saving →" }),
+      ]));
+    }
 
     if (state.settlement === "online" && state.billing.online_enabled) {
       card.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:6px",
@@ -875,10 +903,10 @@
       // "Who's playing?" — the caller's children/dependents (My Account). Loaded once; cached on
       // state. Failure is non-fatal (the dropdown simply shows only "Myself").
       try { var dr = await window.API.dependents(); state.dependents = dr.dependents || []; } catch (e) {}
-      // Token packs (docs/specs/02): the member's active wallets per service kind, for the
-      // "Use 1 token" settlement option. Loaded once; non-fatal (no packs -> option simply hidden).
+      // Token packs (docs/specs/02): the member's wallets per service kind. We load ALL (not just
+      // active) so we can both auto-apply a usable pack AND prompt a re-buy when one has run dry.
       try {
-        var wr = await window.TFAuth.apiJSON("/api/billing/bundles/wallets?active=1");
+        var wr = await window.TFAuth.apiJSON("/api/billing/bundles/wallets");
         (wr.wallets || []).forEach(function (w) {
           (state.walletsByKind[w.service_kind] = state.walletsByKind[w.service_kind] || []).push(w);
         });
