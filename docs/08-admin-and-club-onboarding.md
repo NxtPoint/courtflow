@@ -17,10 +17,16 @@ Sections:
 4. **Pricing** — `billing.product` + `billing.price` per audience (member/visitor/guest), memberships,
    lesson/class prices. ZAR. Effective dates.
 5. **Billing & settlement** — open orders, monthly account balances, record desk payments, run/preview
-   the monthly statement, refunds (later, online).
+   the monthly statement, and **online refunds (✅ built)**: "Recent online payments" → "Refund only" /
+   "Refund & cancel" (`POST /api/billing/yoco/refund`).
 6. **Analytics cockpit** — occupancy (court utilisation %), coach utilisation, revenue by
    product/settlement mode, attendance, no‑show rate, membership MRR, lead funnel conversion. Port
-   1050's cockpit pattern over thin views.
+   1050's cockpit pattern over thin views. *(This is the per-club OPERATIONAL cockpit.)*
+6b. **Business Overview (✅ built, `analytics/`):** a **platform-owner** dashboard at `/overview.html` —
+   website visits + unique/new/returning visitors, traffic sources, top pages, by-country (first-party
+   beacon `analytics.js` + Cloudflare `CF-IPCountry`), customers + sign-ups, bookings + revenue + settlement
+   mix, NPS. `GET /api/analytics/overview` (platform_admin = all/filter; club_admin = own club). Distinct
+   from the per-club operational cockpit above. Ten-Fifty5 (separate app+DB) bridges in later.
 7. **Settings** — club profile, branding (logo/colours/domain), policies (booking window, cancellation
    cutoff, guest rules, which settlement modes are allowed, online‑payment toggle), Klaviyo list,
    payment gateway keys.

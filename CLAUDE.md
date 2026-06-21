@@ -81,6 +81,23 @@ redirecting; fixed). **Two gates, both on:** `PAYMENTS_ENABLED=1`/`YOCO_ENABLED=
   totals, payments, refunds) for online AND desk payments; `frontend/app/receipt.html` + `receipt.js` render a
   printable/PDF receipt, linked from the pay-return page.
 
+## Business Overview dashboard + first-party analytics (`analytics/`)
+A **platform-owner analytics dashboard** (separate lane from the per-club operational cockpit). `analytics/`
+is read-only: `repositories.py` are **guarded** aggregations (a missing/empty table → empty panel, never a
+500), `routes.py` exposes `GET /api/analytics/overview?days=&club_id=` (platform_admin = all clubs or
+`?club_id` filter; club_admin = own club) + `GET /api/analytics/clubs`. Frontend `frontend/app/overview.html`
++ `overview.js` (ECharts) at **`/overview.html`** — KPIs (visits, unique/new/returning, customers, bookings,
+revenue), traffic + sign-up lines, traffic-source / top-page / by-country tables, settlement mix, NPS.
+- **Source data:** website traffic from `core.usage_event` (`event_type='page_view'`); customers from
+  `core.account`; bookings/revenue from `diary.*`/`billing.*`; NPS from `core.nps_response`.
+- **First-party beacon (NEW — none existed before):** `frontend/js/analytics.js` (localStorage `anon_id` for
+  unique visitors, referrer, UTM) → `POST /api/track/page` on load + SPA route change; **loaded on every page
+  via the `web_app.py` head-injection** (single point). `beacon.py` captures **country from Cloudflare's
+  `CF-IPCountry`** header. No cookies, no third parties. **Website-traffic panels accrue data from go-live**
+  (historical events lack page-views/geo).
+- **1050 (Ten-Fifty5) is a SEPARATE app+DB** — the dashboard is CourtFlow-platform now; a "1050" column
+  bridges in later via a small read endpoint on the 1050 side (designed for, not built).
+
 **Pricing model — per-duration PAYG + membership-covered courts.** A service carries ONE `billing.price`
 row per offered duration (`duration_minutes` set, `unit='per_booking'`, `audience='any'`). `diary/pricing.py`:
 `price_for(kind, duration_minutes)` (exact→nearest≤→any), `durations_for(kind[,coach])`, `has_active_membership`.
