@@ -632,6 +632,109 @@ def get_refund_requests():
     return jsonify(requests=rows, count=len(rows)), 200
 
 
+# Refund-request DECISION error code -> (HTTP status, admin-facing message). NOT_FOUND scopes
+# to THIS club (a cross-club request is invisible → 404); NOT_PENDING is the double-action guard
+# (already approved/declined/cancelled → 409); the rest are gateway-refund failures (the request
+# is left 'pending' so the admin can retry).
+_REFUND_DECIDE_ERR = {
+    "NOT_FOUND": (404, "Refund request not found."),
+    "NOT_PENDING": (409, "This request has already been decided."),
+    "yoco_unavailable": (503, "Online payments are not available right now."),
+    "no_yoco_checkout_for_order": (404, "No Yoco checkout found for this order."),
+    "refund_failed": (502, "The gateway refund failed — the request is still pending."),
+}
+
+
+def _emit_refund_decided(*, club_id, request_row, decision, note):
+    """Best-effort emit → drives the (already-built) refund_decided notification (approved/
+    declined). Guarded — the decision already committed; a CRM hiccup must never surface as an
+    error (mirrors the membership_activated / coach_invited emits in this module)."""
+    try:
+        from marketing_crm.tracking import emit
+        emit("refund_decided", {
+            "club_id": str(club_id),
+            "user_id": request_row.get("user_id"),
+            "ref_type": "order", "ref_id": str(request_row.get("order_id")),
+            "order_id": str(request_row.get("order_id")),
+            "decision": decision,
+            "amount_minor": request_row.get("amount_minor"),
+            "note": note,
+        })
+    except Exception:
+        log.debug("refund_decided emit skipped (tracking unavailable)")
+
+
+@admin_bp.post("/refund-requests/<request_id>/approve")
+def approve_refund_request(request_id):
+    """Approve a pending client refund request: execute the Yoco refund for its order (reusing
+    the existing gateway path), mark the request 'refunded', then emit refund_decided/approved.
+    Body {amount_minor?, cancel_booking?, note?}. 404 if not this club's request; 409 if not
+    pending; 502/503 if the gateway refund failed (request LEFT pending)."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    amount_minor = b.get("amount_minor")
+    note = b.get("note")
+    cancel_flag = bool(b.get("cancel_booking"))
+    from billing import refunds
+    with session_scope() as s:
+        req, ecode = refunds.approve_refund_request(
+            s, club_id=p.club_id, request_id=request_id, decided_by=p.user_id,
+            amount_minor=amount_minor, note=note)
+    if ecode:
+        status, msg = _REFUND_DECIDE_ERR.get(ecode, (400, "Could not approve the request."))
+        return jsonify(error=ecode, message=msg), status
+
+    # Optional: also cancel the order's booking(s) + free the slot — the same "Refund & cancel"
+    # choice as the Recent-online-payments path (record-only refund otherwise, docs/05 §8). Reuse
+    # diary.cancel_booking (role=club_admin waives the fee); guarded so the decision stands even
+    # if the cancel fails. Separate session: the approve transaction already committed.
+    cancelled = None
+    if cancel_flag:
+        cancelled = False
+        try:
+            from sqlalchemy import text as _text
+            from diary.bookings import cancel_booking as _diary_cancel
+            with session_scope() as s2:
+                bid = s2.execute(
+                    _text("SELECT booking_id FROM billing.order_line "
+                          "WHERE order_id = :oid AND booking_id IS NOT NULL LIMIT 1"),
+                    {"oid": str(req.get("order_id"))},
+                ).scalar()
+                if bid:
+                    cres = _diary_cancel(s2, club_id=p.club_id, booking_id=str(bid),
+                                         actor_user_id=p.user_id, role="club_admin",
+                                         reason="admin refund (request approved)")
+                    cancelled = bool(cres and cres.get("ok"))
+        except Exception:
+            log.warning("approve refund: booking cancel failed for order=%s (refund stands)",
+                        req.get("order_id"))
+
+    _emit_refund_decided(club_id=p.club_id, request_row=req, decision="approved", note=note)
+    return jsonify(refund_request=req, cancelled=cancelled), 200
+
+
+@admin_bp.post("/refund-requests/<request_id>/decline")
+def decline_refund_request(request_id):
+    """Decline a pending client refund request → 'declined' (no money moves), then emit
+    refund_decided/declined. Body {note?}. 404 if not this club's request; 409 if not pending."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    note = b.get("note")
+    from billing import refunds
+    with session_scope() as s:
+        req, ecode = refunds.decline_refund_request(
+            s, club_id=p.club_id, request_id=request_id, decided_by=p.user_id, note=note)
+    if ecode:
+        status, msg = _REFUND_DECIDE_ERR.get(ecode, (400, "Could not decline the request."))
+        return jsonify(error=ecode, message=msg), status
+    _emit_refund_decided(club_id=p.club_id, request_row=req, decision="declined", note=note)
+    return jsonify(refund_request=req), 200
+
+
 @admin_bp.get("/people")
 def get_people():
     """Everyone in the club (members/coaches/guests/admins) for the admin People tab."""

@@ -423,7 +423,6 @@ def bundles_checkout():
 def yoco_refund():
     from auth import resolve_principal
     from iam.permissions import can
-    from billing.gateway import get_gateway
 
     p = resolve_principal(request)
     if p is None or not p.authenticated:
@@ -434,13 +433,9 @@ def yoco_refund():
     if not order_id:
         return jsonify(error="order_id required"), 400
 
-    gw = get_gateway("yoco")
-    if gw is None:
-        return jsonify(error="yoco_unavailable"), 503
-
     from db import session_scope
-    from sqlalchemy import text
     from billing import orders as orders_repo
+    from yoco_billing import execute_order_refund, RefundError
 
     amount_in = body.get("amount_minor")
     cancel_flag = bool(body.get("cancel_booking"))
@@ -452,37 +447,14 @@ def yoco_refund():
             return jsonify(error="forbidden"), 403
         order_club_id = order["club_id"]
 
-        # The refund endpoint is /api/checkouts/{CHECKOUT_id}/refund — it needs the Yoco
-        # CHECKOUT id (ch_…) we stored at checkout-create (status='created'), NOT the most
-        # recent attempt. apply_payment_event also writes an attempt row from the webhook
-        # carrying the PAYMENT id (p_…); refunding that 404s ("Checkout with id p_… not
-        # found"). Filter to the checkout-create row (status='created' / ch_ prefix).
-        checkout_id = s.execute(
-            text("""
-                SELECT intent_id FROM billing.payment_attempt
-                WHERE order_id = :oid AND provider = 'yoco' AND intent_id IS NOT NULL
-                  AND (status = 'created' OR intent_id LIKE 'ch_%')
-                ORDER BY created_at ASC LIMIT 1
-            """),
-            {"oid": order_id},
-        ).scalar()
-        if not checkout_id:
-            return jsonify(error="no_yoco_checkout_for_order"), 404
-
-        # Full refund (the admin button passes no amount) -> send NO amount so Yoco refunds
-        # the full remaining balance (their `amount` field is nullable; null = full refund).
-        # Sending an explicit full amount that doesn't EXACTLY match Yoco's refundable balance
-        # is a common 400 — so only pass an amount for an explicit partial refund.
-        amount = int(amount_in) if amount_in is not None else None
-
-    try:
-        res = gw.refund(payment={"checkout_id": checkout_id}, amount_minor=amount)
-    except Exception as e:
-        # Surface Yoco's actual reason to the admin UI (str(YocoError) = "yoco <status>: <desc>"),
-        # not just a generic code, so failures are diagnosable from the toast.
-        log.warning("yoco refund failed order=%s checkout=%s: %s", order_id, checkout_id, e)
-        return jsonify(error="refund_failed", message=f"Yoco refund failed — {e}",
-                       detail=str(e)), 502
+        # Execute via the SHARED helper (the checkout-id lookup + gw.refund live in
+        # yoco_billing.__init__ so the admin refund-REQUEST approve path reuses the EXACT same
+        # logic). Full refund (the admin button passes no amount) → send NO amount so Yoco
+        # refunds the full balance (their `amount` field is nullable; null = full refund).
+        try:
+            res = execute_order_refund(s, order_id=order_id, amount_minor=amount_in)
+        except RefundError as e:
+            return jsonify(error=e.code, message=e.message, detail=str(e)), e.status
 
     # Optional: also cancel the booking(s) and free the slot. The refund itself is record-only
     # (booking NOT auto-reversed, docs/05 §8); "Refund & cancel" is an explicit admin choice.

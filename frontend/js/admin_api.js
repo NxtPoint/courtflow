@@ -219,6 +219,26 @@
       return A().apiJSON("/api/admin/financials/coach-earnings" + qs(opts));
     },
     cockpitMemberships: function () { return A().apiJSON("/api/admin/financials/memberships"); },
+
+    // ---- online payments + client refund requests (Billing tab) ----------
+    // GET /api/admin/payments -> {payments:[{order_id,payer_email,amount_minor,currency_code,
+    //                                        created_at,refunded}]}
+    payments: function () { return A().apiJSON("/api/admin/payments"); },
+    // GET /api/admin/refund-requests?status= -> {requests:[{id,order_id,user_id,amount_minor,
+    //   reason,status,decided_by,decided_at,note,created_at,order_amount_minor,currency_code,
+    //   order_status,requester_email,requester_name}]}
+    refundRequests: function (opts) { return A().apiJSON("/api/admin/refund-requests" + qs(opts)); },
+    // POST /api/admin/refund-requests/:id/approve  body:{amount_minor?,cancel_booking?,note?}
+    //   -> {refund_request, cancelled}. 409 if already decided; 502/503 if the gateway refund failed.
+    approveRefundRequest: function (id, body) {
+      return A().apiJSON("/api/admin/refund-requests/" + enc(id) + "/approve",
+        { method: "POST", body: body || {} });
+    },
+    // POST /api/admin/refund-requests/:id/decline  body:{note?} -> {refund_request}
+    declineRefundRequest: function (id, body) {
+      return A().apiJSON("/api/admin/refund-requests/" + enc(id) + "/decline",
+        { method: "POST", body: body || {} });
+    },
   };
 
   window.AdminAPI = AdminAPI;
