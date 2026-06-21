@@ -1,0 +1,21 @@
+# keep-warm — ping the free-tier services during the day so they don't cold-start mid-use.
+# Render free web services sleep after ~15 min idle (~30-60s wake). This pings every 10 min
+# from 07:00–21:59 SAST (UTC+2), then lets them sleep overnight to conserve free instance-hours.
+# Free (GitHub Actions). Note: scheduled runs can be delayed a few min under GH load — harmless.
+# At go-live, bump the Render services to "Starter" (never sleep) and this can be removed.
+name: keep-warm
+
+on:
+  schedule:
+    # GitHub cron is UTC. 05:00–19:00 UTC == 07:00–21:00 SAST.
+    - cron: "*/10 5-19 * * *"
+  workflow_dispatch: {}   # lets you run it manually from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Warm courtflow-api + courtflow-web
+        run: |
+          curl -fsS --max-time 90 https://courtflow-api.onrender.com/healthz || echo "api ping failed (will retry next run)"
+          curl -fsS --max-time 90 https://courtflow-web.onrender.com/ -o /dev/null || echo "web ping failed (will retry next run)"

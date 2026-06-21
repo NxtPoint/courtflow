@@ -467,32 +467,40 @@ def master_diary():
         return jsonify(error="forbidden"), 403
     q = request.args
     from sqlalchemy import text
-    with session_scope() as s:
-        rows = s.execute(
-            text("SELECT b.id, b.booking_type, b.resource_id, r.name AS resource_name, "
-                 "       r.kind, b.coach_user_id, b.starts_at, b.ends_at, b.status, "
-                 "       b.booked_by_user_id, b.order_id, b.settlement_mode "
-                 "FROM diary.booking b LEFT JOIN diary.resource r ON r.id=b.resource_id "
-                 "WHERE b.club_id=:c AND b.status IN ('held','confirmed','completed','no_show') "
-                 "  AND (:df IS NULL OR b.starts_at >= CAST(:df AS timestamptz)) "
-                 "  AND (:dt IS NULL OR b.starts_at <= CAST(:dt AS timestamptz)) "
-                 "ORDER BY b.starts_at"),
-            {"c": p.club_id, "df": q.get("date_from"), "dt": q.get("date_to")},
-        ).mappings().all()
-        # Class sessions render on the same calendar as bookings (docs/03 §1: one diary).
-        class_events = classes_mod.master_class_events(
-            s, club_id=p.club_id, date_from=q.get("date_from"), date_to=q.get("date_to"))
     out = []
-    for r in rows:
-        d = dict(r)
-        for k in ("id", "resource_id", "coach_user_id", "booked_by_user_id", "order_id"):
-            if d.get(k) is not None:
-                d[k] = str(d[k])
-        for k in ("starts_at", "ends_at"):
-            if d.get(k) is not None:
-                d[k] = d[k].isoformat()
-        out.append(d)
-    out.extend(class_events)
+    try:
+        with session_scope() as s:
+            rows = s.execute(
+                text("SELECT b.id, b.booking_type, b.resource_id, r.name AS resource_name, "
+                     "       r.kind, b.coach_user_id, b.starts_at, b.ends_at, b.status, "
+                     "       b.booked_by_user_id, b.order_id, b.settlement_mode "
+                     "FROM diary.booking b LEFT JOIN diary.resource r ON r.id=b.resource_id "
+                     "WHERE b.club_id=:c AND b.status IN ('held','confirmed','completed','no_show') "
+                     "  AND (:df IS NULL OR b.starts_at >= CAST(:df AS timestamptz)) "
+                     "  AND (:dt IS NULL OR b.starts_at <= CAST(:dt AS timestamptz)) "
+                     "ORDER BY b.starts_at"),
+                {"c": p.club_id, "df": q.get("date_from"), "dt": q.get("date_to")},
+            ).mappings().all()
+            for r in rows:
+                d = dict(r)
+                for k in ("id", "resource_id", "coach_user_id", "booked_by_user_id", "order_id"):
+                    if d.get(k) is not None:
+                        d[k] = str(d[k])
+                for k in ("starts_at", "ends_at"):
+                    if d.get(k) is not None:
+                        d[k] = d[k].isoformat()
+                out.append(d)
+            # Class sessions on the same calendar (docs/03 §1). GUARDED: a class-events failure
+            # must not 500 the whole master diary — show the bookings regardless.
+            try:
+                out.extend(classes_mod.master_class_events(
+                    s, club_id=p.club_id, date_from=q.get("date_from"), date_to=q.get("date_to")))
+            except Exception:
+                log.exception("master diary: class_events failed (showing bookings only)")
+    except Exception as e:
+        # Surface the real reason (logged to Render + returned in detail) so a 500 is diagnosable.
+        log.exception("master diary failed club=%s", p.club_id)
+        return jsonify(error="master_failed", detail=("%s: %s" % (type(e).__name__, e))[:300]), 500
     out.sort(key=lambda e: e.get("starts_at") or "")
     return jsonify(events=out, count=len(out)), 200
 
