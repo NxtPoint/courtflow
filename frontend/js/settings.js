@@ -90,6 +90,11 @@
     lbl.appendChild(el("span", { style: "font-weight:600", text: "Accept online card payments" }));
     card.appendChild(lbl);
     host.appendChild(card);
+
+    // Configurable membership term plans (label + price + duration) live under Payments.
+    var plansHost = el("div");
+    host.appendChild(plansHost);
+    window.AdminUI.membershipPlans(plansHost, {});
   }
 
   window.Settings = {

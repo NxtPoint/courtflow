@@ -203,6 +203,17 @@ _DDL = [
     f'ADD COLUMN IF NOT EXISTS order_id uuid REFERENCES {SCHEMA}."order"(id) ON DELETE SET NULL;',
     f"CREATE INDEX IF NOT EXISTS ix_membership_sub_order "
     f"ON {SCHEMA}.membership_subscription (order_id) WHERE order_id IS NOT NULL;",
+
+    # --- configurable membership TERM PLANS (nothing-hardcoded) -----------------
+    # A membership term plan = one billing.price row on the club's kind='membership' product:
+    #   {price_id, label, amount_minor, term_months, active}. `term_months` is the membership
+    #   duration this plan grants (NULL for non-term prices — per-duration court/lesson pricing
+    #   leaves term_months NULL and is undisturbed). `label` is an optional display name
+    #   ("3 months"); the UI falls back to deriving it from term_months. The owner CRUDs these
+    #   in Settings; the member picks one at checkout and activation grants exactly term_months.
+    #   ADD COLUMN IF NOT EXISTS — safe on every boot and twice in a row.
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS term_months int;",
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS label text;",
 ]
 
 

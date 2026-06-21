@@ -477,6 +477,139 @@ def deactivate_price(session, *, club_id, price_id):
 
 
 # ---------------------------------------------------------------------------
+# membership TERM PLANS (configurable: label + amount + duration). A term plan = one
+# billing.price row (with term_months SET, unit='per_month', audience='member') on the
+# club's kind='membership' product. Owner CRUDs them; the member picks one at checkout and
+# activation grants the plan's term_months. NOTHING hardcoded — a plan is data.
+# ---------------------------------------------------------------------------
+
+def _plan_label(label, term_months):
+    if label:
+        return label
+    m = int(term_months or 0)
+    if m == 1:
+        return "1 month"
+    if m > 1:
+        return f"{m} months"
+    return "Membership"
+
+
+def _plan_row(row):
+    if row is None:
+        return None
+    tm = int(row["term_months"]) if row["term_months"] is not None else None
+    return {
+        "price_id": str(row["price_id"]),
+        "label": _plan_label(row["label"], tm),
+        "amount_minor": int(row["amount_minor"] or 0),
+        "term_months": tm,
+        "currency": row["currency_code"],
+        "active": bool(row["active"]),
+    }
+
+
+def list_membership_plans(session, *, club_id):
+    """All membership term plans for the club (active + inactive), cheapest-first. A term plan is
+    a price on the membership product with term_months set."""
+    rows = session.execute(
+        text("SELECT p.id AS price_id, p.label, p.amount_minor, p.term_months, "
+             "       p.currency_code, p.active "
+             "FROM billing.product pr "
+             "JOIN billing.price p ON p.product_id = pr.id "
+             "WHERE pr.club_id = :c AND pr.kind = 'membership' AND p.term_months IS NOT NULL "
+             "ORDER BY p.active DESC, p.amount_minor ASC, p.term_months ASC, p.created_at ASC"),
+        {"c": club_id},
+    ).mappings().all()
+    return [_plan_row(r) for r in rows]
+
+
+def _get_membership_plan(session, *, club_id, price_id):
+    return _plan_row(session.execute(
+        text("SELECT p.id AS price_id, p.label, p.amount_minor, p.term_months, "
+             "       p.currency_code, p.active "
+             "FROM billing.product pr "
+             "JOIN billing.price p ON p.product_id = pr.id "
+             "WHERE pr.club_id = :c AND pr.kind = 'membership' AND p.id = :pid "
+             "  AND p.term_months IS NOT NULL"),
+        {"c": club_id, "pid": price_id},
+    ).mappings().first())
+
+
+def _membership_product_id(session, *, club_id, create_if_missing=False):
+    pid = session.execute(
+        text("SELECT id FROM billing.product "
+             "WHERE club_id = :c AND kind = 'membership' ORDER BY created_at LIMIT 1"),
+        {"c": club_id},
+    ).scalar()
+    if pid:
+        return pid
+    if not create_if_missing:
+        return None
+    return session.execute(
+        text("INSERT INTO billing.product (club_id, kind, name, active) "
+             "VALUES (:c, 'membership', 'Unlimited Courts Membership', true) RETURNING id"),
+        {"c": club_id},
+    ).scalar_one()
+
+
+def create_membership_plan(session, *, club_id, label, amount_minor, term_months):
+    """Add a term plan = a billing.price (term_months, unit='per_month', audience='member') on the
+    club's membership product (creating the product if missing)."""
+    prod_id = _membership_product_id(session, club_id=club_id, create_if_missing=True)
+    pid = session.execute(
+        text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+             "currency_code, unit, term_months, label, active) "
+             "VALUES (:c, :prod, 'member', :amt, :cur, 'per_month', :tm, :lbl, true) "
+             "RETURNING id"),
+        {"c": club_id, "prod": prod_id, "amt": int(amount_minor),
+         "cur": _club_currency(session, club_id=club_id), "tm": int(term_months),
+         "lbl": (label or "").strip() or None},
+    ).scalar_one()
+    return _get_membership_plan(session, club_id=club_id, price_id=pid)
+
+
+def patch_membership_plan(session, *, club_id, price_id, label=None, amount_minor=None,
+                          term_months=None, active=None):
+    """COALESCE partial update of a term plan. Scoped to the club + the membership product so a
+    booking price can't be reshaped into a plan here. `label`='' clears to NULL (derive default)."""
+    lbl = label.strip() if isinstance(label, str) else None
+    res = session.execute(
+        text("""
+            UPDATE billing.price p SET
+                label        = CASE WHEN :lbl_set THEN :lbl ELSE p.label END,
+                amount_minor = COALESCE(:amount_minor, p.amount_minor),
+                term_months  = COALESCE(:term_months, p.term_months),
+                active       = COALESCE(:active, p.active),
+                updated_at   = now()
+            FROM billing.product pr
+            WHERE p.product_id = pr.id AND pr.club_id = :c AND pr.kind = 'membership'
+              AND p.id = :pid AND p.term_months IS NOT NULL
+            RETURNING p.id
+        """),
+        {"c": club_id, "pid": price_id,
+         "lbl_set": label is not None, "lbl": (lbl or None),
+         "amount_minor": amount_minor, "term_months": term_months, "active": active},
+    ).mappings().first()
+    if not res:
+        return None
+    return _get_membership_plan(session, club_id=club_id, price_id=price_id)
+
+
+def deactivate_membership_plan(session, *, club_id, price_id):
+    res = session.execute(
+        text("""
+            UPDATE billing.price p SET active = false, updated_at = now()
+            FROM billing.product pr
+            WHERE p.product_id = pr.id AND pr.club_id = :c AND pr.kind = 'membership'
+              AND p.id = :pid AND p.term_months IS NOT NULL
+            RETURNING p.id
+        """),
+        {"c": club_id, "pid": price_id},
+    ).mappings().first()
+    return res is not None
+
+
+# ---------------------------------------------------------------------------
 # coaches + coach_invite
 # ---------------------------------------------------------------------------
 
