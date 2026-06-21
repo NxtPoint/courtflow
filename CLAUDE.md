@@ -65,9 +65,21 @@ redirecting; fixed). **Two gates, both on:** `PAYMENTS_ENABLED=1`/`YOCO_ENABLED=
 + per-club `club.policy.allow_online_payment` (**Admin → Settings → Payments** toggle; the policy upsert is
 **INSERT-ONLY** so the boot re-seed can't reset it). Frontend: `frontend/js/pay.js` + `pay-return.html` +
 `pay_return.js` (auto-served at `/pay-return.html`).
-- **Refunds (built):** **Admin → Billing & settlement → "Recent online payments" → Refund.**
-  `GET /api/admin/payments` lists succeeded charges + refund status; the button → `POST /api/billing/yoco/refund`
-  (record-only, booking NOT reversed — docs/05 §8).
+- **Refunds (built):** **Admin → Billing & settlement → "Recent online payments".** Two buttons:
+  **"Refund only"** (record-only, booking kept) and **"Refund & cancel"** (also cancels the order's
+  booking(s) + frees the slot via `diary.cancel_booking`, admin-fee waived). Both → `POST /api/billing/yoco/refund`
+  (`{order_id, amount_minor?, cancel_booking?}`). Full refund sends NO amount (Yoco's `amount` is nullable =
+  full); the lookup uses the CHECKOUT id (`ch_`, `payment_attempt.status='created'`), NOT the webhook's
+  payment id (`p_`) — refunding a `p_` 404s.
+- **Reconciliation (missed-webhook recovery):** `yoco_billing/reconcile.py` — if the free-tier API misses a
+  webhook while asleep, an order can stay `awaiting_payment` though the customer paid. `client.get_checkout`
+  asks Yoco; if `completed`+`paymentId` it replays a `charge_succeeded` through `apply_payment_event`
+  (idempotent). `POST /api/billing/yoco/reconcile/<order_id>` (pay-return page calls it when polling stays
+  pending) + `POST /api/cron/reconcile-payments` (OPS bulk sweep). Safe-by-design: a 404/405 GET surface →
+  "unverifiable", never an error.
+- **Receipts:** `GET /api/billing/receipt/<order_id>` (`yoco_billing/receipt.py`) → receipt JSON (lines,
+  totals, payments, refunds) for online AND desk payments; `frontend/app/receipt.html` + `receipt.js` render a
+  printable/PDF receipt, linked from the pay-return page.
 
 **Pricing model — per-duration PAYG + membership-covered courts.** A service carries ONE `billing.price`
 row per offered duration (`duration_minutes` set, `unit='per_booking'`, `audience='any'`). `diary/pricing.py`:
