@@ -38,15 +38,22 @@ def page():
     anon_id = (str(body.get("anon_id") or "")[:64]) or None
     utm = body.get("utm") if isinstance(body.get("utm"), dict) else {}
     props = body.get("props") if isinstance(body.get("props"), dict) else {}
+    # Geolocation (country) from the edge: Cloudflare fronts the services and adds CF-IPCountry.
+    # Must be read here (request context); the writer thread has none. 'XX'/'T1' = unknown/Tor.
+    country = (request.headers.get("CF-IPCountry")
+               or request.headers.get("X-Country-Code") or "").strip().upper()[:2]
+    if country in ("", "XX", "T1"):
+        country = None
     try:
-        threading.Thread(target=_record, args=(path, club_id, email, referrer, props, anon_id, utm),
+        threading.Thread(target=_record,
+                         args=(path, club_id, email, referrer, props, anon_id, utm, country),
                          daemon=True).start()
     except Exception:
         log.exception("page beacon: thread spawn failed")
     return jsonify({"ok": True})
 
 
-def _record(path, club_id, email, referrer, props, anon_id=None, utm=None):
+def _record(path, club_id, email, referrer, props, anon_id=None, utm=None, country=None):
     try:
         from db import session_scope
         from core.repositories import accounts, usage_events
@@ -59,6 +66,8 @@ def _record(path, club_id, email, referrer, props, anon_id=None, utm=None):
             meta = {"path": path, "referrer": referrer}
             if anon_id:
                 meta["anon_id"] = anon_id
+            if country:
+                meta["country"] = country
             for k in ("source", "medium", "campaign", "term", "content"):
                 v = (utm or {}).get(k)
                 if v:

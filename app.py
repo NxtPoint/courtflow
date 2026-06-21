@@ -82,6 +82,7 @@ def create_app():
     _try_register(app, "diary.routes", "cron_bp")           # B: /api/cron/* (reminders, sweep)
     _try_register(app, "billing.routes", "billing_bp")      # C: /api/billing/* + monthly-invoice cron
     _try_register(app, "yoco_billing.routes", "yoco_bp")    # C: /api/billing/yoco/* (checkout/webhook/refund)
+    _try_register(app, "analytics.routes", "analytics_bp")  # Analytics: /api/analytics/* (business overview)
     _try_register(app, "marketing_crm.tracking", "page_bp")            # D: POST /api/track/page
     _try_register(app, "marketing_crm.consent.blueprint", "consent_bp")    # D: /api/consent/*
     _try_register(app, "marketing_crm.backoffice.blueprint", "cockpit_bp")  # D: /api/admin/cockpit/*

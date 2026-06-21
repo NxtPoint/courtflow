@@ -102,6 +102,9 @@ def _inject_head(html: str, b: Branding) -> str:
         f"<script>window.__CF=Object.assign(window.__CF||{{}},{json.dumps(cfg)});"
         f"window.__API_BASE={json.dumps(API_BASE)};"
         f"window.__CLERK_PUBLISHABLE_KEY={json.dumps(CLERK_PUBLISHABLE_KEY)};</script>\n"
+        # First-party page-view beacon (powers the Business Overview dashboard). Loaded on every
+        # served page; reads window.__API_BASE set just above. Privacy-first, no third parties.
+        f"<script src=\"/js/analytics.js\" async></script>\n"
     )
     if "</head>" in html:
         return html.replace("</head>", head + "</head>", 1)

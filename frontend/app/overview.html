@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Business Overview · NextPoint</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --ink:#1b2030; --muted:#6b7280; --line:#e7e9ee;
+    --blue:#2563eb; --green:#16a34a; --amber:#d97706; --red:#dc2626; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:Inter,system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  .ov-top { background:var(--card); border-bottom:1px solid var(--line); padding:18px 24px;
+    display:flex; align-items:center; gap:16px; flex-wrap:wrap; position:sticky; top:0; z-index:5; }
+  .ov-top h1 { font-size:1.2rem; margin:0; font-weight:800; }
+  .ov-top .sp { flex:1; }
+  .ov-sel { font-family:inherit; font-size:.9rem; padding:7px 10px; border:1px solid var(--line);
+    border-radius:9px; background:#fff; color:var(--ink); }
+  .ov-wrap { max-width:1180px; margin:22px auto; padding:0 20px; }
+  .ov-kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:14px; margin-bottom:18px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
+  .kpi .lbl { color:var(--muted); font-size:.78rem; font-weight:600; text-transform:uppercase; letter-spacing:.03em; }
+  .kpi .val { font-size:1.7rem; font-weight:800; margin-top:6px; }
+  .kpi .sub { color:var(--muted); font-size:.8rem; margin-top:2px; }
+  .ov-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .ov-grid.one { grid-template-columns:1fr; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 20px; margin-bottom:16px; }
+  .card h2 { font-size:1rem; margin:0 0 12px; }
+  .chart { width:100%; height:280px; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:8px 6px; font-size:.9rem; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; font-size:.76rem; text-transform:uppercase; }
+  td.num,th.num { text-align:right; }
+  .bar { height:8px; border-radius:4px; background:var(--blue); display:inline-block; vertical-align:middle; }
+  .muted { color:var(--muted); }
+  .nps-buckets { display:flex; gap:10px; margin-top:10px; }
+  .nps-buckets div { flex:1; text-align:center; padding:10px; border-radius:10px; font-weight:700; }
+  .empty { color:var(--muted); padding:20px 0; text-align:center; font-size:.9rem; }
+  @media (max-width:760px){ .ov-grid{ grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="ov-top">
+  <h1>Business Overview</h1>
+  <span class="muted" id="ov-scope">NextPoint</span>
+  <span class="sp"></span>
+  <select id="ov-club" class="ov-sel" style="display:none"></select>
+  <select id="ov-days" class="ov-sel">
+    <option value="7">Last 7 days</option>
+    <option value="30" selected>Last 30 days</option>
+    <option value="90">Last 90 days</option>
+  </select>
+</div>
+<div class="ov-wrap">
+  <div id="ov-kpis" class="ov-kpis"></div>
+  <div class="ov-grid">
+    <div class="card"><h2>Website traffic</h2><div id="ch-visits" class="chart"></div></div>
+    <div class="card"><h2>Sign-ups</h2><div id="ch-signups" class="chart"></div></div>
+  </div>
+  <div class="ov-grid">
+    <div class="card"><h2>Traffic sources</h2><div id="tbl-sources"></div></div>
+    <div class="card"><h2>Top pages</h2><div id="tbl-pages"></div></div>
+  </div>
+  <div class="ov-grid">
+    <div class="card"><h2>Visitors by country</h2><div id="tbl-geo"></div></div>
+    <div class="card"><h2>Settlement mix</h2><div id="tbl-settle"></div></div>
+  </div>
+  <div class="card"><h2>Net Promoter Score</h2><div id="ov-nps"></div></div>
+  <p class="muted" style="font-size:.8rem">First-party analytics · website traffic accrues from when the beacon went live · 1050 bridges in later.</p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<script src="/js/auth_client.js"></script>
+<script src="/js/overview.js"></script>
+<script>window.Overview && window.Overview.start();</script>
+</body>
+</html>
