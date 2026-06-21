@@ -81,28 +81,34 @@ core never changes.
 The booking API takes `settlement_mode`; allowed modes are gated by `club.policy` + role (admins can
 force any; members see what the club allows).
 
-## 6. Yoco adapter (first concrete provider)
+## 6. Yoco adapter (✅ IMPLEMENTED & LIVE)
 
-> Yoco offers hosted **Checkout** (redirect/popup) and webhooks. Build it **vanilla** — mirror the
-> PayPal adapter's size/shape. Tomo has `YOCO_SECRET_KEY` / public key already (Wix is Yoco‑linked).
+Yoco is the live first provider — hosted **Checkout** (redirect) with **card + Apple Pay / Google Pay /
+Samsung Pay** (wallets render automatically on Yoco's hosted page). Built vanilla; `billing/` core untouched.
 
 `yoco_billing/` (mirrors `paypal_billing/`):
-- `client.py` — thin REST client (create checkout, fetch charge) using `YOCO_SECRET_KEY`.
-- `adapter.py` — implements `PaymentGateway`: `create_checkout` (amount in cents, ZAR, `metadata={order_id}`,
-  success/cancel URLs), `verify_webhook` (validate Yoco webhook signature with `YOCO_WEBHOOK_SECRET`),
-  `parse_event` (→ NormalizedPaymentEvent).
-- `routes.py` — `POST /api/billing/yoco/checkout` (server‑side create, amount/order set server‑side —
-  never trust client amount), `POST /api/billing/yoco/webhook` (verify → `apply_payment_event`),
-  `GET /api/billing/config` contribution.
-- Frontend: Yoco SDK popup/redirect on the booking confirm step when `online` mode + config enabled.
-- Env: `YOCO_SECRET_KEY`, `YOCO_PUBLIC_KEY`, `YOCO_WEBHOOK_SECRET`, `PAYMENTS_ENABLED`,
-  `PAYMENTS_PROVIDER=yoco` (all `sync:false` except the public flags).
+- `client.py` — REST client: `create_checkout` (`POST https://payments.yoco.com/api/checkouts`),
+  `refund_checkout` (`POST /api/checkouts/{id}/refund`), `get_checkout` (`GET /api/checkouts/{id}`, used by
+  reconciliation), and `verify_signature` (**Standard-Webhooks / svix** scheme: `whsec_` secret,
+  HMAC-SHA256 over `{id}.{timestamp}.{body}`, ±3-min replay window).
+- `adapter.py` — `YocoGateway` implements `PaymentGateway` (`create_checkout`/`verify_webhook`/`parse_event`/
+  `refund`); self-registers via `register_gateway("yoco", …)` on import.
+- `routes.py` — `POST /api/billing/yoco/checkout` (server-side create, amount/order from the DB — never the
+  client), `POST /api/billing/yoco/webhook` (verify → `apply_payment_event`), `POST /api/billing/yoco/refund`
+  (`{order_id, amount_minor?, cancel_booking?}`), `POST /api/billing/yoco/reconcile/<order_id>` +
+  `POST /api/cron/reconcile-payments` (missed-webhook recovery), `GET /api/billing/receipt/<order_id>`
+  (receipt JSON). `GET /api/billing/config` advertises the provider/public key.
+- Frontend (payments-owned): `frontend/js/pay.js` (`Pay.startYocoCheckout`), `pay-return.html` + `pay_return.js`
+  (return + reconcile fallback + receipt link), `receipt.html` + `receipt.js` (printable receipt).
+- Env (all in `render.yaml` on `courtflow-api`): `YOCO_SECRET_KEY`/`YOCO_PUBLIC_KEY`/`YOCO_WEBHOOK_SECRET`
+  (`sync:false`), `PAYMENTS_ENABLED=1`, `PAYMENTS_PROVIDER=yoco`, `APP_BASE_URL`.
 
-> ⚠️ **Verify before building**: confirm the current Yoco API surface (Checkout API endpoints, webhook
-> signature scheme, recurring/subscription support for memberships). Yoco's API evolves — the build
-> agent should fetch Yoco's current developer docs first and adjust `client.py`/`adapter.py`. If Yoco
-> lacks native subscriptions, model memberships as scheduled monthly charges or off‑session tokenized
-> charges; otherwise keep memberships on `monthly_account`/manual until confirmed.
+**Reconciliation (`reconcile.py`):** on the free tier the API sleeps; a missed webhook can leave an order
+`awaiting_payment` though the customer paid. `get_checkout` asks Yoco; if `completed`+`paymentId` it replays a
+`charge_succeeded` through `apply_payment_event` (idempotent). Safe-by-design if the GET surface is absent.
+
+**Memberships:** Yoco hosted checkout is one-off, so self-serve membership = a one-off term purchase (no native
+recurring); the `subscription_*` event handlers exist but stay dormant. Auto-renewing is a later iteration.
 
 ## 7. PayPal adapter (second provider, mostly free)
 
@@ -110,18 +116,24 @@ Port 1050's `paypal_billing/` as a second `PaymentGateway` implementation so the
 proven with ≥2 providers from the start (and so any USD/international club can use it). Keep it behind
 the same interface; do not let PayPal‑isms leak into core.
 
-## 8. Refunds & disputes (later, but shaped now)
+## 8. Refunds & disputes (✅ IMPLEMENTED)
 
-`billing.payment.direction='refund'`; record‑only by default (don't auto‑reverse bookings) — the
-exact 1050 decision. Admin UI button calls `gateway.refund()`. Disputes/chargebacks logged as
-payment_attempt events.
+`billing.payment.direction='refund'`; record-only by default (don't auto-reverse bookings) — the exact
+1050 decision. The admin **"Recent online payments"** view offers two actions: **"Refund only"** (reverse
+the charge, keep the booking) and **"Refund & cancel"** (also cancel the order's booking(s) + free the slot
+via `diary.cancel_booking`, admin-fee waived). Both call `POST /api/billing/yoco/refund`. A full refund sends
+NO `amount` (Yoco's `amount` is nullable = full); the lookup uses the Yoco **checkout** id (`ch_`), not the
+webhook **payment** id (`p_`). The `refund.succeeded` webhook writes the ledger row (record-only). Disputes/
+chargebacks log as `payment_attempt` events.
 
 ## 9. Build order for payments
 
-1. **Now (with the diary):** `billing.*` tables, `order`/`order_line`/`account_ledger`, the
+1. **✅ Done (with the diary):** `billing.*` tables, `order`/`order_line`/`account_ledger`, the
    `at_court` / `monthly_account` / `membership_covered` / `free` modes, the `apply_payment_event`
-   core + the `manual` provider (desk payments). **No gateway needed to launch.**
-2. **Yoco (fast‑follow / can be brought into MVP):** `yoco_billing/` adapter + `online` mode + config
-   probe + frontend checkout. Flip `allow_online_payment=true` for NextPoint.
-3. **PayPal:** port adapter; multi‑provider proven.
-4. **Memberships online + monthly statements with pay links.**
+   core + the `manual` provider (desk payments).
+2. **✅ Done — Yoco LIVE:** `yoco_billing/` adapter + `online` mode + config probe + frontend checkout +
+   refunds (refund-only / refund-and-cancel) + reconciliation + printable receipts. `allow_online_payment=true`
+   for NextPoint; `PAYMENTS_ENABLED=1`.
+3. **PayPal:** port adapter; multi-provider proven. (Not yet built.)
+4. **Memberships online (one-off term purchase) — DONE; auto-renewing subscriptions + monthly statement pay
+   links — later.**

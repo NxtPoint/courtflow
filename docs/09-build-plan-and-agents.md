@@ -14,7 +14,8 @@ Phase 3  Settlement (no gateway)  billing.* schema, order/ledger, at_court/month
 Phase 4  CRM + Klaviyo     core.* port, event emit, crm_sync, consent, transactional confirmations (+SES fallback)
 Phase 5  Frontends         portal SPAs (member booking wizard, coach diary, club-admin console), marketing site
 Phase 6  SEO migration     url inventory, 301 map, cutover (separate, careful, reversible)
-Phase 7  Yoco online pay   yoco_billing adapter, online mode, checkout UI, config probe   (can pull earlier)
+Phase 7  Yoco online pay   ✅ DONE — yoco_billing adapter, online mode, checkout UI, config probe, refunds
+                            (refund-only / refund-and-cancel), reconciliation, printable receipts. LIVE.
 Phase 8  Hardening         RLS, tests on the edge cases (doc 03 §10), analytics cockpit, polish
 ```
 

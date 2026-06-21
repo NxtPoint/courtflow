@@ -81,10 +81,11 @@ info@nextpointtennis.com.
 - Club admin console + coach diary view.
 - Free‑lesson lead funnel → Klaviyo.
 
-**Phase 4 (designed‑in now, built next):**
-- **Online payments via Yoco** behind the gateway abstraction (Tomo has keys — can be brought forward
-  to MVP as a fast vanilla build if desired).
-- PayPal adapter as a second provider.
+**Phase 4 (✅ now LIVE):**
+- **Online payments via Yoco** behind the gateway abstraction — hosted checkout with card + Apple/Google/
+  Samsung Pay, Standard-Webhooks verification, refunds (refund-only / refund-and-cancel), missed-webhook
+  reconciliation, and printable receipts. `PAYMENTS_ENABLED=1`, `allow_online_payment=true` for NextPoint.
+- PayPal adapter as a second provider (not yet built — the gateway abstraction is proven with Yoco).
 
 **Later (Phase 5+):**
 - Self‑serve club onboarding & white‑label theming polish; billing the *clubs* (platform subscription).
