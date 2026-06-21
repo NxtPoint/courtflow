@@ -117,7 +117,8 @@ def can(principal, action, resource=None):
     if action in ("create_booking", "book_court", "book_lesson", "book_class"):
         return role in ("club_admin", "coach", "member", "guest")
 
-    if action in ("manage_own_profile", "view_own_ledger", "manage_own_membership"):
+    if action in ("manage_own_profile", "view_own_ledger", "manage_own_membership",
+                  "request_refund"):  # request_refund: a client raises a refund REQUEST (admin approves)
         return role in ("club_admin", "coach", "member", "guest")
 
     if action == "add_junior":  # a member adds a child (guardian path, docs/04 §5)

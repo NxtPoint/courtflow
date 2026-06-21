@@ -536,6 +536,21 @@ def get_payments():
     return jsonify(payments=rows, count=len(rows)), 200
 
 
+@admin_bp.get("/refund-requests")
+def get_refund_requests():
+    """Read-only queue of client-raised refund requests for the admin Billing view (join order
+    amount + requester email). Optional ?status= filter. Executing the actual refund stays on
+    the existing Admin → Recent online payments → Refund (Yoco) path — this is just the queue."""
+    p, err = _admin()
+    if err:
+        return err
+    status = (request.args.get("status") or "").strip() or None
+    from billing import refunds
+    with session_scope() as s:
+        rows = refunds.list_refund_requests_admin(s, club_id=p.club_id, status=status)
+    return jsonify(requests=rows, count=len(rows)), 200
+
+
 @admin_bp.get("/people")
 def get_people():
     """Everyone in the club (members/coaches/guests/admins) for the admin People tab."""

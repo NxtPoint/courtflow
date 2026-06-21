@@ -13,6 +13,13 @@
 #   POST  /api/me/dependents            -> add a child (login-less iam.user + iam.dependent)
 #   PATCH /api/me/dependents/<id>       -> edit one the caller owns
 #   DELETE /api/me/dependents/<id>      -> soft-remove one the caller owns
+#
+# Financials + refund requests (client-financials lane — spec §4, §6):
+#   GET   /api/me/financials            -> plan + usage-this-month + spend + account + next_charge
+#   GET   /api/me/orders                -> recent paid/refunded orders (receipts; refund eligibility)
+#   GET   /api/me/refund-requests       -> the caller's own refund requests
+#   POST  /api/me/refund-requests       -> raise a refund request on a paid order the caller owns
+#   POST  /api/me/refund-requests/<id>/cancel -> withdraw a still-pending request
 
 import logging
 from datetime import date, datetime
@@ -296,3 +303,117 @@ def delete_dependent(dependent_id):
     if not ok:
         return jsonify(error="NOT_FOUND"), 404
     return jsonify(ok=True), 200
+
+
+# ---------------------------------------------------------------------------
+# financials  (spec §4) — gate: view_own_ledger (member+, already defined)
+# ---------------------------------------------------------------------------
+
+@me_bp.get("/financials")
+def get_financials():
+    """Current plan + usage-this-month + spend (this month + N-month history) + account
+    balance + next charge. STRICTLY member-scoped (the caller's club_id + user_id from the
+    principal). Reads live billing.*/diary.* via billing.me (each sub-query guarded)."""
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "view_own_ledger", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    from billing import me as billing_me
+    with session_scope() as s:
+        data = billing_me.member_financials(s, club_id=p.club_id, user_id=p.user_id)
+    return jsonify(data), 200
+
+
+@me_bp.get("/orders")
+def get_orders():
+    """The caller's recent paid/refunded orders (receipts) — each row flags whether it is
+    refundable (paid + no open request) so the UI can offer 'Request a refund'."""
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "view_own_ledger", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    from billing import me as billing_me
+    with session_scope() as s:
+        rows = billing_me.member_orders(s, club_id=p.club_id, user_id=p.user_id)
+    return jsonify(orders=rows, count=len(rows)), 200
+
+
+# ---------------------------------------------------------------------------
+# refund requests  (spec §6) — gate: request_refund (member+, NEW verb)
+# ---------------------------------------------------------------------------
+
+# error_code -> (http_status, message)
+_REFUND_ERR = {
+    "NOT_FOUND": (404, "That order was not found on your account."),
+    "NOT_REFUNDABLE": (409, "Only paid orders can be refunded."),
+    "DUPLICATE": (409, "You already have an open refund request for this order."),
+    "NOT_PENDING": (409, "This request can no longer be cancelled."),
+}
+
+
+@me_bp.get("/refund-requests")
+def list_refund_requests():
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "request_refund", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    from billing import refunds
+    with session_scope() as s:
+        rows = refunds.list_refund_requests(s, club_id=p.club_id, user_id=p.user_id)
+    return jsonify(requests=rows, count=len(rows)), 200
+
+
+@me_bp.post("/refund-requests")
+def create_refund_request():
+    """Raise a refund REQUEST against one of the caller's PAID orders. The order is validated
+    server-side as belonging to the caller (club_id + user_id) and being refundable; at most
+    one open request per order. The member never moves money — an admin approves later."""
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "request_refund", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    b = _body()
+    order_id = (b.get("order_id") or "").strip()
+    if not order_id:
+        return jsonify(error="VALIDATION", fields={"order_id": "required"}), 422
+    reason = (b.get("reason") or "").strip() or None
+    amount_minor = b.get("amount_minor")
+    from billing import refunds
+    with session_scope() as s:
+        req, ecode = refunds.create_refund_request(
+            s, club_id=p.club_id, user_id=p.user_id, order_id=order_id,
+            amount_minor=amount_minor, reason=reason)
+    if ecode:
+        status, msg = _REFUND_ERR.get(ecode, (400, "Could not create the request."))
+        return jsonify(error=ecode, message=msg), status
+    # Best-effort: refund_requested (transactional → admin). Guarded — never hard-depends on CRM.
+    try:
+        from marketing_crm.tracking import emit
+        emit("refund_requested", {"club_id": str(p.club_id), "email": p.email,
+                                  "ref_type": "order", "ref_id": str(order_id),
+                                  "amount_minor": req.get("amount_minor"), "reason": reason})
+    except Exception:
+        log.debug("refund_requested emit skipped (tracking unavailable)")
+    return jsonify(refund_request=req), 201
+
+
+@me_bp.post("/refund-requests/<request_id>/cancel")
+def cancel_refund_request(request_id):
+    """Member withdraws a still-pending refund request (their own)."""
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "request_refund", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    from billing import refunds
+    with session_scope() as s:
+        req, ecode = refunds.cancel_refund_request(
+            s, club_id=p.club_id, user_id=p.user_id, request_id=request_id)
+    if ecode:
+        status, msg = _REFUND_ERR.get(ecode, (400, "Could not cancel the request."))
+        return jsonify(error=ecode, message=msg), status
+    return jsonify(ok=True, refund_request=req), 200
