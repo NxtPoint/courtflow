@@ -15,12 +15,14 @@
 #   GET  /order/<id>      AUTH'd. Order status probe for the pay-return page (UX only; the booking
 #                         is confirmed by the webhook, not by this read).
 #
-# Self-serve membership (v1: one month per purchase via the one-off checkout):
-#   POST /api/billing/membership/checkout  AUTH'd member. Creates an online membership order +
+# Self-serve membership (configurable TERM PLANS via the one-off checkout):
+#   POST /api/billing/membership/checkout  AUTH'd member. Body {price_id?} picks a term plan
+#                         (omitted → cheapest). Creates an online membership order for THAT plan +
 #                         a pending linked subscription; returns {order_id} for Pay.startYocoCheckout.
 #   GET  /api/billing/membership/status    AUTH'd member. {active, current_period_end, price_minor,
-#                         currency}. The webhook handler activates the membership AFTER
-#                         apply_payment_event marks the order paid (membership.activate_membership_for_order).
+#                         currency, plans}. The webhook handler activates the membership AFTER
+#                         apply_payment_event marks the order paid, granting the plan's term_months
+#                         (membership.activate_membership_for_order).
 #
 # Importing yoco_billing.adapter (below) registers the gateway as a side-effect. DB-touching
 # imports stay lazy so the module imports clean with no DATABASE_URL (app.py boot discipline).
@@ -192,8 +194,10 @@ def yoco_webhook():
                     and result.get("order_id")):
                 from billing import membership as membership_repo
                 if membership_repo.is_membership_order(s, order_id=result["order_id"]):
+                    # months omitted → the granted duration is the LINKED PLAN's term_months
+                    # (read off the order's price_id), so each term plan grants its own length.
                     act = membership_repo.activate_membership_for_order(
-                        s, order_id=result["order_id"], provider="yoco", months=1)
+                        s, order_id=result["order_id"], provider="yoco")
                     result["membership"] = act
     except Exception:
         # Transient (e.g. DB) error — 500 so Yoco retries the delivery.
@@ -205,16 +209,19 @@ def yoco_webhook():
 
 
 # ---------------------------------------------------------------------------
-# Self-serve membership purchase (v1: ONE MONTH per purchase via the one-off checkout).
-# Auto-renewing Yoco subscription is the NEXT iteration — this buys a single month and the
-# member re-buys when it lapses. Reuses the SAME hosted-checkout + webhook seam as bookings.
+# Self-serve membership purchase (configurable TERM PLANS via the one-off checkout).
+# The member picks a configured term plan (label · price · duration); checkout creates an order
+# for THAT plan's amount; activation (on the paid webhook) grants the plan's term_months. There's
+# no auto-renewing Yoco subscription yet — the member re-buys when the term lapses. Reuses the
+# SAME hosted-checkout + webhook seam as bookings.
 # ---------------------------------------------------------------------------
 
 @yoco_bp.post("/api/billing/membership/checkout")
 def membership_checkout():
-    """AUTH'd member. Create an online order for THIS member's club membership + a pending
+    """AUTH'd member. Create an online order for the CHOSEN membership term plan + a pending
     subscription row linked to it, then return {order_id} so the page calls
-    Pay.startYocoCheckout(order_id). Same gates as a booking online payment."""
+    Pay.startYocoCheckout(order_id). Body {price_id?} selects the term plan; omitted → the
+    cheapest active plan. Same gates as a booking online payment."""
     from auth import resolve_principal
 
     p = resolve_principal(request)
@@ -228,6 +235,9 @@ def membership_checkout():
     if not _truthy("PAYMENTS_ENABLED"):
         return jsonify(error="online_payments_disabled"), 403
 
+    body = request.get_json(silent=True) or {}
+    price_id = (body.get("price_id") or "").strip() or None
+
     from db import session_scope
     from billing import membership as membership_repo
 
@@ -235,7 +245,8 @@ def membership_checkout():
         if not _club_allows_online(s, p.club_id):
             return jsonify(error="online_payments_not_enabled_for_club"), 403
         try:
-            res = membership_repo.create_membership_order(s, club_id=p.club_id, user_id=p.user_id)
+            res = membership_repo.create_membership_order(
+                s, club_id=p.club_id, user_id=p.user_id, price_id=price_id)
         except Exception as e:
             log.warning("create_membership_order failed club=%s: %s", p.club_id, e)
             return jsonify(error="membership_order_failed"), 500
@@ -245,13 +256,16 @@ def membership_checkout():
             return jsonify(error="membership_has_no_price"), 400
 
     return jsonify(order_id=res["order_id"], amount_minor=res["amount_minor"],
-                   currency=res["currency"], provider="yoco"), 200
+                   currency=res["currency"], price_id=res["price_id"],
+                   term_months=res.get("term_months"), label=res.get("label"),
+                   provider="yoco"), 200
 
 
 @yoco_bp.get("/api/billing/membership/status")
 def membership_status():
     """AUTH'd member. Their membership status for the Membership page:
-    {active, current_period_end, price_minor, currency, sold}."""
+    {active, current_period_end, price_minor, currency, sold, plans, online_enabled}.
+    `plans` are the configured term plans the member can pick + buy."""
     from auth import resolve_principal
 
     p = resolve_principal(request)

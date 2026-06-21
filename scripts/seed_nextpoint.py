@@ -95,10 +95,24 @@ PRICES_ZAR = [
         ("any", 25000, "per_booking", 30),   # R250 / 30 min
         ("any", 40000, "per_booking", 60),   # R400 / 60 min
     ]),
-    ("membership", "Unlimited Courts Membership", [("member", 22000, "per_month", None)]),  # R220/mo
+    # Membership is NOT a single hardcoded price anymore — it's a set of configurable TERM PLANS
+    # (MEMBERSHIP_PLANS_ZAR below), seeded via _seed_membership_plans_if_possible. Each plan = a
+    # billing.price with term_months + label; the owner edits them in Settings.
     ("class", "Cardio Tennis", [("any", 12000, "per_session", 45)]),                 # R120
     ("class", "Junior Beginner", [("any", 12000, "per_session", 30)]),               # R120/30min
     ("class", "Junior Intermediate", [("any", 15000, "per_session", 45)]),           # R150
+]
+
+# --- configurable membership TERM PLANS (label, amount_minor, term_months) -------
+# A term plan = one billing.price row (term_months SET, unit='per_month', audience='member') on
+# the "Unlimited Courts Membership" product. The member picks one; activation grants term_months.
+# These are sensible launch defaults — the owner edits/adds/deactivates them in Settings.
+MEMBERSHIP_PRODUCT = ("membership", "Unlimited Courts Membership")
+MEMBERSHIP_PLANS_ZAR = [
+    # (label, amount_minor, term_months)
+    ("1 month",  22000, 1),    # R220 / 1 month
+    ("3 months", 60000, 3),    # R600 / 3 months
+    ("6 months", 110000, 6),   # R1100 / 6 months
 ]
 
 # --- diary.resource content (Agent B owns the schema; we seed IF it exists) ----
@@ -284,6 +298,65 @@ def _seed_billing_if_possible(session, *, club_id, currency_code):
     return n
 
 
+def _seed_membership_plans_if_possible(session, *, club_id, currency_code):
+    """Seed the configurable membership TERM PLANS (MEMBERSHIP_PLANS_ZAR) as billing.price rows
+    (term_months SET, unit='per_month', audience='member') on the membership product. Idempotent:
+    a plan is keyed by (club, membership product, term_months) so re-running adds nothing. Also a
+    one-time migration: deactivate the legacy no-term membership price (the old single R220/mo row
+    without term_months) so it stops being picked as 'the' membership price. Skips cleanly if
+    billing.* / the term_months column isn't present yet."""
+    if not _table_exists(session, "billing", "price"):
+        log.info("TODO(billing): billing.price not present yet — skipping membership plans seed.")
+        return 0
+    has_term = session.execute(
+        text("SELECT 1 FROM information_schema.columns "
+             "WHERE table_schema='billing' AND table_name='price' AND column_name='term_months'"),
+    ).first()
+    if not has_term:
+        log.info("TODO(billing): billing.price.term_months not present yet — skipping plans seed.")
+        return 0
+
+    kind, name = MEMBERSHIP_PRODUCT
+    prod_id = session.execute(
+        text("SELECT id FROM billing.product WHERE club_id=:c AND kind=:k ORDER BY created_at LIMIT 1"),
+        {"c": club_id, "k": kind},
+    ).scalar()
+    if not prod_id:
+        prod_id = session.execute(
+            text("INSERT INTO billing.product (club_id, kind, name, active) "
+                 "VALUES (:c, :k, :n, true) RETURNING id"),
+            {"c": club_id, "k": kind, "n": name},
+        ).scalar_one()
+
+    # One-time migration: deactivate the legacy single membership price (no term_months) — term
+    # plans now carry the duration. Idempotent (only flips still-active no-term rows).
+    session.execute(
+        text("UPDATE billing.price SET active=false, updated_at=now() "
+             "WHERE club_id=:c AND product_id=:p AND term_months IS NULL AND active=true"),
+        {"c": club_id, "p": prod_id},
+    )
+
+    n = 0
+    for label, amount_minor, term_months in MEMBERSHIP_PLANS_ZAR:
+        exists = session.execute(
+            text("SELECT 1 FROM billing.price "
+                 "WHERE club_id=:c AND product_id=:p AND term_months=:tm"),
+            {"c": club_id, "p": prod_id, "tm": term_months},
+        ).first()
+        if exists:
+            continue
+        session.execute(
+            text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                 "currency_code, unit, term_months, label, active) "
+                 "VALUES (:c, :p, 'member', :amt, :cur, 'per_month', :tm, :lbl, true)"),
+            {"c": club_id, "p": prod_id, "amt": amount_minor, "cur": currency_code,
+             "tm": term_months, "lbl": label},
+        )
+        n += 1
+    log.info("seeded %d new membership term plans", n)
+    return n
+
+
 def seed(session):
     """Idempotently seed NextPoint. Returns a summary dict."""
     # Ensure a template club exists (so club #2 can clone) before seeding club #1.
@@ -324,6 +397,8 @@ def seed(session):
     hours_seeded = _seed_availability_if_possible(session, club_id=club_id)
     prices_seeded = _seed_billing_if_possible(session, club_id=club_id,
                                               currency_code=CLUB["currency_code"])
+    plans_seeded = _seed_membership_plans_if_possible(session, club_id=club_id,
+                                                      currency_code=CLUB["currency_code"])
 
     return {
         "club_id": str(club_id),
@@ -333,6 +408,7 @@ def seed(session):
         "courts_seeded": courts_seeded,
         "availability_rules": hours_seeded,
         "prices_seeded": prices_seeded,
+        "membership_plans_seeded": plans_seeded,
     }
 
 

@@ -104,6 +104,22 @@
       return A().apiJSON("/api/admin/prices/" + enc(id), { method: "PATCH", body: body });
     },
 
+    // ---- membership term plans (label + amount + duration) ---------------
+    // GET /api/admin/membership-plans -> {plans:[{price_id,label,amount_minor,term_months,active}]}
+    membershipPlans: function () { return A().apiJSON("/api/admin/membership-plans"); },
+    // POST /api/admin/membership-plans  body: {label,amount_minor,term_months} -> {plan}
+    createMembershipPlan: function (body) {
+      return A().apiJSON("/api/admin/membership-plans", { method: "POST", body: body });
+    },
+    // PATCH /api/admin/membership-plans/:price_id  body: {label?,amount_minor?,term_months?,active?}
+    patchMembershipPlan: function (id, body) {
+      return A().apiJSON("/api/admin/membership-plans/" + enc(id), { method: "PATCH", body: body });
+    },
+    // DELETE /api/admin/membership-plans/:price_id  (deactivate)
+    deleteMembershipPlan: function (id) {
+      return A().apiJSON("/api/admin/membership-plans/" + enc(id), { method: "DELETE" });
+    },
+
     // ---- coaches ---------------------------------------------------------
     // GET /api/admin/coaches -> {coaches:[{id,email,display_name,status,...}]}
     coaches: function () { return A().apiJSON("/api/admin/coaches"); },
@@ -533,9 +549,104 @@
     return { reload: reload };
   }
 
+  // ---------------------------------------------------------------------------
+  // MEMBERSHIP PLANS — configurable term plans (label + price + duration). Each plan
+  // is one billing.price (term_months) on the membership product. -> /membership-plans.
+  // ---------------------------------------------------------------------------
+  function membershipPlans(host, opts) {
+    init(); opts = opts || {};
+    UI.clear(host);
+    var card = el("div", { class: "cf-card" });
+    card.appendChild(el("h2", { text: "Membership plans" }));
+    card.appendChild(el("p", { class: "cf-muted", text:
+      "Set the term plans members can buy. A plan is a price for a duration (e.g. 3 months for R600). " +
+      "Members pick a plan, pay online, and get unlimited-courts membership for that term." }));
+    var listBox = el("div", { class: "cf-list", id: "ad-membership-plans" });
+    card.appendChild(listBox);
+    host.appendChild(card);
+
+    function planTerm(months) {
+      var m = parseInt(months, 10) || 0;
+      return m === 1 ? "1 month" : (m + " months");
+    }
+
+    function reload() {
+      UI.clear(listBox);
+      listBox.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+      window.AdminAPI.membershipPlans().then(function (r) { renderList(r.plans || []); })
+        .catch(function (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+
+    function planRow(plan) {
+      var labelI = input({ value: plan.label || "", placeholder: planTerm(plan.term_months), style: "max-width:150px" });
+      var amtI = input({ value: fromMinor(plan.amount_minor), placeholder: "0.00", style: "max-width:110px" });
+      var monthsI = input({ type: "number", value: plan.term_months || 1, min: 1, style: "max-width:80px" });
+      var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
+      var del = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: plan.active ? "Deactivate" : "Inactive" });
+      if (!plan.active) del.disabled = true;
+      save.addEventListener("click", async function () {
+        var months = num(monthsI.value);
+        if (!months || months < 1) { UI.toast("Duration must be at least 1 month.", "warn"); return; }
+        save.disabled = true;
+        try {
+          await window.AdminAPI.patchMembershipPlan(plan.price_id, {
+            label: labelI.value.trim(), amount_minor: toMinor(amtI.value), term_months: months,
+          });
+          UI.toast("Plan updated.", "info"); reload();
+        } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
+      });
+      del.addEventListener("click", async function () {
+        if (!window.confirm("Deactivate the " + (plan.label || planTerm(plan.term_months)) + " plan?")) return;
+        try { await window.AdminAPI.deleteMembershipPlan(plan.price_id); UI.toast("Plan deactivated.", "info"); reload(); }
+        catch (e) { UI.toast(UI.errMsg(e), "error"); }
+      });
+      var row = el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:6px" }, [
+        labelI, amtI,
+        el("div", { class: "cf-row", style: "gap:4px;align-items:center" }, [monthsI, el("span", { class: "cf-muted", text: "months" })]),
+        el("span", { class: "cf-spacer" }), save, del,
+      ]);
+      if (!plan.active) row.style.opacity = "0.55";
+      return row;
+    }
+
+    function renderList(plans) {
+      UI.clear(listBox);
+      if (!plans.length) listBox.appendChild(el("div", { class: "cf-empty", text: "No membership plans yet. Add one below." }));
+      plans.forEach(function (pl) { listBox.appendChild(planRow(pl)); });
+    }
+
+    // add-plan form
+    var addLabel = input({ placeholder: "Label (optional, e.g. 3 months)", style: "max-width:170px" });
+    var addAmt = input({ placeholder: "0.00", style: "max-width:110px" });
+    var addMonths = input({ type: "number", value: 1, min: 1, placeholder: "Months", style: "max-width:80px" });
+    var addBtn = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Add plan" });
+    addBtn.addEventListener("click", async function () {
+      var amount = toMinor(addAmt.value);
+      var months = num(addMonths.value);
+      if (amount == null || amount < 0) { UI.toast("Enter a price.", "warn"); return; }
+      if (!months || months < 1) { UI.toast("Enter a duration in months (min 1).", "warn"); return; }
+      addBtn.disabled = true;
+      try {
+        await window.AdminAPI.createMembershipPlan({ label: addLabel.value.trim(), amount_minor: amount, term_months: months });
+        addLabel.value = ""; addAmt.value = ""; addMonths.value = 1;
+        UI.toast("Plan added.", "info"); reload();
+      } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { addBtn.disabled = false; }
+    });
+    card.appendChild(el("h3", { text: "Add a plan", style: "margin-top:14px" }));
+    card.appendChild(el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
+      addLabel, addAmt,
+      el("div", { class: "cf-row", style: "gap:4px;align-items:center" }, [addMonths, el("span", { class: "cf-muted", text: "months" })]),
+      addBtn,
+    ]));
+    if (opts.before && opts.before.length) card.appendChild(actionRow(opts.before));
+
+    reload();
+    return { reload: reload };
+  }
+
   window.AdminUI = {
     clubProfile: clubProfile, hours: hours, courts: courts,
-    services: services, coaches: coaches,
+    services: services, coaches: coaches, membershipPlans: membershipPlans,
   };
 })();
 

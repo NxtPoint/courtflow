@@ -381,6 +381,69 @@ def delete_price(price_id):
 
 
 # ---------------------------------------------------------------------------
+# membership term plans (configurable: label + amount + duration). Each plan is a
+# billing.price row (with term_months) on the club's kind='membership' product.
+# ---------------------------------------------------------------------------
+
+@admin_bp.get("/membership-plans")
+def get_membership_plans():
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        plans = repo.list_membership_plans(s, club_id=p.club_id)
+    return jsonify(plans=plans, count=len(plans)), 200
+
+
+@admin_bp.post("/membership-plans")
+def post_membership_plan():
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    term_months = b.get("term_months")
+    amount_minor = b.get("amount_minor")
+    if term_months is None or int(term_months) < 1:
+        return jsonify(error="term_months must be >= 1"), 400
+    if amount_minor is None or int(amount_minor) < 0:
+        return jsonify(error="amount_minor required"), 400
+    with session_scope() as s:
+        plan = repo.create_membership_plan(
+            s, club_id=p.club_id, label=b.get("label"),
+            amount_minor=int(amount_minor), term_months=int(term_months))
+    return jsonify(plan=plan), 201
+
+
+@admin_bp.patch("/membership-plans/<price_id>")
+def patch_membership_plan(price_id):
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        plan = repo.patch_membership_plan(
+            s, club_id=p.club_id, price_id=price_id,
+            label=b.get("label"), amount_minor=b.get("amount_minor"),
+            term_months=b.get("term_months"), active=b.get("active"))
+    if plan is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(plan=plan), 200
+
+
+@admin_bp.delete("/membership-plans/<price_id>")
+def delete_membership_plan(price_id):
+    """Deactivate (soft-delete) a term plan — it stops being offered but past purchases stand."""
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        ok = repo.deactivate_membership_plan(s, club_id=p.club_id, price_id=price_id)
+    if not ok:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(ok=True), 200
+
+
+# ---------------------------------------------------------------------------
 # classes (class type = resource(kind='class') + product(kind='class') + price)
 # ---------------------------------------------------------------------------
 
