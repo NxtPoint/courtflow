@@ -9,7 +9,8 @@
 #
 #   MARKETING HOST (e.g. www.nextpointtennis.com):
 #     /                  -> marketing home (native, crawlable HTML)
-#     /services /coaches /programs/* /pricing /free-lesson /contact /careers
+#     /coaches /programs /pricing /contact /careers  (lean set; docs/public-site/03)
+#     (retired: /services /free-lesson /programs/<x> -> 301 to live equivalents)
 #     /blog /post/<slug> -> the static blog (build_blog.py output)
 #     /robots.txt /sitemap.xml -> generated, host-aware
 #
@@ -30,7 +31,7 @@
 import os
 import glob
 import json
-from flask import Flask, send_file, jsonify, request, Response, abort
+from flask import Flask, send_file, jsonify, request, Response, abort, redirect
 
 # The shared branding resolver lives in the design-system package. Support both
 # running as a package and as a loose script (Render runs from repo root).
@@ -63,6 +64,7 @@ BLOG_DIR = os.path.join(FRONTEND_DIR, "blog")
 APP_DIR = os.path.join(FRONTEND_DIR, "app")     # Agent E's portal SPA shells
 JS_DIR = os.path.join(FRONTEND_DIR, "js")       # Agent E's shared JS
 SHARED_DIR = os.path.join(FRONTEND_DIR, "_shared")
+IMG_DIR = os.path.join(FRONTEND_DIR, "img")     # optimized public-site imagery (/img/*)
 
 # Public, browser-safe config injected into every page (all sync:false secrets
 # stay server-side on courtflow-api; these are the public values by design).
@@ -175,35 +177,16 @@ def index():
     return _app_shell("portal.html")
 
 
-# The clean marketing URL structure from docs/07 §3.
-@app.get("/services")
-def services():
-    return _marketing("services.html")
-
-
+# The clean marketing URL structure (docs/public-site/03). Lean 6-page set; retired
+# pages 301 to their live equivalent to preserve SEO (docs/07).
 @app.get("/coaches")
 def coaches():
     return _marketing("coaches.html")
 
 
-@app.get("/programs/high-performance")
-def program_high_performance():
-    return _marketing("program-high-performance.html")
-
-
-@app.get("/programs/juniors")
-def program_juniors():
-    return _marketing("program-juniors.html")
-
-
-@app.get("/programs/social")
-def program_social():
-    return _marketing("program-social.html")
-
-
-@app.get("/programs/cardio-tennis")
-def program_cardio():
-    return _marketing("program-cardio.html")
+@app.get("/programs")
+def programs():
+    return _marketing("programs.html")
 
 
 @app.get("/pricing")
@@ -211,11 +194,6 @@ def pricing():
     if is_marketing_host(request.host or ""):
         return _marketing("pricing.html")
     return _app_shell("plans.html")
-
-
-@app.get("/free-lesson")
-def free_lesson():
-    return _marketing("free-lesson.html")
 
 
 @app.get("/contact")
@@ -226,6 +204,37 @@ def contact():
 @app.get("/careers")
 def careers():
     return _marketing("careers.html")
+
+
+# --- 301 redirects for retired pages (kept out of nav; preserve link equity) ---
+@app.get("/services")
+def services_redirect():
+    return redirect("/", code=301)
+
+
+@app.get("/free-lesson")
+def free_lesson_redirect():
+    return redirect("/login#/sign-up", code=301)
+
+
+@app.get("/programs/high-performance")
+def program_hp_redirect():
+    return redirect("/programs#high-performance", code=301)
+
+
+@app.get("/programs/juniors")
+def program_juniors_redirect():
+    return redirect("/programs#juniors", code=301)
+
+
+@app.get("/programs/social")
+def program_social_redirect():
+    return redirect("/programs#social", code=301)
+
+
+@app.get("/programs/cardio-tennis")
+def program_cardio_redirect():
+    return redirect("/programs#cardio", code=301)
 
 
 # --- Blog (build_blog.py output) ---
@@ -420,6 +429,17 @@ def shared_asset(filename: str):
     return send_file(candidate)
 
 
+@app.get("/img/<path:filename>")
+def img_asset(filename: str):
+    """Optimized public-site imagery (frontend/img/*). Path-traversal guarded; streamed."""
+    if ".." in filename or filename.startswith("/") or filename.startswith("\\"):
+        abort(404)
+    candidate = os.path.normpath(os.path.join(IMG_DIR, filename))
+    if not candidate.startswith(os.path.normpath(IMG_DIR)) or not os.path.isfile(candidate):
+        abort(404)
+    return send_file(candidate)
+
+
 @app.get("/favicon.svg")
 def favicon_svg():
     return _html("favicon.svg")
@@ -448,14 +468,9 @@ def og_image(filename: str):
 # Public marketing routes for the sitemap (loc, changefreq, priority).
 _MARKETING_URLS = [
     ("/", "weekly", "1.0"),
-    ("/services", "monthly", "0.9"),
     ("/coaches", "monthly", "0.9"),
-    ("/programs/high-performance", "monthly", "0.8"),
-    ("/programs/juniors", "monthly", "0.8"),
-    ("/programs/cardio-tennis", "monthly", "0.8"),
-    ("/programs/social", "monthly", "0.7"),
+    ("/programs", "monthly", "0.8"),
     ("/pricing", "monthly", "0.8"),
-    ("/free-lesson", "monthly", "0.7"),
     ("/blog", "weekly", "0.7"),
     ("/contact", "yearly", "0.4"),
     ("/careers", "monthly", "0.4"),

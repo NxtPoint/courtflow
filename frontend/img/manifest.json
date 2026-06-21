@@ -1,0 +1,131 @@
+{
+  "generated": "public-site v2",
+  "images": {
+    "hero-splash-640.webp": {
+      "w": 640,
+      "bytes": 46794,
+      "src": "splash.jpeg",
+      "use": "homepage hero (cinematic), srcset"
+    },
+    "hero-splash-1024.webp": {
+      "w": 1024,
+      "bytes": 102738,
+      "src": "splash.jpeg",
+      "use": "homepage hero (cinematic), srcset"
+    },
+    "hero-splash-1600.webp": {
+      "w": 1600,
+      "bytes": 197784,
+      "src": "splash.jpeg",
+      "use": "homepage hero (cinematic), srcset"
+    },
+    "hero-splash-1920.webp": {
+      "w": 1920,
+      "bytes": 250786,
+      "src": "splash.jpeg",
+      "use": "homepage hero (cinematic), srcset"
+    },
+    "hero-splash.webp": {
+      "w": 1600,
+      "src": "splash.jpeg",
+      "use": "hero default"
+    },
+    "coach-neville.webp": {
+      "w": 700,
+      "h": 700,
+      "bytes": 31690,
+      "src": "Neville_edited.jpg",
+      "use": "founder portrait (Coaches page + home preview)"
+    },
+    "coach-ross.webp": {
+      "w": 700,
+      "h": 700,
+      "bytes": 32368,
+      "src": "Ross2.jpg",
+      "use": "founder portrait (Coaches page + home preview)"
+    },
+    "coach-allon.webp": {
+      "w": 600,
+      "h": 600,
+      "bytes": 19196,
+      "src": "Allon.JPG",
+      "use": "coach carousel card"
+    },
+    "coach-colbert.webp": {
+      "w": 600,
+      "h": 600,
+      "bytes": 30024,
+      "src": "Colbert.png",
+      "use": "coach carousel card"
+    },
+    "coach-dejan.webp": {
+      "w": 600,
+      "h": 600,
+      "bytes": 108858,
+      "src": "Dejan serve.jpg",
+      "use": "coach carousel card"
+    },
+    "coach-dudley.webp": {
+      "w": 600,
+      "h": 600,
+      "bytes": 45004,
+      "src": "dudley.png",
+      "use": "coach carousel card"
+    },
+    "coach-terka.webp": {
+      "w": 600,
+      "h": 600,
+      "bytes": 7870,
+      "src": "Terka.jpg",
+      "use": "coach carousel card"
+    },
+    "club-clay.webp": {
+      "w": 1200,
+      "bytes": 147510,
+      "src": "launch/PHOTO-2024-11-16-20-01-17.jpg",
+      "use": "homepage gallery + section photo"
+    },
+    "club-courts.webp": {
+      "w": 1200,
+      "bytes": 110404,
+      "src": "launch/PHOTO-2024-11-17-10-18-49.jpg",
+      "use": "homepage gallery + section photo"
+    },
+    "club-juniors.webp": {
+      "w": 1200,
+      "bytes": 354380,
+      "src": "launch/PHOTO-2024-11-17-10-17-26 (1).jpg",
+      "use": "homepage gallery + section photo"
+    },
+    "club-singles.webp": {
+      "w": 1200,
+      "bytes": 139464,
+      "src": "launch/PHOTO-2024-11-17-10-19-54 (1).jpg",
+      "use": "homepage gallery + section photo"
+    },
+    "club-house.webp": {
+      "w": 1200,
+      "bytes": 208134,
+      "src": "launch/PHOTO-2024-11-17-10-19-57 (1).jpg",
+      "use": "homepage gallery + section photo"
+    },
+    "club-sign.webp": {
+      "w": 1200,
+      "bytes": 30016,
+      "src": "launch/PHOTO-2024-11-17-10-19-58.jpg",
+      "use": "homepage gallery + section photo"
+    },
+    "logo.webp": {
+      "w": 480,
+      "bytes": 8124,
+      "src": "Next Point Tennis Centre Logo.jpg",
+      "use": "brand (logo has white bg \u2014 transparent SVG/PNG preferred for nav)"
+    },
+    "ball-mark.webp": {
+      "w": 240,
+      "bytes": 12364,
+      "src": "Next Point Tennis Ball.jpg",
+      "use": "brand (logo has white bg \u2014 transparent SVG/PNG preferred for nav)"
+    }
+  }
+}

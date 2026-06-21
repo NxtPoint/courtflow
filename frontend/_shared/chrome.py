@@ -17,13 +17,12 @@ NAV_MARKER = "<!--#include nav-->"
 FOOTER_MARKER = "<!--#include footer-->"
 
 # Public marketing nav links (label, href). Clean URLs from docs/07 §3.
+# Lean public nav (docs/public-site/03). Services live behind sign-up; the nav
+# sells the story and pushes the free trial.
 _NAV_LINKS = [
-    ("Courts", "/book/court"),
-    ("Coaching", "/coaches"),
-    ("Programs", "/programs/high-performance"),
-    ("Classes", "/programs/cardio-tennis"),
+    ("Coaches", "/coaches"),
+    ("Programs", "/programs"),
     ("Pricing", "/pricing"),
-    ("Blog", "/blog"),
     ("Contact", "/contact"),
 ]
 
@@ -48,7 +47,8 @@ def nav_html(b: "Branding") -> str:
     <a href="/" class="cf-logo">{_logo(b)}</a>
     <div class="cf-nav-links">{links}</div>
     <div class="cf-nav-right">
-      <a href="/login" class="cf-nav-cta">Sign in</a>
+      <a href="/login" class="cf-nav-signin">Sign in</a>
+      <a href="/login#/sign-up" class="cf-nav-cta cf-nav-cta--accent">Start free</a>
       <button class="cf-nav-toggle" aria-label="Toggle menu" onclick="document.querySelector('.cf-nav-links').classList.toggle('open')">&#9776;</button>
     </div>
   </div>
@@ -65,18 +65,18 @@ def footer_html(b: "Branding") -> str:
       <p>Court booking, coaching and classes at {b.city or 'our club'}. Book a court, a lesson with a named coach, or join Cardio Tennis and junior squads.</p>
       <p style="margin-top:10px">{addr}</p>
     </div>
-    <div class="cf-footer-col"><h5>Book</h5><ul>
-      <li><a href="/book/court">Book a court</a></li>
-      <li><a href="/coaches">Book a lesson</a></li>
-      <li><a href="/programs/cardio-tennis">Cardio Tennis</a></li>
-      <li><a href="/programs/juniors">Junior squads</a></li>
-      <li><a href="/free-lesson">Free lesson</a></li>
-    </ul></div>
-    <div class="cf-footer-col"><h5>Club</h5><ul>
-      <li><a href="/services">Our courts</a></li>
-      <li><a href="/programs/high-performance">High Performance</a></li>
+    <div class="cf-footer-col"><h5>Explore</h5><ul>
+      <li><a href="/coaches">Coaches</a></li>
+      <li><a href="/programs">Programs</a></li>
       <li><a href="/pricing">Pricing</a></li>
+      <li><a href="https://www.ten-fifty5.com" target="_blank" rel="noopener">Ten-Fifty5 AI</a></li>
+      <li><a href="/blog">Blog</a></li>
       <li><a href="/careers">Careers</a></li>
+    </ul></div>
+    <div class="cf-footer-col"><h5>Get started</h5><ul>
+      <li><a href="/login#/sign-up">Start your free week</a></li>
+      <li><a href="/login">Sign in</a></li>
+      <li><a href="/contact">Contact</a></li>
       <li><a href="mailto:{b.email}">{b.email}</a></li>
       <li><a href="tel:{b.phone.replace(' ', '')}">{b.phone}</a></li>
     </ul></div>

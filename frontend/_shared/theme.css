@@ -231,3 +231,154 @@ a.cf-card:hover, .cf-card--hover:hover {
  * Use the brand palette via getComputedStyle to read --primary/--accent so
  * charts re-theme per club automatically. */
 .cf-chart { width: 100%; min-height: 240px; }
+
+/* =====================================================================
+ * Public-site v2 additions (approved direction — docs/public-site/).
+ * Additive only. Reuses the brand tokens above. Premium/immersive:
+ * cinematic hero, full-width "experience" sections, bands, cockpit
+ * showcase, founders, quotes, carousels, scroll-reveal.
+ * ===================================================================== */
+
+/* Scroll reveal (JS adds .in). Reduced-motion safe. */
+.cf-reveal { opacity: 0; transform: translateY(28px); transition: opacity .7s cubic-bezier(.2,.7,.2,1), transform .7s cubic-bezier(.2,.7,.2,1); }
+.cf-reveal.in { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .cf-reveal { opacity: 1; transform: none; transition: none; } .cf-kb { animation: none !important; } }
+
+/* Cinematic hero — image is a real <img> (LCP), gradient over it. */
+.cf-hero--cinematic { position: relative; min-height: 90vh; display: flex; align-items: flex-end; overflow: hidden; color: #fff; border-radius: 0; }
+.cf-hero-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
+.cf-kb { animation: cf-kb 26s ease-in-out infinite alternate; }
+@keyframes cf-kb { from { transform: scale(1.02); } to { transform: scale(1.16); } }
+.cf-hero-grade { position: absolute; inset: 0; z-index: 1; background:
+  linear-gradient(180deg, rgba(8,67,31,.5) 0%, rgba(8,67,31,.12) 32%, rgba(8,67,31,.5) 70%, rgba(6,40,20,.95) 100%),
+  linear-gradient(115deg, rgba(8,67,31,.78), rgba(14,122,71,.22)); }
+/* Scoped to the cinematic hero so it never redefines the shared .cf-hero-in
+ * (which app.css/portal also use) — cross-lane contract: additive only. */
+.cf-hero--cinematic .cf-hero-in { position: relative; z-index: 2; width: 100%; padding: 120px 0 74px; }
+.cf-hero--cinematic h1 { color: #fff; font-size: clamp(2.9rem,7.4vw,5.4rem); font-weight: 800; margin: 20px 0 18px; max-width: 14ch; text-shadow: 0 2px 30px rgba(0,0,0,.25); }
+.cf-hero--cinematic h1 em { font-style: normal; color: var(--accent); }
+.cf-hero--cinematic p { color: rgba(255,255,255,.94); font-size: clamp(1.05rem,1.7vw,1.3rem); max-width: 560px; margin-bottom: 30px; }
+.cf-trust { display: flex; gap: 30px; flex-wrap: wrap; margin-top: 40px; padding-top: 26px; border-top: 1px solid rgba(255,255,255,.22); }
+.cf-trust div { font-size: .9rem; color: rgba(255,255,255,.85); font-weight: 600; }
+.cf-trust b { display: block; font-size: 1.5rem; font-weight: 800; color: #fff; letter-spacing: -.02em; }
+.cf-trust b .lm { color: var(--accent); }
+
+/* Conversion / utility bands */
+.cf-band { padding: 30px 0; }
+.cf-band-in { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+.cf-band h3 { font-size: clamp(1.3rem,2.6vw,1.85rem); font-weight: 800; }
+.cf-band--lime { background: linear-gradient(100deg, var(--accent), #d8f17e); color: #21300A; }
+.cf-band--lime p { color: #2c3d10; font-weight: 600; }
+.cf-band--green { background: linear-gradient(120deg, var(--green-700), var(--primary)); color: #fff; text-align: center; }
+.cf-band--green h2 { color: #fff; }
+.cf-band--green p { color: rgba(255,255,255,.85); }
+
+/* Full-width "experience" section (services etc.) — photo + overlaid text. */
+.cf-exp { position: relative; color: #fff; overflow: hidden; }
+.cf-exp-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
+.cf-exp-grade { position: absolute; inset: 0; z-index: 1; background: linear-gradient(90deg, rgba(6,40,20,.94) 0%, rgba(8,67,31,.72) 45%, rgba(8,67,31,.22) 100%); }
+.cf-exp--right .cf-exp-grade { background: linear-gradient(270deg, rgba(6,40,20,.94) 0%, rgba(8,67,31,.72) 45%, rgba(8,67,31,.22) 100%); }
+.cf-exp-in { position: relative; z-index: 2; padding: 112px 0; max-width: 560px; }
+.cf-exp--right .cf-exp-in { margin-left: auto; text-align: right; }
+.cf-exp--right .cf-exp-in .cf-eyebrow { flex-direction: row-reverse; }
+.cf-exp h2 { color: #fff; font-size: clamp(1.9rem,4.2vw,3rem); font-weight: 800; margin: 16px 0 14px; }
+.cf-exp p { color: rgba(255,255,255,.9); font-size: 1.1rem; margin-bottom: 24px; }
+.cf-exp .cf-eyebrow { color: var(--accent); }
+.cf-exp .cf-eyebrow::before { background: var(--accent); }
+.cf-exp-num { font-size: .8rem; font-weight: 800; letter-spacing: .24em; color: var(--accent); }
+
+/* Cockpit showcase (split) + faux device */
+.cf-showcase { display: grid; grid-template-columns: 1fr 1.05fr; gap: 56px; align-items: center; }
+.cf-checks { list-style: none; margin-top: 22px; }
+.cf-checks li { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 13px; font-weight: 600; color: #1c3327; }
+.cf-checks li::before { content: "✓"; flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #21300A; font-weight: 800; font-size: .85rem; display: grid; place-items: center; margin-top: 1px; }
+.cf-device { background: #fff; border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); overflow: hidden; }
+.cf-device-bar { display: flex; gap: 6px; padding: 13px 16px; background: #F0F4F1; border-bottom: 1px solid var(--line); }
+.cf-device-bar span { width: 11px; height: 11px; border-radius: 50%; background: #cdd8d1; }
+.cf-device-body { padding: 22px; }
+.cf-device-kpis { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin: 6px 0 16px; }
+.cf-device-kpi { background: #F7FAF8; border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.cf-device-kpi .n { font-size: 1.5rem; font-weight: 800; color: var(--primary); letter-spacing: -.02em; }
+.cf-device-kpi .l { font-size: .74rem; color: var(--muted); font-weight: 600; }
+.cf-device-bars { display: flex; align-items: flex-end; gap: 10px; height: 110px; padding: 14px; background: #F7FAF8; border: 1px solid var(--line); border-radius: 12px; }
+.cf-device-bars i { flex: 1; background: linear-gradient(180deg, var(--accent), var(--primary)); border-radius: 6px 6px 0 0; }
+
+/* Founders */
+.cf-founders { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.cf-fc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-sm); transition: transform .2s, box-shadow .2s; }
+.cf-fc:hover { transform: translateY(-4px); box-shadow: var(--shadow); }
+.cf-fc-top { display: flex; gap: 18px; padding: 24px; align-items: center; background: linear-gradient(180deg,#fff,#f3f8f4); }
+.cf-fc-top img { width: 108px; height: 108px; border-radius: 16px; object-fit: cover; flex: none; box-shadow: var(--shadow-sm); }
+.cf-fc h3 { font-size: 1.5rem; font-weight: 800; margin-top: 5px; }
+.cf-fc-body { padding: 0 24px 24px; }
+.cf-fc-body p { color: var(--muted); font-size: .98rem; margin-bottom: 14px; }
+.cf-fc-meta { display: flex; gap: 18px; flex-wrap: wrap; font-size: .8rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; }
+.cf-fc-meta b { color: var(--ink); }
+
+/* Quotes */
+.cf-quotes { display: grid; grid-template-columns: repeat(3,1fr); gap: 22px; }
+.cf-q { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 26px; box-shadow: var(--shadow-sm); }
+.cf-q .st { color: #f4b400; letter-spacing: 2px; margin-bottom: 10px; }
+.cf-q h4 { font-size: 1.05rem; margin-bottom: 8px; }
+.cf-q p { color: var(--muted); font-size: .95rem; margin-bottom: 16px; }
+.cf-q .who { font-weight: 700; font-size: .9rem; }
+
+/* Dark Ten-Fifty5 band */
+.cf-band--tenfifty5 { background: radial-gradient(120% 120% at 80% 0%, #143a27 0%, #0b1712 55%, #070d0a 100%); color: #fff; position: relative; overflow: hidden; }
+.cf-band--tenfifty5::after { content: ""; position: absolute; top: -30%; right: -10%; width: 60%; height: 120%; background: radial-gradient(closest-side, rgba(200,232,92,.16), transparent 70%); }
+.cf-tf-in { position: relative; z-index: 2; display: grid; grid-template-columns: 1.1fr 1fr; gap: 56px; align-items: center; }
+.cf-band--tenfifty5 h2 { color: #fff; font-size: clamp(1.9rem,3.8vw,2.7rem); font-weight: 800; margin: 16px 0 16px; }
+.cf-band--tenfifty5 p { color: rgba(255,255,255,.78); font-size: 1.08rem; margin-bottom: 26px; max-width: 48ch; }
+.cf-tf-kicker { font-weight: 800; letter-spacing: .16em; font-size: .9rem; color: var(--accent); }
+.cf-tf-card { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.12); border-radius: var(--radius-lg); padding: 22px; backdrop-filter: blur(6px); }
+.cf-tf-card .ct { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.cf-tf-card .ct b { font-size: .8rem; letter-spacing: .06em; color: rgba(255,255,255,.7); text-transform: uppercase; }
+.cf-tf-card .up { color: var(--accent); font-weight: 800; font-size: .86rem; }
+.cf-tf-kpis { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-top: 16px; }
+.cf-tf-kpis div { background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); border-radius: 12px; padding: 12px; text-align: center; }
+.cf-tf-kpis .n { font-size: 1.35rem; font-weight: 800; color: var(--accent); }
+.cf-tf-kpis .l { font-size: .66rem; color: rgba(255,255,255,.6); text-transform: uppercase; letter-spacing: .06em; }
+
+/* Carousel (gallery + coaches) — scroll-snap track + arrow buttons. */
+.cf-carousel { position: relative; }
+.cf-track { display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; -webkit-overflow-scrolling: touch; padding: 4px; scrollbar-width: none; }
+.cf-track::-webkit-scrollbar { display: none; }
+.cf-slide { scroll-snap-align: start; flex: 0 0 auto; }
+.cf-gallery-slide { width: 380px; max-width: 82vw; height: 280px; border-radius: var(--radius); overflow: hidden; }
+.cf-gallery-slide img { width: 100%; height: 100%; object-fit: cover; transition: transform .5s; }
+.cf-gallery-slide:hover img { transform: scale(1.06); }
+.cf-carousel-btns { display: flex; gap: 10px; margin-top: 18px; }
+.cf-cbtn { width: 44px; height: 44px; border-radius: 50%; border: 1.5px solid var(--line); background: var(--surface); color: var(--primary); font-size: 1.2rem; cursor: pointer; display: grid; place-items: center; transition: .15s; }
+.cf-cbtn:hover { border-color: var(--primary); background: var(--primary-bg); }
+/* Coach card (carousel) */
+.cf-coach-card { width: 260px; max-width: 80vw; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-sm); }
+.cf-coach-card img { width: 100%; height: 240px; object-fit: cover; }
+.cf-coach-card .body { padding: 16px 18px; }
+.cf-coach-card h4 { font-size: 1.1rem; margin: 4px 0 4px; }
+.cf-coach-card p { color: var(--muted); font-size: .88rem; margin-bottom: 10px; }
+
+/* Section heading helper */
+.cf-head { max-width: 640px; margin-bottom: 48px; }
+.cf-head--center { margin-left: auto; margin-right: auto; text-align: center; }
+.cf-head--center .cf-eyebrow { justify-content: center; }
+.cf-head h2 { font-size: clamp(1.9rem,4vw,2.8rem); font-weight: 800; margin: 16px 0 12px; }
+.cf-head p { color: var(--muted); font-size: 1.06rem; }
+
+@media (max-width: 880px) {
+  .cf-showcase, .cf-tf-in { grid-template-columns: 1fr; gap: 34px; }
+  .cf-founders, .cf-quotes { grid-template-columns: 1fr; }
+  .cf-exp--right .cf-exp-in { margin-left: 0; text-align: left; }
+  .cf-exp--right .cf-exp-in .cf-eyebrow { flex-direction: row; }
+}
+@media (max-width: 720px) {
+  .cf-hero--cinematic { min-height: 86vh; }
+  .cf-hero--cinematic .cf-hero-in { padding-top: 96px; }
+  .cf-exp-in { padding: 80px 0; }
+}
+
+/* Nav helpers for the two-CTA right side (Sign in + Start free). */
+.cf-nav-signin { color: var(--primary); font-weight: 700; font-size: .92rem; padding: 9px 12px; white-space: nowrap; }
+.cf-nav-signin:hover { color: var(--primary-d); text-decoration: none; }
+.cf-nav-cta--accent { background: var(--accent); color: #21300A !important; }
+.cf-nav-cta--accent:hover { background: var(--accent-d); }
+@media (max-width: 520px) { .cf-nav-signin { display: none; } }

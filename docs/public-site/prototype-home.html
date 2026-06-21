@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<!-- PROTOTYPE / VISUAL SOURCE OF TRUTH for the public-site redesign.
+     Approved direction (v2). Claude Code: match this aesthetic. Lift the CSS into
+     frontend/_shared/theme.css as the new cf-* components (02-design-system-and-hero.md),
+     and the markup into frontend/marketing/home.html. Images are the optimized assets in
+     frontend/img/ (served at /img/...). Stock photos via Unsplash have onerror fallbacks to
+     real /img/ photos. Keep it fast: preload the hero, lazy-load the rest. -->
+<html lang="en-ZA"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>NextPoint Tennis — homepage v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{--g:#0E7A47;--gd:#0B5C36;--g7:#08431F;--lime:#C8E85C;--limed:#BFE23F;--ink:#10231A;--bg:#F5F8F6;--sf:#fff;--line:#E2E9E5;--mut:#5F7268;--maxw:1200px;--sh:0 18px 50px -22px rgba(16,35,26,.45);--shs:0 1px 3px rgba(16,35,26,.08)}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{font-family:Inter,system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink);line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+img{max-width:100%;display:block}
+h1,h2,h3{letter-spacing:-.025em;line-height:1.04}
+a{text-decoration:none;color:inherit}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px}
+.sec{padding:96px 0}
+.eyebrow{display:inline-flex;align-items:center;gap:10px;font-size:.74rem;font-weight:800;text-transform:uppercase;letter-spacing:.18em;color:var(--g)}
+.eyebrow::before{content:"";width:26px;height:2px;background:var(--lime)}
+.eyebrow.lt{color:var(--lime)}.eyebrow.lt::before{background:var(--lime)}
+.btn{display:inline-flex;align-items:center;gap:9px;padding:15px 30px;border-radius:999px;font-weight:800;font-size:1rem;border:1.6px solid transparent;cursor:pointer;transition:.18s;white-space:nowrap}
+.btn:active{transform:translateY(1px)}
+.b-lime{background:var(--lime);color:#21300A}.b-lime:hover{background:var(--limed);box-shadow:0 10px 26px -8px rgba(200,232,92,.7)}
+.b-green{background:var(--g);color:#fff}.b-green:hover{background:var(--gd)}
+.b-ghost{background:transparent;color:#fff;border-color:rgba(255,255,255,.55)}.b-ghost:hover{background:rgba(255,255,255,.14)}
+.b-dark{background:var(--ink);color:#fff}.b-dark:hover{background:#000}
+.reveal{opacity:0;transform:translateY(28px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+.reveal.in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}.kb{animation:none!important}}
+.preview{position:fixed;top:0;left:0;right:0;z-index:99;background:#10231A;color:#C8E85C;font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;text-align:center;padding:5px;font-weight:700}
+/* nav */
+nav{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.86);backdrop-filter:saturate(1.4) blur(12px);border-bottom:1px solid var(--line)}
+.nav-in{max-width:var(--maxw);margin:0 auto;padding:0 28px;height:70px;display:flex;align-items:center;justify-content:space-between;gap:20px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:900;font-size:1.2rem;letter-spacing:-.02em}
+.dot{width:22px;height:22px;border-radius:50%;background:radial-gradient(circle at 32% 30%,#e7f59a,var(--lime));box-shadow:inset -3px -3px 0 rgba(0,0,0,.07)}
+.nlinks{display:flex;gap:4px}
+.nlinks a{color:var(--mut);font-weight:600;font-size:.92rem;padding:9px 14px;border-radius:999px;transition:.15s}
+.nlinks a:hover{color:var(--gd);background:#E8F4EE}
+.nr{display:flex;gap:10px;align-items:center}
+.si{color:var(--g);font-weight:700;font-size:.92rem;padding:10px 14px}
+.sf{background:var(--lime);color:#21300A;font-weight:800;padding:10px 20px;border-radius:999px;font-size:.92rem;transition:.15s}.sf:hover{background:var(--limed)}
+@media(max-width:880px){.nlinks{display:none}.si{display:none}}
+/* hero */
+.hero{position:relative;min-height:92vh;display:flex;align-items:flex-end;overflow:hidden;color:#fff}
+.hero .bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}
+.hero .kb{animation:kb 26s ease-in-out infinite alternate}
+@keyframes kb{from{transform:scale(1.02)}to{transform:scale(1.16)}}
+.hero .grade{position:absolute;inset:0;z-index:1;background:linear-gradient(180deg,rgba(8,67,31,.55) 0%,rgba(8,67,31,.15) 30%,rgba(8,67,31,.55) 70%,rgba(6,40,20,.95) 100%),linear-gradient(115deg,rgba(8,67,31,.8),rgba(14,122,71,.25))}
+.hero .in{position:relative;z-index:2;width:100%;padding-bottom:74px;padding-top:120px}
+.hero h1{font-size:clamp(2.9rem,7.4vw,5.4rem);font-weight:900;color:#fff;margin:20px 0 18px;max-width:14ch;text-shadow:0 2px 30px rgba(0,0,0,.25)}
+.hero h1 em{font-style:normal;color:var(--lime)}
+.hero p{font-size:clamp(1.05rem,1.7vw,1.32rem);color:rgba(255,255,255,.94);max-width:560px;margin-bottom:30px}
+.cta{display:flex;gap:13px;flex-wrap:wrap}
+.trust{display:flex;gap:30px;flex-wrap:wrap;margin-top:40px;padding-top:26px;border-top:1px solid rgba(255,255,255,.22)}
+.trust div{font-size:.92rem;color:rgba(255,255,255,.85);font-weight:600}
+.trust b{display:block;font-size:1.5rem;font-weight:900;color:#fff;letter-spacing:-.02em}
+.trust b .lm{color:var(--lime)}
+/* free band */
+.freeband{background:linear-gradient(100deg,var(--lime),#d8f17e);color:#21300A}
+.freeband .wrap{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:30px 28px;flex-wrap:wrap}
+.freeband h3{font-size:clamp(1.3rem,2.6vw,1.8rem);font-weight:900}
+.freeband p{font-weight:600;opacity:.85;font-size:.98rem}
+/* section heads */
+.head{max-width:640px;margin-bottom:54px}
+.head h2{font-size:clamp(1.9rem,4vw,2.9rem);font-weight:800;margin:16px 0 14px}
+.head p{color:var(--mut);font-size:1.08rem}
+.center{margin-left:auto;margin-right:auto;text-align:center}.center .eyebrow{justify-content:center}
+/* feature rows */
+.frow{display:grid;grid-template-columns:1fr 1fr;gap:54px;align-items:center;margin-bottom:90px}
+.frow:last-child{margin-bottom:0}
+.frow .media{position:relative;border-radius:22px;overflow:hidden;box-shadow:var(--sh);aspect-ratio:4/3}
+.frow .media img{width:100%;height:100%;object-fit:cover;transition:transform .6s}
+.frow:hover .media img{transform:scale(1.05)}
+.frow .num{font-size:.82rem;font-weight:800;color:var(--g);letter-spacing:.2em}
+.frow h3{font-size:clamp(1.5rem,2.8vw,2rem);font-weight:800;margin:12px 0 14px}
+.frow p{color:var(--mut);font-size:1.05rem;margin-bottom:22px}
+.frow .go{color:var(--g);font-weight:800}
+.frow.flip .txt{order:2}.frow.flip .media{order:1}
+@media(max-width:820px){.frow{grid-template-columns:1fr;gap:26px;margin-bottom:56px}.frow.flip .txt{order:2}.frow.flip .media{order:1}}
+.tag{display:inline-block;background:#E8F4EE;color:var(--gd);font-size:.72rem;font-weight:800;padding:5px 12px;border-radius:999px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+/* clay full bleed */
+.clay{position:relative;color:#fff;overflow:hidden}
+.clay .bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}
+.clay .grade{position:absolute;inset:0;z-index:1;background:linear-gradient(90deg,rgba(6,40,20,.94) 0%,rgba(8,67,31,.72) 45%,rgba(8,67,31,.25) 100%)}
+.clay .in{position:relative;z-index:2;padding:120px 0;max-width:560px}
+.clay h2{color:#fff;font-size:clamp(2rem,4.4vw,3.1rem);font-weight:900;margin:16px 0 16px}
+.clay p{color:rgba(255,255,255,.9);font-size:1.12rem;margin-bottom:26px}
+/* cockpit */
+.cock{display:grid;grid-template-columns:1fr 1.05fr;gap:56px;align-items:center}
+@media(max-width:880px){.cock{grid-template-columns:1fr;gap:34px}}
+.checks{list-style:none;margin-top:22px}
+.checks li{display:flex;gap:12px;align-items:flex-start;margin-bottom:13px;font-weight:600;color:#1c3327}
+.checks li::before{content:"✓";flex:none;width:24px;height:24px;border-radius:50%;background:var(--lime);color:#21300A;font-weight:900;font-size:.85rem;display:grid;place-items:center;margin-top:1px}
+.device{background:#fff;border:1px solid var(--line);border-radius:22px;box-shadow:var(--sh);overflow:hidden}
+.device .bar{display:flex;gap:6px;padding:13px 16px;background:#F0F4F1;border-bottom:1px solid var(--line)}
+.device .bar span{width:11px;height:11px;border-radius:50%;background:#cdd8d1}
+.dash{padding:22px}
+.dash .drow{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.dash .dt{font-weight:800;font-size:1.05rem}
+.dash .pill{font-size:.72rem;font-weight:800;color:var(--gd);background:#E8F4EE;padding:5px 12px;border-radius:999px}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px}
+.kpi{background:#F7FAF8;border:1px solid var(--line);border-radius:14px;padding:14px}
+.kpi .n{font-size:1.5rem;font-weight:900;color:var(--g);letter-spacing:-.02em}
+.kpi .l{font-size:.74rem;color:var(--mut);font-weight:600}
+.bars{display:flex;align-items:flex-end;gap:10px;height:120px;padding:14px;background:#F7FAF8;border:1px solid var(--line);border-radius:14px}
+.bars .bar2{flex:1;background:linear-gradient(180deg,var(--lime),var(--g));border-radius:6px 6px 0 0;position:relative}
+.slot{margin-top:14px;display:flex;gap:10px}
+.slot .s{flex:1;text-align:center;font-size:.74rem;font-weight:700;padding:10px 6px;border-radius:10px;border:1px solid var(--line);color:var(--mut)}
+.slot .s.on{background:var(--g);color:#fff;border-color:var(--g)}
+/* founders */
+.fgrid{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+@media(max-width:820px){.fgrid{grid-template-columns:1fr}}
+.fc{background:var(--sf);border:1px solid var(--line);border-radius:22px;overflow:hidden;box-shadow:var(--shs);transition:.2s}
+.fc:hover{transform:translateY(-4px);box-shadow:var(--sh)}
+.fc .top{display:flex;gap:18px;padding:24px;align-items:center;background:linear-gradient(180deg,#fff,#f3f8f4)}
+.fc img{width:108px;height:108px;border-radius:16px;object-fit:cover;flex:none;box-shadow:var(--shs)}
+.fc .tag2{font-size:.72rem;font-weight:800;color:var(--gd);text-transform:uppercase;letter-spacing:.1em}
+.fc h3{font-size:1.5rem;font-weight:900;margin:5px 0 0}
+.fc .body{padding:0 24px 24px}
+.fc .body p{color:var(--mut);font-size:.98rem;margin-bottom:14px}
+.fc .meta{display:flex;gap:18px;flex-wrap:wrap;font-size:.8rem;color:var(--mut);border-top:1px solid var(--line);padding-top:14px}
+.fc .meta b{color:var(--ink)}
+/* 1050 band */
+.lab{background:radial-gradient(120% 120% at 80% 0%,#143a27 0%,#0b1712 55%,#070d0a 100%);color:#fff;position:relative;overflow:hidden}
+.lab::after{content:"";position:absolute;inset:0;background:radial-gradient(closest-side,rgba(200,232,92,.16),transparent 70%);top:-30%;right:-10%;width:60%;height:120%}
+.lab .in{position:relative;z-index:2;display:grid;grid-template-columns:1.1fr 1fr;gap:56px;align-items:center}
+@media(max-width:880px){.lab .in{grid-template-columns:1fr;gap:36px}}
+.lab h2{color:#fff;font-size:clamp(1.9rem,3.8vw,2.7rem);font-weight:900;margin:16px 0 16px}
+.lab p{color:rgba(255,255,255,.78);font-size:1.08rem;margin-bottom:26px;max-width:48ch}
+.lab .two{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.lab small{color:rgba(255,255,255,.5);font-size:.82rem}
+.chartcard{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);border-radius:20px;padding:22px;backdrop-filter:blur(6px)}
+.chartcard .ct{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.chartcard .ct b{font-size:.82rem;letter-spacing:.06em;color:rgba(255,255,255,.7);text-transform:uppercase}
+.chartcard .up{color:var(--lime);font-weight:800;font-size:.86rem}
+.kpis3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}
+.kpis3 div{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:12px;text-align:center}
+.kpis3 .n{font-size:1.35rem;font-weight:900;color:var(--lime)}
+.kpis3 .l{font-size:.66rem;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:.06em}
+.logo2{font-weight:900;letter-spacing:.16em;font-size:.9rem;color:var(--lime)}
+/* quotes */
+.qgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+@media(max-width:820px){.qgrid{grid-template-columns:1fr}}
+.q{background:var(--sf);border:1px solid var(--line);border-radius:18px;padding:26px;box-shadow:var(--shs)}
+.q .st{color:#f4b400;letter-spacing:2px;margin-bottom:10px}
+.q h4{font-size:1.05rem;margin-bottom:8px}
+.q p{color:var(--mut);font-size:.95rem;margin-bottom:16px}
+.q .who{font-weight:700;font-size:.9rem}
+/* gallery */
+.gal{display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:180px;gap:14px}
+@media(max-width:820px){.gal{grid-template-columns:1fr 1fr;grid-auto-rows:150px}}
+.gal a{border-radius:16px;overflow:hidden;display:block}
+.gal img{width:100%;height:100%;object-fit:cover;transition:transform .5s}
+.gal a:hover img{transform:scale(1.07)}
+.gal .w2{grid-column:span 2}.gal .h2{grid-row:span 2}
+/* final */
+.final{background:linear-gradient(120deg,var(--g7),var(--g));color:#fff;text-align:center;border-radius:0}
+.final .in{padding:100px 0}
+.final h2{color:#fff;font-size:clamp(2rem,4.4vw,3rem);font-weight:900;margin-bottom:14px}
+.final p{color:rgba(255,255,255,.85);font-size:1.12rem;margin-bottom:28px}
+/* footer */
+footer{background:#07120c;color:rgba(255,255,255,.75);padding:64px 0 30px}
+.fcols{display:grid;grid-template-columns:2fr 1fr 1fr;gap:40px}
+@media(max-width:720px){.fcols{grid-template-columns:1fr}}
+footer h5{color:#fff;text-transform:uppercase;font-size:.74rem;letter-spacing:.12em;margin-bottom:14px}
+footer a{display:block;margin-bottom:9px;font-size:.92rem;color:rgba(255,255,255,.7)}footer a:hover{color:var(--lime)}
+footer .fb p{font-size:.92rem;color:rgba(255,255,255,.6);max-width:330px;margin-top:12px;line-height:1.7}
+.fbot{border-top:1px solid rgba(255,255,255,.12);margin-top:40px;padding-top:22px;font-size:.82rem;color:rgba(255,255,255,.45)}
+</style></head>
+<body>
+<div class="preview">BUILD REFERENCE — NextPoint home v2 (images served from /img/*.webp on the live site)</div>
+
+<nav><div class="nav-in">
+  <a class="logo"><span class="dot"></span>NextPoint Tennis</a>
+  <div class="nlinks"><a href="#">Coaches</a><a href="#">Programs</a><a href="#">Pricing</a><a href="#">Contact</a></div>
+  <div class="nr"><a class="si" href="#">Sign in</a><a class="sf" href="#">Start free</a></div>
+</div></nav>
+
+<header class="hero">
+  <img class="bg kb" src="https://images.unsplash.com/photo-1595435934249-5df7ed86e1c0?auto=format&fit=crop&w=2000&q=72" alt="Tennis court at NextPoint" onerror="this.onerror=null;this.src='/img/hero-splash-1600.webp'">
+  <div class="grade"></div>
+  <div class="in wrap">
+    <span class="eyebrow lt">Killarney Country Club · Houghton, Johannesburg</span>
+    <h1>Your club.<br><em>One tap away.</em></h1>
+    <p>Eight resurfaced hard courts and the only clay court in Gauteng — with ATP-level coaching, squads and socials. Book it all from your phone.</p>
+    <div class="cta"><a class="btn b-lime" href="#">Start your free week</a><a class="btn b-ghost" href="#">Sign in</a></div>
+    <div class="trust">
+      <div><b>★ <span class="lm">5.0</span></b>from members</div>
+      <div><b>1,200<span class="lm">+</span></b>lessons delivered</div>
+      <div><b><span class="lm">Only</span> clay</b>court in Gauteng</div>
+    </div>
+  </div>
+</header>
+
+<div class="freeband"><div class="wrap">
+  <div><h3>Your first week is on us.</h3><p>7 days of full access, free — book courts, try a class, see live coach availability. No commitment.</p></div>
+  <a class="btn b-green" href="#">Start your free week →</a>
+</div></div>
+
+<section class="sec"><div class="wrap">
+  <div class="head reveal"><span class="eyebrow">Everything NextPoint</span><h2>One club. Everything in one place.</h2><p>Courts, coaching, programs and membership — described here, booked in your member cockpit.</p></div>
+
+  <div class="frow reveal"><div class="txt"><span class="tag">Courts</span><div class="num">01</div><h3>Nine courts, instant booking</h3><p>Eight resurfaced hard courts plus the premium clay court. See live availability and book in seconds — no calls, no waiting.</p><a class="btn b-green" href="#">Start your free week</a></div>
+    <div class="media"><img loading="lazy" src="/img/club-courts.webp" alt="Hard courts"></div></div>
+
+  <div class="frow flip reveal"><div class="txt"><span class="tag">Coaching</span><div class="num">02</div><h3>Lessons with named, ATP-level coaches</h3><p>Pick your coach, see their real diary, and book a 1:1 or group lesson. Coached by the best — from tour pros to junior specialists.</p><a class="btn b-green" href="#">Meet the coaches</a></div>
+    <div class="media"><img loading="lazy" src="https://images.unsplash.com/photo-1530915534664-4ac6423816f6?auto=format&fit=crop&w=1400&q=70" alt="Coaching" onerror="this.onerror=null;this.src='/img/club-singles.webp'"></div></div>
+
+  <div class="frow reveal"><div class="txt"><span class="tag">Programs</span><div class="num">03</div><h3>Squads, Cardio Tennis &amp; socials</h3><p>High Performance, junior beginner &amp; intermediate squads, Cardio Tennis and weekend socials — with enrolment, rosters and waitlists.</p><a class="btn b-green" href="#">See programs</a></div>
+    <div class="media"><img loading="lazy" src="/img/club-juniors.webp" alt="Junior squads"></div></div>
+
+  <div class="frow flip reveal"><div class="txt"><span class="tag">Membership</span><div class="num">04</div><h3>Go unlimited</h3><p>Members get free court bookings and member pricing across the club. Manage it all — including the whole family — from one login.</p><a class="btn b-green" href="#">See pricing</a></div>
+    <div class="media"><img loading="lazy" src="https://images.unsplash.com/photo-1622279457486-62dcc4a431d6?auto=format&fit=crop&w=1400&q=70" alt="Membership" onerror="this.onerror=null;this.src='/img/club-house.webp'"></div></div>
+</div></section>
+
+<section class="clay">
+  <img class="bg" loading="lazy" src="/img/club-clay.webp" alt="Clay court">
+  <div class="grade"></div>
+  <div class="wrap"><div class="in reveal">
+    <span class="eyebrow lt">The clay experience</span>
+    <h2>The only clay court experience in Gauteng.</h2>
+    <p>Step onto the surface the pros slide on — European feel, match-ready bounce, and a genuine tennis bucket-list tick. Right here in Houghton.</p>
+    <a class="btn b-lime" href="#">Start your free week</a>
+  </div></div>
+</section>
+
+<section class="sec"><div class="wrap"><div class="cock">
+  <div class="reveal"><span class="eyebrow">Your cockpit</span>
+    <h2 style="font-size:clamp(1.9rem,4vw,2.7rem);font-weight:800;margin:16px 0 12px">Everything NextPoint, in your pocket.</h2>
+    <p style="color:var(--mut);font-size:1.08rem">Signing up takes a minute — then your whole club is one tap away. No more phone calls or WhatsApp back-and-forth.</p>
+    <ul class="checks">
+      <li>Book courts, lessons &amp; classes in seconds</li>
+      <li>Reschedule or cancel yourself — anytime</li>
+      <li>Manage your whole family from one login</li>
+      <li>Buy packs or go unlimited with membership</li>
+      <li>Pay securely online, or at the desk</li>
+      <li>See every coach's live availability</li>
+    </ul>
+    <a class="btn b-green" href="#" style="margin-top:24px">Start your free week</a>
+  </div>
+  <div class="device reveal">
+    <div class="bar"><span></span><span></span><span></span></div>
+    <div class="dash">
+      <div class="drow"><div class="dt">This week</div><div class="pill">Member · Unlimited</div></div>
+      <div class="kpis"><div class="kpi"><div class="n">4</div><div class="l">Courts booked</div></div><div class="kpi"><div class="n">2</div><div class="l">Lessons</div></div><div class="kpi"><div class="n">R0</div><div class="l">Court fees</div></div></div>
+      <div class="bars"><div class="bar2" style="height:40%"></div><div class="bar2" style="height:65%"></div><div class="bar2" style="height:52%"></div><div class="bar2" style="height:88%"></div><div class="bar2" style="height:70%"></div><div class="bar2" style="height:95%"></div><div class="bar2" style="height:60%"></div></div>
+      <div class="slot"><div class="s">06:00</div><div class="s on">07:00 ✓</div><div class="s">08:00</div><div class="s">18:00</div></div>
+    </div>
+  </div>
+</div></div></section>
+
+<section class="sec" style="padding-top:0"><div class="wrap">
+  <div class="head reveal"><span class="eyebrow">Coached by the best</span><h2>Founders with real pedigree.</h2><p>People read this — and it's credible. Full bios and the wider coaching team live on the Coaches page.</p></div>
+  <div class="fgrid">
+    <div class="fc reveal"><div class="top"><img src="/img/coach-neville.webp" alt="Neville Godwin"><div><div class="tag2">Program Director</div><h3>Neville Godwin</h3></div></div>
+      <div class="body"><p>2017 ATP Coach of the Year. Has coached Kevin Anderson (to a Grand Slam final &amp; world No. 5), Hyeon Chung and Reilly Opelka — and currently coaches Alexei Popyrin on tour.</p><div class="meta"><span>Since <b>2004</b></span><span>Lang <b>English</b></span><span><b>Johannesburg</b></span></div></div></div>
+    <div class="fc reveal"><div class="top"><img src="/img/coach-ross.webp" alt="Ross Nemeth"><div><div class="tag2">Head Coach</div><h3>Ross Nemeth</h3></div></div>
+      <div class="body"><p>30+ years coaching. Has guided several juniors to National Singles &amp; Doubles titles and helped many players earn college scholarships in the USA.</p><div class="meta"><span>Since <b>1993</b></span><span>Lang <b>English</b></span><span><b>Johannesburg</b></span></div></div></div>
+  </div>
+</div></section>
+
+<section class="lab sec"><div class="wrap"><div class="in">
+  <div class="reveal"><div class="logo2">NEXTPOINT × TEN-FIFTY5</div>
+    <h2>Take your game further with AI match analysis.</h2>
+    <p>Upload a match and get point-by-point breakdowns, biomechanical stroke analysis and an AI coach trained on your data — built by the same team behind NextPoint. Your first match is free.</p>
+    <div class="two"><a class="btn b-lime" href="https://www.ten-fifty5.com" target="_blank" rel="noopener">Explore Ten-Fifty5 →</a><small>ten-fifty5.com · first match on us</small></div>
+  </div>
+  <div class="chartcard reveal">
+    <div class="ct"><b>1st serve % · 6-month trend</b><span class="up">▲ +22%</span></div>
+    <svg viewBox="0 0 320 120" width="100%" height="120" preserveAspectRatio="none">
+      <defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#C8E85C" stop-opacity=".35"/><stop offset="1" stop-color="#C8E85C" stop-opacity="0"/></linearGradient></defs>
+      <path d="M0,92 L46,86 L92,90 L138,70 L184,64 L230,44 L276,34 L320,20" fill="none" stroke="#C8E85C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M0,92 L46,86 L92,90 L138,70 L184,64 L230,44 L276,34 L320,20 L320,120 L0,120 Z" fill="url(#lg)"/>
+      <circle cx="320" cy="20" r="4.5" fill="#C8E85C"/>
+    </svg>
+    <div class="kpis3"><div><div class="n">450+</div><div class="l">Data pts / match</div></div><div><div class="n">18</div><div class="l">KPIs tracked</div></div><div><div class="n">1-2h</div><div class="l">Upload to insight</div></div></div>
+  </div>
+</div></div></section>
+
+<section class="sec"><div class="wrap">
+  <div class="head center reveal"><span class="eyebrow">What members say</span><h2>When you play here, you stay here.</h2></div>
+  <div class="qgrid">
+    <div class="q reveal"><div class="st">★★★★★</div><h4>"Friendly coaches and a great vibe"</h4><p>We joined for a few casual lessons for the kids and ended up signing up properly. The coaches are incredibly patient and the kids look forward to every session.</p><div class="who">Tarryn K</div></div>
+    <div class="q reveal"><div class="st">★★★★★</div><h4>"Best tennis courts in Joburg!"</h4><p>The facilities are top quality — these resurfaced courts are in another league. Booking is easy and the clay court is a real gem.</p><div class="who">Gareth R</div></div>
+    <div class="q reveal"><div class="st">★★★★★</div><h4>"Professional, yet personal"</h4><p>My daughter's been in junior development for six months and improved so much. Coach Ross and the team are hands-on and really care.</p><div class="who">Anita R</div></div>
+  </div>
+</div></section>
+
+<section class="sec" style="padding-top:0"><div class="wrap">
+  <div class="head reveal"><span class="eyebrow">The real NextPoint</span><h2>Lots of court. Lots of vibe.</h2></div>
+  <div class="gal reveal">
+    <a class="w2 h2" href="#"><img loading="lazy" src="/img/club-courts.webp" alt="Courts"></a>
+    <a href="#"><img loading="lazy" src="/img/club-juniors.webp" alt="Juniors"></a>
+    <a href="#"><img loading="lazy" src="/img/club-singles.webp" alt="Singles"></a>
+    <a class="w2" href="#"><img loading="lazy" src="/img/club-house.webp" alt="Clubhouse"></a>
+    <a href="#"><img loading="lazy" src="/img/club-sign.webp" alt="NextPoint sign"></a>
+    <a href="#"><img loading="lazy" src="/img/club-clay.webp" alt="Clay"></a>
+  </div>
+</div></section>
+
+<section class="final"><div class="wrap"><div class="in reveal">
+  <h2>Ready to play?</h2>
+  <p>Create your free account and your whole club is one tap away.</p>
+  <div class="cta" style="justify-content:center"><a class="btn b-lime" href="#">Start your free week</a><a class="btn b-ghost" href="#">Sign in</a></div>
+</div></div></section>
+
+<footer><div class="wrap">
+  <div class="fcols">
+    <div class="fb"><div class="logo" style="color:#fff"><span class="dot"></span>NextPoint Tennis</div><p>Court booking, ATP-level coaching and classes at Killarney Country Club, Houghton, Johannesburg. The only clay court experience in Gauteng.</p><p style="margin-top:10px">60 5th Street, Houghton Estate · 076 990 7439 · info@nextpointtennis.com</p></div>
+    <div><h5>Explore</h5><a href="#">Coaches</a><a href="#">Programs</a><a href="#">Pricing</a><a href="https://www.ten-fifty5.com" target="_blank" rel="noopener">Ten-Fifty5 AI</a><a href="#">Blog</a></div>
+    <div><h5>Get started</h5><a href="#">Start your free week</a><a href="#">Sign in</a><a href="#">Contact</a></div>
+  </div>
+  <div class="fbot">© 2026 NextPoint Tennis. All rights reserved. · Killarney Country Club, Johannesburg</div>
+</div></footer>
+
+<script>
+(function(){var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}})},{threshold:.12});
+document.querySelectorAll('.reveal').forEach(function(el){io.observe(el)});})();
+</script>
+</body></html>
