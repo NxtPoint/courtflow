@@ -12,7 +12,8 @@
     { k: "profile", t: "Club profile" },
     { k: "hours", t: "Hours" },
     { k: "courts", t: "Courts" },
-    { k: "services", t: "Services & pricing" },
+    { k: "pricing", t: "Pricing" },
+    { k: "services", t: "Services (advanced)" },
     { k: "coaches", t: "Coaches" },
     { k: "coachpay", t: "Coach pay" },
     { k: "payments", t: "Payments" },
@@ -54,6 +55,8 @@
       window.AdminUI.hours(sectionHost, d.hours || {}, { saveLabel: "Save hours" });
     } else if (state.tab === "courts") {
       window.AdminUI.courts(sectionHost, {});
+    } else if (state.tab === "pricing") {
+      window.AdminUI.pricingHome(sectionHost);
     } else if (state.tab === "services") {
       window.AdminUI.services(sectionHost, {});
     } else if (state.tab === "coaches") {
@@ -92,17 +95,9 @@
     lbl.appendChild(cb);
     lbl.appendChild(el("span", { style: "font-weight:600", text: "Accept online card payments" }));
     card.appendChild(lbl);
+    card.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:10px",
+      text: "Rates, packs and memberships now live under the Pricing tab." }));
     host.appendChild(card);
-
-    // Configurable membership term plans (label + price + duration) live under Payments.
-    var plansHost = el("div");
-    host.appendChild(plansHost);
-    window.AdminUI.membershipPlans(plansHost, {});
-
-    // Configurable session packs (token bundles) — prepaid packs across court/lesson/class.
-    var bundleHost = el("div");
-    host.appendChild(bundleHost);
-    window.AdminUI.bundlePlans(bundleHost, {});
   }
 
   window.Settings = {

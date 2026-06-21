@@ -1058,10 +1058,108 @@
     return { reload: reload };
   }
 
+  // ---------------------------------------------------------------------------
+  // COURT RATES — clean per-DURATION editor for court hire (the core PAYG config).
+  // No audience/unit jargon: every rate is audience='any', unit='per_booking', with the
+  // duration the customer actually picks. Reuses the 3-state status control. -> /products + /prices.
+  // ---------------------------------------------------------------------------
+  function courtRates(host, opts) {
+    init(); opts = opts || {};
+    UI.clear(host);
+    var card = el("div", { class: "cf-card" });
+    card.appendChild(el("h2", { text: "Court rates" }));
+    card.appendChild(el("p", { class: "cf-muted", text: "What a court costs per length of booking. These are the prices members see when they book." }));
+    var listBox = el("div", { class: "cf-list" });
+    card.appendChild(listBox);
+    host.appendChild(card);
+
+    var productId = null;
+
+    function rateRow(pr) {
+      var durI = input({ type: "number", min: 0, value: pr.duration_minutes || "", placeholder: "60", style: "max-width:80px" });
+      var amtI = input({ value: fromMinor(pr.amount_minor), placeholder: "0.00", style: "max-width:110px" });
+      var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
+      save.addEventListener("click", async function () {
+        var dur = num(durI.value);
+        if (!dur || dur < 1) { UI.toast("Enter the booking length in minutes.", "warn"); return; }
+        save.disabled = true;
+        try {
+          await window.AdminAPI.patchPrice(pr.id, { duration_minutes: dur, amount_minor: toMinor(amtI.value) });
+          UI.toast("Rate saved.", "info"); reload();
+        } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
+      });
+      var status = statusSelect(pr.status, async function (s) {
+        try { await window.AdminAPI.patchPrice(pr.id, { status: s }); UI.toast("Rate " + s + ".", "info"); reload(); }
+        catch (e) { UI.toast(UI.errMsg(e), "error"); }
+      });
+      var row = el("div", { class: "cf-item", style: "gap:6px;align-items:center;flex-wrap:wrap" }, [
+        el("div", { class: "cf-row", style: "gap:4px;align-items:center" }, [durI, el("span", { class: "cf-muted", text: "min" })]),
+        el("span", { class: "cf-muted", text: "→" }), amtI,
+        el("span", { class: "cf-spacer" }), status, save,
+      ]);
+      if ((pr.status || "active") !== "active") row.style.opacity = "0.6";
+      return row;
+    }
+
+    function renderList(products) {
+      UI.clear(listBox);
+      var court = (products || []).filter(function (p) { return p.kind === "court_booking" || p.kind === "court_hire"; })[0];
+      if (!court) {
+        listBox.appendChild(el("div", { class: "cf-empty", text: "No court service yet — add one in onboarding or Settings → Services." }));
+        return;
+      }
+      productId = court.id;
+      // Court per-duration rates only (skip any stray no-duration/legacy rows).
+      var rates = (court.prices || []).filter(function (pr) { return pr.duration_minutes != null; })
+        .sort(function (a, b) { return (a.duration_minutes || 0) - (b.duration_minutes || 0); });
+      if (!rates.length) listBox.appendChild(el("div", { class: "cf-empty", text: "No rates yet. Add your first below." }));
+      rates.forEach(function (pr) { listBox.appendChild(rateRow(pr)); });
+
+      // add-rate
+      var nDur = input({ type: "number", min: 0, placeholder: "60", style: "max-width:80px" });
+      var nAmt = input({ placeholder: "0.00", style: "max-width:110px" });
+      var add = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Add rate" });
+      add.addEventListener("click", async function () {
+        var dur = num(nDur.value);
+        if (!dur || dur < 1) { UI.toast("Enter the booking length in minutes.", "warn"); return; }
+        add.disabled = true;
+        try {
+          await window.AdminAPI.createPrice({ product_id: productId, audience: "any",
+            unit: "per_booking", duration_minutes: dur, amount_minor: toMinor(nAmt.value) });
+          UI.toast("Rate added.", "info"); reload();
+        } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { add.disabled = false; }
+      });
+      listBox.appendChild(el("div", { class: "cf-item", style: "gap:6px;align-items:center;border-top:1px dashed var(--border);flex-wrap:wrap" }, [
+        el("div", { class: "cf-row", style: "gap:4px;align-items:center" }, [nDur, el("span", { class: "cf-muted", text: "min" })]),
+        el("span", { class: "cf-muted", text: "→" }), nAmt, el("span", { class: "cf-spacer" }), add,
+      ]));
+    }
+
+    function reload() {
+      UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+      window.AdminAPI.products().then(function (r) { renderList(r.products || []); })
+        .catch(function (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+    reload();
+    return { reload: reload };
+  }
+
+  // PRICING HOME — one place for everything purchasable: court rates · session packs · memberships.
+  // (Lesson rates + lesson packs are coach-owned and live in the coach console.)
+  function pricingHome(host) {
+    init(); UI.clear(host);
+    host.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 12px",
+      text: "Everything members can buy — court rates, prepaid packs and memberships — in one place. Hide something from customers with Dormant; bring it back any time." }));
+    var rates = el("div"); host.appendChild(rates); courtRates(rates, {});
+    var packs = el("div", { style: "margin-top:18px" }); host.appendChild(packs); bundlePlans(packs, {});
+    var mem = el("div", { style: "margin-top:18px" }); host.appendChild(mem); membershipPlans(mem, {});
+  }
+
   window.AdminUI = {
     clubProfile: clubProfile, hours: hours, courts: courts,
     services: services, coaches: coaches, membershipPlans: membershipPlans,
     coachAgreements: coachAgreements, bundlePlans: bundlePlans,
+    courtRates: courtRates, pricingHome: pricingHome,
   };
 })();
 
