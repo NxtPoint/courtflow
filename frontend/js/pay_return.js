@@ -43,22 +43,33 @@
         return;
       }
 
-      // Poll order status until 'paid' / 'refunded' (webhook-driven), up to ~30s.
-      var tries = 0, maxTries = 15;
+      var receiptLink = '<a ' + BTN + ' href="/receipt.html?order=' +
+        encodeURIComponent(orderId) + '">View receipt</a> ';
+
+      // Poll order status until 'paid' / 'refunded' (webhook-driven), up to ~30s. If it's still
+      // pending part-way through, ask the server to RECONCILE — it checks Yoco directly and
+      // recovers a payment whose webhook was missed/slow (free-tier cold-start safety net).
+      var tries = 0, maxTries = 15, reconciledAt = -1;
       async function poll() {
         tries++;
         try {
           var res = await auth.apiJSON("/api/billing/yoco/order/" + encodeURIComponent(orderId));
           if (res && res.status === "paid") {
             setStatus("Payment received ✓",
-              "Your booking is confirmed. A receipt is on its way.");
-            actions('<a ' + BTN + ' href="/my.html">View my bookings</a>');
+              "Your booking is confirmed. A receipt is on its way to your inbox.");
+            actions(receiptLink + '<a ' + GHOST + ' href="/my.html">My bookings</a>');
             return;
           }
           if (res && res.status === "refunded") {
             setStatus("Payment refunded", "This order was refunded.");
-            actions('<a ' + BTN + ' href="/my.html">My bookings</a>');
+            actions(receiptLink + '<a ' + GHOST + ' href="/my.html">My bookings</a>');
             return;
+          }
+          // Still awaiting payment after a few polls → trigger one reconcile, then keep polling.
+          if (tries === 4 && reconciledAt !== tries) {
+            reconciledAt = tries;
+            try { await auth.apiJSON("/api/billing/yoco/reconcile/" + encodeURIComponent(orderId),
+              { method: "POST" }); } catch (e2) {}
           }
         } catch (e) {
           // 401/transient — fall through to the retry/timeout message.
@@ -66,8 +77,8 @@
         if (tries >= maxTries) {
           setStatus("Almost there…",
             "Your payment is processing. If it went through, your booking will appear in " +
-            "My Bookings shortly.");
-          actions('<a ' + BTN + ' href="/my.html">My bookings</a> ' +
+            "My Bookings shortly — and you can grab your receipt below.");
+          actions(receiptLink + '<a ' + GHOST + ' href="/my.html">My bookings</a> ' +
                   '<a ' + GHOST + ' href="#" onclick="location.reload();return false;">Refresh</a>');
           return;
         }

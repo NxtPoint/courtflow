@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NextPoint · Receipt</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  body { font-family: Inter, system-ui, sans-serif; color: #1f2430; margin: 0;
+    background: #f6f7f9; }
+  .r-wrap { max-width: 600px; margin: 6vh auto; padding: 0 16px; }
+  .r-card { background: #fff; border: 1px solid #e6e6ea; border-radius: 14px;
+    padding: 32px 30px; box-shadow: 0 6px 24px rgba(20,20,40,.06); }
+  .r-head { display: flex; justify-content: space-between; align-items: flex-start;
+    border-bottom: 2px solid #1f2430; padding-bottom: 14px; margin-bottom: 18px; }
+  .r-club { font-size: 1.3rem; font-weight: 700; }
+  .r-meta { text-align: right; font-size: .85rem; color: #555; line-height: 1.5; }
+  .r-meta b { color: #1f2430; }
+  h1 { font-size: 1.05rem; letter-spacing: .04em; text-transform: uppercase;
+    color: #888; margin: 0 0 14px; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0 4px; }
+  th, td { text-align: left; padding: 8px 0; font-size: .92rem;
+    border-bottom: 1px solid #eee; }
+  th { color: #888; font-weight: 600; font-size: .78rem; text-transform: uppercase; }
+  td.num, th.num { text-align: right; }
+  .r-total { display: flex; justify-content: space-between; font-size: 1.15rem;
+    font-weight: 700; padding-top: 12px; }
+  .r-refund { color: #b4232a; }
+  .r-pay { font-size: .85rem; color: #555; margin-top: 14px; line-height: 1.6; }
+  .r-chip { display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-size: .75rem; font-weight: 600; }
+  .r-chip.paid { background: #e6f6ec; color: #1a7f3c; }
+  .r-chip.refunded { background: #fdeaea; color: #b4232a; }
+  .r-actions { margin-top: 22px; display: flex; gap: 10px; }
+  .r-btn { padding: 10px 18px; border-radius: 10px; border: 0; cursor: pointer;
+    background: #1f6feb; color: #fff; font-weight: 600; text-decoration: none;
+    font-family: inherit; font-size: .92rem; }
+  .r-btn.ghost { background: #f1f3f6; color: #1f2430; }
+  .r-foot { text-align: center; color: #aaa; font-size: .78rem; margin-top: 20px; }
+  @media print {
+    body { background: #fff; }
+    .r-wrap { margin: 0; max-width: none; }
+    .r-card { border: 0; box-shadow: none; padding: 0; }
+    .r-actions { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="r-wrap">
+  <div class="r-card" id="r-card">
+    <div id="r-body"><p style="color:#888">Loading receipt…</p></div>
+  </div>
+  <div class="r-foot" id="r-foot"></div>
+</div>
+<script src="/js/auth_client.js"></script>
+<script src="/js/receipt.js"></script>
+<script>window.Receipt.start();</script>
+</body>
+</html>

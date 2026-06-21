@@ -16,6 +16,12 @@
 #                         frees the slot (diary.cancel_booking) — the "Refund & cancel" option.
 #   GET  /order/<id>      AUTH'd. Order status probe for the pay-return page (UX only; the booking
 #                         is confirmed by the webhook, not by this read).
+#   POST /reconcile/<id>  AUTH'd (payer/admin). Recover a MISSED payment: ask Yoco whether the
+#                         checkout completed and, if so, confirm via apply_payment_event
+#                         (idempotent). The pay-return page calls this when polling stays pending.
+#   GET  /receipt/<id>    (path: /api/billing/receipt/<id>) AUTH'd (payer/admin). Receipt JSON for
+#                         the printable receipt page; works for online AND desk payments.
+#   POST /api/cron/reconcile-payments   OPS-only bulk sweep of pending online orders.
 #
 # Self-serve membership (configurable TERM PLANS via the one-off checkout):
 #   POST /api/billing/membership/checkout  AUTH'd member. Body {price_id?} picks a term plan
@@ -420,3 +426,98 @@ def yoco_order_status(order_id):
             amount_minor=order.get("amount_minor"),
             currency_code=order.get("currency_code"),
         ), 200
+
+
+def _owns_or_can_view(p, order, can_fn) -> bool:
+    """The payer, or someone who can view the club's finances, may read this order."""
+    owns = bool(p.user_id and order.get("user_id") and str(order["user_id"]) == str(p.user_id))
+    return owns or can_fn(p, "view_finances", {"club_id": order["club_id"]})
+
+
+# ---------------------------------------------------------------------------
+# POST /api/billing/yoco/reconcile/<order_id> — recover a missed payment (auth'd)
+# The pay-return page calls this when polling stays 'awaiting_payment' (webhook slow/missed):
+# it asks Yoco whether the checkout actually completed and, if so, confirms the booking.
+# ---------------------------------------------------------------------------
+
+@yoco_bp.post("/api/billing/yoco/reconcile/<order_id>")
+def yoco_reconcile_order(order_id):
+    from auth import resolve_principal
+    from iam.permissions import can
+
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(error="unauthorized"), 401
+
+    from db import session_scope
+    from billing import orders as orders_repo
+    from yoco_billing import reconcile
+
+    with session_scope() as s:
+        order = orders_repo.get_order(s, order_id=order_id)
+        if not order:
+            return jsonify(error="order not found"), 404
+        if not _in_callers_club(p, order["club_id"]):
+            return jsonify(error="forbidden"), 403
+        if not _owns_or_can_view(p, order, can):
+            return jsonify(error="forbidden"), 403
+        result = reconcile.reconcile_order(s, order_id=str(order_id))
+    return jsonify(result), 200
+
+
+# ---------------------------------------------------------------------------
+# POST /api/cron/reconcile-payments — OPS-only bulk sweep of pending online orders
+# (callable by a future cron or by hand with X-Ops-Key). Body/query: {club_id?, hours?}.
+# ---------------------------------------------------------------------------
+
+@yoco_bp.post("/api/cron/reconcile-payments")
+def cron_reconcile_payments():
+    from auth import resolve_principal
+    p = resolve_principal(request)
+    if p is None or not p.is_platform_admin:
+        return jsonify(error="unauthorized"), 401
+
+    body = request.get_json(silent=True) or {}
+    club_id = (body.get("club_id") or request.args.get("club_id") or "").strip() or None
+    try:
+        hours = int(body.get("hours") or request.args.get("hours") or 72)
+    except (TypeError, ValueError):
+        hours = 72
+
+    from db import session_scope
+    from yoco_billing import reconcile
+    with session_scope() as s:
+        result = reconcile.reconcile_pending(s, club_id=club_id, hours=hours)
+    return jsonify(result), 200
+
+
+# ---------------------------------------------------------------------------
+# GET /api/billing/receipt/<order_id> — receipt data for the printable receipt page (auth'd).
+# Returns JSON the receipt.html page renders; works for online AND desk payments.
+# ---------------------------------------------------------------------------
+
+@yoco_bp.get("/api/billing/receipt/<order_id>")
+def billing_receipt(order_id):
+    from auth import resolve_principal
+    from iam.permissions import can
+
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(error="unauthorized"), 401
+
+    from db import session_scope
+    from billing import orders as orders_repo
+    from yoco_billing import receipt as receipt_mod
+
+    with session_scope() as s:
+        order = orders_repo.get_order(s, order_id=order_id)
+        if not order:
+            return jsonify(error="order not found"), 404
+        if not _in_callers_club(p, order["club_id"]):
+            return jsonify(error="forbidden"), 403
+        if not _owns_or_can_view(p, order, can):
+            return jsonify(error="forbidden"), 403
+        data = receipt_mod.build_receipt(s, order_id=str(order_id))
+    if not data:
+        return jsonify(error="order not found"), 404
+    return jsonify(receipt=data), 200

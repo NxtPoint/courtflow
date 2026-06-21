@@ -112,6 +112,38 @@ def refund_checkout(*, checkout_id: str, amount_minor: Optional[int] = None,
     return _post(f"/api/checkouts/{checkout_id}/refund", body, idempotency_key=idempotency_key)
 
 
+def get_checkout(*, checkout_id: str) -> Dict[str, Any]:
+    """GET /api/checkouts/{id} — retrieve a checkout to read its current status + paymentId
+    (used by reconciliation to recover a payment whose webhook we never received). The
+    checkout carries: status ('created'|'started'|'processing'|'completed'), paymentId (set
+    once a payment succeeds, else null), amount, currency, metadata. Raises YocoError on
+    non-2xx — reconciliation treats a 404/405 (endpoint unavailable) as 'cannot verify'
+    rather than failing, so this stays safe even if the GET surface changes."""
+    return _get(f"/api/checkouts/{checkout_id}")
+
+
+def _get(path: str) -> Dict[str, Any]:
+    url = YOCO_API_BASE + path
+    try:
+        r = requests.get(url, headers=_headers(), timeout=_TIMEOUT_SECONDS)
+    except requests.RequestException as e:
+        raise YocoError(0, f"network error: {e.__class__.__name__}")
+    if r.status_code // 100 != 2:
+        body: Any
+        try:
+            body = r.json()
+        except Exception:
+            body = {"text": (r.text or "")[:500]}
+        msg = ""
+        if isinstance(body, dict):
+            msg = body.get("description") or body.get("message") or body.get("error") or ""
+        raise YocoError(r.status_code, msg or "request failed", body)
+    try:
+        return r.json() or {}
+    except Exception:
+        return {}
+
+
 # ---------------------------------------------------------------------------
 # Webhook signature verification (Standard Webhooks / svix scheme)
 # ---------------------------------------------------------------------------
