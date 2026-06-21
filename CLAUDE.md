@@ -95,8 +95,13 @@ revenue), traffic + sign-up lines, traffic-source / top-page / by-country tables
   via the `web_app.py` head-injection** (single point). `beacon.py` captures **country from Cloudflare's
   `CF-IPCountry`** header. No cookies, no third parties. **Website-traffic panels accrue data from go-live**
   (historical events lack page-views/geo).
-- **1050 (Ten-Fifty5) is a SEPARATE app+DB** — the dashboard is CourtFlow-platform now; a "1050" column
-  bridges in later via a small read endpoint on the 1050 side (designed for, not built).
+- **1050 (Ten-Fifty5) bridge (built — `analytics/bridge.py`):** a **business switcher** (platform-admin)
+  CourtFlow · Ten-Fifty5 · All. The bridge fetches 1050's existing cockpit metrics over HTTPS (guarded,
+  ~5-min cache) and normalises them; **All** sums COUNT metrics only (USD vs ZAR revenue is never summed —
+  shown per-business). Config via `BRIDGE_TENFIFTY5_*` env (`sync:false`): **Option A** (live, no 1050 change)
+  = URL + CLIENT_KEY + ADMIN_EMAIL; **Option B** (least-privilege) = URL + OPS_KEY against a dedicated 1050
+  endpoint — the bridge auto-switches on which env is set. Unset → the 1050 column shows "not configured".
+  See **`docs/12-tenfifty5-bridge.md`** (incl. the paste-in Option-B endpoint for the 1050 repo).
 
 **Pricing model — per-duration PAYG + membership-covered courts.** A service carries ONE `billing.price`
 row per offered duration (`duration_minutes` set, `unit='per_booking'`, `audience='any'`). `diary/pricing.py`:
