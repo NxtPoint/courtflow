@@ -51,6 +51,11 @@ services:
       - key: AUTH_AUDIENCE
         value: ""            # blank — Clerk default session tokens set no aud
 
+      # Signup gift: a free week of COURT bookings (a time-boxed trial membership granted on
+      # first login). Reuses the membership engine (courts-only, auto-lapses). 0 disables.
+      - key: SIGNUP_TRIAL_DAYS
+        value: "7"
+
       # --- Payments: provider-agnostic, LIVE (Yoco). Global gate = PAYMENTS_ENABLED=1;
       # per-club gate = club.policy.allow_online_payment (Settings → Payments toggle). A club
       # only takes online payments when BOTH are on — so this is safe globally while each club
