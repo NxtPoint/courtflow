@@ -79,6 +79,56 @@ def upsert_user_by_clerk_id(session, *, clerk_user_id, email=None, first_name=No
     return dict(row)
 
 
+def get_user_by_id(session, user_id):
+    """Resolve an iam.user by id (UUID). Returns id, email, first_name, surname or None."""
+    if not user_id:
+        return None
+    row = session.execute(
+        text("SELECT id, email, first_name, surname FROM iam.user WHERE id = :id"),
+        {"id": str(user_id)},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def guardian_user_id_for(session, dependent_user_id):
+    """If `dependent_user_id` is an ACTIVE dependent (a login-less child), return the
+    guardian-payer's iam.user id; else None. Used to route a notification ABOUT a dependent's
+    booking/enrolment to the adult who actually has a login + inbox (child→guardian)."""
+    if not dependent_user_id:
+        return None
+    row = session.execute(
+        text("SELECT guardian_user_id FROM iam.dependent "
+             "WHERE dependent_user_id = :d AND is_active = true "
+             "ORDER BY created_at LIMIT 1"),
+        {"d": str(dependent_user_id)},
+    ).mappings().first()
+    return row["guardian_user_id"] if row else None
+
+
+def resolve_notification_recipient(session, *, user_id=None, email=None):
+    """Resolve the deliverable recipient for a notification: an iam.user with a real id (the
+    inbox owner) + their email/display name. Child→guardian: if `user_id` is a login-less
+    dependent, redirect to the guardian-payer. Falls back to `email` lookup when no user_id.
+
+    Returns {user_id, email, name} (user_id is a str UUID) or None if nothing resolvable."""
+    user = None
+    if user_id:
+        user = get_user_by_id(session, user_id)
+        # A login-less dependent has no email → route to the guardian's inbox.
+        if user is not None and not (user.get("email") or "").strip():
+            g_id = guardian_user_id_for(session, user_id)
+            if g_id:
+                guardian = get_user_by_id(session, g_id)
+                if guardian:
+                    user = guardian
+    if user is None and email:
+        user = get_user_by_email(session, email)
+    if user is None or not user.get("id"):
+        return None
+    name = (user.get("first_name") or "").strip() or None
+    return {"user_id": str(user["id"]), "email": (user.get("email") or None), "name": name}
+
+
 def memberships_for_user(session, user_id):
     """All membership rows for a user (across clubs). Each: club_id, role, member_status."""
     rows = session.execute(

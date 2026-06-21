@@ -653,6 +653,15 @@ def grant_membership(user_id):
     with session_scope() as s:
         res = repo.grant_membership(s, club_id=p.club_id, user_id=user_id,
                                     months=b.get("months") or 1)
+    # NEW emit: a manual membership grant → "Membership active" notification to the member
+    # (child→guardian resolved by the notifications engine). Best-effort + guarded — the admin
+    # action already committed; a CRM/notification hiccup must not surface as an error.
+    try:
+        from marketing_crm.tracking import emit
+        emit("membership_activated", {"club_id": str(p.club_id), "user_id": str(user_id),
+                                      "ref_type": "membership_subscription"})
+    except Exception:
+        log.debug("membership_activated emit skipped (tracking unavailable)")
     return jsonify(res), 200
 
 

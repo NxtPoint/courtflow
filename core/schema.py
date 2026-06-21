@@ -14,6 +14,64 @@ from sqlalchemy import text
 
 from core.models import Base, SCHEMA
 
+# ---------------------------------------------------------------------------
+# core.notification — the in-app inbox + transactional-email delivery ledger.
+#
+# Driven off the existing emit() event stream (marketing_crm.notifications): for a mapped
+# set of transactional usage_event kinds we render a notification and (a) ALWAYS write an
+# in-app row here, (b) attempt a best-effort email (SES/Klaviyo) recording its outcome in
+# email_status. Delivery is non-fatal — a failure here never touches a booking/payment.
+#
+# user_id references iam.user(id) (a UUID — the platform identity producers speak), NOT
+# core.app_user (a bigint). This is the inbox the member sees in the portal (GET
+# /api/me/notifications), so it must key on the same id the principal carries.
+#
+# Raw idempotent DDL (matches iam/schema.py's style) rather than an ORM model, because it
+# FKs across to iam.user + club.club which the core ORM Base deliberately doesn't import.
+# ---------------------------------------------------------------------------
+_NOTIFICATION_DDL = [
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.notification (
+        id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id       uuid NOT NULL,
+        user_id       uuid NOT NULL,                 -- iam.user(id): recipient (guardian for a minor)
+        kind          text NOT NULL,                 -- the usage_event kind that produced it
+        title         text NOT NULL,
+        body          text,
+        link          text,                          -- e.g. /receipt.html?order=<id>
+        data          jsonb,                         -- non-PII context (the rendered ctx)
+        read_at       timestamptz,                   -- NULL = unread
+        email_status  text NOT NULL DEFAULT 'skipped', -- skipped|sent|failed|pending
+        created_at    timestamptz NOT NULL DEFAULT now()
+    )
+    """,
+    # Hot path: the inbox query is (user_id, unread) most-recent-first.
+    f"CREATE INDEX IF NOT EXISTS ix_notification_user_read "
+    f"ON {SCHEMA}.notification (user_id, read_at)",
+    f"CREATE INDEX IF NOT EXISTS ix_notification_user_created "
+    f"ON {SCHEMA}.notification (user_id, created_at DESC)",
+    f"CREATE INDEX IF NOT EXISTS ix_notification_club "
+    f"ON {SCHEMA}.notification (club_id)",
+]
+
+# Cross-schema FKs, guarded (ADD CONSTRAINT has no IF NOT EXISTS). CASCADE: a notification
+# is meaningless once its user/club is gone.
+_NOTIFICATION_FKS = [
+    ("fk_notification_club", "club_id", "club.club(id)", "CASCADE"),
+    ("fk_notification_user", "user_id", "iam.user(id)", "CASCADE"),
+]
+
+_ADD_NOTIFICATION_FK = """
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '{conname}') THEN
+        ALTER TABLE {schema}.notification
+            ADD CONSTRAINT {conname}
+            FOREIGN KEY ({col}) REFERENCES {ref} ON DELETE {ondelete};
+    END IF;
+END $$;
+"""
+
 # Supplementary DDL — each statement idempotent. Run after create_all.
 _SUPPLEMENTAL = [
     # Case-insensitive unique email (replaces a citext dependency).
@@ -89,6 +147,22 @@ def init(engine=None):
             conn.execute(text(stmt))
         for table, conname in _CLUB_FKS:
             conn.execute(text(_ADD_CLUB_FK.format(schema=SCHEMA, table=table, conname=conname)))
+
+    # core.notification — raw DDL (FKs to iam.user + club.club; both boot earlier). The FK to
+    # iam.user is added best-effort: if iam.* hasn't booted yet in some isolated path, the table
+    # still stands (the FK is added on a later boot — idempotent, ADD CONSTRAINT IF NOT EXISTS-style).
+    with engine.begin() as conn:
+        for stmt in _NOTIFICATION_DDL:
+            conn.execute(text(stmt))
+    for conname, col, ref, ondelete in _NOTIFICATION_FKS:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(_ADD_NOTIFICATION_FK.format(
+                    schema=SCHEMA, conname=conname, col=col, ref=ref, ondelete=ondelete)))
+        except Exception:
+            # Referenced table not present yet in an isolated boot — the FK is added on a
+            # later full boot. The table + indexes are already in place. Idempotent.
+            pass
 
     return engine
 

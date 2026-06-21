@@ -150,9 +150,13 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
             if split:
                 result["commission"] = split
         result["payment_recorded"] = True
+        # ref_type/ref_id + the order's user_id let the notifications engine resolve the payer
+        # (iam.user; child→guardian) and link the receipt notification to /receipt.html?order=<id>.
         _emit("payment_succeeded",
               club_id=str(club_id) if club_id else None,
               order_id=str(order_id) if order_id else None,
+              ref_type="order", ref_id=str(order_id) if order_id else None,
+              user_id=str(order["user_id"]) if (order and order.get("user_id")) else None,
               amount_minor=event.amount_minor, currency=event.currency,
               provider=event.provider)
 
