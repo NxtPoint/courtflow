@@ -109,6 +109,31 @@
     deskPayment: function (body) {
       return A().apiJSON("/api/billing/desk-payment", { method: "POST", body: body });
     },
+
+    // ---- me: client self-service ("My Account") -------------------------
+    // GET /api/me/profile -> {email(read-only), first_name, surname, phone, dob, address_*,
+    //   city, postal_code, country, emergency_contact_name/phone, marketing_opt_in, role}
+    getProfile: function () { return A().apiJSON("/api/me/profile"); },
+    // PATCH /api/me/profile  body: editable fields only (email IGNORED server-side) -> refreshed profile
+    patchProfile: function (body) {
+      return A().apiJSON("/api/me/profile", { method: "PATCH", body: body });
+    },
+    // GET /api/me/dependents -> {dependents:[{id, dependent_user_id, first_name, surname, dob,
+    //   relationship, is_minor, notes, is_active}], count}
+    dependents: function () { return A().apiJSON("/api/me/dependents"); },
+    // POST /api/me/dependents  body: {first_name(req), surname?, dob?, relationship?, is_minor?, notes?}
+    addDependent: function (body) {
+      return A().apiJSON("/api/me/dependents", { method: "POST", body: body });
+    },
+    // PATCH /api/me/dependents/:id  body: editable fields
+    patchDependent: function (id, body) {
+      return A().apiJSON("/api/me/dependents/" + encodeURIComponent(id),
+        { method: "PATCH", body: body });
+    },
+    // DELETE /api/me/dependents/:id -> soft remove
+    removeDependent: function (id) {
+      return A().apiJSON("/api/me/dependents/" + encodeURIComponent(id), { method: "DELETE" });
+    },
   };
 
   window.API = API;

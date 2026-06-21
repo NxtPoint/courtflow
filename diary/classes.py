@@ -47,10 +47,15 @@ def _enrolled_count(session, class_session_id):
 
 
 def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_court",
-          audience="member"):
+          audience="member", payer_user_id=None):
     """Enrol a player; over-capacity -> waitlisted. Capacity-safe via FOR UPDATE on the
     session row. Idempotent-ish: a prior cancelled enrolment is reactivated; an existing
-    active/waitlisted enrolment is returned as-is."""
+    active/waitlisted enrolment is returned as-is.
+
+    `payer_user_id` (My Account / dependents): when a GUARDIAN enrols a CHILD, the enrolment's
+    `user_id` is the child (activity → player) while the ORDER is billed to the guardian (spend →
+    payer). Defaults to user_id so a normal self-enrolment bills the player themselves — no change."""
+    payer_user_id = payer_user_id or user_id
     cs = _session_row(session, club_id, class_session_id, lock=True)
     if not cs:
         return _err("SESSION_NOT_FOUND", 404)
@@ -88,7 +93,7 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
     # Order only for a real (enrolled) seat; waitlist doesn't bill until promoted.
     if target == "enrolled":
         order = _create_order_guarded(
-            session, club_id=club_id, user_id=user_id, booking_id=None,
+            session, club_id=club_id, user_id=payer_user_id, booking_id=None,
             booking_type="class", settlement_mode=settlement_mode, parties=[],
             resource_id=cs["resource_id"], starts_at=cs["starts_at"], ends_at=cs["ends_at"],
             enrolment_id=str(enrol_id), audience=audience,

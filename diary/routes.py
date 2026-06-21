@@ -16,6 +16,7 @@ from flask import Blueprint, jsonify, request
 from auth import resolve_principal
 from db import session_scope
 from iam.permissions import can
+from iam import repositories as iam_repo
 from diary import availability as availability_mod
 from diary import bookings as bookings_mod
 from diary import classes as classes_mod
@@ -348,11 +349,20 @@ def enrol(class_session_id):
     # admins/coaches may enrol another user; members enrol themselves.
     target_user = b.get("user_id") if p.role in ("club_admin", "platform_admin", "coach") else p.user_id
     target_user = target_user or p.user_id
+    # "Who's playing?" — a member may enrol their OWN dependent (child). The enrolment's player is
+    # the child (activity → player) but the order bills the GUARDIAN (spend → payer). Ownership is
+    # validated here; an unowned/unknown dependent_user_id is ignored (falls back to the caller).
+    payer_user = None
+    dep = (b.get("dependent_user_id") or "").strip() or None
     with session_scope() as s:
+        if dep and iam_repo.owns_dependent_user(
+                s, club_id=p.club_id, guardian_user_id=p.user_id, dependent_user_id=dep):
+            target_user = dep
+            payer_user = p.user_id   # bill the guardian, not the child
         res = classes_mod.enrol(
             s, club_id=p.club_id, class_session_id=class_session_id, user_id=target_user,
             settlement_mode=b.get("settlement_mode", "at_court"),
-            audience=b.get("audience", "member"))
+            audience=b.get("audience", "member"), payer_user_id=payer_user)
     return _result(res)
 
 

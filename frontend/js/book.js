@@ -34,6 +34,8 @@
     slotsCache: {},          // cacheKey -> slots[] (per-day availability cache)
     slot: null,              // {start,end,resource_id,resource_name,kind,price,court_resource_id?}
     guest: null,             // {name,email} optional member-guest
+    dependents: [],          // [{dependent_user_id, first_name, surname, ...}] the caller's children
+    player: null,            // chosen "Who's playing?" dependent (null = Myself); a player PARTY, not the owner
     settlement: "at_court",
   };
 
@@ -521,6 +523,33 @@
     return modes.filter(function (m) { return UI.SETTLEMENT[m]; });
   }
 
+  // ---- "Who's playing?" dropdown (My Account dependents) --------------------
+  // A single control covering court, lesson, and class. Default "Myself" (state.player=null).
+  // Selecting a child sets state.player to that dependent; submit() injects them as the player
+  // party (court/lesson) or dependent_user_id (class) — the parent stays the owner/payer.
+  function playerName(d) {
+    return ((d.first_name || "") + " " + (d.surname || "")).trim() || "Child";
+  }
+  function playerSection() {
+    if (!state.dependents || !state.dependents.length) return el("span"); // nothing to choose
+    var sel = el("select", { class: "cf-select", onchange: function (ev) {
+      var v = ev.target.value;
+      state.player = v === "ME" ? null
+        : state.dependents.filter(function (d) { return d.dependent_user_id === v; })[0] || null;
+    } });
+    sel.appendChild(el("option", { value: "ME", text: "Myself",
+      selected: state.player ? null : "selected" }));
+    state.dependents.forEach(function (d) {
+      sel.appendChild(el("option", { value: d.dependent_user_id, text: playerName(d),
+        selected: (state.player && state.player.dependent_user_id === d.dependent_user_id) ? "selected" : null }));
+    });
+    return el("div", { class: "cf-confirm-sec" }, [
+      el("h3", { text: "Who's playing?" }),
+      el("p", { class: "cf-muted cf-tiny", text: "Book for yourself or one of your children — it stays on your account." }),
+      el("div", { class: "cf-field" }, [ el("label", { text: "Player" }), sel ]),
+    ]);
+  }
+
   // ---- Step 4: pay & confirm ------------------------------------------------
   function stepConfirm() {
     captureGuest(); // preserve typed guest details across settlement re-renders
@@ -534,6 +563,11 @@
 
     // --- summary block ---
     card.appendChild(summaryCard());
+
+    // --- "Who's playing?" (court / lesson / class) — defaults to Myself, plus each child.
+    // Selecting a child adds them as the booking PLAYER party; the booking stays owned/billed to
+    // the parent. Only shown when the caller actually has dependents.
+    card.appendChild(playerSection());
 
     // --- member-guest (court/lesson only) ---
     if (state.type !== "class") {
@@ -632,11 +666,22 @@
     btn.disabled = true; btn.textContent = "Booking…";
     try {
       var res;
+      // "Who's playing?" — the chosen child (or null = Myself). Owner/billing stays the parent.
+      var playerDepId = state.player && state.player.dependent_user_id;
       if (state.type === "class") {
-        res = await window.API.enrol(state.selClass.id, { settlement_mode: state.settlement, audience: "member" });
+        // Class enrol: pass dependent_user_id so the CHILD is the enrolled player while the order
+        // bills the parent (server validates guardian ownership). Default omits it (self-enrol).
+        var enrolBody = { settlement_mode: state.settlement, audience: "member" };
+        if (playerDepId) enrolBody.dependent_user_id = playerDepId;
+        res = await window.API.enrol(state.selClass.id, enrolBody);
         success("class", res);
       } else {
         var parties = [];
+        if (playerDepId) {
+          // The child is the PLAYER party; the booking owner stays the parent (booked_by_user_id),
+          // so it appears in the parent's My Bookings and is billed to the parent — not the child.
+          parties.push({ party_role: "player", user_id: playerDepId });
+        }
         if (state.guest) {
           // Member-guest: the booking member is the host (required when
           // policy.guest_requires_member — diary/bookings.py GUEST_REQUIRES_HOST).
@@ -727,7 +772,7 @@
           state.selCoach = "ANY"; state.selCourt = "ANY";
           state.durations = []; state.selDuration = null; state.selDurationPrice = null;
           state.membershipCovered = false;
-          state.guest = null; state.day = null; state.calMonth = null; state.slotsCache = {};
+          state.guest = null; state.player = null; state.day = null; state.calMonth = null; state.slotsCache = {};
           stepService();
         } }),
       ]),
@@ -751,6 +796,7 @@
       if (state.slot) rows.push(["When", UI.fmtRange(state.slot.start, state.slot.end)]);
       if (state.guest) rows.push(["Guest", state.guest.name]);
     }
+    if (state.player) rows.push(["Player", playerName(state.player)]);
     rows.push(["Settlement", UI.settlementLabel(state.settlement)]);
     return rows;
   }
@@ -770,6 +816,9 @@
       UI = window.UI; el = UI.el;
       state.principal = principal;
       try { state.billing = await window.API.billingConfig(principal.club_id); } catch (e) {}
+      // "Who's playing?" — the caller's children/dependents (My Account). Loaded once; cached on
+      // state. Failure is non-fatal (the dropdown simply shows only "Myself").
+      try { var dr = await window.API.dependents(); state.dependents = dr.dependents || []; } catch (e) {}
       // policy: pulled from principal/club if exposed; otherwise defaults apply.
       state.policy = principal.policy || null;
       stepService();
