@@ -168,6 +168,40 @@
       return A().apiJSON("/api/diary/classes/" + enc(sessionId) + "/attendance",
         { method: "POST", body: body });
     },
+
+    // ---- commission engine: coach agreements + rules (owner config) ------
+    // GET /api/admin/coach-agreements ->
+    //   {club_default_pct, currency, coaches:[{coach_user_id,name,rent_minor,rent_day,
+    //     coach_pct, lesson_types:[{product_id,name,club_pct,coach_pct,effective_pct}]}], rules}
+    coachAgreements: function () { return A().apiJSON("/api/admin/coach-agreements"); },
+    // PUT /api/admin/coach-agreements/:coach_user_id  body:{rent_minor?,rent_day?,status?,notes?}
+    putCoachAgreement: function (id, body) {
+      return A().apiJSON("/api/admin/coach-agreements/" + enc(id), { method: "PUT", body: body });
+    },
+    // GET /api/admin/commission-rules -> {rules:[...]}
+    commissionRules: function () { return A().apiJSON("/api/admin/commission-rules"); },
+    // POST /api/admin/commission-rules  body:{product_id?,coach_user_id?,commission_pct} -> {rule}
+    //   scope derived from which of product_id/coach_user_id are sent.
+    setCommissionRule: function (body) {
+      return A().apiJSON("/api/admin/commission-rules", { method: "POST", body: body });
+    },
+    // DELETE /api/admin/commission-rules/:rule_id
+    deleteCommissionRule: function (id) {
+      return A().apiJSON("/api/admin/commission-rules/" + enc(id), { method: "DELETE" });
+    },
+    // GET /api/admin/commission-rules/preview?coach_user_id=&product_id= -> {effective_pct}
+    commissionPreview: function (opts) {
+      return A().apiJSON("/api/admin/commission-rules/preview" + qs(opts));
+    },
+
+    // ---- owner cockpit / financials (commission engine reporting) --------
+    // Under /api/admin/financials/* (the CRM lane owns /api/admin/cockpit/* — no clash).
+    cockpitSummary: function (opts) { return A().apiJSON("/api/admin/financials/summary" + qs(opts)); },
+    cockpitRevenue: function (opts) { return A().apiJSON("/api/admin/financials/revenue" + qs(opts)); },
+    cockpitCoachEarnings: function (opts) {
+      return A().apiJSON("/api/admin/financials/coach-earnings" + qs(opts));
+    },
+    cockpitMemberships: function () { return A().apiJSON("/api/admin/financials/memberships"); },
   };
 
   window.AdminAPI = AdminAPI;
@@ -644,9 +678,144 @@
     return { reload: reload };
   }
 
+  // ---------------------------------------------------------------------------
+  // COACH AGREEMENTS — the commission/rental config (Phase D owner lane).
+  // Club default % + per coach: rent + commission % (+ per-lesson-type % override) with a
+  // live "effective rate" preview. Rent AND/OR commission are additive (docs/specs/01).
+  // ---------------------------------------------------------------------------
+  function coachAgreements(host, opts) {
+    init(); opts = opts || {};
+    UI.clear(host);
+    var card = el("div", { class: "cf-card" });
+    card.appendChild(el("h2", { text: "Coach agreements" }));
+    card.appendChild(el("p", { class: "cf-muted", text:
+      "How you monetise each coach: a flat monthly rent and/or a commission % on their lessons. " +
+      "Rent and commission are added together (not either/or). Commission is taken on collected, " +
+      "ex-VAT lesson revenue. The most specific % wins: coach + lesson type, then lesson type, " +
+      "then coach, then the club default." }));
+    var body = el("div", { id: "ad-coach-agreements" });
+    card.appendChild(body);
+    host.appendChild(card);
+
+    function money(minor, cur) { return UI.money(minor || 0, cur || "ZAR"); }
+
+    function clubDefaultRow(data) {
+      var box = el("div", { class: "cf-card", style: "background:var(--cf-surface-2,#f7f8fa)" });
+      box.appendChild(el("h3", { text: "Club default commission" }));
+      box.appendChild(el("p", { class: "cf-muted", text:
+        "The % of every lesson the club keeps by default. Coaches keep the rest. Override per coach below." }));
+      var pctI = input({ type: "number", step: "0.5", min: 0, max: 100,
+        value: (data.club_default_pct != null ? data.club_default_pct : 0), style: "max-width:110px" });
+      var save = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Save default" });
+      save.addEventListener("click", async function () {
+        var pct = parseFloat(pctI.value);
+        if (isNaN(pct) || pct < 0 || pct > 100) { UI.toast("Enter 0–100.", "warn"); return; }
+        save.disabled = true;
+        try { await window.AdminAPI.setCommissionRule({ commission_pct: pct });
+          UI.toast("Club default saved.", "info"); reload(); }
+        catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
+      });
+      box.appendChild(el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [
+        pctI, el("span", { class: "cf-muted", text: "% the club keeps" }), el("span", { class: "cf-spacer" }), save]));
+      return box;
+    }
+
+    function coachCard(coach, currency) {
+      var c = el("div", { class: "cf-card" });
+      c.appendChild(el("h3", { text: coach.name }));
+
+      // rent + rent day
+      var rentI = input({ value: fromMinor(coach.rent_minor), placeholder: "0.00", style: "max-width:120px" });
+      var dayI = input({ type: "number", min: 1, max: 28, value: coach.rent_day || 1, style: "max-width:80px" });
+      var rentSave = el("button", { class: "cf-btn cf-btn-sm", text: "Save rent" });
+      rentSave.addEventListener("click", async function () {
+        rentSave.disabled = true;
+        try {
+          await window.AdminAPI.putCoachAgreement(coach.coach_user_id, {
+            rent_minor: toMinor(rentI.value) || 0, rent_day: num(dayI.value) || 1 });
+          UI.toast("Rent saved.", "info");
+        } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { rentSave.disabled = false; }
+      });
+      c.appendChild(field("Monthly rent (" + currency + ")",
+        el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [
+          rentI, el("span", { class: "cf-muted", text: "on day" }), dayI,
+          el("span", { class: "cf-spacer" }), rentSave])));
+
+      // coach-level commission %
+      var coachPctI = input({ type: "number", step: "0.5", min: 0, max: 100,
+        value: (coach.coach_pct != null ? coach.coach_pct : ""), placeholder: "(club default)", style: "max-width:130px" });
+      var coachPctSave = el("button", { class: "cf-btn cf-btn-sm", text: "Save %" });
+      coachPctSave.addEventListener("click", async function () {
+        var pct = parseFloat(coachPctI.value);
+        if (isNaN(pct) || pct < 0 || pct > 100) { UI.toast("Enter 0–100.", "warn"); return; }
+        coachPctSave.disabled = true;
+        try {
+          await window.AdminAPI.setCommissionRule({ coach_user_id: coach.coach_user_id, commission_pct: pct });
+          UI.toast("Coach commission saved.", "info"); reload();
+        } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { coachPctSave.disabled = false; }
+      });
+      c.appendChild(field("Commission % (all this coach's lessons)",
+        el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [
+          coachPctI, el("span", { class: "cf-spacer" }), coachPctSave])));
+
+      // per-lesson-type overrides
+      if (coach.lesson_types && coach.lesson_types.length) {
+        c.appendChild(el("h4", { text: "Per lesson type", style: "margin:10px 0 4px" }));
+        var t = el("table", { class: "cf-table" });
+        t.appendChild(el("thead", {}, [el("tr", {}, ["Lesson type", "Override %", "Effective %", ""].map(function (h) {
+          return el("th", { text: h }); }))]));
+        var tb = el("tbody");
+        coach.lesson_types.forEach(function (lt) {
+          var ovrI = input({ type: "number", step: "0.5", min: 0, max: 100,
+            value: (lt.coach_pct != null ? lt.coach_pct : ""), placeholder: "—", style: "max-width:90px" });
+          var b = el("button", { class: "cf-btn cf-btn-sm", text: "Set" });
+          b.addEventListener("click", async function () {
+            var pct = parseFloat(ovrI.value);
+            if (isNaN(pct) || pct < 0 || pct > 100) { UI.toast("Enter 0–100.", "warn"); return; }
+            b.disabled = true;
+            try {
+              await window.AdminAPI.setCommissionRule({
+                coach_user_id: coach.coach_user_id, product_id: lt.product_id, commission_pct: pct });
+              UI.toast("Override saved.", "info"); reload();
+            } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { b.disabled = false; }
+          });
+          tb.appendChild(el("tr", {}, [
+            el("td", { text: lt.name || "Lesson" }),
+            el("td", {}, [ovrI]),
+            el("td", { class: "num" }, [el("span", { class: "cf-chip confirmed", text: (lt.effective_pct || 0) + "%" })]),
+            el("td", {}, [b]),
+          ]));
+        });
+        t.appendChild(tb); c.appendChild(t);
+      }
+      return c;
+    }
+
+    function render(data) {
+      UI.clear(body);
+      body.appendChild(clubDefaultRow(data));
+      var coaches = data.coaches || [];
+      if (!coaches.length) {
+        body.appendChild(el("div", { class: "cf-empty", text: "No coaches yet — invite a coach in the Coaches tab." }));
+        return;
+      }
+      coaches.forEach(function (co) { body.appendChild(coachCard(co, data.currency || "ZAR")); });
+    }
+
+    function reload() {
+      UI.clear(body); body.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+      window.AdminAPI.coachAgreements().then(render)
+        .catch(function (e) { UI.clear(body); body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+
+    reload();
+    return { reload: reload };
+  }
+
   window.AdminUI = {
     clubProfile: clubProfile, hours: hours, courts: courts,
     services: services, coaches: coaches, membershipPlans: membershipPlans,
+    coachAgreements: coachAgreements,
   };
 })();
 

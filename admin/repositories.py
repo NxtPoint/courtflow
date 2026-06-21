@@ -912,3 +912,350 @@ def hours_week(session, *, club_id):
             week.append({"weekday": wd, "open": False, "start_time": "06:00",
                          "end_time": "22:00", "slot_minutes": 60})
     return {"week": week}
+
+
+# ===========================================================================
+# commission engine — owner config + cockpit aggregation (Phase D)
+#
+# Plain SQL backing /api/admin/coach-agreements*, /commission-rules*, the coach statement,
+# and the owner cockpit. All club_id-scoped. Rate writes SUPERSEDE (close the prior rule,
+# insert a new one) so history is preserved for the cockpit. The resolution algorithm lives
+# in billing/commission.py (resolve_commission_pct) — these helpers read/write config + the
+# reporting aggregates. Money in *_minor cents, ex-VAT.
+# ===========================================================================
+
+def _derive_scope(product_id, coach_user_id):
+    if product_id and coach_user_id:
+        return "coach_product"
+    if product_id:
+        return "product"
+    if coach_user_id:
+        return "coach"
+    return "club"
+
+
+def get_agreement(session, *, club_id, coach_user_id):
+    """The coach's current (active, open-ended) agreement, or None."""
+    return _row(session.execute(
+        text("SELECT id, club_id, coach_user_id, rent_minor, rent_currency, rent_day, status, "
+             "       effective_from, effective_to, notes "
+             "FROM billing.coach_agreement "
+             "WHERE club_id = :c AND coach_user_id = :u "
+             "  AND status = 'active' AND effective_to IS NULL "
+             "ORDER BY effective_from DESC LIMIT 1"),
+        {"c": club_id, "u": coach_user_id},
+    ).mappings().first())
+
+
+def upsert_agreement(session, *, club_id, coach_user_id, rent_minor=None, rent_day=None,
+                     status=None, notes=None):
+    """Upsert the coach's active agreement (one open-ended active row per coach). COALESCE
+    partial update; inserts a fresh row if none exists. Currency = club currency."""
+    existing = get_agreement(session, club_id=club_id, coach_user_id=coach_user_id)
+    if existing:
+        session.execute(
+            text("""
+                UPDATE billing.coach_agreement SET
+                    rent_minor = COALESCE(:rent, rent_minor),
+                    rent_day   = COALESCE(:day, rent_day),
+                    status     = COALESCE(:status, status),
+                    notes      = COALESCE(:notes, notes),
+                    updated_at = now()
+                WHERE id = :id
+            """),
+            {"rent": rent_minor, "day": rent_day, "status": status,
+             "notes": notes, "id": existing["id"]},
+        )
+    else:
+        session.execute(
+            text("""
+                INSERT INTO billing.coach_agreement
+                    (club_id, coach_user_id, rent_minor, rent_currency, rent_day, status, notes)
+                VALUES (:c, :u, COALESCE(:rent, 0), :cur, COALESCE(:day, 1), 'active', :notes)
+            """),
+            {"c": club_id, "u": coach_user_id, "rent": rent_minor,
+             "cur": _club_currency(session, club_id=club_id), "day": rent_day, "notes": notes},
+        )
+    return get_agreement(session, club_id=club_id, coach_user_id=coach_user_id)
+
+
+def list_commission_rules(session, *, club_id):
+    """All commission rules for the club (active + history), most-specific/newest first."""
+    return _rows(session.execute(
+        text("SELECT id, club_id, scope, product_id, coach_user_id, commission_pct, "
+             "       effective_from, effective_to, active, note "
+             "FROM billing.commission_rule WHERE club_id = :c "
+             "ORDER BY active DESC, effective_from DESC, id DESC"),
+        {"c": club_id},
+    ).mappings().all())
+
+
+def set_commission_rule(session, *, club_id, product_id=None, coach_user_id=None,
+                        commission_pct=0):
+    """Set a rate for a scope: close any matching ACTIVE rule (effective_to=now, active=false)
+    then insert a new one. SUPERSEDE preserves history. Scope is derived from which of
+    product_id/coach_user_id are set. Returns the new rule row."""
+    scope = _derive_scope(product_id, coach_user_id)
+    # Close the prior active rule of the SAME scope (exact same product/coach keys).
+    session.execute(
+        text("""
+            UPDATE billing.commission_rule
+            SET active = false, effective_to = now()
+            WHERE club_id = :c AND active AND scope = :scope
+              AND product_id IS NOT DISTINCT FROM :product
+              AND coach_user_id IS NOT DISTINCT FROM :coach
+        """),
+        {"c": club_id, "scope": scope, "product": product_id, "coach": coach_user_id},
+    )
+    row = session.execute(
+        text("""
+            INSERT INTO billing.commission_rule
+                (club_id, scope, product_id, coach_user_id, commission_pct, active)
+            VALUES (:c, :scope, :product, :coach, :pct, true)
+            RETURNING id, club_id, scope, product_id, coach_user_id, commission_pct,
+                      effective_from, effective_to, active, note
+        """),
+        {"c": club_id, "scope": scope, "product": product_id, "coach": coach_user_id,
+         "pct": commission_pct},
+    ).mappings().first()
+    return _row(row)
+
+
+def deactivate_commission_rule(session, *, club_id, rule_id):
+    res = session.execute(
+        text("UPDATE billing.commission_rule SET active = false, effective_to = now() "
+             "WHERE club_id = :c AND id = :id AND active RETURNING id"),
+        {"c": club_id, "id": rule_id},
+    ).mappings().first()
+    return res is not None
+
+
+def coach_agreements_overview(session, *, club_id):
+    """The Settings 'Coach agreements' payload: per coach -> rent + resolved coach-level % +
+    their lesson types with club/coach/effective %, plus the club default %, plus the full
+    rule list. The effective_pct per lesson type is computed by the resolution algorithm so
+    the owner sees exactly what will apply."""
+    from billing.commission import resolve_commission_pct
+    currency = _club_currency(session, club_id=club_id)
+
+    # Club default (scope='club') resolved %.
+    club_default = float(resolve_commission_pct(session, club_id=club_id))
+
+    coaches = session.execute(
+        text("""
+            SELECT u.id AS coach_user_id, u.first_name, u.surname, u.email, cp.display_name
+            FROM iam.membership m
+            JOIN iam.user u ON u.id = m.user_id
+            LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id AND cp.club_id = m.club_id
+            WHERE m.club_id = :c AND m.role = 'coach'
+            ORDER BY cp.rank NULLS LAST, u.surname NULLS LAST, u.first_name NULLS LAST
+        """),
+        {"c": club_id},
+    ).mappings().all()
+
+    out_coaches = []
+    for c in coaches:
+        coach_id = c["coach_user_id"]
+        agreement = get_agreement(session, club_id=club_id, coach_user_id=coach_id)
+        name = (c["display_name"]
+                or " ".join(x for x in [c["first_name"], c["surname"]] if x).strip()
+                or c["email"] or "Coach")
+        # The coach's lesson products (lesson type = billing.product(kind='lesson', coach)).
+        lesson_types = session.execute(
+            text("SELECT id, name FROM billing.product "
+                 "WHERE club_id = :c AND kind IN ('lesson','class') "
+                 "  AND (coach_user_id = :u OR coach_user_id IS NULL) AND active "
+                 "ORDER BY kind, name"),
+            {"c": club_id, "u": coach_id},
+        ).mappings().all()
+        lt_out = []
+        for lt in lesson_types:
+            club_pct = _scope_pct(session, club_id=club_id, scope="product",
+                                  product_id=lt["id"], coach_user_id=None)
+            coach_pct = _scope_pct(session, club_id=club_id, scope="coach_product",
+                                   product_id=lt["id"], coach_user_id=coach_id)
+            effective = float(resolve_commission_pct(
+                session, club_id=club_id, product_id=lt["id"], coach_user_id=coach_id))
+            lt_out.append({"product_id": str(lt["id"]), "name": lt["name"],
+                           "club_pct": club_pct, "coach_pct": coach_pct,
+                           "effective_pct": effective})
+        coach_level_pct = _scope_pct(session, club_id=club_id, scope="coach",
+                                     product_id=None, coach_user_id=coach_id)
+        out_coaches.append({
+            "coach_user_id": str(coach_id),
+            "name": name,
+            "rent_minor": int(agreement["rent_minor"]) if agreement else 0,
+            "rent_day": int(agreement["rent_day"]) if agreement else 1,
+            "currency": currency,
+            "coach_pct": coach_level_pct,
+            "lesson_types": lt_out,
+        })
+
+    return {
+        "club_default_pct": club_default,
+        "currency": currency,
+        "coaches": out_coaches,
+        "rules": list_commission_rules(session, club_id=club_id),
+    }
+
+
+def _scope_pct(session, *, club_id, scope, product_id, coach_user_id):
+    """The raw active rule % for an EXACT scope (not resolved/inherited) — None if no such
+    rule. Drives the editable per-scope fields in the config UI."""
+    v = session.execute(
+        text("""
+            SELECT commission_pct FROM billing.commission_rule
+            WHERE club_id = :c AND active AND scope = :scope
+              AND product_id IS NOT DISTINCT FROM :product
+              AND coach_user_id IS NOT DISTINCT FROM :coach
+            ORDER BY effective_from DESC, id DESC LIMIT 1
+        """),
+        {"c": club_id, "scope": scope, "product": product_id, "coach": coach_user_id},
+    ).scalar()
+    return float(v) if v is not None else None
+
+
+# ---------------------------------------------------------------------------
+# owner cockpit — financial aggregates (views-style, thin SQL passthroughs)
+# ---------------------------------------------------------------------------
+
+def cockpit_revenue(session, *, club_id, dt_from=None, dt_to=None):
+    """Revenue by month + service kind, NET from the payment log (gross charges - refunds).
+    Money in minor units. dt_from/dt_to are ISO date strings (inclusive from, exclusive to)."""
+    rows = session.execute(
+        text("""
+            SELECT to_char(date_trunc('month', p.created_at), 'YYYY-MM') AS month,
+                   COALESCE(prod.kind, 'other') AS service_kind,
+                   SUM(ol.amount_minor) FILTER (WHERE p.direction='charge') AS gross_minor,
+                   SUM(ol.amount_minor) FILTER (WHERE p.direction='refund') AS refund_minor,
+                   SUM(CASE WHEN p.direction='charge' THEN ol.amount_minor
+                            ELSE -ol.amount_minor END) AS net_minor
+            FROM billing.payment p
+            JOIN billing."order" o     ON o.id = p.order_id
+            JOIN billing.order_line ol ON ol.order_id = o.id
+            LEFT JOIN billing.price pr   ON pr.id = ol.price_id
+            LEFT JOIN billing.product prod ON prod.id = pr.product_id
+            WHERE p.club_id = :c AND p.status = 'succeeded'
+              AND (CAST(:dt_from AS text) IS NULL OR p.created_at >= CAST(:dt_from AS timestamptz))
+              AND (CAST(:dt_to AS text) IS NULL OR p.created_at <  CAST(:dt_to   AS timestamptz))
+            GROUP BY 1, 2 ORDER BY 1 DESC, 2
+        """),
+        {"c": club_id, "dt_from": dt_from, "dt_to": dt_to},
+    ).mappings().all()
+    return [{"month": r["month"], "service_kind": r["service_kind"],
+             "gross_minor": int(r["gross_minor"] or 0),
+             "refund_minor": int(r["refund_minor"] or 0),
+             "net_minor": int(r["net_minor"] or 0)} for r in rows]
+
+
+def cockpit_coach_earnings(session, *, club_id, dt_from=None, dt_to=None):
+    """Per coach: gross lesson revenue, commission earned (owner keeps), coach earning, rent
+    due (period), net to coach, and lifetime ledger balance. Straight off commission_split +
+    coach_ledger (the heart of the cockpit). Signed minor units."""
+    rows = session.execute(
+        text("""
+            WITH splits AS (
+              SELECT coach_user_id,
+                     SUM(amount_minor) FILTER (WHERE party_type='coach') AS coach_earn_minor,
+                     SUM(amount_minor) FILTER (WHERE party_type='owner') AS owner_cut_minor,
+                     SUM(gross_minor)  FILTER (WHERE party_type='owner') AS gross_lesson_minor,
+                     count(*) FILTER (WHERE party_type='coach')          AS lesson_count
+              FROM billing.commission_split
+              WHERE club_id = :c AND basis <> 'refund_clawback'
+                AND (CAST(:dt_from AS text) IS NULL OR occurred_at >= CAST(:dt_from AS timestamptz))
+                AND (CAST(:dt_to AS text) IS NULL OR occurred_at <  CAST(:dt_to   AS timestamptz))
+              GROUP BY coach_user_id),
+            rent AS (
+              SELECT coach_user_id, SUM(amount_minor) AS rent_minor   -- negative
+              FROM billing.coach_ledger
+              WHERE club_id = :c AND entry_type = 'rent_charge'
+                AND (CAST(:dt_from AS text) IS NULL OR occurred_at >= CAST(:dt_from AS timestamptz))
+                AND (CAST(:dt_to AS text) IS NULL OR occurred_at <  CAST(:dt_to   AS timestamptz))
+              GROUP BY coach_user_id),
+            bal AS (
+              SELECT coach_user_id, SUM(amount_minor) AS balance_minor
+              FROM billing.coach_ledger WHERE club_id = :c GROUP BY coach_user_id)
+            SELECT u.id AS coach_user_id,
+                   COALESCE(cp.display_name,
+                            NULLIF(trim(concat_ws(' ', u.first_name, u.surname)), ''),
+                            u.email) AS coach_name,
+                   COALESCE(s.gross_lesson_minor, 0) AS gross_lesson_minor,
+                   COALESCE(s.owner_cut_minor, 0)    AS commission_earned_minor,
+                   COALESCE(s.coach_earn_minor, 0)   AS coach_earning_minor,
+                   COALESCE(s.lesson_count, 0)       AS lesson_count,
+                   COALESCE(-r.rent_minor, 0)        AS rent_due_minor,
+                   COALESCE(s.coach_earn_minor, 0) + COALESCE(r.rent_minor, 0) AS net_to_coach_minor,
+                   COALESCE(b.balance_minor, 0)      AS lifetime_balance_minor
+            FROM iam.user u
+            JOIN billing.coach_agreement ca
+                 ON ca.coach_user_id = u.id AND ca.club_id = :c
+                AND ca.status = 'active' AND ca.effective_to IS NULL
+            LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id AND cp.club_id = :c
+            LEFT JOIN splits s ON s.coach_user_id = u.id
+            LEFT JOIN rent   r ON r.coach_user_id = u.id
+            LEFT JOIN bal    b ON b.coach_user_id = u.id
+            ORDER BY commission_earned_minor DESC
+        """),
+        {"c": club_id, "dt_from": dt_from, "dt_to": dt_to},
+    ).mappings().all()
+    return [{
+        "coach_user_id": str(r["coach_user_id"]),
+        "coach_name": r["coach_name"],
+        "lesson_count": int(r["lesson_count"] or 0),
+        "gross_lesson_minor": int(r["gross_lesson_minor"] or 0),
+        "commission_earned_minor": int(r["commission_earned_minor"] or 0),
+        "coach_earning_minor": int(r["coach_earning_minor"] or 0),
+        "rent_due_minor": int(r["rent_due_minor"] or 0),
+        "net_to_coach_minor": int(r["net_to_coach_minor"] or 0),
+        "lifetime_balance_minor": int(r["lifetime_balance_minor"] or 0),
+    } for r in rows]
+
+
+def cockpit_memberships(session, *, club_id):
+    """Active membership count + MRR-ish (sum of active membership prices). Term plans mean
+    'MRR' is the active monthly-equivalent; we report the active subscription value sum."""
+    r = session.execute(
+        text("""
+            SELECT count(*) FILTER (WHERE ms.status='active'
+                     AND (ms.current_period_end IS NULL OR ms.current_period_end >= CURRENT_DATE))
+                     AS active_members,
+                   COALESCE(SUM(pr.amount_minor) FILTER (WHERE ms.status='active'
+                     AND (ms.current_period_end IS NULL OR ms.current_period_end >= CURRENT_DATE)
+                     AND COALESCE(pr.term_months,1) > 0), 0) AS mrr_minor
+            FROM billing.membership_subscription ms
+            LEFT JOIN billing.price pr ON pr.id = ms.price_id
+            WHERE ms.club_id = :c
+        """),
+        {"c": club_id},
+    ).mappings().first()
+    return {"active_members": int(r["active_members"] or 0),
+            "mrr_minor": int(r["mrr_minor"] or 0)}
+
+
+def cockpit_summary(session, *, club_id, dt_from=None, dt_to=None):
+    """KPI header scalars: net revenue (period), commission earned (owner), rent due,
+    active members + MRR, lessons booked (period)."""
+    rev = cockpit_revenue(session, club_id=club_id, dt_from=dt_from, dt_to=dt_to)
+    earnings = cockpit_coach_earnings(session, club_id=club_id, dt_from=dt_from, dt_to=dt_to)
+    mem = cockpit_memberships(session, club_id=club_id)
+    net_revenue = sum(r["net_minor"] for r in rev)
+    commission = sum(e["commission_earned_minor"] for e in earnings)
+    rent_due = sum(e["rent_due_minor"] for e in earnings)
+    lessons = sum(e["lesson_count"] for e in earnings)
+    return {
+        "currency": _club_currency(session, club_id=club_id),
+        "net_revenue_minor": net_revenue,
+        "commission_earned_minor": commission,
+        "rent_due_minor": rent_due,
+        "lessons_paid": lessons,
+        "active_members": mem["active_members"],
+        "mrr_minor": mem["mrr_minor"],
+    }
+
+
+def coach_user_ids(session, *, club_id):
+    """Coach user_ids for the club (membership role=coach). Used to scope the statement route."""
+    return [str(r) for r in session.execute(
+        text("SELECT user_id FROM iam.membership WHERE club_id = :c AND role = 'coach'"),
+        {"c": club_id},
+    ).scalars().all()]
