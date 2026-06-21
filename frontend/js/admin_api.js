@@ -620,6 +620,20 @@
     return { reload: reload };
   }
 
+  // Lifecycle control shared by plan/pack/price rows: active | dormant (configured but hidden
+  // from customers) | retired. onChange(newStatus) PATCHes {status}. Returns the <select>.
+  function statusSelect(current, onChange) {
+    var sel = el("select", { class: "cf-select", style: "max-width:155px;font-size:.82rem" });
+    [["active", "● Active"], ["dormant", "◐ Dormant — hidden"], ["retired", "✕ Retired"]]
+      .forEach(function (o) {
+        var opt = el("option", { value: o[0], text: o[1] });
+        if ((current || "active") === o[0]) opt.selected = "selected";
+        sel.appendChild(opt);
+      });
+    sel.addEventListener("change", function () { onChange(sel.value); });
+    return sel;
+  }
+
   // ---------------------------------------------------------------------------
   // MEMBERSHIP PLANS — configurable term plans (label + price + duration). Each plan
   // is one billing.price (term_months) on the membership product. -> /membership-plans.
@@ -653,8 +667,10 @@
       var amtI = input({ value: fromMinor(plan.amount_minor), placeholder: "0.00", style: "max-width:110px" });
       var monthsI = input({ type: "number", value: plan.term_months || 1, min: 1, style: "max-width:80px" });
       var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
-      var del = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: plan.active ? "Deactivate" : "Inactive" });
-      if (!plan.active) del.disabled = true;
+      var status = statusSelect(plan.status, async function (s) {
+        try { await window.AdminAPI.patchMembershipPlan(plan.price_id, { status: s }); UI.toast("Plan " + s + ".", "info"); reload(); }
+        catch (e) { UI.toast(UI.errMsg(e), "error"); }
+      });
       save.addEventListener("click", async function () {
         var months = num(monthsI.value);
         if (!months || months < 1) { UI.toast("Duration must be at least 1 month.", "warn"); return; }
@@ -666,17 +682,12 @@
           UI.toast("Plan updated.", "info"); reload();
         } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
       });
-      del.addEventListener("click", async function () {
-        if (!window.confirm("Deactivate the " + (plan.label || planTerm(plan.term_months)) + " plan?")) return;
-        try { await window.AdminAPI.deleteMembershipPlan(plan.price_id); UI.toast("Plan deactivated.", "info"); reload(); }
-        catch (e) { UI.toast(UI.errMsg(e), "error"); }
-      });
       var row = el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:6px" }, [
         labelI, amtI,
         el("div", { class: "cf-row", style: "gap:4px;align-items:center" }, [monthsI, el("span", { class: "cf-muted", text: "months" })]),
-        el("span", { class: "cf-spacer" }), save, del,
+        el("span", { class: "cf-spacer" }), status, save,
       ]);
-      if (!plan.active) row.style.opacity = "0.55";
+      if ((plan.status || "active") !== "active") row.style.opacity = "0.6";
       return row;
     }
 
@@ -891,8 +902,10 @@
         ? select(plan.coach_user_id || "", coachOptions()) : null;
       if (coachSel) coachSel.style.maxWidth = "150px";
       var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
-      var del = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: plan.active ? "Deactivate" : "Inactive" });
-      if (!plan.active) del.disabled = true;
+      var status = statusSelect(plan.status, async function (s) {
+        try { await window.AdminAPI.patchBundlePlan(plan.id, { status: s }); UI.toast("Pack " + s + ".", "info"); reload(); }
+        catch (e) { UI.toast(UI.errMsg(e), "error"); }
+      });
       save.addEventListener("click", async function () {
         var n = num(nI.value);
         if (!n || n < 1) { UI.toast("Sessions must be at least 1.", "warn"); return; }
@@ -906,11 +919,6 @@
         try { await window.AdminAPI.patchBundlePlan(plan.id, body); UI.toast("Pack updated.", "info"); reload(); }
         catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
       });
-      del.addEventListener("click", async function () {
-        if (!window.confirm("Deactivate this pack?")) return;
-        try { await window.AdminAPI.deleteBundlePlan(plan.id); UI.toast("Pack deactivated.", "info"); reload(); }
-        catch (e) { UI.toast(UI.errMsg(e), "error"); }
-      });
       var kids = [
         el("span", { class: "cf-chip", text: kindLabel(plan.service_kind) }),
         labelI,
@@ -920,9 +928,9 @@
         el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [valI, el("span", { class: "cf-muted", text: "days" })]),
       ];
       if (coachSel) kids.push(coachSel);
-      kids.push(el("span", { class: "cf-spacer" }), save, del);
+      kids.push(el("span", { class: "cf-spacer" }), status, save);
       var row = el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:6px" }, kids);
-      if (!plan.active) row.style.opacity = "0.55";
+      if ((plan.status || "active") !== "active") row.style.opacity = "0.6";
       return row;
     }
 

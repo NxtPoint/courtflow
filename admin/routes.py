@@ -361,7 +361,7 @@ def patch_price(price_id):
             s, club_id=p.club_id, price_id=price_id,
             audience=b.get("audience"), amount_minor=b.get("amount_minor"),
             unit=b.get("unit"), duration_minutes=b.get("duration_minutes"),
-            active=b.get("active"),
+            active=b.get("active"), status=b.get("status"),
         )
     if price is None:
         return jsonify(error="NOT_FOUND"), 404
@@ -424,7 +424,7 @@ def patch_membership_plan(price_id):
         plan = repo.patch_membership_plan(
             s, club_id=p.club_id, price_id=price_id,
             label=b.get("label"), amount_minor=b.get("amount_minor"),
-            term_months=b.get("term_months"), active=b.get("active"))
+            term_months=b.get("term_months"), active=b.get("active"), status=b.get("status"))
     if plan is None:
         return jsonify(error="NOT_FOUND"), 404
     return jsonify(plan=plan), 200
@@ -501,7 +501,7 @@ def patch_bundle_plan(plan_id):
             label=b.get("label"), sessions_count=b.get("sessions_count"),
             duration_minutes=b.get("duration_minutes"), price_minor=b.get("price_minor"),
             coach_user_id=b.get("coach_user_id"), validity_days=b.get("validity_days"),
-            active=b.get("active"),
+            active=b.get("active"), status=b.get("status"),
             _clear_coach=bool(b.get("clear_coach")),
             _clear_duration=bool(b.get("clear_duration")),
             _clear_validity=bool(b.get("clear_validity")))

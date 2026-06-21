@@ -72,6 +72,7 @@ def _plan_dict(row) -> Optional[Dict[str, Any]]:
         "currency": row["currency_code"],
         "validity_days": int(row["validity_days"]) if row["validity_days"] is not None else None,
         "active": bool(row["active"]),
+        "status": row["status"] if "status" in row.keys() else ("active" if row["active"] else "retired"),
     }
 
 
@@ -87,7 +88,7 @@ def list_plans(session, *, club_id, service_kind=None, active_only=True) -> List
         where.append("active = true")
     rows = session.execute(
         text("SELECT id, club_id, service_kind, coach_user_id, label, sessions_count, "
-             "       duration_minutes, price_minor, currency_code, validity_days, active "
+             "       duration_minutes, price_minor, currency_code, validity_days, active, status "
              "FROM billing.bundle_plan WHERE " + " AND ".join(where) + " "
              "ORDER BY active DESC, price_minor ASC, created_at ASC"),
         params,
@@ -98,7 +99,7 @@ def list_plans(session, *, club_id, service_kind=None, active_only=True) -> List
 def get_plan(session, *, club_id, plan_id) -> Optional[Dict[str, Any]]:
     return _plan_dict(session.execute(
         text("SELECT id, club_id, service_kind, coach_user_id, label, sessions_count, "
-             "       duration_minutes, price_minor, currency_code, validity_days, active "
+             "       duration_minutes, price_minor, currency_code, validity_days, active, status "
              "FROM billing.bundle_plan WHERE club_id = :c AND id = :id"),
         {"c": str(club_id), "id": str(plan_id)},
     ).mappings().first())
@@ -132,10 +133,14 @@ def create_plan(session, *, club_id, service_kind, sessions_count, price_minor,
 
 def update_plan(session, *, club_id, plan_id, label=None, sessions_count=None,
                 duration_minutes=None, price_minor=None, coach_user_id=None,
-                validity_days=None, active=None, _clear_coach=False,
+                validity_days=None, active=None, status=None, _clear_coach=False,
                 _clear_duration=False, _clear_validity=False) -> Optional[Dict[str, Any]]:
-    """COALESCE partial update of a plan. Pass _clear_* to null a nullable field. Scoped to the
-    club. Past purchases (wallets) are untouched — they carry their own denormalised terms."""
+    """COALESCE partial update of a plan. Pass _clear_* to null a nullable field, or `status`
+    (active|dormant|retired) to move the plan through its lifecycle. `active` is kept in sync with
+    status (active = status='active') so every customer-facing read (active=true) Just Works. Scoped
+    to the club. Past purchases (wallets) are untouched — they carry their own denormalised terms."""
+    if status is not None and status not in ("active", "dormant", "retired"):
+        raise ValueError(f"bad status '{status}'")
     res = session.execute(
         text("""
             UPDATE billing.bundle_plan SET
@@ -148,7 +153,9 @@ def update_plan(session, *, club_id, plan_id, label=None, sessions_count=None,
                                         ELSE COALESCE(:coach, coach_user_id) END,
                 validity_days    = CASE WHEN :clr_val THEN NULL
                                         ELSE COALESCE(:validity, validity_days) END,
-                active           = COALESCE(:active, active),
+                status           = COALESCE(:status, status),
+                active           = CASE WHEN :status IS NOT NULL THEN (:status = 'active')
+                                        ELSE COALESCE(:active, active) END,
                 updated_at       = now()
             WHERE club_id = :c AND id = :id
             RETURNING id
@@ -163,21 +170,21 @@ def update_plan(session, *, club_id, plan_id, label=None, sessions_count=None,
          "coach": str(coach_user_id) if coach_user_id else None,
          "clr_val": bool(_clear_validity),
          "validity": int(validity_days) if validity_days else None,
-         "active": active},
+         "active": active, "status": status},
     ).mappings().first()
     if not res:
         return None
     return get_plan(session, club_id=club_id, plan_id=plan_id)
 
 
+def set_plan_status(session, *, club_id, plan_id, status) -> Optional[Dict[str, Any]]:
+    """Move a plan to active | dormant (configured but hidden from customers) | retired."""
+    return update_plan(session, club_id=club_id, plan_id=plan_id, status=status)
+
+
 def deactivate_plan(session, *, club_id, plan_id) -> bool:
-    """Soft-delete: stop offering the plan. Past wallets stand."""
-    res = session.execute(
-        text("UPDATE billing.bundle_plan SET active = false, updated_at = now() "
-             "WHERE club_id = :c AND id = :id RETURNING id"),
-        {"c": str(club_id), "id": str(plan_id)},
-    ).first()
-    return res is not None
+    """Soft-delete = retire: stop offering the plan (hidden from customers). Past wallets stand."""
+    return set_plan_status(session, club_id=club_id, plan_id=plan_id, status="retired") is not None
 
 
 # ---------------------------------------------------------------------------

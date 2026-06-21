@@ -420,7 +420,7 @@ def patch_product(session, *, club_id, product_id, kind=None, name=None, descrip
 def _get_price(session, *, club_id, price_id):
     return _row(session.execute(
         text("SELECT id, club_id, product_id, audience, amount_minor, currency_code, unit, "
-             "       duration_minutes, active, created_at, updated_at "
+             "       duration_minutes, active, status, created_at, updated_at "
              "FROM billing.price WHERE club_id = :c AND id = :p"),
         {"c": club_id, "p": price_id},
     ).mappings().first())
@@ -446,7 +446,11 @@ def create_price(session, *, club_id, product_id, audience="any", amount_minor=0
 
 
 def patch_price(session, *, club_id, price_id, audience=None, amount_minor=None, unit=None,
-                duration_minutes=None, active=None):
+                duration_minutes=None, active=None, status=None):
+    """Partial update. `status` (active|dormant|retired) moves the price through its lifecycle and
+    keeps the `active` boolean in sync (active = status='active') so customer reads Just Work."""
+    if status is not None and status not in ("active", "dormant", "retired"):
+        return None
     res = session.execute(
         text("""
             UPDATE billing.price SET
@@ -454,13 +458,15 @@ def patch_price(session, *, club_id, price_id, audience=None, amount_minor=None,
                 amount_minor     = COALESCE(:amount_minor, amount_minor),
                 unit             = COALESCE(:unit, unit),
                 duration_minutes = COALESCE(:duration_minutes, duration_minutes),
-                active           = COALESCE(:active, active),
+                status           = COALESCE(:status, status),
+                active           = CASE WHEN :status IS NOT NULL THEN (:status = 'active')
+                                        ELSE COALESCE(:active, active) END,
                 updated_at       = now()
             WHERE club_id = :c AND id = :p
             RETURNING id
         """),
         {"c": club_id, "p": price_id, "audience": audience, "amount_minor": amount_minor,
-         "unit": unit, "duration_minutes": duration_minutes, "active": active},
+         "unit": unit, "duration_minutes": duration_minutes, "active": active, "status": status},
     ).mappings().first()
     if not res:
         return None
@@ -468,12 +474,8 @@ def patch_price(session, *, club_id, price_id, audience=None, amount_minor=None,
 
 
 def deactivate_price(session, *, club_id, price_id):
-    res = session.execute(
-        text("UPDATE billing.price SET active = false, updated_at = now() "
-             "WHERE club_id = :c AND id = :p RETURNING id"),
-        {"c": club_id, "p": price_id},
-    ).mappings().first()
-    return res is not None
+    """Retire a price (hidden from customers, kept for history)."""
+    return patch_price(session, club_id=club_id, price_id=price_id, status="retired") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -505,6 +507,7 @@ def _plan_row(row):
         "term_months": tm,
         "currency": row["currency_code"],
         "active": bool(row["active"]),
+        "status": row["status"] if "status" in row.keys() else ("active" if row["active"] else "retired"),
     }
 
 
@@ -513,7 +516,7 @@ def list_membership_plans(session, *, club_id):
     a price on the membership product with term_months set."""
     rows = session.execute(
         text("SELECT p.id AS price_id, p.label, p.amount_minor, p.term_months, "
-             "       p.currency_code, p.active "
+             "       p.currency_code, p.active, p.status "
              "FROM billing.product pr "
              "JOIN billing.price p ON p.product_id = pr.id "
              "WHERE pr.club_id = :c AND pr.kind = 'membership' AND p.term_months IS NOT NULL "
@@ -526,7 +529,7 @@ def list_membership_plans(session, *, club_id):
 def _get_membership_plan(session, *, club_id, price_id):
     return _plan_row(session.execute(
         text("SELECT p.id AS price_id, p.label, p.amount_minor, p.term_months, "
-             "       p.currency_code, p.active "
+             "       p.currency_code, p.active, p.status "
              "FROM billing.product pr "
              "JOIN billing.price p ON p.product_id = pr.id "
              "WHERE pr.club_id = :c AND pr.kind = 'membership' AND p.id = :pid "
@@ -569,9 +572,12 @@ def create_membership_plan(session, *, club_id, label, amount_minor, term_months
 
 
 def patch_membership_plan(session, *, club_id, price_id, label=None, amount_minor=None,
-                          term_months=None, active=None):
+                          term_months=None, active=None, status=None):
     """COALESCE partial update of a term plan. Scoped to the club + the membership product so a
-    booking price can't be reshaped into a plan here. `label`='' clears to NULL (derive default)."""
+    booking price can't be reshaped into a plan here. `label`='' clears to NULL (derive default).
+    `status` (active|dormant|retired) keeps the `active` boolean in sync."""
+    if status is not None and status not in ("active", "dormant", "retired"):
+        return None
     lbl = label.strip() if isinstance(label, str) else None
     res = session.execute(
         text("""
@@ -579,7 +585,9 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
                 label        = CASE WHEN :lbl_set THEN :lbl ELSE p.label END,
                 amount_minor = COALESCE(:amount_minor, p.amount_minor),
                 term_months  = COALESCE(:term_months, p.term_months),
-                active       = COALESCE(:active, p.active),
+                status       = COALESCE(:status, p.status),
+                active       = CASE WHEN :status IS NOT NULL THEN (:status = 'active')
+                                    ELSE COALESCE(:active, p.active) END,
                 updated_at   = now()
             FROM billing.product pr
             WHERE p.product_id = pr.id AND pr.club_id = :c AND pr.kind = 'membership'
@@ -588,7 +596,8 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
         """),
         {"c": club_id, "pid": price_id,
          "lbl_set": label is not None, "lbl": (lbl or None),
-         "amount_minor": amount_minor, "term_months": term_months, "active": active},
+         "amount_minor": amount_minor, "term_months": term_months,
+         "active": active, "status": status},
     ).mappings().first()
     if not res:
         return None
@@ -596,17 +605,9 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
 
 
 def deactivate_membership_plan(session, *, club_id, price_id):
-    res = session.execute(
-        text("""
-            UPDATE billing.price p SET active = false, updated_at = now()
-            FROM billing.product pr
-            WHERE p.product_id = pr.id AND pr.club_id = :c AND pr.kind = 'membership'
-              AND p.id = :pid AND p.term_months IS NOT NULL
-            RETURNING p.id
-        """),
-        {"c": club_id, "pid": price_id},
-    ).mappings().first()
-    return res is not None
+    """Retire a term plan (hidden from customers, kept for history)."""
+    return patch_membership_plan(session, club_id=club_id, price_id=price_id,
+                                 status="retired") is not None
 
 
 # ---------------------------------------------------------------------------

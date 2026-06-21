@@ -62,13 +62,30 @@ _DDL = [
         unit            text NOT NULL DEFAULT 'per_booking'
                             CHECK (unit IN ('per_booking','per_hour','per_session','per_month')),
         duration_minutes int,                         -- for per_session/lessons
-        active          boolean NOT NULL DEFAULT true,
+        active          boolean NOT NULL DEFAULT true, -- = (status='active'); kept in sync
+        status          text NOT NULL DEFAULT 'active',-- active|dormant(hidden, kept)|retired
         created_at      timestamptz NOT NULL DEFAULT now(),
         updated_at      timestamptz NOT NULL DEFAULT now()
     );
     """,
     f"CREATE INDEX IF NOT EXISTS ix_price_club ON {SCHEMA}.price (club_id);",
     f"CREATE INDEX IF NOT EXISTS ix_price_product ON {SCHEMA}.price (product_id);",
+    # Lifecycle (3-state) on an EXISTING db: add status, backfill from the active boolean
+    # (active->'active', inactive->'retired'; only WHERE status IS NULL so a later 'dormant'
+    # is preserved across boots), then pin default/NOT NULL/CHECK. Idempotent.
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS status text;",
+    f"UPDATE {SCHEMA}.price SET status = CASE WHEN active THEN 'active' ELSE 'retired' END "
+    f"WHERE status IS NULL;",
+    f"ALTER TABLE {SCHEMA}.price ALTER COLUMN status SET DEFAULT 'active';",
+    f"ALTER TABLE {SCHEMA}.price ALTER COLUMN status SET NOT NULL;",
+    f"""
+    DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'price_status_chk') THEN
+            ALTER TABLE {SCHEMA}.price ADD CONSTRAINT price_status_chk
+                CHECK (status IN ('active','dormant','retired'));
+        END IF;
+    END $$;
+    """,
 
     # --- billing.membership_subscription : recurring memberships ----------
     f"""
@@ -463,13 +480,28 @@ _DDL = [
         price_minor      int  NOT NULL CHECK (price_minor >= 0),
         currency_code    text NOT NULL DEFAULT 'ZAR',
         validity_days    int,                            -- NULL = no expiry
-        active           boolean NOT NULL DEFAULT true,
+        active           boolean NOT NULL DEFAULT true,   -- = (status='active'); kept in sync
+        status           text NOT NULL DEFAULT 'active',  -- active|dormant(hidden, kept)|retired
         created_at       timestamptz NOT NULL DEFAULT now(),
         updated_at       timestamptz NOT NULL DEFAULT now()
     );
     """,
     f"CREATE INDEX IF NOT EXISTS ix_bundle_plan_club "
     f"ON {SCHEMA}.bundle_plan (club_id, service_kind, active);",
+    # Lifecycle (3-state) on an EXISTING db — mirror of billing.price above. Idempotent.
+    f"ALTER TABLE {SCHEMA}.bundle_plan ADD COLUMN IF NOT EXISTS status text;",
+    f"UPDATE {SCHEMA}.bundle_plan SET status = CASE WHEN active THEN 'active' ELSE 'retired' END "
+    f"WHERE status IS NULL;",
+    f"ALTER TABLE {SCHEMA}.bundle_plan ALTER COLUMN status SET DEFAULT 'active';",
+    f"ALTER TABLE {SCHEMA}.bundle_plan ALTER COLUMN status SET NOT NULL;",
+    f"""
+    DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'bundle_plan_status_chk') THEN
+            ALTER TABLE {SCHEMA}.bundle_plan ADD CONSTRAINT bundle_plan_status_chk
+                CHECK (status IN ('active','dormant','retired'));
+        END IF;
+    END $$;
+    """,
 
     # 2. token_wallet — a member's purchased pack (denormalised for matching).
     f"""
