@@ -207,6 +207,13 @@ def yoco_webhook():
                     act = membership_repo.activate_membership_for_order(
                         s, order_id=result["order_id"], provider="yoco")
                     result["membership"] = act
+                # Bundle/token pack purchase (docs/specs/02): activate the linked PENDING wallet —
+                # grant sessions_count tokens + set expires_at. Idempotent keyed off order_id (a
+                # replay finds it already active → no second grant), mirroring the membership hook.
+                from billing import bundles as bundles_repo
+                if bundles_repo.is_bundle_order(s, order_id=result["order_id"]):
+                    result["bundle"] = bundles_repo.activate_wallet_for_order(
+                        s, order_id=result["order_id"], provider="yoco")
     except Exception:
         # Transient (e.g. DB) error — 500 so Yoco retries the delivery.
         log.exception("apply_payment_event failed for yoco webhook")
@@ -290,6 +297,106 @@ def membership_status():
         # Surface whether the club has online pay on, so the page can disable the Buy button.
         st["online_enabled"] = bool(_truthy("PAYMENTS_ENABLED") and _club_allows_online(s, p.club_id))
     return jsonify(st), 200
+
+
+# ---------------------------------------------------------------------------
+# Session packs (token bundles) — buy a prepaid pack of N sessions via the SAME hosted checkout.
+# Mirrors the membership purchase seam: checkout creates an awaiting_payment order + a pending
+# token_wallet linked by order_id; the webhook (above) activates the wallet (grants tokens) on the
+# paid charge — idempotent. docs/specs/02.
+# ---------------------------------------------------------------------------
+
+@yoco_bp.get("/api/billing/bundles")
+def bundles_list():
+    """AUTH'd member. The club's active bundle plans the member can buy (optionally one kind):
+    GET /api/billing/bundles?service_kind=court|lesson|class
+    -> {plans:[{id,service_kind,coach_user_id,label,sessions_count,duration_minutes,price_minor,
+                currency,validity_days}], online_enabled}."""
+    from auth import resolve_principal
+
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(error="unauthorized"), 401
+    if not p.club_id:
+        return jsonify(error="no_club"), 403
+
+    service_kind = (request.args.get("service_kind") or "").strip() or None
+
+    from db import session_scope
+    from billing import bundles as bundles_repo
+    with session_scope() as s:
+        plans = bundles_repo.list_plans(s, club_id=p.club_id, service_kind=service_kind)
+        online = bool(_truthy("PAYMENTS_ENABLED") and _club_allows_online(s, p.club_id))
+    return jsonify(plans=plans, count=len(plans), online_enabled=online), 200
+
+
+@yoco_bp.get("/api/billing/bundles/wallets")
+def bundles_wallets():
+    """AUTH'd member. Their token wallets (remaining + expiry), optionally for one kind:
+    GET /api/billing/bundles/wallets?service_kind=&active=1
+    -> {wallets:[{id,service_kind,coach_user_id,duration_minutes,tokens_total,tokens_remaining,
+                  status,expires_at,label}]}."""
+    from auth import resolve_principal
+
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(error="unauthorized"), 401
+    if not p.club_id:
+        return jsonify(error="no_club"), 403
+
+    service_kind = (request.args.get("service_kind") or "").strip() or None
+    active_only = (request.args.get("active") or "").strip() in ("1", "true", "yes")
+
+    from db import session_scope
+    from billing import bundles as bundles_repo
+    with session_scope() as s:
+        wallets = bundles_repo.wallets_for(s, club_id=p.club_id, user_id=p.user_id,
+                                           service_kind=service_kind, active_only=active_only)
+    return jsonify(wallets=wallets, count=len(wallets)), 200
+
+
+@yoco_bp.post("/api/billing/bundles/checkout")
+def bundles_checkout():
+    """AUTH'd member. Create an online order for a chosen bundle plan + a pending token_wallet
+    linked by order_id, then return {order_id} for Pay.startYocoCheckout. Same gates as a booking
+    online payment. Body {bundle_plan_id}."""
+    from auth import resolve_principal
+
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(error="unauthorized"), 401
+    if not p.club_id:
+        return jsonify(error="no_club"), 403
+    if not p.user_id:
+        return jsonify(error="no_user"), 403
+
+    if not _truthy("PAYMENTS_ENABLED"):
+        return jsonify(error="online_payments_disabled"), 403
+
+    body = request.get_json(silent=True) or {}
+    plan_id = (body.get("bundle_plan_id") or "").strip()
+    if not plan_id:
+        return jsonify(error="bundle_plan_id required"), 400
+
+    from db import session_scope
+    from billing import bundles as bundles_repo
+
+    with session_scope() as s:
+        if not _club_allows_online(s, p.club_id):
+            return jsonify(error="online_payments_not_enabled_for_club"), 403
+        try:
+            res = bundles_repo.create_bundle_order(
+                s, club_id=p.club_id, user_id=p.user_id, bundle_plan_id=plan_id)
+        except Exception as e:
+            log.warning("create_bundle_order failed club=%s: %s", p.club_id, e)
+            return jsonify(error="bundle_order_failed"), 500
+        if not res:
+            return jsonify(error="bundle_plan_not_found"), 404
+        if int(res.get("amount_minor") or 0) <= 0:
+            return jsonify(error="bundle_has_no_price"), 400
+
+    return jsonify(order_id=res["order_id"], amount_minor=res["amount_minor"],
+                   currency=res["currency"], plan=res["plan"], provider="yoco"), 200
 
 
 # ---------------------------------------------------------------------------

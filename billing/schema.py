@@ -25,7 +25,9 @@ from sqlalchemy import text
 SCHEMA = "billing"
 
 # Settlement modes (docs/05 §5) and order statuses (docs/02 §5) — enforced as CHECK constraints.
-SETTLEMENT_MODES = ("online", "at_court", "monthly_account", "membership_covered", "free")
+# 'token' = settled by drawing one prepaid session token (docs/specs/02): order paid, amount 0,
+# booking confirmed — the count-based sibling of membership_covered/free.
+SETTLEMENT_MODES = ("online", "at_court", "monthly_account", "membership_covered", "free", "token")
 ORDER_STATUSES = ("open", "awaiting_payment", "paid", "void", "refunded", "written_off")
 
 _DDL = [
@@ -101,7 +103,7 @@ _DDL = [
         amount_minor    int NOT NULL DEFAULT 0,
         currency_code   text NOT NULL,
         settlement_mode text NOT NULL CHECK (settlement_mode IN
-                            ('online','at_court','monthly_account','membership_covered','free')),
+                            ('online','at_court','monthly_account','membership_covered','free','token')),
         status          text NOT NULL DEFAULT 'open' CHECK (status IN
                             ('open','awaiting_payment','paid','void','refunded','written_off')),
         due_date        date,                         -- for monthly_account
@@ -424,6 +426,120 @@ _DDL = [
     f"CREATE UNIQUE INDEX IF NOT EXISTS ux_refund_request_open "
     f"ON {SCHEMA}.refund_request (order_id) WHERE status = 'pending';",
     # --- end refund_request (client self-service) ---
+
+    # ===========================================================================
+    # --- token / bundle engine (prepaid session packs) --- (docs/specs/02)
+    #
+    # SHARED-FILE PROTOCOL: appended at the very END of billing's _DDL, after the
+    # refund_request block. Touches nothing above. Idempotent CREATE/ALTER ... IF NOT EXISTS
+    # throughout (python -m db twice = no-op). All rows carry club_id (multi-tenant). Money in
+    # *_minor cents.
+    #
+    # A GENERIC, owner-configurable prepaid-pack capability: a member buys N prepaid sessions
+    # (tokens); a matching booking DRAWS one (settling at R0, settlement_mode='token'); a
+    # cancel CREDITS one back. The count-based sibling of PAYG (per-use) + membership (time).
+    # Works for court / lesson / class. Nothing is hardcoded — a pack is a bundle_plan row.
+    #
+    #   bundle_plan   — the owner offer (service_kind, optional coach, label, sessions_count,
+    #                   optional duration, price, optional validity). NOTHING hardcoded.
+    #   token_wallet  — a member's purchased pack (denormalised kind/coach/duration for fast
+    #                   matching; tokens_total/remaining; status pending|active|exhausted|expired;
+    #                   order_id links the Yoco purchase so the webhook activates idempotently).
+    #   token_ledger  — audit + idempotency. UNIQUE (wallet_id, booking_id, kind) NULLS NOT
+    #                   DISTINCT so a draw AND a credit-back are each recorded at most once per
+    #                   booking (idempotent re-runs); the balance only moves when the row inserts.
+    # ---------------------------------------------------------------------------
+
+    # 1. bundle_plan — the configurable offer.
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.bundle_plan (
+        id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id          uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        service_kind     text NOT NULL CHECK (service_kind IN ('court','lesson','class')),
+        coach_user_id    uuid,                          -- lesson packs may be coach-specific; NULL = any
+        label            text,
+        sessions_count   int  NOT NULL CHECK (sessions_count > 0),
+        duration_minutes int,                           -- per-token session length; NULL = any
+        price_minor      int  NOT NULL CHECK (price_minor >= 0),
+        currency_code    text NOT NULL DEFAULT 'ZAR',
+        validity_days    int,                            -- NULL = no expiry
+        active           boolean NOT NULL DEFAULT true,
+        created_at       timestamptz NOT NULL DEFAULT now(),
+        updated_at       timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_bundle_plan_club "
+    f"ON {SCHEMA}.bundle_plan (club_id, service_kind, active);",
+
+    # 2. token_wallet — a member's purchased pack (denormalised for matching).
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.token_wallet (
+        id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id          uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        user_id          uuid,                          -- iam.user.id (owner)
+        bundle_plan_id   uuid REFERENCES {SCHEMA}.bundle_plan(id) ON DELETE SET NULL,
+        order_id         uuid REFERENCES {SCHEMA}."order"(id) ON DELETE SET NULL,
+        service_kind     text NOT NULL CHECK (service_kind IN ('court','lesson','class')),
+        coach_user_id    uuid,                          -- denormalised (NULL = any)
+        duration_minutes int,                           -- denormalised (NULL = any)
+        tokens_total     int  NOT NULL DEFAULT 0,
+        tokens_remaining int  NOT NULL DEFAULT 0 CHECK (tokens_remaining >= 0),
+        status           text NOT NULL DEFAULT 'pending'
+                            CHECK (status IN ('pending','active','exhausted','expired')),
+        purchased_at     timestamptz,
+        expires_at       date,                           -- NULL = no expiry
+        created_at       timestamptz NOT NULL DEFAULT now(),
+        updated_at       timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_token_wallet_club "
+    f"ON {SCHEMA}.token_wallet (club_id);",
+    # The hot path: match_wallet scans a member's active wallets for a service_kind.
+    f"CREATE INDEX IF NOT EXISTS ix_token_wallet_match "
+    f"ON {SCHEMA}.token_wallet (club_id, user_id, service_kind, status);",
+    f"CREATE INDEX IF NOT EXISTS ix_token_wallet_order "
+    f"ON {SCHEMA}.token_wallet (order_id) WHERE order_id IS NOT NULL;",
+
+    # 3. token_ledger — audit + THE idempotency guard.
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.token_ledger (
+        id          bigserial PRIMARY KEY,
+        club_id     uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        wallet_id   uuid NOT NULL REFERENCES {SCHEMA}.token_wallet(id) ON DELETE CASCADE,
+        booking_id  uuid,                                -- diary.booking / enrolment (cross-lane)
+        kind        text NOT NULL CHECK (kind IN ('draw','credit','grant','expire')),
+        delta       int  NOT NULL,                        -- signed: draw -1, credit +1, grant +N
+        reason      text,
+        created_at  timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_token_ledger_wallet "
+    f"ON {SCHEMA}.token_ledger (wallet_id, created_at);",
+    f"CREATE INDEX IF NOT EXISTS ix_token_ledger_booking "
+    f"ON {SCHEMA}.token_ledger (booking_id) WHERE booking_id IS NOT NULL;",
+    # THE idempotency guard: a draw and a credit-back are each recorded at most ONCE per
+    # (wallet, booking). NULLS NOT DISTINCT so grant/expire rows (booking_id NULL) also dedupe
+    # — at most one grant per wallet. The balance only moves when the row actually inserts.
+    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_token_ledger_once "
+    f"ON {SCHEMA}.token_ledger (wallet_id, booking_id, kind) NULLS NOT DISTINCT;",
+
+    # Migrate the order settlement_mode CHECK on an EXISTING db so 'token' is accepted (a plain
+    # CREATE TABLE IF NOT EXISTS never re-applies the inline CHECK above). Idempotent: drop the
+    # old constraint if present, then add the full set. DO block keeps it a no-op when already current.
+    f"""
+    DO $$
+    BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.constraint_column_usage
+                   WHERE table_schema = '{SCHEMA}' AND table_name = 'order'
+                     AND constraint_name = 'order_settlement_mode_check') THEN
+            ALTER TABLE {SCHEMA}."order" DROP CONSTRAINT order_settlement_mode_check;
+        END IF;
+        ALTER TABLE {SCHEMA}."order" ADD CONSTRAINT order_settlement_mode_check
+            CHECK (settlement_mode IN
+                ('online','at_court','monthly_account','membership_covered','free','token'));
+    END $$;
+    """,
+    # --- end token / bundle engine ---
 ]
 
 

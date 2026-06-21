@@ -111,7 +111,9 @@ def _settlement_allowed(mode, policy, role):
         return bool(policy.get("allow_monthly_account", True))
     if mode == "online":
         return bool(policy.get("allow_online_payment", False))
-    if mode in ("membership_covered", "free"):
+    if mode in ("membership_covered", "free", "token"):
+        # token: a member spending their own prepaid pack is always allowed; the real gate is
+        # whether they actually HOLD a matching wallet (match_wallet → NO_TOKEN otherwise).
         return True
     return False
 
@@ -145,11 +147,59 @@ def release_expired_holds(session, club_id, now=None):
 # billing speaks product kinds. This adapter is the single translation point.
 _KIND_BY_BOOKING_TYPE = {"court": "court_booking", "lesson": "lesson", "class": "class"}
 
+# booking_type -> bundle service_kind (docs/specs/02). The token engine speaks the diary's
+# booking-type vocabulary directly (court|lesson|class).
+_SERVICE_KIND_BY_BOOKING_TYPE = {"court": "court", "lesson": "lesson", "class": "class"}
+
+
+def _match_token_wallet_guarded(session, *, club_id, user_id, booking_type,
+                                duration_minutes=None, coach_user_id=None):
+    """Find (and LOCK, FOR UPDATE) the best token wallet for this booking, or None. Guarded so the
+    diary self-verifies without billing.* present. The wallet is held under the caller's tx so the
+    subsequent draw_token can't race. service_kind/duration/coach drive the match (docs/specs/02)."""
+    try:
+        from billing import bundles
+    except Exception:
+        return None
+    service_kind = _SERVICE_KIND_BY_BOOKING_TYPE.get(booking_type)
+    if not service_kind:
+        return None
+    try:
+        return bundles.match_wallet(
+            session, club_id=club_id, user_id=user_id, service_kind=service_kind,
+            duration_minutes=duration_minutes, coach_user_id=coach_user_id)
+    except Exception:
+        log.debug("token match_wallet suppressed (bundles/tables absent)", exc_info=False)
+        return None
+
+
+def _draw_token_guarded(session, *, club_id, wallet, booking_id, reason="booking"):
+    """Draw one token from an already-matched wallet for this booking. Idempotent + guarded."""
+    try:
+        from billing import bundles
+        return bundles.draw_token(session, club_id=club_id, wallet=wallet,
+                                  booking_id=booking_id, reason=reason)
+    except Exception:
+        log.warning("token draw failed (booking kept, order deferred)", exc_info=False)
+        return False
+
+
+def _credit_token_guarded(session, *, club_id, booking_id, reason="cancellation"):
+    """Credit one token back for a token-settled booking on cancel. Idempotent + guarded so a
+    re-cancel (or a non-token booking) is a clean no-op."""
+    try:
+        from billing import bundles
+        return bundles.credit_token(session, club_id=club_id, booking_id=booking_id, reason=reason)
+    except Exception:
+        log.debug("token credit suppressed (bundles/tables absent)", exc_info=False)
+        return False
+
 
 def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking_type="court",
                           settlement_mode="at_court", parties=None, resource_id=None,
                           starts_at=None, ends_at=None, linked_booking_id=None,
-                          audience="member", enrolment_id=None, duration_minutes=None):
+                          audience="member", enrolment_id=None, duration_minutes=None,
+                          token_wallet=None, token_ref=None):
     """Adapter between the diary and Agent C's billing.orders.create_order_for_booking.
 
     The diary speaks bookings; billing speaks order *lines*. We translate here: price each
@@ -158,9 +208,20 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
     the diary callers expect {order_id, status, checkout, amount_minor}.
 
     membership_covered -> the order is free: lines carry amount 0 (the membership pays for it).
+    token -> the order is free (R0, settlement 'token'): a prepaid session token is drawn from
+    `token_wallet` (matched + locked by the caller). If settlement is 'token' but no wallet was
+    matched, return {"error":"NO_TOKEN"} so the caller rejects the booking cleanly (UI falls back
+    to PAYG) — and NOTHING is billed.
 
     Guarded: if billing isn't present (self-verify mode) the booking still succeeds with no
     order; if pricing isn't seeded yet, lines carry amount 0 (admin sets price later)."""
+    # --- token settlement (docs/specs/02): draw a prepaid token, settle the order at R0. -------
+    is_token = (settlement_mode == "token")
+    if is_token and token_wallet is None:
+        # No matching wallet was found at the pre-flight match — reject so the booking rolls back.
+        return {"order_id": None, "status": None, "checkout": None,
+                "amount_minor": None, "error": "NO_TOKEN"}
+
     try:
         from billing.orders import create_order_for_booking, booking_status_for_mode
     except Exception:
@@ -171,7 +232,7 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
     kind = _KIND_BY_BOOKING_TYPE.get(booking_type, "court_booking")
     ref = {"booking_id": booking_id, "enrolment_id": enrolment_id}
     parties = parties or []
-    covered = (settlement_mode == "membership_covered")  # free — the membership pays
+    covered = (settlement_mode == "membership_covered" or is_token)  # free — token/membership pays
 
     def _amount(pr):
         return 0 if covered else (pr.get("amount_minor") or 0)
@@ -197,6 +258,17 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
             session, club_id=club_id, user_id=user_id, lines=lines,
             settlement_mode=settlement_mode)
         total = sum(int(l["amount_minor"]) * int(l.get("qty") or 1) for l in lines)
+        # token settlement: draw ONE token from the locked wallet for THIS booking, in the SAME
+        # transaction (so a rollback un-draws it; a committed draw always has a confirmed booking).
+        # The draw is idempotent per (wallet, ref); a False return means it was already drawn. The
+        # ledger ref is the booking_id for court/lesson, or the enrolment_id (token_ref) for a class.
+        draw_ref = token_ref or booking_id
+        if is_token and draw_ref and token_wallet is not None:
+            drawn = _draw_token_guarded(session, club_id=club_id, wallet=token_wallet,
+                                        booking_id=draw_ref, reason=f"{booking_type} booking")
+            if not drawn:
+                # Re-run for the same booking (idempotent) — fine; the token already moved.
+                log.debug("token already drawn for booking=%s (idempotent)", booking_id)
         return {"order_id": str(order_id) if order_id else None,
                 "status": booking_status_for_mode(settlement_mode),
                 "checkout": None,  # gateway checkout intent comes later (Phase 7, online mode)
@@ -288,6 +360,22 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     held_until = (now + timedelta(minutes=hold_minutes)) if online else None
     coach_uid = coach_user_id or (res["coach_user_id"] if res["kind"] == "coach" else None)
 
+    # Token settlement (docs/specs/02): PRE-FLIGHT match a prepaid wallet BEFORE we insert the
+    # booking, so a NO-token request never persists anything (clean NO_TOKEN — the UI falls back to
+    # PAYG). The matched wallet is locked FOR UPDATE and held through the insert; the draw happens
+    # in the SAME transaction right after order creation. service_kind/duration/coach drive the
+    # match: a lesson token may be coach-specific (coach_uid), a court/class token is coach-agnostic.
+    token_wallet = None
+    if settlement_mode == "token":
+        duration_for_match = int((ends - starts).total_seconds() // 60)
+        match_coach = coach_uid if booking_type == "lesson" else None
+        token_wallet = _match_token_wallet_guarded(
+            session, club_id=club_id, user_id=owner_user_id, booking_type=booking_type,
+            duration_minutes=duration_for_match, coach_user_id=match_coach)
+        if token_wallet is None:
+            return _err("NO_TOKEN", 422,
+                        message="no matching prepaid token — choose another way to pay")
+
     # --- the concurrency-safe insert(s) inside one transaction ----------
     try:
         with session.begin_nested():  # SAVEPOINT — lets us catch the overlap cleanly
@@ -325,7 +413,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         booking_type=booking_type, settlement_mode=settlement_mode, parties=parties,
         resource_id=resource_id, starts_at=starts, ends_at=ends,
         linked_booking_id=linked_court_id, audience=audience,
-        duration_minutes=duration_minutes,
+        duration_minutes=duration_minutes, token_wallet=token_wallet,
     )
     order_id = order.get("order_id")
     if order_id:
@@ -513,6 +601,17 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
          "oid": bk.get("order_id")},
     )
 
+    # Token credit-back (docs/specs/02): if this booking (or its linked lesson court) was settled
+    # by a prepaid token, return the token to the wallet. Idempotent — a re-cancel credits nothing.
+    # Default policy: ALWAYS credit back on cancel (a too-late forfeit is a future option). The
+    # lesson + its court share the order_id but only ONE token was drawn (against booking_id), so
+    # we credit the cancelled booking_id (and, defensively, any linked booking that drew a token).
+    credited = _credit_token_guarded(session, club_id=club_id, booking_id=booking_id,
+                                     reason=reason or "cancellation")
+    if bk.get("order_id"):
+        _credit_linked_tokens(session, club_id=club_id, order_id=bk["order_id"],
+                              except_booking_id=booking_id, reason=reason or "cancellation")
+
     booking = _booking_dict(session, booking_id)
     res = _resource(session, club_id, booking["resource_id"])
     payload = _payload(booking, res)
@@ -524,7 +623,24 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
                                        resource_id=booking["resource_id"],
                                        desired_start=_parse_dt(booking["starts_at"]))
     return {"ok": True, "booking": booking, "fee_applied": fee_applies,
-            "fee_minor": fee_minor, "waitlist_notified": promoted}
+            "fee_minor": fee_minor, "waitlist_notified": promoted,
+            "token_credited": credited}
+
+
+def _credit_linked_tokens(session, *, club_id, order_id, except_booking_id, reason):
+    """Credit back any token drawn against OTHER bookings sharing this order_id (e.g. a lesson and
+    its auto-held court — both cancelled together). Each credit is idempotent per (wallet, booking).
+    Cheap + guarded; a no-op when no linked token bookings exist."""
+    try:
+        rows = session.execute(
+            text("SELECT id FROM diary.booking "
+                 "WHERE club_id=:c AND order_id=:o AND id<>:b"),
+            {"c": club_id, "o": order_id, "b": except_booking_id},
+        ).mappings().all()
+    except Exception:
+        return
+    for r in rows:
+        _credit_token_guarded(session, club_id=club_id, booking_id=str(r["id"]), reason=reason)
 
 
 def _promote_court_waitlist(session, *, club_id, resource_id, desired_start):

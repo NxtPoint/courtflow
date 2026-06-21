@@ -444,6 +444,87 @@ def delete_membership_plan(price_id):
 
 
 # ---------------------------------------------------------------------------
+# session-pack (token bundle) plans — the owner-configured prepaid packs (docs/specs/02).
+# Each plan = a billing.bundle_plan row (service_kind, optional coach, label, #sessions, optional
+# duration, price, optional validity). Generic across court/lesson/class; nothing hardcoded.
+# Delegates to billing.bundles (the engine owns the CRUD); routes stay thin.
+# ---------------------------------------------------------------------------
+
+@admin_bp.get("/bundle-plans")
+def get_bundle_plans():
+    p, err = _admin()
+    if err:
+        return err
+    from billing import bundles as bundles_repo
+    service_kind = (request.args.get("service_kind") or "").strip() or None
+    with session_scope() as s:
+        plans = bundles_repo.list_plans(s, club_id=p.club_id, service_kind=service_kind,
+                                        active_only=False)
+    return jsonify(plans=plans, count=len(plans)), 200
+
+
+@admin_bp.post("/bundle-plans")
+def post_bundle_plan():
+    p, err = _admin()
+    if err:
+        return err
+    from billing import bundles as bundles_repo
+    b = _body()
+    service_kind = (b.get("service_kind") or "").strip()
+    if service_kind not in ("court", "lesson", "class"):
+        return jsonify(error="service_kind must be court|lesson|class"), 400
+    sessions_count = b.get("sessions_count")
+    price_minor = b.get("price_minor")
+    if sessions_count is None or int(sessions_count) < 1:
+        return jsonify(error="sessions_count must be >= 1"), 400
+    if price_minor is None or int(price_minor) < 0:
+        return jsonify(error="price_minor required"), 400
+    with session_scope() as s:
+        plan = bundles_repo.create_plan(
+            s, club_id=p.club_id, service_kind=service_kind,
+            sessions_count=int(sessions_count), price_minor=int(price_minor),
+            label=b.get("label"), duration_minutes=b.get("duration_minutes"),
+            coach_user_id=b.get("coach_user_id"), validity_days=b.get("validity_days"))
+    return jsonify(plan=plan), 201
+
+
+@admin_bp.patch("/bundle-plans/<plan_id>")
+def patch_bundle_plan(plan_id):
+    p, err = _admin()
+    if err:
+        return err
+    from billing import bundles as bundles_repo
+    b = _body()
+    with session_scope() as s:
+        plan = bundles_repo.update_plan(
+            s, club_id=p.club_id, plan_id=plan_id,
+            label=b.get("label"), sessions_count=b.get("sessions_count"),
+            duration_minutes=b.get("duration_minutes"), price_minor=b.get("price_minor"),
+            coach_user_id=b.get("coach_user_id"), validity_days=b.get("validity_days"),
+            active=b.get("active"),
+            _clear_coach=bool(b.get("clear_coach")),
+            _clear_duration=bool(b.get("clear_duration")),
+            _clear_validity=bool(b.get("clear_validity")))
+    if plan is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(plan=plan), 200
+
+
+@admin_bp.delete("/bundle-plans/<plan_id>")
+def delete_bundle_plan(plan_id):
+    """Deactivate (soft-delete) a pack — it stops being offered but past purchases stand."""
+    p, err = _admin()
+    if err:
+        return err
+    from billing import bundles as bundles_repo
+    with session_scope() as s:
+        ok = bundles_repo.deactivate_plan(s, club_id=p.club_id, plan_id=plan_id)
+    if not ok:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(ok=True), 200
+
+
+# ---------------------------------------------------------------------------
 # classes (class type = resource(kind='class') + product(kind='class') + price)
 # ---------------------------------------------------------------------------
 
