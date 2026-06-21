@@ -214,6 +214,166 @@ _DDL = [
     #   ADD COLUMN IF NOT EXISTS — safe on every boot and twice in a row.
     f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS term_months int;",
     f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS label text;",
+
+    # ===========================================================================
+    # --- commission engine (owner) --- (Phase D, owner-self-service lane)
+    #
+    # SHARED-FILE PROTOCOL: this block is appended at the very END of billing's _DDL by
+    # the commission/coaching-settlement (owner) lane. The Client-financials lane also
+    # appends here — both keep their own clearly-marked `# ---  ... ---` block so a merge
+    # preserves both. Idempotent CREATE TABLE/INDEX IF NOT EXISTS throughout (python -m db
+    # twice = no-op). All tables carry club_id (multi-tenant). Money in *_minor cents,
+    # ex-VAT net (docs/specs/01). See billing/commission.py for the engine logic.
+    #
+    #   coach_agreement  — per coach: optional rent + effective dates (the "is this coach
+    #                      monetised, and what rent" record). Commission % lives in rules.
+    #   commission_rule  — scoped (club|product|coach|coach_product), dated rate rows; the
+    #                      resolution input (coach+product > product > coach > club).
+    #   commission_split — per-payment-line decomposition (owner cut + coach net), signed,
+    #                      idempotent on (payment_id, order_line_id, party_type).
+    #   coach_ledger     — signed running account per coach (earnings +, rent -, payout -).
+    #   coach_arrears    — an unpaid (off-platform) lesson on the coach's per-client tab;
+    #                      coach marks it collected -> commission accrues (docs/specs/01).
+    # ---------------------------------------------------------------------------
+
+    # 1. coach_agreement — rent posture, one active row per coach.
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.coach_agreement (
+        id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id         uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        coach_user_id   uuid NOT NULL,                  -- iam.user (coach)
+        rent_minor      integer NOT NULL DEFAULT 0,     -- monthly rent the coach owes (cents, ex-VAT)
+        rent_currency   text    NOT NULL DEFAULT 'ZAR',
+        rent_day        integer NOT NULL DEFAULT 1
+                          CHECK (rent_day BETWEEN 1 AND 28),
+        status          text NOT NULL DEFAULT 'active'
+                          CHECK (status IN ('active','ended')),
+        effective_from  date NOT NULL DEFAULT CURRENT_DATE,
+        effective_to    date,
+        notes           text,
+        created_at      timestamptz NOT NULL DEFAULT now(),
+        updated_at      timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_coach_agreement_club "
+    f"ON {SCHEMA}.coach_agreement (club_id, coach_user_id);",
+    # one active, open-ended agreement per coach at a time:
+    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_agreement_active "
+    f"ON {SCHEMA}.coach_agreement (club_id, coach_user_id) "
+    f"WHERE status = 'active' AND effective_to IS NULL;",
+
+    # 2. commission_rule — scoped, dated rate rows.
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.commission_rule (
+        id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id         uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        scope           text NOT NULL
+                          CHECK (scope IN ('club','product','coach','coach_product')),
+        product_id      uuid,                            -- billing.product; null = any
+        coach_user_id   uuid,                            -- null = any coach
+        commission_pct  numeric(5,2) NOT NULL            -- % the CLUB keeps (0..100)
+                          CHECK (commission_pct >= 0 AND commission_pct <= 100),
+        effective_from  timestamptz NOT NULL DEFAULT now(),
+        effective_to    timestamptz,
+        active          boolean NOT NULL DEFAULT true,
+        note            text,
+        created_at      timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_commission_rule_resolve "
+    f"ON {SCHEMA}.commission_rule (club_id, active, product_id, coach_user_id);",
+
+    # 3. commission_split — per-payment-line decomposition (signed, record-only).
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.commission_split (
+        id              bigserial PRIMARY KEY,
+        club_id         uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        payment_id      uuid REFERENCES {SCHEMA}.payment(id) ON DELETE CASCADE,
+        order_line_id   uuid,                            -- billing.order_line
+        booking_id      uuid,                            -- diary.booking
+        coach_user_id   uuid,
+        product_id      uuid,
+        rule_id         uuid REFERENCES {SCHEMA}.commission_rule(id),
+        party_type      text NOT NULL
+                          CHECK (party_type IN ('owner','coach')),
+        basis           text NOT NULL
+                          CHECK (basis IN ('lesson_commission','class_commission',
+                                           'arrears_commission','refund_clawback')),
+        gross_minor     integer NOT NULL,                -- ex-VAT line gross used as the base
+        commission_pct  numeric(5,2),                    -- snapshot of the resolved rate
+        amount_minor    integer NOT NULL,                -- SIGNED: owner cut / coach net
+        currency        text NOT NULL DEFAULT 'ZAR',
+        occurred_at     timestamptz NOT NULL DEFAULT now(),
+        created_at      timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    # THE idempotency guard for the on-collection accrual: one (owner,coach) pair per
+    # payment line. NULLS NOT DISTINCT so arrears splits (payment_id NULL) dedupe on
+    # (order_line_id, party_type) too. A re-delivered webhook re-enters the fan-out and
+    # ON CONFLICT DO NOTHING makes it a strict no-op.
+    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_commission_split "
+    f"ON {SCHEMA}.commission_split (payment_id, order_line_id, party_type) NULLS NOT DISTINCT;",
+    f"CREATE INDEX IF NOT EXISTS ix_commission_split_coach "
+    f"ON {SCHEMA}.commission_split (club_id, coach_user_id, occurred_at);",
+
+    # 4. coach_ledger — signed running account per coach.
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.coach_ledger (
+        id              bigserial PRIMARY KEY,
+        club_id         uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        coach_user_id   uuid NOT NULL,
+        entry_type      text NOT NULL
+                          CHECK (entry_type IN ('commission_earning','rent_charge',
+                                                'payout','adjustment')),
+        amount_minor    integer NOT NULL,                -- SIGNED: + owed TO coach, - owed BY coach
+        currency        text NOT NULL DEFAULT 'ZAR',
+        ref_type        text,                            -- 'split' | 'rent_period' | 'payout'
+        ref_id          text,                            -- split.id / 'YYYY-MM' / payout.id
+        note            text,
+        occurred_at     timestamptz NOT NULL DEFAULT now(),
+        created_at      timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_coach_ledger "
+    f"ON {SCHEMA}.coach_ledger (club_id, coach_user_id, occurred_at);",
+    # idempotency for accrual entries via a deterministic ref (period rent / split id):
+    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_ledger_rent "
+    f"ON {SCHEMA}.coach_ledger (club_id, coach_user_id, ref_id) "
+    f"WHERE entry_type = 'rent_charge';",
+    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_ledger_earning "
+    f"ON {SCHEMA}.coach_ledger (club_id, coach_user_id, ref_id) "
+    f"WHERE entry_type = 'commission_earning';",
+
+    # 5. coach_arrears — an unpaid (off-platform) lesson on the coach's per-client tab.
+    # Created lazily from confirmed-but-unpaid lesson bookings; the coach marks it
+    # collected (off-platform EFT) -> commission accrues (docs/specs/01). Idempotent on
+    # the source booking so the lazy upsert never double-posts.
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.coach_arrears (
+        id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id         uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        coach_user_id   uuid NOT NULL,
+        client_user_id  uuid,
+        booking_id      uuid,                            -- diary.booking (the source lesson)
+        order_line_id   uuid,                            -- billing.order_line (commission base)
+        product_id      uuid,
+        gross_minor     integer NOT NULL DEFAULT 0,      -- ex-VAT owed
+        currency        text NOT NULL DEFAULT 'ZAR',
+        status          text NOT NULL DEFAULT 'owed'
+                          CHECK (status IN ('owed','collected','written_off')),
+        collected_at    timestamptz,
+        collected_by    uuid,
+        note            text,
+        created_at      timestamptz NOT NULL DEFAULT now(),
+        updated_at      timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_coach_arrears_coach "
+    f"ON {SCHEMA}.coach_arrears (club_id, coach_user_id, status);",
+    # one arrears row per source booking (the lazy upsert key):
+    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_arrears_booking "
+    f"ON {SCHEMA}.coach_arrears (club_id, booking_id) WHERE booking_id IS NOT NULL;",
+    # --- end commission engine (owner) ---
 ]
 
 

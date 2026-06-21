@@ -14,6 +14,7 @@
     { k: "courts", t: "Courts" },
     { k: "services", t: "Services & pricing" },
     { k: "coaches", t: "Coaches" },
+    { k: "coachpay", t: "Coach pay" },
     { k: "payments", t: "Payments" },
   ];
 
@@ -57,6 +58,8 @@
       window.AdminUI.services(sectionHost, {});
     } else if (state.tab === "coaches") {
       window.AdminUI.coaches(sectionHost, {});
+    } else if (state.tab === "coachpay") {
+      window.AdminUI.coachAgreements(sectionHost, {});
     } else if (state.tab === "payments") {
       renderPayments(sectionHost, (state.data && state.data.policy) || {});
     }

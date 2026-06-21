@@ -134,11 +134,21 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
 
     # --- 4. dispatch by kind -------------------------------------------------
     if kind == "charge_succeeded":
-        _record_payment(session, event, order, club_id, direction="charge", status="succeeded")
+        payment_id = _record_payment(session, event, order, club_id,
+                                     direction="charge", status="succeeded")
         if order_id:
             _mark_order(session, order_id, "paid")
             confirmed = _confirm_held_bookings(session, order_id, club_id)
             result["bookings_confirmed"] = confirmed
+            # --- commission fan-out (Phase D, owner lane) ----------------------
+            # Accrue commission ON COLLECTION for each lesson/class line of the paid order.
+            # Savepoint-guarded (like _confirm_held_bookings) so a split failure NEVER blocks
+            # settlement, and idempotent on (payment_id, order_line_id, party_type) so a
+            # replayed webhook adds NO second split. apply_payment_event's existing
+            # record/confirm semantics are untouched — this is a pure fan-out after them.
+            split = _accrue_commission(session, club_id, order_id, payment_id)
+            if split:
+                result["commission"] = split
         result["payment_recorded"] = True
         _emit("payment_succeeded",
               club_id=str(club_id) if club_id else None,
@@ -210,6 +220,32 @@ def _record_payment(session, event: NormalizedPaymentEvent, order, club_id, *,
         },
     ).mappings().first()
     return str(row["id"]) if row else None
+
+
+def _accrue_commission(session, club_id, order_id, payment_id):
+    """Commission fan-out after a successful charge (Phase D owner lane). Resolves the
+    payment row if `_record_payment` returned None (a second delivery dedup'd on
+    (provider, provider_payment_id) — we still want the split keyed to the real payment),
+    then calls billing.commission.record_split_for_order. SAVEPOINT-guarded so a failure
+    (e.g. commission tables not present in an isolated billing self-test) NEVER blocks the
+    payment/order commit, and idempotent on the split's unique key so a replay is a no-op.
+    Returns the engine result dict or None."""
+    try:
+        with session.begin_nested():
+            pid = payment_id
+            if pid is None and order_id:
+                pid = session.execute(
+                    text("SELECT id FROM billing.payment WHERE order_id = :o "
+                         "AND direction = 'charge' AND status = 'succeeded' "
+                         "ORDER BY created_at DESC LIMIT 1"),
+                    {"o": str(order_id)},
+                ).scalar()
+            from billing import commission as _commission
+            return _commission.record_split_for_order(
+                session, club_id=club_id, order_id=order_id, payment_id=pid)
+    except Exception:
+        log.info("commission fan-out skipped (engine/tables unavailable) order=%s", order_id)
+        return None
 
 
 def _mark_order(session, order_id, status: str) -> None:

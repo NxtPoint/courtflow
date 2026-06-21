@@ -598,11 +598,127 @@
       .catch(function (e) { UI.toast(UI.errMsg(e), "error"); btn.disabled = false; btn.textContent = label; });
   }
 
+  // ---- cockpit / financials (Phase D owner lane) ----------------------------
+  // Owner financial cockpit: KPI strip + revenue-by-service + per-coach commission/rent/net.
+  // Reads /api/admin/cockpit/* (admin-gated, club-scoped). Reuses cf-* (no app.css change):
+  // KPI "stat" cards are cf-card with inline emphasis.
+  function monthRange(which) {
+    // 'this' | 'last' -> {from, to} ISO date strings (from inclusive, to exclusive).
+    var now = new Date();
+    var y = now.getFullYear(), m = now.getMonth();
+    if (which === "last") { m -= 1; if (m < 0) { m = 11; y -= 1; } }
+    var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+    var from = y + "-" + pad(m + 1) + "-01";
+    var ny = (m === 11) ? y + 1 : y, nm = (m === 11) ? 0 : m + 1;
+    var to = ny + "-" + pad(nm + 1) + "-01";
+    return { from: from, to: to };
+  }
+
+  function statCard(label, value, sub) {
+    return el("div", { class: "cf-card", style: "flex:1;min-width:170px" }, [
+      el("div", { class: "cf-muted", style: "font-size:13px", text: label }),
+      el("div", { style: "font-size:26px;font-weight:700;margin:4px 0 2px", text: value }),
+      sub ? el("div", { class: "cf-muted", style: "font-size:12px", text: sub }) : el("span"),
+    ]);
+  }
+
+  var cockpitState = { range: "this" };
+
   async function renderCockpit(panel) {
-    // The cockpit (occupancy, revenue, no-show) is D-lane: GET /api/admin/cockpit/*.
-    panel.appendChild(el("div", { class: "cf-card cf-empty", html:
-      "Analytics cockpit (occupancy, coach utilisation, revenue, no-show, MRR, funnel) is served by the CRM/marketing lane " +
-      "at <code>/api/admin/cockpit/*</code>. Wire the charts once those routes are confirmed. See report." }));
+    panel.appendChild(el("div", { class: "cf-card" }, [
+      el("h2", { text: "Financials" }),
+      el("p", { class: "cf-muted", style: "margin:-4px 0 10px", text:
+        "Revenue, per-coach commission and rent. Commission accrues on collected (ex-VAT) lesson revenue " +
+        "— online at payment, arrears when the coach marks it collected." }),
+    ]));
+    var ctrl = el("div", { class: "cf-row", style: "gap:8px;margin-bottom:12px" });
+    [["this", "This month"], ["last", "Last month"], ["all", "All time"]].forEach(function (r) {
+      var a = el("button", { class: "cf-btn cf-btn-sm" + (cockpitState.range === r[0] ? " cf-btn-primary" : ""), text: r[1] });
+      a.addEventListener("click", function () { cockpitState.range = r[0]; renderCockpit2(panel); });
+      ctrl.appendChild(a);
+    });
+    panel.appendChild(ctrl);
+    var host = el("div", { id: "cockpit-host" });
+    panel.appendChild(host);
+    renderCockpit2(panel);
+  }
+
+  async function renderCockpit2(panel) {
+    // re-render control active states
+    var host = document.getElementById("cockpit-host");
+    if (!host) return;
+    UI.clear(host);
+    host.appendChild(el("div", { class: "cf-loading", text: "Loading financials…" }));
+    var opts = (cockpitState.range === "all") ? {} : monthRange(cockpitState.range);
+    try {
+      var summary = await window.AdminAPI.cockpitSummary(opts);
+      var earnings = await window.AdminAPI.cockpitCoachEarnings(opts);
+      var revenue = await window.AdminAPI.cockpitRevenue(opts);
+      var cur = summary.currency || "ZAR";
+      UI.clear(host);
+
+      // KPI strip
+      host.appendChild(el("div", { class: "cf-row", style: "gap:10px;flex-wrap:wrap;margin-bottom:14px" }, [
+        statCard("Net revenue", UI.money(summary.net_revenue_minor, cur)),
+        statCard("Commission (you keep)", UI.money(summary.commission_earned_minor, cur)),
+        statCard("Rent due", UI.money(summary.rent_due_minor, cur)),
+        statCard("Active members", String(summary.active_members), "MRR " + UI.money(summary.mrr_minor, cur)),
+        statCard("Lessons paid", String(summary.lessons_paid)),
+      ]));
+
+      // Coaches table
+      var ce = el("div", { class: "cf-card" });
+      ce.appendChild(el("h3", { text: "Per coach" }));
+      var coaches = (earnings && earnings.coaches) || [];
+      if (!coaches.length) {
+        ce.appendChild(el("div", { class: "cf-empty", text: "No coach agreements yet — set them up in Settings → Coach pay." }));
+      } else {
+        var t = el("table", { class: "cf-table" });
+        t.appendChild(el("thead", {}, [el("tr", {}, ["Coach", "Lessons", "Gross", "Commission (you)", "Coach earns", "Rent due", "Net to coach", "Balance"].map(function (h) {
+          return el("th", { text: h }); }))]));
+        var tb = el("tbody");
+        coaches.forEach(function (c) {
+          tb.appendChild(el("tr", {}, [
+            el("td", { text: c.coach_name || "Coach" }),
+            el("td", { class: "num", text: String(c.lesson_count) }),
+            el("td", { class: "num", text: UI.money(c.gross_lesson_minor, cur) }),
+            el("td", { class: "num", text: UI.money(c.commission_earned_minor, cur) }),
+            el("td", { class: "num", text: UI.money(c.coach_earning_minor, cur) }),
+            el("td", { class: "num", text: UI.money(c.rent_due_minor, cur) }),
+            el("td", { class: "num", text: UI.money(c.net_to_coach_minor, cur) }),
+            el("td", { class: "num", text: UI.money(c.lifetime_balance_minor, cur) }),
+          ]));
+        });
+        t.appendChild(tb); ce.appendChild(t);
+      }
+      host.appendChild(ce);
+
+      // Revenue by service kind
+      var rv = el("div", { class: "cf-card" });
+      rv.appendChild(el("h3", { text: "Revenue by service" }));
+      var rows = (revenue && revenue.revenue) || [];
+      if (!rows.length) {
+        rv.appendChild(el("div", { class: "cf-empty", text: "No revenue in this period yet." }));
+      } else {
+        var rt = el("table", { class: "cf-table" });
+        rt.appendChild(el("thead", {}, [el("tr", {}, ["Month", "Service", "Gross", "Refunds", "Net"].map(function (h) {
+          return el("th", { text: h }); }))]));
+        var rtb = el("tbody");
+        rows.forEach(function (r) {
+          rtb.appendChild(el("tr", {}, [
+            el("td", { text: r.month }),
+            el("td", { text: r.service_kind }),
+            el("td", { class: "num", text: UI.money(r.gross_minor, cur) }),
+            el("td", { class: "num", text: UI.money(r.refund_minor, cur) }),
+            el("td", { class: "num", text: UI.money(r.net_minor, cur) }),
+          ]));
+        });
+        rt.appendChild(rtb); rv.appendChild(rt);
+      }
+      host.appendChild(rv);
+    } catch (e) {
+      UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) }));
+    }
   }
 
   // ---- modal helper ---------------------------------------------------------

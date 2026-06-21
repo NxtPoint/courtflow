@@ -646,3 +646,208 @@ def revoke_coach(user_id):
     if not ok:
         return jsonify(error="NOT_FOUND"), 404
     return jsonify(ok=True), 200
+
+
+# ---------------------------------------------------------------------------
+# commission engine — coach agreements + commission rules (owner config)
+# The owner monetises coaches via rent AND/OR commission % (additive, per coach). Commission
+# resolves coach+product > product > coach > club (billing.commission.resolve_commission_pct).
+# ---------------------------------------------------------------------------
+
+@admin_bp.get("/coach-agreements")
+def get_coach_agreements():
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        data = repo.coach_agreements_overview(s, club_id=p.club_id)
+    return jsonify(data), 200
+
+
+@admin_bp.put("/coach-agreements/<coach_user_id>")
+def put_coach_agreement(coach_user_id):
+    """Set a coach's rent posture (rent_minor / rent_day). Commission % is set via the
+    commission-rules endpoint (so rent and % are independent — additive per docs/specs/01)."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        agr = repo.upsert_agreement(
+            s, club_id=p.club_id, coach_user_id=coach_user_id,
+            rent_minor=b.get("rent_minor"), rent_day=b.get("rent_day"),
+            status=b.get("status"), notes=b.get("notes"))
+    return jsonify(agreement=agr), 200
+
+
+@admin_bp.get("/commission-rules")
+def get_commission_rules():
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        rows = repo.list_commission_rules(s, club_id=p.club_id)
+    return jsonify(rules=rows, count=len(rows)), 200
+
+
+@admin_bp.post("/commission-rules")
+def post_commission_rule():
+    """Set a rate for a scope (derived from which of product_id/coach_user_id are sent):
+    club | product | coach | coach_product. SUPERSEDES the matching active rule."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    pct = b.get("commission_pct")
+    try:
+        pct = float(pct)
+    except (TypeError, ValueError):
+        return jsonify(error="commission_pct must be a number 0..100"), 400
+    if pct < 0 or pct > 100:
+        return jsonify(error="commission_pct must be between 0 and 100"), 400
+    with session_scope() as s:
+        rule = repo.set_commission_rule(
+            s, club_id=p.club_id,
+            product_id=b.get("product_id") or None,
+            coach_user_id=b.get("coach_user_id") or None,
+            commission_pct=pct)
+    return jsonify(rule=rule), 201
+
+
+@admin_bp.delete("/commission-rules/<rule_id>")
+def delete_commission_rule(rule_id):
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        ok = repo.deactivate_commission_rule(s, club_id=p.club_id, rule_id=rule_id)
+    if not ok:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(ok=True), 200
+
+
+@admin_bp.get("/commission-rules/preview")
+def preview_commission_rule():
+    """The 'effective rate' UI preview: the resolved % for a (coach, product) pair."""
+    p, err = _admin()
+    if err:
+        return err
+    from billing.commission import resolve_commission_pct
+    coach = (request.args.get("coach_user_id") or "").strip() or None
+    product = (request.args.get("product_id") or "").strip() or None
+    with session_scope() as s:
+        pct = resolve_commission_pct(s, club_id=p.club_id, product_id=product,
+                                     coach_user_id=coach)
+    return jsonify(effective_pct=float(pct)), 200
+
+
+# ---------------------------------------------------------------------------
+# owner cockpit — financial numbers (views-style thin passthroughs)
+# ---------------------------------------------------------------------------
+
+def _range():
+    return ((request.args.get("from") or "").strip() or None,
+            (request.args.get("to") or "").strip() or None)
+
+
+@admin_bp.get("/financials/summary")
+def get_cockpit_summary():
+    p, err = _admin()
+    if err:
+        return err
+    dt_from, dt_to = _range()
+    with session_scope() as s:
+        data = repo.cockpit_summary(s, club_id=p.club_id, dt_from=dt_from, dt_to=dt_to)
+    return jsonify(data), 200
+
+
+@admin_bp.get("/financials/revenue")
+def get_cockpit_revenue():
+    p, err = _admin()
+    if err:
+        return err
+    dt_from, dt_to = _range()
+    with session_scope() as s:
+        rows = repo.cockpit_revenue(s, club_id=p.club_id, dt_from=dt_from, dt_to=dt_to)
+    return jsonify(revenue=rows, count=len(rows)), 200
+
+
+@admin_bp.get("/financials/coach-earnings")
+def get_cockpit_coach_earnings():
+    p, err = _admin()
+    if err:
+        return err
+    dt_from, dt_to = _range()
+    with session_scope() as s:
+        rows = repo.cockpit_coach_earnings(s, club_id=p.club_id, dt_from=dt_from, dt_to=dt_to)
+    return jsonify(coaches=rows, count=len(rows)), 200
+
+
+@admin_bp.get("/financials/memberships")
+def get_cockpit_memberships():
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        data = repo.cockpit_memberships(s, club_id=p.club_id)
+    return jsonify(data), 200
+
+
+# ---------------------------------------------------------------------------
+# coach month-end statement (coach self-service surface — NOT admin-only).
+# Per docs/specs/01 the coach's most-wanted surface. Accessible to the logged-in coach
+# (their own statement) OR an admin (any coach via ?coach_user_id=). Lives in the admin lane
+# (this module) rather than coach.py so the Coach agent's files are untouched.
+# ---------------------------------------------------------------------------
+
+def _coach_or_admin():
+    """Resolve a principal who is a coach (own statement) or club/platform admin. Returns
+    (principal, error). Admins may target ?coach_user_id=; a coach is locked to themselves."""
+    pr = resolve_principal(request)
+    if pr is None or not pr.authenticated:
+        return None, (jsonify(error="unauthorized"), 401)
+    if pr.role not in ("coach", "club_admin", "platform_admin"):
+        return None, (jsonify(error="forbidden"), 403)
+    if pr.club_id is None:
+        return None, (jsonify(error="no_club_scope"), 400)
+    return pr, None
+
+
+@admin_bp.get("/coach-statement")
+def coach_statement():
+    """GET /api/admin/coach-statement?month=YYYY-MM[&coach_user_id=]
+    Per-client: lessons, paid-via-Yoco, owed (arrears), net balance + the coach's running
+    ledger balance. A coach sees only their own; an admin may pass coach_user_id."""
+    pr, err = _coach_or_admin()
+    if err:
+        return err
+    from billing import commission as comm
+    month = (request.args.get("month") or "").strip() or None
+    target = (request.args.get("coach_user_id") or "").strip() or None
+    is_admin = pr.role in ("club_admin", "platform_admin")
+    coach_id = target if (is_admin and target) else pr.user_id
+    if coach_id is None:
+        return jsonify(error="no_coach"), 400
+    with session_scope() as s:
+        data = comm.coach_statement(s, club_id=pr.club_id, coach_user_id=coach_id, month=month)
+    return jsonify(data), 200
+
+
+@admin_bp.post("/coach-statement/arrears/<arrears_id>/collected")
+def post_arrears_collected(arrears_id):
+    """The coach (or admin) marks an arrears invoice collected (off-platform EFT received) →
+    accrues its commission. A coach may only mark their OWN arrears."""
+    pr, err = _coach_or_admin()
+    if err:
+        return err
+    from billing import commission as comm
+    is_admin = pr.role in ("club_admin", "platform_admin")
+    with session_scope() as s:
+        res = comm.mark_arrears_collected(
+            s, club_id=pr.club_id, arrears_id=arrears_id,
+            coach_user_id=None if is_admin else pr.user_id,
+            collected_by=pr.user_id)
+    if not res.get("ok"):
+        code = 404 if res.get("error") == "NOT_FOUND" else 403
+        return jsonify(error=res.get("error")), code
+    return jsonify(res), 200
