@@ -316,13 +316,20 @@ def yoco_refund():
         if not checkout_id:
             return jsonify(error="no_yoco_checkout_for_order"), 404
 
-        amount = int(amount_in) if amount_in is not None else int(order.get("amount_minor") or 0)
+        # Full refund (the admin button passes no amount) -> send NO amount so Yoco refunds
+        # the full remaining balance (their `amount` field is nullable; null = full refund).
+        # Sending an explicit full amount that doesn't EXACTLY match Yoco's refundable balance
+        # is a common 400 — so only pass an amount for an explicit partial refund.
+        amount = int(amount_in) if amount_in is not None else None
 
     try:
         res = gw.refund(payment={"checkout_id": checkout_id}, amount_minor=amount)
     except Exception as e:
-        log.warning("yoco refund failed for order=%s: %s", order_id, e)
-        return jsonify(error="refund_failed", detail=str(e)), 502
+        # Surface Yoco's actual reason to the admin UI (str(YocoError) = "yoco <status>: <desc>"),
+        # not just a generic code, so failures are diagnosable from the toast.
+        log.warning("yoco refund failed order=%s checkout=%s: %s", order_id, checkout_id, e)
+        return jsonify(error="refund_failed", message=f"Yoco refund failed — {e}",
+                       detail=str(e)), 502
 
     # The authoritative ledger write happens on the refund.succeeded webhook ->
     # apply_payment_event(kind='refunded'). This is the gateway acknowledgement.
