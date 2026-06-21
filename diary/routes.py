@@ -476,8 +476,8 @@ def master_diary():
                      "       b.booked_by_user_id, b.order_id, b.settlement_mode "
                      "FROM diary.booking b LEFT JOIN diary.resource r ON r.id=b.resource_id "
                      "WHERE b.club_id=:c AND b.status IN ('held','confirmed','completed','no_show') "
-                     "  AND (:df IS NULL OR b.starts_at >= CAST(:df AS timestamptz)) "
-                     "  AND (:dt IS NULL OR b.starts_at <= CAST(:dt AS timestamptz)) "
+                     "  AND (CAST(:df AS timestamptz) IS NULL OR b.starts_at >= CAST(:df AS timestamptz)) "
+                     "  AND (CAST(:dt AS timestamptz) IS NULL OR b.starts_at <= CAST(:dt AS timestamptz)) "
                      "ORDER BY b.starts_at"),
                 {"c": p.club_id, "df": q.get("date_from"), "dt": q.get("date_to")},
             ).mappings().all()
