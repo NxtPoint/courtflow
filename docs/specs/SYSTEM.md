@@ -28,10 +28,11 @@ portal, defaulting to PAYG; admins/coaches are seeded/invited).
 `guest`. **Every domain query is `club_id`-scoped** — multi-tenant is a discipline (RLS is a future
 phase). The client can never assert a `club_id`; it's derived server-side.
 
-## The six schemas (idempotent boot DDL — NO migration framework)
+## The five schemas (idempotent boot DDL — NO migration framework)
 `club` (tenants/branding/location/policy) · `iam` (identity/membership/coach/dependents) · `diary`
 (the booking engine) · `billing` (orders/ledger + the commercial engines) · `core` (ported 1050
-account/usage_event/consent/nps + notifications) · `analytics` (another agent's traffic lane).
+account/usage_event/consent/nps + notifications). *(The Business Overview analytics are read-only
+views over `core.usage_event` — no separate schema.)*
 `db.py` runs each registered module's `init()` on boot; **`python -m db` twice must be a no-op** — that's
 the schema gate. Extensions: `btree_gist` (the no-double-book EXCLUDE constraint), `pgcrypto` (UUIDs).
 

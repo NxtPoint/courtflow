@@ -59,8 +59,6 @@ services:
         value: "1"
       - key: PAYMENTS_PROVIDER     # which adapter the /api/billing/config probe advertises
         value: "yoco"
-      - key: YOCO_ENABLED
-        value: "1"
       - key: YOCO_SECRET_KEY       # sk_live_… (server-side checkout + refund calls)
         sync: false
       - key: YOCO_PUBLIC_KEY       # pk_live_… (publishable; surfaced by /api/billing/config)
@@ -83,13 +81,9 @@ services:
       - key: BRIDGE_TENFIFTY5_ADMIN_EMAIL
         sync: false        # an admin email on 1050 (e.g. info@ten-fifty5.com)
 
-      # --- CRM / Klaviyo (one Klaviyo, NextPoint brand — decision D3). ---
-      - key: TRACKING_ENABLED      # core.usage_event + page-view beacon
-        value: "1"
-      - key: CONSENT_ENABLED       # consent capture endpoints + screens
-        value: "1"
-      - key: CRM_SYNC_ENABLED      # forward to Klaviyo — ON (stays safely dark until KLAVIYO_API_KEY is set)
-        value: "1"
+      # --- CRM / Klaviyo (one Klaviyo, NextPoint brand — decision D3). Tracking + consent are
+      # always-on in code; CRM sync SELF-GATES on KLAVIYO_API_KEY (no key = silent no-op), so there
+      # are no *_ENABLED flags to manage — just add the key when Klaviyo work begins. ---
       - key: KLAVIYO_API_KEY
         sync: false
 

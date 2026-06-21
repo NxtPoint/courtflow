@@ -27,7 +27,7 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21). Paths 
 | `admin/` | routes, repositories, schema | `/api/admin/*` owner self-service + config |
 | `coach/` | routes, repositories, schema | `/api/coach/*` coach self-service + cockpit |
 | `me/` | routes | `/api/me/*` client self-service (profile, dependents, financials, refund-requests, notifications) |
-| `analytics/` | (4 files) | **Page/traffic analytics — another agent's lane (in progress); `/api/analytics/*`, `/stream`** |
+| `analytics/` | repositories, routes, bridge | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`) + the **Ten-Fifty5 bridge**; `/api/analytics/*` |
 | `crons/` | trigger | thin dispatcher → `/api/cron/*` |
 | `scripts/` | seed_nextpoint, provision_club | seed/provision tenants |
 | `web_app.py`, `frontend/` | host-switch + SPA shells + marketing | The web service |
@@ -71,10 +71,11 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21). Paths 
 **Crons `/api/cron/*`** (handlers exist; cron services off): `POST capacity-sweep` · `POST reminders` ·
 `POST monthly-invoice` · `POST membership-refill` · `POST reconcile-payments`.
 
-**Analytics `/api/analytics/*`** (another agent): `GET overview` · `GET clubs` · `GET properties` ·
-`GET /stream`. **Core:** `GET /healthz` · `GET /api/whoami`.
+**Analytics `/api/analytics/*`:** `GET overview` (`?days`, `?club_id`, `?property=courtflow|ten-fifty5|all`)
+· `GET properties` · `GET clubs`. **Tracking:** `POST /api/track/page` (first-party page-view beacon;
+geolocation via Cloudflare `CF-IPCountry`). **Core:** `GET /healthz` · `GET /api/whoami`.
 
-## 4. Database — 6 schemas (idempotent boot DDL)
+## 4. Database — 5 schemas (idempotent boot DDL)
 - **`club`**: `club`, `branding`, `location`, `policy`
 - **`iam`**: `user`, `membership`, `coach_profile`, `coach_invite`, `player_profile`, `dependent`
 - **`diary`**: `resource`, `availability_rule`, `booking`, `booking_party`, `time_off`, `class_session`,
@@ -84,7 +85,7 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21). Paths 
   `token_ledger`, `coach_agreement`, `commission_rule`, `commission_split`, `coach_ledger`,
   `coach_arrears`
 - **`core`**: account/user/person, `usage_event`, consent, nps, `notification`
-- **`analytics`**: (another agent's lane — traffic/sessions)
+  *(the Business Overview analytics are read-only views over `core.usage_event` — no separate schema)*
 
 Settlement modes on `billing.order`: `at_court`, `monthly_account`, `online`, `membership_covered`,
 `token`. Boot order + `BOOT_MODULES` in `db.py`.
@@ -93,20 +94,23 @@ Settlement modes on `billing.order`: `at_court`, `monthly_account`, `online`, `m
 **Portal SPA shells** (`frontend/app/*.html`, each `cf-*` design system, absolute asset links):
 `portal` (dashboard) · `book` · `my` (my bookings) · `membership` · `packs` · `account` (profile/family/
 financials) · `coach` (+`coach-onboarding`) · `statement` (coach month-end) · `admin` · `onboarding`
-(owner) · `settings` · `overview` (analytics, another agent) · `receipt` · `pay-return` · `styleguide`.
+(owner) · `settings` · `overview` (**Business Overview dashboard**, ECharts) · `receipt` · `pay-return` · `styleguide`.
 
 **JS modules** (`frontend/js/*.js`): `portal` (nav + notification bell) · `book` · `my` · `membership` ·
 `packs` · `account` · `coach` (+`coach_api`, `coach_onboarding`) · `statement` · `admin` (+`admin_api`,
 `class_ui`) · `settings` · `onboarding` · `notifications` · `pay` · `pay_return` · `receipt` ·
-`analytics`/`overview` (another agent) · `api` · `auth_client` · `ui`. **One design system:**
+`analytics` (page-view beacon) · `overview` (Business Overview dashboard) · `api` · `auth_client` · `ui`. **One design system:**
 `frontend/app/app.css` (all `cf-*` classes). Marketing site: `frontend/marketing/`, `frontend/_shared/`.
 
-## 6. Env / config (render.yaml)
-Auth: `AUTH_ENABLED`, Clerk `pk_test_…` (inline). Payments: `PAYMENTS_ENABLED=1`, `YOCO_ENABLED=1`,
-`PAYMENTS_PROVIDER=yoco`, `YOCO_SECRET_KEY`/`YOCO_PUBLIC_KEY`/`YOCO_WEBHOOK_SECRET` (sync:false),
-`APP_BASE_URL`. CRM: `TRACKING_ENABLED`, `KLAVIYO_API_KEY` (sync:false, **unset → CRM/email dark**).
-Assets/email: `S3_BUCKET`+AWS keys (sync:false, **unset → photo uploads via URL paste, SES dark**).
-Tenancy: `SEED_NEXTPOINT=1`, `MARKETING_HOSTS`, `OPS_KEY` (cron auth). DB: `DATABASE_URL`.
+## 6. Env / config
+**Full reference: `docs/specs/ENV-STATUS.md`** — every var, live/dark status, copy-paste checklist.
+Live now: `DATABASE_URL`, `OPS_KEY`, Clerk `AUTH_*`, Yoco (`PAYMENTS_ENABLED=1`, `PAYMENTS_PROVIDER=yoco`,
+`YOCO_SECRET_KEY`/`YOCO_PUBLIC_KEY`/`YOCO_WEBHOOK_SECRET`), `APP_BASE_URL`, `SEED_NEXTPOINT=1`,
+`MARKETING_HOSTS`. Dark until keyed: `KLAVIYO_API_KEY` (CRM/email — self-gates), `S3_BUCKET`+AWS keys
+(photo uploads), `SES_SENDER` (email fallback), `BRIDGE_TENFIFTY5_*` (Ten-Fifty5 dashboard column).
+**Note:** the old `*_ENABLED` toggles (`YOCO_/TRACKING_/CONSENT_/CRM_SYNC_`) were dead config (never read)
+— removed; those features are always-on or self-gate on their keys. `render.yaml` is documentation only —
+env is entered in the Render dashboard.
 
 ## 7. Verify gates (no live infra)
 - Compile: `python -m py_compile $(git ls-files '*.py')`.

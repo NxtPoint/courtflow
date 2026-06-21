@@ -48,8 +48,10 @@ NextPoint Tennis is club #1, migrating off Wix.
     cockpit** (`/cockpit`: lessons/hours/net-of-commission earnings/fill-rate/trend); statement page.
   - **Client (self-service):** `me/` — `/api/me/*`; profile/demographics (email read-only), **dependents**
     (`iam.dependent`, login-less child users → booking party), financials, refund-requests, notifications.
-  - **Analytics:** `analytics/` + `/api/analytics/*` + `overview.html` — **page/traffic analytics, owned by a
-    separate agent (in progress)**; do not edit that lane.
+  - **Analytics:** `analytics/` + `/api/analytics/*` + `overview.html` — **Business Overview dashboard**
+    (built & live): visits/visitors/sources/geo + customers/bookings/revenue/NPS; first-party page-view
+    beacon (`analytics.js` → `/api/track/page`, geo via `CF-IPCountry`); **Ten-Fifty5 bridge** (`bridge.py`,
+    config via `BRIDGE_TENFIFTY5_*`). See `docs/specs/ENV-STATUS.md` + `docs/12-tenfifty5-bridge.md`.
   - **Frontend:** `frontend/app/` (shells) + `frontend/js/` — **ONE design system in `frontend/app/app.css`**
     (bright/modern; every page uses its `cf-*` classes — keep it the single source, do NOT inline component
     styles). Booking wizard, my-bookings, coach console, **master-diary calendar** (custom resource-timeline),
@@ -76,7 +78,7 @@ NextPoint Tennis is club #1, migrating off Wix.
 Pay) → `POST /api/billing/yoco/webhook` (Standard-Webhooks verified) → `apply_payment_event` → order `paid`
 + booking `confirmed`. **GOTCHA the booking API returns `{booking:{order_id,status}, checkout}` — read
 `res.booking.order_id`, NOT `res.order_id`** (that bug silently confirmed online bookings without
-redirecting; fixed). **Two gates, both on:** `PAYMENTS_ENABLED=1`/`YOCO_ENABLED=1` (global, in `render.yaml`)
+redirecting; fixed). **Two gates, both on:** `PAYMENTS_ENABLED=1` (global, in `render.yaml`)
 + per-club `club.policy.allow_online_payment` (**Admin → Settings → Payments** toggle; the policy upsert is
 **INSERT-ONLY** so the boot re-seed can't reset it). Frontend: `frontend/js/pay.js` + `pay-return.html` +
 `pay_return.js` (auto-served at `/pay-return.html`).

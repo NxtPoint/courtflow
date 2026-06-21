@@ -37,10 +37,15 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 - [ ] **Self-serve coach/admin role transitions** — e.g. a dependent **aging out at 18** into their own
       login (foundations spec open question).
 
-## C. In progress by another agent (do not duplicate)
-- [ ] **Page / traffic analytics** for BOTH sites (visitors, geolocation, channel, device). The
-      `analytics/` lane + `/api/analytics/*` + `/overview.html` already exist in the repo and are being
-      built by a separate agent. Coordinate; don't touch their lane.
+## C. Analytics — BUILT ✅ (follow-ups only)
+- [x] **Business Overview dashboard** (`analytics/`, `/overview.html`): website visits / unique / new-vs-
+      returning, traffic sources, top pages, by-country, customers, bookings, revenue, settlement mix, NPS —
+      platform-admin with a club filter. First-party page-view beacon (`analytics.js` → `/api/track/page`,
+      geo via Cloudflare `CF-IPCountry`).
+- [x] **Ten-Fifty5 bridge** (`bridge.py`): CourtFlow · Ten-Fifty5 · All switcher; live once the
+      `BRIDGE_TENFIFTY5_*` env is set (see `docs/12-tenfifty5-bridge.md` + `ENV-STATUS.md`).
+- [ ] Follow-ups: per-club web-traffic attribution (set `window.__CLUB_ID__` in the beacon); the 1050
+      Option-B least-privilege endpoint (`docs/12`); source/page/country breakdowns on the 1050 side.
 
 ## D. Hardening / pre-launch (later phases, from the original docs)
 - [ ] **RLS** (row-level security) on domain tables — Phase 8; today multi-tenant is a query discipline.
