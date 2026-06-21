@@ -173,12 +173,15 @@ def _match_token_wallet_guarded(session, *, club_id, user_id, booking_type,
         return None
 
 
-def _draw_token_guarded(session, *, club_id, wallet, booking_id, reason="booking"):
-    """Draw one token from an already-matched wallet for this booking. Idempotent + guarded."""
+def _draw_token_guarded(session, *, club_id, wallet, booking_id, reason="booking",
+                        duration_minutes=None):
+    """Draw a booking's worth of MINUTES from an already-matched wallet (its duration, or one full
+    unit for a class). Idempotent + guarded."""
     try:
         from billing import bundles
         return bundles.draw_token(session, club_id=club_id, wallet=wallet,
-                                  booking_id=booking_id, reason=reason)
+                                  booking_id=booking_id, reason=reason,
+                                  duration_minutes=duration_minutes)
     except Exception:
         log.warning("token draw failed (booking kept, order deferred)", exc_info=False)
         return False
@@ -264,8 +267,10 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
         # ledger ref is the booking_id for court/lesson, or the enrolment_id (token_ref) for a class.
         draw_ref = token_ref or booking_id
         if is_token and draw_ref and token_wallet is not None:
+            # court/lesson draw their own duration; a class passes None -> one full unit (per-session).
             drawn = _draw_token_guarded(session, club_id=club_id, wallet=token_wallet,
-                                        booking_id=draw_ref, reason=f"{booking_type} booking")
+                                        booking_id=draw_ref, reason=f"{booking_type} booking",
+                                        duration_minutes=duration_minutes)
             if not drawn:
                 # Re-run for the same booking (idempotent) — fine; the token already moved.
                 log.debug("token already drawn for booking=%s (idempotent)", booking_id)

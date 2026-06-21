@@ -482,8 +482,12 @@ _DDL = [
         service_kind     text NOT NULL CHECK (service_kind IN ('court','lesson','class')),
         coach_user_id    uuid,                          -- denormalised (NULL = any)
         duration_minutes int,                           -- denormalised (NULL = any)
-        tokens_total     int  NOT NULL DEFAULT 0,
-        tokens_remaining int  NOT NULL DEFAULT 0 CHECK (tokens_remaining >= 0),
+        base_minutes     int,                           -- the pack's UNIT length (the divisor); NULL=legacy/count
+        tokens_total     int  NOT NULL DEFAULT 0,        -- nominal session count (display "of N")
+        tokens_remaining int  NOT NULL DEFAULT 0 CHECK (tokens_remaining >= 0),  -- legacy/display (ceil of sessions)
+        -- AUTHORITATIVE balance, held in MINUTES so a pack covers any duration (90min off a 60-unit = 1.5).
+        minutes_total    int  NOT NULL DEFAULT 0,
+        minutes_remaining int NOT NULL DEFAULT 0 CHECK (minutes_remaining >= 0),
         status           text NOT NULL DEFAULT 'pending'
                             CHECK (status IN ('pending','active','exhausted','expired')),
         purchased_at     timestamptz,
@@ -499,6 +503,25 @@ _DDL = [
     f"ON {SCHEMA}.token_wallet (club_id, user_id, service_kind, status);",
     f"CREATE INDEX IF NOT EXISTS ix_token_wallet_order "
     f"ON {SCHEMA}.token_wallet (order_id) WHERE order_id IS NOT NULL;",
+
+    # Migrate an EXISTING db to the unit (minute-balance) model (docs/specs/02). A token used to be a
+    # count; it is now MINUTES, so a pack covers any duration proportionally. Add the columns, then
+    # backfill: base_minutes = the pack's unit length (its duration_minutes, default 60), and convert
+    # the existing integer token balance to minutes (tokens * base). Idempotent (IF NOT EXISTS + only
+    # backfill rows not yet migrated). The legacy tokens_* columns stay for display/back-compat.
+    f"ALTER TABLE {SCHEMA}.token_wallet ADD COLUMN IF NOT EXISTS base_minutes int;",
+    f"ALTER TABLE {SCHEMA}.token_wallet ADD COLUMN IF NOT EXISTS minutes_total int NOT NULL DEFAULT 0;",
+    f"ALTER TABLE {SCHEMA}.token_wallet ADD COLUMN IF NOT EXISTS minutes_remaining int NOT NULL DEFAULT 0;",
+    f"""
+    DO $$
+    BEGIN
+        UPDATE {SCHEMA}.token_wallet
+        SET base_minutes      = COALESCE(base_minutes, duration_minutes, 60),
+            minutes_total     = tokens_total     * COALESCE(base_minutes, duration_minutes, 60),
+            minutes_remaining = tokens_remaining * COALESCE(base_minutes, duration_minutes, 60)
+        WHERE base_minutes IS NULL;
+    END $$;
+    """,
 
     # 3. token_ledger — audit + THE idempotency guard.
     f"""

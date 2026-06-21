@@ -212,39 +212,41 @@ def expire_due(session, *, club_id) -> int:
 
 def match_wallet(session, *, club_id, user_id, service_kind, duration_minutes=None,
                  coach_user_id=None) -> Optional[Dict[str, Any]]:
-    """The best ACTIVE wallet to draw a token from for this booking, or None.
+    """The best ACTIVE wallet to draw from for this booking, or None.
 
+    Unit model (docs/specs/02): the balance is held in MINUTES, so ONE pack covers any duration —
+    a booking draws minutes proportional to its length (a 90-min court off a 60-min unit = 1.5).
     Match rules (generic across court/lesson/class):
       * service_kind equal,
-      * wallet duration_minutes equals the booking's OR is NULL (any duration),
       * wallet coach_user_id equals the booking's OR is NULL (any coach),
-      * status = 'active', tokens_remaining > 0, not past expires_at.
+      * status = 'active', minutes_remaining > 0, not past expires_at.
+    Duration is NO LONGER a match gate — any positive balance can be drawn against any duration
+    (the draw computes the cost; the customer-wins tail lets the last credit cover any length).
     Preference: the wallet EXPIRING SOONEST (use-it-or-lose-it; NULL expiry last), then the one
-    with the FEWEST tokens left (drain partial packs first), then oldest.
+    with the FEWEST minutes left (drain partial packs first), then oldest.
 
     `SELECT … FOR UPDATE` locks the chosen wallet row so two concurrent draws for the same member
-    serialise — combined with the token_ledger unique + the tokens_remaining>=0 CHECK, a wallet can
-    NEVER go below zero or be double-spent. Returns {id, tokens_remaining, ...} or None.
+    serialise — combined with the token_ledger unique + the minutes_remaining>=0 CHECK, a wallet can
+    NEVER go below zero or be double-spent. Returns {id, base_minutes, minutes_remaining, ...} or None.
     """
     # Lazily expire before matching so an expired wallet is never selected.
     expire_due(session, club_id=club_id)
     row = session.execute(
         text("""
             SELECT id, club_id, user_id, service_kind, coach_user_id, duration_minutes,
-                   tokens_total, tokens_remaining, status, expires_at
+                   base_minutes, tokens_total, tokens_remaining,
+                   minutes_total, minutes_remaining, status, expires_at
             FROM billing.token_wallet
             WHERE club_id = :c
               AND user_id = :u
               AND service_kind = :sk
               AND status = 'active'
-              AND tokens_remaining > 0
+              AND minutes_remaining > 0
               AND (expires_at IS NULL OR expires_at >= CURRENT_DATE)
-              AND (duration_minutes IS NULL OR CAST(:dur AS int) IS NULL
-                   OR duration_minutes = CAST(:dur AS int))
               AND (coach_user_id IS NULL OR CAST(:coach AS uuid) IS NULL
                    OR coach_user_id = CAST(:coach AS uuid))
             ORDER BY (expires_at IS NULL) ASC, expires_at ASC,
-                     tokens_remaining ASC, created_at ASC
+                     minutes_remaining ASC, created_at ASC
             LIMIT 1
             FOR UPDATE
         """),
@@ -259,24 +261,36 @@ def match_wallet(session, *, club_id, user_id, service_kind, duration_minutes=No
 # draw / credit — the careful, idempotent token movements
 # ---------------------------------------------------------------------------
 
-def draw_token(session, *, club_id, wallet, booking_id, reason="booking") -> bool:
-    """Draw ONE token from `wallet` for `booking_id`. MUST run inside the caller's booking tx.
+def draw_token(session, *, club_id, wallet, booking_id, reason="booking",
+               duration_minutes=None) -> bool:
+    """Draw a booking's worth of MINUTES from `wallet` for `booking_id`. MUST run inside the caller's
+    booking tx, against a wallet locked by match_wallet (FOR UPDATE).
 
-    Insert a ('draw', -1) ledger row guarded by the unique (wallet_id, booking_id, 'draw') — so a
-    re-run for the SAME booking inserts nothing (idempotent). ONLY when the row actually inserts do
-    we decrement tokens_remaining (and flip active->exhausted at 0). Returns True iff a token was
-    consumed on THIS call (False = already drawn for this booking).
-    """
+    Cost = the booking's own duration (court/lesson), or ONE full unit (base_minutes) when duration
+    isn't applicable (a class = one session). CUSTOMER-WINS TAIL: we never draw more than the balance
+    — `LEAST(want, minutes_remaining)` — so the last credit covers a booking of any length and the
+    wallet lands exactly at 0 (never blocked while a positive balance remains).
+
+    Insert a ('draw', -minutes) ledger row guarded by the unique (wallet_id, booking_id, 'draw') — a
+    re-run for the SAME booking inserts nothing (idempotent). ONLY when the row inserts do we draw the
+    minutes down (and flip active->exhausted at 0). tokens_remaining is kept as a customer-favourable
+    CEIL of the remaining sessions (a half-unit still shows as 1). Returns True iff minutes were
+    consumed on THIS call (False = already drawn for this booking)."""
     wallet_id = wallet["id"] if isinstance(wallet, dict) else wallet
+    base = int(wallet.get("base_minutes") or 0) if isinstance(wallet, dict) else 0
+    remaining = int(wallet.get("minutes_remaining") or 0) if isinstance(wallet, dict) else 0
+    # how many minutes this booking wants: its duration, else one full unit (class/per-session).
+    want = int(duration_minutes) if duration_minutes else (base or 60)
+    drawn = min(want, remaining) if remaining > 0 else want  # customer-wins tail
     inserted = session.execute(
         text("""
             INSERT INTO billing.token_ledger
                 (club_id, wallet_id, booking_id, kind, delta, reason)
-            VALUES (:c, :w, :b, 'draw', -1, :reason)
+            VALUES (:c, :w, :b, 'draw', :delta, :reason)
             ON CONFLICT (wallet_id, booking_id, kind) DO NOTHING
             RETURNING id
         """),
-        {"c": str(club_id), "w": str(wallet_id),
+        {"c": str(club_id), "w": str(wallet_id), "delta": -int(drawn),
          "b": str(booking_id) if booking_id else None, "reason": reason},
     ).first()
     if not inserted:
@@ -284,12 +298,14 @@ def draw_token(session, *, club_id, wallet, booking_id, reason="booking") -> boo
     session.execute(
         text("""
             UPDATE billing.token_wallet
-            SET tokens_remaining = tokens_remaining - 1,
-                status = CASE WHEN tokens_remaining - 1 <= 0 THEN 'exhausted' ELSE status END,
+            SET minutes_remaining = GREATEST(minutes_remaining - :drawn, 0),
+                tokens_remaining = CEIL(GREATEST(minutes_remaining - :drawn, 0)::numeric
+                                        / NULLIF(base_minutes, 0)),
+                status = CASE WHEN minutes_remaining - :drawn <= 0 THEN 'exhausted' ELSE status END,
                 updated_at = now()
             WHERE id = :w
         """),
-        {"w": str(wallet_id)},
+        {"w": str(wallet_id), "drawn": int(drawn)},
     )
     return True
 
@@ -303,22 +319,23 @@ def credit_token(session, *, club_id, booking_id, reason="cancellation") -> bool
     (when the wallet hasn't expired). Returns True iff a token was credited on THIS call.
     """
     draw = session.execute(
-        text("SELECT wallet_id FROM billing.token_ledger "
+        text("SELECT wallet_id, delta FROM billing.token_ledger "
              "WHERE club_id = :c AND booking_id = :b AND kind = 'draw' LIMIT 1"),
         {"c": str(club_id), "b": str(booking_id) if booking_id else None},
     ).mappings().first()
     if not draw:
         return False  # this booking was never token-settled — nothing to credit
     wallet_id = draw["wallet_id"]
+    credited = abs(int(draw["delta"]))  # restore EXACTLY the minutes this booking drew (tail-safe)
     inserted = session.execute(
         text("""
             INSERT INTO billing.token_ledger
                 (club_id, wallet_id, booking_id, kind, delta, reason)
-            VALUES (:c, :w, :b, 'credit', 1, :reason)
+            VALUES (:c, :w, :b, 'credit', :delta, :reason)
             ON CONFLICT (wallet_id, booking_id, kind) DO NOTHING
             RETURNING id
         """),
-        {"c": str(club_id), "w": str(wallet_id),
+        {"c": str(club_id), "w": str(wallet_id), "delta": credited,
          "b": str(booking_id) if booking_id else None, "reason": reason},
     ).first()
     if not inserted:
@@ -326,7 +343,9 @@ def credit_token(session, *, club_id, booking_id, reason="cancellation") -> bool
     session.execute(
         text("""
             UPDATE billing.token_wallet
-            SET tokens_remaining = tokens_remaining + 1,
+            SET minutes_remaining = LEAST(minutes_remaining + :credited, minutes_total),
+                tokens_remaining = CEIL(LEAST(minutes_remaining + :credited, minutes_total)::numeric
+                                        / NULLIF(base_minutes, 0)),
                 status = CASE
                     WHEN status = 'exhausted'
                          AND (expires_at IS NULL OR expires_at >= CURRENT_DATE) THEN 'active'
@@ -334,7 +353,7 @@ def credit_token(session, *, club_id, booking_id, reason="cancellation") -> bool
                 updated_at = now()
             WHERE id = :w
         """),
-        {"w": str(wallet_id)},
+        {"w": str(wallet_id), "credited": credited},
     )
     return True
 
@@ -356,9 +375,9 @@ def wallets_for(session, *, club_id, user_id, service_kind=None,
     if active_only:
         where.append("w.status = 'active' AND w.tokens_remaining > 0")
     rows = session.execute(
-        text("SELECT w.id, w.service_kind, w.coach_user_id, w.duration_minutes, "
-             "       w.tokens_total, w.tokens_remaining, w.status, w.expires_at, "
-             "       w.purchased_at, w.bundle_plan_id, bp.label "
+        text("SELECT w.id, w.service_kind, w.coach_user_id, w.duration_minutes, w.base_minutes, "
+             "       w.tokens_total, w.tokens_remaining, w.minutes_total, w.minutes_remaining, "
+             "       w.status, w.expires_at, w.purchased_at, w.bundle_plan_id, bp.label "
              "FROM billing.token_wallet w "
              "LEFT JOIN billing.bundle_plan bp ON bp.id = w.bundle_plan_id "
              "WHERE " + " AND ".join(where) + " "
@@ -367,13 +386,20 @@ def wallets_for(session, *, club_id, user_id, service_kind=None,
     ).mappings().all()
     out = []
     for r in rows:
+        base = int(r["base_minutes"] or 0) or 60
+        mins_left = int(r["minutes_remaining"] or 0)
         out.append({
             "id": str(r["id"]),
             "service_kind": r["service_kind"],
             "coach_user_id": str(r["coach_user_id"]) if r["coach_user_id"] else None,
             "duration_minutes": int(r["duration_minutes"]) if r["duration_minutes"] is not None else None,
-            "tokens_total": int(r["tokens_total"] or 0),
-            "tokens_remaining": int(r["tokens_remaining"] or 0),
+            "base_minutes": base,
+            "tokens_total": int(r["tokens_total"] or 0),       # nominal session count ("of N")
+            "tokens_remaining": int(r["tokens_remaining"] or 0),  # legacy/display (ceil of sessions)
+            # Precise remaining, for the UI ("4.5 of 10 sessions left"): minutes ÷ unit length.
+            "minutes_total": int(r["minutes_total"] or 0),
+            "minutes_remaining": mins_left,
+            "sessions_remaining": round(mins_left / base, 2) if base else 0,
             "status": r["status"],
             "expires_at": r["expires_at"].isoformat() if r["expires_at"] else None,
             "label": _plan_label(r["label"], r["service_kind"], r["tokens_total"]),
@@ -389,25 +415,26 @@ def has_matching_wallet(session, *, club_id, user_id, service_kind, duration_min
     expire_due(session, club_id=club_id)
     row = session.execute(
         text("""
-            SELECT id, tokens_remaining
+            SELECT id, base_minutes, minutes_remaining, tokens_remaining
             FROM billing.token_wallet
             WHERE club_id = :c AND user_id = :u AND service_kind = :sk
-              AND status = 'active' AND tokens_remaining > 0
+              AND status = 'active' AND minutes_remaining > 0
               AND (expires_at IS NULL OR expires_at >= CURRENT_DATE)
-              AND (duration_minutes IS NULL OR CAST(:dur AS int) IS NULL
-                   OR duration_minutes = CAST(:dur AS int))
               AND (coach_user_id IS NULL OR CAST(:coach AS uuid) IS NULL
                    OR coach_user_id = CAST(:coach AS uuid))
-            ORDER BY (expires_at IS NULL) ASC, expires_at ASC, tokens_remaining ASC
+            ORDER BY (expires_at IS NULL) ASC, expires_at ASC, minutes_remaining ASC
             LIMIT 1
         """),
         {"c": str(club_id), "u": str(user_id) if user_id else None, "sk": service_kind,
-         "dur": int(duration_minutes) if duration_minutes is not None else None,
          "coach": str(coach_user_id) if coach_user_id else None},
     ).mappings().first()
     if not row:
         return None
-    return {"wallet_id": str(row["id"]), "tokens_remaining": int(row["tokens_remaining"] or 0)}
+    base = int(row["base_minutes"] or 0) or 60
+    mins = int(row["minutes_remaining"] or 0)
+    return {"wallet_id": str(row["id"]), "tokens_remaining": int(row["tokens_remaining"] or 0),
+            "minutes_remaining": mins, "base_minutes": base,
+            "sessions_remaining": round(mins / base, 2) if base else 0}
 
 
 # ---------------------------------------------------------------------------
@@ -488,12 +515,14 @@ def create_bundle_order(session, *, club_id, user_id, bundle_plan_id) -> Optiona
         text("""
             INSERT INTO billing.token_wallet
                 (club_id, user_id, bundle_plan_id, order_id, service_kind, coach_user_id,
-                 duration_minutes, tokens_total, tokens_remaining, status)
-            VALUES (:c, :u, :plan, :oid, :sk, :coach, :dur, 0, 0, 'pending')
+                 duration_minutes, base_minutes, tokens_total, tokens_remaining,
+                 minutes_total, minutes_remaining, status)
+            VALUES (:c, :u, :plan, :oid, :sk, :coach, :dur, :base, 0, 0, 0, 0, 'pending')
         """),
         {"c": str(club_id), "u": str(user_id) if user_id else None,
          "plan": plan["id"], "oid": order_id, "sk": plan["service_kind"],
-         "coach": plan["coach_user_id"], "dur": plan["duration_minutes"]},
+         "coach": plan["coach_user_id"], "dur": plan["duration_minutes"],
+         "base": int(plan["duration_minutes"]) if plan["duration_minutes"] else 60},
     )
 
     return {"order_id": order_id, "amount_minor": amount, "currency": currency, "plan": plan}
@@ -541,18 +570,26 @@ def activate_wallet_for_order(session, *, order_id, provider="yoco") -> Dict[str
                 "tokens_total": int(wallet["tokens_total"] or 0)}
 
     plan = session.execute(
-        text("SELECT sessions_count, validity_days, label FROM billing.bundle_plan WHERE id = :p"),
+        text("SELECT sessions_count, validity_days, label, duration_minutes "
+             "FROM billing.bundle_plan WHERE id = :p"),
         {"p": str(wallet["bundle_plan_id"])},
     ).mappings().first()
     n = int(plan["sessions_count"]) if plan else 0
+    # The pack's UNIT length (the divisor). A pack always has a base now; default 60 for a legacy
+    # 'any duration' plan. Total credit = sessions × base, held in minutes.
+    base = int(plan["duration_minutes"]) if (plan and plan["duration_minutes"]) else 60
+    minutes = n * base
     validity = int(plan["validity_days"]) if (plan and plan["validity_days"] is not None) else None
 
     row = session.execute(
         text("""
             UPDATE billing.token_wallet
             SET status = 'active',
+                base_minutes = :base,
                 tokens_total = :n,
                 tokens_remaining = :n,
+                minutes_total = :minutes,
+                minutes_remaining = :minutes,
                 purchased_at = now(),
                 expires_at = CASE WHEN CAST(:validity AS int) IS NULL THEN NULL
                                   ELSE (CURRENT_DATE
@@ -561,15 +598,15 @@ def activate_wallet_for_order(session, *, order_id, provider="yoco") -> Dict[str
             WHERE id = :w
             RETURNING expires_at
         """),
-        {"n": n, "validity": validity, "w": str(wallet["id"])},
+        {"n": n, "base": base, "minutes": minutes, "validity": validity, "w": str(wallet["id"])},
     ).mappings().first()
 
-    # Audit: a single 'grant' ledger row (idempotent on the unique (wallet, NULL, 'grant')).
+    # Audit: a single 'grant' ledger row in MINUTES (idempotent on the unique (wallet, NULL, 'grant')).
     session.execute(
         text("INSERT INTO billing.token_ledger (club_id, wallet_id, booking_id, kind, delta, reason) "
-             "VALUES (:c, :w, NULL, 'grant', :n, :reason) "
+             "VALUES (:c, :w, NULL, 'grant', :minutes, :reason) "
              "ON CONFLICT (wallet_id, booking_id, kind) DO NOTHING"),
-        {"c": str(wallet["club_id"]), "w": str(wallet["id"]), "n": n,
+        {"c": str(wallet["club_id"]), "w": str(wallet["id"]), "minutes": minutes,
          "reason": f"{provider} bundle purchase"},
     )
 
