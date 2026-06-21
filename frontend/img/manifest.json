@@ -31,53 +31,39 @@
       "use": "hero default"
     },
     "coach-neville.webp": {
-      "w": 700,
-      "h": 700,
-      "bytes": 31690,
-      "src": "Neville_edited.jpg",
+      "w": 554,
+      "h": 554,
+      "bytes": 24960,
+      "src": "coaches/Neville.jpg",
       "use": "founder portrait (Coaches page + home preview)"
     },
     "coach-ross.webp": {
-      "w": 700,
-      "h": 700,
-      "bytes": 32368,
-      "src": "Ross2.jpg",
+      "w": 200,
+      "h": 200,
+      "bytes": 6042,
+      "src": "coaches/ross.jpg",
       "use": "founder portrait (Coaches page + home preview)"
     },
     "coach-allon.webp": {
-      "w": 600,
-      "h": 600,
-      "bytes": 19196,
-      "src": "Allon.JPG",
-      "use": "coach carousel card"
+      "w": 340,
+      "h": 340,
+      "bytes": 10974,
+      "src": "coaches/Allon.JPG",
+      "use": "coach carousel card (Allon Rock)"
     },
     "coach-colbert.webp": {
       "w": 600,
       "h": 600,
-      "bytes": 30024,
-      "src": "Colbert.png",
-      "use": "coach carousel card"
-    },
-    "coach-dejan.webp": {
-      "w": 600,
-      "h": 600,
-      "bytes": 108858,
-      "src": "Dejan serve.jpg",
-      "use": "coach carousel card"
-    },
-    "coach-dudley.webp": {
-      "w": 600,
-      "h": 600,
-      "bytes": 45004,
-      "src": "dudley.png",
-      "use": "coach carousel card"
+      "bytes": 31836,
+      "src": "coaches/Colbert.png",
+      "use": "coach carousel card (Colbert Ndlovu)"
     },
     "coach-terka.webp": {
       "w": 600,
       "h": 600,
-      "bytes": 7870,
-      "src": "Terka.jpg",
-      "use": "coach carousel card"
+      "bytes": 8514,
+      "src": "coaches/Terka.jpg",
+      "use": "coach carousel card (Terka Nambe)"
     },
     "club-clay.webp": {
       "w": 1200,

@@ -220,16 +220,29 @@
   var io = new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12});
   els.forEach(function(el){io.observe(el);});
 })();
-/* Carousels (arrow buttons) */
+/* Carousels: scroll by one card; hide controls when nothing overflows and
+ * disable an arrow at each end. */
 (function(){
-  document.querySelectorAll('.cf-cbtn').forEach(function(btn){
-    btn.addEventListener('click', function(){
-      var track = document.getElementById(btn.dataset.carousel);
-      if(!track) return;
-      var card = track.querySelector('.cf-slide');
-      var step = card ? card.getBoundingClientRect().width + 16 : 300;
-      track.scrollBy({left: step * parseInt(btn.dataset.dir,10), behavior:'smooth'});
+  document.querySelectorAll('.cf-carousel').forEach(function(car){
+    var track=car.querySelector('.cf-track'), btns=car.querySelector('.cf-carousel-btns');
+    if(!track) return;
+    var prev=car.querySelector('.cf-cbtn[data-dir="-1"]'), next=car.querySelector('.cf-cbtn[data-dir="1"]');
+    function refresh(){
+      var overflow=track.scrollWidth-track.clientWidth>4;
+      if(btns) btns.style.display=overflow?'':'none';
+      if(prev) prev.disabled=track.scrollLeft<=2;
+      if(next) next.disabled=track.scrollLeft>=track.scrollWidth-track.clientWidth-2;
+    }
+    car.querySelectorAll('.cf-cbtn').forEach(function(btn){
+      btn.addEventListener('click',function(){
+        var c=track.querySelector('.cf-slide');
+        var step=c?c.getBoundingClientRect().width+16:300;
+        track.scrollBy({left:step*parseInt(btn.dataset.dir,10),behavior:'smooth'});
+      });
     });
+    track.addEventListener('scroll',refresh,{passive:true});
+    window.addEventListener('resize',refresh);
+    refresh();
   });
 })();
 </script>

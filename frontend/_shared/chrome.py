@@ -20,6 +20,7 @@ FOOTER_MARKER = "<!--#include footer-->"
 # Lean public nav (docs/public-site/03). Services live behind sign-up; the nav
 # sells the story and pushes the free trial.
 _NAV_LINKS = [
+    ("Home", "/"),
     ("Coaches", "/coaches"),
     ("Programs", "/programs"),
     ("Pricing", "/pricing"),
