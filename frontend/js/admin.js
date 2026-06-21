@@ -65,17 +65,15 @@
     if (tab === "overview") return renderOverview(p);
   }
 
-  // Business Overview — website traffic, customers, bookings, revenue, NPS. Embedded as the
-  // standalone /overview.html page (its own ECharts), which auths via the parent (auth_client
-  // relay) so it works inside this admin shell. Full-page link as a fallback.
+  // Business Overview — opens the full /overview.html dashboard (its own ECharts page; loads
+  // Clerk auth top-level, so no iframe-relay fragility). A link, not an embedded frame.
   function renderOverview(p) {
-    p.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 10px",
-      text: "Website visits & visitors, traffic sources, geolocation, customers, bookings, revenue & NPS." }));
-    p.appendChild(el("iframe", { src: "/overview.html", title: "Business Overview",
-      style: "width:100%;height:82vh;border:1px solid var(--line,#e6e6ea);border-radius:12px;background:#f5f6f8" }));
-    p.appendChild(el("p", { style: "margin-top:8px" }, [
-      el("a", { href: "/overview.html", target: "_blank", class: "cf-link",
-        text: "Open in full page ↗" }),
+    p.appendChild(el("div", { class: "cf-card", style: "text-align:center;padding:36px 24px" }, [
+      el("h2", { text: "Business Overview", style: "margin:0 0 8px" }),
+      el("p", { class: "cf-muted", style: "margin:0 auto 20px;max-width:480px",
+        text: "Website visits & visitors, new vs returning, traffic sources, geolocation, " +
+              "customers, sign-ups, bookings, revenue & NPS." }),
+      el("a", { href: "/overview.html", class: "cf-btn cf-btn-primary", text: "Open Business Overview →" }),
     ]));
   }
 

@@ -95,6 +95,17 @@
     try { src.postMessage({ __tfauth: 1, dir: "res", id: d.id, payload: payload }, "*"); } catch (e3) {}
   }
 
+  // Reject after `ms` so a hung Clerk/network call can never block the UI forever
+  // (the caller catches -> the page shows an error instead of an endless spinner).
+  function _withTimeout(promise, ms, label) {
+    return Promise.race([
+      Promise.resolve(promise),
+      new Promise(function (_, reject) {
+        setTimeout(function () { reject(new Error("timeout:" + (label || "op"))); }, ms);
+      }),
+    ]);
+  }
+
   // ---- resolve auth state once -----------------------------------------------
   function ready() {
     if (readyP) return readyP;
@@ -109,7 +120,7 @@
       try {
         await loadClerk();
         clerk = window.Clerk;
-        await clerk.load();
+        await _withTimeout(clerk.load(), 15000, "clerk_load");
         authed = !!(clerk && clerk.user);
       } catch (e) { authed = false; }
     })();
@@ -119,8 +130,11 @@
   async function authHeaders() {
     await ready();
     if (!authed) return {};
-    var token = inIframe ? await callParent("token")
-                         : (clerk && clerk.session ? await clerk.session.getToken(tmplOpts()) : null);
+    var token = null;
+    try {
+      token = inIframe ? await _withTimeout(callParent("token"), 8000, "relay_token")
+                       : (clerk && clerk.session ? await _withTimeout(clerk.session.getToken(tmplOpts()), 8000, "get_token") : null);
+    } catch (e) { token = null; }
     return token ? { "Authorization": "Bearer " + token } : {};
   }
 
@@ -137,11 +151,20 @@
   }
 
   // apiFetch — prepend the API base, attach the Bearer header, return the raw Response.
+  // A 30s AbortController timeout guarantees a hung request rejects (the caller shows an
+  // error) rather than spinning forever — important on the sleepy free tier.
   async function apiFetch(path, opts) {
     opts = opts || {};
     var headers = Object.assign({}, await authHeaders(), opts.headers || {});
     var url = (path.indexOf("http") === 0) ? path : (apiBase + path);
-    return fetch(url, Object.assign({}, opts, { headers: headers }));
+    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, 30000) : null;
+    try {
+      return await fetch(url, Object.assign({}, opts, { headers: headers },
+        ctrl ? { signal: ctrl.signal } : {}));
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   // apiJSON — apiFetch + JSON body helper. Throws {status, body} on non-2xx so
