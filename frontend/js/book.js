@@ -118,7 +118,7 @@
             state.slot = null; state.selClass = null;
             state.selCoach = "ANY"; state.selCourt = "ANY";
             state.durations = []; state.selDuration = null; state.selDurationPrice = null;
-            state.membershipCovered = false;
+            state.membershipCovered = false; state.showPayOptions = false;
             state.slotsCache = {}; state.day = null; state.calMonth = null;
           }
           // Court/lesson go through Duration first (live per-duration price); class skips it.
@@ -452,6 +452,38 @@
     return start ? withinWindow(start, w) : false;  // no slot yet -> resolve at the slot step
   }
 
+  // ---- Phase 7: a tidy, "customer wins" confirm -----------------------------
+  function isFreeMode(m) { return m === "token" || m === "membership_covered" || m === "free"; }
+
+  // The clean "this is free — just confirm" panel (replaces the payment chooser for free bookings).
+  function freePanel(title, sub) {
+    return el("div", { class: "cf-confirm-sec" }, [
+      el("div", { style: "display:flex;gap:12px;align-items:center;padding:14px 16px;border-radius:12px;background:var(--primary-bg);border:1px solid #cfe4d8" }, [
+        el("span", { style: "font-size:1.4rem;line-height:1", text: "✓" }),
+        el("div", {}, [
+          el("div", { style: "font-weight:800", text: title }),
+          sub ? el("div", { class: "cf-muted cf-tiny", text: sub }) : null,
+        ].filter(Boolean)),
+      ]),
+    ]);
+  }
+
+  // A gentle upsell for a PAID booking by a member with no pack & no membership for this service.
+  function upsellNudge() {
+    if (isFreeMode(state.settlement) || state.membershipCovered) return null;
+    var kind = bookingServiceKind();
+    if ((state.walletsByKind[kind] || []).some(function (w) { return walletMinutesLeft(w) > 0; })) return null;
+    if (emptyPackForKind()) return null;  // the re-buy nudge already covers this
+    var court = kind === "court";
+    return el("p", { class: "cf-muted cf-tiny", style: "margin-top:10px" }, [
+      el("span", { text: "💡 " }),
+      el("a", { href: court ? "/membership.html" : "/packs.html",
+        style: "color:var(--primary);font-weight:700",
+        text: court ? "Playing often? Members book courts free — see membership →"
+                    : "Taking regular lessons? Save with a pack →" }),
+    ]);
+  }
+
   // The court that will actually be reserved (resolved from the slot for "Any").
   function courtSummaryLabel() {
     if (state.selCourt !== "ANY") return (state.selCourt && state.selCourt.name) || "—";
@@ -709,22 +741,42 @@
       ]));
     }
 
-    // --- settlement (selectable blocks; a usable pack is pre-selected as the default) ---
-    card.appendChild(el("div", { class: "cf-confirm-sec" }, [
-      el("h3", { text: "How would you like to pay?" }),
-      settlementBlocks(modes),
-    ]));
-
-    // Re-buy nudge: the member had a pack for this service but it's run dry. Offer the options again.
-    if (emptyPackForKind()) {
-      card.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:10px" }, [
-        el("span", { text: "Your pack is finished — " }),
-        el("a", { href: "/packs.html", style: "color:var(--primary);font-weight:700",
-                  text: "buy another to keep saving →" }),
+    // --- payment: a free booking just confirms (no chooser); a pack-covered one offers "pay another
+    // way"; a paid one shows the tidy options + a gentle upsell. Customer-first: never make someone
+    // pick a payment method for a booking that's already free.
+    if (courtCovered()) {
+      var trial = state.plan && state.plan.is_trial;
+      var sub = (trial && state.plan.trial_days_left != null)
+        ? ("Your free week — " + state.plan.trial_days_left + " day" + (state.plan.trial_days_left === 1 ? "" : "s") + " left")
+        : "No charge for this court.";
+      card.appendChild(freePanel(trial ? "Free this week — enjoy the club." : "Covered by your membership — free.", sub));
+    } else if (state.settlement === "token" && !state.showPayOptions) {
+      var w = state.tokenWallet;
+      card.appendChild(freePanel("Free with your pack.",
+        w ? (walletSessionsLeft(w) + " of " + (w.tokens_total || 0) + " sessions left in your pack") : null));
+      card.appendChild(el("p", { style: "text-align:center;margin-top:8px" }, [
+        el("a", { href: "#", class: "cf-muted cf-tiny", text: "Pay another way instead",
+          onclick: function (ev) { ev.preventDefault(); state.showPayOptions = true; stepConfirm(); } }),
       ]));
+    } else {
+      card.appendChild(el("div", { class: "cf-confirm-sec" }, [
+        el("h3", { text: "How would you like to pay?" }),
+        settlementBlocks(modes),
+      ]));
+      // Re-buy nudge (pack just ran dry) or a gentle save-with-a-pack/membership upsell.
+      if (emptyPackForKind()) {
+        card.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:10px" }, [
+          el("span", { text: "Your pack is finished — " }),
+          el("a", { href: "/packs.html", style: "color:var(--primary);font-weight:700",
+                    text: "buy another to keep saving →" }),
+        ]));
+      } else {
+        var up = upsellNudge();
+        if (up) card.appendChild(up);
+      }
     }
 
-    if (state.settlement === "online" && state.billing.online_enabled) {
+    if (state.settlement === "online" && state.billing.online_enabled && !isFreeMode(state.settlement)) {
       card.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:6px",
         text: "Online payment (" + state.billing.provider + ") opens at confirmation. The booking is held until paid." }));
     }
