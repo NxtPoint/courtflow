@@ -92,11 +92,26 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
 
     # Order only for a real (enrolled) seat; waitlist doesn't bill until promoted.
     if target == "enrolled":
+        # Token settlement (docs/specs/02): PRE-FLIGHT match a prepaid CLASS wallet for the PAYER
+        # before billing. The token is keyed off the enrolment_id (a class has no booking_id). If
+        # token settlement is asked but no wallet matches, reject cleanly (NO_TOKEN) so the seat is
+        # rolled back and the UI falls back to PAYG. Class tokens are duration/coach-agnostic by
+        # default (a class session has a fixed time); a plan with NULL duration/coach matches any.
+        token_wallet = None
+        if settlement_mode == "token":
+            from diary.bookings import _match_token_wallet_guarded
+            token_wallet = _match_token_wallet_guarded(
+                session, club_id=club_id, user_id=payer_user_id, booking_type="class",
+                duration_minutes=None, coach_user_id=None)
+            if token_wallet is None:
+                return _err("NO_TOKEN", 422,
+                            message="no matching prepaid class token — choose another way to pay")
         order = _create_order_guarded(
             session, club_id=club_id, user_id=payer_user_id, booking_id=None,
             booking_type="class", settlement_mode=settlement_mode, parties=[],
             resource_id=cs["resource_id"], starts_at=cs["starts_at"], ends_at=cs["ends_at"],
-            enrolment_id=str(enrol_id), audience=audience,
+            enrolment_id=str(enrol_id), audience=audience, token_wallet=token_wallet,
+            token_ref=str(enrol_id),
         )
         if order.get("order_id"):
             session.execute(
@@ -132,6 +147,15 @@ def cancel_enrolment(session, *, club_id, class_session_id, user_id, actor_user_
         text("UPDATE diary.enrolment SET status='cancelled', updated_at=now() WHERE id=:id"),
         {"id": row["id"]},
     )
+
+    # Token credit-back (docs/specs/02): if this enrolment was settled by a prepaid CLASS token,
+    # return it to the wallet. Idempotent per (wallet, enrolment) — a re-cancel credits nothing.
+    try:
+        from diary.bookings import _credit_token_guarded
+        _credit_token_guarded(session, club_id=club_id, booking_id=str(row["id"]),
+                              reason="enrolment cancelled")
+    except Exception:
+        pass
 
     promoted = None
     if was_enrolled:

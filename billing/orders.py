@@ -38,6 +38,7 @@ _BOOKING_STATUS_BY_MODE = {
     "monthly_account":    "confirmed",
     "membership_covered": "confirmed",
     "free":               "confirmed",
+    "token":              "confirmed",  # prepaid token drawn -> confirmed (docs/specs/02)
     "online":             "held",
 }
 
@@ -47,6 +48,7 @@ _ORDER_STATUS_BY_MODE = {
     "monthly_account":    "open",
     "membership_covered": "paid",
     "free":               "paid",
+    "token":              "paid",       # token is paid in kind (R0 order, no money moves)
     "online":             "awaiting_payment",
 }
 
@@ -87,8 +89,9 @@ def create_order_for_booking(session, *, club_id, user_id, lines: List[Dict[str,
     currency = currency_code or _club_currency(session, club_id)
     lines = lines or []
 
-    # membership_covered / free => zero amount regardless of line inputs.
-    zero_amount = mode in ("membership_covered", "free")
+    # membership_covered / free / token => zero amount regardless of line inputs (no money moves;
+    # a token is paid in kind from a prepaid wallet — docs/specs/02).
+    zero_amount = mode in ("membership_covered", "free", "token")
     total = 0 if zero_amount else sum(int(l.get("amount_minor") or 0) * int(l.get("qty") or 1)
                                       for l in lines)
     order_status = _ORDER_STATUS_BY_MODE[mode]

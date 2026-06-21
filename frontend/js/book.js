@@ -37,6 +37,8 @@
     dependents: [],          // [{dependent_user_id, first_name, surname, ...}] the caller's children
     player: null,            // chosen "Who's playing?" dependent (null = Myself); a player PARTY, not the owner
     settlement: "at_court",
+    walletsByKind: {},       // service_kind -> [active wallets] (token packs; docs/specs/02), cached
+    tokenWallet: null,       // the matching wallet for the current service+duration(+coach), or null
   };
 
   // Priced durations + membership-covered flag for the current service (Duration step).
@@ -520,7 +522,51 @@
                 ["at_court", "monthly_account", "membership_covered"];
     var modes = allow.slice();
     if (state.billing.online_enabled && modes.indexOf("online") < 0) modes.push("online");
-    return modes.filter(function (m) { return UI.SETTLEMENT[m]; });
+    // Token packs (docs/specs/02): if the member holds a wallet that matches THIS booking
+    // (service + duration + coach), offer "token" as a settlement option. PAYG fallback stays.
+    if (matchTokenWallet() && modes.indexOf("token") < 0) modes.unshift("token");
+    return modes.filter(function (m) { return m === "token" || UI.SETTLEMENT[m]; });
+  }
+
+  // The bundle service_kind for the current booking ('court'|'lesson'|'class').
+  function bookingServiceKind() { return state.type === "lesson" ? "lesson" : (state.type === "class" ? "class" : "court"); }
+
+  // The chosen coach's coach_user_id (lesson only) — used to match coach-specific packs.
+  function chosenCoachUserId() {
+    if (state.type !== "lesson") return null;
+    if (state.selCoach !== "ANY" && state.selCoach && state.selCoach.coach_user_id) return state.selCoach.coach_user_id;
+    // "Any coach": fall back to the resolved slot's coach if the wizard surfaced one.
+    return (state.slot && state.slot.coach_user_id) || null;
+  }
+
+  // Find a held wallet matching the current service + duration (+ coach), mirroring match_wallet:
+  // service_kind equal; wallet duration == chosen OR null; wallet coach == chosen OR null. Prefer
+  // the soonest-expiring with tokens left. Caches the result on state.tokenWallet.
+  function matchTokenWallet() {
+    var kind = bookingServiceKind();
+    var wallets = state.walletsByKind[kind] || [];
+    var dur = state.type === "class" ? null : state.selDuration;
+    var coach = chosenCoachUserId();
+    var hit = wallets.filter(function (w) {
+      if (w.status !== "active" || w.tokens_remaining <= 0) return false;
+      if (w.duration_minutes != null && dur != null && w.duration_minutes !== dur) return false;
+      if (w.coach_user_id != null && coach != null && String(w.coach_user_id) !== String(coach)) return false;
+      // a coach-specific wallet can't be matched when we don't know the coach yet
+      if (w.coach_user_id != null && coach == null) return false;
+      return true;
+    }).sort(function (a, b) {
+      var ax = a.expires_at || "9999", bx = b.expires_at || "9999";
+      return ax < bx ? -1 : (ax > bx ? 1 : a.tokens_remaining - b.tokens_remaining);
+    })[0] || null;
+    state.tokenWallet = hit;
+    return hit;
+  }
+
+  // Settlement chip meta for 'token' (built dynamically — the remaining count is live).
+  function tokenChipMeta() {
+    var w = state.tokenWallet;
+    var n = w ? w.tokens_remaining : 0;
+    return { label: "Use 1 token", hint: n + " session" + (n === 1 ? "" : "s") + " left in your pack" };
   }
 
   // ---- "Who's playing?" dropdown (My Account dependents) --------------------
@@ -649,7 +695,8 @@
   function settlementBlocks(modes) {
     var wrap = el("div", { class: "cf-settlechips" });
     modes.forEach(function (m) {
-      var meta = UI.SETTLEMENT[m];
+      var meta = m === "token" ? tokenChipMeta() : UI.SETTLEMENT[m];
+      if (!meta) return;
       wrap.appendChild(el("button", {
         class: "cf-settlechip" + (state.settlement === m ? " sel" : ""),
         onclick: function () { state.settlement = m; stepConfirm(); },
@@ -723,6 +770,15 @@
       btn.disabled = false; btn.textContent = confirmLabel();
       // Surface a just-taken slot gracefully and bounce back to the schedule step.
       var code = (e && e.body && e.body.error) || "";
+      if (code === "NO_TOKEN") {
+        // The pack ran out (or another booking just spent it) — fall back to PAYG cleanly.
+        UI.toast("No matching session token — please choose another way to pay.", "error");
+        state.tokenWallet = null;
+        var fallback = allowedModes().filter(function (m) { return m !== "token"; });
+        state.settlement = fallback[0] || "at_court";
+        stepConfirm();
+        return;
+      }
       if (e && (e.status === 409 || code === "SLOT_TAKEN")) {
         UI.toast("That slot was just taken — pick another.", "error");
         if (state.type !== "class") {
@@ -797,7 +853,7 @@
       if (state.guest) rows.push(["Guest", state.guest.name]);
     }
     if (state.player) rows.push(["Player", playerName(state.player)]);
-    rows.push(["Settlement", UI.settlementLabel(state.settlement)]);
+    rows.push(["Settlement", state.settlement === "token" ? "Prepaid token" : UI.settlementLabel(state.settlement)]);
     return rows;
   }
 
@@ -819,6 +875,14 @@
       // "Who's playing?" — the caller's children/dependents (My Account). Loaded once; cached on
       // state. Failure is non-fatal (the dropdown simply shows only "Myself").
       try { var dr = await window.API.dependents(); state.dependents = dr.dependents || []; } catch (e) {}
+      // Token packs (docs/specs/02): the member's active wallets per service kind, for the
+      // "Use 1 token" settlement option. Loaded once; non-fatal (no packs -> option simply hidden).
+      try {
+        var wr = await window.TFAuth.apiJSON("/api/billing/bundles/wallets?active=1");
+        (wr.wallets || []).forEach(function (w) {
+          (state.walletsByKind[w.service_kind] = state.walletsByKind[w.service_kind] || []).push(w);
+        });
+      } catch (e) {}
       // policy: pulled from principal/club if exposed; otherwise defaults apply.
       state.policy = principal.policy || null;
       stepService();

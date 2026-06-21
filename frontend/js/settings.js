@@ -98,6 +98,11 @@
     var plansHost = el("div");
     host.appendChild(plansHost);
     window.AdminUI.membershipPlans(plansHost, {});
+
+    // Configurable session packs (token bundles) — prepaid packs across court/lesson/class.
+    var bundleHost = el("div");
+    host.appendChild(bundleHost);
+    window.AdminUI.bundlePlans(bundleHost, {});
   }
 
   window.Settings = {
