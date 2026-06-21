@@ -87,7 +87,7 @@ def membership_plans(session, *, club_id, active_only=True) -> List[Dict[str, An
     where = "AND p.active = true" if active_only else ""
     rows = session.execute(
         text("SELECT p.id AS price_id, p.label, p.amount_minor, p.term_months, "
-             "       p.currency_code, p.active "
+             "       p.currency_code, p.active, p.access_days, p.access_start_min, p.access_end_min "
              "FROM billing.product pr "
              "JOIN billing.price p ON p.product_id = pr.id "
              "WHERE pr.club_id = :c AND pr.kind = 'membership' "
@@ -105,8 +105,39 @@ def membership_plans(session, *, club_id, active_only=True) -> List[Dict[str, An
             "term_months": tm,
             "currency": r["currency_code"],
             "active": bool(r["active"]),
+            # Access window (Phase 5): a human summary for the purchase page (None = covers any time).
+            "access_summary": _window_summary(r["access_days"], r["access_start_min"], r["access_end_min"]),
         })
     return out
+
+
+def _window_summary(days_csv, start_min, end_min):
+    """Concise human label for a membership access window, e.g. 'Courts free weekdays 06:00–17:00'.
+    None when there's no constraint (covers any time)."""
+    if not days_csv and start_min is None and end_min is None:
+        return None
+    nums = sorted(int(x) for x in days_csv.split(",")) if days_csv else list(range(1, 8))
+    names = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
+    if nums == [1, 2, 3, 4, 5]:
+        day_txt = "weekdays"
+    elif nums == [6, 7]:
+        day_txt = "weekends"
+    elif len(nums) == 7:
+        day_txt = "any day"
+    else:
+        day_txt = "/".join(names[n] for n in nums)
+
+    def hhmm(m):
+        return f"{m // 60:02d}:{m % 60:02d}"
+    if start_min is not None and end_min is not None:
+        time_txt = f"{hhmm(start_min)}–{hhmm(end_min)}"
+    elif end_min is not None:
+        time_txt = f"before {hhmm(end_min)}"
+    elif start_min is not None:
+        time_txt = f"after {hhmm(start_min)}"
+    else:
+        time_txt = ""
+    return ("Courts free " + day_txt + (" " + time_txt if time_txt else "")).strip()
 
 
 def _plan_for_price(session, *, club_id, price_id) -> Optional[Dict[str, Any]]:
@@ -333,23 +364,36 @@ def membership_status(session, *, club_id, user_id) -> Dict[str, Any]:
     plans = membership_plans(session, club_id=club_id)
     offer = plans[0] if plans else None
     row = session.execute(
-        text("SELECT current_period_end, provider, "
-             "       (current_period_end - CURRENT_DATE) AS days_left "
-             "FROM billing.membership_subscription "
-             "WHERE club_id = :c AND user_id = :u AND status = 'active' "
-             "  AND (current_period_end IS NULL OR current_period_end >= CURRENT_DATE) "
-             "ORDER BY current_period_end DESC NULLS FIRST LIMIT 1"),
+        text("SELECT ms.current_period_end, ms.provider, "
+             "       (ms.current_period_end - CURRENT_DATE) AS days_left, "
+             "       p.access_days, p.access_start_min, p.access_end_min "
+             "FROM billing.membership_subscription ms "
+             "LEFT JOIN billing.price p ON p.id = ms.price_id "
+             "WHERE ms.club_id = :c AND ms.user_id = :u AND ms.status = 'active' "
+             "  AND (ms.current_period_end IS NULL OR ms.current_period_end >= CURRENT_DATE) "
+             "ORDER BY ms.current_period_end DESC NULLS FIRST LIMIT 1"),
         {"c": str(club_id), "u": str(user_id) if user_id else None},
     ).mappings().first()
     end = row["current_period_end"] if row else None
     is_trial = bool(row and row["provider"] == "trial")
     days_left = int(row["days_left"]) if (row and row["days_left"] is not None) else None
+    # Access window of the active membership (Phase 5): None = unconstrained (covers any time).
+    window = None
+    if row and (row["access_days"] or row["access_start_min"] is not None
+                or row["access_end_min"] is not None):
+        window = {
+            "days": [int(x) for x in row["access_days"].split(",") if x.strip()]
+            if row["access_days"] else None,
+            "start_min": int(row["access_start_min"]) if row["access_start_min"] is not None else None,
+            "end_min": int(row["access_end_min"]) if row["access_end_min"] is not None else None,
+        }
     return {
         "active": row is not None,
         "current_period_end": (end.isoformat() if hasattr(end, "isoformat") else end)
         if end is not None else None,
         "is_trial": is_trial,                       # the signup free-week (provider='trial')
         "trial_days_left": days_left if is_trial else None,
+        "membership_window": window,                # Phase 5 access window (None = any time)
         "price_minor": offer["amount_minor"] if offer else None,
         "currency": offer["currency"] if offer else None,
         "sold": bool(plans),

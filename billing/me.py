@@ -61,6 +61,7 @@ def _plan(session, *, club_id, user_id) -> Dict[str, Any]:
         "sold": bool(st.get("sold")),
         "is_trial": is_trial,                       # signup free-week (courts free, time-boxed)
         "trial_days_left": st.get("trial_days_left"),
+        "membership_window": st.get("membership_window"),  # Phase 5 (None = covers any time)
     }
 
 

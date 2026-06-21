@@ -146,6 +146,47 @@ def has_active_membership(session, *, club_id, user_id):
         return False
 
 
+def membership_covers(session, *, club_id, user_id, starts_at):
+    """True if an ACTIVE membership covers a COURT booking that STARTS at `starts_at` — i.e. the
+    member is active AND the booking falls inside that plan's access window (Phase 5). A plan with
+    NO window (trial/unconstrained) covers any time; a time-boxed tier (e.g. Student weekdays-only)
+    covers only inside its days + hours, otherwise the booking is PAYG. ANY qualifying subscription
+    wins. Guarded -> False (never blocks a booking; a non-covered booking just isn't free).
+
+    Day/time are taken from `starts_at` (the booking's local start). access_days is CSV ISO weekdays
+    (Mon=1..Sun=7); access_start_min/access_end_min are minutes-from-midnight (start inclusive, end
+    exclusive)."""
+    try:
+        if not user_id or starts_at is None or not _membership_sub_exists(session):
+            return False
+        iso_dow = starts_at.isoweekday()                 # 1=Mon..7=Sun
+        min_of_day = starts_at.hour * 60 + starts_at.minute
+        row = session.execute(
+            text("""
+                SELECT 1
+                FROM billing.membership_subscription ms
+                LEFT JOIN billing.price p ON p.id = ms.price_id
+                WHERE ms.club_id = :c AND ms.user_id = :u AND ms.status = 'active'
+                  AND (ms.current_period_end IS NULL OR ms.current_period_end >= CURRENT_DATE)
+                  AND (
+                    p.id IS NULL  -- trial / no linked plan -> unconstrained, covers any time
+                    OR (
+                      (p.access_days IS NULL
+                       OR CAST(:dow AS text) = ANY(string_to_array(p.access_days, ',')))
+                      AND (p.access_start_min IS NULL OR :mod >= p.access_start_min)
+                      AND (p.access_end_min   IS NULL OR :mod <  p.access_end_min)
+                    )
+                  )
+                LIMIT 1
+            """),
+            {"c": club_id, "u": user_id, "dow": iso_dow, "mod": min_of_day},
+        ).first()
+        return row is not None
+    except Exception:
+        log.debug("membership_covers() suppressed (billing not ready)", exc_info=False)
+        return False
+
+
 def _product_has_coach_col(session):
     """billing.product.coach_user_id is added by the coach lane; absent in isolation. Cached
     per session so we don't re-probe information_schema on every price read."""

@@ -128,6 +128,17 @@ def _has_active_membership_guarded(session, *, club_id, user_id):
         return False
 
 
+def _membership_covers_guarded(session, *, club_id, user_id, starts_at):
+    """True if an active membership covers a COURT booking STARTING at starts_at — active AND inside
+    the plan's access window (Phase 5). Outside the window -> False -> the booking is billed PAYG.
+    Guarded; never raises."""
+    try:
+        from diary.pricing import membership_covers
+        return membership_covers(session, club_id=club_id, user_id=user_id, starts_at=starts_at)
+    except Exception:
+        return False
+
+
 def release_expired_holds(session, club_id, now=None):
     """Lazy expiry (NO cron): cancel 'held' bookings whose held_until has passed, freeing the
     slot. Called opportunistically at the start of availability + booking creation, so an
@@ -324,14 +335,15 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
 
     policy = _policy(session, club_id)
 
-    # Membership-covered guard: 'membership_covered' (free) is ONLY honoured for a COURT booking
-    # by a user with an active membership. Anyone else who asks for it (no membership, or a
-    # lesson/class) falls back to per-duration PAYG at the court — the booking still succeeds,
-    # just billed normally. We never trust the client's claim of being covered.
+    # Membership-covered guard: 'membership_covered' (free) is ONLY honoured for a COURT booking by
+    # a user whose active membership covers THIS start time (Phase 5 access window — a time-boxed
+    # tier like Student is free only inside its hours). Anyone else who asks for it (no membership,
+    # a lesson/class, or a court OUTSIDE the membership window) falls back to per-duration PAYG at
+    # the court — the booking still succeeds, just billed normally. Never trust the client's claim.
     if settlement_mode == "membership_covered":
-        if booking_type == "court" and _has_active_membership_guarded(
-                session, club_id=club_id, user_id=owner_user_id):
-            pass  # legitimately covered
+        if booking_type == "court" and _membership_covers_guarded(
+                session, club_id=club_id, user_id=owner_user_id, starts_at=starts):
+            pass  # legitimately covered (active membership + inside its access window)
         else:
             settlement_mode = "at_court"
 

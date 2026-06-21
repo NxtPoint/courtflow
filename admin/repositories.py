@@ -500,6 +500,7 @@ def _plan_row(row):
     if row is None:
         return None
     tm = int(row["term_months"]) if row["term_months"] is not None else None
+    days = row["access_days"] if "access_days" in row.keys() else None
     return {
         "price_id": str(row["price_id"]),
         "label": _plan_label(row["label"], tm),
@@ -508,15 +509,23 @@ def _plan_row(row):
         "currency": row["currency_code"],
         "active": bool(row["active"]),
         "status": row["status"] if "status" in row.keys() else ("active" if row["active"] else "retired"),
+        # Access window (Phase 5): NULL = unconstrained (covers any time). access_days = ISO list.
+        "access_days": [int(x) for x in days.split(",") if x.strip()] if days else None,
+        "access_start_min": int(row["access_start_min"]) if row.get("access_start_min") is not None else None,
+        "access_end_min": int(row["access_end_min"]) if row.get("access_end_min") is not None else None,
     }
+
+
+_MEMBERSHIP_PLAN_COLS = (
+    "p.id AS price_id, p.label, p.amount_minor, p.term_months, p.currency_code, p.active, p.status, "
+    "p.access_days, p.access_start_min, p.access_end_min")
 
 
 def list_membership_plans(session, *, club_id):
     """All membership term plans for the club (active + inactive), cheapest-first. A term plan is
     a price on the membership product with term_months set."""
     rows = session.execute(
-        text("SELECT p.id AS price_id, p.label, p.amount_minor, p.term_months, "
-             "       p.currency_code, p.active, p.status "
+        text("SELECT " + _MEMBERSHIP_PLAN_COLS + " "
              "FROM billing.product pr "
              "JOIN billing.price p ON p.product_id = pr.id "
              "WHERE pr.club_id = :c AND pr.kind = 'membership' AND p.term_months IS NOT NULL "
@@ -528,8 +537,7 @@ def list_membership_plans(session, *, club_id):
 
 def _get_membership_plan(session, *, club_id, price_id):
     return _plan_row(session.execute(
-        text("SELECT p.id AS price_id, p.label, p.amount_minor, p.term_months, "
-             "       p.currency_code, p.active, p.status "
+        text("SELECT " + _MEMBERSHIP_PLAN_COLS + " "
              "FROM billing.product pr "
              "JOIN billing.price p ON p.product_id = pr.id "
              "WHERE pr.club_id = :c AND pr.kind = 'membership' AND p.id = :pid "
@@ -555,27 +563,47 @@ def _membership_product_id(session, *, club_id, create_if_missing=False):
     ).scalar_one()
 
 
-def create_membership_plan(session, *, club_id, label, amount_minor, term_months):
+def _days_csv(days):
+    """Normalize an access_days value (list[int], CSV str, or None) to a clean CSV of ISO weekdays
+    ('1'..'7'), or None for 'all days'. An empty/full set -> None (unconstrained)."""
+    if days is None:
+        return None
+    if isinstance(days, str):
+        days = [d for d in days.split(",")]
+    nums = sorted({int(d) for d in days if str(d).strip() and 1 <= int(d) <= 7})
+    if not nums or len(nums) == 7:
+        return None
+    return ",".join(str(n) for n in nums)
+
+
+def create_membership_plan(session, *, club_id, label, amount_minor, term_months,
+                           access_days=None, access_start_min=None, access_end_min=None):
     """Add a term plan = a billing.price (term_months, unit='per_month', audience='member') on the
-    club's membership product (creating the product if missing)."""
+    club's membership product (creating the product if missing). Optional access window (Phase 5)
+    time-boxes a tier: NULL = unconstrained (covers any time)."""
     prod_id = _membership_product_id(session, club_id=club_id, create_if_missing=True)
     pid = session.execute(
         text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
-             "currency_code, unit, term_months, label, active) "
-             "VALUES (:c, :prod, 'member', :amt, :cur, 'per_month', :tm, :lbl, true) "
-             "RETURNING id"),
+             "currency_code, unit, term_months, label, active, "
+             "access_days, access_start_min, access_end_min) "
+             "VALUES (:c, :prod, 'member', :amt, :cur, 'per_month', :tm, :lbl, true, "
+             ":days, :smin, :emin) RETURNING id"),
         {"c": club_id, "prod": prod_id, "amt": int(amount_minor),
          "cur": _club_currency(session, club_id=club_id), "tm": int(term_months),
-         "lbl": (label or "").strip() or None},
+         "lbl": (label or "").strip() or None, "days": _days_csv(access_days),
+         "smin": access_start_min, "emin": access_end_min},
     ).scalar_one()
     return _get_membership_plan(session, club_id=club_id, price_id=pid)
 
 
 def patch_membership_plan(session, *, club_id, price_id, label=None, amount_minor=None,
-                          term_months=None, active=None, status=None):
+                          term_months=None, active=None, status=None,
+                          access_days=None, access_start_min=None, access_end_min=None,
+                          set_window=False):
     """COALESCE partial update of a term plan. Scoped to the club + the membership product so a
     booking price can't be reshaped into a plan here. `label`='' clears to NULL (derive default).
-    `status` (active|dormant|retired) keeps the `active` boolean in sync."""
+    `status` (active|dormant|retired) keeps the `active` boolean in sync. `set_window=True` writes
+    the access window (any of the three may be NULL = unconstrained); else the window is untouched."""
     if status is not None and status not in ("active", "dormant", "retired"):
         return None
     lbl = label.strip() if isinstance(label, str) else None
@@ -588,6 +616,9 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
                 status       = COALESCE(:status, p.status),
                 active       = CASE WHEN :status IS NOT NULL THEN (:status = 'active')
                                     ELSE COALESCE(:active, p.active) END,
+                access_days      = CASE WHEN :set_win THEN :days ELSE p.access_days END,
+                access_start_min = CASE WHEN :set_win THEN :smin ELSE p.access_start_min END,
+                access_end_min   = CASE WHEN :set_win THEN :emin ELSE p.access_end_min END,
                 updated_at   = now()
             FROM billing.product pr
             WHERE p.product_id = pr.id AND pr.club_id = :c AND pr.kind = 'membership'
@@ -597,7 +628,9 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
         {"c": club_id, "pid": price_id,
          "lbl_set": label is not None, "lbl": (lbl or None),
          "amount_minor": amount_minor, "term_months": term_months,
-         "active": active, "status": status},
+         "active": active, "status": status,
+         "set_win": bool(set_window), "days": _days_csv(access_days),
+         "smin": access_start_min, "emin": access_end_min},
     ).mappings().first()
     if not res:
         return None

@@ -87,7 +87,10 @@
           el("div", { style: "font-weight:700;font-size:1.3rem;margin:6px 0",
             html: UI.esc(UI.money(p.amount_minor, p.currency || st.currency)) }),
           el("div", { class: "cf-muted", text: "for " + planTerm(p.term_months) }),
-        ]);
+          // Access window (Phase 5): show the constraint up front so a buyer knows before purchase.
+          p.access_summary ? el("div", { class: "cf-muted cf-tiny", style: "margin-top:6px",
+            text: "🕐 " + p.access_summary }) : null,
+        ].filter(Boolean));
         cards.push(planCard);
         function pick() {
           selected.price_id = p.price_id;

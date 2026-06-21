@@ -64,11 +64,20 @@ _DDL = [
         duration_minutes int,                         -- for per_session/lessons
         active          boolean NOT NULL DEFAULT true, -- = (status='active'); kept in sync
         status          text NOT NULL DEFAULT 'active',-- active|dormant(hidden, kept)|retired
+        -- Membership access window (membership plans only): a cheap tier can be time-boxed so it
+        -- only covers courts during certain hours/days (else PAYG). NULL = unconstrained.
+        access_days      text,                         -- ISO weekdays allowed, CSV '1'..'7' (Mon=1); NULL=all
+        access_start_min int,                          -- minutes from midnight (>=); NULL=no earliest
+        access_end_min   int,                          -- minutes from midnight (<, exclusive); NULL=no latest
         created_at      timestamptz NOT NULL DEFAULT now(),
         updated_at      timestamptz NOT NULL DEFAULT now()
     );
     """,
     f"CREATE INDEX IF NOT EXISTS ix_price_club ON {SCHEMA}.price (club_id);",
+    # Membership access-window columns on an EXISTING db (NULL = unconstrained). Idempotent.
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS access_days text;",
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS access_start_min int;",
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS access_end_min int;",
     f"CREATE INDEX IF NOT EXISTS ix_price_product ON {SCHEMA}.price (product_id);",
     # Lifecycle (3-state) on an EXISTING db: add status, backfill from the active boolean
     # (active->'active', inactive->'retired'; only WHERE status IS NULL so a later 'dormant'

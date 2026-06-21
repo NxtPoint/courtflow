@@ -620,6 +620,56 @@
     return { reload: reload };
   }
 
+  // minutes-from-midnight <-> "HH:MM" for the membership access-window editor.
+  function minToTime(m) {
+    if (m == null || m === "") return "";
+    var h = Math.floor(m / 60), mm = m % 60;
+    return ("0" + h).slice(-2) + ":" + ("0" + mm).slice(-2);
+  }
+  function timeToMin(s) {
+    if (!s) return null;
+    var p = String(s).split(":");
+    return (parseInt(p[0], 10) || 0) * 60 + (parseInt(p[1], 10) || 0);
+  }
+  var _DOW = [["1", "Mon"], ["2", "Tue"], ["3", "Wed"], ["4", "Thu"], ["5", "Fri"], ["6", "Sat"], ["7", "Sun"]];
+
+  // The access-window editor for one membership plan (days + from/to). Reveals on a toggle. Saving
+  // PATCHes {set_window:true, access_days, access_start_min, access_end_min}; "all days + no times"
+  // = unconstrained (covers any time). Returns a collapsible element.
+  function windowEditor(plan) {
+    var sel = {};
+    var cur = plan.access_days; // array of ISO ints, or null = all days
+    var chips = el("div", { class: "cf-row", style: "gap:4px;flex-wrap:wrap" });
+    _DOW.forEach(function (o) {
+      var on = !cur || cur.indexOf(parseInt(o[0], 10)) >= 0;
+      sel[o[0]] = on;
+      var b = el("button", { class: "cf-chip" + (on ? " class" : ""), text: o[1], type: "button" });
+      b.addEventListener("click", function () { sel[o[0]] = !sel[o[0]]; b.className = "cf-chip" + (sel[o[0]] ? " class" : ""); });
+      chips.appendChild(b);
+    });
+    var fromI = input({ type: "time", value: minToTime(plan.access_start_min), style: "max-width:110px" });
+    var toI = input({ type: "time", value: minToTime(plan.access_end_min), style: "max-width:110px" });
+    var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save hours" });
+    save.addEventListener("click", async function () {
+      var days = _DOW.filter(function (o) { return sel[o[0]]; }).map(function (o) { return parseInt(o[0], 10); });
+      save.disabled = true;
+      try {
+        await window.AdminAPI.patchMembershipPlan(plan.price_id, {
+          set_window: true,
+          access_days: (days.length === 0 || days.length === 7) ? null : days,
+          access_start_min: timeToMin(fromI.value),
+          access_end_min: timeToMin(toI.value),
+        });
+        UI.toast("Access hours saved.", "info");
+      } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
+    });
+    return el("div", { class: "cf-subtle", style: "padding:8px 0 4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap" }, [
+      el("span", { class: "cf-muted cf-tiny", text: "Free on:" }), chips,
+      el("span", { class: "cf-muted cf-tiny", text: "from" }), fromI,
+      el("span", { class: "cf-muted cf-tiny", text: "to" }), toI, save,
+    ]);
+  }
+
   // Lifecycle control shared by plan/pack/price rows: active | dormant (configured but hidden
   // from customers) | retired. onChange(newStatus) PATCHes {status}. Returns the <select>.
   function statusSelect(current, onChange) {
@@ -687,8 +737,17 @@
         el("div", { class: "cf-row", style: "gap:4px;align-items:center" }, [monthsI, el("span", { class: "cf-muted", text: "months" })]),
         el("span", { class: "cf-spacer" }), status, save,
       ]);
-      if ((plan.status || "active") !== "active") row.style.opacity = "0.6";
-      return row;
+      // Access window (Phase 5): a "⏱ Access hours" toggle reveals the day+time editor. A summary
+      // shows when the tier is time-boxed.
+      var win = windowEditor(plan); win.style.display = "none";
+      var hasWin = !!(plan.access_days || plan.access_start_min != null || plan.access_end_min != null);
+      var winToggle = el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", type: "button",
+        text: hasWin ? "⏱ Access hours · limited" : "⏱ Access hours · any time" });
+      winToggle.addEventListener("click", function () { win.style.display = win.style.display === "none" ? "flex" : "none"; });
+      row.appendChild(winToggle);
+      var wrap = el("div", {}, [row, win]);
+      if ((plan.status || "active") !== "active") wrap.style.opacity = "0.6";
+      return wrap;
     }
 
     function renderList(plans) {

@@ -198,14 +198,19 @@
     var tiles = el("div", { class: "cf-tiles" });
     state.durations.forEach(function (d) {
       var on = state.selDuration === d.duration_minutes;
-      var priceText = state.membershipCovered
+      // Unconstrained membership -> free at any time (show R0). A windowed tier can't be judged
+      // until the time is chosen, so show the price now; real coverage resolves at the slot/confirm.
+      var coveredAnyTime = state.membershipCovered && !membershipWindow();
+      var priceText = coveredAnyTime
         ? coveredLabel()
         : UI.money(d.amount_minor, state.billing.currency);
       tiles.appendChild(el("div", {
         class: "cf-tile cf-tile-tap" + (on ? " sel" : ""),
         onclick: function () {
           state.selDuration = d.duration_minutes;
-          state.selDurationPrice = state.membershipCovered ? 0 : d.amount_minor;
+          // Keep the real price for windowed tiers (coverage is decided per-slot); only zero it for
+          // unconstrained membership which is free at any time.
+          state.selDurationPrice = coveredAnyTime ? 0 : d.amount_minor;
           state.slot = null; state.slotsCache = {};   // duration changed -> re-fetch slots
           stepSchedule();
         },
@@ -414,7 +419,7 @@
   // duration's price (slot price when a slot is picked, else the duration tile price).
   function priceLabel() {
     if (state.settlement === "token" && state.tokenWallet) return "Covered by your pack · R0";
-    if (state.membershipCovered && state.type === "court") return coveredLabel();
+    if (courtCovered()) return coveredLabel();
     var minor = (state.slot && state.slot.price != null) ? state.slot.price : state.selDurationPrice;
     return minor != null ? UI.money(minor, state.billing.currency) : "—";
   }
@@ -423,6 +428,28 @@
   function coveredLabel() {
     return (state.plan && state.plan.is_trial)
       ? "Free this week · R0" : "Covered by your membership · R0";
+  }
+
+  // ---- membership access window (Phase 5) -----------------------------------
+  function membershipWindow() { return state.plan && state.plan.membership_window; }
+  // A member with NO window is covered any time; a windowed tier (e.g. Student) only inside it.
+  function withinWindow(d, w) {
+    if (!w || !d) return true;
+    var iso = ((d.getDay() + 6) % 7) + 1;             // JS Sun=0 -> ISO Mon=1..Sun=7
+    if (w.days && w.days.length && w.days.indexOf(iso) < 0) return false;
+    var mod = d.getHours() * 60 + d.getMinutes();
+    if (w.start_min != null && mod < w.start_min) return false;
+    if (w.end_min != null && mod >= w.end_min) return false;
+    return true;
+  }
+  // Court covered FREE for the currently chosen slot: member has court membership AND (no window OR
+  // the slot start falls inside it). Outside the window -> PAYG (server enforces the same).
+  function courtCovered() {
+    if (state.type !== "court" || !state.membershipCovered) return false;
+    var w = membershipWindow();
+    if (!w) return true;
+    var start = state.slot && state.slot.start ? new Date(state.slot.start) : null;
+    return start ? withinWindow(start, w) : false;  // no slot yet -> resolve at the slot step
   }
 
   // The court that will actually be reserved (resolved from the slot for "Any").
@@ -639,9 +666,9 @@
   // ---- Step 4: pay & confirm ------------------------------------------------
   function stepConfirm() {
     captureGuest(); // preserve typed guest details across settlement re-renders
-    // Membership-covered court booking -> free: settlement is fixed to membership_covered.
-    var modes = state.membershipCovered && state.type === "court"
-      ? ["membership_covered"] : allowedModes();
+    // Covered court booking (inside the membership window) -> free: settlement fixed to
+    // membership_covered. Outside a windowed tier's hours, it falls to PAYG (server enforces too).
+    var modes = courtCovered() ? ["membership_covered"] : allowedModes();
     if (modes.indexOf(state.settlement) < 0) state.settlement = modes[0] || "at_court"; // smart default
 
     var card = el("div", { class: "cf-card" });
@@ -671,6 +698,15 @@
       card.appendChild(detail);
     } else {
       state._gName = null; state._gEmail = null;
+    }
+
+    // Outside-hours note: a windowed tier (e.g. Student) that picked a slot outside its hours pays
+    // as normal — tell them why, kindly.
+    if (state.type === "court" && state.membershipCovered && membershipWindow() && !courtCovered()) {
+      card.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-bottom:10px" }, [
+        el("span", { text: "This time is outside your membership hours, so it's pay-as-you-go. " }),
+        el("span", { text: "Book within your hours and it's free." }),
+      ]));
     }
 
     // --- settlement (selectable blocks; a usable pack is pre-selected as the default) ---
