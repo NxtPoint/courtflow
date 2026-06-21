@@ -156,6 +156,100 @@ def cancel_refund_request(session, *, club_id, user_id, request_id
 
 
 # ---------------------------------------------------------------------------
+# admin: decide (approve → execute the Yoco refund + mark refunded | decline → declined)
+#
+# The approve/decline LOGIC lives here (the admin route stays thin). Both functions:
+#   - look the request up SCOPED TO club_id (a cross-club request → NOT_FOUND / 404),
+#   - enforce the pending→ transition (anything not 'pending' → NOT_PENDING / 409 — this is the
+#     double-action guard: approving twice can NEVER double-refund),
+#   - stamp decided_by / decided_at / note,
+#   - take an explicit `session`, NEVER commit (the route's session_scope owns the transaction).
+#
+# APPROVE executes the REAL money movement by REUSING the existing Yoco refund path
+# (yoco_billing.execute_order_refund — the same checkout-id lookup + gateway call the admin
+# "Recent online payments → Refund" button uses). It runs the gateway refund FIRST and only
+# marks the request 'refunded' if that SUCCEEDS — a failed gateway refund raises, we return the
+# error, and the request is LEFT 'pending' (the UPDATE never runs, so nothing committed). The
+# route emits refund_decided after a successful decision.
+# ---------------------------------------------------------------------------
+
+def _load_pending_admin(session, *, club_id, request_id):
+    """Load a request scoped to club_id; return (row_dict, error). error is NOT_FOUND (wrong
+    club / missing → 404) or NOT_PENDING (already decided/cancelled → 409)."""
+    row = session.execute(
+        text("SELECT " + _SELECT_COLS + " FROM billing.refund_request "
+             "WHERE id = :id AND club_id = :c"),
+        {"id": str(request_id), "c": str(club_id)},
+    ).mappings().first()
+    if not row:
+        return None, "NOT_FOUND"
+    if row["status"] != "pending":
+        return None, "NOT_PENDING"
+    return _row_to_dict(row), None
+
+
+def approve_refund_request(session, *, club_id, request_id, decided_by,
+                           amount_minor=None, note=None
+                           ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Approve a 'pending' request: execute the Yoco refund for the request's order, then mark
+    it 'refunded'. Returns (request_dict, None) | (None, error_code).
+
+    Errors: NOT_FOUND (wrong club / missing) | NOT_PENDING (already decided — the double-action
+    guard) | <refund error code> (the gateway refund failed: the request is LEFT 'pending').
+
+    The refunded amount defaults to the request's amount_minor (the member's requested figure);
+    an explicit amount_minor overrides it; None throughout → a full refund (the helper sends no
+    amount → Yoco's full balance)."""
+    req, err = _load_pending_admin(session, club_id=club_id, request_id=request_id)
+    if err:
+        return None, err
+
+    # The money FIRST — reuse the existing admin Yoco-refund path. On failure this RAISES; we
+    # return the error and DO NOT mark the request refunded (it stays 'pending' — no UPDATE ran).
+    from yoco_billing import execute_order_refund, RefundError
+    amt = amount_minor if amount_minor is not None else req.get("amount_minor")
+    try:
+        execute_order_refund(session, order_id=req["order_id"], amount_minor=amt)
+    except RefundError as e:
+        log.warning("approve_refund_request: gateway refund failed req=%s: %s", request_id, e.message)
+        return None, e.code
+
+    note = (note or "").strip() or None
+    upd = session.execute(
+        text("UPDATE billing.refund_request "
+             "SET status = 'refunded', decided_by = :by, decided_at = now(), "
+             "    note = :note, updated_at = now() "
+             "WHERE id = :id AND status = 'pending' RETURNING " + _SELECT_COLS),
+        {"id": str(request_id), "by": str(decided_by) if decided_by else None, "note": note},
+    ).mappings().first()
+    if not upd:
+        # Lost a race (another admin decided it between our load and update) — treat as already
+        # actioned. The money refund above is idempotent on Yoco's side (keyed on checkout+amount).
+        return None, "NOT_PENDING"
+    return _row_to_dict(upd), None
+
+
+def decline_refund_request(session, *, club_id, request_id, decided_by, note=None
+                           ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Decline a 'pending' request → 'declined' (terminal), stamping the decider + optional note.
+    No money moves. Errors: NOT_FOUND (wrong club / missing) | NOT_PENDING (already decided)."""
+    _, err = _load_pending_admin(session, club_id=club_id, request_id=request_id)
+    if err:
+        return None, err
+    note = (note or "").strip() or None
+    upd = session.execute(
+        text("UPDATE billing.refund_request "
+             "SET status = 'declined', decided_by = :by, decided_at = now(), "
+             "    note = :note, updated_at = now() "
+             "WHERE id = :id AND status = 'pending' RETURNING " + _SELECT_COLS),
+        {"id": str(request_id), "by": str(decided_by) if decided_by else None, "note": note},
+    ).mappings().first()
+    if not upd:
+        return None, "NOT_PENDING"
+    return _row_to_dict(upd), None
+
+
+# ---------------------------------------------------------------------------
 # admin: read-only queue (the thin admin follow-up; approve/decline is another lane)
 # ---------------------------------------------------------------------------
 

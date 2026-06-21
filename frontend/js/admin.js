@@ -527,6 +527,15 @@
         " · Currency: " + cfg.currency }));
     } catch (e) { document.getElementById("bill-cfg").textContent = UI.errMsg(e); }
 
+    // Client refund requests (queue) — approve (executes the refund) / decline.
+    panel.appendChild(el("div", { class: "cf-card" }, [
+      el("h2", { text: "Refund requests" }),
+      el("p", { class: "cf-muted", style: "margin:-4px 0 12px", text:
+        "Refunds your members have asked for. Approve to refund the money via Yoco (you can also " +
+        "cancel the booking), or decline with a note. They're notified either way." }),
+      el("div", { id: "bill-refreq", class: "cf-loading", text: "Loading refund requests…" }),
+    ]));
+
     // Recent online payments + refunds.
     panel.appendChild(el("div", { class: "cf-card" }, [
       el("h2", { text: "Recent online payments" }),
@@ -535,7 +544,79 @@
         "cancel the booking separately if you also want to release the slot)." }),
       el("div", { id: "bill-pay", class: "cf-loading", text: "Loading payments…" }),
     ]));
+    loadRefundRequests();
     loadPayments();
+  }
+
+  // ---- client refund requests ------------------------------------------------
+  function loadRefundRequests() {
+    var box = document.getElementById("bill-refreq");
+    if (!box) return;
+    window.AdminAPI.refundRequests().then(function (r) {
+      UI.clear(box);
+      var reqs = r.requests || [];
+      if (!reqs.length) {
+        box.appendChild(el("div", { class: "cf-empty", text: "No refund requests." })); return;
+      }
+      var t = el("table", { class: "cf-table" });
+      t.appendChild(el("thead", {}, [ el("tr", {}, ["When", "Member", "Order", "Requested", "Reason", "Status", ""]
+        .map(function (h) { return el("th", { text: h }); })) ]));
+      var tb = el("tbody");
+      reqs.forEach(function (rq) {
+        var cur = rq.currency_code || "ZAR";
+        var pending = rq.status === "pending";
+        // Reuse existing chip styles (no app.css change): refunded→green, declined/cancelled→red,
+        // pending→amber (the 'held' warning style).
+        var chipClass = (rq.status === "refunded") ? "confirmed"
+          : (rq.status === "declined" || rq.status === "cancelled") ? "cancelled" : "held";
+        var actionCell;
+        if (pending) {
+          var bApprove = el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Approve" });
+          bApprove.addEventListener("click", function () { decideRefund(rq, bApprove, true); });
+          var bDecline = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger",
+            style: "margin-left:6px", text: "Decline" });
+          bDecline.addEventListener("click", function () { decideRefund(rq, bDecline, false); });
+          actionCell = [ bApprove, bDecline ];
+        } else {
+          actionCell = [ el("span", { class: "cf-muted", text: rq.note || "—" }) ];
+        }
+        tb.appendChild(el("tr", {}, [
+          el("td", { text: String(rq.created_at || "").replace("T", " ").slice(0, 16) }),
+          el("td", { text: rq.requester_name || rq.requester_email || "—" }),
+          el("td", { class: "num", text: UI.money(rq.order_amount_minor, cur) }),
+          el("td", { class: "num", text: UI.money(rq.amount_minor, cur) }),
+          el("td", { text: rq.reason || "—" }),
+          el("td", {}, [ el("span", { class: "cf-chip " + chipClass, text: rq.status }) ]),
+          el("td", {}, actionCell),
+        ]));
+      });
+      t.appendChild(tb); box.appendChild(t);
+    }).catch(function (e) { box.textContent = UI.errMsg(e); });
+  }
+
+  function decideRefund(rq, btn, approve) {
+    var cur = rq.currency_code || "ZAR";
+    var amt = UI.money(rq.amount_minor, cur);
+    var who = rq.requester_name || rq.requester_email || "the member";
+    var label = btn.textContent;
+    if (approve) {
+      if (!window.confirm("Approve and refund " + amt + " to " + who + " via Yoco?")) return;
+      var alsoCancel = window.confirm("Also CANCEL the booking and free the slot?\n\nOK = refund + cancel.   Cancel = refund only (booking kept).");
+      btn.disabled = true; btn.textContent = "Refunding…";
+      window.AdminAPI.approveRefundRequest(rq.id, { cancel_booking: !!alsoCancel })
+        .then(function (res) {
+          UI.toast((alsoCancel && res && res.cancelled) ? "Refunded & booking cancelled." : "Refund approved.", "info");
+          loadRefundRequests(); loadPayments();
+        })
+        .catch(function (e) { UI.toast(UI.errMsg(e), "error"); btn.disabled = false; btn.textContent = label; });
+    } else {
+      var note = window.prompt("Decline this refund request? Add an optional note for the member:", "");
+      if (note === null) return;  // cancelled the prompt
+      btn.disabled = true; btn.textContent = "Declining…";
+      window.AdminAPI.declineRefundRequest(rq.id, { note: (note || "").trim() || undefined })
+        .then(function () { UI.toast("Refund request declined.", "info"); loadRefundRequests(); })
+        .catch(function (e) { UI.toast(UI.errMsg(e), "error"); btn.disabled = false; btn.textContent = label; });
+    }
   }
 
   async function loadPayments() {
