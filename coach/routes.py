@@ -456,3 +456,22 @@ def get_client(client_user_id):
     if client is None:
         return jsonify(error="NOT_FOUND"), 404
     return jsonify(client=client), 200
+
+
+# ---------------------------------------------------------------------------
+# business cockpit — the coach's read-only "how is my business doing?" overview.
+# One payload: KPIs (activity + earnings net-of-commission + fill rate + clients),
+# a last-6-months trend, top clients, upcoming sessions. Coach-scoped (club_id +
+# user_id from the principal — never the body), so a coach only ever sees THEIR
+# OWN numbers. Pure SQL aggregation; billing/commission reads degrade gracefully.
+# ---------------------------------------------------------------------------
+
+@coach_bp.get("/cockpit")
+def get_cockpit():
+    p, err = _coach()
+    if err:
+        return err
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = repo.cockpit(s, club_id=p.club_id, user_id=p.user_id, month=month)
+    return jsonify(data), 200
