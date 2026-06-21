@@ -64,12 +64,26 @@ live — until then shareable/printable.)
   coach generates + marks collected; collection event → commission accrual.
 - **`commission_split` accrues on collection** (online charge OR arrears-collected), ex-VAT.
 
-## Still-open (non-blocking; default sensibly, confirm later)
-- Bundle **expiry** period (e.g. 6 months) and refund/transfer of unused credits.
-- Arrears invoice: does the coach collect **off-platform** (cash/EFT, then mark collected) or can the
-  client pay the statement **online via Yoco**? (Recommend: allow a Yoco "pay statement" link too.)
-- Who **eats the Yoco fee** on coach online payments.
-- Gateway-fee + VAT on the commission base specifics (we treat base as ex-VAT net).
+## RESOLVED (2026-06-21, second round)
+- **NOTHING IS HARDCODED — build fully CONFIGURABLE CAPABILITIES.** This is the platform's spine
+  (white-label). Every commercial value (prices, durations, plans, commission %, rent, term lengths)
+  is owner-configured data, never a constant in code. Design each feature as a *capability* (e.g. the
+  plan capability is "a function of amount + duration") that the owner parameterises per club.
+- **Memberships/plans are TERM-based, not recurring** (we have no recurring billing). The owner sets up
+  **plan terms** = (label, **amount**, **duration**), e.g. 1 month R220, 3 months R600, 6 months R1100.
+  A member buys a chosen term via Yoco (one-off) → membership granted for that term's duration. Replace
+  the hardcoded "1 month R220" with these configurable terms. Same capability covers lesson "bundles"
+  (a term/pack the coach or owner configures: amount + count/duration).
+- **Arrears = OFF-PLATFORM.** The coach sends the statement to the client and chases the **EFT** payment
+  himself; the platform records it and the coach **marks it collected** (no Yoco "pay statement" link for
+  now). Commission still accrues when the coach marks it collected.
+- **Yoco fees are for the OWNER's account** — the owner recovers them through commission. So the
+  commission/split math does NOT deduct the gateway fee from the coach; the owner bears it.
+- Commission base = **ex-VAT net**, on **collected** amounts.
+
+### Still-open (non-blocking; default sensibly)
+- Plan/bundle **expiry** edge cases (unused-credit refund/transfer) — default: no refund of a started term.
+- VAT registration / invoicing format — later.
 
 ## Build order impact
 Phase D becomes: (D1) `coach_agreement` + `commission_rule` + resolution; (D2) accrue
