@@ -40,17 +40,45 @@ in [01-commission-and-coaching-decisions.md](01-commission-and-coaching-decision
 
 ## 4. The three purchasing models (all configurable)
 1. **PAYG** — pay per booking (online / at-court / monthly account) at the per-duration price.
-2. **Membership (time-based)** — configurable **term plans** = (label, amount, **duration in months**),
+2. **Membership (term-based)** — configurable **term plans** = (label, amount, **duration in months**),
    e.g. 1mo R220 / 3mo R600 / 6mo R1100. Bought via Yoco (one-off, no recurring billing); grants
    membership for that term. An **active membership makes COURT bookings free**
-   (`settlement_mode=membership_covered`, server-resolved via `has_active_membership` — courts only,
-   never lessons). Admin can also **grant/revoke** a membership manually (People tab).
-3. **Tokens / bundles (count-based)** — a generic engine: an owner-configured **pack** = (service_kind
-   court|lesson|class, label, **# sessions**, session duration, price, validity, optional coach). Bought
-   via Yoco upfront → a **token wallet** of N credits. Booking that service draws a token (R0);
-   **cancellation credits one back**. Draw-down is **atomic** (no double-spend under concurrency),
-   credit-back is **idempotent** (no double-credit). Expiry handled. Use-it-or-lose-it (drains the
-   soonest-expiring wallet first).
+   (`settlement_mode=membership_covered`, server-resolved — courts only, never lessons). Admin can also
+   **grant/revoke** a membership manually (People tab).
+   - **Tiers + access windows (abuse guard).** A plan can carry an optional **access window**
+     (`billing.price.access_days` / `access_start_min` / `access_end_min`) so a cheap tier only covers
+     courts during set hours/days — e.g. *Student = weekdays 06:00–17:00*. Enforced **server-side** by
+     `diary.pricing.membership_covers(starts_at)`: a court **outside** the window falls back to PAYG
+     (never blocked, just not free). Owner sets it via the **"Access hours"** editor; the booking flow
+     resolves coverage per slot and shows the real price; the purchase page shows each tier's summary
+     ("Courts free weekdays 06:00–17:00"). A plan with no window covers any time. Tiers (Student / Family
+     / Single) are simply labelled plans, each with its own price.
+3. **Tokens / bundles (UNIT / minute-based)** — a generic engine: an owner-configured **pack** =
+   (service_kind court|lesson|class, label, **# sessions**, **base session length**, price, validity,
+   optional coach). Bought via Yoco upfront → a **token wallet** whose balance is held in **MINUTES**
+   (`sessions_count × base_minutes`). Booking draws minutes **proportional to its duration** (R0), so
+   **one pack covers any length**: a 90-min court off a 60-min unit = **1.5 sessions**, a class draws
+   **one full unit**. **Customer-wins tail** — any positive balance books any length (the last credit
+   covers a full booking). **Cancellation credits back the exact minutes** drawn. Draw-down is **atomic**
+   (no double-spend), credit-back **idempotent** (no double-credit). Expiry + use-it-or-lose-it (drains
+   the soonest-expiring wallet first). Consumption is **seamless** — a matching pack auto-applies at
+   checkout ("Covered by your pack · R0"); run-dry prompts a re-buy. Full spec: `02-token-bundle-engine.md`.
+
+### Free week (signup gift)
+A brand-new member is **auto-granted a 7-day courts-free trial** on first login — a time-boxed
+`billing.membership_subscription` (`provider='trial'`, `current_period_end = today + N days`) that makes
+COURT bookings free via the membership engine and **auto-lapses** (no cron). Lessons/packs stay paid.
+One-shot + idempotent (never double-granted, never re-issued; existing/paid members get nothing). Length
+via `SIGNUP_TRIAL_DAYS` env (default 7; 0 disables). The booking page shows a "free week — N days left"
+banner; `GET /api/me/plan` exposes `is_trial` / `trial_days_left`. Granted in `auth/principal.py`
+auto-enrol; `billing.membership.grant_signup_trial`.
+
+### Plan lifecycle (active / dormant / retired)
+Every catalogue item — court rates, packs, membership plans — carries a `status`
+(`active` | `dormant` | `retired`) on `billing.price` / `billing.bundle_plan`. **Dormant** = configured
+but **hidden from customers** (kept editable); **retired** = soft-deleted. `active` is kept in sync
+(`active = status='active'`), so customer reads (`price_for`, `membership_plans`, pack lists) only ever
+show active items — dormant/retired vanish for customers but stay visible to the owner with their status.
 
 ## 5. Payments & refunds (Yoco)
 - **Online:** `online` booking → `awaiting_payment` order + `held` booking → Yoco hosted checkout (card +
@@ -90,13 +118,15 @@ in [01-commission-and-coaching-decisions.md](01-commission-and-coaching-decision
   **children/dependents**; **Financials** (current plan, usage this month, spend per month + history,
   next charge); raise **refund requests**. Buy membership (`/membership.html`) + packs (`/packs.html`).
 - **Coach (`/coach.html`):** edit profile (bio, photo, specialties, languages, qualifications,
-  visibility toggles); set **per-duration lesson rates**; availability + time-off; **My Clients**
+  visibility toggles); set **per-duration lesson rates**; **own lesson packs** (Packs tab →
+  `/api/coach/bundle-plans`, scoped + ownership-guarded); availability + time-off; **My Clients**
   (derived, private to that coach); **Dashboard cockpit** (lessons, hours, gross + **net-of-commission**
   earnings, fill rate, new-vs-returning, top clients, trend); **Statement** (month-end money).
 - **Owner (`/admin.html`, `/settings.html`):** master diary; resources/courts; people (+ membership
-  grant); classes; pricing; **membership plans**; **bundle/pack plans**; **Coach pay** (rent +
-  commission rules); payments + refunds + refund-requests; **Cockpit/Financials**; onboarding; branding;
-  policy (incl. the online-payments toggle).
+  grant); classes; a consolidated **Settings → Pricing** tab (court rates · packs · memberships, each
+  with the active/dormant/retired control + membership "Access hours"); **Coach pay** (rent +
+  commission rules); payments (online-payments toggle) + refunds + refund-requests; **Cockpit/Financials**;
+  onboarding; branding; policy.
 
 ## 8. Notifications
 - In-app **bell + inbox** (topbar) for every member; driven non-fatally off `emit()`. Kinds:

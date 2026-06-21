@@ -129,7 +129,13 @@ Wix-era "member R0" court tier is GONE** (the seed deactivates legacy no-duratio
 membership makes COURT bookings free** (`settlement_mode=membership_covered`, resolved server-side via
 `has_active_membership` — guarded: courts only, never lessons). Admin grants/revokes in **People**
 (`POST|DELETE /api/admin/members/<user_id>/membership` → `billing.membership_subscription`, provider='manual').
-Self-serve membership purchase (a Yoco subscription) is the next piece.
+**Self-serve membership purchase (Yoco one-off) is BUILT** (`/membership.html`). Memberships also support
+**typed tiers + optional access windows** (`billing.price.access_days/access_start_min/access_end_min`,
+enforced by `diary.pricing.membership_covers(starts_at)` — outside the window → PAYG) and a **7-day
+free-week trial** auto-granted on signup (`grant_signup_trial`, `provider='trial'`). Bundles are now
+**unit/minute-based** (a pack covers any length; 90min off a 60-unit = 1.5 sessions). Catalogue items
+carry a lifecycle **`status`** (active/dormant/retired). See `docs/specs/02-token-bundle-engine.md` +
+`docs/specs/BUSINESS-RULES.md §4`. **(Current source of truth: `docs/specs/`.)**
 
 **Booking flow (`book.js`, Wix "Schedule your service" style):** Service → **Duration** (court/lesson; live
 per-duration price, or "Covered by your membership") → **Schedule** (month calendar | 2-col time blocks |

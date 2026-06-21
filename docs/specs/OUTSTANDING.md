@@ -22,9 +22,12 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
         *reports* who owes what; settlement is offline.
   - [ ] **Rent auto-accrual** — `accrue_rent_for_club` exists + is idempotent; it runs on-read. A
         scheduled monthly accrual would be cleaner (needs a scheduler — see crons below).
-- [ ] **Bundle/arrears edges:** bundle **expiry** policy for unused credits (refund/transfer?); a
-      "too-late cancellation forfeits the token" option (today cancel always credits back); optionally a
-      Yoco "pay statement" link so a client can pay a coach's arrears invoice online (today off-platform).
+- [ ] **Bundle/arrears edges:** bundle **expiry** policy for unused minutes/credits (refund/transfer?); a
+      "too-late cancellation forfeits the credit" option (today cancel always credits back the exact
+      minutes); optionally a Yoco "pay statement" link so a client can pay a coach's arrears invoice
+      online (today off-platform).
+- [ ] **Membership upgrades / downgrades** — a member changing tier mid-term (proration, when it takes
+      effect, credit/refund). Backlog — needs a proper spec before building.
 - [ ] **Platform / super-admin cockpit** — cross-club view (all clubs' revenue/health) for
       `platform_admin`. Low priority while there's one club; the `scope_clause` design supports it.
 - [ ] **Reminders** — booking reminders (the `/api/cron/reminders` handler exists but cron services are

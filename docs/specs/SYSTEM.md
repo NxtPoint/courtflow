@@ -12,7 +12,7 @@ Two Render web services + one Postgres:
   `locker_room_app.py`): a marketing host serves the public site at `/` and the portal SPA shells at
   `/portal`, `/book`, `/admin`, …; a club host would serve that club's branded site. Serves static
   `cf-*` pages + JS, proxies nothing — the SPAs call `courtflow-api` directly.
-- **Postgres** (separate Render DB). **One DB, six schemas** (below).
+- **Postgres** (separate Render DB). **One DB, five schemas** (below).
 
 The browser holds a **Clerk** session; the SPA attaches the JWT to every `/api/*` call; the API verifies
 it (JWKS) and resolves a club-scoped `Principal`.
@@ -51,8 +51,16 @@ provider-agnostic. On top of it:
 - **`yoco_billing/`** — the Yoco adapter (hosted checkout, Standard-Webhooks verify, refund, reconcile,
   receipt) behind `register_gateway`/`get_gateway`. `billing/` core is untouched.
 - **`billing/membership.py`** — configurable membership **term plans** (price × duration).
-- **`billing/bundles.py`** — the generic **token/bundle** engine (prepaid session packs; atomic
-  draw-down, idempotent credit-back) across court/lesson/class.
+- **`billing/bundles.py`** — the generic **token/bundle** engine (prepaid session packs) across
+  court/lesson/class. **Unit/minute-based:** a pack covers any length, drawing minutes proportional to
+  the booking's duration (90min off a 60-unit = 1.5 sessions; class = one full unit); customer-wins tail;
+  atomic draw-down, idempotent credit-back of the exact minutes. Catalogue items carry a lifecycle
+  `status` (active/dormant/retired). Coaches configure their own lesson packs (`/api/coach/bundle-plans`).
+- **Free week** — new members are auto-granted a 7-day courts-free trial membership on signup
+  (`billing.membership.grant_signup_trial`, `provider='trial'`, fired from `auth/principal.py`;
+  `SIGNUP_TRIAL_DAYS` env). **Membership access windows** — a tier can be time-boxed
+  (`billing.price.access_days/access_start_min/access_end_min`), enforced server-side by
+  `diary.pricing.membership_covers(starts_at)` (outside the window → PAYG).
 - **`billing/commission.py`** — the coach **commission/rent** engine: scoped dated rules
   (`coach+product > product > coach > club`), split computed **on collection** inside `apply_payment_event`
   (idempotent), arrears statement, owner cockpit aggregations.

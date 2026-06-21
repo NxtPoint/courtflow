@@ -64,13 +64,18 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21). Paths 
 `POST refund-requests/<id>/{approve,decline}`.
 
 **Coach `/api/coach/*`:** `GET/PATCH profile` · `GET onboarding` · `POST/PATCH services`
-(+`POST services/<pid>/rate`, `PATCH/DELETE services/<id>`) · `PUT hours` · `GET/POST/DELETE time-off` ·
-`GET clients` · `GET clients/<id>` · `GET cockpit` · `POST photo-presign` · `GET classes*` (shared) ·
-`POST coach-statement/...` (shared admin route, coach-gated for own).
+(+`POST services/<pid>/rate`, `PATCH/DELETE services/<id>`) · `GET/POST bundle-plans`
+(+`PATCH bundle-plans/<id>` — own lesson packs, scoped + ownership-guarded) · `PUT hours` ·
+`GET/POST/DELETE time-off` · `GET clients` · `GET clients/<id>` · `GET cockpit` · `POST photo-presign` ·
+`GET classes*` (shared) · `POST coach-statement/...` (shared admin route, coach-gated for own).
 
 **Client `/api/me/*`:** `GET/PATCH profile` · `GET/POST dependents` (+`PATCH/DELETE /<id>`) ·
-`GET financials` · `GET orders` · `GET/POST refund-requests` (+`POST /<id>/cancel`) ·
-`GET notifications` · `POST notifications/read`.
+`GET plan` (current plan + `is_trial`/`trial_days_left` + `membership_window`) · `GET financials` ·
+`GET orders` · `GET/POST refund-requests` (+`POST /<id>/cancel`) · `GET notifications` ·
+`POST notifications/read`.
+
+**Web service (`web_app.py`, marketing host):** `GET/POST /contact` (the public contact form posts
+here — emails the club via SES, self-gating; logs the lead if SES unset).
 
 **Crons `/api/cron/*`** (handlers exist; cron services off): `POST capacity-sweep` · `POST reminders` ·
 `POST monthly-invoice` · `POST membership-refill` · `POST reconcile-payments`.
@@ -88,6 +93,10 @@ geolocation via Cloudflare `CF-IPCountry`). **Core:** `GET /healthz` · `GET /ap
   `account_ledger`, `membership_subscription`, `refund_request`, `bundle_plan`, `token_wallet`,
   `token_ledger`, `coach_agreement`, `commission_rule`, `commission_split`, `coach_ledger`,
   `coach_arrears`
+  - *Key recent columns:* `price.status` (active/dormant/retired) + `term_months`/`label` (membership
+    plans) + `access_days`/`access_start_min`/`access_end_min` (membership access window);
+    `bundle_plan.status`; `token_wallet.base_minutes`/`minutes_total`/`minutes_remaining` (the unit
+    engine's authoritative minute balance — `tokens_*` are display only).
 - **`core`**: account/user/person, `usage_event`, consent, nps, `notification`
   *(the Business Overview analytics are read-only views over `core.usage_event` — no separate schema)*
 
