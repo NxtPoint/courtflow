@@ -94,6 +94,51 @@ _DDL = [
     f"CREATE INDEX IF NOT EXISTS ix_player_profile_user ON {SCHEMA}.player_profile (user_id);",
     f"CREATE INDEX IF NOT EXISTS ix_player_profile_guardian "
     f"ON {SCHEMA}.player_profile (guardian_user_id);",
+
+    # --- iam.user : self-service demographics (client "My Account" spec §2.2 — option A:
+    # ADD COLUMN on iam.user, 1:1 with the human, cross-club). Email stays the identity key
+    # (read-only in the UI). Idempotent — safe on every boot.
+    f"ALTER TABLE {SCHEMA}.user ADD COLUMN IF NOT EXISTS dob                     date;",
+    f"ALTER TABLE {SCHEMA}.user ADD COLUMN IF NOT EXISTS address_line1           text;",
+    f"ALTER TABLE {SCHEMA}.user ADD COLUMN IF NOT EXISTS address_line2           text;",
+    f"ALTER TABLE {SCHEMA}.user ADD COLUMN IF NOT EXISTS city                    text;",
+    f"ALTER TABLE {SCHEMA}.user ADD COLUMN IF NOT EXISTS postal_code             text;",
+    f"ALTER TABLE {SCHEMA}.user ADD COLUMN IF NOT EXISTS country                 text;",
+    f"ALTER TABLE {SCHEMA}.user ADD COLUMN IF NOT EXISTS emergency_contact_name  text;",
+    f"ALTER TABLE {SCHEMA}.user ADD COLUMN IF NOT EXISTS emergency_contact_phone text;",
+    f"ALTER TABLE {SCHEMA}.user ADD COLUMN IF NOT EXISTS marketing_opt_in        boolean "
+    f"NOT NULL DEFAULT false;",
+
+    # --- iam.dependent : a guardian-managed child/dependent who can be BOOKED FOR but never
+    # logs in. The dependent IS an iam.user (clerk_user_id NULL → inert to auth) so it can be
+    # a diary.booking_party.user_id / diary.enrolment.user_id with ZERO change to diary/billing.
+    # This table carries the guardianship + management metadata. Shared foundation: the canonical
+    # iam.dependent model from the CRM/foundations spec §3.2 (other roles reuse it). Spend rolls
+    # up to the PAYER (order.user_id = guardian); activity rolls up to the PLAYER (this user).
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.dependent (
+        id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id           uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        guardian_user_id  uuid NOT NULL REFERENCES {SCHEMA}.user(id) ON DELETE CASCADE,  -- the adult/payer
+        dependent_user_id uuid NOT NULL REFERENCES {SCHEMA}.user(id) ON DELETE CASCADE,  -- the login-less child user
+        first_name        text NOT NULL,
+        surname           text,
+        dob               date,
+        relationship      text DEFAULT 'child' CHECK (relationship IN
+                              ('child','spouse','partner','other')),
+        is_minor          boolean NOT NULL DEFAULT true,
+        can_self_book     boolean NOT NULL DEFAULT false,  -- reserved (a teen given limited self-service later)
+        notes             text,
+        is_active         boolean NOT NULL DEFAULT true,
+        created_at        timestamptz NOT NULL DEFAULT now(),
+        updated_at        timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (guardian_user_id, dependent_user_id)
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_dependent_guardian "
+    f"ON {SCHEMA}.dependent (club_id, guardian_user_id);",
+    f"CREATE INDEX IF NOT EXISTS ix_dependent_dependent "
+    f"ON {SCHEMA}.dependent (dependent_user_id);",
 ]
 
 
