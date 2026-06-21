@@ -41,7 +41,9 @@
     // GET /api/coach/profile -> {profile:{...}}
     profile: function () { return A().apiJSON("/api/coach/profile"); },
     // PATCH /api/coach/profile  body:
-    //   {display_name,headline,bio,photo_url,specialties[],phone,first_name,surname}
+    //   {display_name,headline,bio,photo_url,specialties[],languages[],qualifications[],
+    //    years_experience,is_bookable,public_visibility,phone,first_name,surname}
+    //   (rank is admin-only — ignored if sent.)
     patchProfile: function (body) {
       return A().apiJSON("/api/coach/profile", { method: "PATCH", body: body });
     },
@@ -53,15 +55,22 @@
       return A().apiJSON("/api/coach/hours", { method: "PUT", body: body });
     },
 
-    // ---- services & rates ------------------------------------------------
+    // ---- services & rates (PER-DURATION per_booking — see diary/pricing.py) ----
     // GET /api/coach/services -> {services:[{price_id,product_id,name,amount_minor,
-    //   unit,duration_minutes,audience}]}
+    //   unit:'per_booking',duration_minutes,audience}]}
     services: function () { return A().apiJSON("/api/coach/services"); },
-    // POST /api/coach/services  body: {name,duration_minutes,amount_minor,audience}
+    // POST /api/coach/services  body: {name,duration_minutes,amount_minor} -> {service}
+    //   (server defaults unit='per_booking', audience='any' so the rate prices + books.)
     createService: function (body) {
       return A().apiJSON("/api/coach/services", { method: "POST", body: body });
     },
-    // PATCH /api/coach/services/:price_id  body: {name,duration_minutes,amount_minor,audience}
+    // POST /api/coach/services/:product_id/rate  body: {duration_minutes,amount_minor}
+    //   adds another per-duration rate to an existing lesson product -> {service}
+    addServiceRate: function (productId, body) {
+      return A().apiJSON("/api/coach/services/" + enc(productId) + "/rate",
+        { method: "POST", body: body });
+    },
+    // PATCH /api/coach/services/:price_id  body: {name,duration_minutes,amount_minor}
     patchService: function (priceId, body) {
       return A().apiJSON("/api/coach/services/" + enc(priceId), { method: "PATCH", body: body });
     },
@@ -69,6 +78,24 @@
     deleteService: function (priceId) {
       return A().apiJSON("/api/coach/services/" + enc(priceId), { method: "DELETE" });
     },
+
+    // ---- time-off (view + remove; POST stays in the diary lane) ----------
+    // GET /api/coach/time-off[?all=1] -> {time_off:[{id,resource_id,resource_name,
+    //   starts_at,ends_at,reason}], count}  (upcoming-only by default)
+    timeOff: function (opts) { return A().apiJSON("/api/coach/time-off" + _qs(opts)); },
+    // DELETE /api/coach/time-off/:id -> {ok:true}
+    deleteTimeOff: function (id) {
+      return A().apiJSON("/api/coach/time-off/" + enc(id), { method: "DELETE" });
+    },
+
+    // ---- my clients (read-only derivation; THIS coach only) --------------
+    // GET /api/coach/clients[?search=&limit=] -> {clients:[{user_id,first_name,surname,
+    //   email,phone,first_seen,last_seen,lessons_count,classes_count,no_show_count,
+    //   upcoming_count,lifetime_spend_minor}], count}
+    clients: function (opts) { return A().apiJSON("/api/coach/clients" + _qs(opts)); },
+    // GET /api/coach/clients/:user_id -> {client:{...headline, history:[{kind,starts_at,
+    //   status,order_id}]}}
+    client: function (userId) { return A().apiJSON("/api/coach/clients/" + enc(userId)); },
 
     // ---- profile photo ---------------------------------------------------
     // POST /api/coach/photo-presign  body: {filename,content_type}
@@ -161,13 +188,14 @@
   function actionRow(children) { return el("div", { class: "cf-row", style: "margin-top:14px" }, children); }
 
   // ---------------------------------------------------------------------------
-  // SPECIALTIES — a chip/tag editor. Renders removable cf-chips + an "add" input.
-  // Returns {el, value()} where value() yields the current string[] of tags.
+  // TAG EDITOR — a generic chip editor (removable cf-chips + an "add" input). Reused
+  // for specialties, languages, qualifications. Returns {el, value()} -> string[].
   // ---------------------------------------------------------------------------
-  function specialtyEditor(initial) {
+  function tagEditor(initial, opts) {
+    opts = opts || {};
     var tags = (initial || []).slice();
     var chips = el("div", { class: "cf-row", style: "flex-wrap:wrap;gap:6px" });
-    var addI = input({ placeholder: "Add a specialty (e.g. Junior development) + Enter", style: "max-width:280px" });
+    var addI = input({ placeholder: opts.placeholder || "Add + Enter", style: "max-width:280px" });
     function draw() {
       UI.clear(chips);
       tags.forEach(function (t, idx) {
@@ -176,7 +204,7 @@
           onclick: function () { tags.splice(idx, 1); draw(); } });
         chips.appendChild(x);
       });
-      if (!tags.length) chips.appendChild(el("span", { class: "cf-muted", text: "No specialties yet." }));
+      if (!tags.length) chips.appendChild(el("span", { class: "cf-muted", text: opts.empty || "None yet." }));
     }
     function add() {
       var v = addI.value.trim();
@@ -192,9 +220,19 @@
     var wrap = el("div", {}, [chips, el("div", { class: "cf-row", style: "margin-top:6px" }, [addI, addBtn])]);
     return { el: wrap, value: function () { return tags.slice(); } };
   }
+  // toggle row: a labelled checkbox returning {el, checked()}.
+  function toggle(label, checked, hint) {
+    var box = input({ type: "checkbox" }); box.checked = !!checked;
+    var row = el("label", { class: "cf-row", style: "gap:8px;align-items:center;cursor:pointer" },
+      [box, el("span", { text: label, style: "font-weight:600" })]);
+    var wrap = el("div", {}, [row]);
+    if (hint) wrap.appendChild(el("div", { class: "cf-muted", style: "margin-top:2px", text: hint }));
+    return { el: wrap, checked: function () { return box.checked; } };
+  }
 
   // ---------------------------------------------------------------------------
-  // PROFILE — photo, display name, headline, bio, specialties, phone.
+  // PROFILE — photo, name, headline, bio, specialties, languages, qualifications,
+  // years of experience, bookable/visibility toggles, phone.
   //   -> PATCH /coach/profile (+ POST /coach/photo-presign for the photo upload).
   // data: the onboarding/profile `profile` object. opts.onSaved fires on success.
   // ---------------------------------------------------------------------------
@@ -255,10 +293,24 @@
       display: input({ value: p.display_name || "", placeholder: "How your name appears to members" }),
       headline: input({ value: p.headline || "", placeholder: "e.g. LTA Level 3 coach · 10+ years" }),
       bio: textarea({ placeholder: "Tell members about your coaching style and experience…", rows: 5 }),
+      years: input({ value: (p.years_experience == null ? "" : p.years_experience),
+        placeholder: "e.g. 10", type: "number", min: "0", max: "80", style: "max-width:120px" }),
       phone: input({ value: p.phone || "", placeholder: "Cell phone", type: "tel", style: "max-width:220px" }),
     };
     f.bio.value = p.bio || "";
-    var spec = specialtyEditor(p.specialties || []);
+    var spec = tagEditor(p.specialties || [], {
+      placeholder: "Add a specialty (e.g. Junior development) + Enter", empty: "No specialties yet." });
+    var langs = tagEditor(p.languages || [], {
+      placeholder: "Add a language (e.g. English) + Enter", empty: "No languages yet." });
+    var quals = tagEditor(p.qualifications || [], {
+      placeholder: "Add a qualification (e.g. LTA Level 3) + Enter", empty: "No qualifications yet." });
+    // is_bookable defaults true; public_visibility defaults true (NOT NULL DEFAULT true).
+    var bookable = toggle("Accepting new bookings",
+      (p.is_bookable == null ? true : p.is_bookable),
+      "Members can book lessons with you. Turn off when you're full.");
+    var visible = toggle("Show on the public coach directory",
+      (p.public_visibility == null ? true : p.public_visibility),
+      "Appears on the club's public/marketing site. Independent of bookable.");
 
     var card = el("div", { class: "cf-card" }, [
       el("h2", { text: "Your coaching profile" }),
@@ -269,7 +321,11 @@
       field("Headline", f.headline),
       field("Bio", f.bio),
       field("Specialties", spec.el),
+      field("Languages", langs.el),
+      field("Qualifications", quals.el),
+      field("Years of experience", f.years),
       field("Cell phone", f.phone),
+      el("div", { class: "cf-grid cf-grid-2", style: "margin-top:4px" }, [bookable.el, visible.el]),
     ]);
     var btn = el("button", { class: "cf-btn cf-btn-primary", text: opts.saveLabel || "Save" });
     card.appendChild(actionRow((opts.before || []).concat([btn])));
@@ -286,6 +342,11 @@
           bio: f.bio.value.trim(),
           photo_url: (photoUrl || urlI.value.trim()) || null,
           specialties: spec.value(),
+          languages: langs.value(),
+          qualifications: quals.value(),
+          years_experience: num(f.years.value),
+          is_bookable: bookable.checked(),
+          public_visibility: visible.checked(),
           phone: f.phone.value.trim(),
           first_name: f.first.value.trim(),
           surname: f.surname.value.trim(),
@@ -355,7 +416,10 @@
   }
 
   // ---------------------------------------------------------------------------
-  // SERVICES & RATES — repeatable rows of {lesson name, duration, price}.
+  // SERVICES & RATES — repeatable rows of {lesson name, duration, price}. Each rate
+  // is a PER-DURATION price (unit='per_booking') the booking flow resolves directly
+  // (diary/pricing.py). No audience is sent — the server defaults to 'any' so the
+  // rate prices for every booker.
   //   -> GET /coach/services, POST/PATCH/DELETE /coach/services[/:price_id].
   // ---------------------------------------------------------------------------
   var DURATIONS = [
@@ -368,7 +432,7 @@
     UI.clear(host);
     var card = el("div", { class: "cf-card" });
     card.appendChild(el("h2", { text: "Services & rates" }));
-    card.appendChild(el("p", { class: "cf-muted", text: "Add the lessons you offer with their length and price." }));
+    card.appendChild(el("p", { class: "cf-muted", text: "Add the lessons you offer with their length and price. Each price is for the whole lesson (e.g. 60 min = R400)." }));
     var listBox = el("div", { class: "cf-list", id: "co-services" });
     card.appendChild(listBox);
     host.appendChild(card);
@@ -424,7 +488,7 @@
       try {
         await window.CoachAPI.createService({
           name: nm, duration_minutes: num(addDur.value) || 60,
-          amount_minor: toMinor(addAmt.value), audience: "member",
+          amount_minor: toMinor(addAmt.value),
         });
         addName.value = ""; addAmt.value = ""; UI.toast("Service added.", "info"); reload();
       } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { addBtn.disabled = false; }

@@ -12,9 +12,10 @@
 #      the booking flow can find "this coach's lesson rate"). Nullable + unconstrained
 #      (cross-lane, like billing's other cross-lane uuid columns).
 #
-# Every column iam.coach_profile needs for the profile editor (display_name, headline,
-# bio, photo_url, specialties, is_bookable, rank, default_lesson_price_id) ALREADY exists
-# in iam/schema.py, so we only add what's genuinely missing.
+# The base iam.coach_profile columns (display_name, headline, bio, photo_url, specialties,
+# is_bookable, rank, default_lesson_price_id) ALREADY exist in iam/schema.py. The richer
+# editor fields (languages, qualifications, years_experience, public_visibility) are added
+# HERE (coach-self-service spec §3.1) idempotently — the coach lane must not edit iam/schema.py.
 #
 # init() is safe on every boot and twice in a row.
 
@@ -30,6 +31,17 @@ _DDL = [
     "ALTER TABLE billing.product ADD COLUMN IF NOT EXISTS coach_user_id uuid;",
     "CREATE INDEX IF NOT EXISTS ix_product_coach "
     "ON billing.product (club_id, coach_user_id);",
+
+    # 3) editable-profile field additions (coach self-service spec §3.1). The coach lane
+    #    owns these — it must not edit iam/schema.py. languages/qualifications are text[]
+    #    (same shape as specialties); years_experience is an int; public_visibility is the
+    #    "appears in the public/marketing directory" flag, DISTINCT from is_bookable
+    #    ("accepts new lesson bookings"). A coach can be visible-but-not-bookable.
+    "ALTER TABLE iam.coach_profile ADD COLUMN IF NOT EXISTS languages text[];",
+    "ALTER TABLE iam.coach_profile ADD COLUMN IF NOT EXISTS qualifications text[];",
+    "ALTER TABLE iam.coach_profile ADD COLUMN IF NOT EXISTS years_experience int;",
+    "ALTER TABLE iam.coach_profile ADD COLUMN IF NOT EXISTS "
+    "public_visibility boolean NOT NULL DEFAULT true;",
 ]
 
 

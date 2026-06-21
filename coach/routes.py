@@ -1,5 +1,6 @@
-# coach/routes.py — the /api/coach/* write surface (coach self-service: onboarding,
-# profile, weekly hours, lesson services/rates). Blueprint coach_bp. Registered in app.py.
+# coach/routes.py — the /api/coach/* surface (coach self-service: onboarding, profile,
+# weekly hours, lesson services/rates, time-off view/remove, and a read-only "My Clients"
+# view). Blueprint coach_bp. Registered in app.py.
 #
 # Thin routes (admin/diary/billing style): resolve the principal (auth.resolve_principal),
 # gate to roles coach + club_admin + platform_admin (reject others 403), and pull BOTH
@@ -121,15 +122,22 @@ def patch_profile():
     if err:
         return err
     b = _body()
-    specialties = b.get("specialties")
-    if specialties is not None and not isinstance(specialties, list):
-        return jsonify(error="specialties must be a list"), 400
+    # text[] fields must be lists when supplied (same guard as specialties).
+    for arr in ("specialties", "languages", "qualifications"):
+        v = b.get(arr)
+        if v is not None and not isinstance(v, list):
+            return jsonify(error=arr + " must be a list"), 400
+    # rank is admin-only — the repo doesn't accept it, so it's ignored even if sent.
     with session_scope() as s:
         profile = repo.patch_profile(
             s, club_id=p.club_id, user_id=p.user_id,
             display_name=b.get("display_name"), headline=b.get("headline"),
             bio=b.get("bio"), photo_url=b.get("photo_url"),
-            specialties=specialties, phone=b.get("phone"),
+            specialties=b.get("specialties"), languages=b.get("languages"),
+            qualifications=b.get("qualifications"),
+            years_experience=b.get("years_experience"),
+            is_bookable=b.get("is_bookable"), public_visibility=b.get("public_visibility"),
+            phone=b.get("phone"),
             first_name=b.get("first_name"), surname=b.get("surname"),
         )
     return jsonify(profile=profile), 200
@@ -176,13 +184,35 @@ def post_service():
     if err:
         return err
     b = _body()
+    # Per-duration per_booking is the platform pricing model (diary/pricing.py). audience
+    # defaults to 'any' so the price resolves for every booker (not just 'member').
     with session_scope() as s:
         svc = repo.create_service(
             s, club_id=p.club_id, user_id=p.user_id,
             name=b.get("name"), duration_minutes=b.get("duration_minutes"),
             amount_minor=b.get("amount_minor", 0), audience=b.get("audience", "any"),
-            unit=b.get("unit", "per_hour"),
+            unit=b.get("unit", "per_booking"),
         )
+    return jsonify(service=svc), 201
+
+
+@coach_bp.post("/services/<product_id>/rate")
+def post_service_rate(product_id):
+    """Add another per-duration rate to an existing lesson product the coach owns (so one
+    'Private lesson' product can carry 30/60/90 rates). Body: {duration_minutes, amount_minor}."""
+    p, err = _coach()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        svc = repo.add_service_rate(
+            s, club_id=p.club_id, user_id=p.user_id, product_id=product_id,
+            duration_minutes=b.get("duration_minutes"),
+            amount_minor=b.get("amount_minor", 0), audience=b.get("audience", "any"),
+            unit=b.get("unit", "per_booking"),
+        )
+    if svc is None:
+        return jsonify(error="NOT_FOUND"), 404
     return jsonify(service=svc), 201
 
 
@@ -196,6 +226,7 @@ def patch_service(price_id):
         svc = repo.patch_service(
             s, club_id=p.club_id, user_id=p.user_id, price_id=price_id,
             name=b.get("name"), amount_minor=b.get("amount_minor"),
+            duration_minutes=b.get("duration_minutes"),
         )
     if svc is None:
         return jsonify(error="NOT_FOUND"), 404
@@ -357,3 +388,71 @@ def photo_presign():
     else:
         public_url = f"https://{bucket}.s3.amazonaws.com/{key}"
     return jsonify(configured=True, url=url, public_url=public_url, key=key), 200
+
+
+# ---------------------------------------------------------------------------
+# time-off (view + remove) — the coach's OWN coach resource. POST stays in the
+# diary lane (/api/diary/time-off); the coach lane owns the GET/DELETE so a coach
+# can list upcoming blocks and remove a holiday. Every repo call is scoped to the
+# coach's user_id, so a coach can only see/remove blocks on their own resource.
+# ---------------------------------------------------------------------------
+
+@coach_bp.get("/time-off")
+def get_time_off():
+    p, err = _coach()
+    if err:
+        return err
+    upcoming = (request.args.get("all") or "").lower() not in ("1", "true", "yes")
+    with session_scope() as s:
+        rows = repo.list_time_off(s, club_id=p.club_id, user_id=p.user_id,
+                                  upcoming_only=upcoming)
+    return jsonify(time_off=rows, count=len(rows)), 200
+
+
+@coach_bp.delete("/time-off/<time_off_id>")
+def delete_time_off(time_off_id):
+    p, err = _coach()
+    if err:
+        return err
+    with session_scope() as s:
+        ok = repo.delete_time_off(s, club_id=p.club_id, user_id=p.user_id,
+                                  time_off_id=time_off_id)
+    if not ok:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(ok=True), 200
+
+
+# ---------------------------------------------------------------------------
+# "My Clients" — read-only derivation from diary.booking + diary.enrolment.
+# A coach sees ONLY their own clients (scoped by coach_user_id = principal.user_id),
+# and only that client's history WITH THIS COACH. Spend is GROSS (commission-engine
+# agent owns net-of-commission). No new tables; pure SQL aggregation in the repo.
+# ---------------------------------------------------------------------------
+
+@coach_bp.get("/clients")
+def get_clients():
+    p, err = _coach()
+    if err:
+        return err
+    q = request.args
+    try:
+        limit = min(max(int(q.get("limit") or 200), 1), 500)
+    except (TypeError, ValueError):
+        limit = 200
+    with session_scope() as s:
+        rows = repo.list_clients(s, club_id=p.club_id, user_id=p.user_id,
+                                 search=(q.get("search") or "").strip() or None, limit=limit)
+    return jsonify(clients=rows, count=len(rows)), 200
+
+
+@coach_bp.get("/clients/<client_user_id>")
+def get_client(client_user_id):
+    p, err = _coach()
+    if err:
+        return err
+    with session_scope() as s:
+        client = repo.get_client(s, club_id=p.club_id, user_id=p.user_id,
+                                 client_user_id=client_user_id)
+    if client is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(client=client), 200
