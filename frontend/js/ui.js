@@ -69,7 +69,12 @@
       return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
     });
   }
-  function clear(node) { while (node && node.firstChild) node.removeChild(node.firstChild); }
+  function clear(node) {
+    // Also drop the loading state: .cf-loading paints a CSS ::before spinner, so emptying a
+    // node WITHOUT removing the class leaves the spinner animating over the new content.
+    if (node && node.classList) node.classList.remove("cf-loading");
+    while (node && node.firstChild) node.removeChild(node.firstChild);
+  }
 
   // ---- toast / inline status -------------------------------------------------
   function toast(msg, kind) {

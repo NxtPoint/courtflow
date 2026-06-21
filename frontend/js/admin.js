@@ -65,16 +65,58 @@
     if (tab === "overview") return renderOverview(p);
   }
 
-  // Business Overview — opens the full /overview.html dashboard (its own ECharts page; loads
-  // Clerk auth top-level, so no iframe-relay fragility). A link, not an embedded frame.
+  // Business Overview — rendered INLINE in this tab (no iframe, no navigation). We build the
+  // structure overview.js expects, lazy-load ECharts + overview.js, then run its renderer here.
+  var OV_CSS = ".ov-embed .ov-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:12px;margin-bottom:16px}" +
+    ".ov-embed .kpi{background:#fff;border:1px solid #e7e9ee;border-radius:14px;padding:14px 16px}" +
+    ".ov-embed .kpi .lbl{color:#6b7280;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.03em}" +
+    ".ov-embed .kpi .val{font-size:1.5rem;font-weight:800;margin-top:6px}" +
+    ".ov-embed .kpi .sub{color:#6b7280;font-size:.76rem;margin-top:2px}" +
+    ".ov-embed .ov-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}" +
+    ".ov-embed .ovc{background:#fff;border:1px solid #e7e9ee;border-radius:14px;padding:16px 18px;margin-bottom:14px}" +
+    ".ov-embed .ovc h3{font-size:.95rem;margin:0 0 10px}.ov-embed .chart{width:100%;height:260px}" +
+    ".ov-embed table{width:100%;border-collapse:collapse}.ov-embed th,.ov-embed td{text-align:left;padding:7px 6px;font-size:.88rem;border-bottom:1px solid #eef0f4}" +
+    ".ov-embed th{color:#6b7280;font-weight:600;font-size:.72rem;text-transform:uppercase}.ov-embed td.num,.ov-embed th.num{text-align:right}" +
+    ".ov-embed .bar{height:8px;border-radius:4px;background:#2563eb;display:inline-block;vertical-align:middle}" +
+    ".ov-embed .empty{color:#6b7280;padding:18px 0;text-align:center;font-size:.88rem}" +
+    ".ov-embed .nps-buckets{display:flex;gap:10px;margin-top:10px}.ov-embed .nps-buckets div{flex:1;text-align:center;padding:10px;border-radius:10px;font-weight:700}" +
+    "@media(max-width:760px){.ov-embed .ov-grid{grid-template-columns:1fr}}";
+
   function renderOverview(p) {
-    p.appendChild(el("div", { class: "cf-card", style: "text-align:center;padding:36px 24px" }, [
-      el("h2", { text: "Business Overview", style: "margin:0 0 8px" }),
-      el("p", { class: "cf-muted", style: "margin:0 auto 20px;max-width:480px",
-        text: "Website visits & visitors, new vs returning, traffic sources, geolocation, " +
-              "customers, sign-ups, bookings, revenue & NPS." }),
-      el("a", { href: "/overview.html", class: "cf-btn cf-btn-primary", text: "Open Business Overview →" }),
-    ]));
+    if (!document.getElementById("ov-embed-style")) {
+      var st = document.createElement("style"); st.id = "ov-embed-style"; st.textContent = OV_CSS;
+      document.head.appendChild(st);
+    }
+    function ovc(title, inner) { return el("div", { class: "ovc" }, [el("h3", { text: title }), inner]); }
+    var wrap = el("div", { class: "ov-embed" }, [
+      el("div", { class: "cf-row", style: "align-items:center;gap:10px;margin-bottom:14px" }, [
+        el("strong", { text: "Business Overview" }),
+        el("span", { id: "ov-scope", class: "cf-muted" }),
+        el("span", { style: "flex:1" }),
+        el("select", { id: "ov-club", class: "cf-input", style: "width:auto;display:none" }),
+        el("select", { id: "ov-days", class: "cf-input", style: "width:auto" }, [
+          el("option", { value: "7", text: "Last 7 days" }),
+          el("option", { value: "30", text: "Last 30 days", selected: "selected" }),
+          el("option", { value: "90", text: "Last 90 days" }),
+        ]),
+      ]),
+      el("div", { id: "ov-kpis", class: "ov-kpis" }),
+      el("div", { class: "ov-grid" }, [ovc("Website traffic", el("div", { id: "ch-visits", class: "chart" })),
+                                        ovc("Sign-ups", el("div", { id: "ch-signups", class: "chart" }))]),
+      el("div", { class: "ov-grid" }, [ovc("Traffic sources", el("div", { id: "tbl-sources" })),
+                                        ovc("Top pages", el("div", { id: "tbl-pages" }))]),
+      el("div", { class: "ov-grid" }, [ovc("Visitors by country", el("div", { id: "tbl-geo" })),
+                                        ovc("Settlement mix", el("div", { id: "tbl-settle" }))]),
+      ovc("Net Promoter Score", el("div", { id: "ov-nps" })),
+      el("p", { class: "cf-muted", style: "font-size:.8rem;margin-top:6px",
+        text: "First-party analytics · website traffic accrues from when the beacon went live." }),
+    ]);
+    p.appendChild(wrap);
+    (async function () {
+      try { if (!window.echarts) await loadScript("https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"); } catch (e) {}
+      try { if (!window.Overview) await loadScript("/js/overview.js"); } catch (e) {}
+      if (window.Overview && window.Overview.start) window.Overview.start();
+    })();
   }
 
   // ---- master diary ---------------------------------------------------------

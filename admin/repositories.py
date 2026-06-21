@@ -1169,7 +1169,9 @@ def cockpit_revenue(session, *, club_id, dt_from=None, dt_to=None):
             JOIN billing.order_line ol ON ol.order_id = o.id
             LEFT JOIN billing.price pr   ON pr.id = ol.price_id
             LEFT JOIN billing.product prod ON prod.id = pr.product_id
-            WHERE p.club_id = :c AND p.status = 'succeeded'
+            WHERE p.club_id = :c
+              AND ((p.direction = 'charge' AND p.status = 'succeeded')
+                   OR (p.direction = 'refund' AND p.status IN ('succeeded', 'refunded')))
               AND (CAST(:dt_from AS text) IS NULL OR p.created_at >= CAST(:dt_from AS timestamptz))
               AND (CAST(:dt_to AS text) IS NULL OR p.created_at <  CAST(:dt_to   AS timestamptz))
             GROUP BY 1, 2 ORDER BY 1 DESC, 2
