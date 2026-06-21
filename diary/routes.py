@@ -500,7 +500,8 @@ def master_diary():
     except Exception as e:
         # Surface the real reason (logged to Render + returned in detail) so a 500 is diagnosable.
         log.exception("master diary failed club=%s", p.club_id)
-        return jsonify(error="master_failed", detail=("%s: %s" % (type(e).__name__, e))[:300]), 500
+        return jsonify(error="master_failed",
+                       message=("Master diary error — %s: %s" % (type(e).__name__, e))[:400]), 500
     out.sort(key=lambda e: e.get("starts_at") or "")
     return jsonify(events=out, count=len(out)), 200
 
