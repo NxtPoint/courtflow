@@ -134,6 +134,26 @@
     removeDependent: function (id) {
       return A().apiJSON("/api/me/dependents/" + encodeURIComponent(id), { method: "DELETE" });
     },
+
+    // ---- me: financials + refund requests ("My Account → Financials") ----
+    // GET /api/me/financials -> {currency, plan:{type,active,name,current_period_end,price_minor,sold},
+    //   usage_this_month:{court,lesson,class,total}, spend:{this_month_minor,history:[{period,paid_minor,orders}]},
+    //   account:{balance_minor,open_charges}, next_charge:{kind,amount_minor,due_date}}
+    financials: function () { return A().apiJSON("/api/me/financials"); },
+    // GET /api/me/orders -> {orders:[{id,created_at,amount_minor,currency_code,status,settlement_mode,
+    //   description,has_open_refund,refund_status,refundable}], count}
+    myOrders: function () { return A().apiJSON("/api/me/orders"); },
+    // GET /api/me/refund-requests -> {requests:[{id,order_id,amount_minor,reason,status,...}], count}
+    refundRequests: function () { return A().apiJSON("/api/me/refund-requests"); },
+    // POST /api/me/refund-requests  body: {order_id(req), amount_minor?, reason?} -> {refund_request}
+    requestRefund: function (body) {
+      return A().apiJSON("/api/me/refund-requests", { method: "POST", body: body });
+    },
+    // POST /api/me/refund-requests/:id/cancel -> {ok, refund_request}
+    cancelRefundRequest: function (id) {
+      return A().apiJSON("/api/me/refund-requests/" + encodeURIComponent(id) + "/cancel",
+        { method: "POST", body: {} });
+    },
   };
 
   window.API = API;

@@ -374,6 +374,56 @@ _DDL = [
     f"CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_arrears_booking "
     f"ON {SCHEMA}.coach_arrears (club_id, booking_id) WHERE booking_id IS NOT NULL;",
     # --- end commission engine (owner) ---
+
+    # ===========================================================================
+    # --- refund_request (client self-service) ---  (Phase B, client-financials lane)
+    #
+    # SHARED-FILE PROTOCOL: this block is appended at the very END of billing's _DDL,
+    # AFTER the commission engine block, by the Client-financials (My Account) lane. It
+    # touches nothing above. Idempotent CREATE TABLE/INDEX IF NOT EXISTS throughout
+    # (python -m db twice = no-op). All rows carry club_id (multi-tenant). Money in
+    # *_minor cents.
+    #
+    # A client raises a refund REQUEST against one of THEIR paid orders; an admin later
+    # approves/declines it. This is DISTINCT from the admin's direct Yoco refund
+    # (yoco_billing — a record-only money movement, docs/05 §8). The request is a
+    # lightweight approval object: the member never moves money; on approval the admin
+    # still executes the actual refund through the existing gateway path. The booking is
+    # never auto-reversed.
+    #
+    # State machine (crm-and-foundations-spec §5.2):
+    #   pending --approve--> approved --(admin runs the real refund)--> refunded (terminal)
+    #      |                    |
+    #      |--decline--> declined (terminal, with note)
+    #      |--cancel---> cancelled (member withdrew before a decision; terminal)
+    # ---------------------------------------------------------------------------
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.refund_request (
+        id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id       uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        order_id      uuid NOT NULL REFERENCES {SCHEMA}."order"(id) ON DELETE CASCADE,
+        user_id       uuid,                          -- requester (iam.user.id)
+        amount_minor  int,                           -- requested amount (default: full paid order)
+        reason        text,
+        status        text NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','approved','declined','refunded','cancelled')),
+        decided_by    uuid,                          -- admin iam.user.id
+        decided_at    timestamptz,
+        note          text,                          -- admin decision note
+        created_at    timestamptz NOT NULL DEFAULT now(),
+        updated_at    timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_refund_request_club_status "
+    f"ON {SCHEMA}.refund_request (club_id, status);",
+    f"CREATE INDEX IF NOT EXISTS ix_refund_request_order "
+    f"ON {SCHEMA}.refund_request (order_id);",
+    f"CREATE INDEX IF NOT EXISTS ix_refund_request_user "
+    f"ON {SCHEMA}.refund_request (club_id, user_id);",
+    # At most ONE open (pending) request per order — the member can't spam duplicates.
+    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_refund_request_open "
+    f"ON {SCHEMA}.refund_request (order_id) WHERE status = 'pending';",
+    # --- end refund_request (client self-service) ---
 ]
 
 
