@@ -97,6 +97,21 @@
     //   status,order_id}]}}
     client: function (userId) { return A().apiJSON("/api/coach/clients/" + enc(userId)); },
 
+    // ---- business cockpit (read-only; THIS coach's own numbers only) -----
+    // GET /api/coach/cockpit[?month=YYYY-MM] ->
+    //   {period:'YYYY-MM',
+    //    kpis:{lessons_count,hours,classes_count,gross_minor,net_minor,commission_minor,
+    //          arrears_owed_minor,fill_rate_pct(0-100|null),clients_active,clients_new,no_shows},
+    //    trend:[{month,net_minor,lessons}] (last ~6 months, oldest->newest),
+    //    top_clients:[{user_id,name,sessions,spend_minor}],
+    //    upcoming:[{when,client,type}]}
+    // Earnings are NET of commission (party_type='coach' splits); with no agreement the
+    // server returns net=gross & commission=0. fill_rate_pct is null when the coach has no
+    // working hours set. Money in *_minor cents.
+    cockpit: function (month) {
+      return A().apiJSON("/api/coach/cockpit" + (month ? ("?month=" + enc(month)) : ""));
+    },
+
     // ---- profile photo ---------------------------------------------------
     // POST /api/coach/photo-presign  body: {filename,content_type}
     //   -> {url,public_url}  (S3 PUT target + the public URL to store), or

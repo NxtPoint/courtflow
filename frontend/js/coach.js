@@ -394,6 +394,201 @@
     return n || c.email || "Client";
   }
 
+  // ---- business cockpit (Dashboard) -----------------------------------------
+  // The coach's read-only "how is my business doing?" landing surface: a KPI tile
+  // strip, a no-library CSS-bar trend (last 6 months net + lessons), top clients,
+  // upcoming sessions, a month selector, and a link to the month-end Statement.
+  // GET /api/coach/cockpit[?month=YYYY-MM]; earnings are NET of commission. Injected
+  // as the FIRST card in #cf-main so it's the coach's default view.
+  var dashState = { month: null };
+
+  function thisMonthKey() {
+    var d = new Date();
+    return d.getFullYear() + "-" + (d.getMonth() < 9 ? "0" : "") + (d.getMonth() + 1);
+  }
+  function shiftMonthKey(ym, delta) {
+    var parts = (ym || thisMonthKey()).split("-");
+    var y = parseInt(parts[0], 10), m = parseInt(parts[1], 10) - 1 + delta;
+    while (m < 0) { m += 12; y -= 1; } while (m > 11) { m -= 12; y += 1; }
+    return y + "-" + (m < 9 ? "0" : "") + (m + 1);
+  }
+  function monthLabel(ym) {
+    try {
+      var p = ym.split("-");
+      return new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, 1)
+        .toLocaleDateString([], { month: "long", year: "numeric" });
+    } catch (e) { return ym; }
+  }
+  function shortMonth(ym) {
+    try {
+      var p = ym.split("-");
+      return new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, 1)
+        .toLocaleDateString([], { month: "short" });
+    } catch (e) { return ym; }
+  }
+  function pct(v) { return (v == null) ? "—" : (Math.round(v * 10) / 10) + "%"; }
+  function tile(t, s, hint) {
+    var kids = [el("div", { class: "cf-tile-t", text: t }),
+      el("div", { class: "cf-tile-s", text: s })];
+    if (hint) kids.push(el("div", { class: "cf-tile-s cf-tiny", style: "margin-top:2px", text: hint }));
+    return el("div", { class: "cf-tile", style: "cursor:default" }, kids);
+  }
+
+  function initDashboard() {
+    var main = document.getElementById("cf-main"); if (!main) return;
+    var card = el("div", { class: "cf-card", id: "coach-dash-card" }, [
+      el("div", { class: "cf-row", style: "margin-bottom:6px;align-items:center;gap:8px" }, [
+        el("h2", { text: "Dashboard", style: "margin:0" }),
+        el("span", { class: "cf-spacer" }),
+        el("button", { class: "cf-btn cf-btn-sm", id: "coach-dash-prev", text: "‹ Prev" }),
+        el("span", { class: "cf-chip", id: "coach-dash-month", text: "…" }),
+        el("button", { class: "cf-btn cf-btn-sm", id: "coach-dash-next", text: "Next ›" }),
+        el("a", { class: "cf-btn cf-btn-sm cf-btn-primary", href: "/statement.html",
+          text: "Month-end statement →" }),
+      ]),
+      el("p", { class: "cf-muted", style: "margin:-2px 0 12px",
+        text: "Your coaching business at a glance. Earnings are net of commission." }),
+      el("div", { id: "coach-dash-body", class: "cf-loading", text: "Loading your cockpit…" }),
+    ]);
+    // Place it FIRST in main so the dashboard is the coach's landing surface.
+    if (main.firstChild) main.insertBefore(card, main.firstChild);
+    else main.appendChild(card);
+
+    dashState.month = thisMonthKey();
+    document.getElementById("coach-dash-prev").addEventListener("click", function () {
+      dashState.month = shiftMonthKey(dashState.month, -1); loadDashboard();
+    });
+    document.getElementById("coach-dash-next").addEventListener("click", function () {
+      dashState.month = shiftMonthKey(dashState.month, 1); loadDashboard();
+    });
+    loadDashboard();
+  }
+
+  async function loadDashboard() {
+    var body = document.getElementById("coach-dash-body"); if (!body) return;
+    var ml = document.getElementById("coach-dash-month");
+    if (ml) ml.textContent = monthLabel(dashState.month);
+    UI.clear(body); body.appendChild(el("div", { class: "cf-loading", text: "Loading your cockpit…" }));
+    try {
+      var d = await window.CoachAPI.cockpit(dashState.month);
+      renderDashboard(d || {});
+    } catch (e) { UI.clear(body); body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
+  }
+
+  function renderDashboard(d) {
+    var body = document.getElementById("coach-dash-body"); if (!body) return;
+    UI.clear(body);
+    var k = d.kpis || {};
+
+    // KPI tile strip.
+    body.appendChild(el("div", { class: "cf-tiles" }, [
+      tile(String(k.lessons_count || 0), "Lessons delivered"),
+      tile((Math.round((k.hours || 0) * 10) / 10) + "h", "Coaching hours"),
+      tile(fmtMoney(k.gross_minor), "Gross collected"),
+      tile(fmtMoney(k.net_minor), "Net earnings", "after commission"),
+      tile(fmtMoney(k.commission_minor), "Commission to club"),
+      tile(pct(k.fill_rate_pct), "Fill rate", "booked ÷ available"),
+    ]));
+    body.appendChild(el("div", { class: "cf-tiles", style: "margin-top:14px" }, [
+      tile(String(k.classes_count || 0), "Class sessions"),
+      tile(String(k.clients_active || 0), "Active clients", (k.clients_new || 0) + " new"),
+      tile(String(k.no_shows || 0), "No-shows"),
+      tile(fmtMoney(k.arrears_owed_minor), "Arrears owed", "off-platform"),
+    ]));
+
+    // Trend — last 6 months, no chart library: CSS div-height bars (net + lessons).
+    body.appendChild(renderTrend(d.trend || []));
+
+    // Two-column: top clients + upcoming.
+    var cols = el("div", { class: "cf-grid cf-grid-2", style: "margin-top:18px" });
+    cols.appendChild(renderTopClients(d.top_clients || []));
+    cols.appendChild(renderUpcoming(d.upcoming || []));
+    body.appendChild(cols);
+  }
+
+  // No-library trend: a row of vertical bars whose height is proportional to net
+  // earnings that month, with the lesson count under each. Pure cf-* + inline layout
+  // (heights are data-driven, which CSS classes can't express) — vanilla JS principle.
+  function renderTrend(trend) {
+    var wrap = el("div", { style: "margin-top:18px" }, [
+      el("h3", { text: "Net earnings — last 6 months", style: "margin:0 0 10px" }),
+    ]);
+    if (!trend.length) {
+      wrap.appendChild(el("div", { class: "cf-empty", text: "No history yet." }));
+      return wrap;
+    }
+    var maxNet = trend.reduce(function (m, t) { return Math.max(m, t.net_minor || 0); }, 0);
+    var bars = el("div", {
+      style: "display:flex;align-items:flex-end;flex-wrap:nowrap;gap:10px;height:170px;" +
+             "padding:6px 2px;overflow-x:auto" });
+    trend.forEach(function (t) {
+      var h = maxNet > 0 ? Math.max(4, Math.round((t.net_minor || 0) / maxNet * 120)) : 4;
+      var lbl = "font-size:.8rem;margin:0";
+      var col = el("div", {
+        style: "flex:1;min-width:46px;align-items:center;gap:4px;display:flex;" +
+               "flex-direction:column;justify-content:flex-end" }, [
+        el("div", { class: "cf-muted", style: lbl, text: fmtMoney(t.net_minor) }),
+        el("div", { title: monthLabel(t.month) + " · " + fmtMoney(t.net_minor) + " · " + (t.lessons || 0) + " lessons",
+          style: "width:100%;height:" + h + "px;border-radius:8px 8px 0 0;" +
+                 "background:linear-gradient(180deg,var(--green,#2e9e6b),#1f7d52)" }),
+        el("div", { style: lbl + ";font-weight:700", text: shortMonth(t.month) }),
+        el("div", { class: "cf-muted", style: lbl, text: (t.lessons || 0) + "L" }),
+      ]);
+      bars.appendChild(col);
+    });
+    wrap.appendChild(bars);
+    return wrap;
+  }
+
+  function renderTopClients(list) {
+    var card = el("div", {}, [el("h3", { text: "Top clients this month", style: "margin:0 0 8px" })]);
+    if (!list.length) {
+      card.appendChild(el("div", { class: "cf-empty", text: "No client activity this month." }));
+      return card;
+    }
+    var table = el("table", { class: "cf-table" });
+    table.appendChild(el("thead", {}, [el("tr", {}, [
+      el("th", { text: "Client" }), el("th", { text: "Sessions" }), el("th", { text: "Spend" }),
+    ])]));
+    var tb = el("tbody");
+    list.forEach(function (c) {
+      var tr = el("tr", { style: "cursor:pointer" });
+      tr.addEventListener("click", function () { openClient(c.user_id); });
+      tr.appendChild(el("td", {}, [el("strong", { text: c.name || "Client" })]));
+      tr.appendChild(el("td", { text: String(c.sessions || 0) }));
+      tr.appendChild(el("td", { text: fmtMoney(c.spend_minor) }));
+      tb.appendChild(tr);
+    });
+    table.appendChild(tb);
+    card.appendChild(table);
+    return card;
+  }
+
+  function renderUpcoming(list) {
+    var card = el("div", {}, [el("h3", { text: "Upcoming", style: "margin:0 0 8px" })]);
+    if (!list.length) {
+      card.appendChild(el("div", { class: "cf-empty", text: "Nothing booked yet." }));
+      return card;
+    }
+    var ul = el("div", { class: "cf-list" });
+    list.forEach(function (u) {
+      var when = "—";
+      try {
+        when = new Date(u.when).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) +
+          " · " + new Date(u.when).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      } catch (e) {}
+      ul.appendChild(el("div", { class: "cf-item" }, [
+        el("span", { class: "cf-chip", text: u.type || "session" }),
+        el("div", { class: "cf-item-main" }, [
+          el("div", { class: "cf-item-t", text: u.client || "Client" }),
+          el("div", { class: "cf-item-s", text: when }),
+        ]),
+      ]));
+    });
+    card.appendChild(ul);
+    return card;
+  }
+
   function initMyClients() {
     var main = document.getElementById("cf-main"); if (!main) return;
     var card = el("div", { class: "cf-card", id: "coach-clients-card" }, [
@@ -579,6 +774,7 @@
   window.CoachConsole = {
     start: function (p) {
       UI = window.UI; el = UI.el; principal = p;
+      initDashboard();
       loadWeek(); loadResources(); loadTimeOff(); loadProfile();
       initMyClasses(); initMyClients();
       document.getElementById("to-submit").addEventListener("click", submitTimeOff);

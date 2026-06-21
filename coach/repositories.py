@@ -593,6 +593,34 @@ spend AS (
 )
 """
 
+# The same coach activity union WITHOUT the billing-referencing `spend` CTE. The cockpit
+# helpers use this so they don't parse-error on a billing-less (diary-only) scratch DB —
+# they bolt on a spend CTE only when billing.payment is present (see _coach_top_clients).
+_COACH_ACTIVITY_BASE = """
+WITH coach_bookings AS (
+    SELECT b.booked_by_user_id AS user_id, 'lesson' AS kind,
+           b.starts_at, b.status, b.order_id
+    FROM diary.booking b
+    WHERE b.club_id = :c AND b.coach_user_id = :u
+      AND b.booking_type = 'lesson'
+      AND b.booked_by_user_id IS NOT NULL
+      AND b.status IN """ + _CLIENT_LESSON_STATUSES + """
+),
+coach_classes AS (
+    SELECT e.user_id, 'class' AS kind, cs.starts_at, e.status, e.order_id
+    FROM diary.class_session cs
+    JOIN diary.enrolment e ON e.class_session_id = cs.id AND e.club_id = cs.club_id
+    WHERE cs.club_id = :c AND cs.coach_user_id = :u
+      AND e.user_id IS NOT NULL
+      AND e.status IN """ + _CLIENT_CLASS_STATUSES + """
+),
+activity AS (
+    SELECT * FROM coach_bookings
+    UNION ALL
+    SELECT * FROM coach_classes
+)
+"""
+
 
 def _billing_present(session):
     """billing.order/payment exist? The clients view degrades to 0 spend if not (the lane
@@ -692,3 +720,441 @@ def get_client(session, *, club_id, user_id, client_user_id):
     history = _rows(session.execute(text(hist_sql), params).mappings().all())
     head["history"] = history
     return head
+
+
+# ---------------------------------------------------------------------------
+# BUSINESS COCKPIT — the coach's read-only "how is my business doing?" overview
+# (coach-self-service-spec §6). Pure SQL aggregation over what already exists:
+#   activity  -> diary.booking (lessons coach ran) + diary.enrolment/class_session
+#   earnings  -> billing.commission_split (party_type='coach' = NET; gross_minor = GROSS;
+#                commission = owner party). NET-of-commission per docs/specs/01 (ex-VAT,
+#                accrues on collection). If no agreement/splits exist -> commission 0,
+#                net = gross (derived from succeeded payments).
+#   fill rate -> booked lesson hours / available hours (availability_rule over the month).
+#   clients   -> new (first_seen in-period) vs returning; top by spend/sessions.
+#   arrears   -> billing.coach_arrears (status='owed') if readable; else 0.
+# PRIVACY: every query is scoped to coach_user_id = the principal's user_id (passed in,
+# never the body), so a coach sees ONLY their own numbers. Each billing/commission read is
+# guarded by _table_present so the lane degrades gracefully on a diary-only scratch DB.
+# ---------------------------------------------------------------------------
+
+def _table_present(session, schema, table):
+    """Does schema.table exist? Cached per session so a degraded (diary-only) DB returns
+    0/None instead of erroring. Mirrors _billing_present but generic."""
+    attr = "_cf_present_%s_%s" % (schema, table)
+    cache = getattr(session, attr, None)
+    if cache is not None:
+        return cache
+    try:
+        present = session.execute(
+            text("SELECT 1 FROM information_schema.tables "
+                 "WHERE table_schema = :s AND table_name = :t"),
+            {"s": schema, "t": table},
+        ).first() is not None
+    except Exception:
+        present = False
+    try:
+        setattr(session, attr, present)
+    except Exception:
+        pass
+    return present
+
+
+def _month_bounds(session, month=None):
+    """Resolve a YYYY-MM (default current month, server tz) to (ym, start_date, end_date) —
+    a half-open [start, end) of date objects. Done in SQL so it matches Postgres' clock."""
+    row = session.execute(
+        text("""
+            SELECT to_char(COALESCE(to_date(:m,'YYYY-MM'), date_trunc('month', now())),
+                          'YYYY-MM') AS ym,
+                   date_trunc('month',
+                              COALESCE(to_date(:m,'YYYY-MM'), now()))::date AS start_d,
+                   (date_trunc('month',
+                              COALESCE(to_date(:m,'YYYY-MM'), now())) +
+                    interval '1 month')::date AS end_d
+        """),
+        {"m": month},
+    ).mappings().first()
+    return row["ym"], row["start_d"], row["end_d"]
+
+
+def _coach_activity_kpis(session, *, club_id, user_id, start_d, end_d):
+    """Lessons/hours/classes/no-shows/active clients for the month, scoped to this coach.
+    Lessons: diary.booking(coach_user_id=me, type=lesson, status confirmed/completed/no_show)
+    in [start,end). Classes: class_session(coach_user_id=me) scheduled/completed in-period."""
+    lessons = session.execute(
+        text("""
+            SELECT
+                COUNT(*) FILTER (WHERE status IN ('confirmed','completed')) AS lessons_count,
+                COALESCE(SUM(EXTRACT(EPOCH FROM (ends_at - starts_at))/3600.0)
+                         FILTER (WHERE status IN ('confirmed','completed')),0) AS hours,
+                COUNT(*) FILTER (WHERE status = 'no_show') AS no_shows,
+                COUNT(DISTINCT booked_by_user_id)
+                    FILTER (WHERE status IN ('confirmed','completed')) AS clients_active
+            FROM diary.booking
+            WHERE club_id = :c AND coach_user_id = :u AND booking_type = 'lesson'
+              AND starts_at >= :s AND starts_at < :e
+              AND status IN ('confirmed','completed','no_show')
+        """),
+        {"c": club_id, "u": user_id, "s": start_d, "e": end_d},
+    ).mappings().first()
+    classes = session.execute(
+        text("""
+            SELECT COUNT(*) AS classes_count
+            FROM diary.class_session cs
+            WHERE cs.club_id = :c AND cs.coach_user_id = :u
+              AND cs.starts_at >= :s AND cs.starts_at < :e
+              AND cs.status IN ('scheduled','completed')
+        """),
+        {"c": club_id, "u": user_id, "s": start_d, "e": end_d},
+    ).mappings().first()
+    return {
+        "lessons_count": int(lessons["lessons_count"] or 0),
+        "hours": round(float(lessons["hours"] or 0.0), 2),
+        "no_shows": int(lessons["no_shows"] or 0),
+        "clients_active": int(lessons["clients_active"] or 0),
+        "classes_count": int(classes["classes_count"] or 0),
+    }
+
+
+def _coach_earnings(session, *, club_id, user_id, start_d, end_d):
+    """Earnings for the month, NET of commission (docs/specs/01). Two reads, both guarded:
+      gross  = succeeded charge payments (minus refunds) on orders attributable to this
+               coach's lessons/classes, in-period (the canonical 'what the client paid').
+      net/commission = from billing.commission_split (party_type='coach' = coach net;
+               party_type='owner' = the commission). If commission_split has no rows for the
+    period (no agreement / nothing collected), net = gross and commission = 0 — exactly the
+    graceful-degradation contract. We anchor the headline on payments so 'no commission engine
+    yet' still shows real gross/net."""
+    out = {"gross_minor": 0, "net_minor": 0, "commission_minor": 0}
+    if not _table_present(session, "billing", "payment"):
+        return out  # diary-only DB: no money surface at all.
+
+    # Gross from succeeded payments on coach-attributable orders (lessons + classes).
+    gross = session.execute(
+        text("""
+            WITH coach_orders AS (
+                SELECT DISTINCT b.order_id AS order_id
+                FROM diary.booking b
+                WHERE b.club_id = :c AND b.coach_user_id = :u
+                  AND b.booking_type = 'lesson' AND b.order_id IS NOT NULL
+                  AND b.status IN ('confirmed','completed')
+                UNION
+                SELECT DISTINCT e.order_id
+                FROM diary.class_session cs
+                JOIN diary.enrolment e ON e.class_session_id = cs.id AND e.club_id = cs.club_id
+                WHERE cs.club_id = :c AND cs.coach_user_id = :u AND e.order_id IS NOT NULL
+            )
+            SELECT
+                COALESCE(SUM(p.amount_minor) FILTER (WHERE p.direction='charge'),0)
+              - COALESCE(SUM(p.amount_minor) FILTER (WHERE p.direction='refund'),0) AS gross_minor
+            FROM billing.payment p
+            WHERE p.club_id = :c AND p.status = 'succeeded'
+              AND p.order_id IN (SELECT order_id FROM coach_orders)
+              AND p.created_at >= :s AND p.created_at < :e
+        """),
+        {"c": club_id, "u": user_id, "s": start_d, "e": end_d},
+    ).scalar()
+    out["gross_minor"] = int(gross or 0)
+
+    # Net + commission from the commission engine, if present + populated for the period.
+    if _table_present(session, "billing", "commission_split"):
+        split = session.execute(
+            text("""
+                SELECT
+                    COALESCE(SUM(amount_minor) FILTER (WHERE party_type='coach'),0) AS net_minor,
+                    COALESCE(SUM(amount_minor) FILTER (WHERE party_type='owner'),0) AS commission_minor,
+                    COUNT(*) AS n
+                FROM billing.commission_split
+                WHERE club_id = :c AND coach_user_id = :u
+                  AND basis IN ('lesson_commission','class_commission')
+                  AND occurred_at >= :s AND occurred_at < :e
+            """),
+            {"c": club_id, "u": user_id, "s": start_d, "e": end_d},
+        ).mappings().first()
+        if split and int(split["n"] or 0) > 0:
+            out["net_minor"] = int(split["net_minor"] or 0)
+            out["commission_minor"] = int(split["commission_minor"] or 0)
+            return out
+    # No agreement / no splits -> commission 0, net = gross.
+    out["net_minor"] = out["gross_minor"]
+    out["commission_minor"] = 0
+    return out
+
+
+def _coach_arrears_owed(session, *, club_id, user_id):
+    """Total arrears still owed to the coach (status='owed') across all clients — read-only.
+    Degrades to 0 if billing.coach_arrears is absent (no commission engine on this DB)."""
+    if not _table_present(session, "billing", "coach_arrears"):
+        return 0
+    try:
+        v = session.execute(
+            text("SELECT COALESCE(SUM(gross_minor),0) FROM billing.coach_arrears "
+                 "WHERE club_id = :c AND coach_user_id = :u AND status = 'owed'"),
+            {"c": club_id, "u": user_id},
+        ).scalar()
+    except Exception:
+        session.rollback()
+        return 0
+    return int(v or 0)
+
+
+def _coach_fill_rate(session, *, club_id, user_id, start_d, end_d):
+    """Coarse fill rate (%) for the month = booked lesson hours / available hours.
+    Available hours = SUM over the coach's availability_rule of (end_time-start_time) per
+    open weekday, weighted by how many times that weekday occurs in [start,end). Returns
+    None if the coach has no availability_rule (can't divide) so the UI shows '—'."""
+    res = get_coach_resource(session, club_id=club_id, user_id=user_id)
+    if not res:
+        return None
+    avail = session.execute(
+        text("""
+            WITH days AS (
+                SELECT d::date AS d, EXTRACT(ISODOW FROM d)::int - 1 AS weekday
+                FROM generate_series(CAST(:s AS timestamp),
+                                     CAST(:e AS timestamp) - interval '1 day',
+                                     interval '1 day') d
+            ),
+            wd_counts AS (
+                SELECT weekday, COUNT(*) AS n FROM days GROUP BY weekday
+            )
+            SELECT COALESCE(SUM(
+                       EXTRACT(EPOCH FROM (ar.end_time - ar.start_time))/3600.0 * wc.n
+                   ),0) AS available_hours
+            FROM diary.availability_rule ar
+            JOIN wd_counts wc ON wc.weekday = ar.weekday
+            WHERE ar.club_id = :c AND ar.resource_id = :r
+        """),
+        {"c": club_id, "r": res["id"], "s": start_d, "e": end_d},
+    ).scalar()
+    available_hours = float(avail or 0.0)
+    if available_hours <= 0:
+        return None
+    booked = session.execute(
+        text("""
+            SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (ends_at - starts_at))/3600.0),0)
+            FROM diary.booking
+            WHERE club_id = :c AND coach_user_id = :u AND booking_type = 'lesson'
+              AND status IN ('confirmed','completed')
+              AND starts_at >= :s AND starts_at < :e
+        """),
+        {"c": club_id, "u": user_id, "s": start_d, "e": end_d},
+    ).scalar()
+    booked_hours = float(booked or 0.0)
+    pct = (booked_hours / available_hours) * 100.0
+    return round(min(pct, 100.0), 1)
+
+
+def _coach_new_clients(session, *, club_id, user_id, start_d, end_d):
+    """clients_new = clients whose FIRST EVER session with this coach (lesson or class) falls
+    in [start,end); the rest active this month are 'returning'. Uses the same activity union
+    as the clients view (lessons + class enrolments), scoped to this coach."""
+    row = session.execute(
+        text(_COACH_ACTIVITY_BASE + """
+            , first_seen AS (
+                SELECT user_id, MIN(starts_at) AS fs FROM activity GROUP BY user_id
+            ),
+            active_this_month AS (
+                SELECT DISTINCT user_id FROM activity
+                WHERE starts_at >= :s AND starts_at < :e
+            )
+            SELECT COUNT(*) FILTER (WHERE fs.fs >= :s AND fs.fs < :e) AS clients_new
+            FROM active_this_month a
+            JOIN first_seen fs ON fs.user_id = a.user_id
+        """),
+        {"c": club_id, "u": user_id, "s": start_d, "e": end_d},
+    ).mappings().first()
+    return int(row["clients_new"] or 0)
+
+
+def _coach_top_clients(session, *, club_id, user_id, start_d, end_d, limit=5):
+    """Top clients for the month by spend then sessions, scoped to this coach. Spend is GROSS
+    (what the client paid on this coach's orders in-period); degrades to 0 if billing absent."""
+    with_spend = _table_present(session, "billing", "payment")
+    spend_cte = ""
+    spend_select = "0 AS spend_minor"
+    spend_join = ""
+    if with_spend:
+        spend_cte = """
+            , period_spend AS (
+                SELECT o.user_id,
+                       COALESCE(SUM(p.amount_minor) FILTER (WHERE p.direction='charge'),0)
+                     - COALESCE(SUM(p.amount_minor) FILTER (WHERE p.direction='refund'),0) AS spend_minor
+                FROM billing."order" o
+                JOIN billing.payment p ON p.order_id = o.id AND p.club_id = o.club_id
+                                      AND p.status = 'succeeded'
+                WHERE o.club_id = :c
+                  AND o.id IN (SELECT order_id FROM activity
+                               WHERE order_id IS NOT NULL AND starts_at >= :s AND starts_at < :e)
+                GROUP BY o.user_id
+            )
+        """
+        spend_select = "COALESCE(ps.spend_minor,0) AS spend_minor"
+        spend_join = "LEFT JOIN period_spend ps ON ps.user_id = a.user_id"
+    sql = _COACH_ACTIVITY_BASE + spend_cte + f"""
+        SELECT u.id AS user_id, u.first_name, u.surname, u.email,
+               COUNT(*) AS sessions, {spend_select}
+        FROM activity a
+        JOIN iam."user" u ON u.id = a.user_id
+        {spend_join}
+        WHERE a.starts_at >= :s AND a.starts_at < :e
+        GROUP BY u.id, u.first_name, u.surname, u.email{', ps.spend_minor' if with_spend else ''}
+        ORDER BY spend_minor DESC, sessions DESC, u.surname ASC
+        LIMIT :lim
+    """
+    rows = session.execute(text(sql),
+                           {"c": club_id, "u": user_id, "s": start_d, "e": end_d,
+                            "lim": int(limit)}).mappings().all()
+    out = []
+    for r in rows:
+        name = " ".join(x for x in [r["first_name"], r["surname"]] if x).strip()
+        out.append({
+            "user_id": str(r["user_id"]),
+            "name": name or r["email"] or "Client",
+            "sessions": int(r["sessions"] or 0),
+            "spend_minor": int(r["spend_minor"] or 0),
+        })
+    return out
+
+
+def _coach_trend(session, *, club_id, user_id, months=6):
+    """Last `months` calendar months (oldest->newest) of {month, net_minor, lessons}. Net is
+    from commission_split (coach party) if present+populated, else falls back to gross from
+    payments so the bars still reflect real money on a pre-commission DB."""
+    has_split = _table_present(session, "billing", "commission_split")
+    has_pay = _table_present(session, "billing", "payment")
+    spine = session.execute(
+        text("""
+            SELECT to_char(m,'YYYY-MM') AS ym, m::date AS start_d,
+                   (m + interval '1 month')::date AS end_d
+            FROM generate_series(
+                date_trunc('month', now()) - (:k - 1) * interval '1 month',
+                date_trunc('month', now()), interval '1 month') m
+            ORDER BY m
+        """),
+        {"k": int(months)},
+    ).mappings().all()
+    out = []
+    for row in spine:
+        s, e = row["start_d"], row["end_d"]
+        lessons = session.execute(
+            text("""
+                SELECT COUNT(*) FROM diary.booking
+                WHERE club_id = :c AND coach_user_id = :u AND booking_type = 'lesson'
+                  AND status IN ('confirmed','completed')
+                  AND starts_at >= :s AND starts_at < :e
+            """),
+            {"c": club_id, "u": user_id, "s": s, "e": e},
+        ).scalar()
+        net_minor = 0
+        if has_split:
+            sp = session.execute(
+                text("""
+                    SELECT COALESCE(SUM(amount_minor) FILTER (WHERE party_type='coach'),0) AS net,
+                           COUNT(*) AS n
+                    FROM billing.commission_split
+                    WHERE club_id = :c AND coach_user_id = :u
+                      AND basis IN ('lesson_commission','class_commission')
+                      AND occurred_at >= :s AND occurred_at < :e
+                """),
+                {"c": club_id, "u": user_id, "s": s, "e": e},
+            ).mappings().first()
+            if sp and int(sp["n"] or 0) > 0:
+                net_minor = int(sp["net"] or 0)
+        if net_minor == 0 and has_pay:
+            ern = _coach_earnings(session, club_id=club_id, user_id=user_id, start_d=s, end_d=e)
+            net_minor = ern["net_minor"]
+        out.append({"month": row["ym"], "net_minor": int(net_minor),
+                    "lessons": int(lessons or 0)})
+    return out
+
+
+def _coach_upcoming(session, *, club_id, user_id, limit=6):
+    """The coach's next N confirmed lessons + scheduled class sessions (whichever is sooner),
+    scoped to this coach. Returns [{when, client, type}]. Lessons resolve the booked client's
+    name; classes show the class/resource name + enrolled count."""
+    lessons = session.execute(
+        text("""
+            SELECT b.starts_at AS when_at, 'lesson' AS type, r.name AS resource_name,
+                   u.first_name, u.surname, u.email
+            FROM diary.booking b
+            LEFT JOIN iam."user" u ON u.id = b.booked_by_user_id
+            LEFT JOIN diary.resource r ON r.id = b.resource_id
+            WHERE b.club_id = :c AND b.coach_user_id = :u AND b.booking_type = 'lesson'
+              AND b.status = 'confirmed' AND b.starts_at >= now()
+            ORDER BY b.starts_at
+            LIMIT :lim
+        """),
+        {"c": club_id, "u": user_id, "lim": int(limit)},
+    ).mappings().all()
+    classes = session.execute(
+        text("""
+            SELECT cs.starts_at AS when_at, 'class' AS type, r.name AS resource_name,
+                   COUNT(e.id) FILTER (WHERE e.status IN ('enrolled','attended')) AS enrolled
+            FROM diary.class_session cs
+            LEFT JOIN diary.resource r ON r.id = cs.resource_id
+            LEFT JOIN diary.enrolment e ON e.class_session_id = cs.id AND e.club_id = cs.club_id
+            WHERE cs.club_id = :c AND cs.coach_user_id = :u
+              AND cs.status = 'scheduled' AND cs.starts_at >= now()
+            GROUP BY cs.starts_at, r.name
+            ORDER BY cs.starts_at
+            LIMIT :lim
+        """),
+        {"c": club_id, "u": user_id, "lim": int(limit)},
+    ).mappings().all()
+    merged = []
+    for r in lessons:
+        client = " ".join(x for x in [r["first_name"], r["surname"]] if x).strip()
+        merged.append({
+            "when": r["when_at"].isoformat() if r["when_at"] else None,
+            "client": client or r["email"] or "Client",
+            "type": (r["resource_name"] or "Lesson"),
+        })
+    for r in classes:
+        merged.append({
+            "when": r["when_at"].isoformat() if r["when_at"] else None,
+            "client": (str(int(r["enrolled"] or 0)) + " enrolled"),
+            "type": (r["resource_name"] or "Class"),
+        })
+    merged.sort(key=lambda x: x["when"] or "")
+    return merged[:limit]
+
+
+def cockpit(session, *, club_id, user_id, month=None):
+    """The coach business cockpit payload for a month (default current). Read-only aggregation,
+    scoped to coach_user_id = user_id (the principal — never the body). Composes the helpers
+    above into the single payload the dashboard renders. Every billing/commission read is
+    guarded so a diary-only DB degrades to 0/None instead of erroring."""
+    ym, start_d, end_d = _month_bounds(session, month=month)
+
+    act = _coach_activity_kpis(session, club_id=club_id, user_id=user_id,
+                               start_d=start_d, end_d=end_d)
+    earn = _coach_earnings(session, club_id=club_id, user_id=user_id,
+                           start_d=start_d, end_d=end_d)
+    arrears = _coach_arrears_owed(session, club_id=club_id, user_id=user_id)
+    fill = _coach_fill_rate(session, club_id=club_id, user_id=user_id,
+                            start_d=start_d, end_d=end_d)
+    clients_new = _coach_new_clients(session, club_id=club_id, user_id=user_id,
+                                     start_d=start_d, end_d=end_d)
+
+    kpis = {
+        "lessons_count": act["lessons_count"],
+        "hours": act["hours"],
+        "classes_count": act["classes_count"],
+        "gross_minor": earn["gross_minor"],
+        "net_minor": earn["net_minor"],
+        "commission_minor": earn["commission_minor"],
+        "arrears_owed_minor": arrears,
+        "fill_rate_pct": fill,
+        "clients_active": act["clients_active"],
+        "clients_new": clients_new,
+        "no_shows": act["no_shows"],
+    }
+    return {
+        "period": ym,
+        "kpis": kpis,
+        "trend": _coach_trend(session, club_id=club_id, user_id=user_id, months=6),
+        "top_clients": _coach_top_clients(session, club_id=club_id, user_id=user_id,
+                                          start_d=start_d, end_d=end_d, limit=5),
+        "upcoming": _coach_upcoming(session, club_id=club_id, user_id=user_id, limit=6),
+    }
