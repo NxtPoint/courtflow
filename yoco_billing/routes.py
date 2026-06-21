@@ -9,9 +9,11 @@
 #                         (the same idempotent core as a desk payment). 401 only on bad signature;
 #                         200 for accepted/duplicate/unknown so Yoco stops retrying; 500 only on a
 #                         transient internal error (so Yoco DOES retry).
-#   POST /refund          ADMIN (role-gated take_pay_at_court). Body {order_id, amount_minor?}.
-#                         Asks Yoco to refund; the ledger row is written when the refund.succeeded
-#                         webhook arrives (record-only — the booking is NEVER auto-reversed, docs/05 §8).
+#   POST /refund          ADMIN (role-gated take_pay_at_court). Body {order_id, amount_minor?,
+#                         cancel_booking?}. Asks Yoco to refund; ledger row written when the
+#                         refund.succeeded webhook arrives (record-only — booking NOT auto-reversed,
+#                         docs/05 §8). cancel_booking=true ALSO cancels the order's booking(s) +
+#                         frees the slot (diary.cancel_booking) — the "Refund & cancel" option.
 #   GET  /order/<id>      AUTH'd. Order status probe for the pay-return page (UX only; the booking
 #                         is confirmed by the webhook, not by this read).
 #
@@ -312,12 +314,14 @@ def yoco_refund():
     from billing import orders as orders_repo
 
     amount_in = body.get("amount_minor")
+    cancel_flag = bool(body.get("cancel_booking"))
     with session_scope() as s:
         order = orders_repo.get_order(s, order_id=order_id)
         if not order:
             return jsonify(error="order not found"), 404
         if not can(p, "take_pay_at_court", {"club_id": order["club_id"]}):
             return jsonify(error="forbidden"), 403
+        order_club_id = order["club_id"]
 
         # The refund endpoint is /api/checkouts/{CHECKOUT_id}/refund — it needs the Yoco
         # CHECKOUT id (ch_…) we stored at checkout-create (status='created'), NOT the most
@@ -351,10 +355,36 @@ def yoco_refund():
         return jsonify(error="refund_failed", message=f"Yoco refund failed — {e}",
                        detail=str(e)), 502
 
+    # Optional: also cancel the booking(s) and free the slot. The refund itself is record-only
+    # (booking NOT auto-reversed, docs/05 §8); "Refund & cancel" is an explicit admin choice.
+    # Reuse diary.cancel_booking (lazy + guarded): it cancels every booking sharing this order_id
+    # (lesson + its court) in one call, frees the slot, and promotes the waitlist. role=club_admin
+    # bypasses the cancellation fee (this is an admin override paired with a money refund).
+    cancelled = None
+    if cancel_flag:
+        cancelled = False
+        try:
+            from db import session_scope as _scope
+            from sqlalchemy import text as _text
+            from diary.bookings import cancel_booking as _diary_cancel
+            with _scope() as s2:
+                bid = s2.execute(
+                    _text("SELECT booking_id FROM billing.order_line "
+                          "WHERE order_id = :oid AND booking_id IS NOT NULL LIMIT 1"),
+                    {"oid": order_id},
+                ).scalar()
+                if bid:
+                    cres = _diary_cancel(s2, club_id=order_club_id, booking_id=str(bid),
+                                         actor_user_id=p.user_id, role="club_admin",
+                                         reason="admin refund")
+                    cancelled = bool(cres and cres.get("ok"))
+        except Exception:
+            log.warning("refund+cancel: booking cancel failed for order=%s (refund stands)", order_id)
+
     # The authoritative ledger write happens on the refund.succeeded webhook ->
     # apply_payment_event(kind='refunded'). This is the gateway acknowledgement.
     return jsonify(ok=True, provider="yoco", refund_id=res.provider_refund_id,
-                   amount_minor=res.amount_minor, status=res.status,
+                   amount_minor=res.amount_minor, status=res.status, cancelled=cancelled,
                    note="refund requested; ledger updates on refund.succeeded webhook"), 200
 
 

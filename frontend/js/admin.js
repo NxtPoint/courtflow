@@ -553,30 +553,49 @@
       var tb = el("tbody");
       r.payments.forEach(function (pay) {
         var refunded = !!pay.refunded;
-        var btn = el("button", { class: "cf-btn cf-btn-sm" + (refunded ? "" : " cf-btn-danger"),
-          text: refunded ? "Refunded" : "Refund" });
-        btn.disabled = refunded;
-        if (!refunded) btn.addEventListener("click", function () { doRefund(pay, btn); });
+        var actionCell;
+        if (refunded) {
+          var done = el("button", { class: "cf-btn cf-btn-sm", text: "Refunded" });
+          done.disabled = true;
+          actionCell = [ done ];
+        } else {
+          // Two choices: refund only (booking stays) vs refund + cancel (frees the slot).
+          var bRefund = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Refund only" });
+          bRefund.addEventListener("click", function () { doRefund(pay, bRefund, false); });
+          var bCancel = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger",
+            style: "margin-left:6px", text: "Refund & cancel" });
+          bCancel.addEventListener("click", function () { doRefund(pay, bCancel, true); });
+          actionCell = [ bRefund, bCancel ];
+        }
         tb.appendChild(el("tr", {}, [
           el("td", { text: String(pay.created_at || "").replace("T", " ").slice(0, 16) }),
           el("td", { text: pay.payer_email || "—" }),
           el("td", { class: "num", text: UI.money(pay.amount_minor, pay.currency_code) }),
           el("td", {}, [ el("span", { class: "cf-chip " + (refunded ? "cancelled" : "confirmed"),
             text: refunded ? "refunded" : "paid" }) ]),
-          el("td", {}, [ btn ]),
+          el("td", {}, actionCell),
         ]));
       });
       t.appendChild(tb); box.appendChild(t);
     } catch (e) { box.textContent = UI.errMsg(e); }
   }
 
-  function doRefund(pay, btn) {
-    if (!window.confirm("Refund " + UI.money(pay.amount_minor, pay.currency_code) +
-        " to " + (pay.payer_email || "the customer") + "?")) return;
+  function doRefund(pay, btn, cancel) {
+    var amt = UI.money(pay.amount_minor, pay.currency_code);
+    var who = pay.payer_email || "the customer";
+    var msg = cancel
+      ? ("Refund " + amt + " to " + who + " AND cancel the booking (frees the slot)?")
+      : ("Refund " + amt + " to " + who + "? The booking stays booked — cancel it separately to free the slot.");
+    if (!window.confirm(msg)) return;
+    var label = btn.textContent;
     btn.disabled = true; btn.textContent = "Refunding…";
-    window.TFAuth.apiJSON("/api/billing/yoco/refund", { method: "POST", body: { order_id: pay.order_id } })
-      .then(function () { UI.toast("Refund issued.", "info"); loadPayments(); })
-      .catch(function (e) { UI.toast(UI.errMsg(e), "error"); btn.disabled = false; btn.textContent = "Refund"; });
+    window.TFAuth.apiJSON("/api/billing/yoco/refund",
+        { method: "POST", body: { order_id: pay.order_id, cancel_booking: !!cancel } })
+      .then(function (r) {
+        UI.toast((cancel && r && r.cancelled) ? "Refunded & booking cancelled." : "Refund issued.", "info");
+        loadPayments();
+      })
+      .catch(function (e) { UI.toast(UI.errMsg(e), "error"); btn.disabled = false; btn.textContent = label; });
   }
 
   async function renderCockpit(panel) {
