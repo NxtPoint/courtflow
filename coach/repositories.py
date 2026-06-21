@@ -46,7 +46,8 @@ def get_profile(session, *, club_id, user_id):
     return _row(session.execute(
         text("""
             SELECT cp.id, cp.club_id, cp.user_id, cp.display_name, cp.headline, cp.bio,
-                   cp.photo_url, cp.specialties, cp.is_bookable, cp.rank,
+                   cp.photo_url, cp.specialties, cp.languages, cp.qualifications,
+                   cp.years_experience, cp.is_bookable, cp.public_visibility, cp.rank,
                    cp.default_lesson_price_id, cp.onboarding_completed,
                    u.first_name, u.surname, u.email, u.phone,
                    cp.created_at, cp.updated_at
@@ -82,24 +83,36 @@ def ensure_profile(session, *, club_id, user_id):
 
 
 def patch_profile(session, *, club_id, user_id, display_name=None, headline=None, bio=None,
-                  photo_url=None, specialties=None, phone=None, first_name=None, surname=None):
+                  photo_url=None, specialties=None, languages=None, qualifications=None,
+                  years_experience=None, is_bookable=None, public_visibility=None,
+                  phone=None, first_name=None, surname=None):
     """COALESCE-style partial update of the coach's OWN profile + linked user. Only supplied
-    fields change. `specialties` is a text[] (passed through as a Python list or None).
-    Scoped to (club_id, user_id)."""
+    (non-None) fields change. `specialties`/`languages`/`qualifications` are text[] (a Python
+    list or None); `is_bookable`/`public_visibility` are booleans (None = leave unchanged).
+    `rank` is NOT writable here — it's admin-only (the route never forwards it). Scoped to
+    (club_id, user_id)."""
     ensure_profile(session, club_id=club_id, user_id=user_id)
     session.execute(
         text("""
             UPDATE iam.coach_profile SET
-                display_name = COALESCE(:display_name, display_name),
-                headline     = COALESCE(:headline, headline),
-                bio          = COALESCE(:bio, bio),
-                photo_url    = COALESCE(:photo_url, photo_url),
-                specialties  = COALESCE(:specialties, specialties),
-                updated_at   = now()
+                display_name      = COALESCE(:display_name, display_name),
+                headline          = COALESCE(:headline, headline),
+                bio               = COALESCE(:bio, bio),
+                photo_url         = COALESCE(:photo_url, photo_url),
+                specialties       = COALESCE(:specialties, specialties),
+                languages         = COALESCE(:languages, languages),
+                qualifications    = COALESCE(:qualifications, qualifications),
+                years_experience  = COALESCE(:years_experience, years_experience),
+                is_bookable       = COALESCE(:is_bookable, is_bookable),
+                public_visibility = COALESCE(:public_visibility, public_visibility),
+                updated_at        = now()
             WHERE club_id = :c AND user_id = :u
         """),
         {"c": club_id, "u": user_id, "display_name": display_name, "headline": headline,
-         "bio": bio, "photo_url": photo_url, "specialties": specialties},
+         "bio": bio, "photo_url": photo_url, "specialties": specialties,
+         "languages": languages, "qualifications": qualifications,
+         "years_experience": years_experience, "is_bookable": is_bookable,
+         "public_visibility": public_visibility},
     )
     # Names + phone live on iam.user (the global identity row).
     session.execute(
@@ -250,8 +263,15 @@ def replace_hours(session, *, club_id, user_id, week, display_name=None):
 # ---------------------------------------------------------------------------
 #
 # A "service" = a lesson product owned by the coach (billing.product.coach_user_id = the
-# coach) + its price(s). We surface one price per product to the frontend (the lesson rate).
+# coach) + its price(s). We surface one row per price to the frontend (the lesson rate).
 # The coach's default_lesson_price_id points at their first service's price.
+#
+# PRICING MODEL (the bug fix — coach-self-service spec §3.4): the platform prices lessons
+# PER-DURATION as unit='per_booking' rows (one billing.price per offered length, with
+# duration_minutes set, audience='any') — EXACTLY what diary/pricing.py price_for()/
+# durations_for() resolve against. The old default unit='per_hour' produced rows the booking
+# flow could never match, so a coach's rates never surfaced. create_service/add_service_rate
+# now write per-duration per_booking rows so a coach's lessons actually price + book.
 
 def _club_currency(session, *, club_id):
     cur = session.execute(
@@ -297,9 +317,13 @@ def get_service(session, *, club_id, user_id, price_id):
 
 
 def create_service(session, *, club_id, user_id, name=None, duration_minutes=None,
-                   amount_minor=0, audience="any", unit="per_hour"):
-    """Create a lesson product owned by the coach + one price, and set the coach's
-    default_lesson_price_id if unset. Returns the created service (price) dict."""
+                   amount_minor=0, audience="any", unit="per_booking"):
+    """Create a lesson product owned by the coach + one PER-DURATION price, and set the
+    coach's default_lesson_price_id if unset. Returns the created service (price) dict.
+
+    The price is written as unit='per_booking' with duration_minutes set and audience='any'
+    by default — the shape diary/pricing.py resolves (spec §3.4). duration_minutes defaults
+    to 60 so a rate is always priceable; pass an explicit value for 30/45/90/120 lessons."""
     ensure_profile(session, club_id=club_id, user_id=user_id)
     pid = session.execute(
         text("INSERT INTO billing.product (club_id, kind, name, coach_user_id, active) "
@@ -311,8 +335,8 @@ def create_service(session, *, club_id, user_id, name=None, duration_minutes=Non
              "currency_code, unit, duration_minutes, active) "
              "VALUES (:c, :prod, :a, :amt, :cur, :u, :dur, true) RETURNING id"),
         {"c": club_id, "prod": pid, "a": audience or "any", "amt": int(amount_minor or 0),
-         "cur": _club_currency(session, club_id=club_id), "u": unit or "per_hour",
-         "dur": duration_minutes},
+         "cur": _club_currency(session, club_id=club_id), "u": unit or "per_booking",
+         "dur": int(duration_minutes) if duration_minutes else 60},
     ).scalar_one()
     # Set default_lesson_price_id only if the coach hasn't got one yet.
     session.execute(
@@ -323,9 +347,39 @@ def create_service(session, *, club_id, user_id, name=None, duration_minutes=Non
     return get_service(session, club_id=club_id, user_id=user_id, price_id=str(price_id))
 
 
-def patch_service(session, *, club_id, user_id, price_id, name=None, amount_minor=None):
-    """Update a service the coach owns: amount on the price, name on the parent product.
-    Returns the updated service, or None if not found / not theirs."""
+def add_service_rate(session, *, club_id, user_id, product_id, duration_minutes=None,
+                     amount_minor=0, audience="any", unit="per_booking"):
+    """Add an additional PER-DURATION rate to an existing lesson product the coach owns (so
+    one 'Private lesson' product can carry 30/60/90 rates). Returns the new service (price)
+    dict, or None if the product isn't a lesson product owned by this coach."""
+    owns = session.execute(
+        text("SELECT 1 FROM billing.product WHERE club_id = :c AND id = :prod "
+             "AND kind = 'lesson' AND coach_user_id = :u AND active = true"),
+        {"c": club_id, "prod": product_id, "u": user_id},
+    ).first()
+    if owns is None:
+        return None
+    price_id = session.execute(
+        text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+             "currency_code, unit, duration_minutes, active) "
+             "VALUES (:c, :prod, :a, :amt, :cur, :u, :dur, true) RETURNING id"),
+        {"c": club_id, "prod": product_id, "a": audience or "any",
+         "amt": int(amount_minor or 0), "cur": _club_currency(session, club_id=club_id),
+         "u": unit or "per_booking", "dur": int(duration_minutes) if duration_minutes else 60},
+    ).scalar_one()
+    session.execute(
+        text("UPDATE iam.coach_profile SET default_lesson_price_id = :p, updated_at = now() "
+             "WHERE club_id = :c AND user_id = :u AND default_lesson_price_id IS NULL"),
+        {"c": club_id, "u": user_id, "p": price_id},
+    )
+    return get_service(session, club_id=club_id, user_id=user_id, price_id=str(price_id))
+
+
+def patch_service(session, *, club_id, user_id, price_id, name=None, amount_minor=None,
+                  duration_minutes=None):
+    """Update a service the coach owns: amount + duration on the price, name on the parent
+    product. Returns the updated service, or None if not found / not theirs. duration_minutes
+    stays per_booking — editing it keeps the row in the price-resolvable shape."""
     svc = get_service(session, club_id=club_id, user_id=user_id, price_id=price_id)
     if svc is None:
         return None
@@ -334,6 +388,12 @@ def patch_service(session, *, club_id, user_id, price_id, name=None, amount_mino
             text("UPDATE billing.price SET amount_minor = :amt, updated_at = now() "
                  "WHERE club_id = :c AND id = :pid"),
             {"c": club_id, "pid": price_id, "amt": int(amount_minor)},
+        )
+    if duration_minutes is not None:
+        session.execute(
+            text("UPDATE billing.price SET duration_minutes = :dur, updated_at = now() "
+                 "WHERE club_id = :c AND id = :pid"),
+            {"c": club_id, "pid": price_id, "dur": int(duration_minutes)},
         )
     if name is not None:
         session.execute(
@@ -426,3 +486,209 @@ def owns_class_session(session, *, club_id, user_id, session_id):
              "  AND r.coach_user_id = :u"),
         {"c": club_id, "s": session_id, "u": user_id},
     ).first() is not None
+
+
+# ---------------------------------------------------------------------------
+# time-off (view + remove) — the coach's OWN diary.resource(kind='coach') blocks.
+# POST lives in the diary lane (/api/diary/time-off); the coach lane owns the GET
+# (list upcoming) + DELETE (remove a block) so a coach can manage their own holidays.
+# Every query is double-scoped: club_id + a JOIN to the coach's own resource, so a
+# coach can only ever see/remove time-off on THEIR resource.
+# ---------------------------------------------------------------------------
+
+def owns_coach_resource(session, *, club_id, user_id, resource_id):
+    """True iff resource_id is the coach's own diary.resource(kind='coach')."""
+    return session.execute(
+        text("SELECT 1 FROM diary.resource "
+             "WHERE club_id = :c AND id = :r AND kind = 'coach' AND coach_user_id = :u"),
+        {"c": club_id, "r": resource_id, "u": user_id},
+    ).first() is not None
+
+
+def list_time_off(session, *, club_id, user_id, upcoming_only=True):
+    """The coach's time-off blocks on their own coach resource. Upcoming-by-default (ends in
+    the future) so the editor shows blocks the coach can still remove. Scoped via a JOIN to
+    diary.resource(kind='coach', coach_user_id=the principal)."""
+    where = ["t.club_id = :c", "r.kind = 'coach'", "r.coach_user_id = :u"]
+    if upcoming_only:
+        where.append("t.ends_at >= now()")
+    rows = session.execute(
+        text("SELECT t.id, t.club_id, t.resource_id, r.name AS resource_name, "
+             "       t.starts_at, t.ends_at, t.reason, t.created_at "
+             "FROM diary.time_off t "
+             "JOIN diary.resource r ON r.id = t.resource_id AND r.club_id = t.club_id "
+             "WHERE " + " AND ".join(where) +
+             " ORDER BY t.starts_at"),
+        {"c": club_id, "u": user_id},
+    ).mappings().all()
+    return _rows(rows)
+
+
+def delete_time_off(session, *, club_id, user_id, time_off_id):
+    """Remove a time-off block, but ONLY if it sits on the coach's own resource. Returns
+    True if a row was deleted, False otherwise (not found / not theirs)."""
+    res = session.execute(
+        text("DELETE FROM diary.time_off t "
+             "USING diary.resource r "
+             "WHERE t.id = :tid AND t.club_id = :c "
+             "  AND r.id = t.resource_id AND r.kind = 'coach' AND r.coach_user_id = :u"),
+        {"tid": time_off_id, "c": club_id, "u": user_id},
+    )
+    return (res.rowcount or 0) > 0
+
+
+# ---------------------------------------------------------------------------
+# "My Clients" — READ-ONLY derivation from diary.booking + diary.enrolment.
+# A coach's client = any user who has a lesson (diary.booking.coach_user_id = me,
+# grouped by booked_by_user_id) or a class (diary.enrolment on a class_session I run).
+# No new tables. PRIVACY: every query is scoped to coach_user_id = the principal, so a
+# coach sees ONLY their own clients and only that client's history WITH THIS COACH.
+# lifetime_spend_minor is GROSS (what the client paid on orders attributable to this
+# coach) — net-of-commission is the commission-engine agent's job, NOT here.
+# ---------------------------------------------------------------------------
+
+# Statuses that count as a real coaching relationship (exclude cancelled/held-only).
+_CLIENT_LESSON_STATUSES = "('confirmed','completed','no_show')"
+_CLIENT_CLASS_STATUSES = "('enrolled','attended','no_show')"
+
+# A CTE that unions this coach's lesson activity (per client) and class activity (per
+# enrolled user) into one (user_id, kind, starts_at, status, order_id) stream. Shared by
+# the list + the single-client 360 so the two never drift. Spend is attributed via orders
+# referenced by those bookings/enrolments (gross succeeded charges minus refunds).
+_COACH_ACTIVITY_CTE = """
+WITH coach_bookings AS (
+    SELECT b.booked_by_user_id AS user_id, 'lesson' AS kind,
+           b.starts_at, b.status, b.order_id
+    FROM diary.booking b
+    WHERE b.club_id = :c AND b.coach_user_id = :u
+      AND b.booking_type = 'lesson'
+      AND b.booked_by_user_id IS NOT NULL
+      AND b.status IN """ + _CLIENT_LESSON_STATUSES + """
+),
+coach_classes AS (
+    SELECT e.user_id, 'class' AS kind, cs.starts_at, e.status, e.order_id
+    FROM diary.class_session cs
+    JOIN diary.enrolment e ON e.class_session_id = cs.id AND e.club_id = cs.club_id
+    WHERE cs.club_id = :c AND cs.coach_user_id = :u
+      AND e.user_id IS NOT NULL
+      AND e.status IN """ + _CLIENT_CLASS_STATUSES + """
+),
+activity AS (
+    SELECT * FROM coach_bookings
+    UNION ALL
+    SELECT * FROM coach_classes
+),
+spend AS (
+    -- Gross succeeded charges (minus refunds) on the orders those bookings/enrolments
+    -- reference, grouped by the order's user. Guarded join keeps R0/free sessions at 0.
+    SELECT o.user_id,
+           COALESCE(SUM(p.amount_minor) FILTER (WHERE p.direction='charge'),0)
+         - COALESCE(SUM(p.amount_minor) FILTER (WHERE p.direction='refund'),0) AS paid_minor
+    FROM billing."order" o
+    JOIN billing.payment p ON p.order_id = o.id AND p.club_id = o.club_id
+                          AND p.status = 'succeeded'
+    WHERE o.club_id = :c
+      AND o.id IN (SELECT order_id FROM activity WHERE order_id IS NOT NULL)
+    GROUP BY o.user_id
+)
+"""
+
+
+def _billing_present(session):
+    """billing.order/payment exist? The clients view degrades to 0 spend if not (the lane
+    can run against a diary-only scratch DB). Cached per session."""
+    cache = getattr(session, "_cf_billing_present", None)
+    if cache is not None:
+        return cache
+    try:
+        row = session.execute(
+            text("SELECT 1 FROM information_schema.tables "
+                 "WHERE table_schema='billing' AND table_name='payment'")
+        ).first()
+        present = row is not None
+    except Exception:
+        present = False
+    try:
+        session._cf_billing_present = present
+    except Exception:
+        pass
+    return present
+
+
+def list_clients(session, *, club_id, user_id, search=None, limit=200):
+    """The coach's client list, derived from their lessons + classes. One row per client with
+    counts, first/last seen, no-shows and gross lifetime spend WITH THIS COACH. Optional
+    case-insensitive `search` over name/email. Privacy: scoped to coach_user_id = the
+    principal — a coach never sees another coach's clients."""
+    with_spend = _billing_present(session)
+    spend_select = "COALESCE(s.paid_minor,0) AS lifetime_spend_minor" if with_spend else \
+        "0 AS lifetime_spend_minor"
+    spend_join = "LEFT JOIN spend s ON s.user_id = a.user_id" if with_spend else ""
+    params = {"c": club_id, "u": user_id, "lim": int(limit or 200)}
+    search_clause = ""
+    if search:
+        search_clause = ("WHERE (lower(coalesce(u.first_name,'')||' '||"
+                         "coalesce(u.surname,'')) LIKE :q OR lower(coalesce(u.email,'')) "
+                         "LIKE :q)")
+        params["q"] = "%" + str(search).strip().lower() + "%"
+    sql = _COACH_ACTIVITY_CTE + f"""
+        SELECT u.id AS user_id, u.first_name, u.surname, u.email, u.phone,
+               MIN(a.starts_at) AS first_seen, MAX(a.starts_at) AS last_seen,
+               COUNT(*) FILTER (WHERE a.kind='lesson') AS lessons_count,
+               COUNT(*) FILTER (WHERE a.kind='class')  AS classes_count,
+               COUNT(*) FILTER (WHERE a.status='no_show') AS no_show_count,
+               COUNT(*) FILTER (WHERE a.starts_at >= now()) AS upcoming_count,
+               {spend_select}
+        FROM activity a
+        JOIN iam.user u ON u.id = a.user_id
+        {spend_join}
+        {search_clause}
+        GROUP BY u.id, u.first_name, u.surname, u.email, u.phone{', s.paid_minor' if with_spend else ''}
+        ORDER BY last_seen DESC NULLS LAST
+        LIMIT :lim
+    """
+    rows = session.execute(text(sql), params).mappings().all()
+    return _rows(rows)
+
+
+def get_client(session, *, club_id, user_id, client_user_id):
+    """A single client's 360 WITH THIS COACH only: the same headline counts as the list row
+    plus the full session history (lessons + classes, date/type/status/spend). Returns None
+    if the user has no coaching relationship with this coach (privacy: can't probe arbitrary
+    users — they must appear in this coach's activity)."""
+    with_spend = _billing_present(session)
+    params = {"c": club_id, "u": user_id, "cu": client_user_id}
+
+    # Headline (same shape as a list row, filtered to the one client).
+    spend_select = "COALESCE(s.paid_minor,0) AS lifetime_spend_minor" if with_spend else \
+        "0 AS lifetime_spend_minor"
+    spend_join = "LEFT JOIN spend s ON s.user_id = a.user_id" if with_spend else ""
+    head_sql = _COACH_ACTIVITY_CTE + f"""
+        SELECT u.id AS user_id, u.first_name, u.surname, u.email, u.phone,
+               MIN(a.starts_at) AS first_seen, MAX(a.starts_at) AS last_seen,
+               COUNT(*) FILTER (WHERE a.kind='lesson') AS lessons_count,
+               COUNT(*) FILTER (WHERE a.kind='class')  AS classes_count,
+               COUNT(*) FILTER (WHERE a.status='no_show') AS no_show_count,
+               COUNT(*) FILTER (WHERE a.starts_at >= now()) AS upcoming_count,
+               {spend_select}
+        FROM activity a
+        JOIN iam.user u ON u.id = a.user_id
+        {spend_join}
+        WHERE a.user_id = :cu
+        GROUP BY u.id, u.first_name, u.surname, u.email, u.phone{', s.paid_minor' if with_spend else ''}
+    """
+    head = _row(session.execute(text(head_sql), params).mappings().first())
+    if head is None:
+        return None
+
+    # Full per-session history (most recent first), scoped to this coach + this client.
+    hist_sql = _COACH_ACTIVITY_CTE + """
+        SELECT a.kind, a.starts_at, a.status, a.order_id
+        FROM activity a
+        WHERE a.user_id = :cu
+        ORDER BY a.starts_at DESC
+        LIMIT 200
+    """
+    history = _rows(session.execute(text(hist_sql), params).mappings().all())
+    head["history"] = history
+    return head

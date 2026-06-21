@@ -1,7 +1,9 @@
 // coach.js — coach console (docs/08 §2): my week (lessons + classes I run), class
-// rosters + mark attendance, my availability/time-off editor. No pricing/finance.
+// rosters + mark attendance, my availability/time-off editor (view + remove), and a
+// read-only "My clients" view (gross activity with this coach only).
 // Calls GET /api/diary/bookings?as_coach=1, GET /api/diary/classes, GET /api/diary/resources,
-// POST /api/diary/bookings/:id/status, POST /api/diary/time-off.
+// POST /api/diary/bookings/:id/status, POST /api/diary/time-off, GET/DELETE /api/coach/time-off,
+// GET /api/coach/clients[/:id].
 (function () {
   var UI, el, principal;
   var resCache = null;   // {coachRes:[...], courts:[...]} — cached resources for the booking modal
@@ -329,7 +331,183 @@
       UI.toast("Time off blocked.", "info");
       document.getElementById("to-start").value = "";
       document.getElementById("to-end").value = "";
+      loadTimeOff();
     } catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+
+  // List the coach's upcoming time-off blocks (GET /api/coach/time-off) with a Remove
+  // action (DELETE /api/coach/time-off/:id). Injected under the "Block time off" card.
+  function timeOffListHost() {
+    var existing = document.getElementById("coach-timeoff-list");
+    if (existing) return existing;
+    var submit = document.getElementById("to-submit");
+    var card = submit ? submit.closest(".cf-card") : null;
+    if (!card) return null;
+    var host = el("div", { id: "coach-timeoff-list", style: "margin-top:16px" });
+    card.appendChild(host);
+    return host;
+  }
+
+  async function loadTimeOff() {
+    var host = timeOffListHost(); if (!host) return;
+    UI.clear(host); host.appendChild(el("div", { class: "cf-loading", text: "Loading time off…" }));
+    try {
+      var r = await window.CoachAPI.timeOff();
+      var rows = r.time_off || [];
+      UI.clear(host);
+      host.appendChild(el("h3", { text: "Upcoming time off", style: "margin:4px 0 8px" }));
+      if (!rows.length) { host.appendChild(el("div", { class: "cf-empty", text: "No upcoming time off." })); return; }
+      var list = el("div", { class: "cf-list" });
+      rows.forEach(function (t) {
+        var rm = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove",
+          onclick: function () { removeTimeOff(t.id, t.reason); } });
+        list.appendChild(el("div", { class: "cf-item" }, [
+          el("span", { class: "cf-chip", text: "blocked" }),
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: t.reason || "Time off" }),
+            el("div", { class: "cf-item-s", text: UI.fmtRange(t.starts_at, t.ends_at) }),
+          ]),
+          el("span", { class: "cf-spacer" }), rm,
+        ]));
+      });
+      host.appendChild(list);
+    } catch (e) { UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
+  }
+
+  async function removeTimeOff(id, reason) {
+    if (!window.confirm("Remove the time-off block" + (reason ? " (" + reason + ")" : "") + "?")) return;
+    try { await window.CoachAPI.deleteTimeOff(id); UI.toast("Time off removed.", "info"); loadTimeOff(); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+
+  // ---- my clients -----------------------------------------------------------
+  // A read-only table of the coach's own clients (GET /api/coach/clients), derived from
+  // their lessons + class enrolments. Row -> a 360 drawer (GET /api/coach/clients/:id)
+  // showing the client's full history WITH THIS COACH. Gross activity only (no commission).
+  function fmtMoney(m) { return (m == null) ? "—" : "R" + (m / 100).toFixed(2); }
+  function fmtDate(iso) {
+    if (!iso) return "—";
+    try { return new Date(iso).toLocaleDateString(); } catch (e) { return iso; }
+  }
+  function clientName(c) {
+    var n = ((c.first_name || "") + " " + (c.surname || "")).trim();
+    return n || c.email || "Client";
+  }
+
+  function initMyClients() {
+    var main = document.getElementById("cf-main"); if (!main) return;
+    var card = el("div", { class: "cf-card", id: "coach-clients-card" }, [
+      el("div", { class: "cf-row", style: "margin-bottom:6px;align-items:center" }, [
+        el("h2", { text: "My clients", style: "margin:0" }),
+        el("span", { class: "cf-spacer" }),
+        el("input", { class: "cf-input", id: "coach-clients-search",
+          placeholder: "Search name or email…", style: "max-width:240px" }),
+      ]),
+      el("p", { class: "cf-muted", style: "margin:-2px 0 12px",
+        text: "Everyone who has had a lesson or class with you. Gross activity with you only." }),
+      el("div", { id: "coach-clients-body", class: "cf-loading", text: "Loading clients…" }),
+    ]);
+    main.appendChild(card);
+    var search = document.getElementById("coach-clients-search");
+    var t = null;
+    search.addEventListener("input", function () {
+      clearTimeout(t); t = setTimeout(function () { loadClients(search.value.trim()); }, 250);
+    });
+    loadClients("");
+  }
+
+  async function loadClients(q) {
+    var box = document.getElementById("coach-clients-body"); if (!box) return;
+    UI.clear(box); box.appendChild(el("div", { class: "cf-loading", text: "Loading clients…" }));
+    try {
+      var r = await window.CoachAPI.clients(q ? { search: q } : {});
+      renderClients(r.clients || []);
+    } catch (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
+  }
+
+  function renderClients(list) {
+    var box = document.getElementById("coach-clients-body"); if (!box) return;
+    UI.clear(box);
+    if (!list.length) {
+      box.appendChild(el("div", { class: "cf-empty",
+        text: "No clients yet — once members book you, they'll appear here." }));
+      return;
+    }
+    var table = el("table", { class: "cf-table" });
+    var thead = el("thead", {}, [el("tr", {}, [
+      el("th", { text: "Client" }), el("th", { text: "Contact" }),
+      el("th", { text: "Lessons" }), el("th", { text: "Classes" }),
+      el("th", { text: "No-shows" }), el("th", { text: "Last seen" }),
+      el("th", { text: "Spend (with you)" }),
+    ])]);
+    var tbody = el("tbody");
+    list.forEach(function (c) {
+      var tr = el("tr", { style: "cursor:pointer" });
+      tr.addEventListener("click", function () { openClient(c.user_id); });
+      tr.appendChild(el("td", {}, [el("strong", { text: clientName(c) })]));
+      tr.appendChild(el("td", { text: c.email || c.phone || "—" }));
+      tr.appendChild(el("td", { text: String(c.lessons_count || 0) }));
+      tr.appendChild(el("td", { text: String(c.classes_count || 0) }));
+      tr.appendChild(el("td", { text: String(c.no_show_count || 0) }));
+      tr.appendChild(el("td", { text: fmtDate(c.last_seen) }));
+      tr.appendChild(el("td", { text: fmtMoney(c.lifetime_spend_minor) }));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(thead); table.appendChild(tbody);
+    box.appendChild(table);
+  }
+
+  async function openClient(userId) {
+    var bg = el("div", { class: "cf-modal-bg" });
+    function close() { if (bg.parentNode) document.body.removeChild(bg); }
+    var modal = el("div", { class: "cf-modal" }, [el("div", { class: "cf-loading", text: "Loading…" })]);
+    bg.appendChild(modal); document.body.appendChild(bg);
+    bg.addEventListener("click", function (e) { if (e.target === bg) close(); });
+    try {
+      var r = await window.CoachAPI.client(userId);
+      var c = r.client || {};
+      UI.clear(modal);
+      modal.appendChild(el("div", { class: "cf-row", style: "align-items:center" }, [
+        el("h2", { text: clientName(c), style: "margin:0" }),
+        el("span", { class: "cf-spacer" }),
+        el("button", { class: "cf-btn cf-btn-sm", text: "Close", onclick: close }),
+      ]));
+      modal.appendChild(el("p", { class: "cf-muted",
+        text: (c.email || "") + (c.phone ? " · " + c.phone : "") }));
+      modal.appendChild(el("div", { class: "cf-row", style: "gap:10px;flex-wrap:wrap;margin:8px 0" }, [
+        el("span", { class: "cf-chip lesson", text: (c.lessons_count || 0) + " lessons" }),
+        el("span", { class: "cf-chip class", text: (c.classes_count || 0) + " classes" }),
+        el("span", { class: "cf-chip", text: (c.no_show_count || 0) + " no-shows" }),
+        el("span", { class: "cf-chip", text: "Spend " + fmtMoney(c.lifetime_spend_minor) }),
+      ]));
+      modal.appendChild(el("p", { class: "cf-muted", style: "margin:2px 0",
+        text: "First seen " + fmtDate(c.first_seen) + " · Last seen " + fmtDate(c.last_seen) +
+              " · " + (c.upcoming_count || 0) + " upcoming" }));
+      modal.appendChild(el("h3", { text: "History with you", style: "margin-top:12px" }));
+      var hist = c.history || [];
+      if (!hist.length) { modal.appendChild(el("div", { class: "cf-empty", text: "No sessions." })); }
+      else {
+        var list = el("div", { class: "cf-list" });
+        hist.forEach(function (h) {
+          var time = "";
+          try { time = new Date(h.starts_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e3) {}
+          list.appendChild(el("div", { class: "cf-item" }, [
+            el("span", { class: "cf-chip " + (h.kind || ""), text: h.kind || "session" }),
+            el("div", { class: "cf-item-main" }, [
+              el("div", { class: "cf-item-t", text: fmtDate(h.starts_at) }),
+              el("div", { class: "cf-item-s", text: time }),
+            ]),
+            el("span", { class: "cf-chip " + (h.status || ""), text: h.status || "" }),
+          ]));
+        });
+        modal.appendChild(list);
+      }
+    } catch (e) {
+      UI.clear(modal);
+      modal.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) }));
+      modal.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:10px" },
+        [el("button", { class: "cf-btn", text: "Close", onclick: close })]));
+    }
   }
 
   // ---- my profile editor ----------------------------------------------------
@@ -383,7 +561,14 @@
     var host = profileRoot(); if (!host) return;
     UI.clear(host); host.appendChild(el("div", { class: "cf-card" }, [el("div", { class: "cf-loading", text: "Loading your profile…" })]));
     try {
-      profileState.data = await window.CoachAPI.onboarding();
+      // onboarding() carries hours + services; profile() carries the FULL profile field set
+      // (languages/qualifications/years/visibility/bookable) that the onboarding shell omits.
+      var ob = await window.CoachAPI.onboarding();
+      try {
+        var pr = await window.CoachAPI.profile();
+        if (pr && pr.profile) ob.profile = Object.assign({}, ob.profile || {}, pr.profile);
+      } catch (e2) { /* fall back to the onboarding profile subset */ }
+      profileState.data = ob;
     } catch (e) {
       profileState.data = {};
       UI.toast(UI.errMsg(e), "error");
@@ -394,7 +579,8 @@
   window.CoachConsole = {
     start: function (p) {
       UI = window.UI; el = UI.el; principal = p;
-      loadWeek(); loadResources(); loadProfile(); initMyClasses();
+      loadWeek(); loadResources(); loadTimeOff(); loadProfile();
+      initMyClasses(); initMyClients();
       document.getElementById("to-submit").addEventListener("click", submitTimeOff);
     },
   };
