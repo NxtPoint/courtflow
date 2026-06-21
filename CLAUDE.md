@@ -260,8 +260,24 @@ There is no test runner yet; create one. Each phase has a concrete "done when":
   recreate a service.
 - **Never let an agent change DNS.** The Wix→Render SEO cutover (`docs/07`) is supervised by Tomo.
 - **`marketing/` (untracked) is NOT platform code** — it holds ad-ops notes (adspirer setup, Google Ads
-  audit) and is not in `.gitignore`. Don't commit it with platform changes, and don't confuse it with
-  `frontend/marketing/` (the host-switched marketing site) or `marketing_crm/` (the CRM lane).
+  audit) and is not in `.gitignore`. Don't commit it with platform changes (`git add <paths>`, NOT
+  `git add -A`), and don't confuse it with `frontend/marketing/` (the host-switched marketing site) or
+  `marketing_crm/` (the CRM lane).
+- **`UI.clear(node)` must drop the `cf-loading` class** (it does, in `frontend/js/ui.js`). `.cf-loading`
+  paints a CSS `::before` spinner — emptying a node's children WITHOUT removing the class leaves the spinner
+  animating *over* the new content. This caused "spinners on every admin page" until fixed. When you add a
+  loading placeholder, render the result with `UI.clear(box)` before appending.
+- **Free-tier cold starts → use timeouts, not infinite spinners.** Render Free web services sleep after
+  ~15 min idle (~30–60s wake). `auth_client.js` puts a **70s timeout** on every `apiFetch` (+ Clerk-load /
+  token-mint timeouts) so a cold/hung call shows a clear error, never an endless spinner. A GitHub Action
+  (`.github/workflows/keep-warm.yml`) pings both services every 10 min **07:00–21:59 SAST** to avoid mid-use
+  cold starts (free; sleeps overnight). At go-live, bump the Render services to **Starter** (never sleep)
+  and the keep-warm can be removed.
+- **SQL `:param IS NULL` needs a CAST** (psycopg `AmbiguousParameter`): write `CAST(:df AS timestamptz) IS
+  NULL`, never a bare `:df IS NULL` — Postgres can't type the bare placeholder. (This 500'd the master diary.)
+- **Cockpit revenue must let refunds through** — refund `billing.payment` rows have `status='refunded'`, so a
+  `WHERE status='succeeded'` filter silently drops them (refunds showed R0, Net overstated). Filter as
+  `(direction='charge' AND status='succeeded') OR (direction='refund' AND status IN ('succeeded','refunded'))`.
 
 ## Needs Tomo (an agent cannot do these)
 See the `BUILD_PROMPT.md` pre-flight checklist: `DATABASE_URL`, a new Clerk app, S3/SES, Klaviyo sender

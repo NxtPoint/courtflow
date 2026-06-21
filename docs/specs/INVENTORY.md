@@ -11,6 +11,10 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21). Paths 
 - **Postgres** — a separate Render DB (Frankfurt). **Clerk DEV app** for auth (`pk_test_…`).
 - **Crons** — declared in `render.yaml` but **commented out** (Free plan, no paid crons). Their HTTP
   handlers exist (see §3 crons) and can be triggered manually; hold-release + waitlist run lazily instead.
+- **Keep-warm** — `.github/workflows/keep-warm.yml` (GitHub Action) pings both services every 10 min
+  07:00–21:59 SAST so the Free tier doesn't cold-start mid-use; sleeps overnight. Free. (Frontend also has
+  a 70s `apiFetch` timeout so a cold/hung call errors instead of spinning forever — `frontend/js/auth_client.js`.)
+  At go-live, bump services to **Starter** and remove the keep-warm.
 
 ## 2. Code lanes (Python)
 | Lane | Owns | Purpose |
