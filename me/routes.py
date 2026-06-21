@@ -325,6 +325,21 @@ def get_financials():
     return jsonify(data), 200
 
 
+@me_bp.get("/plan")
+def get_plan():
+    """The caller's current plan only (type, is_trial, trial_days_left, current_period_end) — a
+    cheap read for the free-week banner + the booking flow's covered-court label."""
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "view_own_ledger", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    from billing import me as billing_me
+    with session_scope() as s:
+        data = billing_me.member_plan(s, club_id=p.club_id, user_id=p.user_id)
+    return jsonify(data), 200
+
+
 @me_bp.get("/orders")
 def get_orders():
     """The caller's recent paid/refunded orders (receipts) — each row flags whether it is

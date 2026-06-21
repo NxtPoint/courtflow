@@ -137,6 +137,17 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
                 iam_repo.upsert_membership(s, club_id=default_club, user_id=user["id"],
                                            role="member", member_status="active")
                 memberships = iam_repo.memberships_for_user(s, user["id"])
+                # Signup gift: a free week of COURT access. Grant a time-boxed trial membership
+                # (provider='trial') — courts become free via the membership engine and it lapses
+                # on its own. Guarded + one-shot (idempotent: never granted twice). SIGNUP_TRIAL_DAYS
+                # tunes the length (default 7; 0 disables).
+                try:
+                    from billing.membership import grant_signup_trial
+                    days = int(os.getenv("SIGNUP_TRIAL_DAYS", "7") or 0)
+                    if days > 0:
+                        grant_signup_trial(s, club_id=default_club, user_id=user["id"], days=days)
+                except Exception:
+                    log.debug("signup trial grant skipped (billing absent/benign)", exc_info=False)
 
     club_id, role = _resolve_active_club(memberships, host_club_id, x_club)
 

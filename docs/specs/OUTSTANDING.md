@@ -42,10 +42,10 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       returning, traffic sources, top pages, by-country, customers, bookings, revenue, settlement mix, NPS —
       platform-admin with a club filter. First-party page-view beacon (`analytics.js` → `/api/track/page`,
       geo via Cloudflare `CF-IPCountry`).
-- [x] **Ten-Fifty5 bridge** (`bridge.py`): CourtFlow · Ten-Fifty5 · All switcher; live once the
-      `BRIDGE_TENFIFTY5_*` env is set (see `docs/12-tenfifty5-bridge.md` + `ENV-STATUS.md`).
-- [ ] Follow-ups: per-club web-traffic attribution (set `window.__CLUB_ID__` in the beacon); the 1050
-      Option-B least-privilege endpoint (`docs/12`); source/page/country breakdowns on the 1050 side.
+- [x] **Embedded in the admin console** as the "Overview" tab (+ standalone `/overview.html`).
+- [x] **Per-business by design** — the cross-business "Ten-Fifty5 bridge" was **deprecated 2026-06-21**
+      (removed); each app shows its own overview. Ten-Fifty5 uses its own `/backoffice` cockpit.
+- [ ] Follow-up: per-club web-traffic attribution (set `window.__CLUB_ID__` in the beacon).
 
 ## D. Hardening / pre-launch (later phases, from the original docs)
 - [ ] **RLS** (row-level security) on domain tables — Phase 8; today multi-tenant is a query discipline.

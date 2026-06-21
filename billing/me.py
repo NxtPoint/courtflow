@@ -34,6 +34,12 @@ def _iso(v) -> Optional[str]:
 # plan (REUSE membership_status — single source of truth)
 # ---------------------------------------------------------------------------
 
+def member_plan(session, *, club_id, user_id) -> Dict[str, Any]:
+    """Public, lightweight read of the caller's plan (for the free-week banner / covered label).
+    Single source of truth: _plan -> membership_status."""
+    return _plan(session, club_id=club_id, user_id=user_id)
+
+
 def _plan(session, *, club_id, user_id) -> Dict[str, Any]:
     """Current plan: 'membership' when an active membership exists, else 'payg'. Renewal date
     + the club's headline membership offer (for upsell) come straight from membership_status."""
@@ -45,13 +51,16 @@ def _plan(session, *, club_id, user_id) -> Dict[str, Any]:
         st = {"active": False, "current_period_end": None, "price_minor": None,
               "currency": None, "sold": False}
     active = bool(st.get("active"))
+    is_trial = bool(st.get("is_trial"))
     return {
         "type": "membership" if active else "payg",
         "active": active,
-        "name": "Membership" if active else "Pay as you go",
+        "name": ("Free week" if is_trial else "Membership") if active else "Pay as you go",
         "current_period_end": st.get("current_period_end"),
         "price_minor": st.get("price_minor"),
         "sold": bool(st.get("sold")),
+        "is_trial": is_trial,                       # signup free-week (courts free, time-boxed)
+        "trial_days_left": st.get("trial_days_left"),
     }
 
 

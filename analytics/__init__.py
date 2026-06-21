@@ -10,7 +10,10 @@
 #
 # NOTHING here mutates; every aggregation is a guarded SELECT (a missing/empty table yields an
 # empty panel, never a 500). All queries are club-scoped when a club_id is given (platform_admin
-# may pass ?club_id= to filter, or omit it for platform-wide). Designed so a future "1050" column
-# can be bridged in by a separate read endpoint without touching this core.
+# may pass ?club_id= to filter, or omit it for platform-wide).
+#
+# Per-business by design: this shows THIS platform only. (The cross-business "Ten-Fifty5 bridge"
+# was deprecated 2026-06-21 — each app shows its own overview; Ten-Fifty5 has its own /backoffice
+# cockpit.) Embedded in the admin console as the "Overview" tab + standalone at /overview.html.
 #
 # Wiring: app.py registers analytics.routes:analytics_bp (one line, try/except-wrapped).

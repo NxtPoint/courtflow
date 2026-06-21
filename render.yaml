@@ -70,17 +70,6 @@ services:
       - key: APP_BASE_URL
         value: "https://courtflow-web.onrender.com"
 
-      # --- Ten-Fifty5 (1050) bridge — CONNECTION DETAILS for the SEPARATE 1050 system (NOT a
-      # feature toggle): powers the dashboard's optional "Ten-Fifty5" column. Like a second
-      # DATABASE_URL — fill all three ONCE to connect; leave blank and the column simply doesn't
-      # appear. (Option B least-privilege later just swaps the key for an OPS one — see docs/12.) ---
-      - key: BRIDGE_TENFIFTY5_URL
-        sync: false        # https://<1050-api-host>
-      - key: BRIDGE_TENFIFTY5_CLIENT_KEY
-        sync: false        # 1050's CLIENT_API_KEY
-      - key: BRIDGE_TENFIFTY5_ADMIN_EMAIL
-        sync: false        # an admin email on 1050 (e.g. info@ten-fifty5.com)
-
       # --- CRM / Klaviyo (one Klaviyo, NextPoint brand — decision D3). Tracking + consent are
       # always-on in code; CRM sync SELF-GATES on KLAVIYO_API_KEY (no key = silent no-op), so there
       # are no *_ENABLED flags to manage — just add the key when Klaviyo work begins. ---

@@ -6,7 +6,7 @@ full `os.getenv` scan of the code) is the list to work from.
 
 **Live-audit (2026-06-21):** all code is deployed on both services — every API route answers `401`
 (exists, auth-gated), every public page `200`. Nothing is "stuck in yaml". The only things dark are
-optional integrations whose **keys aren't entered yet** (Klaviyo, S3, SES, the Ten-Fifty5 bridge).
+optional integrations whose **keys aren't entered yet** (Klaviyo, S3, SES).
 
 Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ has a safe default, usually skip.
 
@@ -19,7 +19,6 @@ Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ h
   - **Klaviyo email** → `KLAVIYO_API_KEY` *(future — not started, per you)*
   - **Coach photo uploads** → `S3_BUCKET` + `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`
   - **Transactional email fallback** → `SES_SENDER` (+ the AWS creds above)
-  - **Ten-Fifty5 column on the dashboard** → `BRIDGE_TENFIFTY5_URL` + `_CLIENT_KEY` + `_ADMIN_EMAIL`
 - 🗑️ **Removed (dead flags, never read by code):** `YOCO_ENABLED`, `TRACKING_ENABLED`,
   `CONSENT_ENABLED`, `CRM_SYNC_ENABLED` — tracking/consent are always-on; CRM self-gates on the
   Klaviyo key; Yoco is gated by `PAYMENTS_ENABLED`. Don't set these.
@@ -57,13 +56,6 @@ Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ h
 | `AWS_SECRET_ACCESS_KEY` | 🟡 | AWS credential for S3 + SES | secret key |
 | `AWS_REGION` | ⚪ | AWS region (defaults to `af-south-1`) | `af-south-1` |
 | `SES_SENDER` | 🟡 | Transactional email fallback sender | `bookings@nextpointtennis.com` |
-
-### Ten-Fifty5 bridge — set all three to show the "Ten-Fifty5" dashboard column 🟡
-| Var | Status | What it does | Format |
-|---|---|---|---|
-| `BRIDGE_TENFIFTY5_URL` | 🟡 | Ten-Fifty5's API host (connection address) | `https://<ten-fifty5-api-host>` |
-| `BRIDGE_TENFIFTY5_CLIENT_KEY` | 🟡 | Ten-Fifty5's `CLIENT_API_KEY` | secret |
-| `BRIDGE_TENFIFTY5_ADMIN_EMAIL` | 🟡 | An admin email on Ten-Fifty5 | `info@ten-fifty5.com` |
 
 ### Boot / housekeeping ⚪
 | Var | Status | What it does | Default |
@@ -116,9 +108,6 @@ AWS_ACCESS_KEY_ID=             # S3 + SES
 AWS_SECRET_ACCESS_KEY=
 AWS_REGION=af-south-1
 SES_SENDER=                    # email fallback
-BRIDGE_TENFIFTY5_URL=          # Ten-Fifty5 dashboard column
-BRIDGE_TENFIFTY5_CLIENT_KEY=
-BRIDGE_TENFIFTY5_ADMIN_EMAIL=info@ten-fifty5.com
 
 # courtflow-web (already set)
 AUTH_ENABLED=1

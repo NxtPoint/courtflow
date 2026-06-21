@@ -27,7 +27,7 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21). Paths 
 | `admin/` | routes, repositories, schema | `/api/admin/*` owner self-service + config |
 | `coach/` | routes, repositories, schema | `/api/coach/*` coach self-service + cockpit |
 | `me/` | routes | `/api/me/*` client self-service (profile, dependents, financials, refund-requests, notifications) |
-| `analytics/` | repositories, routes, bridge | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`) + the **Ten-Fifty5 bridge**; `/api/analytics/*` |
+| `analytics/` | repositories, routes | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`); `/api/analytics/*`; embedded as the admin "Overview" tab |
 | `crons/` | trigger | thin dispatcher → `/api/cron/*` |
 | `scripts/` | seed_nextpoint, provision_club | seed/provision tenants |
 | `web_app.py`, `frontend/` | host-switch + SPA shells + marketing | The web service |
@@ -71,8 +71,8 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21). Paths 
 **Crons `/api/cron/*`** (handlers exist; cron services off): `POST capacity-sweep` · `POST reminders` ·
 `POST monthly-invoice` · `POST membership-refill` · `POST reconcile-payments`.
 
-**Analytics `/api/analytics/*`:** `GET overview` (`?days`, `?club_id`, `?property=courtflow|ten-fifty5|all`)
-· `GET properties` · `GET clubs`. **Tracking:** `POST /api/track/page` (first-party page-view beacon;
+**Analytics `/api/analytics/*`:** `GET overview` (`?days`, `?club_id`) · `GET clubs`. **Tracking:**
+`POST /api/track/page` (first-party page-view beacon;
 geolocation via Cloudflare `CF-IPCountry`). **Core:** `GET /healthz` · `GET /api/whoami`.
 
 ## 4. Database — 5 schemas (idempotent boot DDL)
@@ -107,7 +107,7 @@ financials) · `coach` (+`coach-onboarding`) · `statement` (coach month-end) ·
 Live now: `DATABASE_URL`, `OPS_KEY`, Clerk `AUTH_*`, Yoco (`PAYMENTS_ENABLED=1`, `PAYMENTS_PROVIDER=yoco`,
 `YOCO_SECRET_KEY`/`YOCO_PUBLIC_KEY`/`YOCO_WEBHOOK_SECRET`), `APP_BASE_URL`, `SEED_NEXTPOINT=1`,
 `MARKETING_HOSTS`. Dark until keyed: `KLAVIYO_API_KEY` (CRM/email — self-gates), `S3_BUCKET`+AWS keys
-(photo uploads), `SES_SENDER` (email fallback), `BRIDGE_TENFIFTY5_*` (Ten-Fifty5 dashboard column).
+(photo uploads), `SES_SENDER` (email fallback).
 **Note:** the old `*_ENABLED` toggles (`YOCO_/TRACKING_/CONSENT_/CRM_SYNC_`) were dead config (never read)
 — removed; those features are always-on or self-gate on their keys. `render.yaml` is documentation only —
 env is entered in the Render dashboard.

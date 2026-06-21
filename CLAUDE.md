@@ -50,8 +50,8 @@ NextPoint Tennis is club #1, migrating off Wix.
     (`iam.dependent`, login-less child users → booking party), financials, refund-requests, notifications.
   - **Analytics:** `analytics/` + `/api/analytics/*` + `overview.html` — **Business Overview dashboard**
     (built & live): visits/visitors/sources/geo + customers/bookings/revenue/NPS; first-party page-view
-    beacon (`analytics.js` → `/api/track/page`, geo via `CF-IPCountry`); **Ten-Fifty5 bridge** (`bridge.py`,
-    config via `BRIDGE_TENFIFTY5_*`). See `docs/specs/ENV-STATUS.md` + `docs/12-tenfifty5-bridge.md`.
+    beacon (`analytics.js` → `/api/track/page`, geo via `CF-IPCountry`). **Embedded** as the admin console's
+    "Overview" tab + standalone `/overview.html`. Per-business (the Ten-Fifty5 bridge was deprecated).
   - **Frontend:** `frontend/app/` (shells) + `frontend/js/` — **ONE design system in `frontend/app/app.css`**
     (bright/modern; every page uses its `cf-*` classes — keep it the single source, do NOT inline component
     styles). Booking wizard, my-bookings, coach console, **master-diary calendar** (custom resource-timeline),
@@ -59,7 +59,10 @@ NextPoint Tennis is club #1, migrating off Wix.
     so pages work at sub-paths like `/book/court`.
   - **Web/SEO:** `web_app.py` (+ `web_wsgi.py`), `frontend/marketing/` (restyled to the design system, stock
     court imagery), `frontend/_shared/` (`theme.css` + `chrome.py` + `branding.py` host→club resolver),
-    `build_blog.py`, `frontend/login.html`, `migration/`.
+    `build_blog.py`, `frontend/login.html`, `migration/`. **PUBLIC-SITE REDESIGN (in progress):** the
+    authoritative spec for the new lean, photo-rich, conversion-focused public site is
+    **`docs/public-site/`** (START at `docs/public-site/README.md`; paste-ready kickoff in
+    `docs/public-site/BUILD-PROMPT.md`). Optimized real-photo assets are in `frontend/img/`.
 - **Shipped & working (~90%):** owner/coach onboarding + **auto-member** signup · book courts/lessons
   (coach∩court)/classes (recurring, waitlists, rosters, attendance) · book-on-behalf + **book-for-a-child** ·
   **three configurable purchasing models — PAYG (per-duration) · membership (term plans) · tokens/bundles
@@ -112,13 +115,11 @@ revenue), traffic + sign-up lines, traffic-source / top-page / by-country tables
   via the `web_app.py` head-injection** (single point). `beacon.py` captures **country from Cloudflare's
   `CF-IPCountry`** header. No cookies, no third parties. **Website-traffic panels accrue data from go-live**
   (historical events lack page-views/geo).
-- **1050 (Ten-Fifty5) bridge (built — `analytics/bridge.py`):** a **business switcher** (platform-admin)
-  CourtFlow · Ten-Fifty5 · All. The bridge fetches 1050's existing cockpit metrics over HTTPS (guarded,
-  ~5-min cache) and normalises them; **All** sums COUNT metrics only (USD vs ZAR revenue is never summed —
-  shown per-business). Config via `BRIDGE_TENFIFTY5_*` env (`sync:false`): **Option A** (live, no 1050 change)
-  = URL + CLIENT_KEY + ADMIN_EMAIL; **Option B** (least-privilege) = URL + OPS_KEY against a dedicated 1050
-  endpoint — the bridge auto-switches on which env is set. Unset → the 1050 column shows "not configured".
-  See **`docs/12-tenfifty5-bridge.md`** (incl. the paste-in Option-B endpoint for the 1050 repo).
+- **Embedded in the admin console:** the dashboard is the **"Overview" tab** in `admin.html`/`admin.js`
+  (an iframe of `/overview.html`, auth via the parent's `auth_client` relay) + the standalone `/overview.html`.
+- **Per-business by design:** shows THIS platform only. The cross-business "Ten-Fifty5 bridge" was
+  **DEPRECATED 2026-06-21** (removed `analytics/bridge.py`, the `?property=` switcher, `BRIDGE_TENFIFTY5_*`
+  env) — each app shows its own overview; Ten-Fifty5 has its own `/backoffice` cockpit. `docs/12` is retired.
 
 **Pricing model — per-duration PAYG + membership-covered courts.** A service carries ONE `billing.price`
 row per offered duration (`duration_minutes` set, `unit='per_booking'`, `audience='any'`). `diary/pricing.py`:

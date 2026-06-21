@@ -1,4 +1,10 @@
-# 12 · Ten-Fifty5 (1050) bridge — Business Overview
+# 12 · Ten-Fifty5 (1050) bridge — Business Overview  ⚠️ DEPRECATED (2026-06-21)
+
+> **DEPRECATED — not built anymore.** The cross-business "Ten-Fifty5 column" was removed: each app shows
+> its OWN Business Overview (CourtFlow's is embedded as the admin "Overview" tab; Ten-Fifty5 keeps its own
+> `/backoffice` cockpit). `analytics/bridge.py`, the `?property=` switcher, and the `BRIDGE_TENFIFTY5_*` env
+> are gone. This doc is kept for history only.
+
 
 The CourtFlow **Business Overview** dashboard (`analytics/`) can show **Ten-Fifty5** alongside
 **NextPoint/CourtFlow**. 1050 is a *separate app + database*; the bridge fetches its already-aggregated

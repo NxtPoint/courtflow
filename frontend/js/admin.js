@@ -42,7 +42,7 @@
 
     var tabs = el("div", { class: "cf-nav", style: "margin-bottom:12px" });
     [["diary", "Master diary"], ["classes", "Classes"], ["resources", "Resources"], ["people", "People"],
-     ["billing", "Billing"], ["cockpit", "Cockpit"]].forEach(function (t) {
+     ["billing", "Billing"], ["cockpit", "Cockpit"], ["overview", "Overview"]].forEach(function (t) {
       tabs.appendChild(el("a", { href: "#", text: t[1], "data-tab": t[0],
         onclick: function (e) { e.preventDefault(); showTab(t[0]); } }));
     });
@@ -62,6 +62,21 @@
     if (tab === "people") return renderPeople(p);
     if (tab === "billing") return renderBilling(p);
     if (tab === "cockpit") return renderCockpit(p);
+    if (tab === "overview") return renderOverview(p);
+  }
+
+  // Business Overview — website traffic, customers, bookings, revenue, NPS. Embedded as the
+  // standalone /overview.html page (its own ECharts), which auths via the parent (auth_client
+  // relay) so it works inside this admin shell. Full-page link as a fallback.
+  function renderOverview(p) {
+    p.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 10px",
+      text: "Website visits & visitors, traffic sources, geolocation, customers, bookings, revenue & NPS." }));
+    p.appendChild(el("iframe", { src: "/overview.html", title: "Business Overview",
+      style: "width:100%;height:82vh;border:1px solid var(--line,#e6e6ea);border-radius:12px;background:#f5f6f8" }));
+    p.appendChild(el("p", { style: "margin-top:8px" }, [
+      el("a", { href: "/overview.html", target: "_blank", class: "cf-link",
+        text: "Open in full page ↗" }),
+    ]));
   }
 
   // ---- master diary ---------------------------------------------------------

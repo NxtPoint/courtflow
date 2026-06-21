@@ -132,11 +132,26 @@
         ]),
       ]));
     });
-    render("service", el("div", { class: "cf-card" }, [
+    var card = el("div", { class: "cf-card" }, [
       el("h2", { text: "What would you like to book?" }),
       el("p", { class: "cf-muted", style: "margin-top:-4px", text: "Pick a service to get started." }),
       tiles,
-    ]));
+    ]);
+    var banner = freeWeekBanner();
+    render("service", banner ? el("div", {}, [banner, card]) : card);
+  }
+
+  // Signup free-week banner: shown while the member's trial membership is active (courts are free).
+  function freeWeekBanner() {
+    var pl = state.plan;
+    if (!pl || !pl.is_trial) return null;
+    var d = pl.trial_days_left;
+    var when = (d != null) ? (d <= 0 ? "today" : d + " more day" + (d === 1 ? "" : "s"))
+                           : "this week";
+    return el("div", { class: "cf-card", style: "background:linear-gradient(100deg,var(--accent),#d8f17e);color:#21300A;border:none;margin-bottom:14px" }, [
+      el("div", { style: "font-weight:800;font-size:1.05rem", text: "🎾 You're on your free week" }),
+      el("div", { style: "font-weight:600;opacity:.85", text: "Court bookings are free for " + when + ". No limits — enjoy the club." }),
+    ]);
   }
 
   // ---- Step 2: choose a duration (court/lesson) -----------------------------
@@ -184,7 +199,7 @@
     state.durations.forEach(function (d) {
       var on = state.selDuration === d.duration_minutes;
       var priceText = state.membershipCovered
-        ? "Covered by your membership · R0"
+        ? coveredLabel()
         : UI.money(d.amount_minor, state.billing.currency);
       tiles.appendChild(el("div", {
         class: "cf-tile cf-tile-tap" + (on ? " sel" : ""),
@@ -399,9 +414,15 @@
   // duration's price (slot price when a slot is picked, else the duration tile price).
   function priceLabel() {
     if (state.settlement === "token" && state.tokenWallet) return "Covered by your pack · R0";
-    if (state.membershipCovered && state.type === "court") return "Covered by your membership · R0";
+    if (state.membershipCovered && state.type === "court") return coveredLabel();
     var minor = (state.slot && state.slot.price != null) ? state.slot.price : state.selDurationPrice;
     return minor != null ? UI.money(minor, state.billing.currency) : "—";
+  }
+
+  // Court-covered label — "free week" during the signup trial, else "membership".
+  function coveredLabel() {
+    return (state.plan && state.plan.is_trial)
+      ? "Free this week · R0" : "Covered by your membership · R0";
   }
 
   // The court that will actually be reserved (resolved from the slot for "Any").
@@ -911,6 +932,8 @@
           (state.walletsByKind[w.service_kind] = state.walletsByKind[w.service_kind] || []).push(w);
         });
       } catch (e) {}
+      // Plan (for the free-week banner / covered-court label). Non-fatal.
+      try { state.plan = await window.TFAuth.apiJSON("/api/me/plan"); } catch (e) { state.plan = null; }
       // policy: pulled from principal/club if exposed; otherwise defaults apply.
       state.policy = principal.policy || null;
       stepService();

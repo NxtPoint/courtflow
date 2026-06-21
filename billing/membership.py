@@ -333,19 +333,58 @@ def membership_status(session, *, club_id, user_id) -> Dict[str, Any]:
     plans = membership_plans(session, club_id=club_id)
     offer = plans[0] if plans else None
     row = session.execute(
-        text("SELECT current_period_end FROM billing.membership_subscription "
+        text("SELECT current_period_end, provider, "
+             "       (current_period_end - CURRENT_DATE) AS days_left "
+             "FROM billing.membership_subscription "
              "WHERE club_id = :c AND user_id = :u AND status = 'active' "
              "  AND (current_period_end IS NULL OR current_period_end >= CURRENT_DATE) "
              "ORDER BY current_period_end DESC NULLS FIRST LIMIT 1"),
         {"c": str(club_id), "u": str(user_id) if user_id else None},
     ).mappings().first()
     end = row["current_period_end"] if row else None
+    is_trial = bool(row and row["provider"] == "trial")
+    days_left = int(row["days_left"]) if (row and row["days_left"] is not None) else None
     return {
         "active": row is not None,
         "current_period_end": (end.isoformat() if hasattr(end, "isoformat") else end)
         if end is not None else None,
+        "is_trial": is_trial,                       # the signup free-week (provider='trial')
+        "trial_days_left": days_left if is_trial else None,
         "price_minor": offer["amount_minor"] if offer else None,
         "currency": offer["currency"] if offer else None,
         "sold": bool(plans),
         "plans": plans,
     }
+
+
+def grant_signup_trial(session, *, club_id, user_id, days=7) -> Dict[str, Any]:
+    """Grant a new member a time-boxed FREE-WEEK: an active membership_subscription (provider='trial')
+    whose current_period_end = today + `days`. Reuses the membership engine wholesale — this makes
+    COURT bookings free (has_active_membership -> settlement_mode='membership_covered', courts-only
+    guard in diary.bookings), and lapses automatically with NO cron (the active-check is date-bounded).
+
+    IDEMPOTENT + one-shot: grants ONLY if the member has NEVER held any subscription (no paid plan, no
+    prior trial) — so it can't double-grant on repeated logins and an expired trial is never reissued.
+    Returns {granted: bool, current_period_end?, reason?}. Never raises on a benign skip."""
+    if not user_id or int(days) <= 0:
+        return {"granted": False, "reason": "disabled"}
+    existing = session.execute(
+        text("SELECT 1 FROM billing.membership_subscription "
+             "WHERE club_id = :c AND user_id = :u LIMIT 1"),
+        {"c": str(club_id), "u": str(user_id)},
+    ).first()
+    if existing:
+        return {"granted": False, "reason": "already_has_subscription"}
+    row = session.execute(
+        text("""
+            INSERT INTO billing.membership_subscription
+                (club_id, user_id, price_id, status, provider, order_id, current_period_end)
+            VALUES (:c, :u, NULL, 'active', 'trial', NULL,
+                    (CURRENT_DATE + make_interval(days => :d))::date)
+            RETURNING current_period_end
+        """),
+        {"c": str(club_id), "u": str(user_id), "d": int(days)},
+    ).mappings().first()
+    end = row["current_period_end"] if row else None
+    return {"granted": True,
+            "current_period_end": end.isoformat() if hasattr(end, "isoformat") else end}
