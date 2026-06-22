@@ -62,6 +62,23 @@ def _resource(session, club_id, resource_id):
     return dict(row) if row else None
 
 
+def _first_free_court(session, club_id, starts, ends):
+    """The first active court with no held/confirmed booking overlapping [starts, ends). Used to
+    auto-assign a court to a lesson when the caller didn't pick one (coach ∩ court) so a lesson can
+    never be created without a court. The GiST exclusion constraint still has the final say on the
+    insert (a concurrent grab -> SLOT_TAKEN)."""
+    return session.execute(
+        text("SELECT id FROM diary.resource r "
+             "WHERE r.club_id = :c AND r.kind = 'court' AND r.is_active = true "
+             "  AND NOT EXISTS (SELECT 1 FROM diary.booking b "
+             "      WHERE b.club_id = :c AND b.resource_id = r.id "
+             "        AND b.status IN ('held','confirmed') "
+             "        AND b.ends_at > :s AND b.starts_at < :e) "
+             "ORDER BY r.rank, r.name LIMIT 1"),
+        {"c": club_id, "s": starts, "e": ends},
+    ).scalar()
+
+
 def _policy(session, club_id):
     row = session.execute(
         text("SELECT booking_window_days, min_booking_minutes, cancellation_cutoff_hours, "
@@ -333,6 +350,20 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     if not res or not res["is_active"]:
         return _err("RESOURCE_NOT_FOUND", 404)
 
+    # Lesson integrity (coach ∩ court): a lesson is a COACH booking that ALSO holds a court in the
+    # same transaction. The primary resource MUST be an active coach; and a court MUST be held — if
+    # the caller didn't choose one (e.g. the coach console booking on-behalf), auto-assign the first
+    # free court. No coach, or no free court at this time -> reject. This makes a coachless or
+    # courtless "lesson" impossible across every path (member, admin, book-on-behalf).
+    if booking_type == "lesson":
+        if res["kind"] != "coach":
+            return _err("COACH_REQUIRED", 422, message="a lesson must be booked with a coach")
+        if not court_resource_id:
+            court_resource_id = _first_free_court(session, club_id, starts, ends)
+        if not court_resource_id:
+            return _err("NO_COURT_AVAILABLE", 422,
+                        message="no court is free at this time — a lesson needs a court")
+
     policy = _policy(session, club_id)
 
     # Membership-covered guard: 'membership_covered' (free) is ONLY honoured for a COURT booking by
@@ -383,6 +414,8 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     status = "held" if online else "confirmed"
     held_until = (now + timedelta(minutes=hold_minutes)) if online else None
     coach_uid = coach_user_id or (res["coach_user_id"] if res["kind"] == "coach" else None)
+    if booking_type == "lesson" and not coach_uid:
+        return _err("COACH_REQUIRED", 422, message="a lesson must be booked with a coach")
 
     # Token settlement (docs/specs/02): PRE-FLIGHT match a prepaid wallet BEFORE we insert the
     # booking, so a NO-token request never persists anything (clean NO_TOKEN — the UI falls back to
@@ -412,8 +445,8 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
             linked_court_id = None
             if booking_type == "lesson" and court_resource_id:
                 court = _resource(session, club_id, court_resource_id)
-                if not court or not court["is_active"]:
-                    return _err("COURT_NOT_FOUND", 404)
+                if not court or not court["is_active"] or court["kind"] != "court":
+                    return _err("COURT_NOT_FOUND", 404, message="a valid court is required for a lesson")
                 linked_court_id = _insert_booking(
                     session, club_id=club_id, booking_type="court",
                     resource_id=court_resource_id, coach_user_id=coach_uid,
