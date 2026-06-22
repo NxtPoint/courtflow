@@ -285,6 +285,19 @@ def program_cardio_redirect():
     return redirect("/programs#cardio", code=301)
 
 
+# Membership + Packs pages were consolidated into /plan (client-journey redesign).
+@app.get("/membership")
+@app.get("/membership.html")
+def membership_retired_redirect():
+    return redirect("/plan", code=301)
+
+
+@app.get("/packs")
+@app.get("/packs.html")
+def packs_retired_redirect():
+    return redirect("/plan", code=301)
+
+
 # --- Blog (build_blog.py output) ---
 @app.get("/blog")
 def blog_index():

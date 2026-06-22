@@ -26,11 +26,10 @@
   // Absolute hrefs so nav works at any URL depth (e.g. /book/court, a sub-path, would
   // break relative links). Pages still pass `active` as a bare filename ("/book.html").
   var NAV = [
-    { href: "/portal.html", label: "Dashboard", roles: ["*"] },
+    { href: "/portal.html", label: "Home", roles: ["*"] },
     { href: "/book.html",   label: "Book",      roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
     { href: "/my.html",     label: "My Bookings", roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
-    { href: "/membership.html", label: "Membership", roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
-    { href: "/packs.html",  label: "Packs",     roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
+    { href: "/plan",        label: "Plan",      roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
     { href: "/account.html", label: "Account",   roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
     { href: "/coach.html",  label: "Coach",     roles: ["coach", "club_admin", "platform_admin"] },
     { href: "/statement.html", label: "Statement", roles: ["coach"] },

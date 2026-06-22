@@ -310,8 +310,8 @@
     }
     planCard.appendChild(el("div", { style: "margin:6px 0 12px" }, planBits));
     var planActions = el("div", { class: "cf-row", style: "gap:8px" });
-    planActions.appendChild(el("a", { class: "cf-btn cf-btn-primary", href: "/membership.html",
-      text: plan.active ? "Manage membership" : "Get a membership" }));
+    planActions.appendChild(el("a", { class: "cf-btn cf-btn-primary", href: "/plan",
+      text: plan.active ? "Manage plan" : "See plans" }));
     planCard.appendChild(planActions);
     host.appendChild(planCard);
 

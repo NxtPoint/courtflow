@@ -79,7 +79,7 @@ def _t_membership_activated(ctx):
     body = (f"Your {plan} is active. Your court bookings are now covered by your membership."
             if plan != "Membership"
             else "Your membership is active. Your court bookings are now covered.")
-    return ("Membership active", body, "/membership.html")
+    return ("Membership active", body, "/plan")
 
 
 def _t_bundle_activated(ctx):
@@ -88,7 +88,7 @@ def _t_bundle_activated(ctx):
     body = f"Your {label} is ready."
     if n:
         body += f" {n} sessions added to your wallet."
-    return ("Pack activated", body, "/packs.html")
+    return ("Pack activated", body, "/plan")
 
 
 def _t_refund_requested(ctx):
