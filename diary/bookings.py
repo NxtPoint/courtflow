@@ -347,15 +347,22 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         else:
             settlement_mode = "at_court"
 
-    # Booking window + min duration (members; admins/coaches relax).
+    # A booking must have a positive duration (an empty/inverted range is invalid + would break
+    # the GiST exclusion constraint). This is the only LENGTH floor we enforce.
+    if ends <= starts:
+        return _err("TOO_SHORT", 422, message="booking must have a positive duration")
+
+    # Booking window (members; admins/coaches relax). NOTE: we deliberately do NOT enforce
+    # club.policy.min_booking_minutes here. Per-duration pricing is the single source of truth for
+    # length — a member can only pick a duration the club/coach has CONFIGURED a price for
+    # (diary.pricing.durations_for powers the picker), so a separate minimum is redundant and was
+    # actively harmful: it rejected configured services (e.g. a 30-min court the owner priced),
+    # contradicting what the picker offered. Configured == bookable.
     if role in ("member", "guest"):
         window_days = policy.get("booking_window_days") or 14
         if starts > now + timedelta(days=window_days):
             return _err("OUTSIDE_BOOKING_WINDOW", 422,
                         message=f"can't book more than {window_days} days ahead")
-        min_min = policy.get("min_booking_minutes") or 60
-        if (ends - starts) < timedelta(minutes=min_min):
-            return _err("TOO_SHORT", 422, message=f"minimum booking is {min_min} minutes")
 
     if not _settlement_allowed(settlement_mode, policy, role):
         return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=settlement_mode)
