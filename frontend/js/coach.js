@@ -755,6 +755,29 @@
     }
   }
 
+  // A coach with no weekly hours is silently unbookable (no availability → clients can't see or
+  // book them). Surface it loudly at the top of the console with a one-tap jump to the Hours tab.
+  function renderHoursBanner() {
+    var main = document.getElementById("cf-main"); if (!main) return;
+    var prev = document.getElementById("coach-hours-warn"); if (prev) prev.remove();
+    var steps = (profileState.data && profileState.data.steps) || {};
+    if (steps.hours) return;  // hours set — no warning
+    var banner = el("div", { id: "coach-hours-warn", class: "cf-card",
+      style: "border-color:var(--warning);background:var(--warning-bg);display:flex;align-items:center;" +
+             "justify-content:space-between;gap:14px;flex-wrap:wrap" }, [
+      el("div", {}, [
+        el("div", { style: "font-weight:700;color:var(--ink)", text: "⚠️ Set your weekly hours to take bookings" }),
+        el("div", { class: "cf-muted", style: "font-size:.88rem",
+          text: "Until you add your availability, clients can't see or book you." }),
+      ]),
+      el("button", { class: "cf-btn cf-btn-primary", type: "button", text: "Set your hours", onclick: function () {
+        selectProfileTab("hours");
+        var root = profileRoot(); if (root) root.scrollIntoView({ behavior: "smooth", block: "start" });
+      } }),
+    ]);
+    main.insertBefore(banner, main.firstChild);
+  }
+
   async function loadProfile() {
     var host = profileRoot(); if (!host) return;
     UI.clear(host); host.appendChild(el("div", { class: "cf-card" }, [el("div", { class: "cf-loading", text: "Loading your profile…" })]));
@@ -772,6 +795,7 @@
       UI.toast(UI.errMsg(e), "error");
     }
     renderProfile();
+    renderHoursBanner();
   }
 
   window.CoachConsole = {

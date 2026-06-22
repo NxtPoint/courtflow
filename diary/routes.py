@@ -161,9 +161,14 @@ def resources():
     from sqlalchemy import text
     with session_scope() as s:
         rows = s.execute(
-            text("SELECT id, kind, name, surface, coach_user_id, capacity, is_active, rank "
-                 "FROM diary.resource WHERE club_id=:c AND is_active=true "
-                 "ORDER BY kind, rank, name"),
+            text("SELECT r.id, r.kind, r.name, r.surface, r.coach_user_id, r.capacity, "
+                 "       r.is_active, r.rank, "
+                 # has_hours: a coach with no availability_rule is unbookable — the client picker
+                 # filters these out so a no-hours coach is never offered (booking-validation sprint).
+                 "       EXISTS (SELECT 1 FROM diary.availability_rule ar "
+                 "               WHERE ar.club_id = r.club_id AND ar.resource_id = r.id) AS has_hours "
+                 "FROM diary.resource r WHERE r.club_id=:c AND r.is_active=true "
+                 "ORDER BY r.kind, r.rank, r.name"),
             {"c": p.club_id},
         ).mappings().all()
     out = []

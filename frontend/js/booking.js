@@ -47,7 +47,10 @@
     try { ctx.plan = await window.TFAuth.apiJSON("/api/me/plan"); } catch (e) { ctx.plan = null; }
     try {
       var rs = (await window.API.resources()).resources || [];
-      ctx.coaches = rs.filter(function (r) { return r.kind === "coach" && r.is_active; });
+      // Only offer coaches who can actually be booked — a coach with no weekly hours
+      // (has_hours === false) has zero availability, so we never present them (the coach is
+      // prompted to set hours in their console). has_hours absent → keep (backward-safe).
+      ctx.coaches = rs.filter(function (r) { return r.kind === "coach" && r.is_active && r.has_hours !== false; });
       ctx.courts = rs.filter(function (r) { return r.kind === "court" && r.is_active; });
     } catch (e) {}
     ctx.policy = (principal && principal.policy) || null;
