@@ -4,11 +4,15 @@ This folder is the **authoritative current-state documentation** for the platfor
 should read this file first, then the four core docs below. The repo root `CLAUDE.md` is the short
 operating guide; **this folder is the detail.**
 
-> **Status:** LIVE on Render, deployed end-to-end. ~90% of the product is built. Today is the
-> documentation wrap-up of a very large build session (2026-06-20 → 06-21).
+> **Status:** LIVE on Render, deployed end-to-end. Build sessions 2026-06-20 → 06-22. The public
+> marketing site was rebuilt, and the **three purchasing models were completed end-to-end** — unit
+> (minute-based) bundles, seamless checkout, the signup **free week**, the active/dormant/retired
+> **lifecycle**, membership **tiers + access windows** (abuse guard), a consolidated **Pricing**
+> config + coach-owned packs, and a customer-first booking journey. See BUSINESS-RULES §4 +
+> `02-token-bundle-engine.md`. Remaining work: **OUTSTANDING.md**.
 
 ## Read in this order
-1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 6 Postgres schemas, the code lanes,
+1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,
    request/auth flow, integrations, deploy. *"How it's wired."*
 2. **[BUSINESS-RULES.md](BUSINESS-RULES.md)** — every business rule + capability we built: booking,
    the three purchasing models (PAYG / membership / tokens), payments & refunds, the commission /

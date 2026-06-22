@@ -195,11 +195,12 @@ domain model: the **diary**. Same shape as 1050, fewer services (no ML/GPU/video
     makes one authenticated POST to `/api/cron/<job>` (guarded by `OPS_KEY`) and exits non-zero on
     failure. Lanes own the handlers (B-Diary: reminders/capacity-sweep/membership-refill; C-Billing:
     monthly-invoice); until a handler exists the job is a visible no-op (404).
-- **One Postgres DB, six schemas** (idempotent boot DDL, no migration framework):
+- **One Postgres DB, five schemas created** (idempotent boot DDL, no migration framework; `support.*`
+  was designed but is not booted — `docs/specs/` is authoritative):
   - `club.*` tenants/config/branding/location/policies · `iam.*` user↔Clerk, membership, coach_profile
   - `diary.*` resources, availability, booking, class_session, enrolment, waitlist, recurrence (**the heart**, `docs/03`)
-  - `billing.*` price_list, product, order, payment, account_ledger, membership_subscription (`docs/05`)
-  - `core.*` account/user/person, usage_event, consent, nps (ported from 1050 `core_db`) · `support.*` optional FAQ bot
+  - `billing.*` product, price, order, payment, account_ledger, membership_subscription, bundle_plan/token_wallet (`docs/05`)
+  - `core.*` account/user/person, usage_event, consent, nps (ported from 1050 `core_db`)
 - **Integrations (reused accounts, new project-scoped values):** Clerk (identity), Yoco/PayPal
   (provider-agnostic gateway, signed webhooks), AWS S3 (assets) + SES (transactional fallback),
   Klaviyo (all booking/lesson/class confirmations + lifecycle, fed by `core.*` event feed).
@@ -229,9 +230,11 @@ the schema + boot runner exist. **Shared interface files** (`contracts/events.md
 `render.yaml` env list): coordinate edits, Agent A is authoritative.
 
 ## Tech defaults (match 1050 so reuse is clean — docs/09 §6)
-- Python 3.12 + Flask + Gunicorn + psycopg + Postgres. **Idempotent boot DDL** (`init()` on boot,
-  `ADD COLUMN IF NOT EXISTS`) — no Alembic/migrations. Add `btree_gist` + `pgcrypto` extensions
-  (`btree_gist` powers the diary's no-double-booking exclusion constraint).
+- Python 3.12 + Flask + Gunicorn + Postgres. **DB access = SQLAlchemy Core** (`db.get_engine`/`text()`,
+  explicit `session`, repos never commit — callers compose via `db.session_scope()`) over the **psycopg 3**
+  driver — not raw psycopg cursors. **Idempotent boot DDL** (`init()` on boot, `ADD COLUMN IF NOT EXISTS`)
+  — no Alembic/migrations. Add `btree_gist` + `pgcrypto` extensions (`btree_gist` powers the diary's
+  no-double-booking exclusion constraint).
 - Vanilla-JS SPAs (no heavy framework), reusing 1050's CSS/chart conventions; Clerk JS on `/login`.
   The one place to add a dependency is a calendar lib for the diary UI (evaluate FullCalendar resource-timeline).
 

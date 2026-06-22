@@ -40,6 +40,19 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 - [ ] **Self-serve coach/admin role transitions** — e.g. a dependent **aging out at 18** into their own
       login (foundations spec open question).
 
+### Public marketing site — polish follow-ups (rebuilt 2026-06-21; `frontend/marketing/`, spec in `docs/public-site/`)
+- [ ] **Lighthouse / LCP verification** on a real throttled-mobile profile (target ≥90 perf, LCP < 2.5s).
+      The hero is preloaded + `fetchpriority="high"` + `srcset` and everything else lazy, but it was never
+      measured on-device (no headless Chrome in the build env).
+- [ ] **`coach-ross.webp` is low-res** (200×200 source) — looks soft on the founder card; swap if a better
+      original exists. Coach photos come from the owner's `marketing material/coaches/` folder only.
+- [ ] **Homepage "cockpit" showcase uses a faux CSS device mock** (the real portal is behind auth). Swap a
+      real `/portal` screenshot (`/img/portal-cockpit.webp`) at go-live.
+- [ ] **Contact form delivery** needs the **SES sender** (see §A) — until then enquiries are logged to the
+      web-service Render logs (never lost), not emailed.
+- [ ] Two homepage feature images are polished **Unsplash stock** with `onerror` fallbacks to real club
+      photos — swap for real shots when available.
+
 ## C. Analytics — BUILT ✅ (follow-ups only)
 - [x] **Business Overview dashboard** (`analytics/`, `/overview.html`): website visits / unique / new-vs-
       returning, traffic sources, top pages, by-country, customers, bookings, revenue, settlement mix, NPS —
