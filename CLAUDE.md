@@ -188,6 +188,7 @@ session) → enrol. **When editing `book.js`, PRESERVE** the `createBooking` cal
 - **Yoco keys** (`YOCO_*`) — DONE (set in Render; payments live). Each club still opts in via the
   Settings → Payments toggle.
 - **DNS / SEO cutover** for `nextpointtennis.com` (supervised — never an agent). See `docs/11 §5`, `docs/07`.
+- Full pre-flight checklist (incl. `DATABASE_URL`, Clerk app, Klaviyo sender-domain auth): `BUILD_PROMPT.md`.
 
 ## Architecture (big picture — from docs/01, docs/02, docs/09)
 The platform re-assembles ~80% of the proven **Ten-Fifty5 (1050)** architecture around one new
@@ -219,10 +220,12 @@ domain model: the **diary**. Same shape as 1050, fewer services (no ML/GPU/video
   from the consumer (CRM/Klaviyo).
 - **Gateway protocol** (`docs/05 §2`, `apply_payment_event(provider)`) isolates each payment adapter.
 
-## Build order & multi-agent lanes (docs/09)
-Do **Phase 0** (foundation: repo, `render.yaml`, DB connect, schema bootstrap, Clerk auth port,
-club resolution) + **Phase 1** (tenancy schemas, permissions, seed NextPoint as club #1) **sequentially
-and commit**. Only then fan out parallel lane agents — each owns a path lane and touches only it:
+## Module ownership map (historical build order — docs/09)
+**The platform is built; this table is now a reference for which lane owns which path** (touch only your
+lane; coordinate on shared interface files). The original sequencing — **Phase 0** (foundation: repo,
+`render.yaml`, DB connect, schema bootstrap, Clerk auth port, club resolution) + **Phase 1** (tenancy
+schemas, permissions, seed NextPoint as club #1) done sequentially, then parallel lanes — is kept below
+for context:
 
 | Agent | Lane (owns) | Builds |
 |---|---|---|
@@ -247,7 +250,8 @@ the schema + boot runner exist. **Shared interface files** (`contracts/events.md
   The one place to add a dependency is a calendar lib for the diary UI (evaluate FullCalendar resource-timeline).
 
 ## Verification gates (run before merging — docs/03 §10, docs/09 §5)
-There is no test runner yet; create one. Each phase has a concrete "done when":
+There is no automated test runner — the gates are `py_compile` + the `python -m db` idempotency check plus
+the scratch-DB integration scripts under "Verifying" above. Each phase had a concrete "done when":
 - **Phase 0/1:** app boots; `init()` is idempotent (**run twice → no error**); Clerk JWT resolves a
   principal with `club_id` + role; NextPoint seed present.
 - **Phase 2 (booking integrity — do not skip):** concurrent double-booking → exactly one wins;
@@ -295,7 +299,3 @@ There is no test runner yet; create one. Each phase has a concrete "done when":
 - **Cockpit revenue must let refunds through** — refund `billing.payment` rows have `status='refunded'`, so a
   `WHERE status='succeeded'` filter silently drops them (refunds showed R0, Net overstated). Filter as
   `(direction='charge' AND status='succeeded') OR (direction='refund' AND status IN ('succeeded','refunded'))`.
-
-## Needs Tomo (an agent cannot do these)
-See the `BUILD_PROMPT.md` pre-flight checklist: `DATABASE_URL`, a new Clerk app, S3/SES, Klaviyo sender
-domain auth, Yoco keys — and the DNS / SEO cutover (supervised).
