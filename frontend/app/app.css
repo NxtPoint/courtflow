@@ -400,3 +400,55 @@ p{margin:0 0 10px}
 .cf-notif-body{font-size:.83rem;color:var(--muted);margin-top:2px;line-height:1.45}
 .cf-notif-time{font-size:.72rem;color:var(--dim);margin-top:4px}
 @media (max-width:560px){.cf-notif-panel{position:fixed;top:62px;right:8px;left:8px;width:auto}}
+
+/* ===========================================================================
+   Client cockpit dashboard (ADDITIVE — portal.html). Action-first home:
+   slim greeting band · quick-book launchers · plan/coverage nudge · usage
+   stat tiles · CSS history bars (no chart lib). Namespaced cf-greet/cf-qb/
+   cf-stat/cf-bars/cf-nudge so they never touch existing components.
+   =========================================================================== */
+/* Slim greeting band (replaces the tall photo hero — keeps actions above the fold). */
+.cf-greet{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  border-radius:18px;padding:18px 24px;margin-bottom:18px;color:#fff;box-shadow:var(--shadow-md);
+  background:linear-gradient(120deg,var(--green-700),var(--green))}
+.cf-greet h1{color:#fff;font-size:1.45rem;margin:0}
+.cf-greet p{color:rgba(255,255,255,.85);margin:3px 0 0;font-size:.9rem}
+.cf-greet-plan{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.16);
+  border-radius:var(--radius-pill);padding:7px 14px;font-weight:600;font-size:.85rem;color:#fff;white-space:nowrap}
+
+/* Quick-book: three big service launchers (the dashboard's primary action). */
+.cf-qb{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media(max-width:680px){.cf-qb{grid-template-columns:1fr}}
+.cf-qb-btn{display:flex;align-items:center;gap:14px;padding:18px;border:1.5px solid var(--border);
+  border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow-sm);cursor:pointer;
+  text-align:left;width:100%;font:inherit;color:inherit;transition:transform .12s,box-shadow .12s,border-color .12s}
+.cf-qb-btn:hover{transform:translateY(-2px);box-shadow:var(--shadow-md);border-color:var(--green)}
+.cf-qb-ic{flex:0 0 auto;width:48px;height:48px;border-radius:14px;background:var(--green-050);
+  display:flex;align-items:center;justify-content:center;font-size:1.5rem}
+.cf-qb-t{font-weight:700;font-size:1.02rem}
+.cf-qb-s{color:var(--muted);font-size:.83rem}
+
+/* KPI stat tiles (usage this month). */
+.cf-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.cf-stat{background:var(--canvas);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;text-align:center}
+.cf-stat-v{font-size:1.55rem;font-weight:800;line-height:1;color:var(--ink);font-variant-numeric:tabular-nums}
+.cf-stat-k{color:var(--muted);font-size:.76rem;font-weight:600;margin-top:5px}
+
+/* History bars (pure CSS — bookings made per month). */
+.cf-bars{display:flex;align-items:flex-end;gap:10px;height:128px;padding-top:6px}
+.cf-bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%;justify-content:flex-end}
+.cf-bar-fill{width:100%;max-width:48px;background:linear-gradient(var(--green),var(--green-600));
+  border-radius:7px 7px 0 0;min-height:3px;transition:height .35s ease}
+.cf-bar-val{font-size:.74rem;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums}
+.cf-bar-lbl{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.02em}
+
+/* Nudge banner (trial ending / plan upsell). */
+.cf-nudge{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  border:1.5px solid var(--lime);background:#F6FBE3;border-radius:var(--radius);padding:14px 18px;margin-bottom:16px}
+.cf-nudge-t{font-weight:700;color:var(--ink)}
+.cf-nudge-s{color:var(--muted);font-size:.86rem;margin-top:1px}
+
+/* Section header with a trailing link (e.g. "Upcoming  ·  View all"). */
+.cf-sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px}
+.cf-sec-head h2{margin:0}
+.cf-sec-link{font-size:.85rem;font-weight:600}

@@ -24,14 +24,16 @@
 <script src="/js/coach_api.js"></script>
 <script src="/js/portal.js"></script>
 <script>
+// Action-first client cockpit (client-journey redesign, Phase 1). Order: greeting →
+// quick-book → plan/coverage nudge → upcoming → activity (usage + history graph).
+// Staff (coach/admin) get the same cockpit plus a row of links to their consoles.
 Portal.boot({
   active: "/portal.html",
   onReady: async function (p) {
     var UI = window.UI, el = UI.el, main = document.getElementById("cf-main");
 
-    // First-run gate: owners (club_admin / platform_admin) get the club owner wizard;
-    // a pure coach gets the coach onboarding wizard. Each runs only its own check so
-    // an owner is never sent to the coach wizard, and vice versa.
+    // First-run gate: owners → club owner wizard; a pure coach → coach onboarding wizard.
+    // Each runs only its own check so an owner is never sent to the coach wizard, and vice versa.
     if (p.role === "club_admin" || p.role === "platform_admin") {
       try {
         var ob = await window.AdminAPI.onboarding();
@@ -48,51 +50,119 @@ Portal.boot({
 
     var roleLabel = ({ club_admin: "Club admin", platform_admin: "Platform admin",
                        coach: "Coach", member: "Member", guest: "Guest" })[p.role] || p.role;
+    var firstName = (p.email || "").split("@")[0];
 
-    // Time-aware greeting + courtside hero. The gradient overlay keeps the white
-    // text legible even if the Unsplash photo is slow or fails to load.
+    // --- financials drive the greeting plan chip, the nudge, usage tiles + history graph.
+    // One read (guarded server-side); the dashboard degrades gracefully if it fails.
+    var fin = null;
+    try { fin = await window.API.financials(); } catch (e) { fin = null; }
+    var plan = (fin && fin.plan) || null;
+    var currency = (fin && fin.currency) || "ZAR";
+
+    // ---- greeting band -----------------------------------------------------
     var hr = new Date().getHours();
     var greet = hr < 12 ? "Good morning" : (hr < 18 ? "Good afternoon" : "Good evening");
-    var heroBg = "linear-gradient(120deg,rgba(8,67,31,.86),rgba(14,122,71,.5))," +
-      "url('https://images.unsplash.com/photo-1595435934249-5df7ed86e1c0?auto=format&fit=crop&w=1400&q=70')";
-    var hero = el("div", { class: "cf-hero", style: "background-image:" + heroBg }, [
-      el("div", { class: "cf-hero-in" }, [
-        el("h1", { text: greet + "," }),
-        el("p", { text: (p.email || "") + " · " + roleLabel }),
-        el("a", { class: "cf-btn cf-btn-accent", href: "/book.html", text: "Book a court →" }),
+    var planChip = "";
+    if (plan) {
+      if (plan.is_trial && plan.trial_days_left != null) planChip = "🎁 Free week · " + plan.trial_days_left + "d left";
+      else if (plan.type === "membership" && plan.active) planChip = "⭐ Member";
+      else planChip = "Pay as you go";
+    }
+    var greetChildren = [
+      el("div", {}, [
+        el("h1", { text: greet + (firstName ? ", " + firstName : "") }),
+        el("p", { text: roleLabel + (p.email ? " · " + p.email : "") }),
       ]),
-    ]);
-    main.appendChild(hero);
+    ];
+    if (planChip) greetChildren.push(el("span", { class: "cf-greet-plan", text: planChip }));
+    main.appendChild(el("div", { class: "cf-greet" }, greetChildren));
 
-    // Quick links, role-aware — rendered as cf-tiles.
-    var links = [
-      { href: "/book.html", t: "Book", s: "Court, lesson or class", roles: ["*"] },
-      { href: "/my.html", t: "My bookings", s: "Upcoming & statement", roles: ["*"] },
+    // ---- trial-ending / plan nudge (banner) --------------------------------
+    // Surfaced when the free week is nearly up, or for a PAYG member with no coverage.
+    // Links to the consolidated Plan page (bridge: /membership.html until /plan ships).
+    var planHref = "/membership.html";
+    if (plan) {
+      if (plan.is_trial && plan.trial_days_left != null && plan.trial_days_left <= 3) {
+        main.appendChild(el("div", { class: "cf-nudge" }, [
+          el("div", {}, [
+            el("div", { class: "cf-nudge-t", text: "Your free week ends in " + plan.trial_days_left + " day" + (plan.trial_days_left === 1 ? "" : "s") }),
+            el("div", { class: "cf-nudge-s", text: "Keep playing — go unlimited with membership, or grab a session pack." }),
+          ]),
+          el("a", { class: "cf-btn cf-btn-primary", href: planHref, text: "See plans" }),
+        ]));
+      } else if (!plan.active && plan.sold) {
+        main.appendChild(el("div", { class: "cf-nudge" }, [
+          el("div", {}, [
+            el("div", { class: "cf-nudge-t", text: "Make your court bookings free" }),
+            el("div", { class: "cf-nudge-s", text: "Go unlimited with a membership, or buy a prepaid pack." }),
+          ]),
+          el("a", { class: "cf-btn cf-btn-primary", href: planHref, text: "See plans" }),
+        ]));
+      }
+    }
+
+    // ---- quick-book --------------------------------------------------------
+    // The dashboard IS the launchpad. (Increment 2 swaps openBook() for an on-page
+    // slide-up sheet so a court is ~2 taps; for now it opens the booking flow.)
+    function openBook() { window.location.href = "/book.html"; }
+    var services = [
+      { ic: "🎾", t: "Book a court", s: "Hard courts + the clay court" },
+      { ic: "🏆", t: "Book a lesson", s: "1:1 or group with a coach" },
+      { ic: "👥", t: "Attend a class", s: "Squads, Cardio, socials" },
+    ];
+    var qbCard = el("div", { class: "cf-card" }, [ el("h2", { text: "Book" }) ]);
+    var qbGrid = el("div", { class: "cf-qb" });
+    services.forEach(function (sv) {
+      qbGrid.appendChild(el("button", { class: "cf-qb-btn", type: "button", onclick: openBook }, [
+        el("span", { class: "cf-qb-ic", text: sv.ic }),
+        el("span", {}, [
+          el("span", { class: "cf-qb-t", text: sv.t, style: "display:block" }),
+          el("span", { class: "cf-qb-s", text: sv.s }),
+        ]),
+      ]));
+    });
+    qbCard.appendChild(qbGrid);
+    main.appendChild(qbCard);
+
+    // ---- staff tools (coach / admin only) ----------------------------------
+    var staffLinks = [
       { href: "/coach.html", t: "Coach console", s: "My week & rosters", roles: ["coach", "club_admin", "platform_admin"] },
       { href: "/admin.html", t: "Master diary", s: "Club admin & desk", roles: ["club_admin", "platform_admin"] },
       { href: "/settings.html", t: "Settings", s: "Club, hours, courts, pricing", roles: ["club_admin", "platform_admin"] },
-    ];
-    var grid = el("div", { class: "cf-tiles" });
-    links.forEach(function (l) {
-      if (l.roles.indexOf("*") < 0 && l.roles.indexOf(p.role) < 0) return;
-      grid.appendChild(el("a", { href: l.href, class: "cf-tile" }, [
-        el("div", { class: "cf-tile-t", text: l.t }),
-        el("div", { class: "cf-tile-s", text: l.s }),
-      ]));
-    });
-    main.appendChild(grid);
+    ].filter(function (l) { return l.roles.indexOf(p.role) >= 0; });
+    if (staffLinks.length) {
+      var staffCard = el("div", { class: "cf-card" }, [ el("h2", { text: "Manage" }) ]);
+      var staffGrid = el("div", { class: "cf-tiles" });
+      staffLinks.forEach(function (l) {
+        staffGrid.appendChild(el("a", { href: l.href, class: "cf-tile" }, [
+          el("div", { class: "cf-tile-t", text: l.t }),
+          el("div", { class: "cf-tile-s", text: l.s }),
+        ]));
+      });
+      staffCard.appendChild(staffGrid);
+      main.appendChild(staffCard);
+    }
 
-    // Upcoming bookings preview (member lens).
-    var up = el("div", { class: "cf-card", style: "margin-top:16px" }, [ el("h2", { text: "Upcoming" }), el("div", { id: "up", class: "cf-loading", text: "Loading…" }) ]);
+    // ---- upcoming ----------------------------------------------------------
+    var up = el("div", { class: "cf-card" }, [
+      el("div", { class: "cf-sec-head" }, [
+        el("h2", { text: "Upcoming" }),
+        el("a", { class: "cf-sec-link", href: "/my.html", text: "View all →" }),
+      ]),
+      el("div", { id: "up", class: "cf-loading", text: "Loading…" }),
+    ]);
     main.appendChild(up);
-    try {
-      var today = UI.dateKey(new Date());
-      var to = UI.dateKey(UI.addDays(new Date(), 30));
-      var r = await window.API.bookings({ date_from: today, date_to: to, status: "confirmed" });
-      var box = document.getElementById("up");
-      UI.clear(box);
-      if (!r.bookings.length) { box.appendChild(el("div", { class: "cf-empty", text: "No upcoming bookings." })); }
-      else {
+    (async function () {
+      try {
+        var today = UI.dateKey(new Date());
+        var to = UI.dateKey(UI.addDays(new Date(), 30));
+        var r = await window.API.bookings({ date_from: today, date_to: to, status: "confirmed" });
+        var box = document.getElementById("up");
+        UI.clear(box);
+        if (!r.bookings || !r.bookings.length) {
+          box.appendChild(el("div", { class: "cf-empty", text: "No upcoming bookings — book a court above to get started." }));
+          return;
+        }
         var list = el("div", { class: "cf-list" });
         r.bookings.slice(0, 5).forEach(function (b) {
           list.appendChild(el("div", { class: "cf-item" }, [
@@ -104,8 +174,43 @@ Portal.boot({
           ]));
         });
         box.appendChild(list);
+      } catch (e) {
+        var b2 = document.getElementById("up"); if (b2) { UI.clear(b2); b2.textContent = UI.errMsg(e); }
       }
-    } catch (e) { document.getElementById("up").textContent = UI.errMsg(e); }
+    })();
+
+    // ---- activity: usage this month + history graph ------------------------
+    if (fin) {
+      var act = el("div", { class: "cf-card" }, [ el("h2", { text: "Your activity" }) ]);
+
+      var u = fin.usage_this_month || {};
+      act.appendChild(el("div", { class: "cf-stats" }, [
+        el("div", { class: "cf-stat" }, [ el("div", { class: "cf-stat-v", text: String(u.court || 0) }), el("div", { class: "cf-stat-k", text: "Courts this month" }) ]),
+        el("div", { class: "cf-stat" }, [ el("div", { class: "cf-stat-v", text: String(u.lesson || 0) }), el("div", { class: "cf-stat-k", text: "Lessons this month" }) ]),
+        el("div", { class: "cf-stat" }, [ el("div", { class: "cf-stat-v", text: String(u.class || 0) }), el("div", { class: "cf-stat-k", text: "Classes this month" }) ]),
+      ]));
+
+      // History bars — bookings made per month (last ~6, chronological L→R).
+      var hist = ((fin.spend && fin.spend.history) || []).slice().reverse();
+      if (hist.length) {
+        var maxN = hist.reduce(function (m, it) { return Math.max(m, Number(it.bookings != null ? it.bookings : it.orders) || 0); }, 0) || 1;
+        var bars = el("div", { class: "cf-bars", style: "margin-top:18px" });
+        hist.forEach(function (it) {
+          var n = Number(it.bookings != null ? it.bookings : it.orders) || 0;
+          var pct = Math.round((n / maxN) * 100);
+          var monLbl = "";
+          try { monLbl = new Date(it.period + "-01T00:00:00").toLocaleDateString("en-ZA", { month: "short", timeZone: UI.CLUB_TZ }); } catch (e) { monLbl = it.period; }
+          bars.appendChild(el("div", { class: "cf-bar", title: monLbl + ": " + n + " booking" + (n === 1 ? "" : "s") + " · " + UI.money(it.paid_minor, currency) }, [
+            el("div", { class: "cf-bar-val", text: String(n) }),
+            el("div", { class: "cf-bar-fill", style: "height:" + pct + "%" }),
+            el("div", { class: "cf-bar-lbl", text: monLbl }),
+          ]));
+        });
+        act.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin:16px 0 0", text: "Bookings made over the last " + hist.length + " months" }));
+        act.appendChild(bars);
+      }
+      main.appendChild(act);
+    }
   },
 });
 </script>
