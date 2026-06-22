@@ -12,7 +12,7 @@
 <div class="cf-shell">
   <header id="cf-topbar" class="cf-topbar"></header>
   <main id="cf-main" class="cf-main">
-    <div id="cf-wizard"><div class="cf-loading">Loading…</div></div>
+    <div class="cf-loading">Loading…</div>
   </main>
 </div>
 
@@ -21,12 +21,22 @@
 <script src="/js/ui.js"></script>
 <script src="/js/api.js"></script>
 <script src="/js/portal.js"></script>
-<script src="/js/book.js"></script>
+<script src="/js/booking.js"></script>
 <script>
-Portal.boot({
-  active: "/book.html",
-  onReady: function (p) { window.BookWizard.start(p); },
-});
+// Full-screen booking flow (booking.js). Service comes from the URL — /book/court|lesson|class
+// (dashboard deep-links) or ?service=court — defaulting to court; an in-page switch changes it.
+(function () {
+  function serviceFromUrl() {
+    var m = (location.pathname || "").match(/\/book\/(court|lesson|class)\b/);
+    if (m) return m[1];
+    var q = new URLSearchParams(location.search).get("service");
+    return (q === "court" || q === "lesson" || q === "class") ? q : "court";
+  }
+  Portal.boot({
+    active: "/book.html",
+    onReady: function (p) { window.BookFlow.start(p, serviceFromUrl()); },
+  });
+})();
 </script>
 </body>
 </html>

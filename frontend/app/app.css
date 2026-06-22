@@ -499,3 +499,13 @@ p{margin:0 0 10px}
 .cf-planopt-price{font-weight:800;font-size:1.35rem;margin:6px 0;color:var(--ink)}
 .cf-planopt-sub{color:var(--muted);font-size:.84rem}
 .cf-planopt-meta{color:var(--muted);font-size:.74rem;margin-top:6px}
+
+/* Inline duration chips on the booking screen (ADDITIVE — booking.js). Duration lives WITH the
+   times (not a separate step); changing it re-prices the slots live. */
+.cf-durchips{display:flex;gap:8px;flex-wrap:wrap}
+.cf-durchip{border:1.5px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);
+  padding:8px 12px;cursor:pointer;font:600 .85rem Inter;color:var(--ink);text-align:center;
+  display:flex;flex-direction:column;gap:1px;min-width:62px;transition:border-color .12s,background .12s,color .12s}
+.cf-durchip:hover{border-color:var(--green);background:var(--green-050)}
+.cf-durchip.sel{border-color:var(--green);background:var(--green);color:#fff}
+.cf-durchip small{font-weight:500;font-size:.7rem;opacity:.82}

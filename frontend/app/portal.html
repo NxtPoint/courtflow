@@ -22,8 +22,6 @@
 <script src="/js/api.js"></script>
 <script src="/js/admin_api.js"></script>
 <script src="/js/coach_api.js"></script>
-<script src="/js/pay.js"></script>
-<script src="/js/quickbook.js"></script>
 <script src="/js/portal.js"></script>
 <script>
 // Action-first client cockpit (client-journey redesign, Phase 1). Order: greeting →
@@ -104,13 +102,10 @@ Portal.boot({
     }
 
     // ---- quick-book --------------------------------------------------------
-    // The dashboard IS the launchpad: a service card opens the slide-up quick-book
-    // sheet (quickbook.js) — book a court in ~2 taps. Falls back to /book.html if
-    // the sheet module failed to load.
-    function openBook(type) {
-      if (window.QuickBook) window.QuickBook.open(type, p);
-      else window.location.href = "/book.html";
-    }
+    // The dashboard is the launchpad: a service card deep-links into the full-screen
+    // booking flow (/book/<service>), which lands on the calendar with that service
+    // pre-selected — book a court in ~2 taps (today is pre-selected).
+    function openBook(type) { window.location.href = "/book/" + type; }
     var services = [
       { type: "court",  ic: "🎾", t: "Book a court", s: "Hard courts + the clay court" },
       { type: "lesson", ic: "🏆", t: "Book a lesson", s: "1:1 or group with a coach" },
