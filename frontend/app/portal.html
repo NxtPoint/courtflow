@@ -82,7 +82,7 @@ Portal.boot({
     // ---- trial-ending / plan nudge (banner) --------------------------------
     // Surfaced when the free week is nearly up, or for a PAYG member with no coverage.
     // Links to the consolidated Plan page (bridge: /membership.html until /plan ships).
-    var planHref = "/membership.html";
+    var planHref = "/plan";
     if (plan) {
       if (plan.is_trial && plan.trial_days_left != null && plan.trial_days_left <= 3) {
         main.appendChild(el("div", { class: "cf-nudge" }, [

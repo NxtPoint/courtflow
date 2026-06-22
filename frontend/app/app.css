@@ -479,3 +479,23 @@ p{margin:0 0 10px}
 .cf-sheet-back:hover{color:var(--green-600)}
 .cf-qbrow{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
 .cf-qbrow .cf-field{flex:1;min-width:150px;margin-bottom:0}
+
+/* ===========================================================================
+   Plan page (ADDITIVE — plan.js). Segmented chooser + selectable plan-option
+   cards for the three purchasing models. Namespaced cf-segment / cf-planopt.
+   =========================================================================== */
+.cf-segment{display:flex;gap:6px;background:var(--canvas);border:1px solid var(--border);
+  border-radius:var(--radius-pill);padding:5px;margin-bottom:18px;flex-wrap:wrap}
+.cf-segment button{flex:1;min-width:110px;border:0;background:none;border-radius:var(--radius-pill);
+  padding:9px 14px;font:600 .9rem Inter;color:var(--muted);cursor:pointer;transition:.12s}
+.cf-segment button:hover{color:var(--green-600)}
+.cf-segment button.on{background:var(--surface);color:var(--green-600);box-shadow:var(--shadow-sm)}
+.cf-planopts{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin:6px 0 16px}
+.cf-planopt{border:2px solid var(--border);border-radius:var(--radius);background:var(--surface);
+  padding:16px;cursor:pointer;text-align:center;transition:border-color .12s,box-shadow .12s,transform .1s}
+.cf-planopt:hover{border-color:#cfe0d6;transform:translateY(-1px)}
+.cf-planopt.sel{border-color:var(--green);box-shadow:var(--ring)}
+.cf-planopt-name{font-weight:700;font-size:1.02rem}
+.cf-planopt-price{font-weight:800;font-size:1.35rem;margin:6px 0;color:var(--ink)}
+.cf-planopt-sub{color:var(--muted);font-size:.84rem}
+.cf-planopt-meta{color:var(--muted);font-size:.74rem;margin-top:6px}

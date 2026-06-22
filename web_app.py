@@ -333,6 +333,12 @@ def my_area():
     return _app_shell("my.html")
 
 
+@app.get("/plan")
+def plan_page():
+    # Consolidated client purchasing surface (membership / packs / pay-as-you-go).
+    return _app_shell("plans.html")
+
+
 @app.get("/coach")
 def coach_console():
     return _app_shell("coach.html")
