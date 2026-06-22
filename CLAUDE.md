@@ -5,6 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This repo is the **multi-tenant tennis club management platform** (working name "CourtFlow").
 NextPoint Tennis is club #1, migrating off Wix.
 
+## Quick orientation (30-second map)
+- **Entrypoints:** API = `wsgi:app` (has DB) · web/portal = `web_wsgi:app` (DB-less, host-switched in `web_app.py`).
+- **Boot/schema runner:** `python -m db` (idempotent — run **twice**, second run must be a no-op).
+- **Source of truth for current state:** start at **`docs/specs/README.md`** (not the `docs/00→12` design docs).
+- **Gates before merge:** `python -m py_compile` over the tree + `python -m db` twice. There is no pytest suite.
+- **Iron rule:** every domain row is `club_id`-scoped — never query domain data without it.
+
 ## Current state (read this first) — LIVE on Render
 - **Deployed and operational end-to-end.** Repo `NxtPoint/courtflow` (Render auto-deploys `master`).
   Two web services (Render, Frankfurt, **Free** plan pre-launch): **`courtflow-api`** (`wsgi:app`, has DB)
@@ -150,7 +157,8 @@ session) → enrol. **When editing `book.js`, PRESERVE** the `createBooking` cal
 
 ## Commands
 - **Compile gate (CI-style, no infra):** `python -m py_compile $(git ls-files '*.py')` — there is no
-  pytest suite; this + the integration script below are the gates (match 1050).
+  pytest suite; this + the integration script below are the gates (match 1050). **The `$(…)` substitution is
+  bash** — run it from the Bash tool, or in PowerShell use `python -m py_compile (git ls-files '*.py')`.
 - **Boot all schemas / idempotency gate:** `python -m db` (run it **twice** → second run must be a no-op).
 - **Seed club #1:** `python -m scripts.seed_nextpoint` · **provision another tenant:** `python -m scripts.provision_club`
 - **Run the API locally:** `gunicorn wsgi:app` (or `python -m app`) — needs `DATABASE_URL`.
@@ -220,7 +228,7 @@ and commit**. Only then fan out parallel lane agents — each owns a path lane a
 |---|---|---|
 | A — Foundation | `app.py`, `wsgi.py`, `render.yaml`, `db.py`, `iam/`, `auth/` | Skeleton, boot/schema runner, Clerk port, club resolution. **Runs first.** |
 | B — Diary | `diary/` | Booking/lesson/class CRUD, exclusion constraint, recurrence, waitlist, crons. |
-| C — Billing | `billing/`, `yoco_billing/`, `paypal_billing/` | order/ledger, `apply_payment_event`, gateway adapters. |
+| C — Billing | `billing/`, `yoco_billing/`, `paypal_billing/` *(PayPal adapter planned — not yet on disk)* | order/ledger, `apply_payment_event`, gateway adapters. |
 | D — CRM | `core/`, `marketing_crm/` | `core.*` port, tracking, crm_sync, consent, Klaviyo. |
 | E — Frontend | `frontend/` | Booking wizard, coach diary, club-admin console, `/login`. |
 | F — Marketing/SEO | `frontend/marketing/`, `build_blog.py`, `migration/` | Host-switched site, blog, sitemap, URL inventory + 301 map. |
