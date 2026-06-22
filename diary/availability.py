@@ -72,6 +72,11 @@ def _resources(session, *, club_id, resource_id, kind, coach_user_id, surface):
         where.append("coach_user_id = :coach"); params["coach"] = coach_user_id
     if surface:
         where.append("surface = :surface"); params["surface"] = surface
+    # Exclude coaches not accepting bookings (is_bookable=false) from the union ("any coach"). Court
+    # resources have coach_user_id NULL so they're unaffected. (booking-validation sprint #8)
+    where.append("NOT EXISTS (SELECT 1 FROM iam.coach_profile cp "
+                 "WHERE cp.club_id = :c AND cp.user_id = diary.resource.coach_user_id "
+                 "AND cp.is_bookable = false)")
     rows = session.execute(
         text("SELECT id, name, kind, surface, capacity FROM diary.resource "
              "WHERE " + " AND ".join(where) + " ORDER BY rank, name"),

@@ -44,6 +44,10 @@ def billing_config():
     club_id = (request.args.get("club_id") or "").strip() or None
     currency = "ZAR"
     club_allows = False
+    # Desk + monthly-account settlement default ON (matches the backend guard's defaults); the
+    # booking picker reads these so it only ever offers a mode the club actually allows.
+    allow_at_court = True
+    allow_monthly = True
 
     # Resolve the club's policy/currency if we have a DB + a club hint. Best-effort.
     if club_id and (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or os.getenv("DB_URL")):
@@ -54,7 +58,9 @@ def billing_config():
                 row = s.execute(
                     text("""
                         SELECT c.currency_code,
-                               COALESCE(p.allow_online_payment, false) AS allow_online
+                               COALESCE(p.allow_online_payment, false) AS allow_online,
+                               COALESCE(p.allow_pay_at_court, true)    AS allow_at_court,
+                               COALESCE(p.allow_monthly_account, true) AS allow_monthly
                         FROM club.club c
                         LEFT JOIN club.policy p ON p.club_id = c.id
                         WHERE c.id = :id
@@ -64,6 +70,8 @@ def billing_config():
                 if row:
                     currency = row["currency_code"] or "ZAR"
                     club_allows = bool(row["allow_online"])
+                    allow_at_court = bool(row["allow_at_court"])
+                    allow_monthly = bool(row["allow_monthly"])
         except Exception:
             pass
 
@@ -79,6 +87,8 @@ def billing_config():
         "provider": provider if online_enabled else "manual",
         "currency": currency,
         "public_key": public_key if online_enabled else "",
+        "allow_at_court": allow_at_court,
+        "allow_monthly": allow_monthly,
     }), 200
 
 

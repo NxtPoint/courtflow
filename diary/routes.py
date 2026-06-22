@@ -163,11 +163,15 @@ def resources():
         rows = s.execute(
             text("SELECT r.id, r.kind, r.name, r.surface, r.coach_user_id, r.capacity, "
                  "       r.is_active, r.rank, "
-                 # has_hours: a coach with no availability_rule is unbookable — the client picker
-                 # filters these out so a no-hours coach is never offered (booking-validation sprint).
+                 # has_hours / is_bookable: a coach with no availability_rule OR marked not-bookable
+                 # is unbookable — the client picker filters these out so they're never offered
+                 # (booking-validation sprint). Courts have coach_user_id NULL -> is_bookable true.
                  "       EXISTS (SELECT 1 FROM diary.availability_rule ar "
-                 "               WHERE ar.club_id = r.club_id AND ar.resource_id = r.id) AS has_hours "
-                 "FROM diary.resource r WHERE r.club_id=:c AND r.is_active=true "
+                 "               WHERE ar.club_id = r.club_id AND ar.resource_id = r.id) AS has_hours, "
+                 "       COALESCE(cp.is_bookable, true) AS is_bookable "
+                 "FROM diary.resource r "
+                 "LEFT JOIN iam.coach_profile cp ON cp.club_id = r.club_id AND cp.user_id = r.coach_user_id "
+                 "WHERE r.club_id=:c AND r.is_active=true "
                  "ORDER BY r.kind, r.rank, r.name"),
             {"c": p.club_id},
         ).mappings().all()

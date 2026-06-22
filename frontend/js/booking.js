@@ -47,10 +47,12 @@
     try { ctx.plan = await window.TFAuth.apiJSON("/api/me/plan"); } catch (e) { ctx.plan = null; }
     try {
       var rs = (await window.API.resources()).resources || [];
-      // Only offer coaches who can actually be booked — a coach with no weekly hours
-      // (has_hours === false) has zero availability, so we never present them (the coach is
-      // prompted to set hours in their console). has_hours absent → keep (backward-safe).
-      ctx.coaches = rs.filter(function (r) { return r.kind === "coach" && r.is_active && r.has_hours !== false; });
+      // Only offer coaches who can actually be booked: active, with weekly hours set
+      // (has_hours), and accepting bookings (is_bookable). A coach missing any of these has no
+      // bookable availability, so we never present them. Absent flags → keep (backward-safe).
+      ctx.coaches = rs.filter(function (r) {
+        return r.kind === "coach" && r.is_active && r.has_hours !== false && r.is_bookable !== false;
+      });
       ctx.courts = rs.filter(function (r) { return r.kind === "court" && r.is_active; });
     } catch (e) {}
     ctx.policy = (principal && principal.policy) || null;
@@ -105,10 +107,12 @@
     return Math.round(n * 10) / 10;
   }
   function payModes() {
-    var allow = (ctx.policy && ctx.policy.allowed_settlement_modes)
-      ? ctx.policy.allowed_settlement_modes.filter(function (m) { return m !== "membership_covered"; })
-      : ["at_court", "monthly_account"];
-    var modes = allow.slice();
+    // Only offer modes the club's policy actually allows (mirrors the backend _settlement_allowed
+    // guard, surfaced via /api/billing/config) so the picker can never present a mode that would be
+    // rejected at checkout. membership_covered is never a manual option (auto-applied when free).
+    var modes = [];
+    if (ctx.billing.allow_at_court !== false) modes.push("at_court");
+    if (ctx.billing.allow_monthly !== false) modes.push("monthly_account");
     if (ctx.billing.online_enabled && modes.indexOf("online") < 0) modes.push("online");
     if (matchTokenWallet() && modes.indexOf("token") < 0) modes.unshift("token");
     return modes.filter(function (m) { return m === "token" || UI.SETTLEMENT[m]; });
