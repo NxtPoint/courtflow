@@ -497,14 +497,35 @@
     } catch (e) { document.getElementById("res-list").textContent = UI.errMsg(e); }
   }
 
+  // Cache of recent online payments, lazily fetched once, so the People 360 drawer can show a
+  // person's payment history without a per-person endpoint (composed client-side by email).
+  var _paymentsByEmail = null;
+  async function paymentsForEmail(email) {
+    if (!email) return [];
+    if (_paymentsByEmail === null) {
+      _paymentsByEmail = {};
+      try {
+        var r = await window.AdminAPI.payments();
+        (r.payments || []).forEach(function (p) {
+          var k = (p.payer_email || "").toLowerCase();
+          if (!k) return;
+          (_paymentsByEmail[k] = _paymentsByEmail[k] || []).push(p);
+        });
+      } catch (e) { /* leave empty — drawer shows "no payments" */ }
+    }
+    return _paymentsByEmail[email.toLowerCase()] || [];
+  }
+
   async function renderPeople(panel) {
     var card = el("div", { class: "cf-card" }, [ el("h2", { text: "People" }) ]);
     card.appendChild(el("p", { class: "cf-muted", style: "margin:-4px 0 12px",
-      text: "Everyone in the club. To invite a coach, go to Settings → Coaches; the coach completes their own profile when they first log in with that email." }));
+      text: "Everyone in the club. Click a row to see their detail. To invite a coach, go to Settings → Coaches; the coach completes their own profile when they first log in with that email." }));
     var box = el("div", { id: "ppl-list", class: "cf-loading", text: "Loading people…" });
     card.appendChild(box);
     panel.appendChild(card);
     try {
+      if (!window.AdminAPI) await ensureClassDeps();
+      _paymentsByEmail = null;  // refresh the payment cache each time the tab opens
       var r = await window.TFAuth.apiJSON("/api/admin/people");
       UI.clear(box);
       if (!r.people || !r.people.length) {
@@ -529,12 +550,13 @@
         if (canHaveMembership) {
           var ab = el("button", { class: "cf-btn cf-btn-sm" + (pp.has_membership ? " cf-btn-danger" : " cf-btn-primary"),
             text: pp.has_membership ? "Revoke" : "Grant" });
-          ab.addEventListener("click", function () { toggleMembership(pp, ab, chipCell); });
+          // Stop the row-click 360 drawer from also firing when granting/revoking.
+          ab.addEventListener("click", function (ev) { ev.stopPropagation(); toggleMembership(pp, ab, chipCell); });
           actCell.appendChild(ab);
         } else {
           actCell.appendChild(el("span", { class: "cf-muted", text: "—" }));
         }
-        tb.appendChild(el("tr", {}, [
+        var tr = el("tr", { style: "cursor:pointer" }, [
           el("td", { text: name }),
           el("td", { text: pp.email || "—" }),
           el("td", { text: pp.phone || "—" }),
@@ -542,7 +564,9 @@
           el("td", { text: status }),
           chipCell,
           actCell,
-        ]));
+        ]);
+        tr.addEventListener("click", function () { openPersonDrawer(pp, name, status); });
+        tb.appendChild(tr);
       });
       t.appendChild(tb);
       box.appendChild(t);
@@ -568,6 +592,43 @@
       btn.disabled = false;
       UI.toast(pp.has_membership ? "Membership granted (1 month) — courts now free." : "Membership revoked.", "info");
     }).catch(function (e) { UI.toast(UI.errMsg(e), "error"); btn.disabled = false; });
+  }
+
+  // People 360 — a slide-over (shared CRMUI.drawer) with the person's profile, role, membership
+  // and their online-payment history. Composed from /api/admin/people (the row) + /api/admin/payments
+  // filtered by email — there is no dedicated per-person 360 endpoint yet (see report).
+  function openPersonDrawer(pp, name, status) {
+    var cur = state.billing.currency || "ZAR";
+    var roleLabel = (pp.role || "").replace("_", " ");
+    var sections = [{
+      h: "Profile",
+      rows: [
+        ["Email", pp.email || "—"],
+        ["Phone", pp.phone || "—"],
+        ["Role", roleLabel || "—"],
+        ["Status", status || "—"],
+        ["Membership", pp.has_membership ? "Active (free courts)" : "None"],
+      ],
+    }];
+    // Payments section is filled async (cached after the first open).
+    var payHost = el("div", {}, [el("div", { class: "cf-loading", text: "Loading payments…" })]);
+    sections.push({ h: "Online payments", node: payHost });
+    window.CRMUI.drawer({ title: name || pp.email || "Person", subtitle: roleLabel, sections: sections });
+    paymentsForEmail(pp.email).then(function (pays) {
+      UI.clear(payHost);
+      if (!pays.length) { payHost.appendChild(el("div", { class: "cf-empty", text: "No online payments." })); return; }
+      var list = el("div", { class: "cf-list" });
+      pays.forEach(function (p) {
+        list.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: UI.money(p.amount_minor, p.currency_code || cur) }),
+            el("div", { class: "cf-item-s", text: String(p.created_at || "").replace("T", " ").slice(0, 16) }),
+          ]),
+          el("span", { class: "cf-chip " + (p.refunded ? "cancelled" : "confirmed"), text: p.refunded ? "refunded" : "paid" }),
+        ]));
+      });
+      payHost.appendChild(list);
+    });
   }
 
   async function renderBilling(panel) {
@@ -750,16 +811,11 @@
     return { from: from, to: to };
   }
 
-  function statCard(label, value, sub) {
-    return el("div", { class: "cf-card", style: "flex:1;min-width:170px" }, [
-      el("div", { class: "cf-muted", style: "font-size:13px", text: label }),
-      el("div", { style: "font-size:26px;font-weight:700;margin:4px 0 2px", text: value }),
-      sub ? el("div", { class: "cf-muted", style: "font-size:12px", text: sub }) : el("span"),
-    ]);
-  }
-
   var cockpitState = { range: "this" };
 
+  // The owner cockpit reuses the SHARED reporting library (window.CRMUI) — the same
+  // primitives the coach console renders from (one engine, two lenses). admin.html loads
+  // crm_ui.js; the AdminAPI wrappers come via ensureClassDeps (already preloaded on boot).
   async function renderCockpit(panel) {
     panel.appendChild(el("div", { class: "cf-card" }, [
       el("h2", { text: "Financials" }),
@@ -769,52 +825,80 @@
     ]));
     var ctrl = el("div", { class: "cf-row", style: "gap:8px;margin-bottom:12px" });
     [["this", "This month"], ["last", "Last month"], ["all", "All time"]].forEach(function (r) {
-      var a = el("button", { class: "cf-btn cf-btn-sm" + (cockpitState.range === r[0] ? " cf-btn-primary" : ""), text: r[1] });
-      a.addEventListener("click", function () { cockpitState.range = r[0]; renderCockpit2(panel); });
+      var a = el("button", { class: "cf-btn cf-btn-sm" + (cockpitState.range === r[0] ? " cf-btn-primary" : ""),
+        "data-range": r[0], text: r[1] });
+      a.addEventListener("click", function () { cockpitState.range = r[0]; syncRangeButtons(ctrl); renderCockpit2(); });
       ctrl.appendChild(a);
     });
     panel.appendChild(ctrl);
-    var host = el("div", { id: "cockpit-host" });
-    panel.appendChild(host);
-    renderCockpit2(panel);
+    panel.appendChild(el("div", { id: "cockpit-host" }));
+    renderCockpit2();
   }
 
-  async function renderCockpit2(panel) {
-    // re-render control active states
+  function syncRangeButtons(ctrl) {
+    Array.prototype.forEach.call(ctrl.querySelectorAll("button"), function (b) {
+      b.classList.toggle("cf-btn-primary", b.getAttribute("data-range") === cockpitState.range);
+    });
+  }
+
+  async function renderCockpit2() {
     var host = document.getElementById("cockpit-host");
     if (!host) return;
     UI.clear(host);
     host.appendChild(el("div", { class: "cf-loading", text: "Loading financials…" }));
     var opts = (cockpitState.range === "all") ? {} : monthRange(cockpitState.range);
     try {
+      if (!window.AdminAPI) await ensureClassDeps();
       var summary = await window.AdminAPI.cockpitSummary(opts);
       var earnings = await window.AdminAPI.cockpitCoachEarnings(opts);
       var revenue = await window.AdminAPI.cockpitRevenue(opts);
       var cur = summary.currency || "ZAR";
       UI.clear(host);
+      var C = window.CRMUI;
 
-      // KPI strip
-      host.appendChild(el("div", { class: "cf-row", style: "gap:10px;flex-wrap:wrap;margin-bottom:14px" }, [
-        statCard("Net revenue", UI.money(summary.net_revenue_minor, cur)),
-        statCard("Commission (you keep)", UI.money(summary.commission_earned_minor, cur)),
-        statCard("Rent due", UI.money(summary.rent_due_minor, cur)),
-        statCard("Active members", String(summary.active_members), "MRR " + UI.money(summary.mrr_minor, cur)),
-        statCard("Lessons paid", String(summary.lessons_paid)),
+      // KPI strip — shared CRMUI.stats (matches the coach lens). "You keep" = owner cut
+      // of commission; "Net to coaches" = what the coaches earn after rent.
+      var coaches = (earnings && earnings.coaches) || [];
+      var netToCoaches = coaches.reduce(function (a, c) { return a + (c.net_to_coach_minor || 0); }, 0);
+      host.appendChild(C.stats([
+        { value: UI.money(summary.net_revenue_minor, cur), label: "Net revenue" },
+        { value: UI.money(summary.commission_earned_minor, cur), label: "Commission — you keep" },
+        { value: UI.money(netToCoaches, cur), label: "Net to coaches" },
+        { value: UI.money(summary.rent_due_minor, cur), label: "Rent due" },
+        { value: String(summary.active_members) , label: "Active members" },
+        { value: UI.money(summary.mrr_minor, cur), label: "MRR (active value)" },
+        { value: String(summary.lessons_paid), label: "Lessons paid" },
       ]));
 
-      // Coaches table
+      // Monthly revenue trend — CRMUI.bars (net revenue per month, newest last).
+      var byMonth = {};
+      ((revenue && revenue.revenue) || []).forEach(function (r) {
+        byMonth[r.month] = (byMonth[r.month] || 0) + (r.net_minor || 0);
+      });
+      var months = Object.keys(byMonth).sort();
+      var trend = months.map(function (m) {
+        return { label: m.slice(5) + "/" + m.slice(2, 4), value: byMonth[m] / 100,
+          title: m + " · " + UI.money(byMonth[m], cur) };
+      });
+      var trendCard = el("div", { class: "cf-card" });
+      trendCard.appendChild(C.sectionHead("Net revenue — by month"));
+      trendCard.appendChild(C.bars(trend, { fmt: function (v) { return UI.money(Math.round(v * 100), cur); },
+        empty: "No revenue history yet." }));
+      host.appendChild(trendCard);
+
+      // Per-coach commission/rent/net — a fuller table than CRMUI.statementTable (8 cols),
+      // built on cf-table (the same class statementTable uses). Rows open the coach drawer.
       var ce = el("div", { class: "cf-card" });
-      ce.appendChild(el("h3", { text: "Per coach" }));
-      var coaches = (earnings && earnings.coaches) || [];
+      ce.appendChild(C.sectionHead("Per coach"));
       if (!coaches.length) {
         ce.appendChild(el("div", { class: "cf-empty", text: "No coach agreements yet — set them up in Settings → Coach pay." }));
       } else {
         var t = el("table", { class: "cf-table" });
-        t.appendChild(el("thead", {}, [el("tr", {}, ["Coach", "Lessons", "Gross", "Commission (you)", "Coach earns", "Rent due", "Net to coach", "Balance"].map(function (h) {
-          return el("th", { text: h }); }))]));
+        t.appendChild(el("thead", {}, [el("tr", {}, ["Coach", "Lessons", "Gross", "Commission (you)", "Coach earns", "Rent due", "Net to coach", "Balance"].map(function (h, i) {
+          return el("th", { class: i === 0 ? "" : "num", text: h }); }))]));
         var tb = el("tbody");
         coaches.forEach(function (c) {
-          tb.appendChild(el("tr", {}, [
+          var tr = el("tr", { style: "cursor:pointer" }, [
             el("td", { text: c.coach_name || "Coach" }),
             el("td", { class: "num", text: String(c.lesson_count) }),
             el("td", { class: "num", text: UI.money(c.gross_lesson_minor, cur) }),
@@ -823,27 +907,30 @@
             el("td", { class: "num", text: UI.money(c.rent_due_minor, cur) }),
             el("td", { class: "num", text: UI.money(c.net_to_coach_minor, cur) }),
             el("td", { class: "num", text: UI.money(c.lifetime_balance_minor, cur) }),
-          ]));
+          ]);
+          tr.addEventListener("click", function () { openCoachDrawer(c, cur); });
+          tb.appendChild(tr);
         });
         t.appendChild(tb); ce.appendChild(t);
       }
       host.appendChild(ce);
 
-      // Revenue by service kind
+      // Revenue by service kind (gross / refunds / net) — honours the refund gotcha: the
+      // server's cockpit_revenue counts refunded rows, so Net = gross − refunds here.
       var rv = el("div", { class: "cf-card" });
-      rv.appendChild(el("h3", { text: "Revenue by service" }));
+      rv.appendChild(C.sectionHead("Revenue by service"));
       var rows = (revenue && revenue.revenue) || [];
       if (!rows.length) {
         rv.appendChild(el("div", { class: "cf-empty", text: "No revenue in this period yet." }));
       } else {
         var rt = el("table", { class: "cf-table" });
-        rt.appendChild(el("thead", {}, [el("tr", {}, ["Month", "Service", "Gross", "Refunds", "Net"].map(function (h) {
-          return el("th", { text: h }); }))]));
+        rt.appendChild(el("thead", {}, [el("tr", {}, ["Month", "Service", "Gross", "Refunds", "Net"].map(function (h, i) {
+          return el("th", { class: i < 2 ? "" : "num", text: h }); }))]));
         var rtb = el("tbody");
         rows.forEach(function (r) {
           rtb.appendChild(el("tr", {}, [
             el("td", { text: r.month }),
-            el("td", { text: r.service_kind }),
+            el("td", { text: (r.service_kind || "other").replace("_", " ") }),
             el("td", { class: "num", text: UI.money(r.gross_minor, cur) }),
             el("td", { class: "num", text: UI.money(r.refund_minor, cur) }),
             el("td", { class: "num", text: UI.money(r.net_minor, cur) }),
@@ -855,6 +942,28 @@
     } catch (e) {
       UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) }));
     }
+  }
+
+  // Coach 360 (financial lens) — opens the shared CRMUI.drawer with this coach's
+  // period figures. Same drawer component the People 360 uses.
+  function openCoachDrawer(c, cur) {
+    window.CRMUI.drawer({
+      title: c.coach_name || "Coach",
+      subtitle: c.lesson_count + " lesson" + (c.lesson_count === 1 ? "" : "s") + " this period",
+      sections: [{
+        h: "This period",
+        rows: [
+          ["Gross lesson revenue", UI.money(c.gross_lesson_minor, cur)],
+          ["Commission you keep", UI.money(c.commission_earned_minor, cur)],
+          ["Coach earns", UI.money(c.coach_earning_minor, cur)],
+          ["Rent due", UI.money(c.rent_due_minor, cur)],
+          ["Net to coach", UI.money(c.net_to_coach_minor, cur)],
+        ],
+      }, {
+        h: "Lifetime",
+        rows: [["Ledger balance", UI.money(c.lifetime_balance_minor, cur)]],
+      }],
+    });
   }
 
   // ---- modal helper ---------------------------------------------------------
