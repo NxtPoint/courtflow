@@ -888,8 +888,11 @@
   // Accept/Propose-time/Decline drive the diary lifecycle; proposed rows are read-only
   // "sent — awaiting client". Injected right after the dashboard so it's high on the page.
   function bookingTitle(b) {
-    // No client name on the diary list payload — show the resource/type + a hint.
-    return (b.resource_name || "Lesson") + " · " + (b.settlement_mode ? UI.settlementLabel(b.settlement_mode) : "lesson");
+    // Lead with WHO requested (list_bookings now returns booked_by_name/email), then the
+    // resource + settlement hint. Falls back to the resource if no name is available.
+    var who = b.booked_by_name || b.booked_by_email;
+    var what = (b.resource_name || "Lesson") + (b.settlement_mode ? " · " + UI.settlementLabel(b.settlement_mode) : "");
+    return who ? (who + " · " + what) : what;
   }
 
   function initPending() {

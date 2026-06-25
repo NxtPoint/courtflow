@@ -1012,8 +1012,16 @@ def list_bookings(session, *, club_id, role, user_id, date_from=None, date_to=No
     rows = session.execute(
         text("SELECT b.id, b.booking_type, b.resource_id, r.name AS resource_name, "
              "       b.coach_user_id, b.starts_at, b.ends_at, b.status, b.order_id, "
-             "       b.settlement_mode, b.booked_by_user_id "
-             "FROM diary.booking b LEFT JOIN diary.resource r ON r.id = b.resource_id "
+             "       b.settlement_mode, b.booked_by_user_id, "
+             # The booker's name/email so coach/admin lists (esp. the accept/propose/decline
+             # queue) can show WHO requested — not just the resource. Non-PII for the coach who
+             # runs the lesson; the client is their own client.
+             "       NULLIF(TRIM(COALESCE(ub.first_name,'') || ' ' || COALESCE(ub.surname,'')),'') "
+             "         AS booked_by_name, "
+             "       ub.email AS booked_by_email "
+             "FROM diary.booking b "
+             "LEFT JOIN diary.resource r ON r.id = b.resource_id "
+             'LEFT JOIN iam."user" ub ON ub.id = b.booked_by_user_id '
              "WHERE " + " AND ".join(where) + " ORDER BY b.starts_at LIMIT :lim"),
         params,
     ).mappings().all()
