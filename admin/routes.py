@@ -1063,3 +1063,27 @@ def post_arrears_collected(arrears_id):
         code = 404 if res.get("error") == "NOT_FOUND" else 403
         return jsonify(error=res.get("error")), code
     return jsonify(res), 200
+
+
+@admin_bp.patch("/coach-statement/arrears/<arrears_id>")
+def patch_arrears(arrears_id):
+    """The coach (or admin) edits an OWED arrears line before collection: DISCOUNT (body
+    {gross_minor}) and/or WRITE OFF (body {status:'written_off'} — waive the lesson, no
+    commission). A coach may only edit their OWN arrears."""
+    pr, err = _coach_or_admin()
+    if err:
+        return err
+    from billing import commission as comm
+    is_admin = pr.role in ("club_admin", "platform_admin")
+    body = request.get_json(silent=True) or {}
+    with session_scope() as s:
+        res = comm.adjust_arrears(
+            s, club_id=pr.club_id, arrears_id=arrears_id,
+            coach_user_id=None if is_admin else pr.user_id,
+            gross_minor=body.get("gross_minor"), status=body.get("status"),
+            actor_user_id=pr.user_id)
+    if not res.get("ok"):
+        err_code = res.get("error")
+        code = 404 if err_code == "NOT_FOUND" else (403 if err_code == "FORBIDDEN" else 422)
+        return jsonify(error=err_code, status=res.get("status")), code
+    return jsonify(res), 200

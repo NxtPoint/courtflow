@@ -363,6 +363,151 @@ def mark_arrears_collected(session, *, club_id, arrears_id, coach_user_id=None,
             "commission_pct": str(pct)}
 
 
+def adjust_arrears(session, *, club_id, arrears_id, coach_user_id=None,
+                   gross_minor=None, status=None, actor_user_id=None) -> Dict[str, Any]:
+    """Edit an OWED arrears line before collection: DISCOUNT (set a new gross_minor) and/or
+    WRITE IT OFF (status='written_off' — the coach waives the lesson; no commission accrues and it
+    leaves the outstanding tab). A coach may only edit their OWN arrears (self-service guard); a
+    collected line is immutable here. Commission later accrues on the (possibly discounted) amount
+    when the line is marked collected, so a discount correctly reduces both the bill and the cut.
+    """
+    row = session.execute(
+        text("SELECT id, coach_user_id, status FROM billing.coach_arrears "
+             "WHERE club_id = :c AND id = :id"),
+        {"c": club_id, "id": str(arrears_id)},
+    ).mappings().first()
+    if row is None:
+        return {"ok": False, "error": "NOT_FOUND"}
+    if coach_user_id is not None and str(row["coach_user_id"]) != str(coach_user_id):
+        return {"ok": False, "error": "FORBIDDEN"}
+    if row["status"] != "owed":
+        return {"ok": False, "error": "NOT_EDITABLE", "status": row["status"]}
+
+    sets = ["updated_at = now()"]
+    params = {"c": club_id, "id": str(arrears_id)}
+    if gross_minor is not None:
+        try:
+            g = int(gross_minor)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "BAD_AMOUNT"}
+        if g < 0:
+            return {"ok": False, "error": "BAD_AMOUNT"}
+        sets.append("gross_minor = :g"); params["g"] = g
+    if status is not None:
+        if status != "written_off":
+            return {"ok": False, "error": "BAD_STATUS"}
+        sets.append("status = 'written_off'")
+        sets.append("collected_by = :by"); params["by"] = str(actor_user_id) if actor_user_id else None
+
+    session.execute(
+        text("UPDATE billing.coach_arrears SET " + ", ".join(sets) + " WHERE club_id = :c AND id = :id"),
+        params)
+    out = session.execute(
+        text("SELECT id, status, gross_minor FROM billing.coach_arrears WHERE club_id = :c AND id = :id"),
+        {"c": club_id, "id": str(arrears_id)},
+    ).mappings().first()
+    return {"ok": True, "arrears": {"id": str(out["id"]), "status": out["status"],
+                                    "gross_minor": int(out["gross_minor"] or 0)}}
+
+
+def client_statement(session, *, club_id, user_id, month=None) -> Dict[str, Any]:
+    """The CLIENT's coaching statement — the mirror of coach_statement, so a client and coach see
+    the SAME end-of-month picture from opposite sides. Per COACH: lessons paid this month + what
+    the client still OWES (arrears on the tab). Runs the lazy arrears accrual first so every
+    unpaid lesson shows. Returns a dict the client statement view renders."""
+    accrue_arrears_for_club(session, club_id=club_id)
+    ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    try:
+        currency = session.execute(
+            text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": club_id}).scalar() or "ZAR"
+    except Exception:
+        currency = "ZAR"
+
+    paid = session.execute(
+        text("""
+            SELECT cs.coach_user_id, count(*) AS lesson_count,
+                   COALESCE(SUM(cs.gross_minor),0) AS paid_minor
+            FROM billing.commission_split cs
+            JOIN diary.booking b ON b.id = cs.booking_id
+            WHERE cs.club_id = :club AND cs.party_type = 'coach'
+              AND cs.basis IN ('lesson_commission','class_commission','arrears_commission')
+              AND b.booked_by_user_id = :u
+              AND to_char(cs.occurred_at,'YYYY-MM') = :ym
+            GROUP BY 1
+        """),
+        {"club": club_id, "u": str(user_id), "ym": ym},
+    ).mappings().all()
+
+    owed = session.execute(
+        text("""
+            SELECT coach_user_id, count(*) AS lesson_count,
+                   COALESCE(SUM(gross_minor),0) AS owed_minor
+            FROM billing.coach_arrears
+            WHERE club_id = :club AND client_user_id = :u AND status = 'owed'
+            GROUP BY 1
+        """),
+        {"club": club_id, "u": str(user_id)},
+    ).mappings().all()
+
+    items = session.execute(
+        text("""
+            SELECT a.id, a.coach_user_id, a.gross_minor, a.status, a.created_at, b.starts_at
+            FROM billing.coach_arrears a
+            LEFT JOIN diary.booking b ON b.id = a.booking_id
+            WHERE a.club_id = :club AND a.client_user_id = :u AND a.status = 'owed'
+            ORDER BY a.created_at DESC
+        """),
+        {"club": club_id, "u": str(user_id)},
+    ).mappings().all()
+
+    coach_ids = set()
+    for r in list(paid) + list(owed) + list(items):
+        if r["coach_user_id"]:
+            coach_ids.add(str(r["coach_user_id"]))
+    names: Dict[str, str] = {}
+    if coach_ids:
+        for n in session.execute(
+            text('SELECT id, first_name, surname, email FROM iam."user" WHERE id = ANY(:ids)'),
+            {"ids": list(coach_ids)},
+        ).mappings().all():
+            full = " ".join(x for x in [n["first_name"], n["surname"]] if x).strip()
+            names[str(n["id"])] = full or n["email"] or "Coach"
+
+    by_coach: Dict[str, Dict[str, Any]] = {}
+
+    def _slot(cid):
+        key = str(cid) if cid else "_unknown"
+        if key not in by_coach:
+            by_coach[key] = {"coach_user_id": (str(cid) if cid else None),
+                             "coach_name": names.get(str(cid), "Coach"),
+                             "lessons": 0, "paid_minor": 0, "owed_minor": 0, "net_minor": 0}
+        return by_coach[key]
+
+    for r in paid:
+        s = _slot(r["coach_user_id"]); s["lessons"] += int(r["lesson_count"] or 0)
+        s["paid_minor"] += int(r["paid_minor"] or 0)
+    for r in owed:
+        s = _slot(r["coach_user_id"]); s["lessons"] += int(r["lesson_count"] or 0)
+        s["owed_minor"] += int(r["owed_minor"] or 0)
+    for s in by_coach.values():
+        s["net_minor"] = s["paid_minor"] + s["owed_minor"]
+
+    arrears_items = [{
+        "id": str(r["id"]),
+        "coach_user_id": (str(r["coach_user_id"]) if r["coach_user_id"] else None),
+        "coach_name": names.get(str(r["coach_user_id"]), "Coach"),
+        "gross_minor": int(r["gross_minor"] or 0),
+        "starts_at": (r["starts_at"].isoformat() if r["starts_at"] else None),
+    } for r in items]
+
+    totals = {"paid_minor": sum(s["paid_minor"] for s in by_coach.values()),
+              "owed_minor": sum(s["owed_minor"] for s in by_coach.values())}
+    totals["net_minor"] = totals["paid_minor"] + totals["owed_minor"]
+    return {"month": ym, "currency": currency,
+            "coaches": sorted(by_coach.values(), key=lambda x: -x["net_minor"]),
+            "arrears_items": arrears_items, "totals": totals}
+
+
 # ---------------------------------------------------------------------------
 # rent accrual (per coach per month) — idempotent on ref_id='YYYY-MM'
 # ---------------------------------------------------------------------------

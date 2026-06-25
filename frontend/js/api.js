@@ -157,6 +157,9 @@
     //   usage_this_month:{court,lesson,class,total}, spend:{this_month_minor,history:[{period,paid_minor,orders}]},
     //   account:{balance_minor,open_charges}, next_charge:{kind,amount_minor,due_date}}
     financials: function () { return A().apiJSON("/api/me/financials"); },
+    // GET /api/me/statement?month= -> client coaching statement (mirror of the coach's): per coach,
+    // lessons paid this month + outstanding arrears. {month, currency, coaches:[...], arrears_items, totals}
+    myStatement: function (opts) { return A().apiJSON("/api/me/statement" + qs(opts)); },
     // GET /api/me/orders -> {orders:[{id,created_at,amount_minor,currency_code,status,settlement_mode,
     //   description,has_open_refund,refund_status,refundable}], count}
     myOrders: function () { return A().apiJSON("/api/me/orders"); },

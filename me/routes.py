@@ -340,6 +340,23 @@ def get_plan():
     return jsonify(data), 200
 
 
+@me_bp.get("/statement")
+def get_statement():
+    """The client's coaching statement — the mirror of the coach's month-end statement (same data,
+    client lens): per coach, lessons paid this month + what they still owe (arrears). So a client
+    and coach see the SAME end-of-month statement. STRICTLY member-scoped."""
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "view_own_ledger", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    from billing import commission
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = commission.client_statement(s, club_id=p.club_id, user_id=p.user_id, month=month)
+    return jsonify(data), 200
+
+
 @me_bp.get("/orders")
 def get_orders():
     """The caller's recent paid/refunded orders (receipts) — each row flags whether it is
