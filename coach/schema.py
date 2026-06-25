@@ -42,6 +42,12 @@ _DDL = [
     "ALTER TABLE iam.coach_profile ADD COLUMN IF NOT EXISTS years_experience int;",
     "ALTER TABLE iam.coach_profile ADD COLUMN IF NOT EXISTS "
     "public_visibility boolean NOT NULL DEFAULT true;",
+
+    # 4) per-coach "review bookings before confirming" toggle. When true, a client's lesson
+    #    booking with this coach starts as 'requested' (awaiting the coach's accept / propose
+    #    new time / decline) instead of auto-confirming. Default false = today's behaviour.
+    "ALTER TABLE iam.coach_profile ADD COLUMN IF NOT EXISTS "
+    "review_bookings boolean NOT NULL DEFAULT false;",
 ]
 
 

@@ -100,7 +100,11 @@ def can(principal, action, resource=None):
 
     # --- ownership-scoped actions (checked before the flat role table) -------
     if action in ("cancel_booking", "reschedule_booking", "edit_booking",
-                  "mark_attendance", "add_notes"):
+                  "mark_attendance", "add_notes",
+                  # lesson accept/propose/decline lifecycle — coarse gate (coach-of / owner-of /
+                  # admin); the bookings.py functions enforce WHO is awaited (requested=coach,
+                  # proposed=client) by the booking's current status.
+                  "accept_booking", "propose_time", "decline_booking"):
         if role == "club_admin":
             return True
         if role == "coach":

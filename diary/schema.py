@@ -94,7 +94,8 @@ _DDL = [
         starts_at           timestamptz NOT NULL,
         ends_at             timestamptz NOT NULL,
         status              text NOT NULL DEFAULT 'confirmed' CHECK (status IN
-                                ('held','confirmed','cancelled','completed','no_show')),
+                                ('held','confirmed','cancelled','completed','no_show',
+                                 'requested','proposed')),
         held_until          timestamptz,             -- short-lived hold expiry (online flow)
         booked_by_user_id   uuid,
         recurrence_id       uuid,                    -- groups a recurring series (nullable)
@@ -144,6 +145,14 @@ _DDL = [
         END IF;
     END $$;
     """,
+
+    # Expand the booking status set for the lesson accept/propose/decline lifecycle
+    # (requested = awaiting coach, proposed = awaiting client). Idempotent drop+re-add of the
+    # column CHECK so existing DBs gain the new values; boot-twice safe.
+    f"ALTER TABLE {SCHEMA}.booking DROP CONSTRAINT IF EXISTS booking_status_check;",
+    f"ALTER TABLE {SCHEMA}.booking ADD CONSTRAINT booking_status_check "
+    f"CHECK (status IN ('held','confirmed','cancelled','completed','no_show',"
+    f"'requested','proposed'));",
 
     # --- diary.booking_party : participants (members / guests) -----------
     f"""
