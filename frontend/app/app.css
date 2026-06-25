@@ -481,6 +481,22 @@ p{margin:0 0 10px}
 .cf-qbrow .cf-field{flex:1;min-width:150px;margin-bottom:0}
 
 /* ===========================================================================
+   Shared CRM/reporting components (ADDITIVE — crm_ui.js, Phase A4). A right-side
+   slide-over drawer for client/coach 360 detail (coach + owner consoles reuse it).
+   The KPI (cf-stat), trend (cf-bars), table (cf-table) and list (cf-item)
+   primitives already exist above — only the drawer shell is new.
+   =========================================================================== */
+.cf-drawer-bg{position:fixed;inset:0;background:rgba(16,35,26,.45);z-index:85;display:flex;
+  justify-content:flex-end;animation:cf-toast-in .15s ease}
+.cf-drawer{background:var(--surface);width:100%;max-width:460px;height:100%;overflow:auto;
+  box-shadow:var(--shadow-md);animation:cf-drawer-in .22s ease;display:flex;flex-direction:column}
+@keyframes cf-drawer-in{from{transform:translateX(28px);opacity:.5}to{transform:none;opacity:1}}
+.cf-drawer-head{position:sticky;top:0;background:var(--surface);display:flex;align-items:flex-start;
+  justify-content:space-between;gap:12px;padding:16px 20px;border-bottom:1px solid var(--border-2);z-index:2}
+.cf-drawer-body{padding:16px 20px;overflow:auto}
+@media(max-width:560px){.cf-drawer{max-width:100%}}
+
+/* ===========================================================================
    Plan page (ADDITIVE — plan.js). Segmented chooser + selectable plan-option
    cards for the three purchasing models. Namespaced cf-segment / cf-planopt.
    =========================================================================== */
