@@ -1096,7 +1096,7 @@ def coach_agreements_overview(session, *, club_id):
                 or c["email"] or "Coach")
         # The coach's lesson products (lesson type = billing.product(kind='lesson', coach)).
         lesson_types = session.execute(
-            text("SELECT id, name FROM billing.product "
+            text("SELECT id, name, kind FROM billing.product "
                  "WHERE club_id = :c AND kind IN ('lesson','class') "
                  "  AND (coach_user_id = :u OR coach_user_id IS NULL) AND active "
                  "ORDER BY kind, name"),
@@ -1110,7 +1110,7 @@ def coach_agreements_overview(session, *, club_id):
                                    product_id=lt["id"], coach_user_id=coach_id)
             effective = float(resolve_commission_pct(
                 session, club_id=club_id, product_id=lt["id"], coach_user_id=coach_id))
-            lt_out.append({"product_id": str(lt["id"]), "name": lt["name"],
+            lt_out.append({"product_id": str(lt["id"]), "name": lt["name"], "kind": lt["kind"],
                            "club_pct": club_pct, "coach_pct": coach_pct,
                            "effective_pct": effective})
         coach_level_pct = _scope_pct(session, club_id=club_id, scope="coach",

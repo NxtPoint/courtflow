@@ -721,6 +721,17 @@ def get_client(session, *, club_id, user_id, client_user_id):
     """
     history = _rows(session.execute(text(hist_sql), params).mappings().all())
     head["history"] = history
+
+    # Upcoming sessions (future, soonest first) — the list behind upcoming_count, so the
+    # client-360 drawer can show what's next, not just a number.
+    upcoming_sql = _COACH_ACTIVITY_CTE + """
+        SELECT a.kind, a.starts_at, a.status
+        FROM activity a
+        WHERE a.user_id = :cu AND a.starts_at >= now()
+        ORDER BY a.starts_at ASC
+        LIMIT 20
+    """
+    head["upcoming"] = _rows(session.execute(text(upcoming_sql), params).mappings().all())
     return head
 
 
@@ -1159,4 +1170,32 @@ def cockpit(session, *, club_id, user_id, month=None):
         "top_clients": _coach_top_clients(session, club_id=club_id, user_id=user_id,
                                           start_d=start_d, end_d=end_d, limit=5),
         "upcoming": _coach_upcoming(session, club_id=club_id, user_id=user_id, limit=6),
+        "plan_balances": _coach_plan_balances(session, club_id=club_id, user_id=user_id),
     }
+
+
+def _coach_plan_balances(session, *, club_id, user_id):
+    """Outstanding prepaid pack liability for THIS coach: active wallets bought against this
+    coach's lesson packs (token_wallet.coach_user_id = the coach) — total sessions/minutes left
+    and how many clients hold them. Lets the cockpit show 'lessons left on clients' plans'.
+    Guarded -> zeros if the token engine isn't present."""
+    if not _table_present(session, "billing", "token_wallet"):
+        return {"wallets": 0, "clients": 0, "sessions_left": 0, "minutes_left": 0}
+    try:
+        r = session.execute(
+            text("""
+                SELECT count(*) AS wallets, count(DISTINCT user_id) AS clients,
+                       COALESCE(SUM(tokens_remaining),0) AS sessions_left,
+                       COALESCE(SUM(minutes_remaining),0) AS minutes_left
+                FROM billing.token_wallet
+                WHERE club_id = :c AND coach_user_id = :u
+                  AND status = 'active' AND COALESCE(minutes_remaining,0) > 0
+            """),
+            {"c": club_id, "u": str(user_id)},
+        ).mappings().first()
+        return {"wallets": int(r["wallets"] or 0), "clients": int(r["clients"] or 0),
+                "sessions_left": int(r["sessions_left"] or 0),
+                "minutes_left": int(r["minutes_left"] or 0)}
+    except Exception:
+        session.rollback()
+        return {"wallets": 0, "clients": 0, "sessions_left": 0, "minutes_left": 0}

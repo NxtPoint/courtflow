@@ -516,6 +516,7 @@
       { value: (Math.round((k.hours || 0) * 10) / 10) + "h", label: "Coaching hours" },
       { value: k.classes_count || 0, label: "Class sessions" },
       { value: fmtMoney(k.arrears_owed_minor), label: "Arrears owed" },
+      { value: (d.plan_balances || {}).sessions_left || 0, label: "Lessons left on plans" },
     ]));
 
     // Monthly net-earnings trend via the shared CSS bars.
