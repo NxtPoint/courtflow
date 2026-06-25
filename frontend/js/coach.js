@@ -164,6 +164,14 @@
       el("option", { value: "monthly_account", text: "Monthly account" }),
       el("option", { value: "free", text: "Complimentary" }),
     ]);
+    // Lessons can be confirmed immediately OR sent to the client as a proposal (they accept).
+    // Proposals require an existing member (a walk-in guest has no login to accept), so this
+    // is meaningful only when a member email is entered and the type is a lesson.
+    var confirmMode = el("select", { class: "cf-select" }, [
+      el("option", { value: "now", text: "Confirm now" }),
+      el("option", { value: "propose", text: "Send as a proposal (client accepts)" }),
+    ]);
+    var confirmField = fieldEl("How to confirm", confirmMode);
 
     var courtField = fieldEl("Court (optional, held alongside the lesson)", courtSel);
     function syncType() {
@@ -173,6 +181,8 @@
       courtOptions(isLesson).forEach(function (o) { courtSel.appendChild(o); });
       courtField.querySelector("label").textContent = isLesson
         ? "Court (optional, held alongside the lesson)" : "Court";
+      // Proposals are lesson-only; hide the chooser for court bookings.
+      confirmField.style.display = isLesson ? "" : "none";
     }
     typeSel.addEventListener("change", syncType);
     syncType();
@@ -188,6 +198,7 @@
       fieldEl("When", when),
       fieldEl("Duration", dur),
       fieldEl("Settlement", settle),
+      confirmField,
       el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:12px" }, [
         el("button", { class: "cf-btn", text: "Cancel", onclick: close }),
         el("button", { class: "cf-btn cf-btn-primary", text: "Book", onclick: function () { submitBookForClient(); } }),
@@ -220,9 +231,18 @@
       // for_email to a club member (else treats it as a walk-in guest party).
       if (em) body.for_email = em;
       if (gn) { body.for_guest_name = gn; if (ge) body.for_guest_email = ge; }
+      // "Send as a proposal" -> the lesson is created as 'proposed' (awaiting the client).
+      // Only valid for a lesson booked for an EXISTING member (a guest can't accept).
+      var asProposal = isLesson && confirmMode.value === "propose";
+      if (asProposal) {
+        if (!em) { UI.toast("A proposal needs a member email (the client accepts it).", "warn"); return; }
+        body.propose = true;
+      }
       try {
         await window.API.createBooking(body);
-        close(); UI.toast("Booked for client.", "info"); loadWeek();
+        close();
+        UI.toast(asProposal ? "Proposal sent to the client." : "Booked for client.", "info");
+        loadWeek(); loadPending();
       } catch (e3) { UI.toast(UI.errMsg(e3), "error"); }
     }
   }
@@ -480,30 +500,66 @@
     UI.clear(body);
     var k = d.kpis || {};
 
-    // KPI tile strip.
-    body.appendChild(el("div", { class: "cf-tiles" }, [
-      tile(String(k.lessons_count || 0), "Lessons delivered"),
-      tile((Math.round((k.hours || 0) * 10) / 10) + "h", "Coaching hours"),
-      tile(fmtMoney(k.gross_minor), "Gross collected"),
-      tile(fmtMoney(k.net_minor), "Net earnings", "after commission"),
-      tile(fmtMoney(k.commission_minor), "Commission to club"),
-      tile(pct(k.fill_rate_pct), "Fill rate", "booked ÷ available"),
+    // KPI strip (shared CRMUI.stats — identical to the owner cockpit primitives).
+    body.appendChild(window.CRMUI.stats([
+      { value: fmtMoney(k.net_minor), label: "Net earnings (this month)" },
+      { value: k.lessons_count || 0, label: "Sessions delivered" },
+      { value: k.clients_active || 0, label: "Clients" },
+      { value: k.no_shows || 0, label: "No-shows" },
+      { value: pct(k.fill_rate_pct), label: "Fill rate" },
+      { value: k.upcoming_7d || (d.upcoming || []).length || 0, label: "Upcoming (7d)" },
     ]));
-    body.appendChild(el("div", { class: "cf-tiles", style: "margin-top:14px" }, [
-      tile(String(k.classes_count || 0), "Class sessions"),
-      tile(String(k.clients_active || 0), "Active clients", (k.clients_new || 0) + " new"),
-      tile(String(k.no_shows || 0), "No-shows"),
-      tile(fmtMoney(k.arrears_owed_minor), "Arrears owed", "off-platform"),
+    body.appendChild(el("div", { style: "margin-top:10px" }));
+    body.appendChild(window.CRMUI.stats([
+      { value: fmtMoney(k.gross_minor), label: "Gross collected" },
+      { value: fmtMoney(k.commission_minor), label: "Commission to club" },
+      { value: (Math.round((k.hours || 0) * 10) / 10) + "h", label: "Coaching hours" },
+      { value: k.classes_count || 0, label: "Class sessions" },
+      { value: fmtMoney(k.arrears_owed_minor), label: "Arrears owed" },
     ]));
 
-    // Trend — last 6 months, no chart library: CSS div-height bars (net + lessons).
-    body.appendChild(renderTrend(d.trend || []));
+    // Monthly net-earnings trend via the shared CSS bars.
+    body.appendChild(el("div", { style: "margin-top:18px" }));
+    body.appendChild(window.CRMUI.sectionHead("Net earnings — recent months"));
+    body.appendChild(window.CRMUI.bars((d.trend || []).map(function (t) {
+      return { label: shortMonth(t.month), value: (t.net_minor || 0) / 100,
+        title: monthLabel(t.month) + " · " + fmtMoney(t.net_minor) + " · " + (t.lessons || 0) + " lessons" };
+    }), { fmt: function (v) { return fmtMoney(Math.round(v * 100)); }, empty: "No history yet." }));
+
+    // Month-end position after commission — pulled from the statement totals (the SoR for
+    // settlement). Loaded lazily so a cockpit error never blocks the statement card.
+    var posBox = el("div", { id: "coach-dash-position", style: "margin-top:18px" });
+    body.appendChild(posBox);
+    renderMonthEndPosition(posBox);
 
     // Two-column: top clients + upcoming.
     var cols = el("div", { class: "cf-grid cf-grid-2", style: "margin-top:18px" });
     cols.appendChild(renderTopClients(d.top_clients || []));
     cols.appendChild(renderUpcoming(d.upcoming || []));
     body.appendChild(cols);
+  }
+
+  // The clear "what do I owe / am I owed at month end after commission" line — reuses the
+  // same statement totals the Statement card shows (one source of truth).
+  async function renderMonthEndPosition(box) {
+    if (!box) return;
+    UI.clear(box); box.appendChild(el("div", { class: "cf-loading", text: "Loading position…" }));
+    try {
+      var d = await window.CoachAPI.statement(dashState.month);
+      var t = d.totals || {}; var cur = d.currency || "ZAR";
+      UI.clear(box);
+      box.appendChild(window.CRMUI.sectionHead("Month-end position (after commission)"));
+      box.appendChild(window.CRMUI.stats([
+        { value: window.CRMUI.money(t.paid_minor, cur), label: "Collected (net)" },
+        { value: window.CRMUI.money(t.owed_minor, cur), label: "Outstanding" },
+        { value: window.CRMUI.money(t.rent_minor, cur), label: "Rent this month" },
+        { value: window.CRMUI.money(t.balance_minor, cur), label: "Account balance" },
+      ]));
+    } catch (e) {
+      UI.clear(box);
+      box.appendChild(el("div", { class: "cf-muted", style: "font-size:.85rem",
+        text: "Settlement position unavailable: " + UI.errMsg(e) }));
+    }
   }
 
   // No-library trend: a row of vertical bars whose height is proportional to net
@@ -652,57 +708,85 @@
     box.appendChild(table);
   }
 
+  // Client 360 — a slide-over (CRMUI.drawer) showing this client's history WITH THIS
+  // coach only: headline metrics, spend-with-you, attendance, upcoming + full history.
   async function openClient(userId) {
-    var bg = el("div", { class: "cf-modal-bg" });
-    function close() { if (bg.parentNode) document.body.removeChild(bg); }
-    var modal = el("div", { class: "cf-modal" }, [el("div", { class: "cf-loading", text: "Loading…" })]);
-    bg.appendChild(modal); document.body.appendChild(bg);
-    bg.addEventListener("click", function (e) { if (e.target === bg) close(); });
+    // Show the drawer immediately with a loading section, then refill once loaded.
+    var close = window.CRMUI.drawer({ title: "Client", sections: [{ node: el("div", { class: "cf-loading", text: "Loading…" }) }] });
+    var c;
     try {
       var r = await window.CoachAPI.client(userId);
-      var c = r.client || {};
-      UI.clear(modal);
-      modal.appendChild(el("div", { class: "cf-row", style: "align-items:center" }, [
-        el("h2", { text: clientName(c), style: "margin:0" }),
-        el("span", { class: "cf-spacer" }),
-        el("button", { class: "cf-btn cf-btn-sm", text: "Close", onclick: close }),
-      ]));
-      modal.appendChild(el("p", { class: "cf-muted",
-        text: (c.email || "") + (c.phone ? " · " + c.phone : "") }));
-      modal.appendChild(el("div", { class: "cf-row", style: "gap:10px;flex-wrap:wrap;margin:8px 0" }, [
-        el("span", { class: "cf-chip lesson", text: (c.lessons_count || 0) + " lessons" }),
-        el("span", { class: "cf-chip class", text: (c.classes_count || 0) + " classes" }),
-        el("span", { class: "cf-chip", text: (c.no_show_count || 0) + " no-shows" }),
-        el("span", { class: "cf-chip", text: "Spend " + fmtMoney(c.lifetime_spend_minor) }),
-      ]));
-      modal.appendChild(el("p", { class: "cf-muted", style: "margin:2px 0",
-        text: "First seen " + fmtDate(c.first_seen) + " · Last seen " + fmtDate(c.last_seen) +
-              " · " + (c.upcoming_count || 0) + " upcoming" }));
-      modal.appendChild(el("h3", { text: "History with you", style: "margin-top:12px" }));
-      var hist = c.history || [];
-      if (!hist.length) { modal.appendChild(el("div", { class: "cf-empty", text: "No sessions." })); }
-      else {
-        var list = el("div", { class: "cf-list" });
-        hist.forEach(function (h) {
-          var time = "";
-          try { time = new Date(h.starts_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e3) {}
-          list.appendChild(el("div", { class: "cf-item" }, [
-            el("span", { class: "cf-chip " + (h.kind || ""), text: h.kind || "session" }),
-            el("div", { class: "cf-item-main" }, [
-              el("div", { class: "cf-item-t", text: fmtDate(h.starts_at) }),
-              el("div", { class: "cf-item-s", text: time }),
-            ]),
-            el("span", { class: "cf-chip " + (h.status || ""), text: h.status || "" }),
-          ]));
-        });
-        modal.appendChild(list);
-      }
+      c = r.client || {};
     } catch (e) {
-      UI.clear(modal);
-      modal.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) }));
-      modal.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:10px" },
-        [el("button", { class: "cf-btn", text: "Close", onclick: close })]));
+      close();
+      window.CRMUI.drawer({ title: "Client", sections: [{ node: el("div", { class: "cf-empty", text: UI.errMsg(e) }) }] });
+      return;
     }
+    close();  // replace the loading drawer with the full one
+
+    // Spend-with-this-coach + attendance summary as a stat strip.
+    var statsNode = window.CRMUI.stats([
+      { value: c.lessons_count || 0, label: "Lessons" },
+      { value: c.classes_count || 0, label: "Classes" },
+      { value: c.no_show_count || 0, label: "No-shows" },
+      { value: fmtMoney(c.lifetime_spend_minor), label: "Spend with you" },
+    ]);
+
+    // Upcoming sessions (if the payload carries them; else derived from history is omitted).
+    var upcomingNode = null;
+    if ((c.upcoming || []).length) {
+      var ul = el("div", { class: "cf-list" });
+      (c.upcoming || []).forEach(function (h) {
+        ul.appendChild(el("div", { class: "cf-item" }, [
+          el("span", { class: "cf-chip " + (h.kind || ""), text: h.kind || "session" }),
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: fmtDate(h.starts_at) }),
+            el("div", { class: "cf-item-s", text: (function () {
+              try { return new Date(h.starts_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; } })() }),
+          ]),
+        ]));
+      });
+      upcomingNode = ul;
+    }
+
+    // Full history with this coach.
+    var histNode;
+    var hist = c.history || [];
+    if (!hist.length) { histNode = el("div", { class: "cf-empty", text: "No sessions yet." }); }
+    else {
+      var list = el("div", { class: "cf-list" });
+      hist.forEach(function (h) {
+        var time = "";
+        try { time = new Date(h.starts_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e3) {}
+        list.appendChild(el("div", { class: "cf-item" }, [
+          el("span", { class: "cf-chip " + (h.kind || ""), text: h.kind || "session" }),
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: fmtDate(h.starts_at) }),
+            el("div", { class: "cf-item-s", text: time }),
+          ]),
+          el("span", { class: "cf-chip " + (h.status || ""), text: h.status || "" }),
+        ]));
+      });
+      histNode = list;
+    }
+
+    var sections = [
+      { node: statsNode },
+      { h: "At a glance", rows: [
+        ["Contact", (c.email || "—") + (c.phone ? " · " + c.phone : "")],
+        ["First seen", fmtDate(c.first_seen)],
+        ["Last seen", fmtDate(c.last_seen)],
+        ["Upcoming", (c.upcoming_count || 0)],
+      ] },
+    ];
+    if (upcomingNode) sections.push({ h: "Upcoming", node: upcomingNode });
+    sections.push({ h: "History with you", node: histNode });
+
+    window.CRMUI.drawer({
+      title: clientName(c),
+      subtitle: c.email || c.phone || "",
+      sections: sections,
+    });
   }
 
   // ---- my profile editor ----------------------------------------------------
@@ -798,12 +882,250 @@
     renderHoursBanner();
   }
 
+  // ---- pending lesson queue (approval lifecycle) ----------------------------
+  // requested = a client asked for a lesson with this coach (awaiting the coach);
+  // proposed  = the coach (or the system) proposed a time (awaiting the client).
+  // Accept/Propose-time/Decline drive the diary lifecycle; proposed rows are read-only
+  // "sent — awaiting client". Injected right after the dashboard so it's high on the page.
+  function bookingTitle(b) {
+    // No client name on the diary list payload — show the resource/type + a hint.
+    return (b.resource_name || "Lesson") + " · " + (b.settlement_mode ? UI.settlementLabel(b.settlement_mode) : "lesson");
+  }
+
+  function initPending() {
+    var main = document.getElementById("cf-main"); if (!main) return;
+    var card = el("div", { class: "cf-card", id: "coach-pending-card" }, [
+      el("div", { class: "cf-row", style: "margin-bottom:6px;align-items:center" }, [
+        el("h2", { text: "Lesson requests", style: "margin:0" }),
+        el("span", { class: "cf-spacer" }),
+        el("button", { class: "cf-btn cf-btn-sm", id: "coach-pending-refresh", text: "Refresh" }),
+      ]),
+      el("p", { class: "cf-muted", style: "margin:-2px 0 12px",
+        text: "Accept, propose a new time, or decline. Items you’ve proposed wait for the client to accept." }),
+      el("div", { id: "coach-pending-body", class: "cf-loading", text: "Loading requests…" }),
+    ]);
+    // Place after the dashboard card if present, else first.
+    var dash = document.getElementById("coach-dash-card");
+    if (dash && dash.nextSibling) main.insertBefore(card, dash.nextSibling);
+    else if (dash) main.appendChild(card);
+    else if (main.firstChild) main.insertBefore(card, main.firstChild);
+    else main.appendChild(card);
+    document.getElementById("coach-pending-refresh").addEventListener("click", loadPending);
+    loadPending();
+  }
+
+  async function loadPending() {
+    var body = document.getElementById("coach-pending-body"); if (!body) return;
+    UI.clear(body); body.appendChild(el("div", { class: "cf-loading", text: "Loading requests…" }));
+    try {
+      var [reqR, propR] = await Promise.all([
+        window.CoachAPI.pendingLessons("requested"),
+        window.CoachAPI.pendingLessons("proposed"),
+      ]);
+      renderPending(reqR.bookings || [], propR.bookings || []);
+    } catch (e) { UI.clear(body); body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
+  }
+
+  function renderPending(requested, proposed) {
+    var body = document.getElementById("coach-pending-body"); if (!body) return;
+    UI.clear(body);
+    if (!requested.length && !proposed.length) {
+      body.appendChild(el("div", { class: "cf-empty", text: "No pending lesson requests." }));
+      return;
+    }
+    if (requested.length) {
+      body.appendChild(window.CRMUI.sectionHead("Awaiting you"));
+      var items = requested.map(function (b) {
+        return { id: b.id, status: "requested", title: bookingTitle(b),
+          starts_at: b.starts_at, ends_at: b.ends_at };
+      });
+      body.appendChild(window.CRMUI.requestQueue(items, {
+        onAccept: function (it) { acceptPending(it.id); },
+        onPropose: function (it) { openProposeTime(it); },
+        onDecline: function (it) { declinePending(it.id); },
+      }));
+    }
+    if (proposed.length) {
+      body.appendChild(el("div", { style: "margin-top:14px" }));
+      body.appendChild(window.CRMUI.sectionHead("Sent — awaiting client"));
+      // Read-only: a proposal you sent; the client accepts (or counters).
+      var plist = el("div", { class: "cf-list" });
+      proposed.forEach(function (b) {
+        plist.appendChild(el("div", { class: "cf-item" }, [
+          el("span", { class: "cf-chip lesson", text: "proposed" }),
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: bookingTitle(b) }),
+            el("div", { class: "cf-item-s", text: UI.fmtRange(b.starts_at, b.ends_at) }),
+          ]),
+          el("span", { class: "cf-muted", style: "font-size:.82rem", text: "awaiting client" }),
+        ]));
+      });
+      body.appendChild(plist);
+    }
+  }
+
+  async function acceptPending(id) {
+    try { await window.API.acceptBooking(id); UI.toast("Lesson confirmed.", "info"); loadPending(); loadWeek(); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+  async function declinePending(id) {
+    var reason = window.prompt("Decline this lesson? Optional reason for the client:", "");
+    if (reason === null) return;
+    try { await window.API.declineBooking(id, { reason: reason || undefined }); UI.toast("Lesson declined.", "info"); loadPending(); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+
+  // Propose a new time for a requested lesson -> POST /bookings/:id/propose {starts_at,ends_at}.
+  function openProposeTime(it) {
+    var bg = el("div", { class: "cf-modal-bg" });
+    function close() { if (bg.parentNode) document.body.removeChild(bg); }
+    // Default to the originally-requested start; keep the same duration.
+    var defStart = "";
+    var durMin = 60;
+    try {
+      if (it.starts_at) {
+        var s = new Date(it.starts_at);
+        if (it.ends_at) durMin = Math.max(15, Math.round((new Date(it.ends_at) - s) / 60000));
+        // datetime-local needs local YYYY-MM-DDTHH:MM
+        var pad = function (n) { return ("0" + n).slice(-2); };
+        defStart = s.getFullYear() + "-" + pad(s.getMonth() + 1) + "-" + pad(s.getDate()) +
+          "T" + pad(s.getHours()) + ":" + pad(s.getMinutes());
+      }
+    } catch (e) {}
+    var when = el("input", { class: "cf-input", type: "datetime-local", value: defStart });
+    var dur = el("select", { class: "cf-select" }, [
+      el("option", { value: "30", text: "30 min" }), el("option", { value: "45", text: "45 min" }),
+      el("option", { value: "60", text: "60 min" }), el("option", { value: "90", text: "90 min" }),
+      el("option", { value: "120", text: "120 min" }),
+    ]);
+    dur.value = String([30, 45, 60, 90, 120].indexOf(durMin) >= 0 ? durMin : 60);
+    var modal = el("div", { class: "cf-modal" }, [
+      el("h2", { text: "Propose a new time" }),
+      el("p", { class: "cf-muted", text: "The client will be asked to accept this time." }),
+      el("div", { class: "cf-field" }, [el("label", { text: "New start" }), when]),
+      el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), dur]),
+      el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:12px" }, [
+        el("button", { class: "cf-btn", text: "Cancel", onclick: close }),
+        el("button", { class: "cf-btn cf-btn-primary", text: "Send proposal", onclick: submit }),
+      ]),
+    ]);
+    bg.appendChild(modal); document.body.appendChild(bg);
+    bg.addEventListener("click", function (e) { if (e.target === bg) close(); });
+    async function submit() {
+      if (!when.value) { UI.toast("Pick a date and time.", "warn"); return; }
+      var s = new Date(when.value), e2 = new Date(s.getTime() + parseInt(dur.value, 10) * 60000);
+      try {
+        await window.API.proposeTime(it.id, { starts_at: s.toISOString(), ends_at: e2.toISOString() });
+        close(); UI.toast("New time proposed.", "info"); loadPending();
+      } catch (e3) { UI.toast(UI.errMsg(e3), "error"); }
+    }
+  }
+
+  // ---- month-end statement (commission settlement) --------------------------
+  // GET /api/admin/coach-statement (a coach sees their own) → per-client table +
+  // arrears line items with Mark-collected / Discount / Write-off actions, plus
+  // month navigation and totals (incl. the month-end position after commission).
+  var stmtState = { month: null };
+
+  function initStatement() {
+    var main = document.getElementById("cf-main"); if (!main) return;
+    var card = el("div", { class: "cf-card", id: "coach-stmt-card" }, [
+      el("div", { class: "cf-row", style: "margin-bottom:6px;align-items:center;gap:8px" }, [
+        el("h2", { text: "Month-end statement", style: "margin:0" }),
+        el("span", { class: "cf-spacer" }),
+        el("button", { class: "cf-btn cf-btn-sm", id: "coach-stmt-prev", text: "‹ Prev" }),
+        el("span", { class: "cf-chip", id: "coach-stmt-month", text: "…" }),
+        el("button", { class: "cf-btn cf-btn-sm", id: "coach-stmt-next", text: "Next ›" }),
+      ]),
+      el("p", { class: "cf-muted", style: "margin:-2px 0 12px",
+        text: "What you’ve collected and what’s still owed this month, net of commission. Mark off-platform payments collected, discount, or write off." }),
+      el("div", { id: "coach-stmt-body", class: "cf-loading", text: "Loading statement…" }),
+    ]);
+    main.appendChild(card);
+    stmtState.month = thisMonthKey();
+    document.getElementById("coach-stmt-prev").addEventListener("click", function () {
+      stmtState.month = shiftMonthKey(stmtState.month, -1); loadStatement();
+    });
+    document.getElementById("coach-stmt-next").addEventListener("click", function () {
+      stmtState.month = shiftMonthKey(stmtState.month, 1); loadStatement();
+    });
+    loadStatement();
+  }
+
+  async function loadStatement() {
+    var body = document.getElementById("coach-stmt-body"); if (!body) return;
+    var ml = document.getElementById("coach-stmt-month");
+    if (ml) ml.textContent = monthLabel(stmtState.month);
+    UI.clear(body); body.appendChild(el("div", { class: "cf-loading", text: "Loading statement…" }));
+    try {
+      var d = await window.CoachAPI.statement(stmtState.month);
+      renderStatement(d || {});
+    } catch (e) { UI.clear(body); body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
+  }
+
+  function renderStatement(d) {
+    var body = document.getElementById("coach-stmt-body"); if (!body) return;
+    UI.clear(body);
+    var cur = d.currency || "ZAR";
+    var t = d.totals || {};
+
+    // Totals strip — incl. the month-end position after commission (ledger balance + rent).
+    body.appendChild(window.CRMUI.stats([
+      { value: window.CRMUI.money(t.paid_minor, cur), label: "Collected (net)" },
+      { value: window.CRMUI.money(t.owed_minor, cur), label: "Outstanding" },
+      { value: window.CRMUI.money(t.rent_minor, cur), label: "Rent this month" },
+      { value: window.CRMUI.money(t.balance_minor, cur), label: "Account balance" },
+    ]));
+
+    // Per-client table.
+    body.appendChild(el("div", { style: "margin-top:14px" }));
+    body.appendChild(window.CRMUI.sectionHead("By client"));
+    body.appendChild(window.CRMUI.statementTable(d.clients, {
+      nameKey: "client_name", nameLabel: "Client", currency: cur,
+    }));
+
+    // Outstanding arrears with actions.
+    body.appendChild(el("div", { style: "margin-top:16px" }));
+    body.appendChild(window.CRMUI.sectionHead("Outstanding lessons (off-platform)"));
+    body.appendChild(window.CRMUI.lineItems(d.arrears_items, {
+      currency: cur,
+      label: function (it) { return it.client_name || "Lesson"; },
+      sub: function (it) { return it.starts_at ? UI.fmtDate(it.starts_at) : ""; },
+      empty: "Nothing outstanding.",
+      actions: [
+        { label: "Mark collected", tone: "primary", onClick: function (it) { arrearsCollected(it.id); } },
+        { label: "Discount", onClick: function (it) { arrearsDiscount(it); } },
+        { label: "Write off", tone: "danger", onClick: function (it) { arrearsWriteOff(it.id); } },
+      ],
+    }));
+  }
+
+  async function arrearsCollected(id) {
+    try { await window.CoachAPI.arrearsCollected(id); UI.toast("Marked collected.", "info"); loadStatement(); loadDashboard(); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+  async function arrearsDiscount(it) {
+    var cur = window.prompt("New amount for this lesson (in your currency, e.g. 250.00):",
+      ((it.gross_minor || 0) / 100).toFixed(2));
+    if (cur === null) return;
+    var f = parseFloat(cur);
+    if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; }
+    try { await window.CoachAPI.arrearsAdjust(it.id, { gross_minor: Math.round(f * 100) }); UI.toast("Discount applied.", "info"); loadStatement(); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+  async function arrearsWriteOff(id) {
+    if (!window.confirm("Write off this lesson? No commission will be charged and the client won’t owe it.")) return;
+    try { await window.CoachAPI.arrearsAdjust(id, { status: "written_off" }); UI.toast("Written off.", "info"); loadStatement(); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+
   window.CoachConsole = {
     start: function (p) {
       UI = window.UI; el = UI.el; principal = p;
       initDashboard();
+      initPending();
       loadWeek(); loadResources(); loadTimeOff(); loadProfile();
-      initMyClasses(); initMyClients();
+      initMyClasses(); initMyClients(); initStatement();
       document.getElementById("to-submit").addEventListener("click", submitTimeOff);
     },
   };

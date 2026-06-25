@@ -137,6 +137,7 @@ def patch_profile():
             qualifications=b.get("qualifications"),
             years_experience=b.get("years_experience"),
             is_bookable=b.get("is_bookable"), public_visibility=b.get("public_visibility"),
+            review_bookings=b.get("review_bookings"),
             phone=b.get("phone"),
             first_name=b.get("first_name"), surname=b.get("surname"),
         )
