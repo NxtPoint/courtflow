@@ -76,6 +76,23 @@
         { method: "POST", body: body });
     },
 
+    // ---- lesson approval lifecycle (requested=awaiting coach, proposed=awaiting client) --
+    // POST /api/diary/bookings/:id/accept  -> the awaited party confirms (assigns court + settles)
+    acceptBooking: function (id) {
+      return A().apiJSON("/api/diary/bookings/" + encodeURIComponent(id) + "/accept",
+        { method: "POST", body: {} });
+    },
+    // POST /api/diary/bookings/:id/propose  body: {starts_at, ends_at} -> propose a new time
+    proposeTime: function (id, body) {
+      return A().apiJSON("/api/diary/bookings/" + encodeURIComponent(id) + "/propose",
+        { method: "POST", body: body });
+    },
+    // POST /api/diary/bookings/:id/decline  body: {reason?} -> decline a requested/proposed lesson
+    declineBooking: function (id, body) {
+      return A().apiJSON("/api/diary/bookings/" + encodeURIComponent(id) + "/decline",
+        { method: "POST", body: body || {} });
+    },
+
     // ---- diary: classes enrolment ---------------------------------------
     // POST /api/diary/classes/:id/enrol  body: {settlement_mode, audience, user_id?(admin/coach)}
     enrol: function (classId, body) {

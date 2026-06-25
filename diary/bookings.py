@@ -319,7 +319,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                    starts_at, ends_at, settlement_mode="at_court", parties=None,
                    coach_user_id=None, court_resource_id=None, audience="member",
                    notes=None, recurrence_id=None, hold_minutes=HOLD_MINUTES_DEFAULT,
-                   booked_for_user_id=None, now=None):
+                   booked_for_user_id=None, propose=False, now=None):
     """Create a court/lesson/class booking, concurrency-safe (docs/03 §4).
 
     For a lesson, pass court_resource_id to auto-hold a court in the SAME transaction (two
@@ -349,6 +349,36 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     res = _resource(session, club_id, resource_id)
     if not res or not res["is_active"]:
         return _err("RESOURCE_NOT_FOUND", 404)
+
+    # ---- lesson approval gate (accept/propose/decline lifecycle) ----------------------------
+    # A lesson is "gated" — created as requested/proposed, reserving NOTHING (no court, no order,
+    # no payment) until accepted — when either: a client self-books a coach who reviews bookings
+    # ('requested' → awaiting the coach), or a coach/admin books on-behalf and chose "send as a
+    # proposal" ('proposed' → awaiting the client). On accept the court is auto-assigned and the
+    # normal settlement runs; we don't take online prepay for an unconfirmed lesson → coerce to
+    # pay-at-court. Everything else flows through the immediate path below unchanged.
+    if booking_type == "lesson" and res["kind"] == "coach":
+        _gate_coach = coach_user_id or res.get("coach_user_id")
+        _gate_status = None
+        if booked_for_user_id is None and role in ("member", "guest") and \
+                _coach_reviews(session, club_id, _gate_coach):
+            _gate_status = "requested"
+        elif propose and booked_for_user_id is not None:
+            _gate_status = "proposed"
+        if _gate_status and _gate_coach:
+            _gate_sm = "at_court" if settlement_mode == "online" else settlement_mode
+            _gid = _insert_booking(
+                session, club_id=club_id, booking_type="lesson", resource_id=resource_id,
+                coach_user_id=_gate_coach, starts_at=starts, ends_at=ends, status=_gate_status,
+                held_until=None, booked_by_user_id=owner_user_id, recurrence_id=recurrence_id,
+                settlement_mode=_gate_sm, notes=notes)
+            for _party in parties:
+                _insert_party(session, booking_id=_gid, club_id=club_id, party=_party)
+            _gb = _booking_dict(session, _gid)
+            _lesson_event(session, _gb,
+                          "lesson_requested" if _gate_status == "requested" else "lesson_proposed",
+                          _gate_coach if _gate_status == "requested" else owner_user_id)
+            return {"ok": True, "booking": _gb, "checkout": None}
 
     # Lesson integrity (coach ∩ court): a lesson is a COACH booking that ALSO holds a court in the
     # same transaction. The primary resource MUST be an active coach; and a court MUST be held — if
@@ -762,6 +792,171 @@ def set_attendance(session, *, club_id, booking_id, party_id=None, attended=True
             {"a": attended, "b": booking_id, "c": club_id},
         )
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Lesson approval lifecycle: accept / propose new time / decline.
+# requested = awaiting coach · proposed = awaiting client. A gated lesson
+# reserves nothing until accepted; accept assigns a court + runs settlement.
+# ---------------------------------------------------------------------------
+
+def _coach_reviews(session, club_id, coach_user_id):
+    """True when this coach reviews bookings before they confirm (coach_profile.review_bookings)."""
+    if not coach_user_id:
+        return False
+    try:
+        return bool(session.execute(
+            text("SELECT review_bookings FROM iam.coach_profile WHERE club_id=:c AND user_id=:u"),
+            {"c": club_id, "u": coach_user_id}).scalar())
+    except Exception:
+        return False
+
+
+def _as_dt(v):
+    return v if isinstance(v, datetime) else _parse_dt(v)
+
+
+def _gated_actor_ok(bk, actor_user_id, role):
+    """Only the AWAITED party may act on a gated lesson (admins always)."""
+    if role in ("club_admin", "platform_admin"):
+        return True
+    if bk["status"] == "requested":            # awaiting the coach
+        return str(bk.get("coach_user_id")) == str(actor_user_id)
+    if bk["status"] == "proposed":             # awaiting the client (booker)
+        return str(bk.get("booked_by_user_id")) == str(actor_user_id)
+    return False
+
+
+def _lesson_event(session, booking, event, recipient_user_id):
+    """Emit a lesson-lifecycle event routed to the recipient (best-effort, non-fatal)."""
+    try:
+        res = _resource(session, booking["club_id"], booking["resource_id"])
+        payload = _payload(booking, res)
+        if recipient_user_id:
+            payload["user_id"] = str(recipient_user_id)
+        events.emit(event, payload)
+    except Exception:
+        log.debug("lesson event emit failed", exc_info=False)
+
+
+def accept_booking(session, *, club_id, booking_id, actor_user_id, role, now=None):
+    """The awaited party accepts a requested/proposed lesson → assign a free court, confirm both
+    rows (the GiST exclusion constraint arbitrates the slot), run the normal settlement, and notify
+    the requester. Reuses the same seam create_booking uses (no money-path duplication)."""
+    now = now or datetime.now(timezone.utc)
+    bk = _booking_dict(session, booking_id)
+    if not bk or str(bk["club_id"]) != str(club_id):
+        return _err("NOT_FOUND", 404)
+    if bk["status"] not in ("requested", "proposed"):
+        return _err("BAD_STATE", 409, status_value=bk["status"])
+    if not _gated_actor_ok(bk, actor_user_id, role):
+        return _err("NOT_AWAITED", 403, message="only the awaited party can accept this lesson")
+
+    starts = _as_dt(bk["starts_at"]); ends = _as_dt(bk["ends_at"])
+    owner_user_id = bk.get("booked_by_user_id")
+    coach_uid = bk.get("coach_user_id")
+    settlement_mode = bk.get("settlement_mode") or "at_court"
+    online = settlement_mode == "online"
+    status = "held" if online else "confirmed"
+    held_until = (now + timedelta(minutes=HOLD_MINUTES_DEFAULT)) if online else None
+
+    court_resource_id = _first_free_court(session, club_id, starts, ends)
+    if not court_resource_id:
+        return _err("NO_COURT_AVAILABLE", 422, message="no court is free at this time")
+
+    token_wallet = None
+    if settlement_mode == "token":
+        dur = int((ends - starts).total_seconds() // 60)
+        token_wallet = _match_token_wallet_guarded(
+            session, club_id=club_id, user_id=owner_user_id, booking_type="lesson",
+            duration_minutes=dur, coach_user_id=coach_uid)
+        if token_wallet is None:
+            return _err("NO_TOKEN", 422, message="no matching prepaid token — choose another way to pay")
+
+    linked_court_id = None
+    try:
+        with session.begin_nested():
+            session.execute(
+                text("UPDATE diary.booking SET status=:st, held_until=:hu, updated_at=now() WHERE id=:id"),
+                {"st": status, "hu": held_until, "id": booking_id})
+            court = _resource(session, club_id, court_resource_id)
+            if not court or not court["is_active"] or court["kind"] != "court":
+                return _err("COURT_NOT_FOUND", 404, message="a valid court is required for a lesson")
+            linked_court_id = _insert_booking(
+                session, club_id=club_id, booking_type="court", resource_id=court_resource_id,
+                coach_user_id=coach_uid, starts_at=starts, ends_at=ends, status=status,
+                held_until=held_until, booked_by_user_id=owner_user_id, recurrence_id=None,
+                settlement_mode=settlement_mode, notes="(court held for lesson)")
+    except IntegrityError as e:
+        if _is_slot_taken(e):
+            return _err("SLOT_TAKEN", 409, message="that slot was just taken")
+        log.exception("accept booking integrity error")
+        return _err("INTEGRITY_ERROR", 409)
+
+    duration_minutes = int((ends - starts).total_seconds() // 60)
+    order = _create_order_guarded(
+        session, club_id=club_id, user_id=owner_user_id, booking_id=booking_id,
+        booking_type="lesson", settlement_mode=settlement_mode, parties=[],
+        resource_id=bk["resource_id"], starts_at=starts, ends_at=ends,
+        linked_booking_id=linked_court_id, audience="member",
+        duration_minutes=duration_minutes, token_wallet=token_wallet)
+    order_id = order.get("order_id")
+    if order_id:
+        _attach_order(session, booking_id, order_id)
+        if linked_court_id:
+            _attach_order(session, linked_court_id, order_id)
+
+    booking = _booking_dict(session, booking_id)
+    res = _resource(session, club_id, booking["resource_id"])
+    other = owner_user_id if bk["status"] == "requested" else coach_uid
+    _lesson_event(session, booking, "lesson_accepted", other)
+    if not online:
+        _emit_confirmed(session, booking, res, settlement_mode)
+    return {"ok": True, "booking": booking, "checkout": order.get("checkout")}
+
+
+def propose_time(session, *, club_id, booking_id, actor_user_id, role, starts_at, ends_at, now=None):
+    """The awaited party proposes a different time → flips the turn to the other party."""
+    now = now or datetime.now(timezone.utc)
+    bk = _booking_dict(session, booking_id)
+    if not bk or str(bk["club_id"]) != str(club_id):
+        return _err("NOT_FOUND", 404)
+    if bk["status"] not in ("requested", "proposed"):
+        return _err("BAD_STATE", 409, status_value=bk["status"])
+    if not _gated_actor_ok(bk, actor_user_id, role):
+        return _err("NOT_AWAITED", 403, message="only the awaited party can propose a new time")
+    starts = _parse_dt(starts_at); ends = _parse_dt(ends_at)
+    if not starts or not ends or ends <= starts:
+        return _err("BAD_RANGE", 400, message="ends_at must be after starts_at")
+    if starts < now:
+        return _err("IN_THE_PAST", 400, message="cannot propose a past slot")
+    new_status = "proposed" if bk["status"] == "requested" else "requested"
+    session.execute(
+        text("UPDATE diary.booking SET starts_at=:sa, ends_at=:ea, status=:st, updated_at=now() WHERE id=:id"),
+        {"sa": starts, "ea": ends, "st": new_status, "id": booking_id})
+    booking = _booking_dict(session, booking_id)
+    recipient = booking.get("booked_by_user_id") if new_status == "proposed" else booking.get("coach_user_id")
+    _lesson_event(session, booking, "lesson_proposed", recipient)
+    return {"ok": True, "booking": booking}
+
+
+def decline_booking(session, *, club_id, booking_id, actor_user_id, role, reason=None):
+    """The awaited party declines a requested/proposed lesson → cancelled; notify the requester."""
+    bk = _booking_dict(session, booking_id)
+    if not bk or str(bk["club_id"]) != str(club_id):
+        return _err("NOT_FOUND", 404)
+    if bk["status"] not in ("requested", "proposed"):
+        return _err("BAD_STATE", 409, status_value=bk["status"])
+    if not _gated_actor_ok(bk, actor_user_id, role):
+        return _err("NOT_AWAITED", 403, message="only the awaited party can decline")
+    session.execute(
+        text("UPDATE diary.booking SET status='cancelled', cancellation_reason=:r, "
+             "cancelled_by=:by, cancelled_at=now(), updated_at=now() WHERE id=:id"),
+        {"r": reason or "declined", "by": actor_user_id, "id": booking_id})
+    booking = _booking_dict(session, booking_id)
+    other = booking.get("booked_by_user_id") if bk["status"] == "requested" else booking.get("coach_user_id")
+    _lesson_event(session, booking, "lesson_declined", other)
+    return {"ok": True, "booking": booking}
 
 
 # ---------------------------------------------------------------------------
