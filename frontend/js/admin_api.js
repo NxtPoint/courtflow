@@ -786,31 +786,80 @@
   }
 
   // ---------------------------------------------------------------------------
-  // COACH AGREEMENTS — the commission/rental config (Phase D owner lane).
-  // Club default % + per coach: rent + commission % (+ per-lesson-type % override) with a
-  // live "effective rate" preview. Rent AND/OR commission are additive (docs/specs/01).
+  // COACH AGREEMENTS — the commission/rental config (Phase C owner lane).
+  // Headline owner ask: a clean PER-SERVICE commission editor. Hierarchy (most specific wins):
+  //   coach + service  ›  service (all coaches)  ›  coach (all services)  ›  club default.
+  // Per coach we show rent + a coach-level %, then a skimmable per-service table with BOTH the
+  // club-wide rate (global, {product_id}) and this coach's override ({coach_user_id, product_id}),
+  // each Set/Clear-able, with the live resolved effective_pct alongside. Rules can be cleared via
+  // DELETE /commission-rules/<rule_id> (we resolve the rule_id from data.rules by scope+keys).
   // ---------------------------------------------------------------------------
   function coachAgreements(host, opts) {
     init(); opts = opts || {};
     UI.clear(host);
     var card = el("div", { class: "cf-card" });
-    card.appendChild(el("h2", { text: "Coach agreements" }));
+    card.appendChild(el("h2", { text: "Coach pay" }));
     card.appendChild(el("p", { class: "cf-muted", text:
-      "How you monetise each coach: a flat monthly rent and/or a commission % on their lessons. " +
-      "Rent and commission are added together (not either/or). Commission is taken on collected, " +
-      "ex-VAT lesson revenue. The most specific % wins: coach + lesson type, then lesson type, " +
-      "then coach, then the club default." }));
+      "How you monetise each coach: a flat monthly rent and/or a commission % on their lessons " +
+      "and classes. Rent and commission add together (not either/or). Commission is taken on " +
+      "collected, ex-VAT revenue. The most specific rate wins: coach + service, then the service " +
+      "(all coaches), then the coach (all services), then the club default." }));
     var body = el("div", { id: "ad-coach-agreements" });
     card.appendChild(body);
     host.appendChild(card);
 
-    function money(minor, cur) { return UI.money(minor || 0, cur || "ZAR"); }
+    var DATA = null;  // last loaded payload (for rule_id lookup on Clear).
+
+    // Find the ACTIVE rule_id matching a scope's exact keys, or null. Lets us Clear a rule.
+    function ruleIdFor(scope, productId, coachId) {
+      var rules = (DATA && DATA.rules) || [];
+      for (var i = 0; i < rules.length; i++) {
+        var r = rules[i];
+        if (!r.active) continue;
+        if (r.scope !== scope) continue;
+        if (String(r.product_id || "") !== String(productId || "")) continue;
+        if (String(r.coach_user_id || "") !== String(coachId || "")) continue;
+        return r.id;
+      }
+      return null;
+    }
+
+    // A small inline %-editor cell: number input + Set + (Clear when a rule exists).
+    // saveArgs() -> body for setCommissionRule; scope/keys identify the rule to Clear.
+    function pctCell(currentPct, scope, productId, coachId, savedMsg) {
+      var wrap = el("div", { class: "cf-row", style: "gap:5px;align-items:center" });
+      var inp = input({ type: "number", step: "0.5", min: 0, max: 100,
+        value: (currentPct != null ? currentPct : ""), placeholder: "—", style: "max-width:78px" });
+      var set = el("button", { class: "cf-btn cf-btn-sm", text: "Set" });
+      set.addEventListener("click", async function () {
+        var pct = parseFloat(inp.value);
+        if (isNaN(pct) || pct < 0 || pct > 100) { UI.toast("Enter 0–100.", "warn"); return; }
+        set.disabled = true;
+        var b = { commission_pct: pct };
+        if (productId) b.product_id = productId;
+        if (coachId) b.coach_user_id = coachId;
+        try { await window.AdminAPI.setCommissionRule(b); UI.toast(savedMsg || "Saved.", "info"); reload(); }
+        catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { set.disabled = false; }
+      });
+      wrap.appendChild(inp); wrap.appendChild(set);
+      var rid = ruleIdFor(scope, productId, coachId);
+      if (rid) {
+        var clr = el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", title: "Clear this rule", text: "Clear" });
+        clr.addEventListener("click", async function () {
+          clr.disabled = true;
+          try { await window.AdminAPI.deleteCommissionRule(rid); UI.toast("Rule cleared.", "info"); reload(); }
+          catch (e) { UI.toast(UI.errMsg(e), "error"); clr.disabled = false; }
+        });
+        wrap.appendChild(clr);
+      }
+      return wrap;
+    }
 
     function clubDefaultRow(data) {
       var box = el("div", { class: "cf-card", style: "background:var(--cf-surface-2,#f7f8fa)" });
       box.appendChild(el("h3", { text: "Club default commission" }));
       box.appendChild(el("p", { class: "cf-muted", text:
-        "The % of every lesson the club keeps by default. Coaches keep the rest. Override per coach below." }));
+        "The % of every lesson the club keeps by default. Coaches keep the rest. Override per coach or per service below." }));
       var pctI = input({ type: "number", step: "0.5", min: 0, max: 100,
         value: (data.club_default_pct != null ? data.club_default_pct : 0), style: "max-width:110px" });
       var save = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Save default" });
@@ -825,6 +874,12 @@
       box.appendChild(el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [
         pctI, el("span", { class: "cf-muted", text: "% the club keeps" }), el("span", { class: "cf-spacer" }), save]));
       return box;
+    }
+
+    // Guess a lesson/class chip for a service by name (the payload has no kind field). Cosmetic only.
+    function kindChip(name) {
+      var isClass = /class|clinic|group|squad|camp/i.test(name || "");
+      return el("span", { class: "cf-chip " + (isClass ? "class" : "lesson"), text: isClass ? "class" : "lesson" });
     }
 
     function coachCard(coach, currency) {
@@ -848,65 +903,47 @@
           rentI, el("span", { class: "cf-muted", text: "on day" }), dayI,
           el("span", { class: "cf-spacer" }), rentSave])));
 
-      // coach-level commission %
-      var coachPctI = input({ type: "number", step: "0.5", min: 0, max: 100,
-        value: (coach.coach_pct != null ? coach.coach_pct : ""), placeholder: "(club default)", style: "max-width:130px" });
-      var coachPctSave = el("button", { class: "cf-btn cf-btn-sm", text: "Save %" });
-      coachPctSave.addEventListener("click", async function () {
-        var pct = parseFloat(coachPctI.value);
-        if (isNaN(pct) || pct < 0 || pct > 100) { UI.toast("Enter 0–100.", "warn"); return; }
-        coachPctSave.disabled = true;
-        try {
-          await window.AdminAPI.setCommissionRule({ coach_user_id: coach.coach_user_id, commission_pct: pct });
-          UI.toast("Coach commission saved.", "info"); reload();
-        } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { coachPctSave.disabled = false; }
-      });
-      c.appendChild(field("Commission % (all this coach's lessons)",
-        el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [
-          coachPctI, el("span", { class: "cf-spacer" }), coachPctSave])));
+      // coach-level commission % (all this coach's services) — Set/Clear.
+      c.appendChild(field("Commission % — all this coach's services",
+        pctCell(coach.coach_pct, "coach", null, coach.coach_user_id, "Coach commission saved.")));
 
-      // per-lesson-type overrides
+      // per-service table: service · club-wide % · this coach's override % · effective.
       if (coach.lesson_types && coach.lesson_types.length) {
-        c.appendChild(el("h4", { text: "Per lesson type", style: "margin:10px 0 4px" }));
+        c.appendChild(el("h4", { text: "Per service", style: "margin:12px 0 4px" }));
+        c.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:0 0 6px",
+          text: "Club-wide sets the rate for this service across every coach; the override sets it for this coach only. Effective is what will actually apply." }));
         var t = el("table", { class: "cf-table" });
-        t.appendChild(el("thead", {}, [el("tr", {}, ["Lesson type", "Override %", "Effective %", ""].map(function (h) {
-          return el("th", { text: h }); }))]));
+        t.appendChild(el("thead", {}, [el("tr", {}, ["Service", "Club-wide %", coach.name + "'s %", "Effective"].map(function (h, i) {
+          return el("th", { text: h, style: i === 0 ? "" : "white-space:nowrap" }); }))]));
         var tb = el("tbody");
         coach.lesson_types.forEach(function (lt) {
-          var ovrI = input({ type: "number", step: "0.5", min: 0, max: 100,
-            value: (lt.coach_pct != null ? lt.coach_pct : ""), placeholder: "—", style: "max-width:90px" });
-          var b = el("button", { class: "cf-btn cf-btn-sm", text: "Set" });
-          b.addEventListener("click", async function () {
-            var pct = parseFloat(ovrI.value);
-            if (isNaN(pct) || pct < 0 || pct > 100) { UI.toast("Enter 0–100.", "warn"); return; }
-            b.disabled = true;
-            try {
-              await window.AdminAPI.setCommissionRule({
-                coach_user_id: coach.coach_user_id, product_id: lt.product_id, commission_pct: pct });
-              UI.toast("Override saved.", "info"); reload();
-            } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { b.disabled = false; }
-          });
           tb.appendChild(el("tr", {}, [
-            el("td", { text: lt.name || "Lesson" }),
-            el("td", {}, [ovrI]),
+            el("td", {}, [el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [kindChip(lt.name), el("span", { text: lt.name || "Service" })])]),
+            // Club-wide (scope=product): {product_id} only.
+            el("td", {}, [pctCell(lt.club_pct, "product", lt.product_id, null, "Service rate saved.")]),
+            // This coach's override (scope=coach_product): {coach_user_id, product_id}.
+            el("td", {}, [pctCell(lt.coach_pct, "coach_product", lt.product_id, coach.coach_user_id, "Override saved.")]),
             el("td", { class: "num" }, [el("span", { class: "cf-chip confirmed", text: (lt.effective_pct || 0) + "%" })]),
-            el("td", {}, [b]),
           ]));
         });
         t.appendChild(tb); c.appendChild(t);
+      } else {
+        c.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:10px",
+          text: "This coach has no lesson or class services yet — they add these in their own console." }));
       }
       return c;
     }
 
     function render(data) {
+      DATA = data || {};
       UI.clear(body);
-      body.appendChild(clubDefaultRow(data));
-      var coaches = data.coaches || [];
+      body.appendChild(clubDefaultRow(DATA));
+      var coaches = DATA.coaches || [];
       if (!coaches.length) {
         body.appendChild(el("div", { class: "cf-empty", text: "No coaches yet — invite a coach in the Coaches tab." }));
         return;
       }
-      coaches.forEach(function (co) { body.appendChild(coachCard(co, data.currency || "ZAR")); });
+      coaches.forEach(function (co) { body.appendChild(coachCard(co, DATA.currency || "ZAR")); });
     }
 
     function reload() {
