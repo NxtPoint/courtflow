@@ -1,17 +1,25 @@
 // coach_onboarding.js — first-run coach onboarding wizard.
 //
-// A 3-step guided setup that writes the same rows the coach console later edits.
+// A guided multi-step setup that writes the same rows the coach console later edits.
 // Reuses the CoachUI section components (coach_api.js) so the wizard and the console
 // "My profile" editor stay 1:1. Each step saves to the coach API and can be revisited;
-// pre-filled from GET /api/coach/onboarding. Gated to coach / club_admin /
-// platform_admin via Portal.boot.
+// EVERY field pre-fills from GET /api/coach/onboarding MERGED with the full
+// GET /api/coach/profile (so visibility/bookable/review/languages/quals also pre-fill).
+// Gated to coach / club_admin / platform_admin via Portal.boot.
 //
-// Steps: 1 Profile -> 2 Working hours -> 3 Services & rates
+// Steps: 1 Profile -> 2 Working hours -> 3 Services & rates -> 4 Packs (optional)
 //        -> Done (POST /coach/onboarding/complete) -> /coach.html.
 (function () {
   var UI, el;
   var state = { step: 0, data: null };
-  var LABELS = ["Profile", "Hours", "Services"];
+  var LABELS = ["Profile", "Hours", "Services", "Packs"];
+  // Short, friendly explainer shown above each step.
+  var HELP = [
+    "Tell members who you are. A photo, headline and bio help them choose you. Toggle whether you’re taking bookings, whether you appear on the public site, and whether new bookings should wait for your approval.",
+    "Set the hours you’re available to coach each day. Members can only book you inside these windows — without hours you’re invisible.",
+    "Add the lessons you offer and a price for each length. One lesson can have several durations (e.g. 30 min and 60 min) — use “Add another duration”. Settlement (pay at court, pay online, or use a pack) is chosen by the client at booking.",
+    "Optional: sell prepaid packs (e.g. 10 × 60 min). Clients buy once and book without paying each time; a longer lesson simply uses more of the pack. You can skip this and add packs later.",
+  ];
 
   function host() { return document.getElementById("cf-wizard"); }
 
@@ -31,6 +39,9 @@
   function frame(active, sectionHost) {
     var h = host(); UI.clear(h);
     h.appendChild(stepsBar(active));
+    if (HELP[active]) {
+      h.appendChild(el("p", { class: "cf-muted", style: "margin:4px 2px 14px", text: HELP[active] }));
+    }
     h.appendChild(sectionHost);
   }
 
@@ -61,11 +72,18 @@
         saveLabel: "Save & continue →", before: [backBtn()], onSaved: advance,
       });
     } else if (state.step === 2) {
-      // Services is a list-style step: the coach adds rows inline, then clicks Finish.
-      window.CoachUI.services(sectionHost, { before: [backBtn(), finishBtn()] });
+      // Services is a list-style step: the coach adds rows inline, then clicks Continue.
+      window.CoachUI.services(sectionHost, { before: [backBtn(), continueBtn()] });
+    } else if (state.step === 3) {
+      // Packs is optional — the coach can add some or skip straight to finish.
+      window.CoachUI.packs(sectionHost, { before: [backBtn(), finishBtn()] });
     }
   }
 
+  function continueBtn() {
+    return el("button", { class: "cf-btn cf-btn-primary", text: "Continue →",
+      onclick: function () { go(state.step + 1); } });
+  }
   function finishBtn() {
     return el("button", { class: "cf-btn cf-btn-primary", text: "Finish setup →",
       onclick: function () { go(LABELS.length); } });
@@ -107,6 +125,14 @@
       UI.clear(h); h.appendChild(el("div", { class: "cf-loading", text: "Loading your setup…" }));
       try {
         state.data = await window.CoachAPI.onboarding();
+        // The onboarding payload carries only a profile SUBSET. Merge the FULL profile so
+        // languages/qualifications/years/visibility/bookable/review_bookings pre-fill too.
+        try {
+          var pr = await window.CoachAPI.profile();
+          if (pr && pr.profile) {
+            state.data.profile = Object.assign({}, state.data.profile || {}, pr.profile);
+          }
+        } catch (e2) { /* fall back to the onboarding subset */ }
       } catch (e) {
         state.data = {};
         UI.toast(UI.errMsg(e), "error");

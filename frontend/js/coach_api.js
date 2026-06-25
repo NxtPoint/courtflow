@@ -42,7 +42,7 @@
     profile: function () { return A().apiJSON("/api/coach/profile"); },
     // PATCH /api/coach/profile  body:
     //   {display_name,headline,bio,photo_url,specialties[],languages[],qualifications[],
-    //    years_experience,is_bookable,public_visibility,phone,first_name,surname}
+    //    years_experience,is_bookable,public_visibility,review_bookings,phone,first_name,surname}
     //   (rank is admin-only — ignored if sent.)
     patchProfile: function (body) {
       return A().apiJSON("/api/coach/profile", { method: "PATCH", body: body });
@@ -121,6 +121,35 @@
     // working hours set. Money in *_minor cents.
     cockpit: function (month) {
       return A().apiJSON("/api/coach/cockpit" + (month ? ("?month=" + enc(month)) : ""));
+    },
+
+    // ---- month-end statement (commission settlement; a coach sees their OWN) ----
+    // GET /api/admin/coach-statement?month=YYYY-MM ->
+    //   {month, currency, clients:[{client_name,lessons,paid_minor,owed_minor,net_minor}],
+    //    arrears_items:[{id,client_name,client_user_id,gross_minor,currency,starts_at}],
+    //    totals:{paid_minor,owed_minor,net_minor,rent_minor,balance_minor}}
+    statement: function (month) {
+      return A().apiJSON("/api/admin/coach-statement" + (month ? ("?month=" + enc(month)) : ""));
+    },
+    // POST /api/admin/coach-statement/arrears/:id/collected — mark an owed lesson collected
+    // (off-platform EFT received) → accrues its commission. -> {ok}
+    arrearsCollected: function (id) {
+      return A().apiJSON("/api/admin/coach-statement/arrears/" + enc(id) + "/collected",
+        { method: "POST", body: {} });
+    },
+    // PATCH /api/admin/coach-statement/arrears/:id  body: {gross_minor?} (discount) |
+    //   {status:'written_off'} (waive — no commission). -> {ok}
+    arrearsAdjust: function (id, body) {
+      return A().apiJSON("/api/admin/coach-statement/arrears/" + enc(id),
+        { method: "PATCH", body: body || {} });
+    },
+
+    // ---- pending lessons (approval queue; THIS coach as the runner) ----------
+    // Thin alias over the diary list — lessons awaiting the coach (status='requested')
+    // or awaiting the client (status='proposed'). Returns {bookings:[...],count}.
+    // (No client name in the row — see api.js bookings(); we render a best-effort title.)
+    pendingLessons: function (status) {
+      return window.API.bookings({ as_coach: "1", status: status || "requested" });
     },
 
     // ---- profile photo ---------------------------------------------------
@@ -337,6 +366,10 @@
     var visible = toggle("Show on the public coach directory",
       (p.public_visibility == null ? true : p.public_visibility),
       "Appears on the club's public/marketing site. Independent of bookable.");
+    // review_bookings defaults FALSE — lessons confirm immediately unless the coach opts in.
+    var review = toggle("Review bookings before they confirm",
+      !!p.review_bookings,
+      "New lesson requests wait for you to accept (or propose a new time) before they're confirmed.");
 
     var card = el("div", { class: "cf-card" }, [
       el("h2", { text: "Your coaching profile" }),
@@ -352,6 +385,7 @@
       field("Years of experience", f.years),
       field("Cell phone", f.phone),
       el("div", { class: "cf-grid cf-grid-2", style: "margin-top:4px" }, [bookable.el, visible.el]),
+      el("div", { style: "margin-top:10px" }, [review.el]),
     ]);
     var btn = el("button", { class: "cf-btn cf-btn-primary", text: opts.saveLabel || "Save" });
     card.appendChild(actionRow((opts.before || []).concat([btn])));
@@ -373,6 +407,7 @@
           years_experience: num(f.years.value),
           is_bookable: bookable.checked(),
           public_visibility: visible.checked(),
+          review_bookings: review.checked(),
           phone: f.phone.value.trim(),
           first_name: f.first.value.trim(),
           surname: f.surname.value.trim(),
@@ -458,8 +493,8 @@
     UI.clear(host);
     var card = el("div", { class: "cf-card" });
     card.appendChild(el("h2", { text: "Services & rates" }));
-    card.appendChild(el("p", { class: "cf-muted", text: "Add the lessons you offer with their length and price. Each price is for the whole lesson (e.g. 60 min = R400)." }));
-    var listBox = el("div", { class: "cf-list", id: "co-services" });
+    card.appendChild(el("p", { class: "cf-muted", text: "Add the lessons you offer. Each lesson can have several lengths (e.g. 30 min = R250, 60 min = R400) — use “Add another duration” to add more. Each price is for the whole lesson." }));
+    var listBox = el("div", { id: "co-services" });
     card.appendChild(listBox);
     host.appendChild(card);
 
@@ -470,39 +505,74 @@
         .catch(function (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
     }
 
+    // One editable rate row (a single billing.price). save -> patch; del -> delete.
+    function rateRow(s) {
+      var durI = select(s.duration_minutes || 60, DURATIONS);
+      var amtI = input({ value: fromMinor(s.amount_minor), placeholder: "0.00", style: "max-width:110px" });
+      var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
+      var del = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove" });
+      save.addEventListener("click", async function () {
+        save.disabled = true;
+        try {
+          await window.CoachAPI.patchService(s.price_id, {
+            name: s.name, duration_minutes: num(durI.value) || 60, amount_minor: toMinor(amtI.value),
+          });
+          UI.toast("Rate updated.", "info");
+        } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
+      });
+      del.addEventListener("click", async function () {
+        if (!window.confirm("Remove this rate?")) return;
+        try { await window.CoachAPI.deleteService(s.price_id); UI.toast("Rate removed.", "info"); reload(); }
+        catch (e) { UI.toast(UI.errMsg(e), "error"); }
+      });
+      return el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:6px" }, [
+        durI, el("span", { class: "cf-muted", text: "R" }), amtI,
+        el("span", { class: "cf-spacer" }), save, del,
+      ]);
+    }
+
+    // Group flattened rates by product_id so each lesson PRODUCT shows all its durations
+    // with one "Add another duration" affordance (POST /services/:product_id/rate).
     function renderList(list) {
       UI.clear(listBox);
       if (!list.length) { listBox.appendChild(el("div", { class: "cf-empty", text: "No services yet. Add one below." })); return; }
+      var groups = {}; var order = [];
       list.forEach(function (s) {
-        var nameI = input({ value: s.name || "", placeholder: "Lesson name", style: "max-width:220px" });
-        var durI = select(s.duration_minutes || 60, DURATIONS);
-        var amtI = input({ value: fromMinor(s.amount_minor), placeholder: "0.00", style: "max-width:110px" });
-        var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
-        var del = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete" });
-        save.addEventListener("click", async function () {
-          var nm = nameI.value.trim();
-          if (!nm) { UI.toast("Enter a lesson name.", "warn"); return; }
-          save.disabled = true;
-          try {
-            await window.CoachAPI.patchService(s.price_id, {
-              name: nm, duration_minutes: num(durI.value) || 60, amount_minor: toMinor(amtI.value),
-            });
-            UI.toast("Service updated.", "info");
-          } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
-        });
-        del.addEventListener("click", async function () {
-          if (!window.confirm("Delete " + (s.name || "this service") + "?")) return;
-          try { await window.CoachAPI.deleteService(s.price_id); UI.toast("Service deleted.", "info"); reload(); }
-          catch (e) { UI.toast(UI.errMsg(e), "error"); }
-        });
-        listBox.appendChild(el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:6px" }, [
+        var pid = s.product_id || s.price_id;
+        if (!groups[pid]) { groups[pid] = { name: s.name, rates: [] }; order.push(pid); }
+        groups[pid].rates.push(s);
+      });
+      order.forEach(function (pid) {
+        var g = groups[pid];
+        var box = el("div", { class: "cf-card", style: "margin-bottom:10px" });
+        box.appendChild(el("div", { class: "cf-row", style: "align-items:center;gap:8px" }, [
           el("span", { class: "cf-chip lesson", text: "lesson" }),
-          nameI, durI, amtI, el("span", { class: "cf-spacer" }), save, del,
+          el("strong", { text: g.name || "Lesson" }),
+          el("span", { class: "cf-muted", text: g.rates.length + (g.rates.length === 1 ? " duration" : " durations") }),
         ]));
+        var rates = el("div", { class: "cf-list", style: "margin-top:8px" });
+        g.rates.forEach(function (s) { rates.appendChild(rateRow(s)); });
+        box.appendChild(rates);
+        // "Add another duration" — inline mini-form bound to this product.
+        var aDur = select(90, DURATIONS);
+        var aAmt = input({ placeholder: "0.00", style: "max-width:110px" });
+        var aBtn = el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ Add another duration" });
+        aBtn.addEventListener("click", async function () {
+          aBtn.disabled = true;
+          try {
+            await window.CoachAPI.addServiceRate(pid, {
+              duration_minutes: num(aDur.value) || 60, amount_minor: toMinor(aAmt.value),
+            });
+            UI.toast("Duration added.", "info"); reload();
+          } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { aBtn.disabled = false; }
+        });
+        box.appendChild(el("div", { class: "cf-row", style: "gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap" },
+          [aDur, el("span", { class: "cf-muted", text: "R" }), aAmt, aBtn]));
+        listBox.appendChild(box);
       });
     }
 
-    // add-service form
+    // add-service form (creates a NEW lesson product + its first rate)
     var addName = input({ placeholder: "Lesson name (e.g. Private 1:1)", style: "max-width:240px" });
     var addDur = select(60, DURATIONS);
     var addAmt = input({ placeholder: "0.00", style: "max-width:110px" });
@@ -519,8 +589,9 @@
         addName.value = ""; addAmt.value = ""; UI.toast("Service added.", "info"); reload();
       } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { addBtn.disabled = false; }
     });
-    card.appendChild(el("h3", { text: "Add a service", style: "margin-top:14px" }));
-    card.appendChild(el("div", { class: "cf-row", style: "gap:6px;flex-wrap:wrap" }, [addName, addDur, addAmt, addBtn]));
+    card.appendChild(el("h3", { text: "Add a new lesson", style: "margin-top:14px" }));
+    card.appendChild(el("div", { class: "cf-row", style: "gap:6px;flex-wrap:wrap;align-items:center" },
+      [addName, addDur, el("span", { class: "cf-muted", text: "R" }), addAmt, addBtn]));
     if (opts.before && opts.before.length) card.appendChild(actionRow(opts.before));
 
     reload();

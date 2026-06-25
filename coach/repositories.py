@@ -48,6 +48,7 @@ def get_profile(session, *, club_id, user_id):
             SELECT cp.id, cp.club_id, cp.user_id, cp.display_name, cp.headline, cp.bio,
                    cp.photo_url, cp.specialties, cp.languages, cp.qualifications,
                    cp.years_experience, cp.is_bookable, cp.public_visibility, cp.rank,
+                   cp.review_bookings,
                    cp.default_lesson_price_id, cp.onboarding_completed,
                    u.first_name, u.surname, u.email, u.phone,
                    cp.created_at, cp.updated_at
@@ -85,7 +86,7 @@ def ensure_profile(session, *, club_id, user_id):
 def patch_profile(session, *, club_id, user_id, display_name=None, headline=None, bio=None,
                   photo_url=None, specialties=None, languages=None, qualifications=None,
                   years_experience=None, is_bookable=None, public_visibility=None,
-                  phone=None, first_name=None, surname=None):
+                  review_bookings=None, phone=None, first_name=None, surname=None):
     """COALESCE-style partial update of the coach's OWN profile + linked user. Only supplied
     (non-None) fields change. `specialties`/`languages`/`qualifications` are text[] (a Python
     list or None); `is_bookable`/`public_visibility` are booleans (None = leave unchanged).
@@ -105,6 +106,7 @@ def patch_profile(session, *, club_id, user_id, display_name=None, headline=None
                 years_experience  = COALESCE(:years_experience, years_experience),
                 is_bookable       = COALESCE(:is_bookable, is_bookable),
                 public_visibility = COALESCE(:public_visibility, public_visibility),
+                review_bookings   = COALESCE(:review_bookings, review_bookings),
                 updated_at        = now()
             WHERE club_id = :c AND user_id = :u
         """),
@@ -112,7 +114,7 @@ def patch_profile(session, *, club_id, user_id, display_name=None, headline=None
          "bio": bio, "photo_url": photo_url, "specialties": specialties,
          "languages": languages, "qualifications": qualifications,
          "years_experience": years_experience, "is_bookable": is_bookable,
-         "public_visibility": public_visibility},
+         "public_visibility": public_visibility, "review_bookings": review_bookings},
     )
     # Names + phone live on iam.user (the global identity row).
     session.execute(
