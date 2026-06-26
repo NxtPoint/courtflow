@@ -22,6 +22,11 @@ from diary import pricing
 
 log = logging.getLogger("diary.availability")
 
+# Default booking start cadence (minutes): a booking may start every 30 min. This is the slot
+# GRID granularity, independent of a booking's length. A club may configure a finer cadence per
+# availability_rule (slot_minutes); we never offer starts coarser than this.
+BOOKING_GRANULARITY_MIN = 30
+
 
 def _club_tz(session, club_id):
     """zoneinfo for the club's timezone (defaults to JHB). Falls back to UTC if the tz db
@@ -111,7 +116,12 @@ def _candidate_slots(session, *, club_id, resource_id, tz, range_start, range_en
             if r["valid_to"] and day > r["valid_to"]:
                 continue
             step = timedelta(minutes=duration_min)
-            slot_min = r["slot_minutes"] or duration_min
+            # Start cadence (how OFTEN a booking can start) is separate from its LENGTH (step =
+            # duration). Default to a 30-min grid so a 30-min booking doesn't sterilise the
+            # following half-hour (a 60-min slot_minutes would only ever offer :00 starts, leaving
+            # a 09:30 gap unbookable). A club may configure a FINER cadence via slot_minutes; we
+            # never go coarser than 30. (booking-validation: half-hour starts.)
+            slot_min = min(r["slot_minutes"] or BOOKING_GRANULARITY_MIN, BOOKING_GRANULARITY_MIN)
             cursor = _combine(day, r["start_time"], tz)
             window_end = _combine(day, r["end_time"], tz)
             stride = timedelta(minutes=slot_min)

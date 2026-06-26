@@ -323,6 +323,24 @@ def sc_coach_class_conflict(s, fx):
     check("court booking at class time still allowed", rc.get("ok"), str(rc))
 
 
+def sc_slot_granularity(s, fx):
+    print("\n# Slot grid: 30-min cadence — a 30-min booking leaves the next half-hour bookable")
+    m = fx.members[0]; court = fx.courts[0]
+    # Grid should offer :00 AND :30 starts.
+    slots = court_slots(s, fx, court)
+    check("08:30 start is offered (30-min grid)", has_slot(slots, at(fx, 8, 30)),
+          "no 08:30 candidate")
+    # Book 09:00–09:30 (a 30-min booking). The 09:30 start must remain bookable (the bug: an
+    # hourly grid would jump straight to 10:00).
+    B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                     booking_type="court", resource_id=court,
+                     starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 9, 30)))
+    after = court_slots(s, fx, court)
+    check("09:30 start still bookable after a 30-min booking", has_slot(after, at(fx, 9, 30)),
+          "09:30 gap not offered")
+    check("09:00 start gone (just booked)", not has_slot(after, at(fx, 9)))
+
+
 def sc_class_waitlist(s, fx):
     print("\n# Class: enrol to capacity → waitlist → cancel promotes the waitlister")
     # A fresh one-off class at 14:00 so it doesn't collide with the 08:00 session.
@@ -402,6 +420,7 @@ SCENARIOS = [
     sc_lesson_list_collapse,
     sc_lesson_needs_court,
     sc_coach_class_conflict,
+    sc_slot_granularity,
     sc_class_waitlist,
     sc_lesson_lifecycle,
 ]
