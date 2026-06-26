@@ -15,6 +15,7 @@ log = logging.getLogger("analytics.repositories")
 
 # core.usage_event stores the page-view beacon payload in its JSONB column named "metadata".
 _PV = "event_type = 'page_view'"
+_PL = "event_type = 'page_leave'"   # carries duration_ms for time-on-site
 
 
 def _window(days: int) -> str:
@@ -145,6 +146,50 @@ def by_country(session, *, club_id, days) -> List[Dict[str, Any]]:
     return _guard(q, [])
 
 
+def by_device(session, *, club_id, days) -> List[Dict[str, Any]]:
+    def q():
+        rows = session.execute(text(f"""
+            SELECT COALESCE(NULLIF(metadata->>'device',''), 'unknown') AS device,
+                   count(*) AS visits
+            FROM core.usage_event
+            WHERE {_PV} AND {_window(days)}{_club_clause('club_id', club_id)}
+            GROUP BY 1 ORDER BY 2 DESC
+        """), _p(club_id)).mappings().all()
+        return [{"device": r["device"], "visits": int(r["visits"] or 0)} for r in rows]
+    return _guard(q, [])
+
+
+def by_browser(session, *, club_id, days) -> List[Dict[str, Any]]:
+    def q():
+        rows = session.execute(text(f"""
+            SELECT COALESCE(NULLIF(metadata->>'browser',''), 'unknown') AS browser,
+                   count(*) AS visits
+            FROM core.usage_event
+            WHERE {_PV} AND {_window(days)}{_club_clause('club_id', club_id)}
+            GROUP BY 1 ORDER BY 2 DESC LIMIT 10
+        """), _p(club_id)).mappings().all()
+        return [{"browser": r["browser"], "visits": int(r["visits"] or 0)} for r in rows]
+    return _guard(q, [])
+
+
+def time_on_site(session, *, club_id, days) -> Dict[str, Any]:
+    """Average + median seconds per page from the page_leave duration events."""
+    def q():
+        row = session.execute(text(f"""
+            SELECT round(avg((metadata->>'duration_ms')::numeric) / 1000.0, 1) AS avg_seconds,
+                   round((percentile_cont(0.5) WITHIN GROUP (
+                         ORDER BY (metadata->>'duration_ms')::numeric) / 1000.0)::numeric, 1) AS median_seconds,
+                   count(*) AS samples
+            FROM core.usage_event
+            WHERE {_PL} AND {_window(days)}
+              AND (metadata->>'duration_ms') ~ '^[0-9]+$'{_club_clause('club_id', club_id)}
+        """), _p(club_id)).mappings().first()
+        return {"avg_seconds": float(row["avg_seconds"] or 0),
+                "median_seconds": float(row["median_seconds"] or 0),
+                "samples": int(row["samples"] or 0)}
+    return _guard(q, {"avg_seconds": 0, "median_seconds": 0, "samples": 0})
+
+
 # ---------------------------------------------------------------------------
 # Customers + signups (core.account)
 # ---------------------------------------------------------------------------
@@ -245,6 +290,7 @@ def nps(session, *, club_id, days) -> Dict[str, Any]:
 def overview(session, *, club_id: Optional[str] = None, days: int = 30) -> Dict[str, Any]:
     traffic = traffic_summary(session, club_id=club_id, days=days)
     nvr = new_vs_returning(session, club_id=club_id, days=days)
+    tos = time_on_site(session, club_id=club_id, days=days)
     cust = customers(session, club_id=club_id, days=days)
     rev = bookings_and_revenue(session, club_id=club_id, days=days)
     return {
@@ -254,6 +300,8 @@ def overview(session, *, club_id: Optional[str] = None, days: int = 30) -> Dict[
             "unique_visitors": traffic["unique_visitors"],
             "new_visitors": nvr["new_visitors"],
             "returning_visitors": nvr["returning_visitors"],
+            "avg_seconds": tos["avg_seconds"],
+            "median_seconds": tos["median_seconds"],
             "total_customers": cust["total"],
             "new_customers": cust["new_in_window"],
             "bookings": rev["bookings"],
@@ -265,6 +313,8 @@ def overview(session, *, club_id: Optional[str] = None, days: int = 30) -> Dict[
         "traffic_sources": traffic_sources(session, club_id=club_id, days=days),
         "top_pages": top_pages(session, club_id=club_id, days=days),
         "by_country": by_country(session, club_id=club_id, days=days),
+        "by_device": by_device(session, club_id=club_id, days=days),
+        "by_browser": by_browser(session, club_id=club_id, days=days),
         "settlement_mix": settlement_mix(session, club_id=club_id, days=days),
         "nps": nps(session, club_id=club_id, days=days),
         "revenue": rev,

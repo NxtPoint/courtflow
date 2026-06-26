@@ -32,13 +32,22 @@
       (sub ? '<div class="sub">' + esc(sub) + '</div>' : '') + '</div>';
   }
 
+  function fmtDuration(sec) {
+    sec = Math.round(Number(sec) || 0);
+    if (!sec) return "—";
+    if (sec < 60) return sec + "s";
+    var m = Math.floor(sec / 60), s = sec % 60;
+    return s ? (m + "m " + s + "s") : (m + "m");
+  }
+
   function kpis(k, currency, extra) {
     var visSub = (k.new_visitors == null) ? "" : (num(k.new_visitors) + " new · " + num(k.returning_visitors) + " returning");
     var cards = [
       card("Website visits", num(k.visits)),
       card("Unique visitors", num(k.unique_visitors), visSub),
-      card("Customers", num(k.total_customers), "+" + num(k.new_customers) + " in period"),
     ];
+    if (k.avg_seconds != null) cards.push(card("Avg time on page", fmtDuration(k.avg_seconds), "median " + fmtDuration(k.median_seconds)));
+    cards.push(card("Customers", num(k.total_customers), "+" + num(k.new_customers) + " in period"));
     if (k.bookings != null) cards.push(card("Bookings", num(k.bookings)));
     cards.push(card("Revenue (net)", money(k.net_minor, currency), "gross " + money(k.revenue_minor, currency)));
     (extra || []).forEach(function (x) {
@@ -115,6 +124,8 @@
     barTable("tbl-sources", d.traffic_sources, "source", "visits");
     barTable("tbl-pages", d.top_pages, "path", "visits");
     barTable("tbl-geo", d.by_country, "country", "visits");
+    barTable("tbl-device", d.by_device, "device", "visits");
+    barTable("tbl-browser", d.by_browser, "browser", "visits");
     settleTable(d.settlement_mix, ccy);
     nps(d.nps);
   }
