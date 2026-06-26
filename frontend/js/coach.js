@@ -58,11 +58,15 @@
           actions.push(el("button", { class: "cf-btn cf-btn-sm", text: "Completed", onclick: function () { setStatus(b.id, "completed"); } }));
           actions.push(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "No-show", onclick: function () { setStatus(b.id, "no_show"); } }));
         }
+        // One line per lesson (the auto-held court is collapsed server-side). Title = the
+        // CLIENT (the coach's own name as the resource is unhelpful here); the court the lesson
+        // sits on is shown inline as "· Court 3".
+        var sub = UI.fmtRange(b.starts_at, b.ends_at) + (b.court_name ? " · " + b.court_name : "");
         ll.appendChild(el("div", { class: "cf-item" }, [
           el("span", { class: "cf-chip lesson", text: "lesson" }),
           el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: b.resource_name || "Lesson" }),
-            el("div", { class: "cf-item-s", text: UI.fmtRange(b.starts_at, b.ends_at) }),
+            el("div", { class: "cf-item-t", text: b.booked_by_name || b.resource_name || "Lesson" }),
+            el("div", { class: "cf-item-s", text: sub }),
           ]),
           el("span", { class: "cf-chip " + b.status, text: b.status }),
         ].concat(actions)));

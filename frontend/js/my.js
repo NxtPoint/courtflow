@@ -81,9 +81,12 @@
   }
 
   function row(b, actionable) {
+    // A lesson is one line (the auto-held court is collapsed server-side); show the court inline.
+    var sub = UI.fmtRange(b.starts_at, b.ends_at) + (b.court_name ? " · " + b.court_name : "")
+      + " · " + UI.settlementLabel(b.settlement_mode);
     var main = el("div", { class: "cf-item-main" }, [
       el("div", { class: "cf-item-t", text: b.resource_name || b.booking_type }),
-      el("div", { class: "cf-item-s", text: UI.fmtRange(b.starts_at, b.ends_at) + " · " + UI.settlementLabel(b.settlement_mode) }),
+      el("div", { class: "cf-item-s", text: sub }),
     ]);
     var children = [
       el("span", { class: "cf-chip " + b.booking_type, text: b.booking_type }),

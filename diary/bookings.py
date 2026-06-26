@@ -1039,10 +1039,23 @@ def list_bookings(session, *, club_id, role, user_id, date_from=None, date_to=No
         where.append("b.status = :st"); params["st"] = status
     if resource_id:
         where.append("b.resource_id = :rid"); params["rid"] = resource_id
+    # A lesson is TWO rows (the coach row + an auto-held court row sharing one order_id). In a
+    # booking LIST we collapse that to ONE line: hide the linked court row (always inserted with
+    # this exact note) and surface its court name on the lesson row as `court_name`. Standalone
+    # court bookings are untouched. (The admin master diary deliberately still shows the court row
+    # — it's a resource timeline.)
+    where.append("NOT (b.booking_type = 'court' AND b.notes = '(court held for lesson)')")
     rows = session.execute(
         text("SELECT b.id, b.booking_type, b.resource_id, r.name AS resource_name, "
              "       b.coach_user_id, b.starts_at, b.ends_at, b.status, b.order_id, "
              "       b.settlement_mode, b.booked_by_user_id, "
+             # The court auto-held for a lesson (same order_id), so a lesson line can show
+             # "Lesson · Court 3" without a second row.
+             "       (SELECT cr.name FROM diary.booking cb "
+             "          JOIN diary.resource cr ON cr.id = cb.resource_id "
+             "         WHERE cb.club_id = b.club_id AND cb.order_id = b.order_id "
+             "           AND cb.booking_type = 'court' AND b.order_id IS NOT NULL "
+             "           AND b.booking_type = 'lesson' LIMIT 1) AS court_name, "
              # The booker's name/email so coach/admin lists (esp. the accept/propose/decline
              # queue) can show WHO requested — not just the resource. Non-PII for the coach who
              # runs the lesson; the client is their own client.

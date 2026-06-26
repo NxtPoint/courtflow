@@ -253,6 +253,31 @@ def sc_lesson_two_rows(s, fx):
           f"free={len(free_courts)}/{len(fx.courts)}")
 
 
+def sc_lesson_list_collapse(s, fx):
+    print("\n# Lesson list: ONE line per lesson (court collapsed) with the court name attached")
+    m = fx.members[0]
+    start, end = at(fx, 9), at(fx, 10)
+    B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                     booking_type="lesson", resource_id=fx.coach_res,
+                     coach_user_id=fx.coach_uid,
+                     starts_at=utc_iso(start), ends_at=utc_iso(end))
+    mine = B.list_bookings(s, club_id=fx.club_id, role="member", user_id=m,
+                           date_from=utc_iso(at(fx, 0)), date_to=utc_iso(at(fx, 23)))
+    lessons = [b for b in mine if b["booking_type"] == "lesson"]
+    courts = [b for b in mine if b["booking_type"] == "court"]
+    check("member sees exactly ONE lesson line", len(lessons) == 1, f"lessons={len(lessons)}")
+    check("the auto-held court row is hidden", len(courts) == 0, f"court rows={len(courts)}")
+    check("lesson line carries the court name", bool(lessons and lessons[0].get("court_name")),
+          str(lessons[0]) if lessons else "no lesson")
+    # The coach (as_coach) sees the same single collapsed line.
+    coach_view = B.list_bookings(s, club_id=fx.club_id, role="coach", user_id=fx.coach_uid,
+                                 as_coach=True, date_from=utc_iso(at(fx, 0)),
+                                 date_to=utc_iso(at(fx, 23)))
+    check("coach sees one row for the lesson (no separate court)",
+          len([b for b in coach_view if b["booking_type"] == "court"]) == 0,
+          f"coach court rows={len([b for b in coach_view if b['booking_type']=='court'])}")
+
+
 def sc_lesson_needs_court(s, fx):
     print("\n# Lesson: no free court at the time → not offered / refused")
     m = fx.members[0]
@@ -374,6 +399,7 @@ SCENARIOS = [
     sc_court_book_cancel,
     sc_court_reschedule,
     sc_lesson_two_rows,
+    sc_lesson_list_collapse,
     sc_lesson_needs_court,
     sc_coach_class_conflict,
     sc_class_waitlist,
