@@ -164,7 +164,10 @@
     if (st.selDuration) q.duration = st.selDuration;
     if (st.type === "lesson") {
       q.kind = "coach";
-      if (st.selCoach !== "ANY" && st.selCoach.id) q.coach_id = st.selCoach.id; else q.any = "1";
+      // The availability API filters by coach_user_id (diary/routes.py), so send the coach's
+      // USER id — not the resource id. (Bug: sending .id matched no resource → zero lesson slots
+      // for a specific coach. loadDurations + createBooking already use coach_user_id.)
+      if (st.selCoach !== "ANY" && st.selCoach.coach_user_id) q.coach_id = st.selCoach.coach_user_id; else q.any = "1";
     } else {
       q.kind = "court";
       if (st.selCourt === "ANY") q.any = "1";
