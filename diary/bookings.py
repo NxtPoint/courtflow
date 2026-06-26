@@ -978,6 +978,9 @@ def _payload(booking, res):
         "starts_at": booking["starts_at"],
         "ends_at": booking["ends_at"],
         "settlement_mode": booking.get("settlement_mode"),
+        # The .ics download (in-app 'Add to calendar'; the confirmation email attaches the same
+        # file once SES/Klaviyo is wired). Matches contracts/events.md booking_confirmed.ics_url.
+        "ics_url": "/api/diary/bookings/" + str(booking["id"]) + "/calendar.ics",
     }
 
 

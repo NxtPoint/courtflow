@@ -11,7 +11,7 @@
 
 import logging
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response
 
 from auth import resolve_principal
 from db import session_scope
@@ -382,6 +382,45 @@ def decline_booking(booking_id):
             s, club_id=p.club_id, booking_id=booking_id, actor_user_id=p.user_id, role=p.role,
             reason=b.get("reason"))
     return _result(res)
+
+
+@diary_bp.get("/bookings/<booking_id>/calendar.ics")
+def booking_calendar(booking_id):
+    """An iCalendar (.ics) for a booking — powers the in-app 'Add to calendar' download, and is
+    the file the confirmation email will attach once SES/Klaviyo is wired. The booker, the coach
+    who runs it, or an admin may fetch it."""
+    p = _principal()
+    if not p or not _need_club(p):
+        return jsonify(error="unauthorized"), 401
+    from sqlalchemy import text
+    with session_scope() as s:
+        bk = bookings_mod.get_booking(s, club_id=p.club_id, booking_id=booking_id)
+        if not bk:
+            return jsonify(error="NOT_FOUND"), 404
+        is_admin = p.role in ("club_admin", "platform_admin")
+        owns = (str(bk.get("booked_by_user_id")) == str(p.user_id)
+                or str(bk.get("coach_user_id")) == str(p.user_id))
+        if not (is_admin or owns):
+            return jsonify(error="forbidden"), 403
+        loc = s.execute(
+            text("SELECT c.name AS club, l.address_line, l.city "
+                 "FROM club.club c LEFT JOIN club.location l ON l.club_id = c.id "
+                 "WHERE c.id = :c ORDER BY l.id LIMIT 1"),
+            {"c": p.club_id}).mappings().first()
+    from diary import calendar as cal
+    club = (loc and loc.get("club")) or "the club"
+    where = ", ".join(x for x in [(loc or {}).get("address_line"), (loc or {}).get("city")] if x) or club
+    bt = bk.get("booking_type") or "booking"
+    summary = club + " · " + (bk.get("resource_name") or bt.title())
+    desc = bt.title() + " at " + club + " — settlement: " + (bk.get("settlement_mode") or "n/a") + "."
+    confirmed = bk.get("status") in ("confirmed", "held", "completed")
+    ics = cal.build_ics(
+        uid="booking-" + str(booking_id) + "@courtflow",
+        summary=summary, starts_at=bk["starts_at"], ends_at=bk["ends_at"],
+        description=desc, location=where,
+        status="CONFIRMED" if confirmed else "TENTATIVE")
+    return Response(ics, mimetype="text/calendar",
+                    headers={"Content-Disposition": "attachment; filename=booking.ics"})
 
 
 # ---------------------------------------------------------------------------

@@ -91,10 +91,24 @@
       el("span", { class: "cf-chip " + b.status, text: b.status }),
     ];
     if (actionable) {
+      children.push(el("button", { class: "cf-btn cf-btn-sm", text: "Add to calendar", onclick: function () { addToCalendar(b); } }));
       children.push(el("button", { class: "cf-btn cf-btn-sm", text: "Reschedule", onclick: function () { reschedule(b); } }));
       children.push(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Cancel", onclick: function () { cancel(b); } }));
     }
     return el("div", { class: "cf-item" }, children);
+  }
+
+  // Authed .ics download -> add the booking to Google/Apple/Outlook. (The same file the
+  // confirmation email will attach once SES/Klaviyo is connected.)
+  async function addToCalendar(b) {
+    try {
+      var res = await window.TFAuth.apiFetch("/api/diary/bookings/" + encodeURIComponent(b.id) + "/calendar.ics");
+      if (!res || !res.ok) throw new Error("unavailable");
+      var url = URL.createObjectURL(new Blob([await res.text()], { type: "text/calendar" }));
+      var a = el("a", { href: url, download: "booking.ics" });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+    } catch (e) { UI.toast("Couldn't generate the calendar file.", "error"); }
   }
 
   async function cancel(b) {
