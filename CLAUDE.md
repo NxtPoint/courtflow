@@ -47,23 +47,40 @@ NextPoint Tennis is club #1, migrating off Wix.
     `billing/` core is untouched — this is a pure adapter behind the registry.
   - **CRM + notifications:** `marketing_crm/` — `emit()`→`core.usage_event` (and drives notifications
     non-fatally), `notifications.py` (in-app `core.notification` inbox + transactional email; child→guardian
-    routing), Klaviyo sync (dark w/o `KLAVIYO_API_KEY`), consent, cockpit, SES fallback; `contracts/events.md`.
+    routing), Klaviyo sync (dark w/o `KLAVIYO_API_KEY`), consent, cockpit, `email/ses.py` fallback (dark
+    w/o `SES_SENDER`); `contracts/events.md`. **Confirmation EMAIL is dark until SES/Klaviyo is keyed —
+    today bookings notify IN-APP only.** A booking **`.ics` calendar** is built (`diary/calendar.py` +
+    `GET /api/diary/bookings/<id>/calendar.ics`; `ics_url` on the confirmation payload) — the in-app
+    "Add to calendar" download works now; the email attaches the same file once SES/Klaviyo is wired.
   - **Admin (owner self-service):** `admin/` — `/api/admin/*` write APIs + onboarding; powers the owner
-    onboarding wizard, Settings, and the People tab. Added `club.onboarding_completed`, `iam.coach_invite`.
-  - **Coach (self-service):** `coach/` — `/api/coach/*`; onboarding (profile/photo, weekly hours →
-    `diary.resource(kind=coach)`, per-duration services/rates); **My Clients** (derived, private); **Dashboard
-    cockpit** (`/cockpit`: lessons/hours/net-of-commission earnings/fill-rate/trend); statement page.
+    onboarding wizard, Settings, the People tab (360 drawer), the **per-service commission editor**
+    (club/coach/per-service incl. classes → `commission_rule`), the **financial cockpit** (per-coach
+    settlement, refund-aware), and **statement arrears adjust** (`PATCH /api/admin/coach-statement/arrears/<id>`).
+    Console = `admin.js` on `crm_ui.js`. Added `club.onboarding_completed`, `iam.coach_invite`.
+  - **Coach (self-service):** `coach/` — `/api/coach/*`; **4-step onboarding** (profile/photo/languages/
+    quals/visibility + `review_bookings`, weekly hours → `diary.resource(kind=coach)`, per-duration
+    services/rates + classes/packs; full pre-fill); **lesson approval queue** (accept/propose/decline);
+    **book-for-a-client** (auto-confirms); **My Clients** 360 (derived, private; history + upcoming);
+    **statement** (per-client paid/owed/net, mark-collected + **discount/write-off**); **Dashboard cockpit**
+    (`/cockpit`: lessons/hours/net-of-commission earnings/fill-rate/trend + **lessons-left-on-plans** +
+    month-end-after-commission). Console = `coach.js` on `crm_ui.js`.
   - **Client (self-service):** `me/` — `/api/me/*`; profile/demographics (email read-only), **dependents**
-    (`iam.dependent`, login-less child users → booking party), financials, refund-requests, notifications.
+    (`iam.dependent`, login-less child users → booking party), financials, **statement** (`GET /api/me/statement`,
+    the client mirror of the coach statement), refund-requests, notifications. **My Bookings** has a
+    **"Needs your attention"** section (accept/decline a coach's proposed time, withdraw a pending request)
+    + **"Add to calendar"** (.ics) on upcoming bookings.
   - **Analytics:** `analytics/` + `/api/analytics/*` + `overview.html` — **Business Overview dashboard**
     (built & live): visits/visitors/sources/geo + customers/bookings/revenue/NPS; first-party page-view
     beacon (`analytics.js` → `/api/track/page`, geo via `CF-IPCountry`). **Embedded** as the admin console's
     "Overview" tab + standalone `/overview.html`. Per-business (the Ten-Fifty5 bridge was deprecated).
   - **Frontend:** `frontend/app/` (shells) + `frontend/js/` — **ONE design system in `frontend/app/app.css`**
     (bright/modern; every page uses its `cf-*` classes — keep it the single source, do NOT inline component
-    styles). Booking wizard, my-bookings, coach console, **master-diary calendar** (custom resource-timeline),
-    owner/coach onboarding + Settings. **Asset/nav links are ABSOLUTE** (`/app.css`, `/js/…`, `/book.html`)
-    so pages work at sub-paths like `/book/court`.
+    styles). **Full-screen booking** (`booking.js` — month calendar + inline per-duration chips; replaced
+    `book.js`/`quickbook.js`), **action-first cockpit** (`portal.js`, with a ~2-tap quick-book), **My
+    Bookings** (`my.js`), consolidated **Plan** page (`plan.js`/`plans.html`), **coach + owner consoles**
+    (both render from the SHARED **`crm_ui.js`** — `CRMUI.stats/bars/statementTable/lineItems/requestQueue/
+    drawer`), **master-diary calendar** (custom resource-timeline), owner/coach onboarding + Settings.
+    **Asset/nav links are ABSOLUTE** (`/app.css`, `/js/…`) so pages work at sub-paths.
   - **Web/SEO:** `web_app.py` (+ `web_wsgi.py`), `frontend/marketing/` (restyled to the design system, stock
     court imagery), `frontend/_shared/` (`theme.css` + `chrome.py` + `branding.py` host→club resolver),
     `build_blog.py`, `frontend/login.html`, `migration/`. **PUBLIC-SITE REDESIGN (in progress):** the
@@ -75,15 +92,19 @@ NextPoint Tennis is club #1, migrating off Wix.
   **three configurable purchasing models — PAYG (per-duration) · membership (term plans) · tokens/bundles
   (prepaid packs, atomic draw-down + credit-back)** · membership-covered free courts (+ admin grant/revoke) ·
   **Yoco** online pay + reconcile + receipts + **refunds (admin direct + client request→approve)** ·
-  **commission/coaching-settlement engine** (rent +/or %, split on collection, arrears statement, owner
-  cockpit) · **self-service for all three roles** (client account/family/financials · coach
-  console/clients/cockpit/statement · owner console/config/cockpit) · **in-app notifications** (email-ready) ·
-  unified master diary · bright/modern UI + public site. **Remaining:** see `docs/specs/OUTSTANDING.md`.
+  **commission/coaching-settlement engine** (rent +/or %, split on collection, arrears + **discount/write-off**,
+  owner cockpit) · **lesson approval lifecycle** (per-coach review → request/propose/accept/decline;
+  on-behalf auto-confirms) · **redesigned self-service for all three roles** (client action-first cockpit +
+  ~2-tap booking + family/financials/**statement** · coach console: onboarding/services/**approval queue**/
+  clients-360/**statement-edits**/cockpit · owner console: per-service commission/financial cockpit/People-360
+  — both on the shared `crm_ui.js`) · **in-app notifications** + booking **`.ics` calendar** (confirmation
+  email pending SES/Klaviyo) · unified master diary · bright/modern UI + public site. **Remaining:** see
+  `docs/specs/OUTSTANDING.md`.
 
 ## Payments, pricing & booking flow — LIVE end-to-end
 **Online payments (Yoco) — wired & verified.** `yoco_billing/` is a pure adapter behind
 `register_gateway`/`get_gateway` (`billing/` core untouched). An `online` booking creates an
-`awaiting_payment` order + `held` booking → `book.js` calls `Pay.startYocoCheckout(order_id)` →
+`awaiting_payment` order + `held` booking → `booking.js` calls `Pay.startYocoCheckout(order_id)` →
 `POST /api/billing/yoco/checkout` returns Yoco's `redirect_url` → hosted page (card + Apple/Google/Samsung
 Pay) → `POST /api/billing/yoco/webhook` (Standard-Webhooks verified) → `apply_payment_event` → order `paid`
 + booking `confirmed`. **GOTCHA the booking API returns `{booking:{order_id,status}, checkout}` — read
@@ -136,7 +157,8 @@ Wix-era "member R0" court tier is GONE** (the seed deactivates legacy no-duratio
 membership makes COURT bookings free** (`settlement_mode=membership_covered`, resolved server-side via
 `has_active_membership` — guarded: courts only, never lessons). Admin grants/revokes in **People**
 (`POST|DELETE /api/admin/members/<user_id>/membership` → `billing.membership_subscription`, provider='manual').
-**Self-serve membership purchase (Yoco one-off) is BUILT** (`/membership.html`). Memberships also support
+**Self-serve membership purchase (Yoco one-off) is BUILT** (on the consolidated **`/plan`** page; the old
+`/membership` + `/packs` 301-redirect there). Memberships also support
 **typed tiers + optional access windows** (`billing.price.access_days/access_start_min/access_end_min`,
 enforced by `diary.pricing.membership_covers(starts_at)` — outside the window → PAYG) and a **7-day
 free-week trial** auto-granted on signup (`grant_signup_trial`, `provider='trial'`). Bundles are now
@@ -144,12 +166,30 @@ free-week trial** auto-granted on signup (`grant_signup_trial`, `provider='trial
 carry a lifecycle **`status`** (active/dormant/retired). See `docs/specs/02-token-bundle-engine.md` +
 `docs/specs/BUSINESS-RULES.md §4`. **(Current source of truth: `docs/specs/`.)**
 
-**Booking flow (`book.js`, Wix "Schedule your service" style):** Service → **Duration** (court/lesson; live
-per-duration price, or "Covered by your membership") → **Schedule** (month calendar | 2-col time blocks |
-coach/court dropdowns with "Any" defaults) → **Pay & confirm** (at court / monthly / membership / online) →
-slick animated success. Class flow skips Duration (sessions have fixed times): Service → Schedule (pick a
-session) → enrol. **When editing `book.js`, PRESERVE** the `createBooking` call + the online seam
-(`res.booking.order_id` → `Pay.startYocoCheckout`).
+**Booking flow (`frontend/js/booking.js`, full-screen — replaced `book.js`/`quickbook.js`):** Service →
+**Schedule** (month calendar with **inline per-duration chips** for court/lesson — pick the duration right
+on the day; live price or "Covered by your membership"; coach/court dropdowns default to "Any") → **Pay &
+confirm** (at court / monthly / membership / online) → animated success. Also a **~2-tap quick-book** off
+the cockpit (`portal.js`). Classes have fixed session times: Service → pick a session → enrol. **When
+editing `booking.js`, PRESERVE** the `createBooking` call + the online seam (`res.booking.order_id` →
+`Pay.startYocoCheckout`).
+
+**Booking-validation principle — the front end only ever offers CONFIGURED services.** The picker shows only
+durations with an active `billing.price` row (`durations_for`); the old per-club `min_booking_minutes`
+rejection is GONE (a priced duration is always bookable). A **lesson reserves coach∩court**: `create_booking`
+auto-assigns a free court (`_first_free_court`) and refuses if no coach OR no court is free
+(`COACH_REQUIRED`/`NO_COURT_AVAILABLE`); only coaches with weekly hours + `is_bookable` are offered.
+
+**Lesson approval lifecycle (accept / propose / decline).** Per-coach `iam.coach_profile.review_bookings`:
+ON → a CLIENT self-booking that coach creates a **`requested`** booking reserving NOTHING (no court/order/
+payment) until the coach acts; a coach/admin booking **on-behalf ALWAYS auto-confirms** (client notified,
+can reschedule/cancel). Coach actions `POST /api/diary/bookings/<id>/{accept,propose,decline}` (only the
+awaited party; admin always): **accept** → auto-assign court + settle → `confirmed` (online prepay coerced
+to at-court for an unconfirmed lesson); **propose** a new time → **`proposed`** (awaiting the client, who
+accepts/declines/withdraws in **My Bookings → "Needs your attention"**); **decline** → `cancelled`.
+`requested`/`proposed` are in the booking `status` CHECK but NOT the GiST exclusion (they hold no slot).
+Events: `lesson_requested|proposed|accepted|declined`. Verified idempotent (`python -m db`) + the full
+request→accept→settle chain green on a scratch DB.
 
 **Capacity-sweep WITHOUT a cron:** abandoned `held` bookings are released by **lazy expiry** —
 `diary.bookings.release_expired_holds` runs at the top of `compute_availability` + `create_booking` (cancels
@@ -184,7 +224,9 @@ session) → enrol. **When editing `book.js`, PRESERVE** the `createBooking` cal
 ## Still needs Tomo (config, not code) — infra is otherwise live
 - **S3** (`S3_BUCKET` + AWS keys) for coach **photo uploads** — until set, coaches paste a photo URL.
 - **SES** verified sender for **invite/confirmation emails** — until then coach invite links are shared
-  manually; Klaviyo marketing also dark until `KLAVIYO_API_KEY`.
+  manually AND **booking confirmations notify in-app only** (no email; the built `.ics` calendar attaches
+  to the email once email is live — SES needs `SendRawEmail`/MIME for the attachment). Klaviyo marketing
+  also dark until `KLAVIYO_API_KEY`.
 - **Yoco keys** (`YOCO_*`) — DONE (set in Render; payments live). Each club still opts in via the
   Settings → Payments toggle.
 - **DNS / SEO cutover** for `nextpointtennis.com` (supervised — never an agent). See `docs/11 §5`, `docs/07`.

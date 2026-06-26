@@ -1,5 +1,10 @@
 # Owner Self-Service + Commission/Rental Revenue Model + Owner Cockpit — Spec
 
+> **AS-BUILT NOTE (2026-06-26):** the owner console SHIPPED (2026-06-25/26) on the shared `crm_ui.js`:
+> a **per-service commission editor** (club/coach/per-service incl. classes), the financial cockpit
+> (per-coach settlement, refund-aware), and People-360. Read this for design intent; see
+> **`BUSINESS-RULES.md`** §6–7 + **`INVENTORY.md`** for what's live.
+
 Status: DRAFT (implementation-ready). Lane owner: **Agent A (Foundation) / Admin lane**, with billing-ledger
 work coordinated with **Agent C (Billing)** and reporting with **Agent D (CRM)**.
 Author POV: the **club owner** of NextPoint.

@@ -11,9 +11,10 @@ in [01-commission-and-coaching-decisions.md](01-commission-and-coaching-decision
   club on login (defaults to PAYG). No more "no active club" for new sign-ups.
 - **Owner onboarding** (wizard): club profile, location, branding, policy, courts, hours, services &
   prices, invite coaches. `club.onboarding_completed` gates first-run redirect.
-- **Coach onboarding:** invited by the owner (`iam.coach_invite`) → on first login the coach completes
-  their own profile/photo/bio, weekly hours (creates their `diary.resource(kind=coach)`), and
-  services/rates.
+- **Coach onboarding (4-step):** invited by the owner (`iam.coach_invite`) → on first login the coach
+  completes profile/photo/bio + languages/qualifications/visibility + **review-bookings** preference,
+  weekly hours (creates their `diary.resource(kind=coach)`), and services/rates + classes/packs (fully
+  pre-filled on return).
 
 ## 2. The diary / booking
 - **Services:** book a **court**, a **lesson** (with a named or "Any" coach), or **attend a class**.
@@ -24,9 +25,21 @@ in [01-commission-and-coaching-decisions.md](01-commission-and-coaching-decision
 - **Classes:** owner/coach create class types + schedule **recurring or one-off** sessions; capacity +
   **waitlist** (auto-promote the next person on a cancellation); rosters + attendance; shown on the
   master diary.
-- **Book-on-behalf:** a coach/admin can book FOR a client (the booking is owned by the client via
-  `booked_for_user_id`). **Book-for-a-child:** a parent picks a dependent in "Who's playing?" — the
-  booking is FOR the child but **owned and billed to the parent**.
+- **Book-on-behalf:** a coach/admin can book FOR a client (owned by the client via `booked_for_user_id`)
+  — this **auto-confirms** (the client is just notified, and can reschedule/cancel). **Book-for-a-child:**
+  a parent picks a dependent in "Who's playing?" — the booking is FOR the child but **owned and billed to
+  the parent**.
+- **Lesson approval lifecycle (accept / propose / decline).** A coach can require approval of lessons
+  clients book with them (`iam.coach_profile.review_bookings`). When ON, a client self-booking that coach
+  creates a **`requested`** lesson that **reserves nothing** (no court, no order, no payment) until the
+  coach acts: **accept** → a court is auto-assigned, settlement runs, status → `confirmed`; **propose** a
+  new time → **`proposed`** (the client accepts/declines/withdraws in *My Bookings → "Needs your
+  attention"*); **decline** → `cancelled`. When OFF, lessons auto-confirm. `requested`/`proposed` hold no
+  slot (not in the GiST exclusion); only the awaited party may act (admin always).
+- **Only configured services are offered.** The booking UI can only present what's been built: a duration
+  is bookable iff it has an active `billing.price` row; a lesson is offered only where a **bookable coach**
+  (weekly hours set, `is_bookable`) **and a court** are both free. No "minimum booking" rule can contradict
+  a configured price.
 - **Holds expire lazily** (no cron): abandoned `held` bookings past `held_until` are released whenever
   anyone checks availability or books.
 - **Booking window / lead time / cancellation cutoff** come from `club.policy` (configurable).
@@ -36,7 +49,8 @@ in [01-commission-and-coaching-decisions.md](01-commission-and-coaching-decision
   `unit='per_booking'`). `price_for(kind, duration)` resolves exact → nearest≤ → any.
 - Seeded defaults (editable): Court 30/60/90/120 = R90/150/210/280; Lesson 30/60 = R250/400; classes
   per session. The legacy Wix "member R0 court" tier is gone.
-- The booking flow: **Service → Duration (live price) → Schedule → Pay/confirm.**
+- The booking flow (`booking.js`, full-screen): **Service → Schedule (month calendar with inline
+  per-duration price) → Pay/confirm.** Duration is picked right on the calendar, not a separate screen.
 
 ## 4. The three purchasing models (all configurable)
 1. **PAYG** — pay per booking (online / at-court / monthly account) at the per-duration price.
@@ -107,30 +121,42 @@ show active items — dormant/retired vanish for customers but stay visible to t
   (gross 0). Coach-lesson **bundle** purchases accrue at the (collected) purchase.
 - **Coach pricing modes:** PAYG (online) · bundles (online) · **monthly arrears** (off-platform: the
   coach sends a statement and chases EFT, then **marks collected** → commission accrues).
-- **Coach month-end statement** (`/statement.html`): per client — lessons, paid-via-Yoco + owed
-  (arrears) = **net balance**; mark arrears collected.
+- **Coach month-end statement** (`/statement.html` + in the console): per client — lessons, paid-via-Yoco
+  + owed (arrears) = **net balance**; mark arrears collected, and **discount / write-off** owed lines
+  (`PATCH /api/admin/coach-statement/arrears/<id>`). The **client sees the same statement** (`GET
+  /api/me/statement`) — one engine, two lenses.
 - **Owner cockpit** (`/api/admin/financials/*`): revenue by service, **commission owed + rent due per
   coach**, membership MRR; reconciles (collected − commission = coach net).
 - Splits/accruals are **idempotent** (a replayed webhook never double-charges).
 
 ## 7. Self-service per role
-- **Client (`/account.html`):** edit profile/demographics (**email read-only = identity**); manage
-  **children/dependents**; **Financials** (current plan, usage this month, spend per month + history,
-  next charge); raise **refund requests**. Buy membership (`/membership.html`) + packs (`/packs.html`).
-- **Coach (`/coach.html`):** edit profile (bio, photo, specialties, languages, qualifications,
-  visibility toggles); set **per-duration lesson rates**; **own lesson packs** (Packs tab →
-  `/api/coach/bundle-plans`, scoped + ownership-guarded); availability + time-off; **My Clients**
-  (derived, private to that coach); **Dashboard cockpit** (lessons, hours, gross + **net-of-commission**
-  earnings, fill rate, new-vs-returning, top clients, trend); **Statement** (month-end money).
-- **Owner (`/admin.html`, `/settings.html`):** master diary; resources/courts; people (+ membership
-  grant); classes; a consolidated **Settings → Pricing** tab (court rates · packs · memberships, each
-  with the active/dormant/retired control + membership "Access hours"); **Coach pay** (rent +
-  commission rules); payments (online-payments toggle) + refunds + refund-requests; **Cockpit/Financials**;
-  onboarding; branding; policy.
+- **Client (`/account.html` + action-first `/portal` cockpit):** edit profile/demographics (**email
+  read-only = identity**); manage **children/dependents**; **Financials** + **statement** (`/api/me/statement`,
+  the mirror of the coach statement); raise **refund requests**. Buy membership + packs on the consolidated
+  **`/plan`** page. **My Bookings** has a *"Needs your attention"* section (accept/decline a coach's proposed
+  time, withdraw a pending request) and **"Add to calendar"** (.ics) on upcoming bookings.
+- **Coach (`/coach.html`, on the shared `crm_ui.js`):** 4-step onboarding + edit profile (bio, photo,
+  specialties, languages, qualifications, visibility, **review-bookings** toggle); set **per-duration
+  lesson rates** + classes; **own lesson packs** (scoped + ownership-guarded); availability + time-off;
+  **lesson approval queue** (accept/propose/decline); **book a session for a client** (auto-confirms);
+  **My Clients** 360 (derived, private; history + upcoming); **Statement** (month-end money — mark
+  collected + discount/write-off); **Dashboard cockpit** (lessons, hours, gross + **net-of-commission**
+  earnings, fill rate, new-vs-returning, top clients, trend, **lessons-left-on-plans**, month-end-after-
+  commission).
+- **Owner (`/admin.html`, `/settings.html`, on the shared `crm_ui.js`):** master diary; resources/courts;
+  **People** (360 drawer + membership grant); classes; a consolidated **Settings → Pricing** tab (court
+  rates · packs · memberships, each with the active/dormant/retired control + membership "Access hours");
+  **Coach pay** — a **per-service commission editor** (club / per-coach / per-service, lessons AND classes)
+  on top of rent; payments (online-payments toggle) + refunds + refund-requests; **financial Cockpit**
+  (per-coach settlement, refund-aware); onboarding; branding; policy.
 
 ## 8. Notifications
 - In-app **bell + inbox** (topbar) for every member; driven non-fatally off `emit()`. Kinds:
   booking confirmed, payment receipt (links to the receipt), membership active, pack activated,
-  refund requested/decided, class enrolled/waitlisted/spot-open, coach invited.
+  refund requested/decided, class enrolled/waitlisted/spot-open, coach invited, **lesson
+  requested/proposed/accepted/declined**.
+- **Calendar:** every booking has a downloadable **`.ics`** (`GET /api/diary/bookings/<id>/calendar.ics`);
+  the confirmation payload carries `ics_url`. The in-app **"Add to calendar"** works now; the email will
+  attach the same file once email is live.
 - **Email** path (SES transactional) lights up when keys are set; until then the inbox works fully and
   email is `skipped`. Child events notify the **guardian**. (See OUTSTANDING.md for the keys.)

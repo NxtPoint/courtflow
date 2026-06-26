@@ -170,11 +170,11 @@ minutes, and burned minutes always have a confirmed booking.** `match_wallet`'s 
   (`CoachUI.packs`). `GET/POST /api/coach/bundle-plans` + `PATCH /api/coach/bundle-plans/<id>` force
   `service_kind='lesson'` + `coach_user_id = the principal` and guard ownership (a coach can only edit
   their own pack, else 404). Reuses the generic engine, so coach packs get the unit draw-down + lifecycle.
-- **Member** — the **Packs** page (`frontend/app/packs.html` + `frontend/js/packs.js`): packs to buy +
-  the member's wallets ("4.5 of 10 sessions left (270 min)" + expiry).
-- **Booking** — `book.js` **auto-applies** a matching pack (no manual chip-hunt): a usable pack is the
+- **Member** — the consolidated **`/plan`** page (`frontend/app/plans.html` + `frontend/js/plan.js`; the
+  old `/packs` 301s here): packs to buy + the member's wallets ("4.5 of 10 sessions left (270 min)" + expiry).
+- **Booking** — `booking.js` **auto-applies** a matching pack (no manual chip-hunt): a usable pack is the
   pre-selected settlement default, shown as **"Covered by your pack · R0"**; a free booking skips the
-  payment chooser entirely (just confirm). When a pack runs dry, a re-buy nudge links to `/packs`.
+  payment chooser entirely (just confirm). When a pack runs dry, a re-buy nudge links to `/plan`.
 
 ---
 

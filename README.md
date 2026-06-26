@@ -13,12 +13,12 @@ appears in marketing copy + repo, never in schema (schema is `club_id`‑scoped)
 
 ---
 
-## 📍 Project status (last updated 2026‑06‑20)
+## 📍 Project status (last updated 2026‑06‑26)
 
 | Track | State |
 |---|---|
-| **Spec** | ✅ Complete — `docs/00`→`11` + `BUILD_PROMPT.md`. |
-| **Platform build** | 🔵 In progress — Phases 0–6 scaffolded & integration‑verified on `master`. Live build state is in **`CLAUDE.md`** (maintained by Claude Code). Remaining: Yoco online pay (Phase 7) + supervised DNS/SEO cutover. **Still needs Tomo to RUN:** new Postgres `DATABASE_URL`, new Clerk app, Klaviyo/Yoco/S3/SES keys — see `CLAUDE.md` "Still needs Tomo". |
+| **Spec** | ✅ Complete — `docs/00`→`11` + `BUILD_PROMPT.md`. **Current as‑built state: `docs/specs/`** (START at `docs/specs/README.md`). |
+| **Platform build** | ✅ **LIVE on Render, end‑to‑end.** All three purchasing models, Yoco online pay + refunds, the commission/settlement engine, the **lesson approval lifecycle**, **redesigned client + coach + owner consoles**, and a booking **`.ics` calendar** are built & deployed. Authoritative current state: **`docs/specs/`** + **`CLAUDE.md`**. Remaining: **`docs/specs/OUTSTANDING.md`**. **Still needs Tomo (config):** S3 (coach photos), SES/Klaviyo (email), supervised DNS/SEO cutover. |
 | **NextPoint Google Ads** | ✅ Optimised & live (2026‑06‑20) — see `marketing/`. |
 | **SEO migration (Wix→Render)** | ⏳ Planned, not executed — `docs/07` + `migration/` (supervised cutover; never auto‑run). |
 
@@ -79,5 +79,16 @@ appears in marketing copy + repo, never in schema (schema is `club_id`‑scoped)
 - **2026‑06‑20 — Platform build kicked off (Claude Code).** Phases 0–6 scaffolded + integration‑verified; `docs/11` + `CLAUDE.md` build‑state added. git initialised.
 - **2026‑06‑20 — NextPoint Google Ads overhauled (Cowork + Adspirer).** Diagnosed PMax + vanity "Page view" conversion; paused PMax; built live **Search** campaign (R66/day, 4 ad groups, 38 keywords, 28 negatives, full extensions); tightened geo to 10 northern suburbs; demoted "Page view" → Secondary (only "Calls from ads" primary). Verified via Adspirer.
 - **2026‑06‑25 (scheduled)** — Day‑5 ads tuning review (search‑terms prune + negatives + report).
+- **2026‑06‑21/22 — Platform shipped to LIVE (Claude Code).** Three purchasing models end‑to‑end
+  (unit/minute bundles, free week, lifecycle, membership tiers + access windows), Yoco online pay +
+  refunds + receipts + reconcile, the Business Overview analytics dashboard, public‑site restyle. The
+  `docs/specs/` folder established as the as‑built source of truth.
+- **2026‑06‑25/26 — Client + coach + owner experience (Claude Code).** Redesigned client journey
+  (action‑first cockpit, full‑screen calendar booking, consolidated `/plan`); the **lesson approval
+  lifecycle** (request/propose/accept/decline + per‑coach review; on‑behalf auto‑confirms; client‑side
+  accept/decline/withdraw); **coach & owner consoles** (onboarding, approval queue, clients‑360,
+  statements with discount/write‑off, per‑service commission, financial cockpits — on the shared
+  `crm_ui.js`); booking **`.ics` calendar**. Verified on a scratch Postgres; the `docs/specs/` set + this
+  index refreshed.
 
 > **Next big link‑up:** once CourtFlow's booking site is live, wire real conversions (booking completion, free‑lesson form, WhatsApp click) into Google Ads so bidding optimises toward actual leads — the ads and the platform reinforce each other.

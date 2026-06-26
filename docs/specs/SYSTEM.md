@@ -40,8 +40,13 @@ the schema gate. Extensions: `btree_gist` (the no-double-book EXCLUDE constraint
 `diary/` computes availability **on read** (expand `availability_rule` − `time_off` − bookings −
 class_sessions), and books with a Postgres **GiST EXCLUDE** constraint so two bookings can never overlap
 a resource (concurrency-safe; the loser gets `SLOT_TAKEN`). Lessons reserve a **coach ∩ court**
-intersection (a lesson holds a court too, one `order_id` across both rows). Classes have capacity +
-waitlist (auto-promote on cancel). **Lazy expiry replaces the capacity-sweep cron:**
+intersection (a lesson holds a court too, one `order_id` across both rows); `create_booking` auto-assigns
+a free court and refuses without a free coach AND court. **Lesson approval lifecycle:** a coach with
+`iam.coach_profile.review_bookings` ON turns a client's self-booked lesson into a **`requested`** booking
+that reserves NOTHING until the coach **accepts** (auto-assign court + settle → `confirmed`), **proposes**
+a new time (→ **`proposed`**, awaiting the client), or **declines** (→ `cancelled`); on-behalf bookings
+always auto-confirm. `requested`/`proposed` are outside the GiST exclusion (they hold no slot). Classes
+have capacity + waitlist (auto-promote on cancel). **Lazy expiry replaces the capacity-sweep cron:**
 `release_expired_holds` runs at the top of availability + booking, cancelling `held` rows past
 `held_until` — no paid cron needed.
 
@@ -69,22 +74,27 @@ provider-agnostic. On top of it:
 
 ## Events, CRM & notifications
 Producers call `marketing_crm.emit(event, payload)` → writes `core.usage_event` (the decoupled event
-contract, `contracts/events.md`). `emit()` also drives **notifications** (`marketing_crm/notifications.py`,
-non-fatal): mapped transactional kinds → a `core.notification` (in-app inbox, always) + a transactional
-email (SES, dark without keys). Klaviyo lifecycle flows hang off the same event feed (dark without
-`KLAVIYO_API_KEY`). Child bookings route notifications to the **guardian**.
+contract, `contracts/events.md`; includes the `lesson_requested|proposed|accepted|declined` lifecycle
+events). `emit()` also drives **notifications** (`marketing_crm/notifications.py`, non-fatal): mapped
+transactional kinds → a `core.notification` (in-app inbox, always) + a transactional email (SES, dark
+without keys). Klaviyo lifecycle flows hang off the same event feed (dark without `KLAVIYO_API_KEY`).
+Child bookings route notifications to the **guardian**. Every booking has a downloadable **`.ics`**
+(`diary/calendar.py` → `GET /api/diary/bookings/<id>/calendar.ics`; `ics_url` on the confirmation
+payload) — in-app "Add to calendar" now, the email attaches the same file once email is live.
 
 ## Request flow (a booking, end to end)
-1. SPA `book.js`: pick service → duration (live per-duration price, or "covered by membership") →
-   schedule (calendar + coach/court "Any") → settlement (at-court / monthly / membership / **token** /
-   online).
+1. SPA `booking.js` (full-screen): pick service → schedule on a month calendar with **inline per-duration
+   price** (or "covered by membership"; coach/court default "Any") → settlement (at-court / monthly /
+   membership / **token** / online / free).
 2. `POST /api/diary/bookings` → `create_booking` (club-scoped, exclusion-constrained); creates the order
    per settlement mode (online → `awaiting_payment` + booking `held`; token → draws a wallet token at R0;
-   membership-covered → R0).
-3. Online: `book.js` reads **`res.booking.order_id`** → `Pay.startYocoCheckout` → Yoco hosted page →
+   membership-covered → R0). A **gated lesson** (review-coach, client self-book) → `requested`, with **no
+   order/court** until the coach accepts.
+3. Online: `booking.js` reads **`res.booking.order_id`** → `Pay.startYocoCheckout` → Yoco hosted page →
    `POST yoco/webhook` (verified) → `apply_payment_event` → order `paid` + booking `confirmed` +
    commission split accrued (if a coach lesson) + `emit('payment_succeeded')` → receipt notification.
-4. Cancel → frees the slot, credits a token back / records a refund as configured.
+4. Cancel/withdraw → frees the slot (also cancels a pending `requested`/`proposed` lesson), credits a
+   token back / records a refund as configured.
 
 ## Deploy
 Render auto-deploys `master` (push → both services rebuild). Go-live flags are committed in

@@ -1,5 +1,11 @@
 # Coach Self-Service + Business Cockpit — Spec
 
+> **AS-BUILT NOTE (2026-06-26):** the coach console SHIPPED (2026-06-25/26), built on the shared
+> `crm_ui.js`: 4-step onboarding, service builder, the **lesson approval queue** (accept/propose/decline),
+> book-for-a-client (auto-confirms), clients-360, statement (mark-collected + discount/write-off), cockpit
+> (incl. lessons-left-on-plans + month-end-after-commission). Read this for design intent; see
+> **`BUSINESS-RULES.md`** §6–7 + **`INVENTORY.md`** for what's live.
+
 Status: DRAFT (implementation-ready). Owner: Coach lane (`coach/`). Coordinates with: Billing (`billing/`),
 Diary (`diary/`), CRM (`marketing_crm/`, `core/`), Admin/Owner (`admin/`).
 

@@ -3,9 +3,18 @@
 The single source of truth for remaining work. Grouped by type. (Everything NOT here is built & live —
 see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 
+> **Recently shipped (2026-06-25/26 — NOT outstanding):** the redesigned client journey (action-first
+> cockpit + full-screen calendar booking + consolidated `/plan`), the **lesson approval lifecycle**
+> (request/propose/accept/decline + per-coach review; on-behalf auto-confirms; client-side accept/decline/
+> withdraw), the **coach & owner consoles** (onboarding, approval queue, clients-360, statements with
+> discount/write-off, **per-service commission editor**, financial cockpits — on the shared `crm_ui.js`),
+> and the booking **`.ics` calendar** (in-app "Add to calendar"). Verified on a scratch DB.
+
 ## A. Config — needs Tomo (not code; flips features from dark → live)
 - [ ] **SES verified sender** → transactional **emails** start sending (notifications engine is built &
-      waiting; until then in-app inbox only). Also enables invite/confirmation emails.
+      waiting; until then in-app inbox only). Also enables invite/confirmation emails. **To attach the
+      booking `.ics` to the confirmation email, SES needs `SendRawEmail`/MIME** — the `.ics` generator
+      (`diary/calendar.py`) + `ics_url` are done; only the MIME send is left (a small add when SES lands).
 - [ ] **`KLAVIYO_API_KEY`** → CRM lifecycle/marketing flows go live (event feed already emits).
 - [ ] **`S3_BUCKET` + AWS keys** → coach **photo uploads** (until then coaches paste a photo URL).
 - [ ] **DNS / SEO cutover** for `nextpointtennis.com` (supervised — never an agent; see `docs/07`,
@@ -30,6 +39,8 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       effect, credit/refund). Backlog — needs a proper spec before building.
 - [ ] **Platform / super-admin cockpit** — cross-club view (all clubs' revenue/health) for
       `platform_admin`. Low priority while there's one club; the `scope_clause` design supports it.
+- [ ] **Owner per-person 360 endpoint** — the owner People drawer composes from people+payments today;
+      a dedicated `GET /api/admin/people/<id>` 360 (like the coach's `clients/<id>`) is a nice-to-have.
 - [ ] **Reminders** — booking reminders (the `/api/cron/reminders` handler exists but cron services are
       off). Needs a scheduler: re-enable a Render cron, or an external pinger, or a lazy "due reminders"
       sweep. Same blocker for scheduled rent accrual + the reconcile/membership-refill sweeps.

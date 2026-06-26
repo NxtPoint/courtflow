@@ -1,5 +1,11 @@
 # Client Self-Service — "My Account" Spec
 
+> **AS-BUILT NOTE (2026-06-26):** this is the original *design* spec — the feature shipped and the UI
+> evolved. The booking SPA is now `booking.js` (full-screen calendar; `book.js`/`quickbook.js` retired),
+> membership/packs are the consolidated **`/plan`** page, and the client has a statement + a "Needs your
+> attention" lesson-proposal surface + "Add to calendar". Read this for design intent; see
+> **`BUSINESS-RULES.md`** §7 + **`INVENTORY.md`** for what's live.
+
 Status: **DRAFT / implementation-ready scope.** Lane: primarily **E (frontend)** + **A (iam)** for
 profile/dependents, with read-only seams into **C (billing)** for financials and a small **B (diary)**
 change to thread dependents through bookings. Nothing here builds the feature — this is the contract a

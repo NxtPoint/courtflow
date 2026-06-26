@@ -4,12 +4,14 @@ This folder is the **authoritative current-state documentation** for the platfor
 should read this file first, then the four core docs below. The repo root `CLAUDE.md` is the short
 operating guide; **this folder is the detail.**
 
-> **Status:** LIVE on Render, deployed end-to-end. Build sessions 2026-06-20 → 06-22. The public
-> marketing site was rebuilt, and the **three purchasing models were completed end-to-end** — unit
-> (minute-based) bundles, seamless checkout, the signup **free week**, the active/dormant/retired
-> **lifecycle**, membership **tiers + access windows** (abuse guard), a consolidated **Pricing**
-> config + coach-owned packs, and a customer-first booking journey. See BUSINESS-RULES §4 +
-> `02-token-bundle-engine.md`. Remaining work: **OUTSTANDING.md**.
+> **Status:** LIVE on Render, deployed end-to-end. Build sessions 2026-06-20 → 06-26. Earlier: the public
+> site + the **three purchasing models** end-to-end (unit/minute bundles, free week, active/dormant/retired
+> lifecycle, membership tiers + access windows). **2026-06-25/26:** a **redesigned client journey**
+> (action-first cockpit, full-screen calendar booking, consolidated `/plan`), the **lesson approval
+> lifecycle** (request/propose/accept/decline + per-coach review; on-behalf auto-confirms), **coach & owner
+> consoles** (onboarding, approval queue, clients-360, statements with discount/write-off, per-service
+> commission, financial cockpits — both on the shared `crm_ui.js`), and a booking **`.ics` calendar**.
+> Remaining work: **OUTSTANDING.md**.
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,
