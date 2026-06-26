@@ -16,13 +16,20 @@
 
   function render(bookings) {
     var box = document.getElementById("my-list"); UI.clear(box);
+    var pending = bookings.filter(function (b) { return ["requested", "proposed"].indexOf(b.status) >= 0; });
     var active = bookings.filter(function (b) { return ["held", "confirmed"].indexOf(b.status) >= 0; });
-    var past = bookings.filter(function (b) { return ["held", "confirmed"].indexOf(b.status) < 0; });
+    var past = bookings.filter(function (b) { return ["cancelled", "completed", "no_show"].indexOf(b.status) >= 0; });
 
     if (!bookings.length) { box.appendChild(el("div", { class: "cf-empty", text: "No bookings yet." })); return; }
 
+    if (pending.length) {
+      box.appendChild(el("h3", { text: "Needs your attention" }));
+      var pend = el("div", { class: "cf-list" });
+      pending.forEach(function (b) { pend.appendChild(pendingRow(b)); });
+      box.appendChild(pend);
+    }
     if (active.length) {
-      box.appendChild(el("h3", { text: "Upcoming" }));
+      box.appendChild(el("h3", { text: "Upcoming", style: pending.length ? "margin-top:16px" : "" }));
       var list = el("div", { class: "cf-list" });
       active.forEach(function (b) { list.appendChild(row(b, true)); });
       box.appendChild(list);
@@ -33,6 +40,44 @@
       past.forEach(function (b) { pl.appendChild(row(b, false)); });
       box.appendChild(pl);
     }
+  }
+
+  // requested = your lesson request awaiting the coach (you can withdraw it).
+  // proposed  = the coach offered a (possibly new) time — accept or decline.
+  function pendingRow(b) {
+    var isProposed = b.status === "proposed";
+    var sub = isProposed
+      ? ("Coach proposed: " + UI.fmtRange(b.starts_at, b.ends_at))
+      : ("Requested: " + UI.fmtRange(b.starts_at, b.ends_at) + " · awaiting coach");
+    var actions = [];
+    if (isProposed) {
+      actions.push(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Accept", onclick: function () { acceptProposed(b); } }));
+      actions.push(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Decline", onclick: function () { declineProposed(b); } }));
+    } else {
+      actions.push(el("button", { class: "cf-btn cf-btn-sm", text: "Withdraw", onclick: function () { withdraw(b); } }));
+    }
+    return el("div", { class: "cf-item" }, [
+      el("span", { class: "cf-chip held", text: b.status }),
+      el("div", { class: "cf-item-main" }, [
+        el("div", { class: "cf-item-t", text: b.resource_name || "Lesson" }),
+        el("div", { class: "cf-item-s", text: sub }),
+      ]),
+    ].concat(actions));
+  }
+
+  async function acceptProposed(b) {
+    try { await window.API.acceptBooking(b.id); UI.toast("Lesson confirmed.", "info"); load(); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+  async function declineProposed(b) {
+    if (!confirm("Decline this proposed time?")) return;
+    try { await window.API.declineBooking(b.id, { reason: "member_declined" }); UI.toast("Declined.", "info"); load(); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+  async function withdraw(b) {
+    if (!confirm("Withdraw this lesson request?")) return;
+    try { await window.API.cancelBooking(b.id, { reason: "member_withdraw" }); UI.toast("Request withdrawn.", "info"); load(); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
   function row(b, actionable) {

@@ -164,15 +164,6 @@
       el("option", { value: "monthly_account", text: "Monthly account" }),
       el("option", { value: "free", text: "Complimentary" }),
     ]);
-    // Lessons can be confirmed immediately OR sent to the client as a proposal (they accept).
-    // Proposals require an existing member (a walk-in guest has no login to accept), so this
-    // is meaningful only when a member email is entered and the type is a lesson.
-    var confirmMode = el("select", { class: "cf-select" }, [
-      el("option", { value: "now", text: "Confirm now" }),
-      el("option", { value: "propose", text: "Send as a proposal (client accepts)" }),
-    ]);
-    var confirmField = fieldEl("How to confirm", confirmMode);
-
     var courtField = fieldEl("Court (optional, held alongside the lesson)", courtSel);
     function syncType() {
       var isLesson = typeSel.value === "lesson";
@@ -181,8 +172,6 @@
       courtOptions(isLesson).forEach(function (o) { courtSel.appendChild(o); });
       courtField.querySelector("label").textContent = isLesson
         ? "Court (optional, held alongside the lesson)" : "Court";
-      // Proposals are lesson-only; hide the chooser for court bookings.
-      confirmField.style.display = isLesson ? "" : "none";
     }
     typeSel.addEventListener("change", syncType);
     syncType();
@@ -198,7 +187,6 @@
       fieldEl("When", when),
       fieldEl("Duration", dur),
       fieldEl("Settlement", settle),
-      confirmField,
       el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:12px" }, [
         el("button", { class: "cf-btn", text: "Cancel", onclick: close }),
         el("button", { class: "cf-btn cf-btn-primary", text: "Book", onclick: function () { submitBookForClient(); } }),
@@ -231,17 +219,10 @@
       // for_email to a club member (else treats it as a walk-in guest party).
       if (em) body.for_email = em;
       if (gn) { body.for_guest_name = gn; if (ge) body.for_guest_email = ge; }
-      // "Send as a proposal" -> the lesson is created as 'proposed' (awaiting the client).
-      // Only valid for a lesson booked for an EXISTING member (a guest can't accept).
-      var asProposal = isLesson && confirmMode.value === "propose";
-      if (asProposal) {
-        if (!em) { UI.toast("A proposal needs a member email (the client accepts it).", "warn"); return; }
-        body.propose = true;
-      }
       try {
         await window.API.createBooking(body);
         close();
-        UI.toast(asProposal ? "Proposal sent to the client." : "Booked for client.", "info");
+        UI.toast("Booked for client.", "info");
         loadWeek(); loadPending();
       } catch (e3) { UI.toast(UI.errMsg(e3), "error"); }
     }

@@ -351,20 +351,20 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         return _err("RESOURCE_NOT_FOUND", 404)
 
     # ---- lesson approval gate (accept/propose/decline lifecycle) ----------------------------
-    # A lesson is "gated" — created as requested/proposed, reserving NOTHING (no court, no order,
-    # no payment) until accepted — when either: a client self-books a coach who reviews bookings
-    # ('requested' → awaiting the coach), or a coach/admin books on-behalf and chose "send as a
-    # proposal" ('proposed' → awaiting the client). On accept the court is auto-assigned and the
-    # normal settlement runs; we don't take online prepay for an unconfirmed lesson → coerce to
-    # pay-at-court. Everything else flows through the immediate path below unchanged.
+    # A lesson is "gated" — created as 'requested' (reserving NOTHING: no court, no order, no
+    # payment) when a CLIENT self-books a coach who reviews bookings, so the coach accepts/declines
+    # first. A coach/admin booking ON-BEHALF of a client ALWAYS auto-confirms (no client-acceptance
+    # step) — the client is just notified and can reschedule/cancel themselves if it doesn't suit.
+    # (A coach can still counter-propose a new time on a request via propose_time -> 'proposed',
+    # which the client then accepts/declines.) On accept the court is auto-assigned + the normal
+    # settlement runs (online prepay -> pay-at-court for an unconfirmed lesson). Everything else
+    # flows through the immediate path below unchanged.
     if booking_type == "lesson" and res["kind"] == "coach":
         _gate_coach = coach_user_id or res.get("coach_user_id")
         _gate_status = None
         if booked_for_user_id is None and role in ("member", "guest") and \
                 _coach_reviews(session, club_id, _gate_coach):
             _gate_status = "requested"
-        elif propose and booked_for_user_id is not None:
-            _gate_status = "proposed"
         if _gate_status and _gate_coach:
             _gate_sm = "at_court" if settlement_mode == "online" else settlement_mode
             _gid = _insert_booking(
@@ -675,7 +675,9 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
     cutoff_h = policy.get("cancellation_cutoff_hours") or 0
     within_cutoff = (_parse_dt(bk["starts_at"]) - now) < timedelta(hours=cutoff_h)
     member_initiated = role in ("member", "guest")
-    fee_applies = bool(member_initiated and within_cutoff and policy.get("no_show_fee_minor"))
+    # A still-pending request/proposal was never confirmed, so withdrawing it never incurs a fee.
+    fee_applies = bool(member_initiated and within_cutoff and policy.get("no_show_fee_minor")
+                       and bk["status"] in ("held", "confirmed"))
     fee_minor = int(policy.get("no_show_fee_minor") or 0) if fee_applies else 0
 
     # Cancel this booking + any linked booking sharing the order_id (lesson + its court).
@@ -683,7 +685,8 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
         text("UPDATE diary.booking SET status='cancelled', cancelled_at=now(), "
              "cancelled_by=:by, cancellation_reason=:reason, held_until=NULL, updated_at=now() "
              "WHERE club_id=:c AND (id=:id OR (order_id IS NOT NULL AND order_id=:oid)) "
-             "  AND status IN ('held','confirmed')"),
+             # include requested/proposed so a client can WITHDRAW a still-pending lesson request.
+             "  AND status IN ('held','confirmed','requested','proposed')"),
         {"by": actor_user_id, "reason": reason, "c": club_id, "id": booking_id,
          "oid": bk.get("order_id")},
     )
