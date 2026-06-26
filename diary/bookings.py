@@ -79,6 +79,21 @@ def _first_free_court(session, club_id, starts, ends):
     ).scalar()
 
 
+def _coach_class_conflict(session, club_id, coach_user_id, starts, ends):
+    """True if the coach RUNS a scheduled class overlapping [starts, ends). A class_session is
+    NOT a diary.booking, so the GiST exclusion constraint can't arbitrate a lesson-vs-class clash
+    for the coach — we must check it explicitly (the write-side half of the coach∩class guard;
+    the read-side half lives in diary.availability._busy_ranges)."""
+    if not coach_user_id:
+        return False
+    return bool(session.execute(
+        text("SELECT 1 FROM diary.class_session "
+             "WHERE club_id = :c AND coach_user_id = :u AND status = 'scheduled' "
+             "  AND ends_at > :s AND starts_at < :e LIMIT 1"),
+        {"c": club_id, "u": coach_user_id, "s": starts, "e": ends},
+    ).first())
+
+
 def _policy(session, club_id):
     row = session.execute(
         text("SELECT booking_window_days, min_booking_minutes, cancellation_cutoff_hours, "
@@ -388,6 +403,12 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     if booking_type == "lesson":
         if res["kind"] != "coach":
             return _err("COACH_REQUIRED", 422, message="a lesson must be booked with a coach")
+        # A coach running a class can't simultaneously take a lesson — the class isn't a
+        # diary.booking so the exclusion constraint can't see it (guard explicitly).
+        if _coach_class_conflict(session, club_id,
+                                 coach_user_id or res.get("coach_user_id"), starts, ends):
+            return _err("COACH_BUSY", 409,
+                        message="the coach is running a class at this time")
         if not court_resource_id:
             court_resource_id = _first_free_court(session, club_id, starts, ends)
         if not court_resource_id:
@@ -862,6 +883,9 @@ def accept_booking(session, *, club_id, booking_id, actor_user_id, role, now=Non
     online = settlement_mode == "online"
     status = "held" if online else "confirmed"
     held_until = (now + timedelta(minutes=HOLD_MINUTES_DEFAULT)) if online else None
+
+    if _coach_class_conflict(session, club_id, coach_uid, starts, ends):
+        return _err("COACH_BUSY", 409, message="the coach is running a class at this time")
 
     court_resource_id = _first_free_court(session, club_id, starts, ends)
     if not court_resource_id:

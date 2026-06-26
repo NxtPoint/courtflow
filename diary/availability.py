@@ -59,7 +59,7 @@ def _resources(session, *, club_id, resource_id, kind, coach_user_id, surface):
     set (kind/coach/surface) for the 'any court' / 'any coach' union."""
     if resource_id:
         rows = session.execute(
-            text("SELECT id, name, kind, surface, capacity FROM diary.resource "
+            text("SELECT id, name, kind, surface, capacity, coach_user_id FROM diary.resource "
                  "WHERE club_id = :c AND id = :rid AND is_active = true"),
             {"c": club_id, "rid": resource_id},
         ).mappings().all()
@@ -78,7 +78,7 @@ def _resources(session, *, club_id, resource_id, kind, coach_user_id, surface):
                  "WHERE cp.club_id = :c AND cp.user_id = diary.resource.coach_user_id "
                  "AND cp.is_bookable = false)")
     rows = session.execute(
-        text("SELECT id, name, kind, surface, capacity FROM diary.resource "
+        text("SELECT id, name, kind, surface, capacity, coach_user_id FROM diary.resource "
              "WHERE " + " AND ".join(where) + " ORDER BY rank, name"),
         params,
     ).mappings().all()
@@ -131,9 +131,15 @@ def _combine(d, t, tz):
     return datetime(d.year, d.month, d.day, t.hour, t.minute, t.second, tzinfo=tz)
 
 
-def _busy_ranges(session, *, club_id, resource_id, range_start, range_end):
+def _busy_ranges(session, *, club_id, resource_id, range_start, range_end, coach_user_id=None):
     """All held/confirmed bookings + scheduled class_sessions + time_off for the resource
-    in the window — as (start,end) UTC tuples to subtract from candidates."""
+    in the window — as (start,end) UTC tuples to subtract from candidates.
+
+    When coach_user_id is given (a coach resource), ALSO subtract the class_sessions that
+    coach RUNS — a class lives on its own kind='class' resource (class_session.resource_id),
+    so it would otherwise never block the coach's lesson availability (the coach is the
+    class_session.coach_user_id, not its resource). This is the read-side half of the
+    coach∩class guard (the write-side half lives in diary.bookings)."""
     out = []
     for row in session.execute(
         text("SELECT starts_at, ends_at FROM diary.booking "
@@ -150,6 +156,14 @@ def _busy_ranges(session, *, club_id, resource_id, range_start, range_end):
         {"c": club_id, "rid": resource_id, "rs": range_start, "re": range_end},
     ):
         out.append((row[0], row[1]))
+    if coach_user_id:
+        for row in session.execute(
+            text("SELECT starts_at, ends_at FROM diary.class_session "
+                 "WHERE club_id = :c AND coach_user_id = :coach AND status = 'scheduled' "
+                 "  AND ends_at > :rs AND starts_at < :re"),
+            {"c": club_id, "coach": coach_user_id, "rs": range_start, "re": range_end},
+        ):
+            out.append((row[0], row[1]))
     for row in session.execute(
         text("SELECT starts_at, ends_at FROM diary.time_off "
              "WHERE club_id = :c AND resource_id = :rid "
@@ -265,7 +279,9 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
         if not candidates:
             continue
         busy = _busy_ranges(session, club_id=club_id, resource_id=res["id"],
-                            range_start=range_start, range_end=range_end)
+                            range_start=range_start, range_end=range_end,
+                            coach_user_id=(res.get("coach_user_id")
+                                           if res.get("kind") == "coach" else None))
         for s_utc, e_utc in candidates:
             if s_utc < now:
                 continue
