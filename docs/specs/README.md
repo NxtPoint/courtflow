@@ -23,6 +23,8 @@ operating guide; **this folder is the detail.**
    **every DB table**, every frontend page/JS module, env vars. *"What exists."*
 4. **[OUTSTANDING.md](OUTSTANDING.md)** — everything still to do: build items, config (needs Tomo),
    and consciously-deferred pieces. *"What's left."*
+5. **[TESTING.md](TESTING.md)** — the **end-to-end test plan** (3 profiles, role-by-role, with expected
+   results). *"How to verify it all."* **← CURRENT PHASE: Tomo is running E2E testing.**
 
 ## The build-era spec docs (design intent, still useful)
 - [00-roadmap.md](00-roadmap.md) — the phased self-service/CRM roadmap (most phases now built).

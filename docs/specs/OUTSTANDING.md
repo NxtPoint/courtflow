@@ -3,6 +3,10 @@
 The single source of truth for remaining work. Grouped by type. (Everything NOT here is built & live —
 see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 
+> **▶ CURRENT PHASE (2026-06-26): end-to-end testing.** Tomo is testing every flow with 3 profiles
+> (owner / coach / client) — the checklist is **[TESTING.md](TESTING.md)**. Bugs found there feed the
+> next build session; the items below are the known remaining work regardless.
+
 > **Recently shipped (2026-06-25/26 — NOT outstanding):** the redesigned client journey (action-first
 > cockpit + full-screen calendar booking + consolidated `/plan`), the **lesson approval lifecycle**
 > (request/propose/accept/decline + per-coach review; on-behalf auto-confirms; client-side accept/decline/
