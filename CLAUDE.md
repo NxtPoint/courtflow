@@ -135,13 +135,15 @@ is read-only: `repositories.py` are **guarded** aggregations (a missing/empty ta
 500), `routes.py` exposes `GET /api/analytics/overview?days=&club_id=` (platform_admin = all clubs or
 `?club_id` filter; club_admin = own club) + `GET /api/analytics/clubs`. Frontend `frontend/app/overview.html`
 + `overview.js` (ECharts) at **`/overview.html`** — KPIs (visits, unique/new/returning, customers, bookings,
-revenue), traffic + sign-up lines, traffic-source / top-page / by-country tables, settlement mix, NPS.
+revenue), traffic + sign-up lines, traffic-source / top-page / by-country / **by-device** tables,
+**time-on-site**, settlement mix, NPS.
 - **Source data:** website traffic from `core.usage_event` (`event_type='page_view'`); customers from
   `core.account`; bookings/revenue from `diary.*`/`billing.*`; NPS from `core.nps_response`.
 - **First-party beacon (NEW — none existed before):** `frontend/js/analytics.js` (localStorage `anon_id` for
   unique visitors, referrer, UTM) → `POST /api/track/page` on load + SPA route change; **loaded on every page
   via the `web_app.py` head-injection** (single point). `beacon.py` captures **country from Cloudflare's
-  `CF-IPCountry`** header. No cookies, no third parties. **Website-traffic panels accrue data from go-live**
+  `CF-IPCountry`** header (falling back to the `Accept-Language` region when no CDN geo header), plus
+  device + time-on-site. No cookies, no third parties. **Website-traffic panels accrue data from go-live**
   (historical events lack page-views/geo).
 - **Embedded in the admin console:** the dashboard is the **"Overview" tab** in `admin.html`/`admin.js`
   (an iframe of `/overview.html`, auth via the parent's `auth_client` relay) + the standalone `/overview.html`.
