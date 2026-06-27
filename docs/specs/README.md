@@ -28,6 +28,9 @@ operating guide; **this folder is the detail.**
 6. **[FEATURES.md](FEATURES.md)** — the **white-label feature & function catalogue** (plain-language,
    grouped by area, with automated-test coverage flags). *"What can it do."* The scratch-DB scenario
    harnesses (`python -m scripts.test_all`) back the ✅-flagged items.
+7. **[PERMISSIONS.md](PERMISSIONS.md)** — the **roles × screens × actions review map**: who sees/does
+   what per console, the 3-layer enforcement model, a straw-man staff-role split to react to, and the
+   built-but-unsurfaced endpoints. *"Who can do what."* (Review artifact — mark it up, then we build.)
 
 ## The build-era spec docs (design intent, still useful)
 - [00-roadmap.md](00-roadmap.md) — the phased self-service/CRM roadmap (most phases now built).
