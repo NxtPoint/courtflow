@@ -25,12 +25,12 @@
 
   // Absolute hrefs so nav works at any URL depth (e.g. /book/court, a sub-path, would
   // break relative links). Pages still pass `active` as a bare filename ("/book.html").
+  // Front-end redesign (2026-06-27): the client surfaces (My Bookings, Plan, Account) are now
+  // SECTIONS of the one-page Home — so the top nav is just Home + Book + the role consoles. The
+  // old /my, /account, /plans pages still resolve as a fallback but are no longer linked here.
   var NAV = [
     { href: "/portal.html", label: "Home", roles: ["*"] },
     { href: "/book.html",   label: "Book",      roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
-    { href: "/my.html",     label: "My Bookings", roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
-    { href: "/plan",        label: "Plan",      roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
-    { href: "/account.html", label: "Account",   roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
     { href: "/coach.html",  label: "Coach",     roles: ["coach", "club_admin", "platform_admin"] },
     { href: "/statement.html", label: "Statement", roles: ["coach"] },
     { href: "/admin.html",  label: "Admin",     roles: ["club_admin", "platform_admin"] },

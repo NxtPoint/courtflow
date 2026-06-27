@@ -3,9 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>NextPoint · Portal</title>
+<title>NextPoint · Home</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<!-- Agent F serves frontend/_shared/portal.css; this page also ships a self-contained fallback. -->
 <link rel="stylesheet" href="/_shared/portal.css" onerror="this.remove()">
 <link rel="stylesheet" href="/app.css">
 </head>
@@ -13,7 +12,7 @@
 <div class="cf-shell">
   <header id="cf-topbar" class="cf-topbar"></header>
   <main id="cf-main" class="cf-main">
-    <div id="cf-dash" class="cf-loading">Loading…</div>
+    <div class="cf-loading">Loading…</div>
   </main>
 </div>
 
@@ -23,196 +22,21 @@
 <script src="/js/admin_api.js"></script>
 <script src="/js/coach_api.js"></script>
 <script src="/js/portal.js"></script>
+<script src="/js/home.js"></script>
 <script>
-// Action-first client cockpit (client-journey redesign, Phase 1). Order: greeting →
-// quick-book → plan/coverage nudge → upcoming → activity (usage + history graph).
-// Staff (coach/admin) get the same cockpit plus a row of links to their consoles.
+// The client ONE-PAGE Home (front-end redesign): a sticky chip nav over four sections —
+// Book · My Bookings · Profile · Money (home.js). Everyone gets the same Home; staff also see
+// console links in the Book section + their Coach/Admin nav. First-run owners/coaches are sent
+// to their onboarding wizard before the page renders.
 Portal.boot({
   active: "/portal.html",
   onReady: async function (p) {
-    var UI = window.UI, el = UI.el, main = document.getElementById("cf-main");
-
-    // First-run gate: owners → club owner wizard; a pure coach → coach onboarding wizard.
-    // Each runs only its own check so an owner is never sent to the coach wizard, and vice versa.
     if (p.role === "club_admin" || p.role === "platform_admin") {
-      try {
-        var ob = await window.AdminAPI.onboarding();
-        if (ob && !ob.completed) { window.location.replace("/onboarding.html"); return; }
-      } catch (e) { /* non-blocking: fall through to the dashboard */ }
+      try { var ob = await window.AdminAPI.onboarding(); if (ob && !ob.completed) { window.location.replace("/onboarding.html"); return; } } catch (e) {}
     } else if (p.role === "coach") {
-      try {
-        var cob = await window.CoachAPI.onboarding();
-        if (cob && !cob.completed) { window.location.replace("/coach-onboarding.html"); return; }
-      } catch (e) { /* non-blocking: fall through to the dashboard */ }
+      try { var cob = await window.CoachAPI.onboarding(); if (cob && !cob.completed) { window.location.replace("/coach-onboarding.html"); return; } } catch (e) {}
     }
-
-    UI.clear(main);
-
-    var roleLabel = ({ club_admin: "Club admin", platform_admin: "Platform admin",
-                       coach: "Coach", member: "Member", guest: "Guest" })[p.role] || p.role;
-    var firstName = (p.email || "").split("@")[0];
-
-    // --- financials drive the greeting plan chip, the nudge, usage tiles + history graph.
-    // One read (guarded server-side); the dashboard degrades gracefully if it fails.
-    var fin = null;
-    try { fin = await window.API.financials(); } catch (e) { fin = null; }
-    var plan = (fin && fin.plan) || null;
-    var currency = (fin && fin.currency) || "ZAR";
-
-    // ---- greeting band -----------------------------------------------------
-    var hr = new Date().getHours();
-    var greet = hr < 12 ? "Good morning" : (hr < 18 ? "Good afternoon" : "Good evening");
-    var planChip = "";
-    if (plan) {
-      if (plan.is_trial && plan.trial_days_left != null) planChip = "🎁 Free week · " + plan.trial_days_left + "d left";
-      else if (plan.type === "membership" && plan.active) planChip = "⭐ Member";
-      else planChip = "Pay as you go";
-    }
-    var greetChildren = [
-      el("div", {}, [
-        el("h1", { text: greet + (firstName ? ", " + firstName : "") }),
-        el("p", { text: roleLabel + (p.email ? " · " + p.email : "") }),
-      ]),
-    ];
-    if (planChip) greetChildren.push(el("span", { class: "cf-greet-plan", text: planChip }));
-    main.appendChild(el("div", { class: "cf-greet" }, greetChildren));
-
-    // ---- trial-ending / plan nudge (banner) --------------------------------
-    // Surfaced when the free week is nearly up, or for a PAYG member with no coverage.
-    // Links to the consolidated Plan page (/plan).
-    var planHref = "/plan";
-    if (plan) {
-      if (plan.is_trial && plan.trial_days_left != null && plan.trial_days_left <= 3) {
-        main.appendChild(el("div", { class: "cf-nudge" }, [
-          el("div", {}, [
-            el("div", { class: "cf-nudge-t", text: "Your free week ends in " + plan.trial_days_left + " day" + (plan.trial_days_left === 1 ? "" : "s") }),
-            el("div", { class: "cf-nudge-s", text: "Keep playing — go unlimited with membership, or grab a session pack." }),
-          ]),
-          el("a", { class: "cf-btn cf-btn-primary", href: planHref, text: "See plans" }),
-        ]));
-      } else if (!plan.active && plan.sold) {
-        main.appendChild(el("div", { class: "cf-nudge" }, [
-          el("div", {}, [
-            el("div", { class: "cf-nudge-t", text: "Make your court bookings free" }),
-            el("div", { class: "cf-nudge-s", text: "Go unlimited with a membership, or buy a prepaid pack." }),
-          ]),
-          el("a", { class: "cf-btn cf-btn-primary", href: planHref, text: "See plans" }),
-        ]));
-      }
-    }
-
-    // ---- quick-book --------------------------------------------------------
-    // The dashboard is the launchpad: a service card deep-links into the full-screen
-    // booking flow (/book/<service>), which lands on the calendar with that service
-    // pre-selected — book a court in ~2 taps (today is pre-selected).
-    function openBook(type) { window.location.href = "/book/" + type; }
-    var services = [
-      { type: "court",  ic: "🎾", t: "Book a court", s: "Hard courts + the clay court" },
-      { type: "lesson", ic: "🏆", t: "Book a lesson", s: "1:1 or group with a coach" },
-      { type: "class",  ic: "👥", t: "Attend a class", s: "Squads, Cardio, socials" },
-    ];
-    var qbCard = el("div", { class: "cf-card" }, [ el("h2", { text: "Book" }) ]);
-    var qbGrid = el("div", { class: "cf-qb" });
-    services.forEach(function (sv) {
-      qbGrid.appendChild(el("button", { class: "cf-qb-btn", type: "button",
-        onclick: function () { openBook(sv.type); } }, [
-        el("span", { class: "cf-qb-ic", text: sv.ic }),
-        el("span", {}, [
-          el("span", { class: "cf-qb-t", text: sv.t, style: "display:block" }),
-          el("span", { class: "cf-qb-s", text: sv.s }),
-        ]),
-      ]));
-    });
-    qbCard.appendChild(qbGrid);
-    main.appendChild(qbCard);
-
-    // ---- staff tools (coach / admin only) ----------------------------------
-    var staffLinks = [
-      { href: "/coach.html", t: "Coach console", s: "My week & rosters", roles: ["coach", "club_admin", "platform_admin"] },
-      { href: "/admin.html", t: "Master diary", s: "Club admin & desk", roles: ["club_admin", "platform_admin"] },
-      { href: "/settings.html", t: "Settings", s: "Club, hours, courts, pricing", roles: ["club_admin", "platform_admin"] },
-    ].filter(function (l) { return l.roles.indexOf(p.role) >= 0; });
-    if (staffLinks.length) {
-      var staffCard = el("div", { class: "cf-card" }, [ el("h2", { text: "Manage" }) ]);
-      var staffGrid = el("div", { class: "cf-tiles" });
-      staffLinks.forEach(function (l) {
-        staffGrid.appendChild(el("a", { href: l.href, class: "cf-tile" }, [
-          el("div", { class: "cf-tile-t", text: l.t }),
-          el("div", { class: "cf-tile-s", text: l.s }),
-        ]));
-      });
-      staffCard.appendChild(staffGrid);
-      main.appendChild(staffCard);
-    }
-
-    // ---- upcoming ----------------------------------------------------------
-    var up = el("div", { class: "cf-card" }, [
-      el("div", { class: "cf-sec-head" }, [
-        el("h2", { text: "Upcoming" }),
-        el("a", { class: "cf-sec-link", href: "/my.html", text: "View all →" }),
-      ]),
-      el("div", { id: "up", class: "cf-loading", text: "Loading…" }),
-    ]);
-    main.appendChild(up);
-    (async function () {
-      try {
-        var today = UI.dateKey(new Date());
-        var to = UI.dateKey(UI.addDays(new Date(), 30));
-        var r = await window.API.bookings({ date_from: today, date_to: to, status: "confirmed" });
-        var box = document.getElementById("up");
-        UI.clear(box);
-        if (!r.bookings || !r.bookings.length) {
-          box.appendChild(el("div", { class: "cf-empty", text: "No upcoming bookings — book a court above to get started." }));
-          return;
-        }
-        var list = el("div", { class: "cf-list" });
-        r.bookings.slice(0, 5).forEach(function (b) {
-          list.appendChild(el("div", { class: "cf-item" }, [
-            el("span", { class: "cf-chip " + b.booking_type, text: b.booking_type }),
-            el("div", { class: "cf-item-main" }, [
-              el("div", { class: "cf-item-t", text: b.resource_name || b.booking_type }),
-              el("div", { class: "cf-item-s", text: UI.fmtRange(b.starts_at, b.ends_at) }),
-            ]),
-          ]));
-        });
-        box.appendChild(list);
-      } catch (e) {
-        var b2 = document.getElementById("up"); if (b2) { UI.clear(b2); b2.textContent = UI.errMsg(e); }
-      }
-    })();
-
-    // ---- activity: usage this month + history graph ------------------------
-    if (fin) {
-      var act = el("div", { class: "cf-card" }, [ el("h2", { text: "Your activity" }) ]);
-
-      var u = fin.usage_this_month || {};
-      act.appendChild(el("div", { class: "cf-stats" }, [
-        el("div", { class: "cf-stat" }, [ el("div", { class: "cf-stat-v", text: String(u.court || 0) }), el("div", { class: "cf-stat-k", text: "Courts this month" }) ]),
-        el("div", { class: "cf-stat" }, [ el("div", { class: "cf-stat-v", text: String(u.lesson || 0) }), el("div", { class: "cf-stat-k", text: "Lessons this month" }) ]),
-        el("div", { class: "cf-stat" }, [ el("div", { class: "cf-stat-v", text: String(u.class || 0) }), el("div", { class: "cf-stat-k", text: "Classes this month" }) ]),
-      ]));
-
-      // History bars — bookings made per month (last ~6, chronological L→R).
-      var hist = ((fin.spend && fin.spend.history) || []).slice().reverse();
-      if (hist.length) {
-        var maxN = hist.reduce(function (m, it) { return Math.max(m, Number(it.bookings != null ? it.bookings : it.orders) || 0); }, 0) || 1;
-        var bars = el("div", { class: "cf-bars", style: "margin-top:18px" });
-        hist.forEach(function (it) {
-          var n = Number(it.bookings != null ? it.bookings : it.orders) || 0;
-          var pct = Math.round((n / maxN) * 100);
-          var monLbl = "";
-          try { monLbl = new Date(it.period + "-01T00:00:00").toLocaleDateString("en-ZA", { month: "short", timeZone: UI.CLUB_TZ }); } catch (e) { monLbl = it.period; }
-          bars.appendChild(el("div", { class: "cf-bar", title: monLbl + ": " + n + " booking" + (n === 1 ? "" : "s") + " · " + UI.money(it.paid_minor, currency) }, [
-            el("div", { class: "cf-bar-val", text: String(n) }),
-            el("div", { class: "cf-bar-fill", style: "height:" + pct + "%" }),
-            el("div", { class: "cf-bar-lbl", text: monLbl }),
-          ]));
-        });
-        act.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin:16px 0 0", text: "Bookings made over the last " + hist.length + " months" }));
-        act.appendChild(bars);
-      }
-      main.appendChild(act);
-    }
+    window.Home.start(p);
   },
 });
 </script>
