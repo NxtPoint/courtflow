@@ -1,6 +1,10 @@
-# UNIFIED CLIENT STATEMENT — design + reconciliation plan (PROPOSAL, not yet built)
+# UNIFIED CLIENT STATEMENT — design + reconciliation plan
 
-Status: **DRAFT for Tomo's approval.** No production code changes until signed off. Authored 2026-06-28.
+Status: **BUILT (Stage 1 + Stage 2), 2026-06-28.** Engine + harness, client switch-over, coach lockstep,
+admin void/write-off, packs offline — all shipped + green (`scripts/test_statement_reconciliation.py`,
+in `test_all`). The arrears table is kept internally and held in LOCKSTEP with orders (the user-visible
+result is the clean single statement); fully dropping `coach_arrears`/`account_ledger` is an optional
+later cosmetic cleanup. Authored 2026-06-28.
 Goal: ONE client-facing statement listing every owed service once, payable online anytime in the
 month, with a hard guarantee that nothing can over- or under-charge.
 
