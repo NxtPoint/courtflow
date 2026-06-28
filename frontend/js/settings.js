@@ -13,8 +13,8 @@
   var TABS = [
     { k: "profile", t: "Club profile" },
     { k: "courts", t: "Courts & hours" },
-    { k: "pricing", t: "Pricing" },
-    { k: "services", t: "Services (advanced)" },
+    { k: "services", t: "Services" },
+    { k: "pricing", t: "Pricing (advanced)" },
     { k: "coaches", t: "Coaches" },
     { k: "coachpay", t: "Coach pay" },
   ];
@@ -58,7 +58,7 @@
     } else if (state.tab === "pricing") {
       window.AdminUI.pricingHome(sectionHost);
     } else if (state.tab === "services") {
-      window.AdminUI.services(sectionHost, {});
+      renderServices(sectionHost);          // unified service list → the ONE Service Editor
     } else if (state.tab === "coaches") {
       window.AdminUI.coaches(sectionHost, {});
     } else if (state.tab === "coachpay") {
@@ -95,6 +95,36 @@
     card.appendChild(flag("allow_pay_at_court", "Pay at the club", "Settle at the front desk."));
     card.appendChild(flag("allow_monthly_account", "Monthly account (invoice in arrears)", "Charges accrue on a tab, invoiced monthly."));
     host.appendChild(card);
+  }
+
+  // Unified services — every service (court / lesson / class) as a summary card → "Manage" opens
+  // the ONE Service Editor (prices · payment · packages · commission). The same editor the coach
+  // uses; the owner additionally edits commission. One place, no duplication.
+  function renderServices(host) {
+    UI.clear(host);
+    host.appendChild(el("div", { class: "cf-card" }, [el("div", { class: "cf-loading", text: "Loading services…" })]));
+    window.TFAuth.apiJSON("/api/services").then(function (r) {
+      var svcs = r.services || [];
+      UI.clear(host);
+      host.appendChild(el("div", { class: "cf-card" }, [
+        el("h2", { text: "Services" }),
+        el("p", { class: "cf-muted", text: "Courts, lessons and classes. Everything for a service — prices, payment, packages and commission — lives behind Manage. Edit it in one place." }),
+      ]));
+      if (!svcs.length) { host.appendChild(el("div", { class: "cf-card cf-empty", text: "No services yet — add them in onboarding or the Pricing tab." })); return; }
+      svcs.forEach(function (s) {
+        var bits = [s.variation_count + " price" + (s.variation_count === 1 ? "" : "s")];
+        if (s.from_amount_minor != null) bits.push("from " + UI.money(s.from_amount_minor));
+        host.appendChild(el("div", { class: "cf-card" }, [
+          el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap" }, [
+            el("div", {}, [
+              el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" })]),
+              el("div", { class: "cf-muted cf-tiny", style: "margin-top:4px", text: bits.join(" · ") }),
+            ]),
+            el("button", { class: "cf-btn cf-btn-primary", text: "Manage", onclick: function () { window.ServiceEditor.open(s.id, { onSaved: function () { renderServices(host); } }); } }),
+          ]),
+        ]));
+      });
+    }, function (e) { UI.clear(host); host.appendChild(el("div", { class: "cf-card cf-empty", text: UI.errMsg(e) })); });
   }
 
   window.Settings = {

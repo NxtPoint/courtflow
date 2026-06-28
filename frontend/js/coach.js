@@ -1175,12 +1175,39 @@
     loadResources(); loadTimeOff();
   }
 
-  // Services — commission (read-only) + per-duration lesson rates, classes, own packs.
+  // Services — each service is ONE summary card → "Manage" opens the unified Service Editor
+  // (prices · payment · packages · commission, all in one place). Class scheduling stays separate
+  // (operational), below. The editor is the single place a service is edited.
   function tabServices(host) {
-    var comm = el("div"); host.appendChild(comm); commissionCard(comm);
-    var svc = el("div"); host.appendChild(svc); window.CoachUI.services(svc, {});
-    initMyClasses(host);
-    var pk = el("div"); host.appendChild(pk); window.CoachUI.packs(pk, {});
+    var box = el("div"); host.appendChild(box); renderServiceList(box);
+    initMyClasses(host);  // class scheduling (sessions/rosters) — operational, not config
+  }
+  function renderServiceList(box) {
+    UI.clear(box);
+    box.appendChild(el("div", { class: "cf-card" }, [el("div", { class: "cf-loading", text: "Loading your services…" })]));
+    window.TFAuth.apiJSON("/api/services").then(function (r) {
+      var svcs = r.services || [];
+      UI.clear(box);
+      box.appendChild(el("div", { class: "cf-card" }, [
+        el("h2", { text: "My services" }),
+        el("p", { class: "cf-muted", text: "Everything for a service — prices, payment options and packages — in one place. Tap Manage." }),
+      ]));
+      if (!svcs.length) { box.appendChild(el("div", { class: "cf-card cf-empty", text: "No services yet — your lesson rates appear here once set in onboarding." })); return; }
+      svcs.forEach(function (s) { box.appendChild(serviceCard(s, box)); });
+    }, function (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-card cf-empty", text: UI.errMsg(e) })); });
+  }
+  function serviceCard(s, box) {
+    var bits = [s.variation_count + " price" + (s.variation_count === 1 ? "" : "s")];
+    if (s.from_amount_minor != null) bits.push("from " + UI.money(s.from_amount_minor));
+    return el("div", { class: "cf-card" }, [
+      el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap" }, [
+        el("div", {}, [
+          el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" })]),
+          el("div", { class: "cf-muted cf-tiny", style: "margin-top:4px", text: bits.join(" · ") }),
+        ]),
+        el("button", { class: "cf-btn cf-btn-primary", text: "Manage", onclick: function () { window.ServiceEditor.open(s.id, { onSaved: function () { renderServiceList(box); } }); } }),
+      ]),
+    ]);
   }
 
   // The club's commission on the coach's lessons — READ-ONLY (greyed). The owner sets the default %
