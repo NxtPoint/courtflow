@@ -74,11 +74,20 @@
     ]));
     var planLines = [];
     if (plan.is_trial && plan.trial_days_left != null) planLines.push("🎁 Free week — " + plan.trial_days_left + " day" + (plan.trial_days_left === 1 ? "" : "s") + " left.");
+    if (plan.active && plan.membership_window_summary) planLines.push(plan.membership_window_summary + " (other times are pay-as-you-go).");
+    else if (plan.active && !plan.is_trial) planLines.push("Court bookings are free, any time.");
     if (plan.active && plan.current_period_end) planLines.push("Renews / expires " + plan.current_period_end + ".");
     if (!plan.active) planLines.push("You pay per booking. A membership makes court bookings free.");
     if (nc && nc.amount_minor) planLines.push("Next charge: " + money(nc.amount_minor, ccy) + (nc.due_date ? " on " + nc.due_date : "") + ".");
     planCard.appendChild(el("div", { class: "cf-muted", style: "margin:6px 0 12px", text: planLines.join(" ") }));
-    planCard.appendChild(el("button", { class: "cf-btn cf-btn-primary", text: plan.active ? "Manage plan" : "Choose a plan", onclick: function () { if (window.PlanWizard) window.PlanWizard.open(); else window.location.href = "/plan"; } }));
+    var planBtns = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap" }, [
+      el("button", { class: "cf-btn cf-btn-primary", text: plan.active ? "Manage plan" : "Choose a plan", onclick: function () { if (window.PlanWizard) window.PlanWizard.open(); else window.location.href = "/plan"; } }),
+    ]);
+    // Self-cancel for a paid membership (not the free trial — that just lapses on its own).
+    if (plan.active && !plan.is_trial) {
+      planBtns.appendChild(el("button", { class: "cf-btn cf-btn-danger", text: "Cancel membership", onclick: function () { cancelMembership(); } }));
+    }
+    planCard.appendChild(planBtns);
     host.appendChild(planCard);
 
     // ---- usage over time (the fleshed-out part) ----
@@ -242,6 +251,14 @@
     if (!confirm("Withdraw this refund request?")) return;
     try { await window.API.cancelRefundRequest(r.id); await reloadMoney(); UI.toast("Request withdrawn.", "info"); }
     catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+  async function cancelMembership() {
+    if (!confirm("Cancel your membership? Court bookings will revert to pay-as-you-go. This doesn't refund the current term — request a refund separately if you need one.")) return;
+    try {
+      await window.TFAuth.apiJSON("/api/me/membership/cancel", { method: "POST", body: {} });
+      await reloadMoney();
+      UI.toast("Membership cancelled — courts are now pay-as-you-go.", "info");
+    } catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
   async function reloadMoney() {
     try { st.fin = await window.API.financials(); } catch (e) {}

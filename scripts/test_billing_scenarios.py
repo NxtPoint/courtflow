@@ -370,6 +370,15 @@ def sc_membership_purchase(s, fx):
     check("offline buyer IS a member straight away",
           PR.has_active_membership(s, club_id=fx.club_id, user_id=bu2))
 
+    # Status surfaces the actual plan name; self-cancel reverts to PAYG.
+    stat = MB.membership_status(s, club_id=fx.club_id, user_id=bu2)
+    check("status carries a plan name + subscription id",
+          bool(stat.get("plan_name")) and bool(stat.get("subscription_id")), str(stat.get("plan_name")))
+    canc = MB.cancel_membership(s, club_id=fx.club_id, user_id=bu2)
+    check("self-cancel ends the membership (1 row)", canc["cancelled"] == 1, str(canc))
+    check("cancelled buyer is no longer a member",
+          not PR.has_active_membership(s, club_id=fx.club_id, user_id=bu2))
+
 
 def sc_refund_request(s, fx):
     print("\n# Refund request lifecycle: create → list → decline (terminal) → withdraw")

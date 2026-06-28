@@ -453,9 +453,10 @@ def membership_status(session, *, club_id, user_id) -> Dict[str, Any]:
     plans = membership_plans(session, club_id=club_id)
     offer = plans[0] if plans else None
     row = session.execute(
-        text("SELECT ms.current_period_end, ms.provider, "
+        text("SELECT ms.id AS sub_id, ms.current_period_end, ms.provider, "
              "       (ms.current_period_end - CURRENT_DATE) AS days_left, "
-             "       p.access_days, p.access_start_min, p.access_end_min "
+             "       p.access_days, p.access_start_min, p.access_end_min, "
+             "       p.membership_tier, p.label, p.term_months "
              "FROM billing.membership_subscription ms "
              "LEFT JOIN billing.price p ON p.id = ms.price_id "
              "WHERE ms.club_id = :c AND ms.user_id = :u AND ms.status = 'active' "
@@ -476,18 +477,40 @@ def membership_status(session, *, club_id, user_id) -> Dict[str, Any]:
             "start_min": int(row["access_start_min"]) if row["access_start_min"] is not None else None,
             "end_min": int(row["access_end_min"]) if row["access_end_min"] is not None else None,
         }
+    # The active plan's display name: tier (Adult Off-Peak) → label → term length → generic.
+    plan_name = None
+    if row:
+        plan_name = (row["membership_tier"] or row["label"]
+                     or (_plan_label(None, row["term_months"]) if row["term_months"] else None))
     return {
         "active": row is not None,
+        "subscription_id": str(row["sub_id"]) if row else None,
+        "plan_name": ("Free week" if is_trial else (plan_name or "Membership")) if row else None,
         "current_period_end": (end.isoformat() if hasattr(end, "isoformat") else end)
         if end is not None else None,
         "is_trial": is_trial,                       # the signup free-week (provider='trial')
         "trial_days_left": days_left if is_trial else None,
         "membership_window": window,                # Phase 5 access window (None = any time)
+        "membership_window_summary": (_window_summary(row["access_days"], row["access_start_min"],
+                                                       row["access_end_min"]) if row else None),
         "price_minor": offer["amount_minor"] if offer else None,
         "currency": offer["currency"] if offer else None,
         "sold": bool(plans),
         "plans": plans,
     }
+
+
+def cancel_membership(session, *, club_id, user_id) -> Dict[str, Any]:
+    """Member self-cancel: end the caller's ACTIVE membership(s) now → courts revert to PAYG. Mirrors
+    the admin cancel (status='cancelled'). Idempotent: no active sub → {cancelled: 0}. The paid term
+    isn't refunded here (a refund is a separate request); cancelling just stops coverage."""
+    res = session.execute(
+        text("UPDATE billing.membership_subscription SET status = 'cancelled', updated_at = now() "
+             "WHERE club_id = :c AND user_id = :u AND status = 'active' "
+             "  AND (current_period_end IS NULL OR current_period_end >= CURRENT_DATE)"),
+        {"c": str(club_id), "u": str(user_id) if user_id else None},
+    )
+    return {"cancelled": int(res.rowcount or 0)}
 
 
 def grant_signup_trial(session, *, club_id, user_id, days=7) -> Dict[str, Any]:

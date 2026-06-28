@@ -55,13 +55,16 @@ def _plan(session, *, club_id, user_id) -> Dict[str, Any]:
     return {
         "type": "membership" if active else "payg",
         "active": active,
-        "name": ("Free week" if is_trial else "Membership") if active else "Pay as you go",
+        # The member's ACTUAL plan name (tier, e.g. "Adult Off-Peak"), not a generic label.
+        "name": st.get("plan_name") if active else "Pay as you go",
+        "subscription_id": st.get("subscription_id"),
         "current_period_end": st.get("current_period_end"),
         "price_minor": st.get("price_minor"),
         "sold": bool(st.get("sold")),
         "is_trial": is_trial,                       # signup free-week (courts free, time-boxed)
         "trial_days_left": st.get("trial_days_left"),
         "membership_window": st.get("membership_window"),  # Phase 5 (None = covers any time)
+        "membership_window_summary": st.get("membership_window_summary"),  # e.g. "Courts free weekdays 06:00–16:00"
     }
 
 

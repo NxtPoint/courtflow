@@ -282,9 +282,12 @@
   function renderDurations() {
     var box = document.getElementById("bk-dur"); if (!box) return; UI.clear(box);
     if (!st.durations.length) { box.appendChild(el("span", { class: "cf-muted cf-tiny", text: "—" })); return; }
+    // "covered" on the duration chip only when the membership covers ANY time (no window). With an
+    // off-peak window, coverage depends on the slot time, so show the price and let the slots show "free".
+    var fullyCovered = st.type === "court" && st.membershipCovered && !membershipWindow();
     st.durations.forEach(function (d) {
       var sel = d.duration_minutes === st.selDuration;
-      var priceTxt = (st.type === "court" && st.membershipCovered) ? "covered"
+      var priceTxt = fullyCovered ? "covered"
         : (d.amount_minor != null ? UI.money(d.amount_minor, ctx.billing.currency) : "");
       box.appendChild(el("button", { type: "button", class: "cf-durchip" + (sel ? " sel" : ""), onclick: function () {
         st.selDuration = d.duration_minutes; st.selDurationPrice = d.amount_minor; st.slot = null;
@@ -304,10 +307,17 @@
       return;
     }
     var grid = el("div", { class: "cf-timeblocks" });
+    var w = membershipWindow();
     slots.forEach(function (sl) {
+      // Coverage is PER-SLOT: an off-peak membership only makes the slot free INSIDE its window;
+      // peak slots stay PAYG (price shown), matching what's charged at confirm + server-side.
+      var covered = st.type === "court" && st.membershipCovered && withinWindow(new Date(sl.start), w);
       var kids = [ el("span", { class: "cf-tb-time", text: UI.fmtTime(sl.start) }) ];
-      if (st.type === "court" && st.membershipCovered) kids.push(el("span", { class: "cf-tb-price", text: "free" }));
-      else if (sl.price != null) kids.push(el("span", { class: "cf-tb-price", text: UI.money(sl.price, ctx.billing.currency) }));
+      if (covered) kids.push(el("span", { class: "cf-tb-price", text: "free" }));
+      else {
+        var price = (sl.price != null) ? sl.price : (st.type === "court" ? st.selDurationPrice : null);
+        if (price != null) kids.push(el("span", { class: "cf-tb-price", text: UI.money(price, ctx.billing.currency) }));
+      }
       grid.appendChild(el("button", { class: "cf-timeblock", type: "button",
         onclick: function () { st.slot = sl; st.view = "confirm"; render(); } }, kids));
     });

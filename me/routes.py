@@ -340,6 +340,21 @@ def get_plan():
     return jsonify(data), 200
 
 
+@me_bp.post("/membership/cancel")
+def cancel_my_membership():
+    """The caller cancels their OWN active membership → courts revert to PAYG. The paid term isn't
+    refunded here (that's a separate refund request). Idempotent."""
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "view_own_ledger", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    from billing import membership as membership_repo
+    with session_scope() as s:
+        res = membership_repo.cancel_membership(s, club_id=p.club_id, user_id=p.user_id)
+    return jsonify(ok=True, **res), 200
+
+
 @me_bp.get("/statement")
 def get_statement():
     """The client's coaching statement — the mirror of the coach's month-end statement (same data,
