@@ -107,26 +107,27 @@
       UI.clear(host);
       host.appendChild(el("div", { class: "cf-card" }, [
         el("h2", { text: "Services" }),
-        el("p", { class: "cf-muted", text: "Courts, lessons and classes. Everything for a service — prices, payment, packages and commission — lives behind Manage. Edit it in one place." }),
+        el("p", { class: "cf-muted", text: "Courts, lessons and classes. Everything for a service — prices, payment, packages and commission — lives behind the block (click to edit)." }),
       ]));
-      if (!svcs.length) { host.appendChild(el("div", { class: "cf-card cf-empty", text: "No services yet — add them in onboarding or the Pricing tab." })); return; }
-      svcs.forEach(function (s) {
-        var hidden = s.active === false;
+      host.appendChild(UI.lifecycleBar(state.svcFilter || "active", function (f) { state.svcFilter = f; renderServices(host); }));
+      var filter = state.svcFilter || "active";
+      var shown = svcs.filter(function (s) { return filter === "all" || s.status === filter; });
+      if (!shown.length) { host.appendChild(el("div", { class: "cf-card cf-empty", text: "No " + (filter === "all" ? "" : filter + " ") + "services." })); return; }
+      shown.forEach(function (s) {
         var bits = [s.variation_count + " price" + (s.variation_count === 1 ? "" : "s")];
         if (s.from_amount_minor != null) bits.push("from " + UI.money(s.from_amount_minor));
-        if (hidden) bits.push("hidden");
-        function setActive(a) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { active: a } }).then(function () { renderServices(host); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
+        function setStatus(ns) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { status: ns } }).then(function () { renderServices(host); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
         var cardEl = el("div", { class: "cf-card cf-pickable" }, [
           el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap" }, [
             el("div", {}, [
-              el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" })]),
+              el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" }), s.status !== "active" ? UI.statusChip(s.status) : null].filter(Boolean)),
               el("div", { class: "cf-muted cf-tiny", style: "margin-top:4px", text: bits.join(" · ") }),
             ]),
-            el("button", { class: "cf-btn cf-btn-sm", text: hidden ? "Unhide" : "Hide", onclick: function (ev) { ev.stopPropagation(); setActive(hidden); } }),
+            el("div", { class: "cf-row", style: "gap:6px" }, UI.lifeActions(s.status, setStatus, { terminateConfirm: "Terminate “" + (s.name || "this service") + "”? Kept for history, removed from use." })),
           ]),
         ]);
         cardEl.addEventListener("click", function () { window.ServiceEditor.open(s.id, { host: host, onClose: function () { renderServices(host); } }); });
-        if (hidden) cardEl.style.opacity = "0.6";
+        if (s.status !== "active") cardEl.style.opacity = "0.6";
         host.appendChild(cardEl);
       });
     }, function (e) { UI.clear(host); host.appendChild(el("div", { class: "cf-card cf-empty", text: UI.errMsg(e) })); });

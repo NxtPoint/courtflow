@@ -1198,6 +1198,7 @@
   // MEMBERSHIPS AS SERVICES — each membership (a TIER) is one service with term VARIANTS inside it
   // (Adult Anytime → 3 / 6 / 12 months). Summary card per membership → Edit opens the full editor
   // (terms + access hours). Same show-then-edit pattern as the Service Editor. -> /membership-plans.
+  var memFilter = "active";
   function membershipServices(host) {
     init(); UI.clear(host);
     var card = el("div", { class: "cf-card" });
@@ -1219,33 +1220,48 @@
       plans.forEach(function (p) { var k = p.tier || p.label || term(p.term_months); if (!map[k]) { map[k] = []; order.push(k); } map[k].push(p); });
       return order.map(function (k) { return { tier: k, plans: map[k].sort(function (a, b) { return (a.term_months || 0) - (b.term_months || 0); }) }; });
     }
+    // A membership tier groups several term plans, each with a plan status (active|dormant|retired).
+    // Surface the SAME lifecycle vocabulary as services/coaches: active→active, dormant→deactivated,
+    // retired→terminated. A tier is active if ANY term is live, else deactivated if any dormant, else terminated.
+    var _PLAN2LIFE = { active: "active", dormant: "deactivated", retired: "terminated" };
+    var _LIFE2PLAN = { active: "active", deactivated: "dormant", terminated: "retired" };
+    function tierLife(g) {
+      var s = g.plans.map(function (p) { return _PLAN2LIFE[p.status || "active"] || "active"; });
+      if (s.indexOf("active") >= 0) return "active";
+      if (s.indexOf("deactivated") >= 0) return "deactivated";
+      return "terminated";
+    }
 
     function reload() {
       UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
       window.AdminAPI.membershipPlans().then(function (r) {
-        var groups = groupByTier((r.plans || []).filter(function (p) { return p.status !== "retired"; }));
+        var groups = groupByTier(r.plans || []);
         UI.clear(listBox);
-        if (!groups.length) { listBox.appendChild(el("div", { class: "cf-empty", text: "No memberships yet. Add one above." })); return; }
+        listBox.appendChild(UI.lifecycleBar(memFilter, function (f) { memFilter = f; reload(); }));
+        var shown = groups.filter(function (g) { return memFilter === "all" || tierLife(g) === memFilter; });
+        if (!shown.length) { listBox.appendChild(el("div", { class: "cf-empty", text: "No " + (memFilter === "all" ? "" : memFilter + " ") + "memberships." })); return; }
         var list = el("div", { class: "cf-list" });
-        groups.forEach(function (g) { list.appendChild(serviceRow(g)); });
+        shown.forEach(function (g) { list.appendChild(serviceRow(g)); });
         listBox.appendChild(list);
       }, function (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
     }
 
     function serviceRow(g) {
-      var hidden = g.plans.every(function (p) { return (p.status || "active") !== "active"; });
+      var life = tierLife(g);
       var minPm = Math.min.apply(null, g.plans.map(perMonth));
-      var sub = g.plans.length + " term" + (g.plans.length > 1 ? "s" : "") + " · from " + UI.money(minPm) + "/mo · " + accessLabel(g.plans[0]) + (hidden ? " · hidden" : "");
-      function setStatus(s) { Promise.all(g.plans.map(function (p) { return window.AdminAPI.patchMembershipPlan(p.price_id, { status: s }).catch(function () {}); })).then(function () { UI.toast("Saved.", "info"); reload(); }); }
-      var row = el("div", { class: "cf-item cf-pickable" }, [
-        el("span", { class: "cf-chip", text: "⭐" }),
-        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: g.tier }), el("div", { class: "cf-item-s", text: sub })]),
-        el("span", { class: "cf-spacer" }),
-        el("button", { class: "cf-btn cf-btn-sm", text: hidden ? "Unhide" : "Hide", onclick: function (ev) { ev.stopPropagation(); setStatus(hidden ? "active" : "dormant"); } }),
-        el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete", onclick: function (ev) { ev.stopPropagation(); delTier(g); } }),
+      var sub = g.plans.length + " term" + (g.plans.length > 1 ? "s" : "") + " · from " + UI.money(minPm) + "/mo · " + accessLabel(g.plans[0]);
+      function setStatus(ns) { var ps = _LIFE2PLAN[ns] || "active"; Promise.all(g.plans.map(function (p) { return window.AdminAPI.patchMembershipPlan(p.price_id, { status: ps }).catch(function () {}); })).then(function () { UI.toast("Saved.", "info"); reload(); }); }
+      var main = el("div", { class: "cf-item-main" }, [
+        el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { class: "cf-item-t", text: g.tier }), life !== "active" ? UI.statusChip(life) : null].filter(Boolean)),
+        el("div", { class: "cf-item-s", text: sub }),
       ]);
+      var actions = UI.lifeActions(life, setStatus, { terminateConfirm: "Terminate the " + g.tier + " membership? Kept for history, removed from sale." });
+      actions.push(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete", onclick: function (ev) { ev.stopPropagation(); delTier(g); } }));
+      var row = el("div", { class: "cf-item cf-pickable" }, [
+        el("span", { class: "cf-chip", text: "⭐" }), main, el("span", { class: "cf-spacer" }),
+      ].concat(actions));
       row.addEventListener("click", function () { openTier(g); });
-      if (hidden) row.style.opacity = "0.6";
+      if (life !== "active") row.style.opacity = "0.6";
       return row;
     }
 
@@ -1348,11 +1364,16 @@
   // commission lives on the service (the Service Editor). One place per coach.
   function coachManage(host) {
     init();
-    var DATA = { agg: {}, coaches: [] };
+    var DATA = { agg: {}, coaches: [], filter: "active" };
     function aggFor(uid) { return (DATA.agg.coaches || []).filter(function (c) { return String(c.coach_user_id) === String(uid); })[0] || {}; }
     function coachName(c) { return c.display_name || ((c.first_name || "") + " " + (c.surname || "")).trim() || c.email || "Coach"; }
     function isPending(c) { return !!(c.invite_status && c.invite_status !== "accepted"); }
 
+    function coachLife(c) {
+      if ((c.member_status || "") === "lapsed") return "terminated";
+      if (c.is_bookable === false) return "deactivated";
+      return "active";
+    }
     function renderList() {
       UI.clear(host);
       host.appendChild(el("div", { class: "cf-card" }, [el("h2", { text: "Coaches" }), el("p", { class: "cf-muted", text: "Your coaches, their rent and commission — one place. Click a coach to edit." })]));
@@ -1363,8 +1384,10 @@
       Promise.all([window.AdminAPI.coaches(), window.AdminAPI.coachAgreements()]).then(function (res) {
         DATA.coaches = res[0].coaches || []; DATA.agg = res[1] || {};
         UI.clear(listBox);
-        if (!DATA.coaches.length) { listBox.appendChild(el("div", { class: "cf-empty", text: "No coaches yet. Invite one below." })); return; }
-        var list = el("div", { class: "cf-list" }); DATA.coaches.forEach(function (c) { list.appendChild(coachRow(c)); }); listBox.appendChild(list);
+        listBox.appendChild(UI.lifecycleBar(DATA.filter, function (f) { DATA.filter = f; renderList(); }));
+        var shown = DATA.coaches.filter(function (c) { return DATA.filter === "all" || coachLife(c) === DATA.filter; });
+        if (!shown.length) { listBox.appendChild(el("div", { class: "cf-empty", text: DATA.coaches.length ? ("No " + DATA.filter + " coaches.") : "No coaches yet. Invite one below." })); return; }
+        var list = el("div", { class: "cf-list" }); shown.forEach(function (c) { list.appendChild(coachRow(c)); }); listBox.appendChild(list);
       }, function (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
     }
 
@@ -1383,23 +1406,26 @@
     }
 
     function coachRow(c) {
-      var uid = c.user_id || c.id, ag = aggFor(uid), pending = isPending(c), hidden = c.is_bookable === false;
+      var uid = c.user_id || c.id, ag = aggFor(uid), pending = isPending(c), life = coachLife(c);
       var subbits = [c.email || ""];
       if (ag.rent_minor) subbits.push("rent " + UI.money(ag.rent_minor));
       if (ag.coach_pct != null) subbits.push(ag.coach_pct + "% commission");
       if (pending) subbits.push("invite pending");
-      if (hidden) subbits.push("hidden");
+      function setStatus(ns) { window.AdminAPI.patchCoach(uid, { status: ns }).then(renderList, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
       var actions = [];
       if (pending) actions.push(el("button", { class: "cf-btn cf-btn-sm", text: "Resend invite", onclick: function (ev) { ev.stopPropagation(); window.AdminAPI.resendCoachInvite(uid).then(function (r) { if (r && r.invite_link) { try { navigator.clipboard.writeText(r.invite_link); } catch (e) {} } UI.toast("Invite re-issued.", "info"); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }));
-      actions.push(el("button", { class: "cf-btn cf-btn-sm", text: hidden ? "Unhide" : "Hide", onclick: function (ev) { ev.stopPropagation(); window.AdminAPI.patchCoach(uid, { is_bookable: hidden }).then(renderList, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }));
-      actions.push(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete", onclick: function (ev) { ev.stopPropagation(); if (window.confirm("Remove " + coachName(c) + " from the club?")) window.AdminAPI.removeCoach(uid).then(function () { UI.toast("Removed.", "info"); renderList(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }));
+      actions = actions.concat(UI.lifeActions(life, setStatus, { terminateConfirm: "Terminate " + coachName(c) + "? They keep their history but can't be booked." }));
+      actions.push(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete", onclick: function (ev) { ev.stopPropagation(); if (window.confirm("Remove " + coachName(c) + " from the club?")) window.AdminAPI.removeCoach(uid).then(function (r) { UI.toast((r && r.outcome === "archived") ? "This coach has history, so they were archived (kept for reporting) rather than deleted." : "Coach deleted.", "info"); renderList(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }));
       var row = el("div", { class: "cf-item cf-pickable" }, [
         el("span", { class: "cf-chip coach", text: "coach" }),
-        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: coachName(c) }), el("div", { class: "cf-item-s", text: subbits.filter(Boolean).join(" · ") })]),
+        el("div", { class: "cf-item-main" }, [
+          el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { class: "cf-item-t", text: coachName(c) }), life !== "active" ? UI.statusChip(life) : null].filter(Boolean)),
+          el("div", { class: "cf-item-s", text: subbits.filter(Boolean).join(" · ") }),
+        ]),
         el("span", { class: "cf-spacer" }),
       ].concat(actions));
       row.addEventListener("click", function () { openCoach(c, ag); });
-      if (hidden) row.style.opacity = "0.6";
+      if (life !== "active") row.style.opacity = "0.6";
       return row;
     }
 

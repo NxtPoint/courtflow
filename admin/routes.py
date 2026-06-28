@@ -854,10 +854,11 @@ def revoke_coach(user_id):
     if err:
         return err
     with session_scope() as s:
-        ok = repo.revoke_coach(s, club_id=p.club_id, user_id=user_id)
-    if not ok:
+        outcome = repo.delete_coach(s, club_id=p.club_id, user_id=user_id)
+    if outcome is None:
         return jsonify(error="NOT_FOUND"), 404
-    return jsonify(ok=True), 200
+    # 'deleted' = removed outright; 'archived' = had history, kept + marked lapsed instead.
+    return jsonify(ok=True, outcome=outcome), 200
 
 
 @admin_bp.patch("/coaches/<user_id>")

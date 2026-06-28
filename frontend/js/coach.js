@@ -1182,6 +1182,7 @@
     var box = el("div"); host.appendChild(box); renderServiceList(box);
     initMyClasses(host);  // class scheduling (sessions/rosters) — operational, not config
   }
+  var svcFilter = "active";
   function renderServiceList(box) {
     UI.clear(box);
     box.appendChild(el("div", { class: "cf-card" }, [el("div", { class: "cf-loading", text: "Loading your services…" })]));
@@ -1190,31 +1191,31 @@
       UI.clear(box);
       box.appendChild(el("div", { class: "cf-card" }, [
         el("h2", { text: "My services" }),
-        el("p", { class: "cf-muted", text: "Everything for a service — prices, payment options and packages — in one place. Tap Manage." }),
+        el("p", { class: "cf-muted", text: "Everything for a service — prices, payment options and packages — in one place. Click a service to edit." }),
       ]));
-      if (!svcs.length) { box.appendChild(el("div", { class: "cf-card cf-empty", text: "No services yet — your lesson rates appear here once set in onboarding." })); return; }
-      svcs.forEach(function (s) { box.appendChild(serviceCard(s, box)); });
+      box.appendChild(UI.lifecycleBar(svcFilter, function (f) { svcFilter = f; renderServiceList(box); }));
+      var shown = svcs.filter(function (s) { return svcFilter === "all" || s.status === svcFilter; });
+      if (!shown.length) { box.appendChild(el("div", { class: "cf-card cf-empty", text: "No " + (svcFilter === "all" ? "" : svcFilter + " ") + "services yet." })); return; }
+      shown.forEach(function (s) { box.appendChild(serviceCard(s, box)); });
     }, function (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-card cf-empty", text: UI.errMsg(e) })); });
   }
   function serviceCard(s, box) {
-    var hidden = s.active === false;
     var bits = [s.variation_count + " price" + (s.variation_count === 1 ? "" : "s")];
     if (s.from_amount_minor != null) bits.push("from " + UI.money(s.from_amount_minor));
-    if (hidden) bits.push("hidden");
-    function setActive(a) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { active: a } }).then(function () { renderServiceList(box); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
+    function setStatus(ns) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { status: ns } }).then(function () { renderServiceList(box); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
     var nameKids = [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" })];
-    function edit() { window.ServiceEditor.open(s.id, { host: box, onClose: function () { renderServiceList(box); } }); }
+    if (s.status !== "active") nameKids.push(UI.statusChip(s.status));
     var card = el("div", { class: "cf-card cf-pickable" }, [
       el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap" }, [
         el("div", {}, [
           el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, nameKids),
           el("div", { class: "cf-muted cf-tiny", style: "margin-top:4px", text: bits.join(" · ") }),
         ]),
-        el("button", { class: "cf-btn cf-btn-sm", text: hidden ? "Unhide" : "Hide", onclick: function (ev) { ev.stopPropagation(); setActive(hidden); } }),
+        el("div", { class: "cf-row", style: "gap:6px" }, UI.lifeActions(s.status, setStatus, { terminateConfirm: "Terminate this service? Kept for history, removed from use." })),
       ]),
     ]);
-    card.addEventListener("click", edit);
-    if (hidden) card.style.opacity = "0.6";
+    card.addEventListener("click", function () { window.ServiceEditor.open(s.id, { host: box, onClose: function () { renderServiceList(box); } }); });
+    if (s.status !== "active") card.style.opacity = "0.6";
     return card;
   }
 

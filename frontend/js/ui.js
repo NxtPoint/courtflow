@@ -105,11 +105,39 @@
     return by;
   }
 
+  // ---- lifecycle (Active / Deactivated / Terminated) — one consistent model everywhere -------
+  function lifecycleBar(current, onChange) {
+    var seg = el("div", { class: "cf-segment", style: "margin:0 0 14px;max-width:460px" });
+    [["all", "All"], ["active", "Active"], ["deactivated", "Deactivated"], ["terminated", "Terminated"]].forEach(function (o) {
+      seg.appendChild(el("button", { type: "button", class: current === o[0] ? "on" : "", text: o[1], onclick: function () { onChange(o[0]); } }));
+    });
+    return seg;
+  }
+  // Row actions for an item's status; `set(newStatus)` performs the change. Returns button elements
+  // (Deactivate/Reactivate + Terminate). Clicks stop propagation so they don't trigger a row's edit.
+  function lifeActions(status, set, opts) {
+    opts = opts || {};
+    function b(label, tone, ns, conf) {
+      return el("button", { class: "cf-btn cf-btn-sm" + (tone ? " " + tone : ""), text: label,
+        onclick: function (ev) { ev.stopPropagation(); if (conf && !window.confirm(conf)) return; set(ns); } });
+    }
+    if (status === "terminated") return [b("Reactivate", "", "active")];
+    return [
+      b(status === "deactivated" ? "Reactivate" : "Deactivate", "", status === "deactivated" ? "active" : "deactivated"),
+      b("Terminate", "cf-btn-danger", "terminated", opts.terminateConfirm || "Terminate this? It's kept for history but removed from use."),
+    ];
+  }
+  function statusChip(status) {
+    var m = { active: "ok", deactivated: "held", terminated: "cancelled" };
+    return el("span", { class: "cf-chip " + (m[status] || ""), text: status || "active" });
+  }
+
   window.UI = {
     CLUB_TZ: CLUB_TZ,
     fmtTime: fmtTime, fmtDate: fmtDate, fmtDateTime: fmtDateTime, fmtRange: fmtRange,
     dateKey: dateKey, addDays: addDays, money: money,
     SETTLEMENT: SETTLEMENT, settlementLabel: settlementLabel,
     el: el, esc: esc, clear: clear, toast: toast, errMsg: errMsg, groupByDay: groupByDay,
+    lifecycleBar: lifecycleBar, lifeActions: lifeActions, statusChip: statusChip,
   };
 })();

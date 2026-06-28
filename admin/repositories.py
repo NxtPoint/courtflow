@@ -810,6 +810,39 @@ def revoke_coach(session, *, club_id, user_id):
     return res is not None
 
 
+def delete_coach(session, *, club_id, user_id):
+    """Hard-delete a coach when it's SAFE (no bookings, no financial history) — for coaches added by
+    mistake or invites never accepted. If the coach has any history we keep the records and archive
+    instead (membership lapsed), so reporting/settlement stays intact. Returns 'deleted', 'archived',
+    or None when no such coach exists. Club-scoped throughout."""
+    exists = session.execute(
+        text("SELECT 1 FROM iam.membership WHERE club_id = :c AND user_id = :u AND role = 'coach'"),
+        {"c": club_id, "u": user_id}).first()
+    if exists is None:
+        return None
+    history = session.execute(
+        text("""
+            SELECT
+              (SELECT count(*) FROM diary.booking WHERE club_id = :c AND coach_user_id = :u)
+            + (SELECT count(*) FROM billing.commission_split WHERE club_id = :c AND coach_user_id = :u)
+            + (SELECT count(*) FROM billing.coach_ledger WHERE club_id = :c AND coach_user_id = :u)
+            + (SELECT count(*) FROM billing.coach_arrears WHERE club_id = :c AND coach_user_id = :u)
+        """),
+        {"c": club_id, "u": user_id}).scalar() or 0
+    if history > 0:
+        revoke_coach(session, club_id=club_id, user_id=user_id)
+        return "archived"
+    # No history → remove the coach's config rows and membership. (diary.resource children — hours,
+    # availability — cascade; bookings would block the resource delete but we've ruled them out.)
+    session.execute(text("DELETE FROM iam.coach_invite WHERE club_id = :c AND user_id = :u"), {"c": club_id, "u": user_id})
+    session.execute(text("DELETE FROM billing.coach_agreement WHERE club_id = :c AND coach_user_id = :u"), {"c": club_id, "u": user_id})
+    session.execute(text("DELETE FROM billing.commission_rule WHERE club_id = :c AND coach_user_id = :u"), {"c": club_id, "u": user_id})
+    session.execute(text("DELETE FROM diary.resource WHERE club_id = :c AND kind = 'coach' AND coach_user_id = :u"), {"c": club_id, "u": user_id})
+    session.execute(text("DELETE FROM iam.coach_profile WHERE club_id = :c AND user_id = :u"), {"c": club_id, "u": user_id})
+    session.execute(text("DELETE FROM iam.membership WHERE club_id = :c AND user_id = :u AND role = 'coach'"), {"c": club_id, "u": user_id})
+    return "deleted"
+
+
 def get_coach(session, *, club_id, user_id):
     return _row(session.execute(
         text("""
