@@ -56,9 +56,9 @@
       window.AdminUI.courts(sectionHost, {});            // courts + …
       window.AdminUI.hours(sectionHost, d.hours || {}, { saveLabel: "Save hours" });  // …their hours, one block
     } else if (state.tab === "pricing") {
-      // Memberships are the one club-wide catalogue (not per-service). Court rates + packs now live
-      // in the Service Editor (Services tab), so this tab is just memberships.
-      window.AdminUI.membershipPlans(sectionHost, {});
+      // Memberships-as-services: each membership (tier) is one service with term variants inside it
+      // (show → Edit). Court rates + packs live in the Service Editor (Services tab).
+      window.AdminUI.membershipServices(sectionHost);
     } else if (state.tab === "services") {
       renderServices(sectionHost);          // unified service list → the ONE Service Editor
     } else if (state.tab === "coaches") {

@@ -1193,6 +1193,148 @@
     return { reload: reload };
   }
 
+  // MEMBERSHIPS AS SERVICES — each membership (a TIER) is one service with term VARIANTS inside it
+  // (Adult Anytime → 3 / 6 / 12 months). Summary card per membership → Edit opens the full editor
+  // (terms + access hours). Same show-then-edit pattern as the Service Editor. -> /membership-plans.
+  function membershipServices(host) {
+    init(); UI.clear(host);
+    var card = el("div", { class: "cf-card" });
+    card.appendChild(el("h2", { text: "Memberships" }));
+    card.appendChild(el("p", { class: "cf-muted", text:
+      "Each membership is a service with term options inside it (e.g. Adult Anytime → 3 / 6 / 12 months). " +
+      "In the buy wizard members pick a membership, then a period." }));
+    var listBox = el("div"); card.appendChild(listBox);
+    var addBtn = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", style: "margin-top:12px", text: "+ Add membership" });
+    addBtn.addEventListener("click", function () { openTier(null); });
+    card.appendChild(addBtn);
+    host.appendChild(card);
+
+    function term(m) { m = parseInt(m, 10) || 0; return m === 1 ? "1 month" : (m + " months"); }
+    function perMonth(p) { var m = parseInt(p.term_months, 10) || 1; return Math.round((p.amount_minor || 0) / m); }
+    function accessLabel(p) { return (!p.access_days && p.access_start_min == null && p.access_end_min == null) ? "Any time" : "Limited hours"; }
+    function groupByTier(plans) {
+      var map = {}, order = [];
+      plans.forEach(function (p) { var k = p.tier || p.label || term(p.term_months); if (!map[k]) { map[k] = []; order.push(k); } map[k].push(p); });
+      return order.map(function (k) { return { tier: k, plans: map[k].sort(function (a, b) { return (a.term_months || 0) - (b.term_months || 0); }) }; });
+    }
+
+    function reload() {
+      UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+      window.AdminAPI.membershipPlans().then(function (r) {
+        var groups = groupByTier((r.plans || []).filter(function (p) { return p.status !== "retired"; }));
+        UI.clear(listBox);
+        if (!groups.length) { listBox.appendChild(el("div", { class: "cf-empty", text: "No memberships yet. Add one above." })); return; }
+        var list = el("div", { class: "cf-list" });
+        groups.forEach(function (g) { list.appendChild(serviceRow(g)); });
+        listBox.appendChild(list);
+      }, function (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+
+    function serviceRow(g) {
+      var minPm = Math.min.apply(null, g.plans.map(perMonth));
+      var sub = g.plans.length + " term" + (g.plans.length > 1 ? "s" : "") + " · from " + UI.money(minPm) + "/mo · " + accessLabel(g.plans[0]);
+      return el("div", { class: "cf-item" }, [
+        el("span", { class: "cf-chip", text: "⭐" }),
+        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: g.tier }), el("div", { class: "cf-item-s", text: sub })]),
+        el("span", { class: "cf-spacer" }),
+        el("button", { class: "cf-btn cf-btn-sm", text: "Edit", onclick: function () { openTier(g); } }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete", onclick: function () { delTier(g); } }),
+      ]);
+    }
+
+    function delTier(g) {
+      if (!window.confirm("Delete the " + g.tier + " membership and all its terms?")) return;
+      Promise.all(g.plans.map(function (p) { return window.AdminAPI.deleteMembershipPlan(p.price_id).catch(function () {}); }))
+        .then(function () { UI.toast("Deleted.", "info"); reload(); });
+    }
+
+    // The membership editor — name + access hours (whole tier) + term variants.
+    function openTier(g) {
+      var bg = el("div", { class: "cf-modal-bg" });
+      function close() { if (bg.parentNode) document.body.removeChild(bg); }
+      var nameI = input({ value: g ? g.tier : "", placeholder: "e.g. Adult Anytime", style: "max-width:260px;font-weight:700" });
+      var body = el("div");
+      var modal = el("div", { class: "cf-modal cf-modal-lg" }, [
+        el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center" }, [
+          el("h2", { text: g ? "Edit membership" : "New membership" }),
+          el("button", { class: "cf-btn cf-btn-sm", text: "✕", onclick: close }),
+        ]),
+        field("Membership name", nameI),
+        body,
+      ]);
+      bg.appendChild(modal); document.body.appendChild(bg);
+      renderBody();
+
+      function reopen(name) {
+        window.AdminAPI.membershipPlans().then(function (r) {
+          var g2 = groupByTier((r.plans || []).filter(function (p) { return p.status !== "retired"; })).filter(function (x) { return x.tier === name; })[0];
+          close(); reload(); if (g2) openTier(g2);
+        });
+      }
+
+      function renderBody() {
+        UI.clear(body);
+        if (g) {
+          body.appendChild(el("div", { style: "margin:4px 0 14px" }, [el("button", { class: "cf-btn cf-btn-sm", text: "Save name", onclick: function () {
+            var name = nameI.value.trim(); if (!name) { UI.toast("Enter a name.", "warn"); return; }
+            Promise.all(g.plans.map(function (p) { return window.AdminAPI.patchMembershipPlan(p.price_id, { tier: name }).catch(function () {}); })).then(function () { UI.toast("Saved.", "info"); reopen(name); });
+          } })]));
+          body.appendChild(el("h3", { text: "Access hours" }));
+          body.appendChild(el("p", { class: "cf-muted cf-tiny", text: "When this membership makes courts free. All days + blank times = any time." }));
+          body.appendChild(tierWindow(g));
+        }
+        body.appendChild(el("h3", { text: "Terms", style: "margin-top:16px" }));
+        var list = el("div", { class: "cf-list" });
+        (g ? g.plans : []).forEach(function (p) { list.appendChild(termRow(p)); });
+        if (!g || !g.plans.length) list.appendChild(el("div", { class: "cf-empty", text: "No terms yet. Add one below." }));
+        body.appendChild(list);
+        var mI = input({ type: "number", min: 1, value: 1, style: "max-width:80px" });
+        var pI = input({ placeholder: "0.00", style: "max-width:120px" });
+        var addB = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Add term" });
+        addB.addEventListener("click", function () {
+          var name = nameI.value.trim(); if (!name) { UI.toast("Name the membership first.", "warn"); return; }
+          var months = num(mI.value), amt = toMinor(pI.value);
+          if (!months || months < 1) { UI.toast("Enter the term in months.", "warn"); return; }
+          if (amt == null || amt < 0) { UI.toast("Enter a price.", "warn"); return; }
+          window.AdminAPI.createMembershipPlan({ tier: name, term_months: months, amount_minor: amt }).then(function () { UI.toast("Term added.", "info"); reopen(name); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+        });
+        body.appendChild(el("div", { class: "cf-row", style: "gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap" }, [mI, el("span", { class: "cf-muted", text: "months" }), pI, addB]));
+      }
+
+      function termRow(p) {
+        var mI = input({ type: "number", min: 1, value: p.term_months || 1, style: "max-width:80px" });
+        var pI = input({ value: fromMinor(p.amount_minor), style: "max-width:120px" });
+        var status = statusSelect(p.status, function (s) { window.AdminAPI.patchMembershipPlan(p.price_id, { status: s }).then(function () { UI.toast("Term " + s + ".", "info"); reopen(nameI.value.trim()); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); });
+        var saveB = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
+        saveB.addEventListener("click", function () {
+          var months = num(mI.value); if (!months || months < 1) { UI.toast("Enter months.", "warn"); return; }
+          window.AdminAPI.patchMembershipPlan(p.price_id, { term_months: months, amount_minor: toMinor(pI.value) }).then(function () { UI.toast("Saved.", "info"); reopen(nameI.value.trim()); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+        });
+        var rmB = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove" });
+        rmB.addEventListener("click", function () { if (window.confirm("Remove this term?")) window.AdminAPI.deleteMembershipPlan(p.price_id).then(function () { reopen(nameI.value.trim()); }); });
+        return el("div", { class: "cf-item" }, [mI, el("span", { class: "cf-muted", text: "months" }), el("span", { class: "cf-muted", text: "→" }), pI, el("span", { class: "cf-spacer" }), status, saveB, rmB]);
+      }
+
+      function tierWindow(g) {
+        var seed = (g && g.plans[0]) || {};
+        var sel = {}, cur = seed.access_days;
+        var chips = el("div", { class: "cf-row", style: "gap:4px;flex-wrap:wrap" });
+        _DOW.forEach(function (o) { var on = !cur || cur.indexOf(parseInt(o[0], 10)) >= 0; sel[o[0]] = on; var b = el("button", { class: "cf-chip" + (on ? " class" : ""), text: o[1], type: "button" }); b.addEventListener("click", function () { sel[o[0]] = !sel[o[0]]; b.className = "cf-chip" + (sel[o[0]] ? " class" : ""); }); chips.appendChild(b); });
+        var fromI = input({ type: "time", value: minToTime(seed.access_start_min), style: "max-width:110px" });
+        var toI = input({ type: "time", value: minToTime(seed.access_end_min), style: "max-width:110px" });
+        var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save hours" });
+        save.addEventListener("click", function () {
+          var days = _DOW.filter(function (o) { return sel[o[0]]; }).map(function (o) { return parseInt(o[0], 10); });
+          var bd = { set_window: true, access_days: (days.length === 0 || days.length === 7) ? null : days, access_start_min: timeToMin(fromI.value), access_end_min: timeToMin(toI.value) };
+          Promise.all(g.plans.map(function (p) { return window.AdminAPI.patchMembershipPlan(p.price_id, bd).catch(function () {}); })).then(function () { UI.toast("Hours saved for all terms.", "info"); reopen(nameI.value.trim()); });
+        });
+        return el("div", {}, [chips, el("div", { class: "cf-row", style: "gap:8px;align-items:center;margin-top:8px" }, [el("span", { class: "cf-muted", text: "from" }), fromI, el("span", { class: "cf-muted", text: "to" }), toI, save])]);
+      }
+    }
+
+    reload();
+  }
+
   // PRICING HOME — one place for everything purchasable: court rates · session packs · memberships.
   // (Lesson rates + lesson packs are coach-owned and live in the coach console.)
   function pricingHome(host) {
@@ -1207,6 +1349,7 @@
   window.AdminUI = {
     clubProfile: clubProfile, hours: hours, courts: courts,
     services: services, coaches: coaches, membershipPlans: membershipPlans,
+    membershipServices: membershipServices,
     coachAgreements: coachAgreements, bundlePlans: bundlePlans,
     courtRates: courtRates, pricingHome: pricingHome,
   };

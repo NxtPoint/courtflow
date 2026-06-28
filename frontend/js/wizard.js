@@ -35,9 +35,10 @@
     return t;
   }
   function plansForTier(l) { return memPlans().filter(function (p) { return tierOf(p) === l; }).sort(function (a, b) { return (a.term_months || 0) - (b.term_months || 0); }); }
-  // Only treat membership as tier→term when a tier genuinely groups MORE THAN ONE term. Otherwise
-  // (e.g. the default plans are labelled by term) show a flat list of plans — no redundant tier step.
-  function memMultiTier() { var t = memTiers(); return t.length > 1 && t.some(function (l) { return plansForTier(l).length > 1; }); }
+  // When the owner uses named tiers (memberships-as-services), drill tier → term: the tiers are the
+  // catalogue (Adult Anytime / Off-peak / Junior / Family), then the period. Only fall back to a flat
+  // plan list when no plan carries an explicit tier (legacy term-labelled defaults).
+  function memMultiTier() { return memPlans().some(function (p) { return !!p.tier; }); }
   function selectedPack() { return courtPacks().filter(function (p) { return p.id === ui.selPackId; })[0] || null; }
   function selectedPlan() { return memPlans().filter(function (p) { return p.price_id === ui.selPriceId; })[0] || null; }
 
