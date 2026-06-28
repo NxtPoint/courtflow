@@ -149,6 +149,12 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
             split = _accrue_commission(session, club_id, order_id, payment_id)
             if split:
                 result["commission"] = split
+            # Statement-payment: if this order is a client paying their coaching statement online,
+            # mark the linked arrears collected (commission accrues per item). Savepoint-guarded +
+            # idempotent, exactly like the commission fan-out — never blocks settlement.
+            settled = _settle_statement_arrears(session, order_id)
+            if settled:
+                result["arrears_settled"] = settled
         result["payment_recorded"] = True
         # ref_type/ref_id + the order's user_id let the notifications engine resolve the payer
         # (iam.user; child→guardian) and link the receipt notification to /receipt.html?order=<id>.
@@ -249,6 +255,19 @@ def _accrue_commission(session, club_id, order_id, payment_id):
                 session, club_id=club_id, order_id=order_id, payment_id=pid)
     except Exception:
         log.info("commission fan-out skipped (engine/tables unavailable) order=%s", order_id)
+        return None
+
+
+def _settle_statement_arrears(session, order_id):
+    """If `order_id` is a client's online statement payment, mark the linked coach_arrears collected
+    (commission accrues per item). SAVEPOINT-guarded + idempotent (no double-settle on a replayed
+    webhook). Returns the count settled, or None when the engine/tables aren't present."""
+    try:
+        with session.begin_nested():
+            from billing import commission as _commission
+            return _commission.settle_arrears_for_order(session, order_id=order_id)
+    except Exception:
+        log.info("arrears settlement skipped (engine/tables unavailable) order=%s", order_id)
         return None
 
 

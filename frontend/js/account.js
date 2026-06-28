@@ -153,6 +153,20 @@
       sc.appendChild(el("div", { class: "cf-row", style: "margin-top:10px;justify-content:space-between;font-weight:700" }, [
         el("span", { text: "Total (this month)" }), el("span", { text: money(tot.net_minor || 0, stm.currency) }),
       ]));
+      // Month-end "pay your invoice online" — when there's an outstanding (owed) amount, the client
+      // pays it by card (Yoco). On payment the arrears settle automatically.
+      var owed = tot.owed_minor || 0;
+      if (owed > 0) {
+        sc.appendChild(el("div", { class: "cf-card", style: "margin-top:12px;background:var(--green-050);border-color:var(--green)" }, [
+          el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px" }, [
+            el("div", {}, [
+              el("div", { style: "font-weight:800", text: "Your invoice is ready — " + money(owed, stm.currency) + " due" }),
+              el("div", { class: "cf-muted cf-tiny", text: "Pay your coaching statement securely by card." }),
+            ]),
+            el("button", { class: "cf-btn cf-btn-primary cf-btn-lg", text: "Pay " + money(owed, stm.currency) + " online", onclick: payStatement }),
+          ]),
+        ]));
+      }
       host.appendChild(sc);
     }
 
@@ -212,6 +226,18 @@
     try { await window.API.requestRefund({ order_id: order.id, reason: reason }); document.body.removeChild(bg); await reloadMoney(); UI.toast("Refund requested — the club will review it.", "info"); }
     catch (e) { btn.disabled = false; btn.textContent = o; UI.toast(UI.errMsg(e), "error"); }
   }
+  async function payStatement() {
+    try {
+      var res = await window.API.payStatement();
+      if (!res || !res.order_id) throw new Error("no order returned");
+      if (window.Pay) { await window.Pay.startYocoCheckout(res.order_id); return; }
+      UI.toast("Couldn't open the payment page — please refresh and try again.", "error");
+    } catch (e) {
+      var code = e && e.body && e.body.error;
+      UI.toast(code === "NOTHING_OWED" ? "You have nothing outstanding to pay." : (UI.errMsg(e) || "Could not start payment."), "error");
+    }
+  }
+
   async function cancelRefund(r) {
     if (!confirm("Withdraw this refund request?")) return;
     try { await window.API.cancelRefundRequest(r.id); await reloadMoney(); UI.toast("Request withdrawn.", "info"); }

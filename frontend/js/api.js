@@ -160,6 +160,8 @@
     // GET /api/me/statement?month= -> client coaching statement (mirror of the coach's): per coach,
     // lessons paid this month + outstanding arrears. {month, currency, coaches:[...], arrears_items, totals}
     myStatement: function (opts) { return A().apiJSON("/api/me/statement" + qs(opts)); },
+    // POST /api/me/statement/pay -> {order_id, amount_minor, currency} — pay owed arrears online (Yoco)
+    payStatement: function () { return A().apiJSON("/api/me/statement/pay", { method: "POST", body: {} }); },
     // GET /api/me/orders -> {orders:[{id,created_at,amount_minor,currency_code,status,settlement_mode,
     //   description,has_open_refund,refund_status,refundable}], count}
     myOrders: function () { return A().apiJSON("/api/me/orders"); },

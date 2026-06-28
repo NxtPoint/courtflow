@@ -357,6 +357,25 @@ def get_statement():
     return jsonify(data), 200
 
 
+@me_bp.post("/statement/pay")
+def pay_statement():
+    """Pay the caller's outstanding coaching statement (their owed arrears) ONLINE — creates an
+    awaiting_payment order the client takes through Yoco checkout. On payment the linked arrears are
+    marked collected (commission accrues). Returns {order_id, amount_minor, currency} or 409 if
+    nothing is owed. STRICTLY member-scoped (the client pays only their own statement)."""
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "view_own_ledger", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    from billing import commission
+    with session_scope() as s:
+        res = commission.create_statement_payment(s, club_id=p.club_id, client_user_id=p.user_id)
+    if not res:
+        return jsonify(error="NOTHING_OWED", message="You have no outstanding statement to pay."), 409
+    return jsonify(res), 201
+
+
 @me_bp.get("/orders")
 def get_orders():
     """The caller's recent paid/refunded orders (receipts) — each row flags whether it is

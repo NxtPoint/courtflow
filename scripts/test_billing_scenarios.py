@@ -347,7 +347,35 @@ def sc_refund_request(s, fx):
     check("re-deciding a closed request → NOT_PENDING", derr2 == "NOT_PENDING", str(derr2))
 
 
+def sc_statement_pay(s, fx):
+    print("\n# Month-end: client pays their owed coaching statement online → arrears settle")
+    # Seed an OWED arrears row for the member (an off-platform lesson on the coach's tab).
+    s.execute(text("INSERT INTO billing.coach_arrears (club_id, coach_user_id, client_user_id, "
+                   "gross_minor, currency, status) VALUES (:c,:coach,:u,40000,'ZAR','owed')"),
+              {"c": fx.club_id, "coach": fx.coach_uid, "u": fx.member})
+    pay = CM.create_statement_payment(s, club_id=fx.club_id, client_user_id=fx.member)
+    check("statement-payment order created for R400", pay and pay["amount_minor"] == 40000, str(pay))
+    oid = pay["order_id"]
+    check("order is awaiting_payment online", _order(s, oid)["status"] == "awaiting_payment")
+    ev = NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
+                                provider_payment_id="p_stmt_1", amount_minor=40000, currency="ZAR",
+                                status="succeeded", direction="charge", club_id=str(fx.club_id),
+                                user_id=str(fx.member), raw={"t": 9})
+    apply_payment_event(ev, session=s)
+    owed = s.execute(text("SELECT count(*) FROM billing.coach_arrears WHERE client_user_id=:u AND status='owed'"),
+                     {"u": fx.member}).scalar()
+    check("arrears marked collected after payment", owed == 0, f"still owed={owed}")
+    # Commission accrued for the coach on the settled arrears.
+    bal = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    check("coach earned commission on the settled statement", bal > 0, f"coach_balance={bal}")
+    # Replay → idempotent (no second settle / double commission).
+    apply_payment_event(ev, session=s)
+    check("replay is idempotent (coach balance unchanged)",
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == bal, "balance changed on replay")
+
+
 SCENARIOS = [
+    sc_statement_pay,
     sc_settlement_at_court,
     sc_settlement_online,
     sc_settlement_monthly,

@@ -404,6 +404,9 @@ _DDL = [
     # one arrears row per source booking (the lazy upsert key):
     f"CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_arrears_booking "
     f"ON {SCHEMA}.coach_arrears (club_id, booking_id) WHERE booking_id IS NOT NULL;",
+    # The online statement-payment order that's settling this arrears (set when the client pays
+    # their month-end statement online; on charge_succeeded the arrears is marked collected). Idempotent.
+    f"ALTER TABLE {SCHEMA}.coach_arrears ADD COLUMN IF NOT EXISTS pay_order_id uuid;",
     # --- end commission engine (owner) ---
 
     # ===========================================================================
