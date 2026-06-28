@@ -357,37 +357,41 @@ def cancel_my_membership():
 
 @me_bp.get("/statement")
 def get_statement():
-    """The client's coaching statement — the mirror of the coach's month-end statement (same data,
-    client lens): per coach, lessons paid this month + what they still owe (arrears). So a client
-    and coach see the SAME end-of-month statement. STRICTLY member-scoped."""
+    """The caller's UNIFIED statement (docs/specs/UNIFIED-STATEMENT.md): every owed service as ONE line
+    (the unpaid orders), with the single reconciled total they owe. One source of truth — no double
+    count. {items:[{order_id, description, kind, amount_minor, settlement_mode, pay_label, created_at}],
+    count, total_owed_minor, currency}. STRICTLY member-scoped."""
     p, err = _principal()
     if err:
         return err
     if not can(p, "view_own_ledger", {"club_id": p.club_id}):
         return jsonify(error="forbidden"), 403
-    from billing import commission
-    month = (request.args.get("month") or "").strip() or None
+    from billing import statement as statement_repo
     with session_scope() as s:
-        data = commission.client_statement(s, club_id=p.club_id, user_id=p.user_id, month=month)
+        data = statement_repo.statement(s, club_id=p.club_id, user_id=p.user_id)
     return jsonify(data), 200
 
 
 @me_bp.post("/statement/pay")
 def pay_statement():
-    """Pay the caller's outstanding coaching statement (their owed arrears) ONLINE — creates an
-    awaiting_payment order the client takes through Yoco checkout. On payment the linked arrears are
-    marked collected (commission accrues). Returns {order_id, amount_minor, currency} or 409 if
-    nothing is owed. STRICTLY member-scoped (the client pays only their own statement)."""
+    """Settle the caller's statement ONLINE. Body {order_ids?} settles a SUBSET (default = everything
+    owed) via ONE Yoco checkout: a settlement order covering the chosen owed orders. On payment each
+    covered order is marked paid once + its commission accrues (the webhook fan-out). Returns
+    {order_id, amount_minor, currency, items} → the page calls Pay.startYocoCheckout(order_id). 409 if
+    nothing is owed. STRICTLY member-scoped (the client pays only their own orders)."""
     p, err = _principal()
     if err:
         return err
     if not can(p, "view_own_ledger", {"club_id": p.club_id}):
         return jsonify(error="forbidden"), 403
-    from billing import commission
+    body = request.get_json(silent=True) or {}
+    order_ids = body.get("order_ids") or None
+    from billing import statement as statement_repo
     with session_scope() as s:
-        res = commission.create_statement_payment(s, club_id=p.club_id, client_user_id=p.user_id)
+        res = statement_repo.create_settlement_order(
+            s, club_id=p.club_id, user_id=p.user_id, order_ids=order_ids)
     if not res:
-        return jsonify(error="NOTHING_OWED", message="You have no outstanding statement to pay."), 409
+        return jsonify(error="NOTHING_OWED", message="You have no outstanding balance to settle."), 409
     return jsonify(res), 201
 
 

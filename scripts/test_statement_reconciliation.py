@@ -19,6 +19,7 @@ from db import get_engine
 from diary import bookings as B
 from billing import statement as S
 from billing import orders as O
+from billing import commission as CM
 
 JHB = ZoneInfo("Africa/Johannesburg")
 _RESULTS = []
@@ -187,7 +188,45 @@ def sc_void(s, fx):
     check("a paid order cannot be voided", S.void_order(s, club_id=fx.club_id, order_id=str(line)).get("ok") is False)
 
 
-SCENARIOS = [sc_no_double_count, sc_membership_r0, sc_pay_all, sc_partial_and_reclaim, sc_void]
+def arrears_owed(s, fx):
+    return int(s.execute(text("SELECT COALESCE(SUM(gross_minor),0) FROM billing.coach_arrears "
+                              "WHERE club_id=:c AND client_user_id=:u AND status='owed'"),
+                         {"c": fx.club_id, "u": fx.member}).scalar() or 0)
+
+
+def sc_arrears_lockstep(s, fx):
+    print("\n# Arrears (coach view) ↔ orders (client view) stay in lockstep; commission once, no double")
+    e0 = coach_earnings(s, fx)
+    book_lesson(s, fx, 8, "at_court")                # R400 owed lesson
+    CM.accrue_arrears_for_club(s, club_id=fx.club_id)   # the coach viewing their statement accrues this
+    check("coach arrears shows the unpaid lesson (R400 owed)", arrears_owed(s, fx) == 40000, str(arrears_owed(s, fx)))
+    check("client statement also shows R400 owed", owed(s, fx)["total_owed_minor"] == 40000, str(owed(s, fx)))
+    # Client settles the lesson via the UNIFIED statement (one settlement order, paid by card).
+    so = S.create_settlement_order(s, club_id=fx.club_id, user_id=fx.member)
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=so["order_id"], amount_minor=so["amount_minor"],
+                          provider="card_at_desk", provider_payment_id="SETTLE-LS", user_id=fx.member)
+    check("client statement zero after settling", owed(s, fx)["total_owed_minor"] == 0, str(owed(s, fx)))
+    check("coach 'owed' arrears cleared (lockstep)", arrears_owed(s, fx) == 0, str(arrears_owed(s, fx)))
+    earn1 = coach_earnings(s, fx)
+    check("coach earned commission on the settled lesson (>0)", earn1 > e0, f"{e0}->{earn1}")
+    # Re-running the lazy accrual must NOT resurrect the now-paid lesson, nor double the commission.
+    CM.accrue_arrears_for_club(s, club_id=fx.club_id)
+    check("re-accrual does NOT resurrect the paid lesson", arrears_owed(s, fx) == 0)
+    check("commission accrued exactly once (no double)", coach_earnings(s, fx) == earn1, str(coach_earnings(s, fx)))
+
+    print("\n# Reverse lockstep: coach marks an off-platform lesson collected → client's order clears")
+    book_lesson(s, fx, 16, "at_court")               # R400 owed lesson (16:00)
+    CM.accrue_arrears_for_club(s, club_id=fx.club_id)
+    aid = s.execute(text("SELECT id FROM billing.coach_arrears WHERE club_id=:c AND client_user_id=:u "
+                         "AND status='owed' ORDER BY created_at DESC LIMIT 1"),
+                    {"c": fx.club_id, "u": fx.member}).scalar()
+    check("a fresh owed lesson is on the client statement", owed(s, fx)["total_owed_minor"] == 40000, str(owed(s, fx)))
+    CM.mark_arrears_collected(s, club_id=fx.club_id, arrears_id=str(aid))
+    check("coach collected off-platform → client statement clears too", owed(s, fx)["total_owed_minor"] == 0,
+          str(owed(s, fx)))
+
+
+SCENARIOS = [sc_no_double_count, sc_membership_r0, sc_pay_all, sc_partial_and_reclaim, sc_void, sc_arrears_lockstep]
 
 
 def main():

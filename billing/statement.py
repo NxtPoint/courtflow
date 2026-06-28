@@ -184,6 +184,17 @@ def settle_settlement_order(session, *, settlement_order_id) -> Dict[str, Any]:
             splits += int(res.get("splits") or 0)
         except Exception:
             log.info("settle_settlement_order: split skipped for child=%s", ch["id"], exc_info=False)
+        # Keep the coach's arrears view in lockstep: a lesson paid here drops off the coach's "owed"
+        # tab. Status-only (commission already accrued via the split above — never double-counted).
+        try:
+            session.execute(
+                text("UPDATE billing.coach_arrears SET status = 'collected', collected_at = now(), "
+                     "updated_at = now() WHERE club_id = :c AND status = 'owed' "
+                     "AND order_line_id IN (SELECT id FROM billing.order_line WHERE order_id = :o)"),
+                {"c": ch["club_id"], "o": ch["id"]},
+            )
+        except Exception:
+            pass
     return {"settled": settled, "splits": splits}
 
 

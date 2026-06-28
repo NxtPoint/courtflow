@@ -137,42 +137,39 @@
     } else {
       billCard.appendChild(el("div", { class: "cf-empty", style: "margin-top:8px", text: "No payments yet." }));
     }
-    var acct = f.account || {};
-    if (acct.balance_minor) {
-      billCard.appendChild(el("div", { class: "cf-row", style: "margin-top:12px;justify-content:space-between;font-weight:700" }, [
-        el("span", { text: "Account balance (pay end of month)" }), el("span", { text: money(acct.balance_minor, ccy) }),
-      ]));
-    }
     host.appendChild(billCard);
 
-    // ---- coaching statement (only if there is coaching activity) ----
-    var stm = st.statement;
-    if (stm && stm.coaches && stm.coaches.length) {
-      var sc = card("Coaching statement");
-      sc.appendChild(el("p", { class: "cf-muted cf-tiny", text: "Lessons with your coaches this month — paid and outstanding." }));
+    // ---- your statement (ONE reconciled view of everything owed — unpaid orders) ----
+    // docs/specs/UNIFIED-STATEMENT.md: the total is exactly SUM(unpaid orders); no double count.
+    var stm = st.statement || {};
+    var items = stm.items || [];
+    var owed = stm.total_owed_minor || 0;
+    if (items.length) {
+      var scur = stm.currency || ccy;
+      var sc = card("Your statement");
+      sc.appendChild(el("p", { class: "cf-muted cf-tiny", text: "Everything you owe, in one place. Settle online anytime — or pay at the club." }));
       var sl = el("div", { class: "cf-list", style: "margin-top:10px" });
-      stm.coaches.forEach(function (c) {
+      items.forEach(function (it) {
         sl.appendChild(el("div", { class: "cf-item" }, [
-          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: c.coach_name || "Coach" }), el("div", { class: "cf-item-s", text: (c.lessons || 0) + " lesson" + (c.lessons === 1 ? "" : "s") + " · paid " + money(c.paid_minor, stm.currency) + (c.owed_minor ? " · owed " + money(c.owed_minor, stm.currency) : "") })]),
-          el("div", { style: "font-weight:700", text: money(c.net_minor, stm.currency) }),
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: it.description || "Booking" }),
+            el("div", { class: "cf-item-s", text: (it.created_at ? String(it.created_at).slice(0, 10) + " · " : "") + (it.pay_label || it.settlement_mode || "") }),
+          ]),
+          el("div", { style: "font-weight:700", text: money(it.amount_minor, scur) }),
         ]));
       });
       sc.appendChild(sl);
-      var tot = stm.totals || {};
       sc.appendChild(el("div", { class: "cf-row", style: "margin-top:10px;justify-content:space-between;font-weight:700" }, [
-        el("span", { text: "Total (this month)" }), el("span", { text: money(tot.net_minor || 0, stm.currency) }),
+        el("span", { text: "Total owed" }), el("span", { text: money(owed, scur) }),
       ]));
-      // Month-end "pay your invoice online" — when there's an outstanding (owed) amount, the client
-      // pays it by card (Yoco). On payment the arrears settle automatically.
-      var owed = tot.owed_minor || 0;
       if (owed > 0) {
         sc.appendChild(el("div", { class: "cf-card", style: "margin-top:12px;background:var(--green-050);border-color:var(--green)" }, [
           el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px" }, [
             el("div", {}, [
-              el("div", { style: "font-weight:800", text: "Your invoice is ready — " + money(owed, stm.currency) + " due" }),
-              el("div", { class: "cf-muted cf-tiny", text: "Pay your coaching statement securely by card." }),
+              el("div", { style: "font-weight:800", text: "Settle your balance — " + money(owed, scur) + " due" }),
+              el("div", { class: "cf-muted cf-tiny", text: "Pay everything securely by card, or settle at the club." }),
             ]),
-            el("button", { class: "cf-btn cf-btn-primary cf-btn-lg", text: "Pay " + money(owed, stm.currency) + " online", onclick: payStatement }),
+            el("button", { class: "cf-btn cf-btn-primary cf-btn-lg", text: "Settle " + money(owed, scur) + " online", onclick: payStatement }),
           ]),
         ]));
       }

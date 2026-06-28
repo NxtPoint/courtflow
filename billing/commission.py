@@ -292,6 +292,7 @@ def accrue_arrears_for_club(session, *, club_id) -> int:
                   AND b.status IN ('confirmed','completed')
                   AND ol.amount_minor > 0
                   AND o.settlement_mode <> 'membership_covered'
+                  AND o.status NOT IN ('paid','void','written_off')   -- already settled/cleared (incl. via a 'pay all' settlement order whose payment sits on the parent)
                   AND COALESCE(pr.coach_user_id, b.coach_user_id) IS NOT NULL
                   AND NOT EXISTS (
                         SELECT 1 FROM billing.payment pay
@@ -342,6 +343,16 @@ def mark_arrears_collected(session, *, club_id, arrears_id, coach_user_id=None,
         {"club": club_id, "id": str(arrears_id),
          "by": str(collected_by) if collected_by else None},
     )
+    # Keep the client's unified statement in lockstep: collecting off-platform clears the client's
+    # owed ORDER too (status-only — the money came in off-gateway; commission accrues below). Without
+    # this the client would still see the lesson as owed after the coach was paid.
+    if row["order_line_id"]:
+        session.execute(
+            text('UPDATE billing."order" SET status = \'paid\', updated_at = now() '
+                 "WHERE club_id = :club AND status IN ('open','awaiting_payment') "
+                 "AND id = (SELECT order_id FROM billing.order_line WHERE id = :olid)"),
+            {"club": club_id, "olid": str(row["order_line_id"])},
+        )
 
     gross = int(row["gross_minor"] or 0)
     coach = row["coach_user_id"]
