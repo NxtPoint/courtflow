@@ -738,6 +738,17 @@ def upsert_coach_profile(session, *, club_id, user_id, display_name=None):
     return row["id"]
 
 
+def set_coach_bookable(session, *, club_id, user_id, is_bookable):
+    """Admin Hide/Unhide a coach: toggle iam.coach_profile.is_bookable (Hidden coaches aren't offered
+    for booking, but are kept). Returns True if a row was updated."""
+    res = session.execute(
+        text("UPDATE iam.coach_profile SET is_bookable = :b, updated_at = now() "
+             "WHERE club_id = :c AND user_id = :u"),
+        {"b": bool(is_bookable), "c": club_id, "u": user_id},
+    )
+    return (res.rowcount or 0) > 0
+
+
 def create_coach_invite(session, *, club_id, user_id, token):
     row = session.execute(
         text("INSERT INTO iam.coach_invite (club_id, user_id, token, status) "

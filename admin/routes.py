@@ -860,6 +860,22 @@ def revoke_coach(user_id):
     return jsonify(ok=True), 200
 
 
+@admin_bp.patch("/coaches/<user_id>")
+def patch_coach(user_id):
+    """Admin edit of a coach — currently Hide/Unhide (is_bookable)."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        if "is_bookable" in b:
+            ok = repo.set_coach_bookable(s, club_id=p.club_id, user_id=user_id,
+                                         is_bookable=bool(b.get("is_bookable")))
+            if not ok:
+                return jsonify(error="NOT_FOUND"), 404
+    return jsonify(ok=True), 200
+
+
 # ---------------------------------------------------------------------------
 # commission engine — coach agreements + commission rules (owner config)
 # The owner monetises coaches via rent AND/OR commission % (additive, per coach). Commission

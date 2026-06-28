@@ -532,3 +532,15 @@ p{margin:0 0 10px}
 /* --- full-screen editor bar (service / membership editors, 2026-06-28) --- */
 .cf-editbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;
   padding:12px 0;margin:-6px 0 10px;background:var(--canvas);border-bottom:1px solid var(--border)}
+
+/* --- selectable day pills + consistent grass-green selected state (2026-06-28) --- */
+.cf-day{display:inline-flex;align-items:center;justify-content:center;padding:7px 13px;
+  border-radius:var(--radius-pill);border:1.5px solid var(--border);background:#fff;color:var(--ink);
+  font:600 .8rem Inter;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+.cf-day:hover{border-color:var(--green)}
+.cf-day.on{background:var(--green);border-color:var(--green);color:#fff}
+/* selected cards read clearly green everywhere */
+.cf-planopt.sel{border-color:var(--green);background:var(--green-050);box-shadow:var(--ring)}
+/* a summary block that opens its editor on click */
+.cf-pickable{cursor:pointer;transition:border-color .12s,box-shadow .12s}
+.cf-pickable:hover{border-color:var(--green);box-shadow:var(--shadow-md)}

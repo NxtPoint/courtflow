@@ -1203,18 +1203,17 @@
     if (hidden) bits.push("hidden");
     function setActive(a) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { active: a } }).then(function () { renderServiceList(box); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
     var nameKids = [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" })];
-    var card = el("div", { class: "cf-card" }, [
+    function edit() { window.ServiceEditor.open(s.id, { host: box, onClose: function () { renderServiceList(box); } }); }
+    var card = el("div", { class: "cf-card cf-pickable" }, [
       el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap" }, [
         el("div", {}, [
           el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, nameKids),
           el("div", { class: "cf-muted cf-tiny", style: "margin-top:4px", text: bits.join(" · ") }),
         ]),
-        el("div", { class: "cf-row", style: "gap:6px" }, [
-          el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Edit", onclick: function () { window.ServiceEditor.open(s.id, { host: box, onClose: function () { renderServiceList(box); } }); } }),
-          el("button", { class: "cf-btn cf-btn-sm", text: hidden ? "Unhide" : "Hide", onclick: function () { setActive(hidden); } }),
-        ]),
+        el("button", { class: "cf-btn cf-btn-sm", text: hidden ? "Unhide" : "Hide", onclick: function (ev) { ev.stopPropagation(); setActive(hidden); } }),
       ]),
     ]);
+    card.addEventListener("click", edit);
     if (hidden) card.style.opacity = "0.6";
     return card;
   }

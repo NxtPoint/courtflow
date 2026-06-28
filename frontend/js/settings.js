@@ -16,7 +16,6 @@
     { k: "services", t: "Services" },
     { k: "pricing", t: "Memberships" },
     { k: "coaches", t: "Coaches" },
-    { k: "coachpay", t: "Coach pay" },
   ];
 
   function root() { return document.getElementById("cf-settings"); }
@@ -62,9 +61,7 @@
     } else if (state.tab === "services") {
       renderServices(sectionHost);          // unified service list → the ONE Service Editor
     } else if (state.tab === "coaches") {
-      window.AdminUI.coaches(sectionHost, {});
-    } else if (state.tab === "coachpay") {
-      window.AdminUI.coachAgreements(sectionHost, {});
+      window.AdminUI.coachManage(sectionHost);   // merged Coaches + Coach pay (summary → edit)
     }
   }
 
@@ -119,18 +116,16 @@
         if (s.from_amount_minor != null) bits.push("from " + UI.money(s.from_amount_minor));
         if (hidden) bits.push("hidden");
         function setActive(a) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { active: a } }).then(function () { renderServices(host); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
-        var cardEl = el("div", { class: "cf-card" }, [
+        var cardEl = el("div", { class: "cf-card cf-pickable" }, [
           el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap" }, [
             el("div", {}, [
               el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" })]),
               el("div", { class: "cf-muted cf-tiny", style: "margin-top:4px", text: bits.join(" · ") }),
             ]),
-            el("div", { class: "cf-row", style: "gap:6px" }, [
-              el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Edit", onclick: function () { window.ServiceEditor.open(s.id, { host: host, onClose: function () { renderServices(host); } }); } }),
-              el("button", { class: "cf-btn cf-btn-sm", text: hidden ? "Unhide" : "Hide", onclick: function () { setActive(hidden); } }),
-            ]),
+            el("button", { class: "cf-btn cf-btn-sm", text: hidden ? "Unhide" : "Hide", onclick: function (ev) { ev.stopPropagation(); setActive(hidden); } }),
           ]),
         ]);
+        cardEl.addEventListener("click", function () { window.ServiceEditor.open(s.id, { host: host, onClose: function () { renderServices(host); } }); });
         if (hidden) cardEl.style.opacity = "0.6";
         host.appendChild(cardEl);
       });

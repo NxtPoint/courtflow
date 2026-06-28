@@ -149,6 +149,8 @@
     resendCoachInvite: function (id) { return A().apiJSON("/api/admin/coaches/" + enc(id) + "/resend-invite", { method: "POST" }); },
     // DELETE /api/admin/coaches/:id  (remove a coach from the club)
     removeCoach: function (id) { return A().apiJSON("/api/admin/coaches/" + enc(id), { method: "DELETE" }); },
+    // PATCH /api/admin/coaches/:id  body:{is_bookable}  (Hide/Unhide a coach)
+    patchCoach: function (id, body) { return A().apiJSON("/api/admin/coaches/" + enc(id), { method: "PATCH", body: body }); },
     // PATCH /api/admin/products/:id  body: {name?,description?,active?}
     patchProduct: function (id, body) { return A().apiJSON("/api/admin/products/" + enc(id), { method: "PATCH", body: body }); },
     // DELETE /api/admin/prices/:id  (delete/deactivate a price)
@@ -1235,14 +1237,14 @@
       var minPm = Math.min.apply(null, g.plans.map(perMonth));
       var sub = g.plans.length + " term" + (g.plans.length > 1 ? "s" : "") + " · from " + UI.money(minPm) + "/mo · " + accessLabel(g.plans[0]) + (hidden ? " · hidden" : "");
       function setStatus(s) { Promise.all(g.plans.map(function (p) { return window.AdminAPI.patchMembershipPlan(p.price_id, { status: s }).catch(function () {}); })).then(function () { UI.toast("Saved.", "info"); reload(); }); }
-      var row = el("div", { class: "cf-item" }, [
+      var row = el("div", { class: "cf-item cf-pickable" }, [
         el("span", { class: "cf-chip", text: "⭐" }),
         el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: g.tier }), el("div", { class: "cf-item-s", text: sub })]),
         el("span", { class: "cf-spacer" }),
-        el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Edit", onclick: function () { openTier(g); } }),
-        el("button", { class: "cf-btn cf-btn-sm", text: hidden ? "Unhide" : "Hide", onclick: function () { setStatus(hidden ? "active" : "dormant"); } }),
-        el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete", onclick: function () { delTier(g); } }),
+        el("button", { class: "cf-btn cf-btn-sm", text: hidden ? "Unhide" : "Hide", onclick: function (ev) { ev.stopPropagation(); setStatus(hidden ? "active" : "dormant"); } }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete", onclick: function (ev) { ev.stopPropagation(); delTier(g); } }),
       ]);
+      row.addEventListener("click", function () { openTier(g); });
       if (hidden) row.style.opacity = "0.6";
       return row;
     }
@@ -1286,7 +1288,7 @@
         var sel = {}, cur = m.win.days;
         function syncDays() { var days = _DOW.filter(function (o) { return sel[o[0]]; }).map(function (o) { return parseInt(o[0], 10); }); m.win.days = (days.length === 0 || days.length === 7) ? null : days; }
         var chips = el("div", { class: "cf-row", style: "gap:4px;flex-wrap:wrap" });
-        _DOW.forEach(function (o) { var on = !cur || cur.indexOf(parseInt(o[0], 10)) >= 0; sel[o[0]] = on; var b = el("button", { class: "cf-chip" + (on ? " class" : ""), text: o[1], type: "button" }); b.addEventListener("click", function () { sel[o[0]] = !sel[o[0]]; b.className = "cf-chip" + (sel[o[0]] ? " class" : ""); syncDays(); }); chips.appendChild(b); });
+        _DOW.forEach(function (o) { var on = !cur || cur.indexOf(parseInt(o[0], 10)) >= 0; sel[o[0]] = on; var b = el("button", { class: "cf-day" + (on ? " on" : ""), text: o[1], type: "button" }); b.addEventListener("click", function () { sel[o[0]] = !sel[o[0]]; b.className = "cf-day" + (sel[o[0]] ? " on" : ""); syncDays(); }); chips.appendChild(b); });
         var fromI = input({ type: "time", value: minToTime(m.win.start), style: "max-width:110px" }); fromI.addEventListener("input", function () { m.win.start = timeToMin(fromI.value); });
         var toI = input({ type: "time", value: minToTime(m.win.end), style: "max-width:110px" }); toI.addEventListener("input", function () { m.win.end = timeToMin(toI.value); });
         c.appendChild(chips);
@@ -1341,8 +1343,112 @@
     var mem = el("div", { style: "margin-top:18px" }); host.appendChild(mem); membershipPlans(mem, {});
   }
 
+  // COACHES (merged Coaches + Coach pay) — each coach is a summary row (click to edit), with
+  // Hide/Delete. Edit opens a full-screen editor: details · rent · default commission. Per-service
+  // commission lives on the service (the Service Editor). One place per coach.
+  function coachManage(host) {
+    init();
+    var DATA = { agg: {}, coaches: [] };
+    function aggFor(uid) { return (DATA.agg.coaches || []).filter(function (c) { return String(c.coach_user_id) === String(uid); })[0] || {}; }
+    function coachName(c) { return c.display_name || ((c.first_name || "") + " " + (c.surname || "")).trim() || c.email || "Coach"; }
+    function isPending(c) { return !!(c.invite_status && c.invite_status !== "accepted"); }
+
+    function renderList() {
+      UI.clear(host);
+      host.appendChild(el("div", { class: "cf-card" }, [el("h2", { text: "Coaches" }), el("p", { class: "cf-muted", text: "Your coaches, their rent and commission — one place. Click a coach to edit." })]));
+      host.appendChild(clubDefaultCard());
+      var listBox = el("div"); host.appendChild(listBox);
+      host.appendChild(inviteCard());
+      listBox.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+      Promise.all([window.AdminAPI.coaches(), window.AdminAPI.coachAgreements()]).then(function (res) {
+        DATA.coaches = res[0].coaches || []; DATA.agg = res[1] || {};
+        UI.clear(listBox);
+        if (!DATA.coaches.length) { listBox.appendChild(el("div", { class: "cf-empty", text: "No coaches yet. Invite one below." })); return; }
+        var list = el("div", { class: "cf-list" }); DATA.coaches.forEach(function (c) { list.appendChild(coachRow(c)); }); listBox.appendChild(list);
+      }, function (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+
+    function clubDefaultCard() {
+      var card = el("div", { class: "cf-card" });
+      card.appendChild(el("h3", { text: "Club default commission" }));
+      card.appendChild(el("p", { class: "cf-muted cf-tiny", text: "The % the club keeps on lessons by default. Override per coach (open a coach) or per service (the service editor)." }));
+      var pctI = input({ type: "number", step: "0.5", min: 0, max: 100, value: (DATA.agg.club_default_pct != null ? DATA.agg.club_default_pct : 0), style: "max-width:110px" });
+      var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save default" });
+      save.addEventListener("click", function () {
+        var pct = parseFloat(pctI.value); if (isNaN(pct) || pct < 0 || pct > 100) { UI.toast("Enter 0–100.", "warn"); return; }
+        window.AdminAPI.setCommissionRule({ commission_pct: pct }).then(function () { UI.toast("Saved.", "info"); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+      });
+      card.appendChild(el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [pctI, el("span", { class: "cf-muted", text: "% the club keeps" }), save]));
+      return card;
+    }
+
+    function coachRow(c) {
+      var uid = c.user_id || c.id, ag = aggFor(uid), pending = isPending(c), hidden = c.is_bookable === false;
+      var subbits = [c.email || ""];
+      if (ag.rent_minor) subbits.push("rent " + UI.money(ag.rent_minor));
+      if (ag.coach_pct != null) subbits.push(ag.coach_pct + "% commission");
+      if (pending) subbits.push("invite pending");
+      if (hidden) subbits.push("hidden");
+      var actions = [];
+      if (pending) actions.push(el("button", { class: "cf-btn cf-btn-sm", text: "Resend invite", onclick: function (ev) { ev.stopPropagation(); window.AdminAPI.resendCoachInvite(uid).then(function (r) { if (r && r.invite_link) { try { navigator.clipboard.writeText(r.invite_link); } catch (e) {} } UI.toast("Invite re-issued.", "info"); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }));
+      actions.push(el("button", { class: "cf-btn cf-btn-sm", text: hidden ? "Unhide" : "Hide", onclick: function (ev) { ev.stopPropagation(); window.AdminAPI.patchCoach(uid, { is_bookable: hidden }).then(renderList, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }));
+      actions.push(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete", onclick: function (ev) { ev.stopPropagation(); if (window.confirm("Remove " + coachName(c) + " from the club?")) window.AdminAPI.removeCoach(uid).then(function () { UI.toast("Removed.", "info"); renderList(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }));
+      var row = el("div", { class: "cf-item cf-pickable" }, [
+        el("span", { class: "cf-chip coach", text: "coach" }),
+        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: coachName(c) }), el("div", { class: "cf-item-s", text: subbits.filter(Boolean).join(" · ") })]),
+        el("span", { class: "cf-spacer" }),
+      ].concat(actions));
+      row.addEventListener("click", function () { openCoach(c, ag); });
+      if (hidden) row.style.opacity = "0.6";
+      return row;
+    }
+
+    function inviteCard() {
+      var card = el("div", { class: "cf-card" }, [el("h3", { text: "Invite a coach" })]);
+      var first = input({ placeholder: "First name", style: "max-width:140px" }), surname = input({ placeholder: "Surname", style: "max-width:140px" }), email = input({ placeholder: "Email", type: "email", style: "max-width:200px" });
+      var invite = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Invite" });
+      invite.addEventListener("click", function () {
+        var em = email.value.trim(); if (!em) { UI.toast("Email is required.", "warn"); return; }
+        var display = (first.value.trim() + " " + surname.value.trim()).trim();
+        window.AdminAPI.inviteCoach({ email: em, first_name: first.value.trim(), surname: surname.value.trim(), display_name: display || em }).then(function (r) { UI.toast("Invite sent.", "info"); if (r && r.invite_link) { try { navigator.clipboard.writeText(r.invite_link); } catch (e) {} } renderList(); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+      });
+      card.appendChild(el("div", { class: "cf-row", style: "gap:6px;align-items:center;flex-wrap:wrap" }, [first, surname, email, invite]));
+      return card;
+    }
+
+    function openCoach(c, ag) {
+      var uid = c.user_id || c.id, pending = isPending(c);
+      var m = { rent_minor: ag.rent_minor || 0, rent_day: ag.rent_day || 1, coach_pct: (ag.coach_pct != null ? ag.coach_pct : "") };
+      render();
+      function render() {
+        UI.clear(host);
+        var saveB = el("button", { class: "cf-btn cf-btn-primary", text: "Save & close" });
+        saveB.addEventListener("click", function () { save(saveB); });
+        host.appendChild(el("div", { class: "cf-editbar" }, [el("button", { class: "cf-btn", text: "← Cancel", onclick: renderList }), el("strong", { text: coachName(c) }), el("span", { class: "cf-spacer" }), saveB]));
+        var det = el("div", { class: "cf-card" }, [el("h3", { text: "Details" }), el("div", { class: "cf-muted", text: (c.email || "") + (pending ? " · invite pending" : "") })]);
+        if (pending) det.appendChild(el("button", { class: "cf-btn cf-btn-sm", style: "margin-top:10px", text: "Resend invite", onclick: function () { window.AdminAPI.resendCoachInvite(uid).then(function (r) { if (r && r.invite_link) { try { navigator.clipboard.writeText(r.invite_link); } catch (e) {} } UI.toast("Invite re-issued.", "info"); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }));
+        host.appendChild(det);
+        var rentI = input({ value: fromMinor(m.rent_minor), placeholder: "0.00", style: "max-width:120px" }); rentI.addEventListener("input", function () { m.rent_minor = toMinor(rentI.value) || 0; });
+        var dayI = input({ type: "number", min: 1, max: 28, value: m.rent_day, style: "max-width:80px" }); dayI.addEventListener("input", function () { m.rent_day = num(dayI.value) || 1; });
+        host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Monthly rent" }), el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [rentI, el("span", { class: "cf-muted", text: "on day" }), dayI])]));
+        var pctI = input({ type: "number", min: 0, max: 100, value: m.coach_pct, placeholder: String(DATA.agg.club_default_pct || 0), style: "max-width:100px" }); pctI.addEventListener("input", function () { m.coach_pct = pctI.value; });
+        host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Default commission" }), el("p", { class: "cf-muted cf-tiny", text: "The % the club keeps on all this coach's lessons. Blank = the club default (" + (DATA.agg.club_default_pct || 0) + "%). Per-service overrides live in the service editor." }), el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [pctI, el("span", { class: "cf-muted", text: "% to the club" })])]));
+      }
+      async function save(btn) {
+        btn.disabled = true; btn.textContent = "Saving…";
+        try {
+          await window.AdminAPI.putCoachAgreement(uid, { rent_minor: m.rent_minor, rent_day: m.rent_day });
+          if (m.coach_pct !== "" && m.coach_pct != null) { var v = parseFloat(m.coach_pct); if (!isNaN(v)) await window.AdminAPI.setCommissionRule({ coach_user_id: uid, commission_pct: Math.max(0, Math.min(100, v)) }); }
+          UI.toast("Saved.", "info"); renderList();
+        } catch (e) { btn.disabled = false; btn.textContent = "Save & close"; UI.toast(UI.errMsg(e) || "Couldn't save.", "error"); }
+      }
+    }
+
+    renderList();
+  }
+
   window.AdminUI = {
-    clubProfile: clubProfile, hours: hours, courts: courts,
+    clubProfile: clubProfile, hours: hours, courts: courts, coachManage: coachManage,
     services: services, coaches: coaches, membershipPlans: membershipPlans,
     membershipServices: membershipServices,
     coachAgreements: coachAgreements, bundlePlans: bundlePlans,
