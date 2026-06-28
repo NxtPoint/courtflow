@@ -79,6 +79,21 @@ def _first_free_court(session, club_id, starts, ends):
     ).scalar()
 
 
+_PRODUCT_KIND_BY_BOOKING = {"court": "court_booking", "lesson": "lesson", "class": "class"}
+
+
+def _service_payment_modes_guarded(session, club_id, booking_type, coach_user_id):
+    """The per-service allowed payment methods (or None = no restriction). Guarded — never raises,
+    so a missing billing.* can never block a booking."""
+    try:
+        from diary.pricing import payment_modes_for
+        return payment_modes_for(session, club_id=club_id,
+                                 kind=_PRODUCT_KIND_BY_BOOKING.get(booking_type, booking_type),
+                                 coach_user_id=coach_user_id)
+    except Exception:
+        return None
+
+
 def _coach_class_conflict(session, club_id, coach_user_id, starts, ends):
     """True if the coach RUNS a scheduled class overlapping [starts, ends). A class_session is
     NOT a diary.booking, so the GiST exclusion constraint can't arbitrate a lesson-vs-class clash
@@ -467,6 +482,16 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     coach_uid = coach_user_id or (res["coach_user_id"] if res["kind"] == "coach" else None)
     if booking_type == "lesson" and not coach_uid:
         return _err("COACH_REQUIRED", 422, message="a lesson must be booked with a coach")
+
+    # Per-service payment preference (members/guests only; admins/coaches override). A service may
+    # offer only a subset of the club-enabled methods — the booking UI already hides the rest, this
+    # refuses a crafted request that picks a method the service doesn't offer. Only the money modes
+    # are constrained (token/membership_covered/free are not "methods" a service restricts).
+    if role in ("member", "guest") and settlement_mode in ("online", "at_court", "monthly_account"):
+        pm = _service_payment_modes_guarded(session, club_id, booking_type, coach_uid)
+        if pm is not None and settlement_mode not in pm:
+            return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=settlement_mode,
+                        message="this service doesn't offer that payment method")
 
     # Token settlement (docs/specs/02): PRE-FLIGHT match a prepaid wallet BEFORE we insert the
     # booking, so a NO-token request never persists anything (clean NO_TOKEN — the UI falls back to

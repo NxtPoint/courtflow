@@ -126,6 +126,35 @@ def durations_for(session, *, club_id, kind, coach_user_id=None, audience="any")
         return []
 
 
+_PAY_MODES = ("online", "at_court", "monthly_account")
+
+
+def payment_modes_for(session, *, club_id, kind, coach_user_id=None):
+    """The per-service payment preference (allowed settlement modes) for this service's product —
+    a subset of the club-enabled methods, or None (= no per-service restriction, all club-enabled).
+    `kind` is the PRODUCT kind (court_booking|lesson|class). Guarded -> None (never blocks booking)."""
+    try:
+        if not _billing_price_exists(session):
+            return None
+        where = ["club_id = :c", "kind = :kind", "active = true"]
+        params = {"c": club_id, "kind": kind}
+        if coach_user_id is not None and _product_has_coach_col(session):
+            where.append("coach_user_id = :coach")
+            params["coach"] = coach_user_id
+        csv = session.execute(
+            text("SELECT payment_modes FROM billing.product WHERE " + " AND ".join(where)
+                 + " ORDER BY created_at LIMIT 1"),
+            params,
+        ).scalar()
+        if not csv:
+            return None
+        modes = [m.strip() for m in str(csv).split(",") if m.strip() in _PAY_MODES]
+        return modes or None
+    except Exception:
+        log.debug("payment_modes_for() suppressed (billing not ready)", exc_info=False)
+        return None
+
+
 def has_active_membership(session, *, club_id, user_id):
     """True if the user holds an ACTIVE billing.membership_subscription in this club whose
     current_period_end is NULL (open-ended) or today-or-later. Guarded -> False if the table

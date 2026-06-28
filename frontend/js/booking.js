@@ -114,6 +114,9 @@
     if (ctx.billing.allow_at_court !== false) modes.push("at_court");
     if (ctx.billing.allow_monthly !== false) modes.push("monthly_account");
     if (ctx.billing.online_enabled && modes.indexOf("online") < 0) modes.push("online");
+    // Per-service payment preference: keep only the methods THIS service offers (token = the
+    // member's own prepaid pack, always allowed; null = no per-service restriction).
+    if (st.paymentModes) modes = modes.filter(function (m) { return st.paymentModes.indexOf(m) >= 0; });
     if (matchTokenWallet() && modes.indexOf("token") < 0) modes.unshift("token");
     return modes.filter(function (m) { return m === "token" || UI.SETTLEMENT[m]; });
   }
@@ -138,7 +141,8 @@
       var r = await fetchDurations(q);
       st.durations = r.durations || [];
       st.membershipCovered = !!r.membership_covered;
-    } catch (e) { st.durations = []; st.membershipCovered = false; }
+      st.paymentModes = r.payment_modes || null;   // per-service payment preference (null = all)
+    } catch (e) { st.durations = []; st.membershipCovered = false; st.paymentModes = null; }
     if (st.durations.length) {
       var keep = st.durations.filter(function (x) { return x.duration_minutes === st.selDuration; })[0];
       if (!keep) { st.selDuration = st.durations[0].duration_minutes; st.selDurationPrice = st.durations[0].amount_minor; }

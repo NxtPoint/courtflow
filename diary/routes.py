@@ -147,10 +147,15 @@ def durations():
             coach_user_id=q.get("coach_id"), audience=audience)
         covered = bool(kind == "court" and pricing_mod.has_active_membership(
             s, club_id=p.club_id, user_id=p.user_id))
+        # Per-service payment preference (which methods THIS service offers) — the booking flow
+        # intersects its pay options with this. None = no restriction (all club-enabled).
+        pay_modes = pricing_mod.payment_modes_for(
+            s, club_id=p.club_id, kind=price_kind, coach_user_id=q.get("coach_id"))
     currency = rows[0]["currency_code"] if rows else None
     out = [{"duration_minutes": r["duration_minutes"], "amount_minor": r["amount_minor"],
             "price_id": r["price_id"]} for r in rows]
-    return jsonify(durations=out, membership_covered=covered, currency=currency), 200
+    return jsonify(durations=out, membership_covered=covered, currency=currency,
+                   payment_modes=pay_modes), 200
 
 
 @diary_bp.get("/resources")

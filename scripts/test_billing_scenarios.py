@@ -347,6 +347,24 @@ def sc_refund_request(s, fx):
     check("re-deciding a closed request → NOT_PENDING", derr2 == "NOT_PENDING", str(derr2))
 
 
+def sc_payment_preference(s, fx):
+    print("\n# Per-service payment preference: a service offering only 'at_court' refuses online")
+    s.execute(text("UPDATE billing.product SET payment_modes='at_court' WHERE id=:p"), {"p": fx.court_product})
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="online")
+    check("online refused when service is at-court-only", r.get("error") == "SETTLEMENT_NOT_ALLOWED", str(r))
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="court", resource_id=fx.courts[1],
+                          starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    check("at-court accepted (the allowed method)", r2.get("ok"), str(r2))
+    s.execute(text("UPDATE billing.product SET payment_modes=NULL WHERE id=:p"), {"p": fx.court_product})
+    r3 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=iso(at(fx, 11)), ends_at=iso(at(fx, 12)), settlement_mode="online")
+    check("online allowed again with no restriction", r3.get("ok"), str(r3))
+
+
 def sc_statement_pay(s, fx):
     print("\n# Month-end: client pays their owed coaching statement online → arrears settle")
     # Seed an OWED arrears row for the member (an off-platform lesson on the coach's tab).
@@ -375,6 +393,7 @@ def sc_statement_pay(s, fx):
 
 
 SCENARIOS = [
+    sc_payment_preference,
     sc_statement_pay,
     sc_settlement_at_court,
     sc_settlement_online,
