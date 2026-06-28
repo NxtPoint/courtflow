@@ -145,6 +145,14 @@
     inviteCoach: function (body) {
       return A().apiJSON("/api/admin/coaches/invite", { method: "POST", body: body });
     },
+    // POST /api/admin/coaches/:id/resend-invite -> {invite_link}
+    resendCoachInvite: function (id) { return A().apiJSON("/api/admin/coaches/" + enc(id) + "/resend-invite", { method: "POST" }); },
+    // DELETE /api/admin/coaches/:id  (remove a coach from the club)
+    removeCoach: function (id) { return A().apiJSON("/api/admin/coaches/" + enc(id), { method: "DELETE" }); },
+    // PATCH /api/admin/products/:id  body: {name?,description?,active?}
+    patchProduct: function (id, body) { return A().apiJSON("/api/admin/products/" + enc(id), { method: "PATCH", body: body }); },
+    // DELETE /api/admin/prices/:id  (delete/deactivate a price)
+    deletePrice: function (id) { return A().apiJSON("/api/admin/prices/" + enc(id), { method: "DELETE" }); },
 
     // ---- classes (management) -------------------------------------------
     // GET /api/admin/classes -> {classes:[{resource_id,name,coach_user_id,coach_name,
@@ -565,13 +573,33 @@
         UI.clear(listBox);
         if (!list.length) { listBox.appendChild(el("div", { class: "cf-empty", text: "No coaches yet. Invite one below." })); return; }
         list.forEach(function (c) {
+          var cid = c.user_id || c.id;
+          var pending = (c.status || "").toLowerCase() !== "active";
+          var actions = [];
+          if (pending && cid) {
+            actions.push(el("button", { class: "cf-btn cf-btn-sm", text: "Resend invite", onclick: async function () {
+              try { var r = await window.AdminAPI.resendCoachInvite(cid);
+                UI.toast(r && r.invite_link ? "Invite re-issued — link copied below." : "Invite re-sent.", "info");
+                if (r && r.invite_link) { try { await navigator.clipboard.writeText(r.invite_link); } catch (e) {} }
+                reload();
+              } catch (e) { UI.toast(UI.errMsg(e), "error"); }
+            } }));
+          }
+          if (cid) {
+            actions.push(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove", onclick: async function () {
+              if (!window.confirm("Remove " + (c.display_name || c.email || "this coach") + " from the club?")) return;
+              try { await window.AdminAPI.removeCoach(cid); UI.toast("Coach removed.", "info"); reload(); }
+              catch (e) { UI.toast(UI.errMsg(e), "error"); }
+            } }));
+          }
           listBox.appendChild(el("div", { class: "cf-item" }, [
             el("span", { class: "cf-chip coach", text: "coach" }),
             el("div", { class: "cf-item-main" }, [
               el("div", { class: "cf-item-t", text: c.display_name || c.email || "Coach" }),
               el("div", { class: "cf-item-s", text: (c.email || "") + (c.status ? " · " + c.status : "") }),
             ]),
-          ]));
+            el("span", { class: "cf-spacer" }),
+          ].concat(actions)));
         });
       }).catch(function (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
     }

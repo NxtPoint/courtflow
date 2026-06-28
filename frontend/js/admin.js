@@ -40,7 +40,13 @@
   function shell() {
     var main = document.getElementById("cf-main"); UI.clear(main);
 
-    var tabs = el("div", { class: "cf-nav", style: "margin-bottom:12px" });
+    main.appendChild(el("div", { class: "cf-row", style: "align-items:baseline;gap:10px;margin-bottom:8px" }, [
+      el("h1", { text: "Club admin" }),
+      el("span", { class: "cf-spacer" }),
+      el("a", { class: "cf-btn cf-btn-sm", href: "/settings.html", text: "⚙ Settings" }),
+    ]));
+
+    var tabs = el("div", { class: "cf-nav", style: "margin-bottom:12px;flex-wrap:wrap" });
     [["diary", "Master diary"], ["classes", "Classes"], ["resources", "Resources"], ["people", "People"],
      ["billing", "Billing"], ["cockpit", "Cockpit"], ["overview", "Overview"]].forEach(function (t) {
       tabs.appendChild(el("a", { href: "#", text: t[1], "data-tab": t[0],
