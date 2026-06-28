@@ -155,6 +155,12 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
             settled = _settle_statement_arrears(session, order_id)
             if settled:
                 result["arrears_settled"] = settled
+            # Unified statement: if this order is a 'pay all' settlement vehicle, mark each child
+            # order paid + fan out its commission (docs/specs/UNIFIED-STATEMENT.md). Savepoint-guarded
+            # + idempotent (only acts on still-'open' children). One debt settled exactly once.
+            unified = _settle_unified_statement(session, order_id)
+            if unified:
+                result["statement_settled"] = unified
         result["payment_recorded"] = True
         # ref_type/ref_id + the order's user_id let the notifications engine resolve the payer
         # (iam.user; child→guardian) and link the receipt notification to /receipt.html?order=<id>.
@@ -268,6 +274,21 @@ def _settle_statement_arrears(session, order_id):
             return _commission.settle_arrears_for_order(session, order_id=order_id)
     except Exception:
         log.info("arrears settlement skipped (engine/tables unavailable) order=%s", order_id)
+        return None
+
+
+def _settle_unified_statement(session, order_id):
+    """If `order_id` is a 'pay all' settlement order, mark its child orders paid + fan out each child's
+    commission. SAVEPOINT-guarded + idempotent (only still-'open' children). Returns the result dict or
+    None when this isn't a settlement order / the engine isn't present."""
+    try:
+        with session.begin_nested():
+            from billing import statement as _statement
+            if not _statement.is_settlement_order(session, order_id=order_id):
+                return None
+            return _statement.settle_settlement_order(session, settlement_order_id=order_id)
+    except Exception:
+        log.info("unified statement settlement skipped order=%s", order_id)
         return None
 
 

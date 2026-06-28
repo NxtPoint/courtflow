@@ -85,6 +85,11 @@ _DDL = [
     # (subset of the club-enabled methods), e.g. 'online,at_court'. NULL = all club-enabled. The
     # single source of truth the unified service editor writes + the booking flow reads. Idempotent.
     f"ALTER TABLE {SCHEMA}.product ADD COLUMN IF NOT EXISTS payment_modes text;",
+    # Unified statement: a child unpaid order, once cleared by a 'pay all' settlement order, points at
+    # that settlement order. The settlement order pays the SUM of its children; on its charge_succeeded
+    # we mark each child paid + fan out its consequence (commission split). NULL = a standalone order.
+    f'ALTER TABLE {SCHEMA}.order ADD COLUMN IF NOT EXISTS settled_by_order_id uuid '
+    f'REFERENCES {SCHEMA}."order"(id) ON DELETE SET NULL;',
     # Per-price payment preference — lets a SINGLE membership tier (one price row, or the rows of a
     # tier) carry its OWN payment options, since all membership tiers share one product. NULL =
     # inherit the product's payment_modes, then the club's global enabled methods. CSV of modes.

@@ -10,6 +10,7 @@ import sys
 
 from scripts import test_booking_scenarios as booking
 from scripts import test_billing_scenarios as billing
+from scripts import test_statement_reconciliation as statement
 
 
 def main():
@@ -18,6 +19,8 @@ def main():
     rc |= booking.main()
     print("\n################  COMMERCIAL ENGINES  ################")
     rc |= billing.main()
+    print("\n################  STATEMENT RECONCILIATION  ################")
+    rc |= statement.main()
     print("\n" + "#" * 60)
     print("ALL HARNESSES PASSED" if rc == 0 else "SOME CHECKS FAILED (see above)")
     return rc

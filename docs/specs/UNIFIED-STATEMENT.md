@@ -187,4 +187,27 @@ Gate: this harness must be green (and `python -m db` twice) before the UI ships.
 6. Demote `account_ledger`/`coach_arrears` from client-facing debts.
 7. Verify: harness green, `python -m db` twice, `test_billing_scenarios` green, manual basket test.
 
-**Nothing above is implemented yet. Awaiting Tomo's answers to §7.**
+## 9. Decisions — LOCKED (Tomo, 2026-06-28)
+1. **Arrears:** option **(B)** — retire `coach_arrears` as a client debt; derive the coach's
+   "owed by this client" from **unpaid lesson orders**, "paid" from commission splits. Cleaner.
+2. **Pay-all:** covers **every** unpaid order; each line shows its **payment type** (e.g. "Pay at club").
+   "Settle all" clears the lot → **balance = 0**. Mechanism: a `billing.order.settled_by_order_id`
+   link (child unpaid order → the settlement order that paid it).
+3. **Packs:** bring them in — a pack not paid online (pay-at-club / month-end) is an **owed order** on
+   the statement, same offline logic as bookings.
+4. **Window:** live **current-unpaid** (no month-boxing).
+5. **Migration:** none — **clean cut-over** (no real customers yet). PLUS: build **void / cancel /
+   write-off** for unpaid orders so a test bill (or a genuine mistake) can be cleared — cancelling a
+   booking voids its unpaid order; an admin can void (mistake) or write-off (forgive) any owed line;
+   voided/written-off lines drop off the statement and the balance.
+
+### Build order (revised)
+- **Stage 1 (foundation, harness-first):** `order.settled_by_order_id` column · `billing/statement.py`
+  (unpaid_orders · statement · create_settlement_order · settle_settlement_order · void/write-off) ·
+  webhook fan-out · **`scripts/test_statement_reconciliation.py`** proving the invariants. NOT yet wired
+  to the live UI.
+- **Stage 2:** point `me/statement` + `account.js` at the new engine (one statement card); migrate the
+  coach statement to orders; retire `coach_arrears`/`account_ledger` as client debts; packs offline
+  purchase path; admin void/write-off UI.
+
+Stage 1 is the safety foundation; Stage 2 is the visible switch-over (done only with Stage 1 green).
