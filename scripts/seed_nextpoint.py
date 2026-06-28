@@ -115,6 +115,20 @@ MEMBERSHIP_PLANS_ZAR = [
     ("6 months", 110000, 6),   # R1100 / 6 months
 ]
 
+# --- configurable COURT PACKS (prepaid PAYG: buy N sessions upfront, draw down) ---------
+# Court is R150 / 60-min session PAYG; a pack is the SAME per-session price for a single, then a
+# growing discount for buying ahead (encourages upfront purchase — the profitable, drawn-down PAYG
+# the wizard sells). Each = one billing.bundle_plan(service_kind='court', duration_minutes=60). The
+# token engine draws minutes proportional to the booking length (90 min = 1.5 sessions). Sensible
+# launch defaults — the owner edits/adds/removes them in Settings → Pricing → Packs.
+COURT_PACKS_ZAR = [
+    # (label, sessions_count, price_minor)   ~per-session: 150 / 140 / 135 / 130
+    ("1 court session",  1,  15000),
+    ("3 court sessions", 3,  42000),
+    ("5 court sessions", 5,  67500),
+    ("10 court sessions", 10, 130000),
+]
+
 # --- diary.resource content (Agent B owns the schema; we seed IF it exists) ----
 # 8 hard courts + 1 clay (docs/02 §4, §7). Class resources are left to Agent B.
 COURTS = [dict(name=f"Court {i}", surface="hard") for i in range(1, 9)]
@@ -357,6 +371,33 @@ def _seed_membership_plans_if_possible(session, *, club_id, currency_code):
     return n
 
 
+def _seed_court_packs_if_possible(session, *, club_id, currency_code):
+    """Seed the default COURT PACKS (COURT_PACKS_ZAR) as billing.bundle_plan rows. Seeds ONLY when
+    the club has NO court packs yet — so a re-seed never resurrects packs the owner deleted/retired
+    (unlike the per-key membership seed, a deleted pack should stay deleted). Skips cleanly if
+    billing.bundle_plan isn't present."""
+    if not _table_exists(session, "billing", "bundle_plan"):
+        log.info("TODO(billing): billing.bundle_plan not present yet — skipping court packs seed.")
+        return 0
+    existing = session.execute(
+        text("SELECT count(*) FROM billing.bundle_plan WHERE club_id=:c AND service_kind='court'"),
+        {"c": club_id},
+    ).scalar()
+    if existing and int(existing) > 0:
+        return 0  # the owner already has court packs configured — leave their catalogue alone
+    n = 0
+    for label, sessions, price_minor in COURT_PACKS_ZAR:
+        session.execute(
+            text("INSERT INTO billing.bundle_plan (club_id, service_kind, label, sessions_count, "
+                 "duration_minutes, price_minor, currency_code, validity_days, active) "
+                 "VALUES (:c, 'court', :lbl, :n, 60, :p, :cur, NULL, true)"),
+            {"c": club_id, "lbl": label, "n": sessions, "p": price_minor, "cur": currency_code},
+        )
+        n += 1
+    log.info("seeded %d new court packs", n)
+    return n
+
+
 def seed(session):
     """Idempotently seed NextPoint. Returns a summary dict."""
     # Ensure a template club exists (so club #2 can clone) before seeding club #1.
@@ -399,6 +440,8 @@ def seed(session):
                                               currency_code=CLUB["currency_code"])
     plans_seeded = _seed_membership_plans_if_possible(session, club_id=club_id,
                                                       currency_code=CLUB["currency_code"])
+    packs_seeded = _seed_court_packs_if_possible(session, club_id=club_id,
+                                                 currency_code=CLUB["currency_code"])
 
     return {
         "club_id": str(club_id),
@@ -409,6 +452,7 @@ def seed(session):
         "availability_rules": hours_seeded,
         "prices_seeded": prices_seeded,
         "membership_plans_seeded": plans_seeded,
+        "court_packs_seeded": packs_seeded,
     }
 
 

@@ -4,7 +4,8 @@
 // edit / cancel / request-refund). Usage + statements live on the separate Account page (account.js).
 (function () {
   var UI, el, P;
-  var st = { profile: null, deps: [], bookings: [], fin: null, view: "upcoming" };
+  var st = { profile: null, deps: [], bookings: [], fin: null, wallets: [], view: "upcoming" };
+  function openWizard() { if (window.PlanWizard) window.PlanWizard.open(); else window.location.href = "/plan"; }
 
   // ---- helpers ---------------------------------------------------------------
   function field(label, input, hint) {
@@ -58,7 +59,7 @@
   function nudge(t, s, cta) {
     return el("div", { class: "cf-nudge" }, [
       el("div", {}, [el("div", { class: "cf-nudge-t", text: t }), el("div", { class: "cf-nudge-s", text: s })]),
-      el("a", { class: "cf-btn cf-btn-primary", href: "/plan", text: cta }),
+      el("button", { class: "cf-btn cf-btn-primary", text: cta, onclick: openWizard }),
     ]);
   }
 
@@ -327,6 +328,7 @@
       window.API.dependents().then(function (r) { st.deps = r.dependents || []; }, function () {}),
       window.API.financials().then(function (r) { st.fin = r; }, function () {}),
       window.API.bookings({ date_from: UI.dateKey(UI.addDays(new Date(), -365)), date_to: UI.dateKey(UI.addDays(new Date(), 90)) }).then(function (r) { st.bookings = r.bookings || []; }, function () {}),
+      window.TFAuth.apiJSON("/api/billing/bundles/wallets").then(function (r) { st.wallets = (r && r.wallets) || []; }, function () {}),
     ]);
   }
 
@@ -337,6 +339,8 @@
       UI.clear(main); main.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
       await loadAll();
       render(main);
+      // The "money moment": if there's no coverage and no credits, open the plan wizard.
+      if (window.PlanWizard) window.PlanWizard.maybeAutoOpen(st.fin, st.wallets);
     },
   };
 })();

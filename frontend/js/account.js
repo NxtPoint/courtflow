@@ -78,7 +78,7 @@
     if (!plan.active) planLines.push("You pay per booking. A membership makes court bookings free.");
     if (nc && nc.amount_minor) planLines.push("Next charge: " + money(nc.amount_minor, ccy) + (nc.due_date ? " on " + nc.due_date : "") + ".");
     planCard.appendChild(el("div", { class: "cf-muted", style: "margin:6px 0 12px", text: planLines.join(" ") }));
-    planCard.appendChild(el("a", { class: "cf-btn cf-btn-primary", href: "/plan", text: plan.active ? "Manage plan" : "Choose a plan" }));
+    planCard.appendChild(el("button", { class: "cf-btn cf-btn-primary", text: plan.active ? "Manage plan" : "Choose a plan", onclick: function () { if (window.PlanWizard) window.PlanWizard.open(); else window.location.href = "/plan"; } }));
     host.appendChild(planCard);
 
     // ---- usage over time (the fleshed-out part) ----

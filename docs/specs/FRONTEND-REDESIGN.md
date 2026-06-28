@@ -71,7 +71,13 @@ for any staff-role gating).
 - [x] Blueprint (this doc).
 - [x] **Client Home** (greeting+popups · Book · Bookings toggle) + **Account** (rich usage/billing) +
   single-top-menu nav. (v1 chips → v2 per Tomo's feedback.)
-- [ ] Post-trial wizard + Manage-plan.
+- [x] **Plan wizard** (`wizard.js`): the "money moment" — Step 1 PAYG vs Membership (PAYG nudged),
+  Step 2 pick a court **pack** (1/3/5/10, prepaid + drawn down) or a membership **tier** (per-month
+  framing), Step 3 Yoco checkout. Auto-opens on Home when there's no coverage + no credits (session-
+  dismissible); opened by the Home nudge + Account "Manage plan". Seeded default **court packs**
+  (1/3/5/10) in `seed_nextpoint` (only when none exist, so owner edits/deletes stick) so PAYG isn't
+  "pay everything each time" — packs draw down via the existing token engine. `/plan` (plan.js) stays
+  as the detailed fallback page.
 - [ ] Coach 5-tab.
 - [ ] Admin restructure.
 - [ ] Retire `/my`, `/account`, `/plans` (301 → Home) once validated.
