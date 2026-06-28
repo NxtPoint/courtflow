@@ -226,7 +226,27 @@ def sc_arrears_lockstep(s, fx):
           str(owed(s, fx)))
 
 
-SCENARIOS = [sc_no_double_count, sc_membership_r0, sc_pay_all, sc_partial_and_reclaim, sc_void, sc_arrears_lockstep]
+def sc_pack_offline(s, fx):
+    print("\n# A pack bought 'pay at club' is usable now + shows as an owed statement line")
+    from billing import bundles as BD
+    plan_id = s.execute(text("INSERT INTO billing.bundle_plan (club_id, service_kind, label, "
+                             "sessions_count, duration_minutes, price_minor, currency_code, active, status) "
+                             "VALUES (:c,'court','5 court sessions',5,60,60000,'ZAR',true,'active') RETURNING id"),
+                        {"c": fx.club_id}).scalar()
+    res = BD.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                 bundle_plan_id=str(plan_id), settlement_mode="at_court")
+    check("offline pack: no checkout, granted immediately", (not res["needs_checkout"]) and res["activated"], str(res))
+    w = s.execute(text("SELECT status, tokens_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                  {"o": res["order_id"]}).mappings().first()
+    check("pack wallet is active + granted (5 sessions usable now)", w and w["status"] == "active" and w["tokens_remaining"] == 5, str(dict(w) if w else None))
+    st = owed(s, fx)
+    check("pack shows as an owed statement line (pay at club)",
+          any("pack" in (i["description"] or "").lower() for i in st["items"]),
+          str([i["description"] for i in st["items"]]))
+
+
+SCENARIOS = [sc_no_double_count, sc_membership_r0, sc_pay_all, sc_partial_and_reclaim, sc_void,
+             sc_arrears_lockstep, sc_pack_offline]
 
 
 def main():

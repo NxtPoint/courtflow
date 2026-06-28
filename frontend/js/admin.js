@@ -637,10 +637,14 @@
         ["Membership", pp.has_membership ? "Active (free courts)" : "None"],
       ],
     }];
+    // Outstanding (owed orders) — the member's unified statement, with void / write-off per line.
+    var owedHost = el("div", {}, [el("div", { class: "cf-loading", text: "Loading statement…" })]);
+    sections.push({ h: "Outstanding", node: owedHost });
     // Payments section is filled async (cached after the first open).
     var payHost = el("div", {}, [el("div", { class: "cf-loading", text: "Loading payments…" })]);
     sections.push({ h: "Online payments", node: payHost });
     window.CRMUI.drawer({ title: name || pp.email || "Person", subtitle: roleLabel, sections: sections });
+    loadOwed(pp, owedHost, cur);
     paymentsForEmail(pp.email).then(function (pays) {
       UI.clear(payHost);
       if (!pays.length) { payHost.appendChild(el("div", { class: "cf-empty", text: "No online payments." })); return; }
@@ -656,6 +660,40 @@
       });
       payHost.appendChild(list);
     });
+  }
+
+  // The member's owed orders (unified statement) + void / write-off. Voiding clears a mistake;
+  // write-off forgives a real debt. Both drop the line off the member's statement + balance.
+  function loadOwed(pp, host, cur) {
+    var uid = pp.user_id;
+    UI.clear(host); host.appendChild(el("div", { class: "cf-loading", text: "Loading statement…" }));
+    window.TFAuth.apiJSON("/api/admin/members/" + encodeURIComponent(uid) + "/statement").then(function (st) {
+      UI.clear(host);
+      var items = (st && st.items) || [];
+      if (!items.length) { host.appendChild(el("div", { class: "cf-empty", text: "Nothing outstanding." })); return; }
+      var list = el("div", { class: "cf-list" });
+      items.forEach(function (it) {
+        function clear(writeOff) {
+          if (!window.confirm((writeOff ? "Write off" : "Void") + " " + UI.money(it.amount_minor, st.currency) + " — " + (it.description || "this charge") + "?")) return;
+          window.TFAuth.apiJSON("/api/admin/orders/" + encodeURIComponent(it.order_id) + "/void", { method: "POST", body: { write_off: !!writeOff } })
+            .then(function () { UI.toast(writeOff ? "Written off." : "Voided.", "info"); loadOwed(pp, host, cur); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+        }
+        list.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: (it.description || "Booking") + " · " + UI.money(it.amount_minor, st.currency) }),
+            el("div", { class: "cf-item-s", text: (it.created_at ? String(it.created_at).slice(0, 10) + " · " : "") + (it.pay_label || it.settlement_mode || "") }),
+          ]),
+          el("div", { class: "cf-row", style: "gap:6px" }, [
+            el("button", { class: "cf-btn cf-btn-sm", text: "Void", onclick: function () { clear(false); } }),
+            el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Write off", onclick: function () { clear(true); } }),
+          ]),
+        ]));
+      });
+      host.appendChild(list);
+      host.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;font-weight:700;margin-top:8px" }, [
+        el("span", { text: "Total owed" }), el("span", { text: UI.money(st.total_owed_minor, st.currency) }),
+      ]));
+    }, function () { UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: "Couldn't load statement." })); });
   }
 
   async function renderBilling(panel) {

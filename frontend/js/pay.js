@@ -42,11 +42,11 @@
       });
     },
 
-    // Buy a membership term plan applying the one rule above.
-    //   opts = { priceId?, modes:[...], host?:Element, onActivated?(res), onError?(err) }
+    // Buy something (membership / pack) applying the one rule above.
+    //   opts = { endpoint, bodyBase:{}, modes:[...], host?:Element, onActivated?(res), onError?(err) }
     // host is where the mode chooser renders when there's a real choice (>1 mode). For a single
     // non-online mode it never prompts — it just completes and calls onActivated.
-    buyMembership: function (opts) {
+    purchase: function (opts) {
       opts = opts || {};
       var UI = window.UI, el = UI && UI.el;
       var modes = (opts.modes || []).filter(function (m) { return m === "online" || m === "at_court" || m === "monthly_account"; });
@@ -54,15 +54,14 @@
 
       function checkout(mode) {
         var body = {};
-        if (opts.priceId) body.price_id = opts.priceId;
+        Object.keys(opts.bodyBase || {}).forEach(function (k) { body[k] = opts.bodyBase[k]; });
         if (mode) body.settlement_mode = mode;
-        return auth().apiJSON("/api/billing/membership/checkout", { method: "POST", body: body })
+        return auth().apiJSON(opts.endpoint, { method: "POST", body: body })
           .then(function (res) {
             if (res && (res.settlement_mode === "online" || res.needs_checkout) && res.order_id) {
               return Pay.startYocoCheckout(res.order_id);
             }
             if (res && res.activated) { if (opts.onActivated) opts.onActivated(res); return res; }
-            // server asked us to choose (shouldn't reach here — we resolve below), surface allowed.
             if (res && res.allowed) { renderChooser(res.allowed); return res; }
             throw new Error("unexpected checkout response");
           }, onErr);
@@ -81,8 +80,21 @@
       }
 
       if (modes.length > 1) { renderChooser(modes); return; }
-      // 0 or 1 mode: let the server resolve the single allowed mode (it defaults safely).
-      checkout(modes[0]);
+      checkout(modes[0]);   // 0 or 1 mode: the server resolves the single allowed mode safely
+    },
+
+    buyMembership: function (opts) {
+      opts = opts || {};
+      Pay.purchase({ endpoint: "/api/billing/membership/checkout",
+        bodyBase: opts.priceId ? { price_id: opts.priceId } : {},
+        modes: opts.modes, host: opts.host, onActivated: opts.onActivated, onError: opts.onError });
+    },
+
+    buyPack: function (opts) {
+      opts = opts || {};
+      Pay.purchase({ endpoint: "/api/billing/bundles/checkout",
+        bodyBase: { bundle_plan_id: opts.planId },
+        modes: opts.modes, host: opts.host, onActivated: opts.onActivated, onError: opts.onError });
     },
   };
 

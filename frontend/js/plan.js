@@ -174,8 +174,10 @@
 
     // Buy a pack
     var plans = (state.bundles.plans || []).filter(function (p) { return p.active !== false; });
-    var canBuy = plans.length > 0 && state.bundles.online_enabled;
+    var packModes = state.bundles.allowed_payment_modes || [];
+    var canBuy = plans.length > 0 && packModes.length > 0;
     if (state.selPack == null && plans.length) state.selPack = plans[0].id;
+    var packChooser = el("div", { style: "margin-top:10px" });
 
     var card = el("div", { class: "cf-card" }, [
       el("h2", { text: "Buy a pack" }),
@@ -201,11 +203,13 @@
     }
     var btn = el("button", { class: "cf-btn cf-btn-primary cf-btn-lg cf-btn-block", text: "Buy pack" });
     if (!canBuy) btn.disabled = true;
-    else btn.addEventListener("click", function () { buyPack(btn, state.selPack); });
+    else btn.addEventListener("click", function () { buyPack(btn, state.selPack, packModes, packChooser); });
     card.appendChild(btn);
+    card.appendChild(packChooser);
     if (!plans.length) card.appendChild(note("Your club doesn't offer session packs yet."));
-    else if (!state.bundles.online_enabled) card.appendChild(note("Online payment isn't enabled yet — please contact the front desk."));
-    else card.appendChild(note("Secure payment (card, Apple/Google Pay). Sessions are added the moment payment completes."));
+    else if (!packModes.length) card.appendChild(note("This pack can't be purchased online yet — please contact the front desk."));
+    else if (packModes.length === 1 && packModes[0] !== "online") card.appendChild(note("You'll get the pack straight away — settle at the front desk."));
+    else card.appendChild(note("Secure payment (card, Apple/Google Pay) or pay at the club. Sessions are added the moment it's confirmed."));
     wrap.appendChild(card);
     return wrap;
   }
@@ -237,12 +241,13 @@
       onError: function (e) { UI.toast(UI.errMsg(e) || "Could not complete.", "error"); },
     });
   }
-  function buyPack(btn, planId) {
+  function buyPack(btn, planId, modes, host) {
     if (!planId) { UI.toast("Pick a pack first.", "error"); return; }
-    btn.disabled = true; var lbl = btn.textContent; btn.textContent = "Starting checkout…";
-    auth().apiJSON("/api/billing/bundles/checkout", { method: "POST", body: { bundle_plan_id: planId } })
-      .then(function (res) { if (!res || !res.order_id) throw new Error("no order returned"); return window.Pay.startYocoCheckout(res.order_id); })
-      .catch(function (e) { btn.disabled = false; btn.textContent = lbl; UI.toast(UI.errMsg(e) || "Could not start checkout.", "error"); });
+    window.Pay.buyPack({
+      planId: planId, modes: modes, host: host,
+      onActivated: function () { UI.toast("Pack added — settle at the front desk.", "info"); setTimeout(function () { location.reload(); }, 1200); },
+      onError: function (e) { UI.toast(UI.errMsg(e) || "Could not complete.", "error"); },
+    });
   }
 
   // ---- render ----------------------------------------------------------------

@@ -387,7 +387,9 @@ def bundles_list():
     with session_scope() as s:
         plans = bundles_repo.list_plans(s, club_id=p.club_id, service_kind=service_kind)
         online = bool(_truthy("PAYMENTS_ENABLED") and _club_allows_online(s, p.club_id))
-    return jsonify(plans=plans, count=len(plans), online_enabled=online), 200
+        allowed = _bundle_allowed_modes(s, p.club_id)
+    return jsonify(plans=plans, count=len(plans), online_enabled=online,
+                   allowed_payment_modes=allowed), 200
 
 
 @yoco_bp.get("/api/billing/bundles/wallets")
@@ -415,11 +417,23 @@ def bundles_wallets():
     return jsonify(wallets=wallets, count=len(wallets)), 200
 
 
+def _bundle_allowed_modes(session, club_id):
+    """The modes a member may use to buy a pack: the club's enabled methods, with 'online' kept only
+    when platform + club have online pay on. Always non-empty so a pack is always buyable."""
+    from services.repositories import club_payment_methods
+    enabled = club_payment_methods(session, club_id=club_id)
+    online_ok = _truthy("PAYMENTS_ENABLED") and _club_allows_online(session, club_id)
+    out = [m for m in enabled if m != "online" or online_ok]
+    return out or ["at_court"]
+
+
 @yoco_bp.post("/api/billing/bundles/checkout")
 def bundles_checkout():
-    """AUTH'd member. Create an online order for a chosen bundle plan + a pending token_wallet
-    linked by order_id, then return {order_id} for Pay.startYocoCheckout. Same gates as a booking
-    online payment. Body {bundle_plan_id}."""
+    """AUTH'd member. Buy a session pack. Body {bundle_plan_id, settlement_mode?}:
+      online           -> {order_id, needs_checkout:true} for Pay.startYocoCheckout; webhook grants.
+      at_court/monthly -> grants the pack IMMEDIATELY (usable now); the 'open' order is owed on the
+                          unified statement, settled at the desk / month-end. The mode is validated
+                          against the club's allowed methods."""
     from auth import resolve_principal
 
     p = resolve_principal(request)
@@ -430,23 +444,32 @@ def bundles_checkout():
     if not p.user_id:
         return jsonify(error="no_user"), 403
 
-    if not _truthy("PAYMENTS_ENABLED"):
-        return jsonify(error="online_payments_disabled"), 403
-
     body = request.get_json(silent=True) or {}
     plan_id = (body.get("bundle_plan_id") or "").strip()
     if not plan_id:
         return jsonify(error="bundle_plan_id required"), 400
+    req_mode = (body.get("settlement_mode") or "").strip().lower() or None
 
     from db import session_scope
     from billing import bundles as bundles_repo
 
     with session_scope() as s:
-        if not _club_allows_online(s, p.club_id):
+        allowed = _bundle_allowed_modes(s, p.club_id)
+        if req_mode and req_mode in allowed:
+            mode = req_mode
+        elif len(allowed) == 1:
+            mode = allowed[0]
+        elif req_mode:
+            return jsonify(error="payment_mode_not_allowed", allowed=allowed), 400
+        else:
+            return jsonify(error="payment_mode_required", allowed=allowed), 400
+
+        if mode == "online" and (not _truthy("PAYMENTS_ENABLED") or not _club_allows_online(s, p.club_id)):
             return jsonify(error="online_payments_not_enabled_for_club"), 403
+
         try:
             res = bundles_repo.create_bundle_order(
-                s, club_id=p.club_id, user_id=p.user_id, bundle_plan_id=plan_id)
+                s, club_id=p.club_id, user_id=p.user_id, bundle_plan_id=plan_id, settlement_mode=mode)
         except Exception as e:
             log.warning("create_bundle_order failed club=%s: %s", p.club_id, e)
             return jsonify(error="bundle_order_failed"), 500
@@ -456,7 +479,11 @@ def bundles_checkout():
             return jsonify(error="bundle_has_no_price"), 400
 
     return jsonify(order_id=res["order_id"], amount_minor=res["amount_minor"],
-                   currency=res["currency"], plan=res["plan"], provider="yoco"), 200
+                   currency=res["currency"], plan=res["plan"],
+                   settlement_mode=res.get("settlement_mode"),
+                   needs_checkout=bool(res.get("needs_checkout")),
+                   activated=bool(res.get("activated")),
+                   provider="yoco" if res.get("settlement_mode") == "online" else "manual"), 200
 
 
 # ---------------------------------------------------------------------------

@@ -195,13 +195,13 @@
     var chooserHost = el("div", { style: "margin-top:6px" });   // membership pay-mode chooser renders here
     if (ui.mode === "payg") {
       var p = selectedPack();
-      var online = data.bundles.online_enabled;
+      var packModes = data.bundles.allowed_payment_modes || [];
       if (p) {
         line = "Pay as you go · " + durLabel(p.duration_minutes || 0) + " · " + p.sessions_count + " session" + (p.sessions_count === 1 ? "" : "s") + " (drawn down as you book)";
         total = money(p.price_minor, p.currency || data.bundles.currency);
-        buyable = !!online;
-        if (!online) note = "Online payment isn't enabled yet — please contact the front desk.";
-        onBuy = function (btn) { buyPack(btn, p.id); };
+        buyable = packModes.length > 0;
+        if (!buyable) note = "This pack can't be purchased online yet — please contact the front desk.";
+        onBuy = function (btn) { buyPack(btn, p.id, packModes, chooserHost); };
       } else line = "Pick a pack above to see your price.";
     } else {
       var pl = selectedPlan();
@@ -252,12 +252,13 @@
     }
     setTimeout(function () { try { ui.loaded = false; } catch (e) {} location.reload(); }, 1600);
   }
-  function buyPack(btn, planId) {
+  function buyPack(btn, planId, modes, host) {
     if (!planId) { UI.toast("Pick a pack first.", "error"); return; }
-    btn.disabled = true; var lbl = btn.textContent; btn.textContent = "Starting checkout…";
-    window.TFAuth.apiJSON("/api/billing/bundles/checkout", { method: "POST", body: { bundle_plan_id: planId } })
-      .then(function (res) { if (!res || !res.order_id) throw new Error("no order returned"); return window.Pay.startYocoCheckout(res.order_id); })
-      .catch(function (e) { btn.disabled = false; btn.textContent = lbl; UI.toast(UI.errMsg(e) || "Could not start checkout.", "error"); });
+    window.Pay.buyPack({
+      planId: planId, modes: modes, host: host,
+      onActivated: function () { UI.toast("Pack added — settle at the front desk. Enjoy!", "info"); setTimeout(function () { ui.loaded = false; location.reload(); }, 1400); },
+      onError: function (e) { UI.toast(UI.errMsg(e) || "Could not complete.", "error"); },
+    });
   }
 
   function render() {

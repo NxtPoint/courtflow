@@ -479,14 +479,23 @@ def _coach_lesson_product(session, *, club_id, coach_user_id):
     return (None, None)
 
 
-def create_bundle_order(session, *, club_id, user_id, bundle_plan_id) -> Optional[Dict[str, Any]]:
-    """Create an online (awaiting_payment) order for a bundle plan + a PENDING token_wallet linked
-    by order_id (the webhook's recognition key). Mirrors membership.create_membership_order.
+_BUNDLE_PAY_MODES = ("online", "at_court", "monthly_account")
 
-    For a COACH LESSON pack the order line carries the coach's lesson product/price so the existing
-    commission fan-out (record_split_for_order on the paid order) accrues on the collected purchase.
-    Court/class packs carry no coach product → no commission. Returns
-    {order_id, amount_minor, currency, plan} or None (plan missing/inactive)."""
+
+def create_bundle_order(session, *, club_id, user_id, bundle_plan_id,
+                        settlement_mode="online") -> Optional[Dict[str, Any]]:
+    """Create an order for a bundle plan + a token_wallet linked by order_id. `settlement_mode`:
+      online           -> 'awaiting_payment'; pay via Yoco; the webhook activates the wallet.
+      at_court/monthly -> 'open' order (owed, on the unified statement); the wallet is granted
+                          IMMEDIATELY so the member can use the pack now (collect at desk / month-end).
+    For a COACH LESSON pack the order line carries the coach's lesson product/price so the commission
+    fan-out accrues on the collected purchase. Returns {order_id, amount_minor, currency, plan,
+    settlement_mode, needs_checkout, activated} or None (plan missing/inactive)."""
+    mode = (settlement_mode or "online").strip().lower()
+    if mode not in _BUNDLE_PAY_MODES:
+        mode = "online"
+    online = (mode == "online")
+
     plan = get_plan(session, club_id=club_id, plan_id=bundle_plan_id)
     if not plan or not plan["active"]:
         return None
@@ -497,11 +506,12 @@ def create_bundle_order(session, *, club_id, user_id, bundle_plan_id) -> Optiona
         text("""
             INSERT INTO billing."order"
                 (club_id, user_id, amount_minor, currency_code, settlement_mode, status)
-            VALUES (:c, :u, :amt, :cur, 'online', 'awaiting_payment')
+            VALUES (:c, :u, :amt, :cur, :mode, :st)
             RETURNING id
         """),
         {"c": str(club_id), "u": str(user_id) if user_id else None,
-         "amt": amount, "cur": currency},
+         "amt": amount, "cur": currency, "mode": mode,
+         "st": ("awaiting_payment" if online else "open")},
     ).scalar_one()
     order_id = str(order_id)
 
@@ -537,7 +547,13 @@ def create_bundle_order(session, *, club_id, user_id, bundle_plan_id) -> Optiona
          "base": int(plan["duration_minutes"]) if plan["duration_minutes"] else 60},
     )
 
-    return {"order_id": order_id, "amount_minor": amount, "currency": currency, "plan": plan}
+    out = {"order_id": order_id, "amount_minor": amount, "currency": currency, "plan": plan,
+           "settlement_mode": mode, "needs_checkout": online, "activated": False}
+    if not online:
+        # Offline pack: usable now; the 'open' order is settled at the desk / month-end via the statement.
+        out["activation"] = _grant_wallet_now(session, order_id=order_id, provider="manual")
+        out["activated"] = True
+    return out
 
 
 def is_bundle_order(session, *, order_id) -> bool:
@@ -550,13 +566,23 @@ def is_bundle_order(session, *, order_id) -> bool:
 
 
 def activate_wallet_for_order(session, *, order_id, provider="yoco") -> Dict[str, Any]:
-    """Activate the PENDING wallet linked to a PAID bundle order. Grants the plan's sessions_count
-    and sets expires_at (= today + validity_days, if any). Called by the Yoco webhook AFTER
-    apply_payment_event marks the order 'paid' (apply_payment_event itself is untouched).
+    """Activate the PENDING wallet linked to a PAID bundle order. Called by the Yoco webhook AFTER
+    apply_payment_event marks the order 'paid'. Defence-in-depth paid-gate, then grants. Returns
+    {ok, status: 'granted'|'already_active'|'no_bundle_order'|'order_not_paid', ...}."""
+    paid = session.execute(
+        text('SELECT 1 FROM billing."order" WHERE id = :oid AND status = :s'),
+        {"oid": str(order_id), "s": "paid"},
+    ).first()
+    if not paid:
+        return {"ok": True, "status": "order_not_paid"}
+    return _grant_wallet_now(session, order_id=order_id, provider=provider)
 
-    IDEMPOTENT keyed off order_id: a replayed paid webhook finds the wallet already 'active' and
-    does NOTHING (no second grant) — mirroring activate_membership_for_order's already-active guard.
-    Returns {ok, status: 'granted'|'already_active'|'no_bundle_order'|'order_not_paid', ...}."""
+
+def _grant_wallet_now(session, *, order_id, provider="yoco") -> Dict[str, Any]:
+    """Grant the PENDING wallet for an order — NO paid-gate, so an OFFLINE pack (pay-at-club /
+    month-end) is usable immediately while its 'open' order sits on the statement. Grants the plan's
+    sessions_count + sets expires_at. IDEMPOTENT keyed off order_id (an already-active wallet is a
+    no-op)."""
     wallet = session.execute(
         text("SELECT w.id, w.club_id, w.user_id, w.status, w.bundle_plan_id, w.tokens_total "
              "FROM billing.token_wallet w WHERE w.order_id = :oid "
@@ -565,15 +591,6 @@ def activate_wallet_for_order(session, *, order_id, provider="yoco") -> Dict[str
     ).mappings().first()
     if not wallet:
         return {"ok": True, "status": "no_bundle_order"}
-
-    # Defence-in-depth: only grant once the order is genuinely paid (the webhook already gates on
-    # apply_payment_event success, but a direct call must respect order status too).
-    paid = session.execute(
-        text('SELECT 1 FROM billing."order" WHERE id = :oid AND status = :s'),
-        {"oid": str(order_id), "s": "paid"},
-    ).first()
-    if not paid:
-        return {"ok": True, "status": "order_not_paid"}
 
     # Idempotency guard: an already-active (or exhausted/expired — already granted) wallet for this
     # order is a no-op. We only grant a wallet still 'pending'.

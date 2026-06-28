@@ -1140,3 +1140,37 @@ def patch_arrears(arrears_id):
         code = 404 if err_code == "NOT_FOUND" else (403 if err_code == "FORBIDDEN" else 422)
         return jsonify(error=err_code, status=res.get("status")), code
     return jsonify(res), 200
+
+
+# ---------------------------------------------------------------------------
+# unified statement (admin view) — see + clear a member's owed orders
+# (docs/specs/UNIFIED-STATEMENT.md). Voids a mistake / writes off a forgiven debt.
+# ---------------------------------------------------------------------------
+
+@admin_bp.get("/members/<user_id>/statement")
+def member_statement(user_id):
+    """A member's UNIFIED statement (their unpaid orders + total), for the People 360 drawer."""
+    p, err = _admin()
+    if err:
+        return err
+    from billing import statement as statement_repo
+    with session_scope() as s:
+        data = statement_repo.statement(s, club_id=p.club_id, user_id=user_id)
+    return jsonify(data), 200
+
+
+@admin_bp.post("/orders/<order_id>/void")
+def void_order(order_id):
+    """Clear an UNPAID order: void (a mistake) or write-off (body {write_off:true} — forgive the debt).
+    A paid order must be refunded, not voided. Drops the line off the member's statement + balance."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    from billing import statement as statement_repo
+    with session_scope() as s:
+        res = statement_repo.void_order(s, club_id=p.club_id, order_id=order_id,
+                                        write_off=bool(b.get("write_off")))
+    if not res.get("ok"):
+        return jsonify(res), 409
+    return jsonify(res), 200
