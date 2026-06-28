@@ -73,6 +73,9 @@
   }
   function courtCovered() {
     if (st.type !== "court" || !st.membershipCovered) return false;
+    // The server already priced the selected slot per its membership window — covered iff it's R0.
+    // (Falls back to the client window check only if a slot somehow lacks a price.)
+    if (st.slot && st.slot.price != null) return st.slot.price === 0;
     var w = membershipWindow();
     if (!w) return true;
     var start = st.slot && st.slot.start ? new Date(st.slot.start) : null;
@@ -307,17 +310,13 @@
       return;
     }
     var grid = el("div", { class: "cf-timeblocks" });
-    var w = membershipWindow();
     slots.forEach(function (sl) {
-      // Coverage is PER-SLOT: an off-peak membership only makes the slot free INSIDE its window;
-      // peak slots stay PAYG (price shown), matching what's charged at confirm + server-side.
-      var covered = st.type === "court" && st.membershipCovered && withinWindow(new Date(sl.start), w);
+      // The server prices each slot PER-SLOT (0 only inside the membership window; peak slots keep
+      // their PAYG price), so "free" is simply price === 0 for a covered court — no client guess.
+      var covered = st.type === "court" && st.membershipCovered && sl.price === 0;
       var kids = [ el("span", { class: "cf-tb-time", text: UI.fmtTime(sl.start) }) ];
       if (covered) kids.push(el("span", { class: "cf-tb-price", text: "free" }));
-      else {
-        var price = (sl.price != null) ? sl.price : (st.type === "court" ? st.selDurationPrice : null);
-        if (price != null) kids.push(el("span", { class: "cf-tb-price", text: UI.money(price, ctx.billing.currency) }));
-      }
+      else if (sl.price != null) kids.push(el("span", { class: "cf-tb-price", text: UI.money(sl.price, ctx.billing.currency) }));
       grid.appendChild(el("button", { class: "cf-timeblock", type: "button",
         onclick: function () { st.slot = sl; st.view = "confirm"; render(); } }, kids));
     });

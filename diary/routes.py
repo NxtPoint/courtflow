@@ -108,10 +108,13 @@ def availability():
                                      else "visitor")
     kind = q.get("kind")
     with session_scope() as s:
-        # A COURT booking by a member with an active membership is free — surface 0 on the
-        # slots so the schedule step shows "R0 · covered". (Lessons/classes are never auto-covered.)
-        covered = bool(kind == "court" and pricing_mod.has_active_membership(
-            s, club_id=p.club_id, user_id=p.user_id))
+        # A COURT booking by a member with an active membership is free INSIDE that membership's
+        # access window (an off-peak tier is free only in its hours; full/trial covers any time).
+        # We pass the windows so each slot is priced individually: 0 inside the window, PAYG outside
+        # — matching the server's settle decision (diary.pricing.membership_covers). Lessons/classes
+        # are never auto-covered.
+        windows = (pricing_mod.active_membership_windows(s, club_id=p.club_id, user_id=p.user_id)
+                   if kind == "court" else [])
         slots = availability_mod.compute_availability(
             s, club_id=p.club_id,
             resource_id=q.get("resource_id"), kind=kind,
@@ -120,7 +123,7 @@ def availability():
             duration_minutes=q.get("duration", type=int),
             audience=audience,
             any_resource=(q.get("any") in ("1", "true", "yes")),
-            membership_covered=covered,
+            membership_covered=bool(windows), membership_windows=windows,
         )
     return jsonify(slots=slots, count=len(slots)), 200
 

@@ -175,6 +175,57 @@ def has_active_membership(session, *, club_id, user_id):
         return False
 
 
+def active_membership_windows(session, *, club_id, user_id):
+    """The access windows of the user's ACTIVE memberships, for pricing availability per-slot WITHOUT
+    a DB round-trip per slot. Returns a list where each entry is either None (unconstrained — covers
+    any time, e.g. a trial or a full membership) or {days, start_min, end_min}. Empty list = no active
+    membership. Guarded -> [] (a missing membership never blocks a booking)."""
+    try:
+        if not user_id or not _membership_sub_exists(session):
+            return []
+        rows = session.execute(
+            text("SELECT p.access_days, p.access_start_min, p.access_end_min "
+                 "FROM billing.membership_subscription ms "
+                 "LEFT JOIN billing.price p ON p.id = ms.price_id "
+                 "WHERE ms.club_id = :c AND ms.user_id = :u AND ms.status = 'active' "
+                 "  AND (ms.current_period_end IS NULL OR ms.current_period_end >= CURRENT_DATE)"),
+            {"c": club_id, "u": user_id},
+        ).mappings().all()
+        out = []
+        for r in rows:
+            if not r["access_days"] and r["access_start_min"] is None and r["access_end_min"] is None:
+                out.append(None)  # unconstrained — covers any time
+            else:
+                out.append({
+                    "days": [int(x) for x in r["access_days"].split(",") if str(x).strip()] if r["access_days"] else None,
+                    "start_min": r["access_start_min"], "end_min": r["access_end_min"],
+                })
+        return out
+    except Exception:
+        log.debug("active_membership_windows() suppressed (billing not ready)", exc_info=False)
+        return []
+
+
+def any_window_covers(windows, starts_local):
+    """True if ANY window in `windows` covers the club-LOCAL start datetime (None = unconstrained).
+    Mirrors membership_covers' day/time test (ISO weekday Mon=1; minutes-from-midnight, end exclusive)."""
+    if not windows or starts_local is None:
+        return False
+    iso = starts_local.isoweekday()
+    mod = starts_local.hour * 60 + starts_local.minute
+    for w in windows:
+        if w is None:
+            return True
+        if w.get("days") and iso not in w["days"]:
+            continue
+        if w.get("start_min") is not None and mod < w["start_min"]:
+            continue
+        if w.get("end_min") is not None and mod >= w["end_min"]:
+            continue
+        return True
+    return False
+
+
 def membership_covers(session, *, club_id, user_id, starts_at):
     """True if an ACTIVE membership covers a COURT booking that STARTS at `starts_at` — i.e. the
     member is active AND the booking falls inside that plan's access window (Phase 5). A plan with

@@ -197,7 +197,7 @@ _LESSON_KINDS = ("coach", "lesson")
 def compute_availability(session, *, club_id, resource_id=None, kind=None,
                          coach_user_id=None, surface=None, date_from=None, date_to=None,
                          duration_minutes=None, audience="member", any_resource=False,
-                         membership_covered=False, now=None):
+                         membership_covered=False, membership_windows=None, now=None):
     """Return free slots for the resolved resource(s). Each slot:
         {start, end, resource_id, resource_name, kind, price}
     where price is the per-duration price for the chosen duration_minutes (guarded; None if
@@ -236,16 +236,23 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
 
     resources = _resources(session, club_id=club_id, resource_id=resource_id, kind=kind,
                            coach_user_id=coach_user_id, surface=surface)
-    # Per-duration price for the chosen slot length. membership_covered (a court booking by an
-    # active member) is free, so we skip the lookup and surface 0. We expose price as a numeric
-    # amount_minor (cents) — the frontend renders it with UI.money — or None when unpriced.
-    if membership_covered:
-        price = 0
-    else:
-        pr = pricing.price_for(session, club_id=club_id, kind=_price_kind(kind),
-                               duration_minutes=duration_min, coach_user_id=coach_user_id,
-                               audience=audience)
-        price = pr.get("amount_minor") if pr else None
+    # Per-duration PAYG price for the chosen slot length (always computed — an off-peak member still
+    # pays this at PEAK times). amount_minor (cents) or None when unpriced. Coverage is then decided
+    # PER SLOT below: 0 only when an active membership window covers that slot's local start; outside
+    # the window (or no membership) the PAYG price stands. This is what makes "free until 16:00,
+    # then RX" correct in the calendar — and matches the server's settle decision (membership_covers).
+    pr = pricing.price_for(session, club_id=club_id, kind=_price_kind(kind),
+                           duration_minutes=duration_min, coach_user_id=coach_user_id,
+                           audience=audience)
+    payg_price = pr.get("amount_minor") if pr else None
+    windows = membership_windows or []
+    covers_any_time = membership_covered and not windows  # legacy bool with no windows = full cover
+    def _slot_price(s_utc):
+        if covers_any_time:
+            return 0
+        if windows and pricing.any_window_covers(windows, s_utc.astimezone(tz)):
+            return 0
+        return payg_price
 
     is_lesson = kind in _LESSON_KINDS
 
@@ -314,7 +321,7 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
                 "resource_id": str(res["id"]),
                 "resource_name": res.get("name"),
                 "kind": res.get("kind"),
-                "price": price,
+                "price": _slot_price(s_utc),
             }
             if court:
                 slot["court_resource_id"] = court["resource_id"]

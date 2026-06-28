@@ -25,6 +25,7 @@ from db import get_engine
 from diary import bookings as B
 from diary import classes as C
 from diary import availability as A
+from diary import pricing as P
 
 JHB = ZoneInfo("Africa/Johannesburg")
 
@@ -413,6 +414,46 @@ def sc_lesson_lifecycle(s, fx):
               {"c": fx.club_id, "u": fx.coach_uid})
 
 
+def sc_offpeak_slot_pricing(s, fx):
+    print("\n# Off-peak membership: court slots priced PER-SLOT (free inside window, PAYG at peak)")
+    from billing.membership import membership_product_id
+    member, court = fx.members[0], fx.courts[0]
+    # A PAYG court price (60 min = R150) so peak slots have an amount to fall back to.
+    cprod = s.execute(text("INSERT INTO billing.product (club_id, kind, name, active) "
+                           "VALUES (:c,'court_booking','Court Hire',true) RETURNING id"),
+                      {"c": fx.club_id}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, unit, duration_minutes, active) "
+                   "VALUES (:c,:p,'any',15000,'ZAR','per_booking',60,true)"),
+              {"c": fx.club_id, "p": cprod})
+    # An OFF-PEAK membership: weekdays 06:00–16:00 (start_min 360, end_min 960).
+    mprod = membership_product_id(s, club_id=fx.club_id, create_if_missing=True)
+    mprice = s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                            "currency_code, unit, term_months, membership_tier, active, "
+                            "access_days, access_start_min, access_end_min) "
+                            "VALUES (:c,:p,'member',18000,'ZAR','per_month',1,'Off-Peak',true,"
+                            "'1,2,3,4,5',360,960) RETURNING id"),
+                       {"c": fx.club_id, "p": mprod}).scalar()
+    s.execute(text("INSERT INTO billing.membership_subscription (club_id, user_id, price_id, status, "
+                   "provider, current_period_end) VALUES (:c,:u,:pr,'active','manual',CURRENT_DATE+30)"),
+              {"c": fx.club_id, "u": member, "pr": mprice})
+
+    windows = P.active_membership_windows(s, club_id=fx.club_id, user_id=member)
+    slots = A.compute_availability(
+        s, club_id=fx.club_id, resource_id=court, kind="court",
+        date_from=utc_iso(at(fx, 8)), date_to=utc_iso(at(fx, 18)),
+        duration_minutes=60, audience="member",
+        membership_covered=bool(windows), membership_windows=windows)
+    by_start = {sl["start"]: sl for sl in slots}
+    s10 = by_start.get(utc_iso(at(fx, 10)))   # inside window
+    s17 = by_start.get(utc_iso(at(fx, 17)))   # peak (after 16:00)
+    is_weekday = fx.target.weekday() < 5
+    check("peak 17:00 slot keeps its PAYG price (R150)", bool(s17) and s17["price"] == 15000,
+          str(s17 and s17.get("price")))
+    check("off-peak 10:00 slot is free on a weekday", (not is_weekday) or (bool(s10) and s10["price"] == 0),
+          f"weekday={is_weekday} price={s10 and s10.get('price')}")
+
+
 SCENARIOS = [
     sc_court_book_cancel,
     sc_court_reschedule,
@@ -423,6 +464,7 @@ SCENARIOS = [
     sc_slot_granularity,
     sc_class_waitlist,
     sc_lesson_lifecycle,
+    sc_offpeak_slot_pricing,
 ]
 
 
