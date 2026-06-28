@@ -8,15 +8,15 @@
   var UI, el;
   var state = { data: null, tab: "profile" };
 
+  // Consolidated (2026-06-28): Hours folded into Courts ("Courts & hours" — everything court-
+  // specific in one block); the global payment methods folded into Club profile (checkboxes).
   var TABS = [
     { k: "profile", t: "Club profile" },
-    { k: "hours", t: "Hours" },
-    { k: "courts", t: "Courts" },
+    { k: "courts", t: "Courts & hours" },
     { k: "pricing", t: "Pricing" },
     { k: "services", t: "Services (advanced)" },
     { k: "coaches", t: "Coaches" },
     { k: "coachpay", t: "Coach pay" },
-    { k: "payments", t: "Payments" },
   ];
 
   function root() { return document.getElementById("cf-settings"); }
@@ -51,10 +51,10 @@
     var d = state.data || {};
     if (state.tab === "profile") {
       window.AdminUI.clubProfile(sectionHost, d, { saveLabel: "Save changes" });
-    } else if (state.tab === "hours") {
-      window.AdminUI.hours(sectionHost, d.hours || {}, { saveLabel: "Save hours" });
+      renderPayments(sectionHost, (state.data && state.data.policy) || {});  // global payment methods
     } else if (state.tab === "courts") {
-      window.AdminUI.courts(sectionHost, {});
+      window.AdminUI.courts(sectionHost, {});            // courts + …
+      window.AdminUI.hours(sectionHost, d.hours || {}, { saveLabel: "Save hours" });  // …their hours, one block
     } else if (state.tab === "pricing") {
       window.AdminUI.pricingHome(sectionHost);
     } else if (state.tab === "services") {
@@ -63,40 +63,37 @@
       window.AdminUI.coaches(sectionHost, {});
     } else if (state.tab === "coachpay") {
       window.AdminUI.coachAgreements(sectionHost, {});
-    } else if (state.tab === "payments") {
-      renderPayments(sectionHost, (state.data && state.data.policy) || {});
     }
   }
 
-  // Per-club online-payments switch. The booking flow offers "Pay online" (Yoco) only when
-  // this is on AND payments are globally enabled — so turning a club live is one toggle.
+  // The club's GLOBAL payment methods (what the whole club can offer). A service/coach/class then
+  // chooses which of these enabled methods IT accepts (per-service preference). Three checkboxes,
+  // each a club.policy flag → PATCH /api/admin/policy.
   function renderPayments(host, policy) {
     var card = el("div", { class: "cf-card" }, [
-      el("h2", { text: "Online payments" }),
-      el("p", { class: "cf-muted", text:
-        "When on, members can pay for bookings online by card (Yoco — card + Apple/Google/Samsung Pay). " +
-        "When off, they pay at the court or on a monthly account." }),
+      el("h3", { text: "Payment methods" }),
+      el("p", { class: "cf-muted", text: "Which ways the club accepts payment. Each service can then choose which of these it offers." }),
     ]);
-    var lbl = el("label", { class: "cf-row", style: "cursor:pointer;gap:10px" });
-    var cb = el("input", { type: "checkbox" });
-    cb.checked = !!policy.allow_online_payment;
-    cb.style.width = "auto";
-    cb.addEventListener("change", async function () {
-      cb.disabled = true;
-      try {
-        await window.AdminAPI.patchPolicy({ allow_online_payment: cb.checked });
-        if (state.data && state.data.policy) state.data.policy.allow_online_payment = cb.checked;
-        UI.toast(cb.checked ? "Online payments enabled." : "Online payments turned off.", "info");
-      } catch (e) {
-        cb.checked = !cb.checked;
-        UI.toast(UI.errMsg(e), "error");
-      } finally { cb.disabled = false; }
-    });
-    lbl.appendChild(cb);
-    lbl.appendChild(el("span", { style: "font-weight:600", text: "Accept online card payments" }));
-    card.appendChild(lbl);
-    card.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:10px",
-      text: "Rates, packs and memberships now live under the Pricing tab." }));
+    function flag(key, label, hint) {
+      var lbl = el("label", { class: "cf-row", style: "cursor:pointer;gap:10px;align-items:flex-start;margin-top:8px" });
+      var cb = el("input", { type: "checkbox" }); cb.checked = !!policy[key]; cb.style.width = "auto";
+      cb.addEventListener("change", async function () {
+        cb.disabled = true;
+        var body = {}; body[key] = cb.checked;
+        try {
+          await window.AdminAPI.patchPolicy(body);
+          if (state.data && state.data.policy) state.data.policy[key] = cb.checked;
+          UI.toast("Saved.", "info");
+        } catch (e) { cb.checked = !cb.checked; UI.toast(UI.errMsg(e), "error"); }
+        finally { cb.disabled = false; }
+      });
+      lbl.appendChild(cb);
+      lbl.appendChild(el("div", {}, [el("div", { style: "font-weight:600", text: label }), hint ? el("div", { class: "cf-muted cf-tiny", text: hint }) : null].filter(Boolean)));
+      return lbl;
+    }
+    card.appendChild(flag("allow_online_payment", "Pay online (card)", "Yoco — card + Apple/Google/Samsung Pay."));
+    card.appendChild(flag("allow_pay_at_court", "Pay at the club", "Settle at the front desk."));
+    card.appendChild(flag("allow_monthly_account", "Monthly account (invoice in arrears)", "Charges accrue on a tab, invoiced monthly."));
     host.appendChild(card);
   }
 
