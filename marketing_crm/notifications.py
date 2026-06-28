@@ -145,6 +145,13 @@ def _t_coach_invited(ctx):
     return ("You've been invited to coach", body, "/coach-onboarding.html")
 
 
+def _t_statement_ready(ctx):
+    amt = _money(_g(ctx, "amount_minor"), _g(ctx, "currency"))
+    body = (f"You have {amt} due for coaching this month. Pay securely online from your "
+            "dashboard — tap to go straight in.")
+    return ("Your invoice is ready", body, "/account.html")
+
+
 # ---------------------------------------------------------------------------
 # KIND_MAP — which usage_event kinds become notifications + their template.
 #
@@ -170,6 +177,7 @@ KIND_MAP = {
     "class_waitlisted":      _t_class_waitlisted,
     "waitlist_slot_open":    _t_class_promoted,          # a seat freed → "you're in" / claim
     "coach_invited":         _t_coach_invited,
+    "statement_ready":       _t_statement_ready,         # month-end: invoice ready → pay online
 }
 
 

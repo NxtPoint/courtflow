@@ -162,6 +162,7 @@ def cron_monthly_invoice():
     from db import session_scope
     from sqlalchemy import text
     from billing import ledger
+    from billing import commission
 
     out = []
     with session_scope() as s:
@@ -174,8 +175,15 @@ def cron_monthly_invoice():
         for cid in club_ids:
             statements = ledger.build_statements(
                 s, club_id=cid, period_start=period_start, period_end=period_end)
-            if statements:
-                out.append({"club_id": cid, "statement_count": len(statements),
-                            "statements": statements})
+            # Month-end: accrue arrears + notify each client with an outstanding balance ("your
+            # invoice is ready — pay online", linking the dashboard). Best-effort; never aborts.
+            notified = 0
+            try:
+                notified = commission.notify_statements_for_club(s, club_id=cid)
+            except Exception:
+                pass
+            out.append({"club_id": cid, "statement_count": len(statements or []),
+                        "clients_notified": notified,
+                        "statements": statements})
 
     return jsonify({"ok": True, "clubs": len(out), "results": out}), 200
