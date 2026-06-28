@@ -6,6 +6,7 @@
 // GET /api/coach/clients[/:id].
 (function () {
   var UI, el, principal;
+  var TAB = "schedule";  // active console tab: schedule · services · clients · reporting · profile
   var resCache = null;   // {coachRes:[...], courts:[...]} — cached resources for the booking modal
   var classState = { list: [] };
 
@@ -238,8 +239,8 @@
   // Reuses the shared ClassUI components (same ones the admin console uses); the coach
   // form has no coach selector (the server attributes the class to the caller).
   // Injects its own card into #cf-main after the "My week" card (HTML shell is fixed).
-  async function initMyClasses() {
-    var main = document.getElementById("cf-main"); if (!main) return;
+  async function initMyClasses(host) {
+    if (!host) return;
     var card = el("div", { class: "cf-card", id: "coach-classes-card" }, [
       el("div", { class: "cf-row", style: "margin-bottom:6px" }, [
         el("h2", { text: "My classes", style: "margin:0" }),
@@ -252,11 +253,7 @@
       el("div", { id: "coach-cls-list", class: "cf-loading", text: "Loading classes…" }),
       el("div", { id: "coach-cls-sessions" }),
     ]);
-    // Place it right after the "My week" card (the first cf-card in main).
-    var weekCard = document.getElementById("coach-week");
-    var anchor = weekCard ? weekCard.closest(".cf-card") : null;
-    if (anchor && anchor.nextSibling) main.insertBefore(card, anchor.nextSibling);
-    else main.appendChild(card);
+    host.appendChild(card);
 
     try { await ensureClassDeps(); } catch (e) {
       var b = document.getElementById("coach-cls-list"); if (b) b.textContent = UI.errMsg(e); return;
@@ -439,8 +436,8 @@
     return el("div", { class: "cf-tile", style: "cursor:default" }, kids);
   }
 
-  function initDashboard() {
-    var main = document.getElementById("cf-main"); if (!main) return;
+  function initDashboard(host) {
+    if (!host) return;
     var card = el("div", { class: "cf-card", id: "coach-dash-card" }, [
       el("div", { class: "cf-row", style: "margin-bottom:6px;align-items:center;gap:8px" }, [
         el("h2", { text: "Dashboard", style: "margin:0" }),
@@ -455,9 +452,7 @@
         text: "Your coaching business at a glance. Earnings are net of commission." }),
       el("div", { id: "coach-dash-body", class: "cf-loading", text: "Loading your cockpit…" }),
     ]);
-    // Place it FIRST in main so the dashboard is the coach's landing surface.
-    if (main.firstChild) main.insertBefore(card, main.firstChild);
-    else main.appendChild(card);
+    host.appendChild(card);
 
     dashState.month = thisMonthKey();
     document.getElementById("coach-dash-prev").addEventListener("click", function () {
@@ -631,8 +626,8 @@
     return card;
   }
 
-  function initMyClients() {
-    var main = document.getElementById("cf-main"); if (!main) return;
+  function initMyClients(host) {
+    if (!host) return;
     var card = el("div", { class: "cf-card", id: "coach-clients-card" }, [
       el("div", { class: "cf-row", style: "margin-bottom:6px;align-items:center" }, [
         el("h2", { text: "My clients", style: "margin:0" }),
@@ -644,7 +639,7 @@
         text: "Everyone who has had a lesson or class with you. Gross activity with you only." }),
       el("div", { id: "coach-clients-body", class: "cf-loading", text: "Loading clients…" }),
     ]);
-    main.appendChild(card);
+    host.appendChild(card);
     var search = document.getElementById("coach-clients-search");
     var t = null;
     search.addEventListener("input", function () {
@@ -775,97 +770,110 @@
     });
   }
 
-  // ---- my profile editor ----------------------------------------------------
-  // A tabbed editor (Profile · Hours · Services) reusing the CoachUI section
-  // components from coach_api.js — the same builders the onboarding wizard uses, so
-  // the wizard and the console stay 1:1. Lets a coach edit everything anytime.
-  var profileState = { data: null, tab: "profile" };
-  var PROFILE_TABS = [
-    { k: "profile", t: "Profile" },
-    { k: "hours", t: "Hours" },
-    { k: "services", t: "Services" },
-    { k: "packs", t: "Packs" },
-  ];
+  // ---- my profile (clean summary + edit popups) -----------------------------
+  // Profile/hours editing live in MODALS (reusing the CoachUI builders the onboarding wizard
+  // uses), so the Profile tab is a tidy at-a-glance summary — not a wall of form fields.
+  var profileState = { data: null };
 
-  function profileRoot() { return document.getElementById("coach-profile"); }
-
-  function profileTabBar() {
-    var nav = el("nav", { class: "cf-nav", style: "margin-bottom:16px" });
-    PROFILE_TABS.forEach(function (tab) {
-      var a = el("a", { href: "#" + tab.k, text: tab.t });
-      if (tab.k === profileState.tab) a.classList.add("active");
-      a.addEventListener("click", function (ev) { ev.preventDefault(); selectProfileTab(tab.k); });
-      nav.appendChild(a);
-    });
-    return nav;
+  function initials() {
+    var pr = (profileState.data && profileState.data.profile) || {};
+    var n = (pr.display_name || principal.email || "C").trim();
+    var parts = n.split(/\s+/);
+    return ((parts[0] || "C")[0] + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
   }
 
-  function selectProfileTab(k) { profileState.tab = k; renderProfile(); }
+  function tabProfile(host) {
+    var d = profileState.data || {}, pr = d.profile || {}, steps = d.steps || {};
 
-  function renderProfile() {
-    var host = profileRoot(); if (!host) return;
-    UI.clear(host);
-    host.appendChild(el("div", { class: "cf-card" }, [
-      el("h2", { text: "My profile" }),
-      el("p", { class: "cf-muted", text: "Edit your coaching profile, working hours and services. Changes save per section." }),
-    ]));
-    host.appendChild(profileTabBar());
-    var sectionHost = el("div");
-    host.appendChild(sectionHost);
-
-    var d = profileState.data || {};
-    if (profileState.tab === "profile") {
-      window.CoachUI.profile(sectionHost, d.profile || {}, { saveLabel: "Save changes" });
-    } else if (profileState.tab === "hours") {
-      window.CoachUI.hours(sectionHost, d.hours || {}, { saveLabel: "Save hours" });
-    } else if (profileState.tab === "services") {
-      window.CoachUI.services(sectionHost, {});
-    } else if (profileState.tab === "packs") {
-      window.CoachUI.packs(sectionHost, {});
+    // Hours warning — a coach with no weekly hours is invisible/unbookable.
+    if (!steps.hours) {
+      host.appendChild(el("div", { class: "cf-card", style: "border-color:#E0A800;background:#FFF8E1;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap" }, [
+        el("div", {}, [
+          el("div", { style: "font-weight:700;color:var(--ink)", text: "⚠️ Set your weekly hours to take bookings" }),
+          el("div", { class: "cf-muted", style: "font-size:.88rem", text: "Until you add your availability, clients can't see or book you." }),
+        ]),
+        el("button", { class: "cf-btn cf-btn-primary", type: "button", text: "Set your hours", onclick: editHoursModal }),
+      ]));
     }
+
+    var avatar = pr.photo_url
+      ? el("img", { src: pr.photo_url, alt: "", style: "width:72px;height:72px;border-radius:50%;object-fit:cover;border:1px solid var(--border)" })
+      : el("div", { style: "width:72px;height:72px;border-radius:50%;background:var(--green-050);color:var(--green-600);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.5rem", text: initials() });
+
+    var chips = el("div", { class: "cf-row", style: "gap:6px;flex-wrap:wrap;margin-top:6px" });
+    chips.appendChild(el("span", { class: "cf-chip " + (pr.is_bookable === false ? "" : "class"), text: pr.is_bookable === false ? "Hidden" : "Bookable" }));
+    chips.appendChild(el("span", { class: "cf-chip", text: pr.review_bookings ? "Reviews lesson requests" : "Auto-confirms lessons" }));
+    if (steps.hours) chips.appendChild(el("span", { class: "cf-chip", text: "Hours set" }));
+
+    var card = el("div", { class: "cf-card" }, [
+      el("div", { class: "cf-row", style: "gap:16px;align-items:flex-start;flex-wrap:wrap" }, [
+        avatar,
+        el("div", { style: "flex:1;min-width:200px" }, [
+          el("h2", { style: "margin:0", text: pr.display_name || (principal.email || "").split("@")[0] }),
+          pr.headline ? el("div", { class: "cf-muted", style: "font-weight:600;margin-top:2px", text: pr.headline }) : null,
+          chips,
+        ].filter(Boolean)),
+        el("div", { class: "cf-row", style: "gap:8px" }, [
+          el("button", { class: "cf-btn cf-btn-primary", text: "Edit profile", onclick: editProfileModal }),
+          el("button", { class: "cf-btn", text: "Edit hours", onclick: editHoursModal }),
+        ]),
+      ]),
+    ]);
+    if (pr.bio) card.appendChild(el("p", { style: "margin-top:14px", text: pr.bio }));
+    var facts = [];
+    if ((pr.specialties || []).length) facts.push(["Specialties", pr.specialties.join(", ")]);
+    if ((pr.languages || []).length) facts.push(["Languages", pr.languages.join(", ")]);
+    if ((pr.qualifications || []).length) facts.push(["Qualifications", pr.qualifications.join(", ")]);
+    if (pr.years_experience) facts.push(["Experience", pr.years_experience + " years"]);
+    if (facts.length) {
+      var grid = el("div", { class: "cf-grid cf-grid-2", style: "margin-top:14px" });
+      facts.forEach(function (f) {
+        grid.appendChild(el("div", {}, [
+          el("div", { class: "cf-muted cf-tiny", text: f[0] }),
+          el("div", { style: "font-weight:600", text: f[1] }),
+        ]));
+      });
+      card.appendChild(grid);
+    }
+    host.appendChild(card);
   }
 
-  // A coach with no weekly hours is silently unbookable (no availability → clients can't see or
-  // book them). Surface it loudly at the top of the console with a one-tap jump to the Hours tab.
-  function renderHoursBanner() {
-    var main = document.getElementById("cf-main"); if (!main) return;
-    var prev = document.getElementById("coach-hours-warn"); if (prev) prev.remove();
-    var steps = (profileState.data && profileState.data.steps) || {};
-    if (steps.hours) return;  // hours set — no warning
-    var banner = el("div", { id: "coach-hours-warn", class: "cf-card",
-      style: "border-color:var(--warning);background:var(--warning-bg);display:flex;align-items:center;" +
-             "justify-content:space-between;gap:14px;flex-wrap:wrap" }, [
-      el("div", {}, [
-        el("div", { style: "font-weight:700;color:var(--ink)", text: "⚠️ Set your weekly hours to take bookings" }),
-        el("div", { class: "cf-muted", style: "font-size:.88rem",
-          text: "Until you add your availability, clients can't see or book you." }),
+  function modalShell(title) {
+    var bg = el("div", { class: "cf-modal-bg" });
+    var body = el("div", {});
+    var modal = el("div", { class: "cf-modal cf-modal-lg" }, [
+      el("div", { class: "cf-row", style: "justify-content:space-between;align-items:flex-start" }, [
+        el("h2", { text: title }),
+        el("button", { class: "cf-btn cf-btn-sm", text: "✕", onclick: function () { document.body.removeChild(bg); } }),
       ]),
-      el("button", { class: "cf-btn cf-btn-primary", type: "button", text: "Set your hours", onclick: function () {
-        selectProfileTab("hours");
-        var root = profileRoot(); if (root) root.scrollIntoView({ behavior: "smooth", block: "start" });
-      } }),
+      body,
     ]);
-    main.insertBefore(banner, main.firstChild);
+    bg.appendChild(modal); document.body.appendChild(bg);
+    return { bg: bg, body: body, close: function () { if (bg.parentNode) document.body.removeChild(bg); } };
+  }
+  function editProfileModal() {
+    var m = modalShell("Edit profile");
+    window.CoachUI.profile(m.body, (profileState.data && profileState.data.profile) || {}, {
+      saveLabel: "Save changes", onSaved: function () { m.close(); loadProfile(); },
+    });
+  }
+  function editHoursModal() {
+    var m = modalShell("Weekly hours");
+    window.CoachUI.hours(m.body, (profileState.data && profileState.data.hours) || {}, {
+      saveLabel: "Save hours", onSaved: function () { m.close(); loadProfile(); },
+    });
   }
 
   async function loadProfile() {
-    var host = profileRoot(); if (!host) return;
-    UI.clear(host); host.appendChild(el("div", { class: "cf-card" }, [el("div", { class: "cf-loading", text: "Loading your profile…" })]));
     try {
-      // onboarding() carries hours + services; profile() carries the FULL profile field set
-      // (languages/qualifications/years/visibility/bookable) that the onboarding shell omits.
       var ob = await window.CoachAPI.onboarding();
       try {
         var pr = await window.CoachAPI.profile();
         if (pr && pr.profile) ob.profile = Object.assign({}, ob.profile || {}, pr.profile);
-      } catch (e2) { /* fall back to the onboarding profile subset */ }
+      } catch (e2) {}
       profileState.data = ob;
-    } catch (e) {
-      profileState.data = {};
-      UI.toast(UI.errMsg(e), "error");
-    }
-    renderProfile();
-    renderHoursBanner();
+    } catch (e) { profileState.data = {}; }
+    if (TAB === "profile") renderTab();
   }
 
   // ---- pending lesson queue (approval lifecycle) ----------------------------
@@ -881,8 +889,8 @@
     return who ? (who + " · " + what) : what;
   }
 
-  function initPending() {
-    var main = document.getElementById("cf-main"); if (!main) return;
+  function initPending(host) {
+    if (!host) return;
     var card = el("div", { class: "cf-card", id: "coach-pending-card" }, [
       el("div", { class: "cf-row", style: "margin-bottom:6px;align-items:center" }, [
         el("h2", { text: "Lesson requests", style: "margin:0" }),
@@ -893,12 +901,7 @@
         text: "Accept, propose a new time, or decline. Items you’ve proposed wait for the client to accept." }),
       el("div", { id: "coach-pending-body", class: "cf-loading", text: "Loading requests…" }),
     ]);
-    // Place after the dashboard card if present, else first.
-    var dash = document.getElementById("coach-dash-card");
-    if (dash && dash.nextSibling) main.insertBefore(card, dash.nextSibling);
-    else if (dash) main.appendChild(card);
-    else if (main.firstChild) main.insertBefore(card, main.firstChild);
-    else main.appendChild(card);
+    host.appendChild(card);
     document.getElementById("coach-pending-refresh").addEventListener("click", loadPending);
     loadPending();
   }
@@ -1016,8 +1019,8 @@
   // month navigation and totals (incl. the month-end position after commission).
   var stmtState = { month: null };
 
-  function initStatement() {
-    var main = document.getElementById("cf-main"); if (!main) return;
+  function initStatement(host) {
+    if (!host) return;
     var card = el("div", { class: "cf-card", id: "coach-stmt-card" }, [
       el("div", { class: "cf-row", style: "margin-bottom:6px;align-items:center;gap:8px" }, [
         el("h2", { text: "Month-end statement", style: "margin:0" }),
@@ -1030,7 +1033,7 @@
         text: "What you’ve collected and what’s still owed this month, net of commission. Mark off-platform payments collected, discount, or write off." }),
       el("div", { id: "coach-stmt-body", class: "cf-loading", text: "Loading statement…" }),
     ]);
-    main.appendChild(card);
+    host.appendChild(card);
     stmtState.month = thisMonthKey();
     document.getElementById("coach-stmt-prev").addEventListener("click", function () {
       stmtState.month = shiftMonthKey(stmtState.month, -1); loadStatement();
@@ -1108,14 +1111,87 @@
     catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
+  // ---- tab shell ------------------------------------------------------------
+  var TABS = [
+    { k: "schedule", t: "Schedule" },
+    { k: "services", t: "Services" },
+    { k: "clients", t: "Clients" },
+    { k: "reporting", t: "Reporting" },
+    { k: "profile", t: "Profile" },
+  ];
+
+  function render() {
+    var main = document.getElementById("cf-main"); if (!main) return;
+    UI.clear(main);
+    var name = ((principal.email || "").split("@")[0]) || "Coach";
+    main.appendChild(el("div", { class: "cf-row", style: "align-items:baseline;gap:10px;margin-bottom:4px" }, [
+      el("h1", { text: "Coach console" }),
+      el("span", { class: "cf-muted", text: name }),
+    ]));
+    var bar = el("nav", { class: "cf-nav", style: "margin:8px 0 18px;flex-wrap:wrap" });
+    TABS.forEach(function (t) {
+      var a = el("a", { href: "#" + t.k, text: t.t });
+      if (TAB === t.k) a.classList.add("active");
+      a.addEventListener("click", function (ev) { ev.preventDefault(); TAB = t.k; render(); });
+      bar.appendChild(a);
+    });
+    main.appendChild(bar);
+    main.appendChild(el("div", { id: "coach-tab" }));
+    renderTab();
+  }
+
+  function renderTab() {
+    var host = document.getElementById("coach-tab"); if (!host) return;
+    UI.clear(host);
+    if (TAB === "schedule") tabSchedule(host);
+    else if (TAB === "services") tabServices(host);
+    else if (TAB === "clients") tabClients(host);
+    else if (TAB === "reporting") tabReporting(host);
+    else tabProfile(host);
+  }
+
+  // Schedule — lesson requests + my week + book-for-a-client + time off.
+  function tabSchedule(host) {
+    initPending(host);
+    host.appendChild(el("div", { class: "cf-card" }, [
+      el("h2", { text: "My week" }),
+      el("div", { id: "coach-week" }, [el("div", { class: "cf-loading", text: "Loading…" })]),
+    ]));
+    loadWeek();
+    var toResource = el("select", { class: "cf-select", id: "to-resource" }, [el("option", { text: "Loading…" })]);
+    var toReason = el("input", { class: "cf-input", id: "to-reason", placeholder: "e.g. holiday" });
+    var toStart = el("input", { class: "cf-input", id: "to-start", type: "datetime-local" });
+    var toEnd = el("input", { class: "cf-input", id: "to-end", type: "datetime-local" });
+    var toSubmit = el("button", { class: "cf-btn cf-btn-primary", id: "to-submit", text: "Block time" });
+    host.appendChild(el("div", { class: "cf-card" }, [
+      el("h2", { text: "Block time off" }),
+      el("div", { class: "cf-grid cf-grid-2" }, [
+        fieldEl("Resource", toResource), fieldEl("Reason", toReason),
+        fieldEl("From", toStart), fieldEl("To", toEnd),
+      ]),
+      toSubmit,
+    ]));
+    toSubmit.addEventListener("click", submitTimeOff);
+    loadResources(); loadTimeOff();
+  }
+
+  // Services — per-duration lesson rates, classes, and own session packs.
+  function tabServices(host) {
+    var svc = el("div"); host.appendChild(svc); window.CoachUI.services(svc, {});
+    initMyClasses(host);
+    var pk = el("div"); host.appendChild(pk); window.CoachUI.packs(pk, {});
+  }
+
+  function tabClients(host) { initMyClients(host); }
+
+  // Reporting — the business cockpit + the month-end settlement statement.
+  function tabReporting(host) { initDashboard(host); initStatement(host); }
+
   window.CoachConsole = {
     start: function (p) {
       UI = window.UI; el = UI.el; principal = p;
-      initDashboard();
-      initPending();
-      loadWeek(); loadResources(); loadTimeOff(); loadProfile();
-      initMyClasses(); initMyClients(); initStatement();
-      document.getElementById("to-submit").addEventListener("click", submitTimeOff);
+      render();
+      loadProfile();   // loads profile data in the background (used by the Profile tab + initials)
     },
   };
 })();
