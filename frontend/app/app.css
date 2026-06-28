@@ -526,13 +526,5 @@ p{margin:0 0 10px}
 .cf-durchip.sel{border-color:var(--green);background:var(--green);color:#fff}
 .cf-durchip small{font-weight:500;font-size:.7rem;opacity:.82}
 
-/* --- client one-page Home: sticky section chips (frontend redesign 2026-06-27) --- */
-.cf-chipnav{position:sticky;top:0;z-index:30;display:flex;gap:8px;padding:12px 0 10px;margin:-6px 0 8px;
-  background:var(--canvas);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
-.cf-chipnav::-webkit-scrollbar{display:none}
-.cf-chip-nav{flex:0 0 auto;padding:8px 16px;border-radius:var(--radius-pill);border:1px solid var(--border);
-  background:var(--surface);color:var(--ink);font:600 .9rem Inter;text-decoration:none;white-space:nowrap;
-  transition:background .12s,border-color .12s,color .12s}
-.cf-chip-nav:hover{border-color:var(--green);background:var(--green-050);color:var(--green-600)}
-.cf-chip-nav.active{background:var(--green);border-color:var(--green);color:#fff}
-.cf-section{scroll-margin-top:64px;margin-bottom:14px}
+/* --- client redesign (2026-06-28): wider modal for the edit-profile form --- */
+.cf-modal-lg{max-width:560px}

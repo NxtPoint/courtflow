@@ -30,7 +30,7 @@
   // old /my, /account, /plans pages still resolve as a fallback but are no longer linked here.
   var NAV = [
     { href: "/portal.html", label: "Home", roles: ["*"] },
-    { href: "/book.html",   label: "Book",      roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
+    { href: "/account.html", label: "Account", roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
     { href: "/coach.html",  label: "Coach",     roles: ["coach", "club_admin", "platform_admin"] },
     { href: "/statement.html", label: "Statement", roles: ["coach"] },
     { href: "/admin.html",  label: "Admin",     roles: ["club_admin", "platform_admin"] },

@@ -1,388 +1,174 @@
-// account.js — the client "My Account" page (docs/specs/client-self-service-spec.md §7).
-// Three tabs (mirrors settings.js): Profile (editable demographics; email read-only),
-// Family (children/dependents list + add/edit/remove), and Financials (current plan, usage
-// this month, spend + recent orders, request a refund). Reuses cf-* + UI helpers; no new CSS.
-//
-// API (api.js): getProfile/patchProfile + dependents/addDependent/patchDependent/removeDependent
-// + financials/myOrders/refundRequests/requestRefund/cancelRefundRequest, each 1:1 with
-// /api/me/*. club_id + user_id are server-derived from the principal — never sent.
+// account.js — the client ACCOUNT page (front-end redesign v2, 2026-06-28).
+// Profile/Family editing moved to the Home greeting popups; Account is now the money + usage
+// surface, fleshed out for good client visibility: plan, usage-over-time (12 months, derived from
+// bookings client-side — no backend change), this-month usage, billing per month, account balance,
+// next charge, coaching statement (if any), payments/receipts (+ request refund), refund requests.
 (function () {
   var UI, el;
-  var state = { profile: null, dependents: [], tab: "profile",
-                financials: null, orders: [], refundReqs: [], finLoaded: false };
+  var st = { fin: null, orders: [], refunds: [], statement: null, bookings: [] };
 
-  var TABS = [
-    { k: "profile", t: "Profile" },
-    { k: "family", t: "Family" },
-    { k: "financials", t: "Financials" },
-  ];
-
-  function root() { return document.getElementById("cf-account"); }
-
-  function tabBar() {
-    var nav = el("nav", { class: "cf-nav", style: "margin-bottom:16px" });
-    TABS.forEach(function (tab) {
-      var a = el("a", { href: "#" + tab.k, text: tab.t });
-      if (tab.k === state.tab) a.classList.add("active");
-      a.addEventListener("click", function (ev) { ev.preventDefault(); select(tab.k); });
-      nav.appendChild(a);
-    });
-    return nav;
+  function money(minor, ccy) { return UI.money(minor, ccy || (st.fin && st.fin.currency) || "ZAR"); }
+  function monthLabel(p) {
+    if (!p) return p; var x = String(p).split("-"); if (x.length < 2) return p;
+    var n = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return (n[parseInt(x[1], 10) - 1] || x[1]) + " " + x[0];
   }
-
-  function select(k) {
-    state.tab = k;
-    try { history.replaceState(null, "", "#" + k); } catch (e) {}
-    render();
-  }
-
-  function render() {
-    var host = root(); UI.clear(host);
-    host.appendChild(el("div", { class: "cf-card" }, [
-      el("h2", { text: "My Account" }),
-      el("p", { class: "cf-muted", text: "Manage your details and your family. Changes save per section." }),
-    ]));
-    host.appendChild(tabBar());
-    var sectionHost = el("div");
-    host.appendChild(sectionHost);
-    if (state.tab === "profile") renderProfile(sectionHost);
-    else if (state.tab === "family") renderFamily(sectionHost);
-    else renderFinancials(sectionHost);
-  }
-
-  // ---- Profile tab ----------------------------------------------------------
-  function field(label, input, hint) {
-    var kids = [el("label", { text: label }), input];
-    if (hint) kids.push(el("div", { class: "cf-pref-note", text: hint }));
-    return el("div", { class: "cf-field" }, kids);
-  }
-  function input(value, attrs) {
-    var a = Object.assign({ class: "cf-input", value: value == null ? "" : value }, attrs || {});
-    return el("input", a);
-  }
-
-  function renderProfile(host) {
-    var pr = state.profile || {};
-    var card = el("div", { class: "cf-card" });
-    card.appendChild(el("h3", { text: "Your details" }));
-
-    // Email — READ-ONLY (the client id / login). Disabled input + helper text.
-    var emailIn = input(pr.email, { type: "email", disabled: "disabled" });
-    card.appendChild(field("Email", emailIn, "This is your login — contact the club to change it."));
-
-    var fn = input(pr.first_name), sn = input(pr.surname), ph = input(pr.phone, { type: "tel" });
-    var dob = input(pr.dob, { type: "date" });
-    card.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [
-      field("First name", fn), field("Surname", sn),
-      field("Phone", ph), field("Date of birth", dob),
-    ]));
-
-    // Address
-    card.appendChild(el("h3", { text: "Address", style: "margin-top:18px" }));
-    var a1 = input(pr.address_line1), a2 = input(pr.address_line2);
-    var city = input(pr.city), pc = input(pr.postal_code), country = input(pr.country);
-    card.appendChild(field("Address line 1", a1));
-    card.appendChild(field("Address line 2", a2));
-    card.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [
-      field("City", city), field("Postal code", pc),
-    ]));
-    card.appendChild(field("Country", country));
-
-    // Emergency contact
-    card.appendChild(el("h3", { text: "Emergency contact", style: "margin-top:18px" }));
-    var ecn = input(pr.emergency_contact_name), ecp = input(pr.emergency_contact_phone, { type: "tel" });
-    card.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [
-      field("Contact name", ecn), field("Contact phone", ecp),
-    ]));
-
-    // Marketing consent
-    var consentLbl = el("label", { class: "cf-row", style: "cursor:pointer;gap:10px;margin-top:14px" });
-    var consentCb = el("input", { type: "checkbox" });
-    consentCb.checked = !!pr.marketing_opt_in;
-    consentCb.style.width = "auto";
-    consentLbl.appendChild(consentCb);
-    consentLbl.appendChild(el("span", { style: "font-weight:600",
-      text: "Send me news, offers and club updates by email" }));
-    card.appendChild(consentLbl);
-
-    // Save
-    var save = el("button", { class: "cf-btn cf-btn-primary cf-btn-lg", style: "margin-top:18px",
-      text: "Save changes" });
-    save.addEventListener("click", function () {
-      var body = {
-        first_name: fn.value.trim(), surname: sn.value.trim(), phone: ph.value.trim(),
-        dob: dob.value || null,
-        address_line1: a1.value.trim(), address_line2: a2.value.trim(),
-        city: city.value.trim(), postal_code: pc.value.trim(), country: country.value.trim(),
-        emergency_contact_name: ecn.value.trim(), emergency_contact_phone: ecp.value.trim(),
-        marketing_opt_in: consentCb.checked,
-      };
-      saveProfile(body, save);
-    });
-    card.appendChild(el("div", { style: "margin-top:4px" }, [save]));
-    host.appendChild(card);
-  }
-
-  async function saveProfile(body, btn) {
-    btn.disabled = true; var orig = btn.textContent; btn.textContent = "Saving…";
-    try {
-      state.profile = await window.API.patchProfile(body);
-      UI.toast("Profile saved.", "info");
-      render();
-    } catch (e) {
-      btn.disabled = false; btn.textContent = orig;
-      // Surface field-level validation if present.
-      var fields = e && e.body && e.body.fields;
-      if (e && e.status === 422 && fields) {
-        var first = Object.keys(fields)[0];
-        UI.toast("Please check " + first.replace(/_/g, " ") + ": " + fields[first], "error");
-      } else {
-        UI.toast(UI.errMsg(e), "error");
-      }
+  function monthsBack(n) {
+    var out = [], d = new Date();
+    for (var i = n - 1; i >= 0; i--) {
+      var dt = new Date(d.getFullYear(), d.getMonth() - i, 1);
+      out.push(dt.getFullYear() + "-" + ("0" + (dt.getMonth() + 1)).slice(-2));
     }
+    return out;
   }
+  function tile(t, s) { return el("div", { class: "cf-tile", style: "cursor:default" }, [el("div", { class: "cf-tile-t", text: t }), el("div", { class: "cf-tile-s", text: s })]); }
+  function card(title) { var c = el("div", { class: "cf-card" }); if (title) c.appendChild(el("h3", { text: title })); return c; }
 
-  // ---- Family tab -----------------------------------------------------------
-  function ageFromDob(dob) {
-    if (!dob) return null;
-    var d = new Date(dob); if (isNaN(d)) return null;
-    var now = new Date();
-    var a = now.getFullYear() - d.getFullYear();
-    var m = now.getMonth() - d.getMonth();
-    if (m < 0 || (m === 0 && now.getDate() < d.getDate())) a--;
-    return a >= 0 ? a : null;
-  }
-
-  function renderFamily(host) {
-    var card = el("div", { class: "cf-card" });
-    card.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center" }, [
-      el("h3", { text: "Children & family" }),
-      el("button", { class: "cf-btn cf-btn-primary", text: "+ Add child",
-        onclick: function () { dependentModal(null); } }),
-    ]));
-    card.appendChild(el("p", { class: "cf-muted cf-tiny",
-      text: "Add a child to book courts, lessons and classes on their behalf — bookings stay on your account." }));
-
-    if (!state.dependents.length) {
-      card.appendChild(el("div", { class: "cf-empty", text: "No children added yet." }));
-      host.appendChild(card);
-      return;
-    }
-    var list = el("div", { class: "cf-list", style: "margin-top:10px" });
-    state.dependents.forEach(function (d) {
-      var age = ageFromDob(d.dob);
-      var sub = [];
-      if (d.relationship && d.relationship !== "child") sub.push(d.relationship);
-      if (age != null) sub.push(age + " yrs");
-      list.appendChild(el("div", { class: "cf-item" }, [
-        el("span", { class: "cf-chip", text: "👤" }),
-        el("div", { class: "cf-item-main" }, [
-          el("div", { class: "cf-item-t", text: (d.first_name || "") + " " + (d.surname || "") }),
-          el("div", { class: "cf-item-s", text: sub.join(" · ") || "Family member" }),
-        ]),
-        el("div", { class: "cf-row", style: "gap:6px" }, [
-          el("button", { class: "cf-btn cf-btn-sm", text: "Edit",
-            onclick: function () { dependentModal(d); } }),
-          el("button", { class: "cf-btn cf-btn-sm", text: "Remove",
-            onclick: function () { removeDependent(d); } }),
-        ]),
+  // A simple bar chart (reuses the cf-bars look from the cockpit).
+  function barChart(items, valueFn, labelFn, titleFn) {
+    var max = items.reduce(function (m, it) { return Math.max(m, valueFn(it) || 0); }, 0) || 1;
+    var bars = el("div", { class: "cf-bars", style: "margin-top:14px" });
+    items.forEach(function (it) {
+      var v = valueFn(it) || 0, pct = Math.round((v / max) * 100);
+      bars.appendChild(el("div", { class: "cf-bar", title: titleFn ? titleFn(it) : "" }, [
+        el("div", { class: "cf-bar-val", text: String(v) }),
+        el("div", { class: "cf-bar-fill", style: "height:" + pct + "%" }),
+        el("div", { class: "cf-bar-lbl", text: labelFn(it) }),
       ]));
     });
-    card.appendChild(list);
-    host.appendChild(card);
+    return bars;
   }
 
-  // Add/edit child modal (reuses the my.js reschedule modal markup pattern: cf-modal-bg > cf-modal).
-  function dependentModal(dep) {
-    var editing = !!dep;
-    var bg = el("div", { class: "cf-modal-bg" });
-    var fn = input(dep && dep.first_name, { placeholder: "First name" });
-    var sn = input(dep && dep.surname, { placeholder: "Surname (optional)" });
-    var dob = input(dep && dep.dob, { type: "date" });
-    var rel = el("select", { class: "cf-select" });
-    [["child", "Child"], ["spouse", "Spouse"], ["partner", "Partner"], ["other", "Other"]].forEach(function (o) {
-      rel.appendChild(el("option", { value: o[0], text: o[1],
-        selected: (dep && dep.relationship === o[0]) ? "selected" : null }));
+  // ---- usage aggregation (client-side, from 12 months of bookings) -----------
+  function aggregateUsage() {
+    var keys = monthsBack(12);
+    var idx = {}; keys.forEach(function (k) { idx[k] = { period: k, court: 0, lesson: 0, "class": 0, total: 0, minutes: 0 }; });
+    var totals = { court: 0, lesson: 0, "class": 0, total: 0, minutes: 0 };
+    st.bookings.forEach(function (b) {
+      if (["confirmed", "completed"].indexOf(b.status) < 0) return;      // actual usage only
+      var k = (b.starts_at || "").slice(0, 7);
+      var row = idx[k]; if (!row) return;                                // outside the 12-mo window
+      var t = b.booking_type === "lesson" ? "lesson" : (b.booking_type === "class" ? "class" : "court");
+      var mins = Math.max(0, Math.round((new Date(b.ends_at) - new Date(b.starts_at)) / 60000));
+      row[t] += 1; row.total += 1; row.minutes += mins;
+      totals[t] += 1; totals.total += 1; totals.minutes += mins;
     });
-    var notes = input(dep && dep.notes, { placeholder: "Notes (optional)" });
-
-    var save = el("button", { class: "cf-btn cf-btn-primary", text: editing ? "Save" : "Add child" });
-    save.addEventListener("click", function () {
-      var body = {
-        first_name: fn.value.trim(), surname: sn.value.trim() || null,
-        dob: dob.value || null, relationship: rel.value, notes: notes.value.trim() || null,
-      };
-      if (!body.first_name) { UI.toast("First name is required.", "error"); return; }
-      saveDependent(dep, body, save, bg);
-    });
-
-    var modal = el("div", { class: "cf-modal" }, [
-      el("h2", { text: editing ? "Edit family member" : "Add a child" }),
-      el("p", { class: "cf-muted cf-tiny", text: "Children don't need a login — you book and pay for them." }),
-      field("First name", fn),
-      field("Surname", sn),
-      el("div", { class: "cf-grid cf-grid-2" }, [
-        field("Date of birth", dob),
-        field("Relationship", rel),
-      ]),
-      field("Notes", notes),
-      el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:12px;gap:8px" }, [
-        el("button", { class: "cf-btn", text: "Cancel", onclick: function () { document.body.removeChild(bg); } }),
-        save,
-      ]),
-    ]);
-    bg.appendChild(modal);
-    document.body.appendChild(bg);
+    return { months: keys.map(function (k) { return idx[k]; }), totals: totals };
   }
 
-  async function saveDependent(dep, body, btn, bg) {
-    btn.disabled = true; var orig = btn.textContent; btn.textContent = "Saving…";
-    try {
-      if (dep) await window.API.patchDependent(dep.id, body);
-      else await window.API.addDependent(body);
-      document.body.removeChild(bg);
-      await loadDependents();
-      UI.toast(dep ? "Saved." : "Child added.", "info");
-      render();
-    } catch (e) {
-      btn.disabled = false; btn.textContent = orig;
-      UI.toast(UI.errMsg(e), "error");
-    }
-  }
+  // ===========================================================================
+  function render() {
+    var host = document.getElementById("cf-account"); UI.clear(host);
+    host.appendChild(el("div", { class: "cf-card" }, [
+      el("h2", { text: "Account" }),
+      el("p", { class: "cf-muted", text: "Your plan, your usage over time, billing and statements." }),
+    ]));
 
-  async function removeDependent(dep) {
-    if (!window.confirm("Remove " + (dep.first_name || "this family member") + "?")) return;
-    try {
-      await window.API.removeDependent(dep.id);
-      await loadDependents();
-      UI.toast("Removed.", "info");
-      render();
-    } catch (e) { UI.toast(UI.errMsg(e), "error"); }
-  }
+    var f = st.fin || {}, ccy = f.currency || "ZAR", plan = f.plan || {}, nc = f.next_charge || {};
 
-  async function loadDependents() {
-    var r = await window.API.dependents();
-    state.dependents = r.dependents || [];
-  }
-
-  // ---- Financials tab -------------------------------------------------------
-  function money(minor, ccy) { return UI.money(minor, ccy || (state.financials && state.financials.currency)); }
-
-  function monthLabel(period) {
-    // "2026-06" -> "Jun 2026"
-    if (!period) return period;
-    var parts = period.split("-");
-    if (parts.length !== 2) return period;
-    var names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    var m = parseInt(parts[1], 10);
-    return (names[m - 1] || parts[1]) + " " + parts[0];
-  }
-
-  function tile(t, s) {
-    return el("div", { class: "cf-tile", style: "cursor:default" }, [
-      el("div", { class: "cf-tile-t", text: t }),
-      el("div", { class: "cf-tile-s", text: s }),
-    ]);
-  }
-
-  function renderFinancials(host) {
-    if (!state.finLoaded) {
-      host.appendChild(el("div", { class: "cf-card cf-loading", text: "Loading your financials…" }));
-      loadFinancials().then(function () { render(); });
-      return;
-    }
-    var f = state.financials || {};
-    var ccy = f.currency || "ZAR";
-
-    // ---- Plan card ----
-    var plan = f.plan || {};
-    var planCard = el("div", { class: "cf-card" });
+    // ---- plan ----
+    var planCard = card(null);
     planCard.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center" }, [
       el("h3", { text: "Your plan" }),
-      el("span", { class: "cf-chip", text: plan.active ? "Membership" : "Pay as you go" }),
+      el("span", { class: "cf-chip", text: plan.name || (plan.active ? "Membership" : "Pay as you go") }),
     ]));
-    var planBits = [];
-    if (plan.active && plan.current_period_end) {
-      planBits.push(el("div", { class: "cf-muted", text: "Renews / expires " + plan.current_period_end }));
-    } else {
-      planBits.push(el("div", { class: "cf-muted",
-        text: "You pay per booking. A membership makes court bookings free." }));
-    }
-    planCard.appendChild(el("div", { style: "margin:6px 0 12px" }, planBits));
-    var planActions = el("div", { class: "cf-row", style: "gap:8px" });
-    planActions.appendChild(el("a", { class: "cf-btn cf-btn-primary", href: "/plan",
-      text: plan.active ? "Manage plan" : "See plans" }));
-    planCard.appendChild(planActions);
+    var planLines = [];
+    if (plan.is_trial && plan.trial_days_left != null) planLines.push("🎁 Free week — " + plan.trial_days_left + " day" + (plan.trial_days_left === 1 ? "" : "s") + " left.");
+    if (plan.active && plan.current_period_end) planLines.push("Renews / expires " + plan.current_period_end + ".");
+    if (!plan.active) planLines.push("You pay per booking. A membership makes court bookings free.");
+    if (nc && nc.amount_minor) planLines.push("Next charge: " + money(nc.amount_minor, ccy) + (nc.due_date ? " on " + nc.due_date : "") + ".");
+    planCard.appendChild(el("div", { class: "cf-muted", style: "margin:6px 0 12px", text: planLines.join(" ") }));
+    planCard.appendChild(el("a", { class: "cf-btn cf-btn-primary", href: "/plan", text: plan.active ? "Manage plan" : "Choose a plan" }));
     host.appendChild(planCard);
 
-    // ---- Usage this month ----
-    var u = f.usage_this_month || {};
-    var usageCard = el("div", { class: "cf-card" });
-    usageCard.appendChild(el("h3", { text: "Usage this month" }));
-    usageCard.appendChild(el("div", { class: "cf-tiles", style: "margin-top:10px" }, [
-      tile(String(u.court || 0), "Courts"),
-      tile(String(u.lesson || 0), "Lessons"),
-      tile(String(u["class"] || 0), "Classes"),
+    // ---- usage over time (the fleshed-out part) ----
+    var ag = aggregateUsage();
+    var usageCard = card("Usage over time");
+    var hours = Math.round(ag.totals.minutes / 60);
+    usageCard.appendChild(el("div", { class: "cf-tiles", style: "margin-top:6px" }, [
+      tile(String(ag.totals.total), "Bookings (12 mo)"),
+      tile(hours + "h", "Court time"),
+      tile(String(ag.totals.court), "Courts"),
+      tile(String(ag.totals.lesson), "Lessons"),
+      tile(String(ag.totals["class"]), "Classes"),
     ]));
+    var anyUsage = ag.months.some(function (m) { return m.total > 0; });
+    if (anyUsage) {
+      usageCard.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:16px", text: "Bookings per month" }));
+      usageCard.appendChild(barChart(ag.months, function (m) { return m.total; },
+        function (m) { return monthLabel(m.period).split(" ")[0]; },
+        function (m) { return monthLabel(m.period) + ": " + m.total + " (" + m.court + " court · " + m.lesson + " lesson · " + m["class"] + " class)"; }));
+    } else {
+      usageCard.appendChild(el("div", { class: "cf-empty", style: "margin-top:10px", text: "No bookings in the last 12 months yet." }));
+    }
     host.appendChild(usageCard);
 
-    // ---- Spend ----
+    // ---- billing per month ----
     var spend = f.spend || {};
-    var spendCard = el("div", { class: "cf-card" });
-    spendCard.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:baseline" }, [
-      el("h3", { text: "Spend" }),
+    var hist = (spend.history || []).slice().sort(function (a, b) { return a.period < b.period ? -1 : 1; });
+    var billCard = card(null);
+    billCard.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:baseline" }, [
+      el("h3", { text: "Billing" }),
       el("div", { style: "font-weight:800;font-size:1.3rem", text: money(spend.this_month_minor || 0, ccy) }),
     ]));
-    spendCard.appendChild(el("p", { class: "cf-muted cf-tiny", text: "Paid this month" }));
-    var hist = (spend.history || []).filter(function (h) { return h.paid_minor > 0 || h.orders > 0; });
-    if (hist.length) {
-      var hl = el("div", { class: "cf-list", style: "margin-top:8px" });
-      hist.forEach(function (h) {
-        hl.appendChild(el("div", { class: "cf-item" }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: monthLabel(h.period) }),
-            el("div", { class: "cf-item-s", text: h.orders + (h.orders === 1 ? " payment" : " payments") }),
-          ]),
+    billCard.appendChild(el("p", { class: "cf-muted cf-tiny", text: "Paid this month" }));
+    var paidHist = hist.filter(function (h) { return h.paid_minor > 0 || h.orders > 0; });
+    if (paidHist.length) {
+      billCard.appendChild(barChart(paidHist, function (h) { return Math.round((h.paid_minor || 0) / 100); },
+        function (h) { return monthLabel(h.period).split(" ")[0]; },
+        function (h) { return monthLabel(h.period) + ": " + money(h.paid_minor, ccy) + " · " + h.orders + " payment" + (h.orders === 1 ? "" : "s"); }));
+      var tbl = el("div", { class: "cf-list", style: "margin-top:14px" });
+      paidHist.slice().reverse().forEach(function (h) {
+        tbl.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: monthLabel(h.period) }), el("div", { class: "cf-item-s", text: h.orders + (h.orders === 1 ? " payment" : " payments") })]),
           el("div", { style: "font-weight:700", text: money(h.paid_minor, ccy) }),
         ]));
       });
-      spendCard.appendChild(hl);
+      billCard.appendChild(tbl);
+    } else {
+      billCard.appendChild(el("div", { class: "cf-empty", style: "margin-top:8px", text: "No payments yet." }));
     }
-    // account balance line (if a monthly tab is used)
     var acct = f.account || {};
     if (acct.balance_minor) {
-      spendCard.appendChild(el("div", { class: "cf-row cf-muted", style: "margin-top:10px;justify-content:space-between" }, [
-        el("span", { text: "Account balance (pay end of month)" }),
-        el("span", { style: "font-weight:700", text: money(acct.balance_minor, ccy) }),
+      billCard.appendChild(el("div", { class: "cf-row", style: "margin-top:12px;justify-content:space-between;font-weight:700" }, [
+        el("span", { text: "Account balance (pay end of month)" }), el("span", { text: money(acct.balance_minor, ccy) }),
       ]));
     }
-    host.appendChild(spendCard);
+    host.appendChild(billCard);
 
-    // ---- Recent payments + Request refund ----
-    var ordCard = el("div", { class: "cf-card" });
-    ordCard.appendChild(el("h3", { text: "Recent payments" }));
-    if (!state.orders.length) {
-      ordCard.appendChild(el("div", { class: "cf-empty", text: "No payments yet." }));
-    } else {
+    // ---- coaching statement (only if there is coaching activity) ----
+    var stm = st.statement;
+    if (stm && stm.coaches && stm.coaches.length) {
+      var sc = card("Coaching statement");
+      sc.appendChild(el("p", { class: "cf-muted cf-tiny", text: "Lessons with your coaches this month — paid and outstanding." }));
+      var sl = el("div", { class: "cf-list", style: "margin-top:10px" });
+      stm.coaches.forEach(function (c) {
+        sl.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: c.coach_name || "Coach" }), el("div", { class: "cf-item-s", text: (c.lessons || 0) + " lesson" + (c.lessons === 1 ? "" : "s") + " · paid " + money(c.paid_minor, stm.currency) + (c.owed_minor ? " · owed " + money(c.owed_minor, stm.currency) : "") })]),
+          el("div", { style: "font-weight:700", text: money(c.net_minor, stm.currency) }),
+        ]));
+      });
+      sc.appendChild(sl);
+      var tot = stm.totals || {};
+      sc.appendChild(el("div", { class: "cf-row", style: "margin-top:10px;justify-content:space-between;font-weight:700" }, [
+        el("span", { text: "Total (this month)" }), el("span", { text: money(tot.net_minor || 0, stm.currency) }),
+      ]));
+      host.appendChild(sc);
+    }
+
+    // ---- payments / receipts (+ request refund) ----
+    var ordCard = card("Payments & receipts");
+    if (!st.orders.length) { ordCard.appendChild(el("div", { class: "cf-empty", text: "No payments yet." })); }
+    else {
       var ol = el("div", { class: "cf-list", style: "margin-top:10px" });
-      state.orders.forEach(function (o) {
+      st.orders.forEach(function (o) {
         var right;
-        if (o.refundable) {
-          right = el("button", { class: "cf-btn cf-btn-sm", text: "Request refund",
-            onclick: function () { refundModal(o); } });
-        } else if (o.has_open_refund) {
-          right = el("span", { class: "cf-chip", text: "Refund " + (o.refund_status || "requested") });
-        } else if (o.status === "refunded") {
-          right = el("span", { class: "cf-chip", text: "Refunded" });
-        } else {
-          right = el("span", { class: "cf-tiny cf-muted", text: "" });
-        }
+        if (o.refundable) right = el("button", { class: "cf-btn cf-btn-sm", text: "Request refund", onclick: function () { refundModal(o); } });
+        else if (o.has_open_refund) right = el("span", { class: "cf-chip", text: "Refund " + (o.refund_status || "requested") });
+        else if (o.status === "refunded") right = el("span", { class: "cf-chip", text: "Refunded" });
+        else right = el("span", { class: "cf-tiny cf-muted", text: "" });
         ol.appendChild(el("div", { class: "cf-item" }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: o.description || "Payment" }),
-            el("div", { class: "cf-item-s",
-              text: (o.created_at ? o.created_at.slice(0, 10) : "") + " · " + money(o.amount_minor, o.currency_code) }),
-          ]),
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: o.description || "Payment" }), el("div", { class: "cf-item-s", text: (o.created_at ? o.created_at.slice(0, 10) : "") + " · " + money(o.amount_minor, o.currency_code) + " · " + (o.status || "") })]),
           right,
         ]));
       });
@@ -390,108 +176,70 @@
     }
     host.appendChild(ordCard);
 
-    // ---- My refund requests ----
-    if (state.refundReqs.length) {
-      var reqCard = el("div", { class: "cf-card" });
-      reqCard.appendChild(el("h3", { text: "Refund requests" }));
+    // ---- refund requests ----
+    if (st.refunds.length) {
+      var rc = card("Refund requests");
       var rl = el("div", { class: "cf-list", style: "margin-top:10px" });
-      state.refundReqs.forEach(function (r) {
+      st.refunds.forEach(function (r) {
         var actions = [el("span", { class: "cf-chip", text: r.status })];
-        if (r.status === "pending") {
-          actions.push(el("button", { class: "cf-btn cf-btn-sm", text: "Withdraw",
-            onclick: function () { cancelRefund(r); } }));
-        }
+        if (r.status === "pending") actions.push(el("button", { class: "cf-btn cf-btn-sm", text: "Withdraw", onclick: function () { cancelRefund(r); } }));
         rl.appendChild(el("div", { class: "cf-item" }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: money(r.amount_minor, ccy) + (r.reason ? " — " + r.reason : "") }),
-            el("div", { class: "cf-item-s", text: r.created_at ? r.created_at.slice(0, 10) : "" }),
-          ]),
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: money(r.amount_minor) + (r.reason ? " — " + r.reason : "") }), el("div", { class: "cf-item-s", text: r.created_at ? r.created_at.slice(0, 10) : "" })]),
           el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, actions),
         ]));
       });
-      reqCard.appendChild(rl);
-      host.appendChild(reqCard);
+      rc.appendChild(rl); host.appendChild(rc);
     }
   }
 
   function refundModal(order) {
     var bg = el("div", { class: "cf-modal-bg" });
-    var reason = el("textarea", { class: "cf-input", rows: "3",
-      placeholder: "Tell the club why you're requesting a refund (optional)" });
+    var reason = el("textarea", { class: "cf-input", rows: "3", placeholder: "Tell the club why you're requesting a refund (optional)" });
     var save = el("button", { class: "cf-btn cf-btn-primary", text: "Send request" });
-    save.addEventListener("click", function () {
-      submitRefund(order, reason.value.trim() || null, save, bg);
-    });
-    var modal = el("div", { class: "cf-modal" }, [
+    save.addEventListener("click", function () { submitRefund(order, reason.value.trim() || null, save, bg); });
+    bg.appendChild(el("div", { class: "cf-modal" }, [
       el("h2", { text: "Request a refund" }),
-      el("p", { class: "cf-muted cf-tiny",
-        text: (order.description || "Payment") + " · " + money(order.amount_minor, order.currency_code)
-              + ". The club will review your request." }),
-      field("Reason", reason),
+      el("p", { class: "cf-muted cf-tiny", text: (order.description || "Payment") + " · " + money(order.amount_minor, order.currency_code) + ". The club will review your request." }),
+      el("div", { class: "cf-field" }, [el("label", { text: "Reason" }), reason]),
       el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:12px;gap:8px" }, [
-        el("button", { class: "cf-btn", text: "Cancel", onclick: function () { document.body.removeChild(bg); } }),
-        save,
+        el("button", { class: "cf-btn", text: "Cancel", onclick: function () { document.body.removeChild(bg); } }), save,
       ]),
-    ]);
-    bg.appendChild(modal);
+    ]));
     document.body.appendChild(bg);
   }
-
   async function submitRefund(order, reason, btn, bg) {
-    btn.disabled = true; var orig = btn.textContent; btn.textContent = "Sending…";
-    try {
-      await window.API.requestRefund({ order_id: order.id, reason: reason });
-      document.body.removeChild(bg);
-      await loadFinancials();
-      UI.toast("Refund requested — the club will review it.", "info");
-      render();
-    } catch (e) {
-      btn.disabled = false; btn.textContent = orig;
-      UI.toast(UI.errMsg(e), "error");
-    }
+    btn.disabled = true; var o = btn.textContent; btn.textContent = "Sending…";
+    try { await window.API.requestRefund({ order_id: order.id, reason: reason }); document.body.removeChild(bg); await reloadMoney(); UI.toast("Refund requested — the club will review it.", "info"); }
+    catch (e) { btn.disabled = false; btn.textContent = o; UI.toast(UI.errMsg(e), "error"); }
   }
-
   async function cancelRefund(r) {
-    if (!window.confirm("Withdraw this refund request?")) return;
-    try {
-      await window.API.cancelRefundRequest(r.id);
-      await loadFinancials();
-      UI.toast("Request withdrawn.", "info");
-      render();
-    } catch (e) { UI.toast(UI.errMsg(e), "error"); }
+    if (!confirm("Withdraw this refund request?")) return;
+    try { await window.API.cancelRefundRequest(r.id); await reloadMoney(); UI.toast("Request withdrawn.", "info"); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+  async function reloadMoney() {
+    try { st.fin = await window.API.financials(); } catch (e) {}
+    try { st.orders = (await window.API.myOrders()).orders || []; } catch (e) { st.orders = []; }
+    try { st.refunds = (await window.API.refundRequests()).requests || []; } catch (e) { st.refunds = []; }
+    render();
   }
 
-  async function loadFinancials() {
-    var fin = await window.API.financials();
-    state.financials = fin;
-    try {
-      var o = await window.API.myOrders();
-      state.orders = o.orders || [];
-    } catch (e) { state.orders = []; }
-    try {
-      var rr = await window.API.refundRequests();
-      state.refundReqs = rr.requests || [];
-    } catch (e) { state.refundReqs = []; }
-    state.finLoaded = true;
+  async function loadAll() {
+    await Promise.all([
+      window.API.financials().then(function (r) { st.fin = r; }, function () {}),
+      window.API.myOrders().then(function (r) { st.orders = r.orders || []; }, function () {}),
+      window.API.refundRequests().then(function (r) { st.refunds = r.requests || []; }, function () {}),
+      window.API.myStatement().then(function (r) { st.statement = r; }, function () {}),
+      window.API.bookings({ date_from: UI.dateKey(UI.addDays(new Date(), -365)), date_to: UI.dateKey(new Date()) }).then(function (r) { st.bookings = r.bookings || []; }, function () {}),
+    ]);
   }
 
-  // ---- boot -----------------------------------------------------------------
   window.Account = {
-    start: async function (principal) {
+    start: async function () {
       UI = window.UI; el = UI.el;
-      var host = root();
+      var host = document.getElementById("cf-account");
       UI.clear(host); host.appendChild(el("div", { class: "cf-loading", text: "Loading your account…" }));
-      try {
-        var pr = await window.API.getProfile();
-        state.profile = pr;
-        await loadDependents();
-      } catch (e) {
-        UI.clear(host);
-        host.appendChild(el("div", { class: "cf-card cf-empty", text: UI.errMsg(e) }));
-        return;
-      }
-      var hash = (location.hash || "").replace("#", "");
-      if (TABS.some(function (t) { return t.k === hash; })) state.tab = hash;
+      await loadAll();
       render();
     },
   };

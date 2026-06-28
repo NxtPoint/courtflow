@@ -55,9 +55,22 @@ Likely: Diary · People · Services & Pricing · Coaches & Pay · Reporting & Fi
 today's 7 admin tabs + 8 Settings tabs into fewer, role-aware groups (see [PERMISSIONS.md](PERMISSIONS.md)
 for any staff-role gating).
 
+## Revision (2026-06-28, from Tomo testing the first cut)
+- **Single top menu only** — the lower chip strip is removed (it read as a second menu on mobile).
+  Nav = **Home · Account** (+ role consoles), same look/feel all devices.
+- **Home** = green greeting (greeting · **name + surname** · email · **[Edit profile] [Add child]**
+  popups — no permanent profile form) → **Book** launchers → **My Bookings** (Upcoming/Past **toggle**,
+  upcoming **nearest→furthest**, full **edit / cancel / request-refund** per booking + needs-attention).
+- **Account** is its own page (`account.js`), **fleshed out**: plan + next charge · **usage over time**
+  (12 months, derived client-side from bookings: bookings/month bar chart + totals, court-time hours,
+  by-type) · this-month usage · **billing per month** (bar chart + table) · account balance · coaching
+  statement (if any) · payments/receipts (request refund) · refund requests.
+- Profile/Family editing = **popups** from the greeting (not a permanent section).
+
 ## Increments / status
 - [x] Blueprint (this doc).
-- [ ] **Client one-page Home** (Book + Bookings + Profile + Money) + nav simplification. ← building now
+- [x] **Client Home** (greeting+popups · Book · Bookings toggle) + **Account** (rich usage/billing) +
+  single-top-menu nav. (v1 chips → v2 per Tomo's feedback.)
 - [ ] Post-trial wizard + Manage-plan.
 - [ ] Coach 5-tab.
 - [ ] Admin restructure.
