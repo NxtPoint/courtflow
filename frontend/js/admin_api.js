@@ -1231,15 +1231,20 @@
     }
 
     function serviceRow(g) {
+      var hidden = g.plans.every(function (p) { return (p.status || "active") !== "active"; });
       var minPm = Math.min.apply(null, g.plans.map(perMonth));
-      var sub = g.plans.length + " term" + (g.plans.length > 1 ? "s" : "") + " · from " + UI.money(minPm) + "/mo · " + accessLabel(g.plans[0]);
-      return el("div", { class: "cf-item" }, [
+      var sub = g.plans.length + " term" + (g.plans.length > 1 ? "s" : "") + " · from " + UI.money(minPm) + "/mo · " + accessLabel(g.plans[0]) + (hidden ? " · hidden" : "");
+      function setStatus(s) { Promise.all(g.plans.map(function (p) { return window.AdminAPI.patchMembershipPlan(p.price_id, { status: s }).catch(function () {}); })).then(function () { UI.toast("Saved.", "info"); reload(); }); }
+      var row = el("div", { class: "cf-item" }, [
         el("span", { class: "cf-chip", text: "⭐" }),
         el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: g.tier }), el("div", { class: "cf-item-s", text: sub })]),
         el("span", { class: "cf-spacer" }),
-        el("button", { class: "cf-btn cf-btn-sm", text: "Edit", onclick: function () { openTier(g); } }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Edit", onclick: function () { openTier(g); } }),
+        el("button", { class: "cf-btn cf-btn-sm", text: hidden ? "Unhide" : "Hide", onclick: function () { setStatus(hidden ? "active" : "dormant"); } }),
         el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete", onclick: function () { delTier(g); } }),
       ]);
+      if (hidden) row.style.opacity = "0.6";
+      return row;
     }
 
     function delTier(g) {
@@ -1248,87 +1253,77 @@
         .then(function () { UI.toast("Deleted.", "info"); reload(); });
     }
 
-    // The membership editor — name + access hours (whole tier) + term variants.
+    // The membership editor — a FULL-SCREEN view (not a popup): name + access hours + term variants,
+    // with a single Save & close (changes batch in memory). Renders into `host`; Cancel/Save rebuild
+    // the list via membershipServices(host).
     function openTier(g) {
-      var bg = el("div", { class: "cf-modal-bg" });
-      function close() { if (bg.parentNode) document.body.removeChild(bg); }
-      var nameI = input({ value: g ? g.tier : "", placeholder: "e.g. Adult Anytime", style: "max-width:260px;font-weight:700" });
-      var body = el("div");
-      var modal = el("div", { class: "cf-modal cf-modal-lg" }, [
-        el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center" }, [
-          el("h2", { text: g ? "Edit membership" : "New membership" }),
-          el("button", { class: "cf-btn cf-btn-sm", text: "✕", onclick: close }),
-        ]),
-        field("Membership name", nameI),
-        body,
-      ]);
-      bg.appendChild(modal); document.body.appendChild(bg);
-      renderBody();
+      var m = {
+        name: g ? g.tier : "",
+        terms: (g ? g.plans : []).map(function (p) { return { price_id: p.price_id, term_months: p.term_months, amount_minor: p.amount_minor }; }),
+        del: [],
+        win: { days: (g && g.plans[0]) ? g.plans[0].access_days : null, start: (g && g.plans[0]) ? g.plans[0].access_start_min : null, end: (g && g.plans[0]) ? g.plans[0].access_end_min : null },
+      };
+      renderEditor();
 
-      function reopen(name) {
-        window.AdminAPI.membershipPlans().then(function (r) {
-          var g2 = groupByTier((r.plans || []).filter(function (p) { return p.status !== "retired"; })).filter(function (x) { return x.tier === name; })[0];
-          close(); reload(); if (g2) openTier(g2);
-        });
+      function renderEditor() {
+        UI.clear(host);
+        var saveB = el("button", { class: "cf-btn cf-btn-primary", text: "Save & close" });
+        saveB.addEventListener("click", function () { save(saveB); });
+        host.appendChild(el("div", { class: "cf-editbar" }, [
+          el("button", { class: "cf-btn", text: "← Cancel", onclick: function () { membershipServices(host); } }),
+          el("strong", { text: g ? "Edit membership" : "New membership" }),
+          el("span", { class: "cf-spacer" }), saveB,
+        ]));
+        var nameI = input({ value: m.name, placeholder: "e.g. Adult Anytime", style: "max-width:360px;font-weight:700" });
+        nameI.addEventListener("input", function () { m.name = nameI.value; });
+        host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Details" }), field("Membership name", nameI)]));
+        host.appendChild(accessCard());
+        host.appendChild(termsCard());
       }
 
-      function renderBody() {
-        UI.clear(body);
-        if (g) {
-          body.appendChild(el("div", { style: "margin:4px 0 14px" }, [el("button", { class: "cf-btn cf-btn-sm", text: "Save name", onclick: function () {
-            var name = nameI.value.trim(); if (!name) { UI.toast("Enter a name.", "warn"); return; }
-            Promise.all(g.plans.map(function (p) { return window.AdminAPI.patchMembershipPlan(p.price_id, { tier: name }).catch(function () {}); })).then(function () { UI.toast("Saved.", "info"); reopen(name); });
-          } })]));
-          body.appendChild(el("h3", { text: "Access hours" }));
-          body.appendChild(el("p", { class: "cf-muted cf-tiny", text: "When this membership makes courts free. All days + blank times = any time." }));
-          body.appendChild(tierWindow(g));
-        }
-        body.appendChild(el("h3", { text: "Terms", style: "margin-top:16px" }));
-        var list = el("div", { class: "cf-list" });
-        (g ? g.plans : []).forEach(function (p) { list.appendChild(termRow(p)); });
-        if (!g || !g.plans.length) list.appendChild(el("div", { class: "cf-empty", text: "No terms yet. Add one below." }));
-        body.appendChild(list);
-        var mI = input({ type: "number", min: 1, value: 1, style: "max-width:80px" });
-        var pI = input({ placeholder: "0.00", style: "max-width:120px" });
-        var addB = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Add term" });
-        addB.addEventListener("click", function () {
-          var name = nameI.value.trim(); if (!name) { UI.toast("Name the membership first.", "warn"); return; }
-          var months = num(mI.value), amt = toMinor(pI.value);
-          if (!months || months < 1) { UI.toast("Enter the term in months.", "warn"); return; }
-          if (amt == null || amt < 0) { UI.toast("Enter a price.", "warn"); return; }
-          window.AdminAPI.createMembershipPlan({ tier: name, term_months: months, amount_minor: amt }).then(function () { UI.toast("Term added.", "info"); reopen(name); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
-        });
-        body.appendChild(el("div", { class: "cf-row", style: "gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap" }, [mI, el("span", { class: "cf-muted", text: "months" }), pI, addB]));
-      }
-
-      function termRow(p) {
-        var mI = input({ type: "number", min: 1, value: p.term_months || 1, style: "max-width:80px" });
-        var pI = input({ value: fromMinor(p.amount_minor), style: "max-width:120px" });
-        var status = statusSelect(p.status, function (s) { window.AdminAPI.patchMembershipPlan(p.price_id, { status: s }).then(function () { UI.toast("Term " + s + ".", "info"); reopen(nameI.value.trim()); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); });
-        var saveB = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
-        saveB.addEventListener("click", function () {
-          var months = num(mI.value); if (!months || months < 1) { UI.toast("Enter months.", "warn"); return; }
-          window.AdminAPI.patchMembershipPlan(p.price_id, { term_months: months, amount_minor: toMinor(pI.value) }).then(function () { UI.toast("Saved.", "info"); reopen(nameI.value.trim()); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
-        });
-        var rmB = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove" });
-        rmB.addEventListener("click", function () { if (window.confirm("Remove this term?")) window.AdminAPI.deleteMembershipPlan(p.price_id).then(function () { reopen(nameI.value.trim()); }); });
-        return el("div", { class: "cf-item" }, [mI, el("span", { class: "cf-muted", text: "months" }), el("span", { class: "cf-muted", text: "→" }), pI, el("span", { class: "cf-spacer" }), status, saveB, rmB]);
-      }
-
-      function tierWindow(g) {
-        var seed = (g && g.plans[0]) || {};
-        var sel = {}, cur = seed.access_days;
+      function accessCard() {
+        var c = el("div", { class: "cf-card" }, [el("h3", { text: "Access hours" }), el("p", { class: "cf-muted cf-tiny", text: "When this membership makes courts free. All days + blank times = any time." })]);
+        var sel = {}, cur = m.win.days;
+        function syncDays() { var days = _DOW.filter(function (o) { return sel[o[0]]; }).map(function (o) { return parseInt(o[0], 10); }); m.win.days = (days.length === 0 || days.length === 7) ? null : days; }
         var chips = el("div", { class: "cf-row", style: "gap:4px;flex-wrap:wrap" });
-        _DOW.forEach(function (o) { var on = !cur || cur.indexOf(parseInt(o[0], 10)) >= 0; sel[o[0]] = on; var b = el("button", { class: "cf-chip" + (on ? " class" : ""), text: o[1], type: "button" }); b.addEventListener("click", function () { sel[o[0]] = !sel[o[0]]; b.className = "cf-chip" + (sel[o[0]] ? " class" : ""); }); chips.appendChild(b); });
-        var fromI = input({ type: "time", value: minToTime(seed.access_start_min), style: "max-width:110px" });
-        var toI = input({ type: "time", value: minToTime(seed.access_end_min), style: "max-width:110px" });
-        var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save hours" });
-        save.addEventListener("click", function () {
-          var days = _DOW.filter(function (o) { return sel[o[0]]; }).map(function (o) { return parseInt(o[0], 10); });
-          var bd = { set_window: true, access_days: (days.length === 0 || days.length === 7) ? null : days, access_start_min: timeToMin(fromI.value), access_end_min: timeToMin(toI.value) };
-          Promise.all(g.plans.map(function (p) { return window.AdminAPI.patchMembershipPlan(p.price_id, bd).catch(function () {}); })).then(function () { UI.toast("Hours saved for all terms.", "info"); reopen(nameI.value.trim()); });
+        _DOW.forEach(function (o) { var on = !cur || cur.indexOf(parseInt(o[0], 10)) >= 0; sel[o[0]] = on; var b = el("button", { class: "cf-chip" + (on ? " class" : ""), text: o[1], type: "button" }); b.addEventListener("click", function () { sel[o[0]] = !sel[o[0]]; b.className = "cf-chip" + (sel[o[0]] ? " class" : ""); syncDays(); }); chips.appendChild(b); });
+        var fromI = input({ type: "time", value: minToTime(m.win.start), style: "max-width:110px" }); fromI.addEventListener("input", function () { m.win.start = timeToMin(fromI.value); });
+        var toI = input({ type: "time", value: minToTime(m.win.end), style: "max-width:110px" }); toI.addEventListener("input", function () { m.win.end = timeToMin(toI.value); });
+        c.appendChild(chips);
+        c.appendChild(el("div", { class: "cf-row", style: "gap:8px;align-items:center;margin-top:8px" }, [el("span", { class: "cf-muted", text: "from" }), fromI, el("span", { class: "cf-muted", text: "to" }), toI]));
+        return c;
+      }
+
+      function termsCard() {
+        var c = el("div", { class: "cf-card" }, [el("h3", { text: "Terms" })]);
+        var list = el("div", { class: "cf-list" });
+        m.terms.forEach(function (t) {
+          var mI = input({ type: "number", min: 1, value: t.term_months || 1, style: "max-width:80px" }); mI.addEventListener("input", function () { t.term_months = parseInt(mI.value, 10) || null; });
+          var pI = input({ value: (t.amount_minor / 100).toFixed(2), style: "max-width:120px" }); pI.addEventListener("input", function () { t.amount_minor = Math.round(parseFloat(pI.value || "0") * 100); });
+          var rm = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove" });
+          rm.addEventListener("click", function () { if (t.price_id) m.del.push(t.price_id); m.terms.splice(m.terms.indexOf(t), 1); renderEditor(); });
+          list.appendChild(el("div", { class: "cf-item" }, [mI, el("span", { class: "cf-muted", text: "months → R" }), pI, el("span", { class: "cf-spacer" }), rm]));
         });
-        return el("div", {}, [chips, el("div", { class: "cf-row", style: "gap:8px;align-items:center;margin-top:8px" }, [el("span", { class: "cf-muted", text: "from" }), fromI, el("span", { class: "cf-muted", text: "to" }), toI, save])]);
+        if (!m.terms.length) list.appendChild(el("div", { class: "cf-empty", text: "No terms yet. Add one below." }));
+        c.appendChild(list);
+        c.appendChild(el("button", { class: "cf-btn cf-btn-sm", style: "margin-top:10px", text: "+ Add term", onclick: function () { m.terms.push({ term_months: 6, amount_minor: 0 }); renderEditor(); } }));
+        return c;
+      }
+
+      async function save(btn) {
+        var name = (m.name || "").trim();
+        if (!name) { UI.toast("Name the membership.", "warn"); return; }
+        if (!m.terms.length) { UI.toast("Add at least one term.", "warn"); return; }
+        btn.disabled = true; btn.textContent = "Saving…";
+        try {
+          for (var i = 0; i < m.terms.length; i++) {
+            var t = m.terms[i]; if (!t.term_months) continue;
+            if (t.price_id) await window.AdminAPI.patchMembershipPlan(t.price_id, { tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, set_window: true, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end });
+            else await window.AdminAPI.createMembershipPlan({ tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end });
+          }
+          for (var d = 0; d < m.del.length; d++) await window.AdminAPI.deleteMembershipPlan(m.del[d]);
+          UI.toast("Saved.", "info"); membershipServices(host);
+        } catch (e) { btn.disabled = false; btn.textContent = "Save & close"; UI.toast(UI.errMsg(e) || "Couldn't save.", "error"); }
       }
     }
 
