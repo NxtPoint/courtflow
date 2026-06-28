@@ -85,6 +85,12 @@ _DDL = [
     # (subset of the club-enabled methods), e.g. 'online,at_court'. NULL = all club-enabled. The
     # single source of truth the unified service editor writes + the booking flow reads. Idempotent.
     f"ALTER TABLE {SCHEMA}.product ADD COLUMN IF NOT EXISTS payment_modes text;",
+    # Service lifecycle (active | deactivated | terminated) — same 3-state model as memberships/coaches.
+    # `active` boolean is kept in sync (active = status='active') so customer reads Just Work. Idempotent.
+    f"ALTER TABLE {SCHEMA}.product ADD COLUMN IF NOT EXISTS status text;",
+    f"UPDATE {SCHEMA}.product SET status = CASE WHEN active THEN 'active' ELSE 'deactivated' END "
+    f"WHERE status IS NULL;",
+    f"ALTER TABLE {SCHEMA}.product ALTER COLUMN status SET DEFAULT 'active';",
     f"CREATE INDEX IF NOT EXISTS ix_price_product ON {SCHEMA}.price (product_id);",
     # Lifecycle (3-state) on an EXISTING db: add status, backfill from the active boolean
     # (active->'active', inactive->'retired'; only WHERE status IS NULL so a later 'dormant'

@@ -45,18 +45,19 @@ def list_services(session, *, club_id, role, user_id):
         where.append("p.coach_user_id = :u")
         params["u"] = str(user_id)
     rows = session.execute(
-        text("SELECT p.id, p.kind, p.name, p.coach_user_id, p.active, "
+        text("SELECT p.id, p.kind, p.name, p.coach_user_id, p.active, p.status, "
              "       (SELECT count(*) FROM billing.price pr WHERE pr.product_id = p.id "
              "          AND pr.term_months IS NULL AND pr.active = true) AS variation_count, "
              "       (SELECT min(pr.amount_minor) FROM billing.price pr WHERE pr.product_id = p.id "
              "          AND pr.term_months IS NULL AND pr.active = true) AS from_amount_minor "
-             "FROM billing.product p WHERE " + " AND ".join(where) + " ORDER BY p.active DESC, p.kind, p.name"),
+             "FROM billing.product p WHERE " + " AND ".join(where) + " ORDER BY p.kind, p.name"),
         params,
     ).mappings().all()
     out = []
     for r in rows:
         d = dict(r)
         d["id"] = str(d["id"])
+        d["status"] = d.get("status") or ("active" if d["active"] else "deactivated")
         d["active"] = bool(d["active"])
         d["service_kind"] = _KIND_TO_SERVICE.get(d["kind"], d["kind"])
         if d.get("coach_user_id") is not None:
@@ -65,11 +66,28 @@ def list_services(session, *, club_id, role, user_id):
     return out
 
 
+_STATUSES = ("active", "deactivated", "terminated")
+
+
+def set_service_status(session, *, club_id, product_id, status):
+    """Service lifecycle: active | deactivated | terminated. Keeps billing.product.active in sync
+    (active only when status='active') so customer reads (durations/pricing) drop deactivated +
+    terminated automatically. Returns True on update."""
+    if status not in _STATUSES:
+        return False
+    res = session.execute(
+        text("UPDATE billing.product SET status = :s, active = :a, updated_at = now() "
+             "WHERE club_id = :c AND id = :p"),
+        {"s": status, "a": (status == "active"), "c": club_id, "p": str(product_id)},
+    )
+    return (res.rowcount or 0) > 0
+
+
 def get_service(session, *, club_id, product_id):
     """The full service config (or None). One payload: identity · variations · payment · packages ·
     commission · the club's enabled methods (for the payment picker)."""
     prod = session.execute(
-        text("SELECT id, kind, name, description, coach_user_id, payment_modes, active "
+        text("SELECT id, kind, name, description, coach_user_id, payment_modes, active, status "
              "FROM billing.product WHERE club_id = :c AND id = :id"),
         {"c": club_id, "id": str(product_id)},
     ).mappings().first()
@@ -117,6 +135,7 @@ def get_service(session, *, club_id, product_id):
 
     return {
         "id": str(prod["id"]), "kind": kind, "service_kind": service_kind,
+        "status": (prod["status"] or ("active" if prod["active"] else "deactivated")),
         "name": prod["name"], "description": prod["description"],
         "coach_user_id": str(prod["coach_user_id"]) if prod["coach_user_id"] else None,
         "currency": currency,

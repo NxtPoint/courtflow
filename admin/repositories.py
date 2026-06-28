@@ -749,6 +749,34 @@ def set_coach_bookable(session, *, club_id, user_id, is_bookable):
     return (res.rowcount or 0) > 0
 
 
+def set_coach_status(session, *, club_id, user_id, status):
+    """Coach lifecycle (the same 3-state model as services/memberships), mapped onto the existing
+    fields: active = membership active + bookable; deactivated = bookable false (kept, hidden from
+    booking); terminated = membership lapsed (kept for history). Returns True on success."""
+    if status not in ("active", "deactivated", "terminated"):
+        return False
+    if status == "terminated":
+        session.execute(
+            text("UPDATE iam.membership SET member_status = 'lapsed', updated_at = now() "
+                 "WHERE club_id = :c AND user_id = :u AND role = 'coach'"),
+            {"c": club_id, "u": user_id})
+    elif status == "deactivated":
+        session.execute(
+            text("UPDATE iam.coach_profile SET is_bookable = false, updated_at = now() "
+                 "WHERE club_id = :c AND user_id = :u"),
+            {"c": club_id, "u": user_id})
+    else:  # active — reinstate fully
+        session.execute(
+            text("UPDATE iam.membership SET member_status = 'active', updated_at = now() "
+                 "WHERE club_id = :c AND user_id = :u AND role = 'coach'"),
+            {"c": club_id, "u": user_id})
+        session.execute(
+            text("UPDATE iam.coach_profile SET is_bookable = true, updated_at = now() "
+                 "WHERE club_id = :c AND user_id = :u"),
+            {"c": club_id, "u": user_id})
+    return True
+
+
 def create_coach_invite(session, *, club_id, user_id, token):
     row = session.execute(
         text("INSERT INTO iam.coach_invite (club_id, user_id, token, status) "

@@ -868,7 +868,9 @@ def patch_coach(user_id):
         return err
     b = _body()
     with session_scope() as s:
-        if "is_bookable" in b:
+        if "status" in b:   # lifecycle: active | deactivated | terminated
+            repo.set_coach_status(s, club_id=p.club_id, user_id=user_id, status=b.get("status"))
+        elif "is_bookable" in b:
             ok = repo.set_coach_bookable(s, club_id=p.club_id, user_id=user_id,
                                          is_bookable=bool(b.get("is_bookable")))
             if not ok:
