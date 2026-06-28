@@ -78,6 +78,14 @@ for any staff-role gating).
   (1/3/5/10) in `seed_nextpoint` (only when none exist, so owner edits/deletes stick) so PAYG isn't
   "pay everything each time" — packs draw down via the existing token engine. `/plan` (plan.js) stays
   as the detailed fallback page.
-- [ ] Coach 5-tab.
-- [ ] Admin restructure.
+- [x] **Membership Tier field** — explicit `billing.price.membership_tier` (admin-configured: a Tier
+  input on the Membership-plans form), drives the wizard's tier → term grouping. Seed gives defaults a
+  'Standard' tier + backfills. `python -m db` twice clean.
+- [x] **Coach console → 5 tabs** (`coach.js`): Schedule (requests · my week · book-for-client · time
+  off) · Services (rates · classes · packs) · Clients (360) · Reporting (cockpit + statement) ·
+  Profile (clean summary + Edit-profile / Edit-hours POPUPS, no field-wall). Reuses CoachUI/CRMUI/
+  ClassUI unchanged; `coach.html` slimmed to a bare shell.
+- [x] **Admin** — surfaced the orphaned coach lifecycle (resend invite / remove coach) on Settings →
+  Coaches + added the missing API wrappers; tidy 'Club admin' header + ⚙ Settings link. (Kept the
+  working 7-tab structure; hard price-delete left out since status-retire is the clean soft-delete.)
 - [ ] Retire `/my`, `/account`, `/plans` (301 → Home) once validated.
