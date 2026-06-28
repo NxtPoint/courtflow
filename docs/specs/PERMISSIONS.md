@@ -25,8 +25,10 @@ about **granularity** and **surfacing**, not a security hole.
 `platform_admin` > `club_admin` > `coach` > `member` > `guest` (most-privileged first).
 - **platform_admin** — cross-club, everything (us, the platform operator).
 - **club_admin** — full control of ONE club. **Monolithic: gets every admin tab + all of Settings.**
-- **coach** — own diary/availability/clients/statement; cannot touch prices/finances/other coaches.
-- **member** — book + manage own bookings/profile/plan/financials.
+- **coach** — own diary/availability/clients/statement (services self-scoped — the coach console shows
+  only the coach's own services); cannot touch prices/finances/other coaches.
+- **member** — book + manage own bookings/profile/plan/financials (incl. own unified statement +
+  self-cancel membership).
 - **guest** — book as a visitor; minimal profile.
 
 ## 3. Page / nav access (who gets which shell) — `portal.js` NAV + `requireRoles`
@@ -46,7 +48,7 @@ about **granularity** and **surfacing**, not a security hole.
 | **Diary** | Master resource-timeline; view/manage all bookings | operational |
 | **Classes** | Create class types, schedule sessions, rosters/attendance | operational |
 | **Resources** | Add/edit/disable courts & resources | config |
-| **People** | Member 360 drawer; **grant/revoke membership** | operational + *financial (grant)* |
+| **People** | Member 360 drawer; **grant/revoke membership**; member's unified statement + **void / write-off** an owed order | operational + *financial (grant / write-off)* |
 | **Billing** | Recent payments, **refunds**, refund-requests | **financial** |
 | **Cockpit** | Per-coach settlement, revenue, commission owed, MRR | **financial** |
 | **Overview** | Business analytics (visits/customers/revenue/NPS) | financial-ish |
@@ -57,7 +59,7 @@ about **granularity** and **surfacing**, not a security hole.
 | **Profile** | Club name/location | config |
 | **Hours** | Opening hours | config |
 | **Courts** | Courts/resources | config |
-| **Pricing** | Court rates · packs · memberships (+ lifecycle/access hours) | **financial (prices)** |
+| **Pricing** | Court rates · packs · memberships (+ lifecycle/access hours + per-tier **payment options**) | **financial (prices)** |
 | **Services** | Service catalogue | config |
 | **Coaches** | Invite / (remove) coaches | config + people |
 | **Coach pay** | **Per-service commission editor + rent** | **highly sensitive** |
@@ -75,7 +77,8 @@ by `can()` (`_is_coachs_own`). Looks correctly scoped — flag anything a coach 
 ## 6. Client/member surface (`/portal`, `/book`, `/my`, `/plan`, `/account`)
 Cockpit + quick-book · full booking · My Bookings (reschedule/cancel/needs-attention/calendar) · Plan
 (buy membership/packs) · Account → **Profile · Family (dependents) · Financials** (plan, orders,
-statement, refund-requests). All own-scope. Looks correct.
+**unified statement** — view + **pay / part-pay** owed lines via tick-to-pay, refund-requests, **self-cancel
+membership**). All own-scope (gated by `view_own_ledger`). Looks correct.
 
 ## 7. Backend `can()` action → minimum role (from `iam/permissions.py`)
 | Action(s) | Allowed |
@@ -85,7 +88,7 @@ statement, refund-requests). All own-scope. Looks correct.
 | `cancel/reschedule/edit_booking`, `mark_attendance`, `accept/propose/decline` | admin (any) · coach (own) · member/guest (own) |
 | `manage_own_availability / time_off`, `view_own_rosters` | club_admin, coach |
 | `create_booking`, `book_court/lesson/class` | all roles |
-| `manage_own_profile`, `view_own_ledger`, `manage_own_membership`, `request_refund` | all roles |
+| `manage_own_profile`, `view_own_ledger` (gates own statement view + pay/part-pay + self-cancel membership), `manage_own_membership`, `request_refund` | all roles |
 | `add_junior` | club_admin, member |
 
 Note every admin write currently collapses to a **single threshold (`club_admin`)** — that's the knob a
@@ -113,15 +116,20 @@ If you like a split like this, the build is: a `role` value set + optional per-p
 `iam`, `can()` updated to the new thresholds, console tabs gated by role, and an admin UI to assign a
 staff member their role. (Decide: fixed presets like above, or fully custom per-permission grants?)
 
-### 8b. Built-but-NOT-surfaced (4 admin endpoints — quick wins)
-| Endpoint | Add to UI |
+### 8b. Built-but-NOT-surfaced — now WIRED (the earlier quick-win gap is closed)
+The four endpoints flagged here are now surfaced, and coach/court deletes are **real** (HARD-delete when
+there's no booking/financial history, else archive):
+| Endpoint | Surfaced as |
 |---|---|
 | `POST /api/admin/coaches/<id>/resend-invite` | "Resend invite" on the Coaches list |
-| `DELETE /api/admin/coaches/<id>` | "Remove coach" on the Coaches list |
-| `DELETE /api/admin/prices/<id>` | "Delete" on a price row (vs only dormant/retire) |
-| `PATCH /api/admin/products/<id>` | "Edit service" on the Services tab |
+| `DELETE /api/admin/coaches/<id>` | "Remove coach" (real delete → `{outcome:'deleted'\|'archived'}`) |
+| `DELETE /api/admin/resources/<id>` | "Remove court" (real delete → `{outcome:'deleted'\|'archived'}`) |
+| `PATCH /api/admin/products/<id>` + lifecycle `status` | "Edit service" + Deactivate/Reactivate/Terminate |
 
-Coverage is otherwise **95% (83/87 endpoints wired)**, **0 broken calls**; coach/client surfaces 100%.
+All are `club_admin+` (Settings = Configure, admin-only). Per-tier membership **payment options**
+(`GET/PATCH /api/admin/membership-config`) and the People-drawer **void / write-off**
+(`POST /api/admin/orders/<id>/void`) are likewise admin-gated. Coverage is otherwise high with 0 broken
+calls; coach/client surfaces 100%.
 
 ### 8c. Things to confirm aren't misplaced
 - **People → grant/revoke membership** sits in the operational console but is a *financial* grant — should

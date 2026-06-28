@@ -25,7 +25,7 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `club/` | `schema.py` | club, branding, location, policy |
 | `core/` | `schema.py`, `repositories/` | core.user/account/person, usage_event, consent, nps, **notification** |
 | `diary/` | bookings, availability, classes, recurrence, pricing, routes | The booking engine (the heart) |
-| `billing/` | orders, ledger, gateway, membership, bundles, commission, refunds, me, events, routes | Orders/ledger + the commercial engines |
+| `billing/` | orders, ledger, gateway, membership, bundles, commission, refunds, statement, me, events, routes | Orders/ledger + the commercial engines (`statement.py` = unified client statement) |
 | `yoco_billing/` | client, adapter, routes, reconcile, receipt | Yoco online payments (adapter behind the gateway registry) |
 | `marketing_crm/` | tracking (`emit`), notifications, email/ses, klaviyo, consent, cockpit | Event feed + **notifications** + CRM |
 | `admin/` | routes, repositories, schema | `/api/admin/*` owner self-service + config |
@@ -38,7 +38,8 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `migration/` | Wix→Render URL/301 helper | SEO migration |
 
 ## 3. API endpoints (by lane)
-**Diary `/api/diary/*`:** `GET availability` · `GET resources` · `GET durations` · `GET/POST bookings` ·
+**Diary `/api/diary/*`:** `GET availability` (membership coverage priced PER-SLOT — R0 only inside the
+access window, PAYG outside) · `GET resources` · `GET durations` · `GET/POST bookings` ·
 `GET bookings/<id>` · `PATCH bookings/<id>` (reschedule) · `POST bookings/<id>/cancel` ·
 `POST bookings/<id>/status` · **`POST bookings/<id>/{accept,propose,decline}`** (lesson lifecycle — only
 the awaited party; admin always) · **`GET bookings/<id>/calendar.ics`** (booking .ics) ·
@@ -48,18 +49,23 @@ the awaited party; admin always) · **`GET bookings/<id>/calendar.ics`** (bookin
 `POST classes/sessions/<sid>/cancel`.
 
 **Billing `/api/billing/*`:** `GET config` · `GET receipt/<order_id>` · `POST desk-payment` ·
-`GET bundles` · `GET bundles/wallets` · `POST bundles/checkout` · `GET membership/status` ·
-`POST membership/checkout`.
+`GET bundles` (+`allowed_payment_modes`) · `GET bundles/wallets` · `POST bundles/checkout` ·
+`GET membership/status` (+`allowed_payment_modes` per plan) · `POST membership/checkout`. The two
+`checkout` routes accept `settlement_mode` (offline → 'open'/owed order + grant immediately; online → Yoco).
 
 **Yoco `/api/billing/yoco/*`:** `POST checkout` · `POST webhook` · `POST refund` · `GET order/<id>` ·
 `POST reconcile/<order_id>`.
 
 **Admin `/api/admin/*`:** `GET/POST onboarding` (+`/complete`) · `GET/PATCH club` · `PUT location` ·
-`PATCH branding` · `PATCH policy` · `GET/POST resources` (+`PATCH/DELETE /<id>`) · `GET/PUT hours` ·
+`PATCH branding` · `PATCH policy` · `GET/POST resources` (+`PATCH/DELETE /<id>` — DELETE now real:
+hard-delete a court with no bookings/sessions, else soft-archive) · `GET/PUT hours` ·
 `GET/POST products` (+`PATCH /<id>`) · `GET/POST prices` (+`PATCH/DELETE /<id>`) ·
-`GET coaches` · `POST coaches/invite` · `POST coaches/<id>/resend-invite` · `DELETE coaches/<id>` ·
-`GET people` · `GET payments` · `POST|DELETE members/<id>/membership` ·
-`GET/POST membership-plans` (+`PATCH/DELETE /<id>`) · `GET/POST bundle-plans` (+`PATCH/DELETE /<id>`) ·
+`GET coaches` · `POST coaches/invite` · `POST coaches/<id>/resend-invite` ·
+**`PATCH coaches/<id>`** (lifecycle status) · **`DELETE coaches/<id>`** (real: hard-delete if no
+history, else archive) · `GET people` · `GET payments` · `POST|DELETE members/<id>/membership` ·
+**`GET members/<id>/statement`** · **`POST orders/<id>/void`** (`{write_off}` — void/write-off an owed order) ·
+`GET/POST membership-plans` (+`PATCH/DELETE /<id>`) ·
+**`GET/PATCH membership-config`** (per-tier payment options) · `GET/POST bundle-plans` (+`PATCH/DELETE /<id>`) ·
 `GET coach-agreements` · `PUT coach-agreements/<coach_id>` · `GET/POST commission-rules`
 (+`DELETE /<id>`, `GET /preview`) · `GET financials/{summary,revenue,coach-earnings,memberships}` ·
 `GET coach-statement` · `POST coach-statement/arrears/<id>/collected` ·
@@ -74,8 +80,10 @@ the awaited party; admin always) · **`GET bookings/<id>/calendar.ics`** (bookin
 `GET classes*` (shared) · `POST coach-statement/...` (shared admin route, coach-gated for own).
 
 **Client `/api/me/*`:** `GET/PATCH profile` · `GET/POST dependents` (+`PATCH/DELETE /<id>`) ·
-`GET plan` (current plan + `is_trial`/`trial_days_left` + `membership_window`) · `GET financials` ·
-**`GET statement`** (client mirror of the coach statement) · `GET orders` ·
+`GET plan` (current plan + `is_trial`/`trial_days_left` + `membership_window`) ·
+**`POST membership/cancel`** (self-cancel a paid membership) · `GET financials` ·
+**`GET statement`** (unified statement — unpaid `billing.order` rows, grouped by category) ·
+**`POST statement/pay`** (`{order_ids?}` → `create_settlement_order` → Yoco; pay all or a subset) · `GET orders` ·
 `GET/POST refund-requests` (+`POST /<id>/cancel`) · `GET notifications` · `POST notifications/read`.
 
 **Web service (`web_app.py`, marketing host):** `GET/POST /contact` (the public contact form posts
@@ -97,9 +105,14 @@ geolocation via Cloudflare `CF-IPCountry`). **Core:** `GET /healthz` · `GET /ap
   `account_ledger`, `membership_subscription`, `refund_request`, `bundle_plan`, `token_wallet`,
   `token_ledger`, `coach_agreement`, `commission_rule`, `commission_split`, `coach_ledger`,
   `coach_arrears`
-  - *Key recent columns:* `price.status` (active/dormant/retired) + `term_months`/`label` (membership
-    plans) + `access_days`/`access_start_min`/`access_end_min` (membership access window);
-    `bundle_plan.status`; `token_wallet.base_minutes`/`minutes_total`/`minutes_remaining` (the unit
+  - *Key recent columns:* `product.status` + `price.status` (active/dormant/retired — the unified
+    3-state lifecycle; `active` boolean kept in sync); `product.payment_modes` + **`price.payment_modes`**
+    (per-tier/per-service allowed payment methods, CSV — layered tier→product→club resolution);
+    `term_months`/`label` (membership plans) + `access_days`/`access_start_min`/`access_end_min`
+    (membership access window); **`order.settled_by_order_id`** (links an owed child order to its
+    'pay all' settlement order); **`order.status` now allows `void`/`written_off`** (admin void / debt
+    write-off; a paid order can't be voided); `bundle_plan.status`;
+    `token_wallet.base_minutes`/`minutes_total`/`minutes_remaining` (the unit
     engine's authoritative minute balance — `tokens_*` are display only); **`booking.status` now allows
     `requested`/`proposed`** (lesson approval lifecycle — NOT in the GiST exclusion, so they hold no
     slot; gated by `iam.coach_profile.review_bookings`).
@@ -118,10 +131,13 @@ financials) · `coach` (+`coach-onboarding`) · `statement` (coach month-end) ·
 
 **JS modules** (`frontend/js/*.js`): `portal` (nav + notification bell) · `booking` (full-screen; replaced
 `book`/`quickbook`) · `my` · `plan` · `account` · `coach` (+`coach_api`, `coach_onboarding`) · `statement` ·
-`admin` (+`admin_api`, `class_ui`) · **`crm_ui`** (shared CRMUI components for both consoles) · `settings` ·
-`onboarding` · `notifications` · `pay` · `pay_return` · `receipt` · `analytics` (page-view beacon) ·
-`overview` (Business Overview dashboard) · `api` · `auth_client` · `ui`. **One design system:**
-`frontend/app/app.css` (all `cf-*` classes). Marketing site: `frontend/marketing/`, `frontend/_shared/`.
+`admin` (+`admin_api`, `class_ui`; `AdminUI.courtsManage` = per-court click-to-edit hours) ·
+**`crm_ui`** (shared CRMUI components for both consoles) · `settings` · `onboarding` · `notifications` ·
+`pay` (`Pay.purchase`/`buyMembership`/`buyPack` — THE payment rule) · `pay_return` · `receipt` ·
+`analytics` (page-view beacon) · `overview` (Business Overview dashboard) · `api` · `auth_client` ·
+`ui` (+`UI.lifecycleBar`/`lifeActions`/`statusChip`/`subtabs` lifecycle helpers). `account.js` renders the
+grouped tick-to-pay "Your statement" card. **One design system:** `frontend/app/app.css` (all `cf-*`
+classes — incl. `.cf-lifefilter`/`.cf-subtabs`). Marketing site: `frontend/marketing/`, `frontend/_shared/`.
 
 ## 6. Env / config
 **Full reference: `docs/specs/ENV-STATUS.md`** — every var, live/dark status, copy-paste checklist.
@@ -136,5 +152,7 @@ env is entered in the Render dashboard.
 ## 7. Verify gates (no live infra)
 - Compile: `python -m py_compile $(git ls-files '*.py')`.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
-- Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`.
+- Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
+  `python -m scripts.test_all` (booking / billing / **`scripts/test_statement_reconciliation.py`** —
+  35 checks: no double-count, pay-all-once, partial settle, void/write-off, arrears↔orders lockstep).
 - Frontend: `node --check <file>.js`.

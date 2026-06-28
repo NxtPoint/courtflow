@@ -4,14 +4,19 @@ This folder is the **authoritative current-state documentation** for the platfor
 should read this file first, then the four core docs below. The repo root `CLAUDE.md` is the short
 operating guide; **this folder is the detail.**
 
-> **Status:** LIVE on Render, deployed end-to-end. Build sessions 2026-06-20 → 06-26. Earlier: the public
+> **Status:** LIVE on Render, deployed end-to-end. Build sessions 2026-06-20 → 06-28. Earlier: the public
 > site + the **three purchasing models** end-to-end (unit/minute bundles, free week, active/dormant/retired
 > lifecycle, membership tiers + access windows). **2026-06-25/26:** a **redesigned client journey**
 > (action-first cockpit, full-screen calendar booking, consolidated `/plan`), the **lesson approval
 > lifecycle** (request/propose/accept/decline + per-coach review; on-behalf auto-confirms), **coach & owner
 > consoles** (onboarding, approval queue, clients-360, statements with discount/write-off, per-service
 > commission, financial cockpits — both on the shared `crm_ui.js`), and a booking **`.ics` calendar**.
-> Remaining work: **OUTSTANDING.md**.
+> **2026-06-28:** the **UNIFIED CLIENT STATEMENT** ([UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md)) — one
+> reconciled "what you owe" from unpaid orders, grouped + tick-to-part-settle, admin void/write-off, coach
+> arrears held in lockstep (commission accrues exactly once); **service-specific & per-membership-tier
+> payment options** + one payment rule (choose / immediate / online); **memberships & packs buy offline**;
+> **off-peak coverage priced per slot**; **Operate (Admin) vs Configure (Settings)** split; unified
+> **Active/Deactivated/Terminated lifecycle** + real coach/court deletes. Remaining: **OUTSTANDING.md**.
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,
@@ -31,6 +36,11 @@ operating guide; **this folder is the detail.**
 7. **[PERMISSIONS.md](PERMISSIONS.md)** — the **roles × screens × actions review map**: who sees/does
    what per console, the 3-layer enforcement model, a straw-man staff-role split to react to, and the
    built-but-unsurfaced endpoints. *"Who can do what."* (Review artifact — mark it up, then we build.)
+8. **[UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md)** — the unified client-statement design + reconciliation
+   plan (BUILT 2026-06-28): one debt = one `billing.order`, settled once; no double-count; the
+   reconciliation harness that gates it. *"How the money reconciles."*
+9. **[FRONTEND-REDESIGN.md](FRONTEND-REDESIGN.md)** — the front-end simplification log (one-page-per-role,
+   Operate-vs-Configure, the statement card, lifecycle UI). *"How the UI got simpler."*
 
 ## The build-era spec docs (design intent, still useful)
 - [00-roadmap.md](00-roadmap.md) — the phased self-service/CRM roadmap (most phases now built).

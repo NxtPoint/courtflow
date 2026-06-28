@@ -135,6 +135,37 @@ Golden rule realised: **one service, one API, one editor, edited in one place.**
   grid defaulting to court hours → reads return access_windows + summary → harness scenario. Additive
   + revenue-critical (gates free courts), so do it as a focused, tested pass.
 
+### Lifecycle UI · unified statement · payment rule (2026-06-28, shipped) ✅
+The presentation pass that made the consoles feel like one system. All client-facing, backend untouched
+except the additive columns noted in [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md) / [INVENTORY.md](INVENTORY.md).
+- [x] **Unified "Your statement" card** on the **Account** page (`account.js`) — ONE card replaces the
+  split account-balance / coaching-statement. Collapsible **category headings** (Coaching · Court hire ·
+  Classes · Membership · Session packs · Other) with a **+/- drill-down** and a per-line **subtotal**;
+  every line has a **tick** → **part-settle** (passes the selected `order_ids`; unticked stay owed) and a
+  **settle-online** CTA (→ `POST /api/me/statement/pay {order_ids?}` → settlement order → Yoco). Backed by
+  `billing/statement.py` (the single "what a client owes" source = unpaid `billing.order` rows).
+- [x] **Lifecycle UI everywhere** — ONE vocabulary (Active / Deactivated / Terminated) across services,
+  memberships and coaches via shared helpers `UI.lifecycleBar` (filter pills) · `UI.lifeActions`
+  (Deactivate / Reactivate / Terminate) · `UI.statusChip` · `UI.subtabs` (in `frontend/js/ui.js`). New CSS
+  **`.cf-lifefilter`** (compact pill filter) + **`.cf-subtabs`** (underline in-section tabs) in `app.css`.
+- [x] **Full-screen editors with a single "Save & close"** (batch — edits/adds/removes apply on save,
+  Cancel discards; no inline saves) + **click-the-block-to-edit** (`.cf-pickable`) + a **green selection**
+  state throughout the consoles.
+- [x] **Settings → Services** as **sub-tabs** (Lessons / Classes / Courts) with a **coach filter** dropdown
+  (admin sees All + each coach; the coach console is self-scoped server-side) and **rich summary cards**
+  (each shows the coach name + actual per-duration amounts).
+- [x] **Settings → Courts & hours** rebuilt as **click-to-edit per-court blocks** (`AdminUI.courtsManage`)
+  — each court owns its weekly playing hours (per-day open/closed + range + slot) via the per-resource
+  `GET/PUT /api/admin/hours`. **Settings now lives on the main nav** (`portal.js`) for admins.
+- [x] **People category slicer** — Members / Coaches / Guests / Admins / All with live counts (default Members).
+- [x] **ONE payment rule on the front end** (`frontend/js/pay.js` — `Pay.purchase` → `Pay.buyMembership` /
+  `Pay.buyPack`): more than one allowed mode → the client **chooses**; exactly one non-online mode →
+  checkout **immediately** (no payment prompt); online → Yoco. `booking.js` hides the chooser when there's
+  a single way to pay. **Off-peak coverage priced per slot** — an availability slot shows **free** only
+  inside the membership access window, **price** outside (matches what `create_booking` charges). The
+  **profile/Account "Your plan"** card shows the tier + window summary + next-renew, with a
+  **Cancel membership** button (paid memberships only → `POST /api/me/membership/cancel`).
+
 ### Consolidation — remaining (the bigger, careful piece; do with Tomo)
 Tomo's principle: **all of a thing's config in ONE place; summary blocks + popup edit; no duplicate
 screens.** Still to do:

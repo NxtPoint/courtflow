@@ -8,6 +8,23 @@ the coach sets up services, then the client books against them. Expected results
 > This plan only exercises what's **built & live**. Anything failing that *isn't* in §6 (known
 > limitations) is a real bug — log it (§7).
 
+> **Automated gate (separate from this manual plan):** the backend money/booking invariants are also
+> proven by scratch-DB scenario harnesses — **`python -m scripts.test_all`** runs **THREE** (each in its
+> own scratch club, always rolled back, never persisted):
+> - **booking** (`test_booking_scenarios`, **43** checks) — double-book refusal, coach∩court integrity,
+>   recurrence/waitlist, lazy hold-expiry.
+> - **billing / commercial** (`test_billing_scenarios`, **56** checks) — PAYG/membership/bundle settlement,
+>   desk-payment idempotency, refunds, commission.
+> - **statement reconciliation** (`test_statement_reconciliation`, **35** checks) — the unified-statement
+>   money invariant: a client owes the SUM of unpaid orders with **no double-count** (ledger/arrears never
+>   added in), **pay-all** settles every debt **once + idempotent** (replay = no re-charge, no double
+>   commission), **partial settle** pays a ticked subset, an **abandoned settlement is reclaimed** (never
+>   locks the rest), **membership-covered R0 is never owed**, **void / write-off** clears a line off the
+>   balance (a paid order can't be voided), **arrears ↔ orders stay in lockstep** both directions, a **pack
+>   bought offline** is usable now + shows owed, and each line carries its **category + coach name**.
+>
+> The manual checklist below exercises the **UI flows** on top of those proven engines.
+
 ---
 
 ## 0. Setup & environment
@@ -42,8 +59,11 @@ the coach sets up services, then the client books against them. Expected results
 - [ ] **Courts/resources** — add/edit/disable a court → appears in the master diary + booking picker.
 - [ ] **Services & prices** — confirm seeded prices (Court 30/60/90/120 = R90/150/210/280; Lesson 30/60 =
       R250/400) and **edit one**; add a new duration → it appears as a bookable chip for the client.
-- [ ] **Pricing lifecycle** — set a price/pack/plan to **dormant** → it vanishes for clients but stays
-      editable for you; **retired** → soft-deleted.
+- [ ] **Lifecycle (Active / Deactivated / Terminated)** — services, membership tiers and coaches share ONE
+      lifecycle (filter bar + per-row **Deactivate / Reactivate / Terminate** + status chips). **Deactivate**
+      a service/plan → it vanishes for clients but stays editable for you; **Terminate** → retired/soft-deleted.
+- [ ] **Real delete** — delete a **coach** or **court** with **no** bookings/financial history → it's
+      HARD-deleted (gone for good); one **with** history → archived instead (`outcome:'deleted'|'archived'`).
 - [ ] **Classes** — create a class type + schedule a recurring/one-off session (capacity) → shows on diary.
 - [ ] **Membership plans** — confirm the seeded term plans; optionally set an **access window** ("Access
       hours", e.g. weekdays 06:00–17:00) on a tier.
@@ -59,6 +79,9 @@ the coach sets up services, then the client books against them. Expected results
 **People, money, refunds** (after the client has booked/paid — revisit)
 - [ ] **People** — open a member's **360 drawer**; **grant** a membership manually → their courts go free;
       **revoke** it.
+- [ ] **Void / write-off** — in the 360 drawer's **"Outstanding"** section, **void** a mistaken charge or
+      **write off** a forgiven debt → it drops off the client's statement + balance (a **paid** order can't
+      be voided).
 - [ ] **Financial cockpit** (Overview/Financials) — revenue by service, **commission owed + rent per coach**,
       membership MRR. Confirm a **refund** shows correctly (refunds must NOT zero out — they're counted).
 - [ ] **Refunds** — Billing → Recent online payments → **"Refund only"** and **"Refund & cancel"** (the
@@ -107,6 +130,9 @@ the coach sets up services, then the client books against them. Expected results
 **Booking (full-screen `/book`)**
 - [ ] **Court** — month calendar → pick a day → **inline per-duration chips** show live price (or
       **"Covered by your membership"** during the free week) → **Pay & confirm**.
+- [ ] **Off-peak coverage (per slot)** — with a **windowed** membership (e.g. weekdays 06:00–16:00), only
+      **in-window** court slots show **R0 / "Covered"**; **out-of-window** slots show the normal PAYG price on
+      the SAME day (the display now matches what you're charged).
 - [ ] **Lesson** — pick the coach (or "Any") → confirms only if **a coach AND a court are free** (the
       lesson holds a court too). Only **bookable** coaches (hours set) are offered.
 - [ ] **Class** — pick a session → enrol; fill a class past capacity → **waitlist** (auto-promote on a cancel).
@@ -117,11 +143,18 @@ the coach sets up services, then the client books against them. Expected results
       is **for the child, billed to you**.
 
 **Plan, bookings, money**
-- [ ] **Plan (`/plan`)** — buy a **membership** (Yoco) → courts go free; buy a **pack** → wallet shows
+- [ ] **Plan (`/plan`)** — buy a **membership** → courts go free; buy a **pack** → wallet shows
       "X of Y sessions left". (Old `/membership` + `/packs` should **301 → /plan**.)
+- [ ] **Pay rule / offline buy** — when a tier/pack allows **more than one** method you **choose**; exactly
+      **one** non-online method → it checks out **immediately** (no payment prompt); **online** → Yoco. Buy a
+      membership/pack **at-court / monthly** → it activates **now** and shows as an owed statement line.
+- [ ] **Self-cancel** — on Account, **"Cancel membership"** a paid plan (the free trial just lapses); the
+      **"Your plan"** card shows the tier + access-window summary + renew date.
 - [ ] **My Bookings (`/my`)** — **reschedule** + **cancel** an upcoming booking (token credit-back / refund
       per policy); **"Add to calendar"** downloads a working **.ics** (imports into Google/Apple/Outlook).
-- [ ] **Statement** — `/api/me/statement` view mirrors the coach's statement (paid/owed/net).
+- [ ] **Statement (unified)** — Account → **"Your statement"**: owed lines **grouped by category** (Coaching /
+      Court hire / Classes / Membership / Session packs) with a subtotal each. **Pay all** → one Yoco
+      settlement (every line clears at once); or **tick a subset** → **part-settle** (unticked lines stay owed).
 - [ ] **Refund request** — raise one on an order → owner approves/declines (§1) → you're notified.
 - [ ] **Notifications** — the bell shows booking confirmed, receipt, membership/pack, refund decisions.
 

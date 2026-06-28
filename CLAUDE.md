@@ -25,8 +25,21 @@ NextPoint Tennis is club #1, migrating off Wix.
   Real domains (`nextpointtennis.com`) cut over at go-live.
 - **Source of truth:** **`docs/specs/README.md` is the authoritative current-state index — START THERE**
   (`SYSTEM.md` architecture · `BUSINESS-RULES.md` capabilities · `INVENTORY.md` every endpoint/table/page ·
-  `OUTSTANDING.md` what's left). The original design docs are `docs/` (`00`→`12`); `docs/11` = locked
-  decisions + the 1050 reuse map. Where they differ, `docs/specs/` reflects as-built reality.
+  `OUTSTANDING.md` what's left · `UNIFIED-STATEMENT.md` the money-reconciliation design). The original
+  design docs are `docs/` (`00`→`12`); `docs/11` = locked decisions + the 1050 reuse map. Where they
+  differ, `docs/specs/` reflects as-built reality.
+- **2026-06-28 additions (all live + harness-gated):** the **unified client statement** (`billing/statement.py`
+  — one debt = one `billing.order`, settled once; account page shows ONE reconciled "Your statement",
+  grouped by category with tick-to-part-settle; admin void/write-off; coach `coach_arrears` kept in
+  **lockstep** with orders so commission accrues exactly once — `docs/specs/UNIFIED-STATEMENT.md`) ·
+  **service-specific & per-membership-tier payment options** (`billing.price.payment_modes`) + **one payment
+  rule** (>1 mode → choose · single non-online → immediate · online → Yoco; `frontend/js/pay.js`
+  `Pay.purchase/buyMembership/buyPack`) · **memberships & packs purchasable offline** (at-court/monthly →
+  owed order, activated immediately) · **off-peak membership coverage priced PER SLOT** (free in-window,
+  PAYG at peak) · **Operate (Admin console) vs Configure (Settings)** split + Settings on the nav · unified
+  **Active/Deactivated/Terminated** lifecycle for services/memberships/coaches + **real coach/court delete**
+  (hard when no history, else archive). New columns: `billing.product.status`, `billing.price.payment_modes`,
+  `billing.order.settled_by_order_id`.
 - **Lanes / modules:**
   - **Foundation:** `app.py`, `wsgi.py`, `db.py` (boot runner + `BOOT_MODULES`), `auth/` (Clerk JWKS +
     club-scoped `Principal`; single-membership default, platform_admin wildcard), `iam/`, `club/`, `core/`,
@@ -36,10 +49,15 @@ NextPoint Tennis is club #1, migrating off Wix.
     `classes.py`, `recurrence.py`, `routes.py` (`/api/diary/*`).
   - **Billing + commercial engines:** `billing/` — `apply_payment_event` (idempotent), `gateway.py`
     (`PaymentGateway` Protocol + registry), `orders.py`, `ledger.py`, `routes.py`, **plus the engines
-    built on top:** `membership.py` (configurable term plans), `bundles.py` (generic token/bundle packs:
-    atomic draw-down + idempotent credit-back), `commission.py` (coach rent +/or % split on collection,
-    arrears, ledger), `refunds.py` (client refund-request → admin approve/decline), `me.py` (client
-    financial reads), `events.py` (commission accrual hook).
+    built on top:** `membership.py` (configurable term plans; **per-tier payment options** +
+    **offline purchase** via `create_membership_order(settlement_mode)`; `cancel_membership`),
+    `bundles.py` (generic token/bundle packs: atomic draw-down + idempotent credit-back; **offline
+    purchase** via `create_bundle_order(settlement_mode)`), `commission.py` (coach rent +/or % split on
+    collection, arrears, ledger — arrears now held in **lockstep** with orders), `refunds.py` (client
+    refund-request → admin approve/decline), `me.py` (client financial reads), `events.py` (commission
+    accrual + settlement-order fan-out hook), **`statement.py` (the UNIFIED client statement — single
+    source of truth for what a client owes = unpaid `billing.order` rows; `create_settlement_order`
+    (pay-all / part-settle) · `settle_settlement_order` · `void_order`).**
   - **Payments — Yoco (online):** `yoco_billing/` — `client.py` (Yoco REST + Standard-Webhooks signature
     verify), `adapter.py` (`YocoGateway` implementing `PaymentGateway`, self-registers on import), `routes.py`
     (`/api/billing/yoco/checkout|webhook|refund` + `/order/<id>`). Hosted-redirect checkout (card +
@@ -98,8 +116,12 @@ NextPoint Tennis is club #1, migrating off Wix.
   ~2-tap booking + family/financials/**statement** · coach console: onboarding/services/**approval queue**/
   clients-360/**statement-edits**/cockpit · owner console: per-service commission/financial cockpit/People-360
   — both on the shared `crm_ui.js`) · **in-app notifications** + booking **`.ics` calendar** (confirmation
-  email pending SES/Klaviyo) · unified master diary · bright/modern UI + public site. **Remaining:** see
-  `docs/specs/OUTSTANDING.md`.
+  email pending SES/Klaviyo) · unified master diary · bright/modern UI + public site ·
+  **UNIFIED CLIENT STATEMENT** (one reconciled "what you owe" from unpaid orders, grouped + tick-to-part-
+  settle, settle online anytime, admin void/write-off) · **service-specific & per-membership-tier payment
+  options + one payment rule** · **memberships & packs buy offline** · **off-peak coverage priced per slot** ·
+  **Operate-vs-Configure** consoles · **Active/Deactivated/Terminated lifecycle + real coach/court delete**.
+  **Remaining:** see `docs/specs/OUTSTANDING.md`.
 
 ## Payments, pricing & booking flow — LIVE end-to-end
 **Online payments (Yoco) — wired & verified.** `yoco_billing/` is a pure adapter behind
@@ -211,6 +233,14 @@ request→accept→settle chain green on a scratch DB.
 
 ## Verifying (no live infra needed)
 - **Compile:** `python -m py_compile` over the tree (CI-style gate; there is no pytest suite — match 1050).
+- **Scratch-DB scenario harnesses — the primary gate:** `python -m scripts.test_all` runs THREE
+  rollback-only harnesses against the local sandbox DB (each its own scratch club, always rolled back):
+  **booking** (`test_booking_scenarios`, 43 checks — double-book, lesson coach∩court, off-peak per-slot
+  pricing, lifecycle), **billing/commercial** (`test_billing_scenarios`, 56 — settlement modes, commission,
+  tokens, membership incl. offline + per-tier modes, refunds), and **statement reconciliation**
+  (`test_statement_reconciliation`, 35 — no double-count, pay-all-once, part-settle, reclaim,
+  membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, pack offline). Run alongside
+  `python -m db` twice + `py_compile`.
 - **Backend integration:** boot all schemas + a booking→order→event chain against a throwaway Postgres
   (`docker run postgres:16`, set `DATABASE_URL`, `python -m db` twice for the idempotency gate, then
   `python -m scripts.seed_nextpoint`). The cross-lane flow (diary→billing→CRM), the double-book refusal,

@@ -74,8 +74,10 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   the booking picker only ever offers durations the owner has priced. ✅
 - **Membership (term plans)** — configurable (label, amount, term months); an active membership makes
   **court** bookings free; admin can also grant/revoke manually. ✅
-  - **Tiers + access windows** — a tier can be time-boxed (e.g. weekdays 06:00–17:00); outside the
-    window the court falls back to PAYG. ✅
+  - **Tiers + access windows** — a tier can be time-boxed (e.g. weekdays 06:00–17:00); coverage is
+    enforced **per slot** (free inside the window, PAYG at peak) so peak slots price correctly. ✅
+  - **Self-cancel** — a member can cancel a paid membership from their Account (the free trial just
+    lapses); their **plan + access window + renew date** show on the profile ("Your plan"). 🔭
   - **Free week** — new members auto-granted a 7-day courts-free trial (one-shot, idempotent,
     auto-lapses). ✅
 - **Tokens / bundles (unit/minute packs)** — prepaid packs across court/lesson/class; balance held in
@@ -84,10 +86,24 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   configure their own lesson packs. ✅
 - **Catalogue lifecycle** — every price/pack/plan carries a status: **active / dormant** (hidden but
   kept) **/ retired** (soft-deleted); customers only ever see active. 🔭
+- **Unified lifecycle (Active / Deactivated / Terminated)** — services, memberships and coaches share
+  ONE lifecycle vocabulary, with a filter bar, per-row Deactivate/Reactivate/Terminate actions and
+  status chips. Memberships derive their state from their term plans' status. 🔭
+- **Real deletes with safe archive** — deleting a **coach** or **court** that has no bookings/financial
+  history **hard-deletes** it; one with history is **archived** instead (kept, hidden from the active
+  list) so nothing referencing it breaks. 🔭
 
 ## 6. Payments & refunds
 - **Settlement modes:** at-court (desk), monthly account (ledger tab), online (Yoco), membership-
   covered (R0), token (R0), free/complimentary. ✅
+- **Per-service & per-membership-tier payment options** — the owner chooses which modes each lesson/
+  court/class **and each membership tier** allows (layered: tier pref → membership default → club's
+  globally-enabled methods). 🔭
+- **The one payment rule** — more than one allowed mode → the client **chooses**; exactly one
+  non-online mode → checkout happens **immediately** (no prompt); online → Yoco. The booking/buy flow
+  hides the chooser when there's a single way to pay. ✅
+- **Memberships & packs buy offline** — not just online: an at-club / month-end purchase opens an owed
+  order and **activates the membership or grants the pack immediately**; online holds until the webhook. ✅
 - **Online payments — Yoco** hosted checkout (card + Apple/Google/Samsung Pay); held booking →
   verified webhook → paid + confirmed. ✅ (settlement core) 🌐 (live webhook/signature)
 - **Idempotent settlement** — a replayed payment/webhook never double-charges, double-confirms, or
@@ -98,6 +114,11 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 - **Refunds** — admin direct ("refund only" / "refund & cancel" frees the slot) and a **client
   refund-request → admin approve/decline** workflow. ✅ (request lifecycle) 🌐 (Yoco execution)
 - **Two gates** for online pay: a global flag + a per-club Settings toggle. 🔭
+- **Unified client statement** — ONE reconciled "what you owe" (the sum of unpaid orders, no double-
+  count), **grouped by category** (Coaching / Court hire / Classes / Membership / Session packs / Other)
+  with +/− drill-down per line (coach name, date). **Pay all** OR **part-settle** by ticking individual
+  lines; **settle online anytime** via Yoco. Admins can **void / write-off** a line from the People 360
+  drawer; coach arrears and orders stay in lockstep so commission accrues exactly once. ✅
 
 ## 7. Commission & coaching-settlement engine
 - Monetise each coach via **rent and/or commission %**, freely combinable, per coach. ✅ (%) 🔭 (rent UI)
@@ -120,10 +141,12 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   approval queue**, **book for a client**, **My Clients 360** (history + upcoming), **statement**
   (mark-collected + discount/write-off), **business cockpit** (lessons/hours/net-of-commission
   earnings/fill-rate/trend/lessons-left-on-plans). 🔭
-- **Owner** — master diary, resources/courts, **People** (360 drawer + membership grant), classes,
-  **Settings → Pricing** (court rates · packs · memberships + access hours + lifecycle), **Coach pay**
-  (per-service commission editor), payments toggle + refunds + refund-requests, **financial cockpit**,
-  branding, policy. 🔭
+- **Owner** — split into **Operate** (the admin console: master diary · classes · **People** with a
+  Members/Coaches/Guests/Admins category slicer + 360 drawer + membership grant · billing/refunds ·
+  financial cockpit · Overview) and **Configure** (Settings: club profile · **Courts & hours** with
+  **per-court** weekly playing hours · **Services** sub-tabs Lessons/Classes/Courts with a coach filter ·
+  Memberships · Coaches). **Coach pay** = per-service commission editor; payments toggle + refunds +
+  refund-requests; branding; policy. 🔭
 
 ## 9. Notifications, calendar & CRM
 - In-app **bell + inbox** for every member, driven off the event feed: booking confirmed, payment
@@ -156,20 +179,27 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 ---
 
 ## 13. Automated test coverage (the scenario harnesses)
-Two rollback-only scratch-DB harnesses drive the **real** engine code and assert invariants. Run all:
-**`python -m scripts.test_all`** (or each: `test_booking_scenarios`, `test_billing_scenarios`).
+Three rollback-only scratch-DB harnesses drive the **real** engine code and assert invariants. Run all:
+**`python -m scripts.test_all`** (or each: `test_booking_scenarios`, `test_billing_scenarios`,
+`test_statement_reconciliation`).
 
-**Booking engine — `scripts/test_booking_scenarios.py` (41 checks):** court book/cancel/double-book/
+**Booking engine — `scripts/test_booking_scenarios.py` (43 checks):** court book/cancel/double-book/
 reschedule (+ conflict preserves original) · lesson = coach + court rows, collapsed to one line ·
 lesson needs a free court · **coach∩class conflict** (read + write) · 30-min slot granularity ·
 class enrol/capacity/waitlist/promote · lesson approval lifecycle (request → accept/decline/propose →
 client accept).
 
-**Commercial engines — `scripts/test_billing_scenarios.py` (35 checks):** settlement per mode
+**Commercial engines — `scripts/test_billing_scenarios.py` (56 checks):** settlement per mode
 (at-court desk, online held→paid, monthly-account ledger) · **idempotent payment replay** · commission
 30%/40% scoping + accrual + idempotency · token pack buy→activate→**unit/minute draw-down**→credit-back
 + NO_TOKEN · membership coverage (R0) + **access window** inside/outside + trial idempotency · refund-
-request lifecycle (create/duplicate/list/decline/NOT_PENDING).
+request lifecycle (create/duplicate/list/decline/NOT_PENDING) · membership/pack **offline buy** + the
+per-tier/per-service payment-mode resolution.
+
+**Unified statement — `scripts/test_statement_reconciliation.py` (35 checks):** no double-count
+(orders only, never ledger + arrears too) · pay-all-once · **partial settle** (selected lines only) ·
+reclaim of an abandoned settlement · membership-covered R0 never owed · **void / write-off** · arrears
+↔ orders lockstep (commission once) · pack-offline owed · category + coach-name grouping.
 
 **What the harnesses do NOT cover (tested another way or not yet):**
 - **Live HTTP/keys** — Yoco webhook signature verify + real refund execution (offline tests in

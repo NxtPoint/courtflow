@@ -7,6 +7,19 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > (owner / coach / client) — the checklist is **[TESTING.md](TESTING.md)**. Bugs found there feed the
 > next build session; the items below are the known remaining work regardless.
 
+> **Recently shipped (2026-06-28 — NOT outstanding):** the **unified client statement**
+> (`billing/statement.py` single source of truth = unpaid `billing.order` rows; grouped tick-to-pay
+> client UI + part-settle; admin void/write-off in the People 360; coach_arrears/account_ledger kept in
+> lockstep, no double-count — see `docs/specs/UNIFIED-STATEMENT.md`); **service-specific + per-membership-
+> tier payment options** (`billing.price.payment_modes`) + the **one payment rule** (`Pay.purchase`:
+> one mode → checkout immediately, many → client chooses); **memberships & packs buy offline**
+> (at-court/monthly = owed order, activate immediately); the **off-peak per-slot membership pricing fix**
+> (peak slots no longer show R0); **self-cancel membership** (`POST /api/me/membership/cancel`); the
+> **unified lifecycle** (Active / Deactivated / Terminated across services/memberships/coaches) with
+> **real coach & court deletes**; the **Admin-vs-Settings split** (Operate vs Configure; Resources tab
+> retired; Settings on the nav); the **People category slicer**; and **stopped seeding demo coaches**.
+> Gated green (`python -m scripts.test_all` → booking 43 / billing 56 / statement 35).
+>
 > **Recently shipped (2026-06-25/26 — NOT outstanding):** the redesigned client journey (action-first
 > cockpit + full-screen calendar booking + consolidated `/plan`), the **lesson approval lifecycle**
 > (request/propose/accept/decline + per-coach review; on-behalf auto-confirms; client-side accept/decline/
@@ -37,8 +50,12 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
         scheduled monthly accrual would be cleaner (needs a scheduler — see crons below).
 - [ ] **Bundle/arrears edges:** bundle **expiry** policy for unused minutes/credits (refund/transfer?); a
       "too-late cancellation forfeits the credit" option (today cancel always credits back the exact
-      minutes); optionally a Yoco "pay statement" link so a client can pay a coach's arrears invoice
-      online (today off-platform).
+      minutes). *(Paying a statement online is now DONE — `POST /api/me/statement/pay` → settlement order
+      → Yoco; 2026-06-28.)*
+- [ ] **Drop coach_arrears / account_ledger as internal tables (OPTIONAL cosmetic cleanup).** The unified
+      statement (`billing/statement.py`) made `billing.order` the single source of truth; `coach_arrears`
+      and `account_ledger` are now kept only in **lockstep** (no double-count). Fully removing them ("option
+      B" in `docs/specs/UNIFIED-STATEMENT.md`) is a pure internal cleanup — **not blocking**.
 - [ ] **Membership upgrades / downgrades** — a member changing tier mid-term (proration, when it takes
       effect, credit/refund). Backlog — needs a proper spec before building.
 - [ ] **Platform / super-admin cockpit** — cross-club view (all clubs' revenue/health) for

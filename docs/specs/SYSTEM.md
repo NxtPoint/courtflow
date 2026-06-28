@@ -10,8 +10,11 @@ Two Render web services + one Postgres:
   logic, Clerk-JWT auth. Boots + idempotently creates all schemas on start.
 - **`courtflow-web`** (`web_wsgi:app`) — DB-less. **Host-switched** (`web_app.py`, mirroring 1050's
   `locker_room_app.py`): a marketing host serves the public site at `/` and the portal SPA shells at
-  `/portal`, `/book`, `/admin`, …; a club host would serve that club's branded site. Serves static
-  `cf-*` pages + JS, proxies nothing — the SPAs call `courtflow-api` directly.
+  `/portal`, `/book`, `/admin`, `/settings`, …; a club host would serve that club's branded site. Serves
+  static `cf-*` pages + JS, proxies nothing — the SPAs call `courtflow-api` directly. The admin surface is
+  split **Operate vs Configure**: the **Admin console** (`admin.html`) runs the club day-to-day (Master
+  diary · Classes · People · Billing · Cockpit · Overview), while **Settings** (`settings.html`, on the main
+  nav) holds configuration (Club profile · Courts & hours · Services · Memberships · Coaches).
 - **Postgres** (separate Render DB). **One DB, five schemas** (below).
 
 The browser holds a **Clerk** session; the SPA attaches the JWT to every `/api/*` call; the API verifies
@@ -55,22 +58,47 @@ have capacity + waitlist (auto-promote on cancel). **Lazy expiry replaces the ca
 provider-agnostic. On top of it:
 - **`yoco_billing/`** — the Yoco adapter (hosted checkout, Standard-Webhooks verify, refund, reconcile,
   receipt) behind `register_gateway`/`get_gateway`. `billing/` core is untouched.
-- **`billing/membership.py`** — configurable membership **term plans** (price × duration).
+- **`billing/statement.py`** — the **single source of truth for what a client owes** (full spec:
+  [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md)). The invariant: one debt = one `billing.order`, settled
+  exactly once. A client owes the SUM of their unpaid orders (`status='open'`) — nothing else; `account_ledger`
+  and `coach_arrears` are **demoted to internal** consequences of a paid order, held in lockstep so they can
+  never double-count the debt. A **settlement order** (new column `billing.order.settled_by_order_id` links a
+  child owed order to its 'pay all' parent) is the pay-all/part-pay vehicle: `create_settlement_order(order_ids?)`
+  builds it, and on its `charge_succeeded` the **`billing/events.py` fan-out** (`settle_settlement_order`) marks
+  each child order paid + accrues its commission once. `void_order` writes off / voids a debt (a paid order can't
+  be voided).
+- **`billing/membership.py`** — configurable membership **term plans** (price × duration). Plans buy
+  **online OR offline** (`create_membership_order(settlement_mode)`: online → `awaiting_payment` + webhook
+  activate; at-court/monthly → an `open` owed order that **activates immediately**).
 - **`billing/bundles.py`** — the generic **token/bundle** engine (prepaid session packs) across
   court/lesson/class. **Unit/minute-based:** a pack covers any length, drawing minutes proportional to
   the booking's duration (90min off a 60-unit = 1.5 sessions; class = one full unit); customer-wins tail;
-  atomic draw-down, idempotent credit-back of the exact minutes. Catalogue items carry a lifecycle
-  `status` (active/dormant/retired). Coaches configure their own lesson packs (`/api/coach/bundle-plans`).
+  atomic draw-down, idempotent credit-back of the exact minutes. Packs also buy **online OR offline**
+  (`create_bundle_order(settlement_mode)`: offline → an `open` order + grant the wallet immediately).
+  Coaches configure their own lesson packs (`/api/coach/bundle-plans`). Catalogue items (services,
+  memberships, packs) share **ONE lifecycle vocabulary** — Active / Deactivated / Terminated
+  (`billing.product.status`; memberships derive theirs from their term plans' active/dormant/retired
+  state) — with filter bars, status chips and per-row Deactivate/Reactivate/Terminate actions.
 - **Free week** — new members are auto-granted a 7-day courts-free trial membership on signup
   (`billing.membership.grant_signup_trial`, `provider='trial'`, fired from `auth/principal.py`;
   `SIGNUP_TRIAL_DAYS` env). **Membership access windows** — a tier can be time-boxed
   (`billing.price.access_days/access_start_min/access_end_min`), enforced server-side by
-  `diary.pricing.membership_covers(starts_at)` (outside the window → PAYG).
+  `diary.pricing.membership_covers(starts_at)` (outside the window → PAYG). Off-peak coverage is priced
+  **per slot**: `compute_availability` surfaces R0 only inside a member's window and PAYG outside it
+  (`diary.pricing.active_membership_windows` / `any_window_covers`), so the calendar's free/charged display
+  matches what `create_booking` actually charges.
 - **`billing/commission.py`** — the coach **commission/rent** engine: scoped dated rules
   (`coach+product > product > coach > club`), split computed **on collection** inside `apply_payment_event`
   (idempotent), arrears statement, owner cockpit aggregations.
 - **`billing/refunds.py`** — client refund-request workflow + admin approve/decline.
 - **`billing/me.py`** — client financial reads.
+
+**The payment rule (one shared rule across every purchase).** What payment methods a purchase offers is
+configurable per service (`billing.product.payment_modes`) and **per membership tier** (new column
+`billing.price.payment_modes`), resolved in layers (tier price-pref → product default → the club's globally
+enabled methods). The front end (`Pay.purchase` → `buyMembership`/`buyPack` in `pay.js`, and `booking.js`)
+applies ONE rule: more than one allowed mode → the client chooses; exactly one non-online mode → check out
+immediately (no prompt); online → Yoco. Offline modes settle through the unified statement as `open` orders.
 
 ## Events, CRM & notifications
 Producers call `marketing_crm.emit(event, payload)` → writes `core.usage_event` (the decoupled event
