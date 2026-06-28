@@ -111,11 +111,14 @@ Golden rule realised: **one service, one API, one editor, edited in one place.**
 - **Wired:** coach **Services** tab + admin **Settings → Services** are both a summary-card list →
   "Manage" → the same editor. The scattered editors (court rates / coach services / packs / per-service
   commission table) collapse into this one place.
-- **Remaining for full one-place purity:** (a) **enforce** `payment_modes` in the booking flow
-  (durations response carries it → `booking.js` intersects pay options) — editable now, not yet
-  enforced; (b) retire the old `Pricing (advanced)` court-rate/pack editors + the per-service column
-  of "Coach pay" (keep rent + the global/per-coach default %) once the editor is validated;
-  (c) membership term-plans (the only non-per-service catalogue) stay on the Pricing tab.
+- **Enforcement — DONE:** `/api/diary/durations` returns the service's `payment_modes`; `booking.js`
+  intersects its pay options, and `create_booking` refuses a crafted member/guest request with a
+  method the service doesn't offer (`SETTLEMENT_NOT_ALLOWED`; admins/coaches override; guarded).
+  Harness scenario green.
+- **Old screens retired — DONE:** Settings `Pricing` → **Memberships** only (court rates + packs moved
+  into the Service Editor); **Coach pay** dropped its per-service table (keeps rent + the global/per-coach
+  **default %**; per-service override is on the service). `AdminUI.courtRates/bundlePlans/pricingHome`
+  remain defined-but-unreferenced (safe to delete later). Membership term-plans stay (club-wide).
 
 ### Consolidation — remaining (the bigger, careful piece; do with Tomo)
 Tomo's principle: **all of a thing's config in ONE place; summary blocks + popup edit; no duplicate
