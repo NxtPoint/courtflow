@@ -152,6 +152,26 @@ def _t_statement_ready(ctx):
     return ("Your invoice is ready", body, "/account.html")
 
 
+# Lesson approval lifecycle (recipient is set on the emit payload's user_id by diary.bookings).
+def _t_lesson_requested(ctx):
+    return ("New lesson request", "A client has requested a lesson with you — accept, propose a new "
+            "time, or decline.", "/coach.html")
+
+
+def _t_lesson_proposed(ctx):
+    return ("Your coach proposed a time", "Your coach suggested a time for your lesson — accept or "
+            "decline it under “Needs your attention”.", "/portal.html")
+
+
+def _t_lesson_accepted(ctx):
+    return ("Lesson confirmed", "Your lesson is confirmed — see it in My Bookings.", "/portal.html")
+
+
+def _t_lesson_declined(ctx):
+    return ("Lesson request declined", "Your coach couldn't take that lesson. Try another time or "
+            "coach.", "/book/lesson")
+
+
 # ---------------------------------------------------------------------------
 # KIND_MAP — which usage_event kinds become notifications + their template.
 #
@@ -178,6 +198,10 @@ KIND_MAP = {
     "waitlist_slot_open":    _t_class_promoted,          # a seat freed → "you're in" / claim
     "coach_invited":         _t_coach_invited,
     "statement_ready":       _t_statement_ready,         # month-end: invoice ready → pay online
+    "lesson_requested":      _t_lesson_requested,        # lesson approval lifecycle (→ coach)
+    "lesson_proposed":       _t_lesson_proposed,         # (→ client)
+    "lesson_accepted":       _t_lesson_accepted,         # (→ requester)
+    "lesson_declined":       _t_lesson_declined,         # (→ requester)
 }
 
 
