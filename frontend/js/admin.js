@@ -510,61 +510,93 @@
     return _paymentsByEmail[email.toLowerCase()] || [];
   }
 
+  // People categories for the top slicer. Default = Members (the everyday focus).
+  var PCATS = [["member", "Members"], ["coach", "Coaches"], ["guest", "Guests"], ["admin", "Admins"], ["all", "All"]];
+  function inCat(pp, cat) {
+    if (cat === "all") return true;
+    if (cat === "admin") return pp.role === "club_admin" || pp.role === "platform_admin";
+    return pp.role === cat;
+  }
+
   async function renderPeople(panel) {
     var card = el("div", { class: "cf-card" }, [ el("h2", { text: "People" }) ]);
     card.appendChild(el("p", { class: "cf-muted", style: "margin:-4px 0 12px",
       text: "Everyone in the club. Click a row to see their detail. To invite a coach, go to Settings → Coaches; the coach completes their own profile when they first log in with that email." }));
+    var slicer = el("div");
     var box = el("div", { id: "ppl-list", class: "cf-loading", text: "Loading people…" });
+    card.appendChild(slicer);
     card.appendChild(box);
     panel.appendChild(card);
     try {
       if (!window.AdminAPI) await ensureClassDeps();
       _paymentsByEmail = null;  // refresh the payment cache each time the tab opens
       var r = await window.TFAuth.apiJSON("/api/admin/people");
-      UI.clear(box);
-      if (!r.people || !r.people.length) {
-        box.appendChild(el("div", { class: "cf-empty", text: "No members or coaches yet — invite a coach from Settings → Coaches." }));
-        return;
-      }
-      var roleChip = { platform_admin: "confirmed", club_admin: "confirmed", coach: "lesson", member: "court", guest: "class" };
-      var t = el("table", { class: "cf-table" });
-      t.appendChild(el("thead", {}, [ el("tr", {}, ["Name", "Email", "Phone", "Role", "Status", "Membership", ""].map(function (h) {
-        return el("th", { text: h }); })) ]));
-      var tb = el("tbody");
-      r.people.forEach(function (pp) {
-        var name = pp.display_name || [pp.first_name, pp.surname].filter(Boolean).join(" ") || "—";
-        var status = (pp.role === "coach" && pp.invite_status) ? pp.invite_status : (pp.member_status || "—");
-        // Membership (free courts) applies to bookers — members/guests, not coaches/admins.
-        var canHaveMembership = (pp.role === "member" || pp.role === "guest");
-        var chipCell = el("td");
-        chipCell.appendChild(pp.has_membership
-          ? el("span", { class: "cf-chip confirmed", text: "Active" })
-          : el("span", { class: "cf-muted", text: "—" }));
-        var actCell = el("td");
-        if (canHaveMembership) {
-          var ab = el("button", { class: "cf-btn cf-btn-sm" + (pp.has_membership ? " cf-btn-danger" : " cf-btn-primary"),
-            text: pp.has_membership ? "Revoke" : "Grant" });
-          // Stop the row-click 360 drawer from also firing when granting/revoking.
-          ab.addEventListener("click", function (ev) { ev.stopPropagation(); toggleMembership(pp, ab, chipCell); });
-          actCell.appendChild(ab);
-        } else {
-          actCell.appendChild(el("span", { class: "cf-muted", text: "—" }));
-        }
-        var tr = el("tr", { style: "cursor:pointer" }, [
-          el("td", { text: name }),
-          el("td", { text: pp.email || "—" }),
-          el("td", { text: pp.phone || "—" }),
-          el("td", {}, [ el("span", { class: "cf-chip " + (roleChip[pp.role] || "court"), text: (pp.role || "").replace("_", " ") }) ]),
-          el("td", { text: status }),
-          chipCell,
-          actCell,
-        ]);
-        tr.addEventListener("click", function () { openPersonDrawer(pp, name, status); });
-        tb.appendChild(tr);
-      });
-      t.appendChild(tb);
-      box.appendChild(t);
+      state.people = r.people || [];
+      if (!state.peopleCat) state.peopleCat = "member";
+      drawPeople(slicer, box);
     } catch (e) { box.textContent = UI.errMsg(e); }
+  }
+
+  function drawPeople(slicer, box) {
+    var people = state.people || [];
+    var cat = state.peopleCat || "member";
+
+    // top slicer — one pill per category, with live counts; default Members.
+    UI.clear(slicer);
+    var bar = el("div", { class: "cf-lifefilter", style: "margin-top:2px" });
+    PCATS.forEach(function (o) {
+      var n = people.filter(function (pp) { return inCat(pp, o[0]); }).length;
+      bar.appendChild(el("button", { type: "button", class: cat === o[0] ? "on" : "",
+        text: o[1] + " (" + n + ")", onclick: function () { state.peopleCat = o[0]; drawPeople(slicer, box); } }));
+    });
+    slicer.appendChild(bar);
+
+    UI.clear(box);
+    if (!people.length) {
+      box.appendChild(el("div", { class: "cf-empty", text: "No members or coaches yet — invite a coach from Settings → Coaches." }));
+      return;
+    }
+    var shown = people.filter(function (pp) { return inCat(pp, cat); });
+    if (!shown.length) { box.appendChild(el("div", { class: "cf-empty", text: "No " + cat + (cat === "all" ? " people" : "s") + " yet." })); return; }
+
+    var roleChip = { platform_admin: "confirmed", club_admin: "confirmed", coach: "lesson", member: "court", guest: "class" };
+    var t = el("table", { class: "cf-table" });
+    t.appendChild(el("thead", {}, [ el("tr", {}, ["Name", "Email", "Phone", "Role", "Status", "Membership", ""].map(function (h) {
+      return el("th", { text: h }); })) ]));
+    var tb = el("tbody");
+    shown.forEach(function (pp) {
+      var name = pp.display_name || [pp.first_name, pp.surname].filter(Boolean).join(" ") || "—";
+      var status = (pp.role === "coach" && pp.invite_status) ? pp.invite_status : (pp.member_status || "—");
+      // Membership (free courts) applies to bookers — members/guests, not coaches/admins.
+      var canHaveMembership = (pp.role === "member" || pp.role === "guest");
+      var chipCell = el("td");
+      chipCell.appendChild(pp.has_membership
+        ? el("span", { class: "cf-chip confirmed", text: "Active" })
+        : el("span", { class: "cf-muted", text: "—" }));
+      var actCell = el("td");
+      if (canHaveMembership) {
+        var ab = el("button", { class: "cf-btn cf-btn-sm" + (pp.has_membership ? " cf-btn-danger" : " cf-btn-primary"),
+          text: pp.has_membership ? "Revoke" : "Grant" });
+        // Stop the row-click 360 drawer from also firing when granting/revoking.
+        ab.addEventListener("click", function (ev) { ev.stopPropagation(); toggleMembership(pp, ab, chipCell); });
+        actCell.appendChild(ab);
+      } else {
+        actCell.appendChild(el("span", { class: "cf-muted", text: "—" }));
+      }
+      var tr = el("tr", { style: "cursor:pointer" }, [
+        el("td", { text: name }),
+        el("td", { text: pp.email || "—" }),
+        el("td", { text: pp.phone || "—" }),
+        el("td", {}, [ el("span", { class: "cf-chip " + (roleChip[pp.role] || "court"), text: (pp.role || "").replace("_", " ") }) ]),
+        el("td", { text: status }),
+        chipCell,
+        actCell,
+      ]);
+      tr.addEventListener("click", function () { openPersonDrawer(pp, name, status); });
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    box.appendChild(t);
   }
 
   // Grant / revoke a member's membership (free courts) in place — updates the row, no reload.

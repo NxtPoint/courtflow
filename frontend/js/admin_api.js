@@ -483,7 +483,7 @@
       host.appendChild(addCard());
       listBox.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
       Promise.all([window.AdminAPI.resources(), window.AdminAPI.hours()]).then(function (res) {
-        DATA.courts = (res[0].resources || []).filter(function (x) { return x.kind === "court"; });
+        DATA.courts = (res[0].resources || []).filter(function (x) { return x.kind === "court" && x.is_active !== false; });
         DATA.hoursByCourt = {};
         (res[1].hours || []).forEach(function (h) { (DATA.hoursByCourt[h.resource_id] = DATA.hoursByCourt[h.resource_id] || []).push(h); });
         UI.clear(listBox);
@@ -520,7 +520,10 @@
 
     function delCourt(c) {
       if (!window.confirm("Delete " + (c.name || "this court") + "?")) return;
-      window.AdminAPI.deleteResource(c.id).then(function () { UI.toast("Court deleted.", "info"); reload(); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+      window.AdminAPI.deleteResource(c.id).then(function (r) {
+        UI.toast((r && r.outcome === "archived") ? "This court has booking history, so it was archived (hidden) rather than deleted." : "Court deleted.", "info");
+        reload();
+      }, function (e) { UI.toast(UI.errMsg(e), "error"); });
     }
 
     function addCard() {

@@ -263,6 +263,29 @@ def soft_delete_resource(session, *, club_id, resource_id):
     return res is not None
 
 
+def delete_resource(session, *, club_id, resource_id):
+    """Remove a resource (court/coach/class). HARD-delete when it's safe — no bookings or class
+    sessions reference it (availability rules cascade away) — so it's genuinely gone from the list.
+    If it has history we soft-delete (is_active=false) to keep that history intact. Returns
+    'deleted', 'archived', or None when no such resource exists. Club-scoped."""
+    exists = session.execute(
+        text("SELECT 1 FROM diary.resource WHERE club_id = :c AND id = :r"),
+        {"c": club_id, "r": resource_id}).first()
+    if exists is None:
+        return None
+    history = session.execute(
+        text("SELECT (SELECT count(*) FROM diary.booking WHERE club_id = :c AND resource_id = :r) "
+             "     + (SELECT count(*) FROM diary.class_session WHERE club_id = :c AND resource_id = :r)"),
+        {"c": club_id, "r": resource_id}).scalar() or 0
+    if history > 0:
+        soft_delete_resource(session, club_id=club_id, resource_id=resource_id)
+        return "archived"
+    session.execute(
+        text("DELETE FROM diary.resource WHERE club_id = :c AND id = :r"),
+        {"c": club_id, "r": resource_id})
+    return "deleted"
+
+
 def court_resource_ids(session, *, club_id, active_only=True):
     where = "AND is_active = true" if active_only else ""
     return [str(r) for r in session.execute(

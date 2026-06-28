@@ -242,10 +242,11 @@ def delete_resource(resource_id):
     if err:
         return err
     with session_scope() as s:
-        ok = repo.soft_delete_resource(s, club_id=p.club_id, resource_id=resource_id)
-    if not ok:
+        outcome = repo.delete_resource(s, club_id=p.club_id, resource_id=resource_id)
+    if outcome is None:
         return jsonify(error="NOT_FOUND"), 404
-    return jsonify(ok=True), 200
+    # 'deleted' = removed outright; 'archived' = had history, kept + hidden (is_active=false).
+    return jsonify(ok=True, outcome=outcome), 200
 
 
 # ---------------------------------------------------------------------------
