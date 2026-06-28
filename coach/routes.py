@@ -544,3 +544,15 @@ def get_cockpit():
     with session_scope() as s:
         data = repo.cockpit(s, club_id=p.club_id, user_id=p.user_id, month=month)
     return jsonify(data), 200
+
+
+@coach_bp.get("/commission")
+def get_commission():
+    """The club's commission on this coach's lessons — READ-ONLY (the owner sets it in admin;
+    the coach only sees it, greyed)."""
+    p, err = _coach()
+    if err:
+        return err
+    with session_scope() as s:
+        data = repo.coach_commission_overview(s, club_id=p.club_id, user_id=p.user_id)
+    return jsonify(data), 200

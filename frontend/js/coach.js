@@ -1175,11 +1175,49 @@
     loadResources(); loadTimeOff();
   }
 
-  // Services — per-duration lesson rates, classes, and own session packs.
+  // Services — commission (read-only) + per-duration lesson rates, classes, own packs.
   function tabServices(host) {
+    var comm = el("div"); host.appendChild(comm); commissionCard(comm);
     var svc = el("div"); host.appendChild(svc); window.CoachUI.services(svc, {});
     initMyClasses(host);
     var pk = el("div"); host.appendChild(pk); window.CoachUI.packs(pk, {});
+  }
+
+  // The club's commission on the coach's lessons — READ-ONLY (greyed). The owner sets the default %
+  // (global) + per-service overrides in the admin portal; the coach only sees it here.
+  function commissionCard(host) {
+    UI.clear(host);
+    host.appendChild(el("div", { class: "cf-card", style: "opacity:.85" }, [el("div", { class: "cf-loading", text: "Loading commission…" })]));
+    window.CoachAPI.commission().then(function (d) {
+      d = d || {};
+      var keep = Math.max(0, 100 - (d.effective_pct || 0));
+      var rows = [
+        el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center" }, [
+          el("h3", { text: "Commission", style: "margin:0" }),
+          el("span", { class: "cf-chip", text: "Set by the club" }),
+        ]),
+        el("p", { class: "cf-muted", style: "margin:6px 0 10px", text: "What the club keeps on your lessons. You keep the rest. Only the club can change this." }),
+        el("div", { class: "cf-tiles" }, [
+          el("div", { class: "cf-tile", style: "cursor:default" }, [el("div", { class: "cf-tile-t", text: (d.effective_pct || 0) + "%" }), el("div", { class: "cf-tile-s", text: "Club commission" })]),
+          el("div", { class: "cf-tile", style: "cursor:default" }, [el("div", { class: "cf-tile-t", text: keep + "%" }), el("div", { class: "cf-tile-s", text: "You keep" })]),
+        ]),
+      ];
+      // Per-service overrides where they differ from the default.
+      var diff = (d.services || []).filter(function (s) { return s.effective_pct !== d.effective_pct; });
+      if (diff.length) {
+        var list = el("div", { class: "cf-list", style: "margin-top:10px" });
+        diff.forEach(function (s) {
+          list.appendChild(el("div", { class: "cf-item" }, [
+            el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: s.name || "Service" })]),
+            el("span", { class: "cf-chip", text: s.effective_pct + "%" }),
+          ]));
+        });
+        rows.push(el("div", { class: "cf-muted cf-tiny", style: "margin-top:8px", text: "Per-service rates:" }));
+        rows.push(list);
+      }
+      UI.clear(host);
+      host.appendChild(el("div", { class: "cf-card" }, rows));
+    }, function () { UI.clear(host); });
   }
 
   function tabClients(host) { initMyClients(host); }

@@ -122,6 +122,9 @@
     cockpit: function (month) {
       return A().apiJSON("/api/coach/cockpit" + (month ? ("?month=" + enc(month)) : ""));
     },
+    // GET /api/coach/commission -> {club_default_pct, coach_default_pct, effective_pct, currency,
+    //   services:[{product_id,name,effective_pct}]} — READ-ONLY (owner sets it in admin).
+    commission: function () { return A().apiJSON("/api/coach/commission"); },
 
     // ---- month-end statement (commission settlement; a coach sees their OWN) ----
     // GET /api/admin/coach-statement?month=YYYY-MM ->

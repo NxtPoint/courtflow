@@ -1199,3 +1199,38 @@ def _coach_plan_balances(session, *, club_id, user_id):
     except Exception:
         session.rollback()
         return {"wallets": 0, "clients": 0, "sessions_left": 0, "minutes_left": 0}
+
+
+# ---------------------------------------------------------------------------
+# commission (READ-ONLY for the coach) — the club's cut on the coach's lessons.
+# The OWNER sets this in admin (global default / per-coach / per-service); the coach
+# only SEES it (greyed in the console). Pure resolution via the commission engine,
+# scoped to the calling coach. Guarded: billing absent -> zeros.
+# ---------------------------------------------------------------------------
+def coach_commission_overview(session, *, club_id, user_id):
+    """{club_default_pct, coach_default_pct, effective_pct, currency, services:[{product_id,
+    name, effective_pct}]} — what the CLUB keeps on this coach's lessons. coach KEEPS (100-pct)."""
+    out = {"club_default_pct": 0.0, "coach_default_pct": 0.0, "effective_pct": 0.0,
+           "currency": "ZAR", "services": []}
+    try:
+        from billing.commission import resolve_commission_pct
+        out["currency"] = session.execute(
+            text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": club_id}).scalar() or "ZAR"
+        club_default = resolve_commission_pct(session, club_id=club_id)
+        coach_default = resolve_commission_pct(session, club_id=club_id, coach_user_id=user_id)
+        out["club_default_pct"] = float(club_default)
+        out["coach_default_pct"] = float(coach_default)
+        out["effective_pct"] = float(coach_default)
+        rows = session.execute(
+            text("SELECT id, name FROM billing.product "
+                 "WHERE club_id = :c AND kind = 'lesson' AND coach_user_id = :u AND active = true "
+                 "ORDER BY created_at"),
+            {"c": club_id, "u": user_id},
+        ).mappings().all()
+        for r in rows:
+            eff = resolve_commission_pct(session, club_id=club_id, product_id=r["id"], coach_user_id=user_id)
+            out["services"].append({"product_id": str(r["id"]), "name": r["name"],
+                                    "effective_pct": float(eff)})
+    except Exception:
+        session.rollback()
+    return out
