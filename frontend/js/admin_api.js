@@ -1344,7 +1344,6 @@
     addBtn.addEventListener("click", function () { openTier(null); });
     card.appendChild(addBtn);
     host.appendChild(card);
-    host.appendChild(membershipPaymentCard());
 
     function term(m) { m = parseInt(m, 10) || 0; return m === 1 ? "1 month" : (m + " months"); }
     function perMonth(p) { var m = parseInt(p.term_months, 10) || 1; return Math.round((p.amount_minor || 0) / m); }
@@ -1405,43 +1404,6 @@
         .then(function () { UI.toast("Deleted.", "info"); reload(); });
     }
 
-    // Payment options for memberships (product-level — applies to every membership/term). Inherits
-    // the club's enabled methods by default; tick a subset to tailor. Same model as a service's
-    // payment preference. -> GET/PATCH /api/admin/membership-config.
-    function membershipPaymentCard() {
-      var card = el("div", { class: "cf-card" }, [
-        el("h3", { text: "Payment options" }),
-        el("p", { class: "cf-muted cf-tiny", text: "How members can pay for a membership. Leave all ticked to offer every method the club accepts; untick to tailor. If only one non-online method is offered, checkout is immediate." }),
-      ]);
-      var body = el("div", { class: "cf-loading", text: "Loading…" });
-      card.appendChild(body);
-      var LABELS = { online: "Pay online (card)", at_court: "Pay at the club", monthly_account: "Monthly account" };
-      window.TFAuth.apiJSON("/api/admin/membership-config").then(function (r) {
-        UI.clear(body);
-        var enabled = r.club_payment_methods || [];
-        var pref = r.payment_modes;  // null = inherit (all enabled)
-        if (!enabled.length) { body.appendChild(el("div", { class: "cf-muted cf-tiny", text: "Enable payment methods on Club profile first." })); return; }
-        var checks = {};
-        enabled.forEach(function (m) {
-          var lbl = el("label", { class: "cf-row", style: "gap:8px;align-items:center;cursor:pointer;margin-top:6px" });
-          var cb = el("input", { type: "checkbox" }); cb.style.width = "auto";
-          cb.checked = pref ? (pref.indexOf(m) >= 0) : true;
-          checks[m] = cb;
-          cb.addEventListener("change", save);
-          lbl.appendChild(cb); lbl.appendChild(el("span", { text: LABELS[m] || m }));
-          body.appendChild(lbl);
-        });
-        function save() {
-          var sel = enabled.filter(function (m) { return checks[m].checked; });
-          if (!sel.length) { UI.toast("Pick at least one payment method.", "warn"); return; }
-          // all enabled selected → inherit (null); else the chosen subset.
-          var modes = (sel.length === enabled.length) ? null : sel;
-          window.TFAuth.apiJSON("/api/admin/membership-config", { method: "PATCH", body: { payment_modes: modes } })
-            .then(function () { UI.toast("Saved.", "info"); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
-        }
-      }, function () { UI.clear(body); body.appendChild(el("div", { class: "cf-muted cf-tiny", text: "Couldn't load payment options." })); });
-      return card;
-    }
 
     // The membership editor — a FULL-SCREEN view (not a popup): name + access hours + term variants,
     // with a single Save & close (changes batch in memory). Renders into `host`; Cancel/Save rebuild

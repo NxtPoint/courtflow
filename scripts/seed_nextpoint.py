@@ -59,16 +59,11 @@ LOCATION = dict(
 )
 
 # --- iam coach profiles (docs/02 §3, §7) ----------------------------------
-COACHES = [
-    dict(email="neville@nextpointtennis.com", first_name="Neville", surname="Godwin",
-         display_name="Neville Godwin", headline="Program Director",
-         bio="Program Director at NextPoint Tennis.",
-         specialties=["high_performance", "junior"], rank=1),
-    dict(email="ross@nextpointtennis.com", first_name="Ross", surname="Nemeth",
-         display_name="Ross Nemeth", headline="Head Coach",
-         bio="Head Coach at NextPoint Tennis.",
-         specialties=["junior", "cardio"], rank=2),
-]
+# No demo coaches are seeded. Real coaches are invited by the owner in the UI (Settings → Coaches);
+# the seed is additive + idempotent, so hardcoded demo coaches used to RESURRECT on every re-seed
+# after they were deleted (and carried placeholder emails). The club is seeded coach-less; invite
+# the real coaches once and they stick. (Empty list keeps the seed loop + summary working.)
+COACHES = []
 
 # --- platform admins (docs/04 §4) -----------------------------------------
 # Seeded by email; iam.user.upsert links by email, so on first Clerk login this user
