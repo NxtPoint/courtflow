@@ -88,4 +88,30 @@ for any staff-role gating).
 - [x] **Admin** — surfaced the orphaned coach lifecycle (resend invite / remove coach) on Settings →
   Coaches + added the missing API wrappers; tidy 'Club admin' header + ⚙ Settings link. (Kept the
   working 7-tab structure; hard price-delete left out since status-retire is the clean soft-delete.)
+- [x] **Coach commission visibility** — `GET /api/coach/commission` (read-only); a greyed
+  "Commission · Set by the club" card on the coach Services tab (club % / you-keep + per-service).
+- [x] **Month-end loop** — `statement_ready` notification ("Your invoice is ready — Rx due", links
+  /account) via the monthly-invoice cron (accrues arrears + notifies clients with a balance) **+**
+  client pay-online: `POST /api/me/statement/pay` → Yoco → on payment the linked `coach_arrears`
+  settle (commission accrues; idempotent). Account "Money" shows the "Pay Rx online" CTA.
+- [x] **Email triggers** — fully wired: every mapped event fires in-app + SES email (self-gating on
+  keys). Added `statement_ready` + the **lesson lifecycle** (requested/proposed/accepted/declined).
+  Only the SES sender key (Tomo's config) is left to start *sending*.
+- [x] **Settings consolidation (start)** — Hours folded into **Courts & hours**; the global payment
+  methods (online · at-club · monthly) moved onto **Club profile**. 8 → 6 tabs.
+
+### Consolidation — remaining (the bigger, careful piece; do with Tomo)
+Tomo's principle: **all of a thing's config in ONE place; summary blocks + popup edit; no duplicate
+screens.** Still to do:
+- **Unified Service Editor popup** (the Wix reference): one modal per service managing price +
+  **variations** (per-duration) + **payment preference** (which enabled methods this service offers)
+  + **packages** (PAYG = session multiples / membership = terms) + **commission** (owner-editable,
+  coach **greyed**). The SAME modal opens for the owner (edits all incl. commission) and the coach
+  (edits all **except** commission). Needs: a per-service `allowed_settlement_modes` field (new) +
+  a per-service payment picker in the booking flow; commission editing moves OUT of the "Coach pay"
+  per-service table INTO the service editor (kill the duplication — Coach pay keeps only rent + the
+  global/per-coach **default %**).
+- **Admin console → client pattern** throughout (summary cards + popup editors), mirroring the coach
+  tabs.
+
 - [ ] Retire `/my`, `/account`, `/plans` (301 → Home) once validated.
