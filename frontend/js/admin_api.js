@@ -935,34 +935,14 @@
           rentI, el("span", { class: "cf-muted", text: "on day" }), dayI,
           el("span", { class: "cf-spacer" }), rentSave])));
 
-      // coach-level commission % (all this coach's services) — Set/Clear.
-      c.appendChild(field("Commission % — all this coach's services",
+      // coach-level commission % (the DEFAULT for all this coach's services) — Set/Clear.
+      c.appendChild(field("Default commission % — all this coach's services",
         pctCell(coach.coach_pct, "coach", null, coach.coach_user_id, "Coach commission saved.")));
 
-      // per-service table: service · club-wide % · this coach's override % · effective.
-      if (coach.lesson_types && coach.lesson_types.length) {
-        c.appendChild(el("h4", { text: "Per service", style: "margin:12px 0 4px" }));
-        c.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:0 0 6px",
-          text: "Club-wide sets the rate for this service across every coach; the override sets it for this coach only. Effective is what will actually apply." }));
-        var t = el("table", { class: "cf-table" });
-        t.appendChild(el("thead", {}, [el("tr", {}, ["Service", "Club-wide %", coach.name + "'s %", "Effective"].map(function (h, i) {
-          return el("th", { text: h, style: i === 0 ? "" : "white-space:nowrap" }); }))]));
-        var tb = el("tbody");
-        coach.lesson_types.forEach(function (lt) {
-          tb.appendChild(el("tr", {}, [
-            el("td", {}, [el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [kindChip(lt.name), el("span", { text: lt.name || "Service" })])]),
-            // Club-wide (scope=product): {product_id} only.
-            el("td", {}, [pctCell(lt.club_pct, "product", lt.product_id, null, "Service rate saved.")]),
-            // This coach's override (scope=coach_product): {coach_user_id, product_id}.
-            el("td", {}, [pctCell(lt.coach_pct, "coach_product", lt.product_id, coach.coach_user_id, "Override saved.")]),
-            el("td", { class: "num" }, [el("span", { class: "cf-chip confirmed", text: (lt.effective_pct || 0) + "%" })]),
-          ]));
-        });
-        t.appendChild(tb); c.appendChild(t);
-      } else {
-        c.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:10px",
-          text: "This coach has no lesson or class services yet — they add these in their own console." }));
-      }
+      // Per-SERVICE overrides now live in the Service Editor (Settings → Services → Manage), so a
+      // service is edited in ONE place. This screen keeps only rent + the global/per-coach default.
+      c.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:10px",
+        text: "Need a different rate for one specific service? Set it on the service itself — Settings → Services → Manage → Commission." }));
       return c;
     }
 

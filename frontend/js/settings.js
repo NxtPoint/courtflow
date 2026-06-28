@@ -14,7 +14,7 @@
     { k: "profile", t: "Club profile" },
     { k: "courts", t: "Courts & hours" },
     { k: "services", t: "Services" },
-    { k: "pricing", t: "Pricing (advanced)" },
+    { k: "pricing", t: "Memberships" },
     { k: "coaches", t: "Coaches" },
     { k: "coachpay", t: "Coach pay" },
   ];
@@ -56,7 +56,9 @@
       window.AdminUI.courts(sectionHost, {});            // courts + …
       window.AdminUI.hours(sectionHost, d.hours || {}, { saveLabel: "Save hours" });  // …their hours, one block
     } else if (state.tab === "pricing") {
-      window.AdminUI.pricingHome(sectionHost);
+      // Memberships are the one club-wide catalogue (not per-service). Court rates + packs now live
+      // in the Service Editor (Services tab), so this tab is just memberships.
+      window.AdminUI.membershipPlans(sectionHost, {});
     } else if (state.tab === "services") {
       renderServices(sectionHost);          // unified service list → the ONE Service Editor
     } else if (state.tab === "coaches") {
