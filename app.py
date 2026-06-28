@@ -89,6 +89,7 @@ def create_app():
     _try_register(app, "admin.routes", "admin_bp")          # Admin: /api/admin/* (onboarding + settings)
     _try_register(app, "coach.routes", "coach_bp")          # Coach: /api/coach/* (self-service profile/hours/services)
     _try_register(app, "me.routes", "me_bp")                # Client: /api/me/* (My Account: profile + dependents)
+    _try_register(app, "services.routes", "services_bp")    # Unified service editor: /api/services/* (owner + coach)
 
     return app
 

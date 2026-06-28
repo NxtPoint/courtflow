@@ -81,6 +81,10 @@ _DDL = [
     # Membership TIER name (Student/Family/…) — the grouping the plan wizard drills (tier → term),
     # distinct from `label`. NULL = ungrouped. Only meaningful on membership term plans. Idempotent.
     f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS membership_tier text;",
+    # Per-SERVICE payment preference: a CSV of allowed settlement modes this service offers
+    # (subset of the club-enabled methods), e.g. 'online,at_court'. NULL = all club-enabled. The
+    # single source of truth the unified service editor writes + the booking flow reads. Idempotent.
+    f"ALTER TABLE {SCHEMA}.product ADD COLUMN IF NOT EXISTS payment_modes text;",
     f"CREATE INDEX IF NOT EXISTS ix_price_product ON {SCHEMA}.price (product_id);",
     # Lifecycle (3-state) on an EXISTING db: add status, backfill from the active boolean
     # (active->'active', inactive->'retired'; only WHERE status IS NULL so a later 'dormant'
