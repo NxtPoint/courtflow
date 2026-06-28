@@ -465,6 +465,136 @@
   }
 
   // ---------------------------------------------------------------------------
+  // COURTS & HOURS (unified) — each court is a summary block (click to edit), exactly like
+  // services/memberships/coaches. The editor sets name + surface + the court's OWN weekly playing
+  // hours (per day, open/closed + time range + slot). -> resources + per-resource /hours.
+  // ---------------------------------------------------------------------------
+  function courtsManage(host) {
+    init();
+    var DATA = { courts: [], hoursByCourt: {} };
+
+    function reload() {
+      UI.clear(host);
+      host.appendChild(el("div", { class: "cf-card" }, [
+        el("h2", { text: "Courts & hours" }),
+        el("p", { class: "cf-muted", text: "Each court with its own surface and weekly playing hours. Click a court to edit; add or remove courts below." }),
+      ]));
+      var listBox = el("div"); host.appendChild(listBox);
+      host.appendChild(addCard());
+      listBox.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+      Promise.all([window.AdminAPI.resources(), window.AdminAPI.hours()]).then(function (res) {
+        DATA.courts = (res[0].resources || []).filter(function (x) { return x.kind === "court"; });
+        DATA.hoursByCourt = {};
+        (res[1].hours || []).forEach(function (h) { (DATA.hoursByCourt[h.resource_id] = DATA.hoursByCourt[h.resource_id] || []).push(h); });
+        UI.clear(listBox);
+        if (!DATA.courts.length) { listBox.appendChild(el("div", { class: "cf-empty", text: "No courts yet. Add your first below." })); return; }
+        var list = el("div", { class: "cf-list" });
+        DATA.courts.forEach(function (c) { list.appendChild(courtRow(c)); });
+        listBox.appendChild(list);
+      }, function (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+
+    function hoursSummary(c) {
+      var rows = DATA.hoursByCourt[c.id] || [];
+      if (!rows.length) return "no hours set";
+      var byDay = {}; rows.forEach(function (r) { byDay[r.weekday] = r; });
+      var openDays = Object.keys(byDay).map(Number).sort(function (a, b) { return a - b; });
+      var first = byDay[openDays[0]];
+      var t = (first.start_time || "").slice(0, 5) + "–" + (first.end_time || "").slice(0, 5);
+      return openDays.map(function (d) { return WEEKDAYS[d]; }).join(", ") + " · " + t;
+    }
+
+    function courtRow(c) {
+      var row = el("div", { class: "cf-item cf-pickable" }, [
+        el("span", { class: "cf-chip court", text: "court" }),
+        el("div", { class: "cf-item-main" }, [
+          el("div", { class: "cf-item-t", text: c.name || "Court" }),
+          el("div", { class: "cf-item-s", text: (c.surface || "hard") + " · " + hoursSummary(c) }),
+        ]),
+        el("span", { class: "cf-spacer" }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete", onclick: function (ev) { ev.stopPropagation(); delCourt(c); } }),
+      ]);
+      row.addEventListener("click", function () { openCourt(c); });
+      return row;
+    }
+
+    function delCourt(c) {
+      if (!window.confirm("Delete " + (c.name || "this court") + "?")) return;
+      window.AdminAPI.deleteResource(c.id).then(function () { UI.toast("Court deleted.", "info"); reload(); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+    }
+
+    function addCard() {
+      var card = el("div", { class: "cf-card" }, [el("h3", { text: "Add a court" })]);
+      var nm = input({ placeholder: "Court name (e.g. Court 1)", style: "max-width:220px" });
+      var sf = select("hard", SURFACES);
+      var b = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Add court" });
+      b.addEventListener("click", function () {
+        var name = nm.value.trim(); if (!name) { UI.toast("Enter a court name.", "warn"); return; }
+        b.disabled = true;
+        window.AdminAPI.createResource({ kind: "court", name: name, surface: sf.value, capacity: 4 })
+          .then(function () { UI.toast("Court added.", "info"); reload(); }, function (e) { b.disabled = false; UI.toast(UI.errMsg(e), "error"); });
+      });
+      card.appendChild(el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;align-items:center" }, [nm, sf, b]));
+      return card;
+    }
+
+    function openCourt(c) {
+      var existing = {}; (DATA.hoursByCourt[c.id] || []).forEach(function (h) { existing[h.weekday] = h; });
+      var hasAny = Object.keys(existing).length > 0;  // a court with NO hours yet → default a sensible open week
+      var m = { name: c.name || "", surface: c.surface || "hard", rows: [] };
+      WEEKDAYS.forEach(function (lbl, wd) {
+        var h = existing[wd];
+        m.rows.push({ wd: wd, label: lbl, open: hasAny ? !!h : (wd < 6), start: h ? (h.start_time || "").slice(0, 5) : "07:00",
+                      end: h ? (h.end_time || "").slice(0, 5) : "21:00", slot: h ? (h.slot_minutes || 60) : 60 });
+      });
+      render();
+
+      function render() {
+        UI.clear(host);
+        var saveB = el("button", { class: "cf-btn cf-btn-primary", text: "Save & close" });
+        saveB.addEventListener("click", function () { save(saveB); });
+        host.appendChild(el("div", { class: "cf-editbar" }, [
+          el("button", { class: "cf-btn", text: "← Cancel", onclick: reload }),
+          el("strong", { text: c.name || "Court" }), el("span", { class: "cf-spacer" }), saveB,
+        ]));
+        var nameI = input({ value: m.name, style: "max-width:260px;font-weight:700" }); nameI.addEventListener("input", function () { m.name = nameI.value; });
+        var surfI = select(m.surface, SURFACES); surfI.addEventListener("change", function () { m.surface = surfI.value; });
+        host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Details" }), field("Court name", nameI), field("Surface", surfI)]));
+
+        var hc = el("div", { class: "cf-card" }, [el("h3", { text: "Playing hours" }),
+          el("p", { class: "cf-muted cf-tiny", text: "The days and hours bookings can be made on this court. Untick a day to close it." })]);
+        var grid = el("div", { class: "cf-list" });
+        m.rows.forEach(function (r) {
+          var tgl = input({ type: "checkbox" }); tgl.checked = r.open; tgl.style.width = "auto"; tgl.addEventListener("change", function () { r.open = tgl.checked; });
+          var st = input({ type: "time", value: r.start, style: "max-width:120px" }); st.addEventListener("input", function () { r.start = st.value; });
+          var en = input({ type: "time", value: r.end, style: "max-width:120px" }); en.addEventListener("input", function () { r.end = en.value; });
+          var sl = select(r.slot, [{ value: 30, label: "30 min" }, { value: 60, label: "60 min" }, { value: 90, label: "90 min" }, { value: 120, label: "120 min" }]);
+          sl.addEventListener("change", function () { r.slot = num(sl.value) || 60; });
+          grid.appendChild(el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:8px" }, [
+            el("label", { class: "cf-row", style: "gap:6px;min-width:96px;font-weight:600;cursor:pointer" }, [tgl, el("span", { text: r.label })]),
+            el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [st, el("span", { class: "cf-muted", text: "to" }), en, sl]),
+          ]));
+        });
+        hc.appendChild(grid);
+        host.appendChild(hc);
+      }
+
+      async function save(btn) {
+        var name = (m.name || "").trim(); if (!name) { UI.toast("Name the court.", "warn"); return; }
+        btn.disabled = true; btn.textContent = "Saving…";
+        try {
+          await window.AdminAPI.patchResource(c.id, { name: name, surface: m.surface });
+          var week = m.rows.map(function (r) { return { weekday: r.wd, open: r.open, start_time: r.start || "07:00", end_time: r.end || "21:00", slot_minutes: r.slot || 60 }; });
+          await window.AdminAPI.putHours({ scope: c.id, week: week });
+          UI.toast("Saved.", "info"); reload();
+        } catch (e) { btn.disabled = false; btn.textContent = "Save & close"; UI.toast(UI.errMsg(e), "error"); }
+      }
+    }
+
+    reload();
+  }
+
+  // ---------------------------------------------------------------------------
   // SERVICES & RATES — products + per-audience prices. -> POST /products, /prices.
   // ---------------------------------------------------------------------------
   function services(host, opts) {
@@ -1474,7 +1604,8 @@
   }
 
   window.AdminUI = {
-    clubProfile: clubProfile, hours: hours, courts: courts, coachManage: coachManage,
+    clubProfile: clubProfile, hours: hours, courts: courts, courtsManage: courtsManage,
+    coachManage: coachManage,
     services: services, coaches: coaches, membershipPlans: membershipPlans,
     membershipServices: membershipServices,
     coachAgreements: coachAgreements, bundlePlans: bundlePlans,

@@ -46,11 +46,19 @@ def list_services(session, *, club_id, role, user_id):
         params["u"] = str(user_id)
     rows = session.execute(
         text("SELECT p.id, p.kind, p.name, p.coach_user_id, p.active, p.status, "
+             "       COALESCE(cp.display_name, NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)), ''), u.email) AS coach_name, "
              "       (SELECT count(*) FROM billing.price pr WHERE pr.product_id = p.id "
              "          AND pr.term_months IS NULL AND pr.active = true) AS variation_count, "
              "       (SELECT min(pr.amount_minor) FROM billing.price pr WHERE pr.product_id = p.id "
-             "          AND pr.term_months IS NULL AND pr.active = true) AS from_amount_minor "
-             "FROM billing.product p WHERE " + " AND ".join(where) + " ORDER BY p.kind, p.name"),
+             "          AND pr.term_months IS NULL AND pr.active = true) AS from_amount_minor, "
+             "       (SELECT json_agg(json_build_object('duration_minutes', pr.duration_minutes, "
+             "                  'amount_minor', pr.amount_minor) ORDER BY pr.duration_minutes NULLS FIRST, pr.amount_minor) "
+             "          FROM billing.price pr WHERE pr.product_id = p.id "
+             "          AND pr.term_months IS NULL AND pr.active = true) AS variations "
+             "FROM billing.product p "
+             "LEFT JOIN iam.coach_profile cp ON cp.club_id = p.club_id AND cp.user_id = p.coach_user_id "
+             "LEFT JOIN iam.user u ON u.id = p.coach_user_id "
+             "WHERE " + " AND ".join(where) + " ORDER BY p.kind, p.name"),
         params,
     ).mappings().all()
     out = []
@@ -60,6 +68,7 @@ def list_services(session, *, club_id, role, user_id):
         d["status"] = d.get("status") or ("active" if d["active"] else "deactivated")
         d["active"] = bool(d["active"])
         d["service_kind"] = _KIND_TO_SERVICE.get(d["kind"], d["kind"])
+        d["variations"] = d.get("variations") or []
         if d.get("coach_user_id") is not None:
             d["coach_user_id"] = str(d["coach_user_id"])
         out.append(d)

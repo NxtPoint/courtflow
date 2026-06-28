@@ -1199,9 +1199,13 @@
       shown.forEach(function (s) { box.appendChild(serviceCard(s, box)); });
     }, function (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-card cf-empty", text: UI.errMsg(e) })); });
   }
+  function priceSummary(s) {
+    var v = s.variations || [];
+    if (!v.length) return "No prices set yet";
+    var bits = v.slice(0, 4).map(function (x) { var amt = UI.money(x.amount_minor); return x.duration_minutes ? (x.duration_minutes + " min " + amt) : amt; });
+    return bits.join("  ·  ") + (v.length > 4 ? "  · +" + (v.length - 4) + " more" : "");
+  }
   function serviceCard(s, box) {
-    var bits = [s.variation_count + " price" + (s.variation_count === 1 ? "" : "s")];
-    if (s.from_amount_minor != null) bits.push("from " + UI.money(s.from_amount_minor));
     function setStatus(ns) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { status: ns } }).then(function () { renderServiceList(box); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
     var nameKids = [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" })];
     if (s.status !== "active") nameKids.push(UI.statusChip(s.status));
@@ -1209,7 +1213,7 @@
       el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap" }, [
         el("div", {}, [
           el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, nameKids),
-          el("div", { class: "cf-muted cf-tiny", style: "margin-top:4px", text: bits.join(" · ") }),
+          el("div", { class: "cf-muted cf-tiny", style: "margin-top:5px", text: priceSummary(s) }),
         ]),
         el("div", { class: "cf-row", style: "gap:6px" }, UI.lifeActions(s.status, setStatus, { terminateConfirm: "Terminate this service? Kept for history, removed from use." })),
       ]),

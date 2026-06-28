@@ -107,11 +107,19 @@
 
   // ---- lifecycle (Active / Deactivated / Terminated) — one consistent model everywhere -------
   function lifecycleBar(current, onChange) {
-    var seg = el("div", { class: "cf-segment", style: "margin:0 0 14px;max-width:460px" });
+    var bar = el("div", { class: "cf-lifefilter" });
     [["all", "All"], ["active", "Active"], ["deactivated", "Deactivated"], ["terminated", "Terminated"]].forEach(function (o) {
-      seg.appendChild(el("button", { type: "button", class: current === o[0] ? "on" : "", text: o[1], onclick: function () { onChange(o[0]); } }));
+      bar.appendChild(el("button", { type: "button", class: current === o[0] ? "on" : "", text: o[1], onclick: function () { onChange(o[0]); } }));
     });
-    return seg;
+    return bar;
+  }
+  // A horizontal sub-tab strip (underline style). items = [[key,label], …]; onChange(key).
+  function subtabs(current, items, onChange) {
+    var bar = el("div", { class: "cf-subtabs" });
+    items.forEach(function (o) {
+      bar.appendChild(el("button", { type: "button", class: current === o[0] ? "on" : "", text: o[1], onclick: function () { onChange(o[0]); } }));
+    });
+    return bar;
   }
   // Row actions for an item's status; `set(newStatus)` performs the change. Returns button elements
   // (Deactivate/Reactivate + Terminate). Clicks stop propagation so they don't trigger a row's edit.
@@ -138,6 +146,6 @@
     dateKey: dateKey, addDays: addDays, money: money,
     SETTLEMENT: SETTLEMENT, settlementLabel: settlementLabel,
     el: el, esc: esc, clear: clear, toast: toast, errMsg: errMsg, groupByDay: groupByDay,
-    lifecycleBar: lifecycleBar, lifeActions: lifeActions, statusChip: statusChip,
+    lifecycleBar: lifecycleBar, subtabs: subtabs, lifeActions: lifeActions, statusChip: statusChip,
   };
 })();

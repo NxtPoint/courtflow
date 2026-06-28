@@ -52,8 +52,7 @@
       window.AdminUI.clubProfile(sectionHost, d, { saveLabel: "Save changes" });
       renderPayments(sectionHost, (state.data && state.data.policy) || {});  // global payment methods
     } else if (state.tab === "courts") {
-      window.AdminUI.courts(sectionHost, {});            // courts + …
-      window.AdminUI.hours(sectionHost, d.hours || {}, { saveLabel: "Save hours" });  // …their hours, one block
+      window.AdminUI.courtsManage(sectionHost);          // courts as click-to-edit blocks, each with its own per-day hours
     } else if (state.tab === "pricing") {
       // Memberships-as-services: each membership (tier) is one service with term variants inside it
       // (show → Edit). Court rates + packs live in the Service Editor (Services tab).
@@ -96,41 +95,98 @@
     host.appendChild(card);
   }
 
-  // Unified services — every service (court / lesson / class) as a summary card → "Manage" opens
-  // the ONE Service Editor (prices · payment · packages · commission). The same editor the coach
-  // uses; the owner additionally edits commission. One place, no duplication.
+  // Unified services — every service as a summary card → click opens the ONE Service Editor
+  // (prices · payment · packages · commission). Sub-tabs split Lessons / Classes / Courts; lessons &
+  // classes add a coach filter (so you can see which services belong to whom). Summaries are rich:
+  // coach name + the actual durations & amounts, not just a count.
   function renderServices(host) {
     UI.clear(host);
     host.appendChild(el("div", { class: "cf-card" }, [el("div", { class: "cf-loading", text: "Loading services…" })]));
-    window.TFAuth.apiJSON("/api/services").then(function (r) {
-      var svcs = r.services || [];
-      UI.clear(host);
-      host.appendChild(el("div", { class: "cf-card" }, [
-        el("h2", { text: "Services" }),
-        el("p", { class: "cf-muted", text: "Courts, lessons and classes. Everything for a service — prices, payment, packages and commission — lives behind the block (click to edit)." }),
-      ]));
-      host.appendChild(UI.lifecycleBar(state.svcFilter || "active", function (f) { state.svcFilter = f; renderServices(host); }));
-      var filter = state.svcFilter || "active";
-      var shown = svcs.filter(function (s) { return filter === "all" || s.status === filter; });
-      if (!shown.length) { host.appendChild(el("div", { class: "cf-card cf-empty", text: "No " + (filter === "all" ? "" : filter + " ") + "services." })); return; }
-      shown.forEach(function (s) {
-        var bits = [s.variation_count + " price" + (s.variation_count === 1 ? "" : "s")];
-        if (s.from_amount_minor != null) bits.push("from " + UI.money(s.from_amount_minor));
-        function setStatus(ns) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { status: ns } }).then(function () { renderServices(host); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
-        var cardEl = el("div", { class: "cf-card cf-pickable" }, [
-          el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap" }, [
-            el("div", {}, [
-              el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" }), s.status !== "active" ? UI.statusChip(s.status) : null].filter(Boolean)),
-              el("div", { class: "cf-muted cf-tiny", style: "margin-top:4px", text: bits.join(" · ") }),
-            ]),
-            el("div", { class: "cf-row", style: "gap:6px" }, UI.lifeActions(s.status, setStatus, { terminateConfirm: "Terminate “" + (s.name || "this service") + "”? Kept for history, removed from use." })),
-          ]),
-        ]);
-        cardEl.addEventListener("click", function () { window.ServiceEditor.open(s.id, { host: host, onClose: function () { renderServices(host); } }); });
-        if (s.status !== "active") cardEl.style.opacity = "0.6";
-        host.appendChild(cardEl);
-      });
+    Promise.all([
+      window.TFAuth.apiJSON("/api/services"),
+      window.AdminAPI.coaches().catch(function () { return { coaches: [] }; }),
+    ]).then(function (res) {
+      state._svcs = (res[0] && res[0].services) || [];
+      state._coaches = (res[1] && res[1].coaches) || [];
+      drawServices(host);
     }, function (e) { UI.clear(host); host.appendChild(el("div", { class: "cf-card cf-empty", text: UI.errMsg(e) })); });
+  }
+
+  function coachName(c) { return c.display_name || ((c.first_name || "") + " " + (c.surname || "")).trim() || c.email || "Coach"; }
+
+  // The actual durations & amounts as a readable line: "30 min R250 · 60 min R400" (court/lesson),
+  // or just the prices for a class. Falls back gracefully when nothing is priced yet.
+  function priceSummary(s) {
+    var v = s.variations || [];
+    if (!v.length) return "No prices set yet";
+    var bits = v.slice(0, 4).map(function (x) {
+      var amt = UI.money(x.amount_minor);
+      return x.duration_minutes ? (x.duration_minutes + " min " + amt) : amt;
+    });
+    return bits.join("  ·  ") + (v.length > 4 ? "  · +" + (v.length - 4) + " more" : "");
+  }
+
+  function drawServices(host) {
+    UI.clear(host);
+    var svcs = state._svcs || [], coaches = state._coaches || [];
+    var kind = state.svcKind || "lesson";
+    var life = state.svcFilter || "active";
+    var coachF = state.svcCoach || "all";
+    host.appendChild(el("div", { class: "cf-card" }, [
+      el("h2", { text: "Services" }),
+      el("p", { class: "cf-muted", text: "Lessons, classes and court hire. Everything for a service — prices, payment, packages and commission — lives behind the block. Click to edit." }),
+    ]));
+    host.appendChild(UI.subtabs(kind, [["lesson", "Lessons"], ["class", "Classes"], ["court", "Courts"]], function (k) { state.svcKind = k; drawServices(host); }));
+
+    // coach filter — only for coach-owned kinds (lessons & classes)
+    if (kind === "lesson" || kind === "class") {
+      var sel = el("select", { style: "max-width:260px" });
+      sel.appendChild(el("option", { value: "all", text: "All coaches" }));
+      coaches.forEach(function (c) {
+        var uid = String(c.user_id || c.id);
+        var o = el("option", { value: uid, text: coachName(c) }); if (uid === String(coachF)) o.selected = true; sel.appendChild(o);
+      });
+      sel.value = coachF;
+      sel.addEventListener("change", function () { state.svcCoach = sel.value; drawServices(host); });
+      host.appendChild(el("div", { class: "cf-row", style: "gap:10px;align-items:center;margin:0 0 14px;flex-wrap:wrap" }, [
+        el("span", { class: "cf-muted", style: "font-weight:600", text: "Coach" }), sel,
+      ]));
+    }
+
+    host.appendChild(UI.lifecycleBar(life, function (f) { state.svcFilter = f; drawServices(host); }));
+
+    var shown = svcs.filter(function (s) {
+      if (s.service_kind !== kind) return false;
+      if (life !== "all" && s.status !== life) return false;
+      if ((kind === "lesson" || kind === "class") && coachF !== "all" && String(s.coach_user_id) !== String(coachF)) return false;
+      return true;
+    });
+    if (!shown.length) {
+      host.appendChild(el("div", { class: "cf-card cf-empty", text: "No " + (life === "all" ? "" : life + " ") + kind + " services" + (coachF !== "all" ? " for this coach" : "") + "." }));
+      return;
+    }
+    shown.forEach(function (s) { host.appendChild(serviceCard(s, host)); });
+  }
+
+  function serviceCard(s, host) {
+    function setStatus(ns) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { status: ns } }).then(function () { renderServices(host); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
+    var sub = [];
+    if ((s.service_kind === "lesson" || s.service_kind === "class") && s.coach_name) sub.push("Coach: " + s.coach_name);
+    sub.push(priceSummary(s));
+    var titleRow = el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [
+      el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }),
+      el("strong", { text: s.name || "Service" }),
+      s.status !== "active" ? UI.statusChip(s.status) : null,
+    ].filter(Boolean));
+    var cardEl = el("div", { class: "cf-card cf-pickable" }, [
+      el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap" }, [
+        el("div", {}, [titleRow, el("div", { class: "cf-muted cf-tiny", style: "margin-top:5px", text: sub.join("  ·  ") })]),
+        el("div", { class: "cf-row", style: "gap:6px" }, UI.lifeActions(s.status, setStatus, { terminateConfirm: "Terminate “" + (s.name || "this service") + "”? Kept for history, removed from use." })),
+      ]),
+    ]);
+    cardEl.addEventListener("click", function () { window.ServiceEditor.open(s.id, { host: host, onClose: function () { renderServices(host); } }); });
+    if (s.status !== "active") cardEl.style.opacity = "0.6";
+    return cardEl;
   }
 
   window.Settings = {
