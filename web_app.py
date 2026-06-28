@@ -60,6 +60,22 @@ apply_chrome = _chrome_mod.apply_chrome
 
 app = Flask(__name__)
 
+
+@app.after_request
+def _no_cache_app_assets(resp):
+    """Pre-launch: the portal SPA JS/CSS must NEVER be served stale, or deploys appear to "not come
+    through" (the browser + Cloudflare keep the old bundle). Force revalidation on JS/CSS (no-store)
+    and let HTML revalidate (no-cache). At go-live, switch to hashed filenames + long max-age."""
+    ct = (resp.mimetype or "")
+    if ct in ("application/javascript", "text/javascript", "text/css"):
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    elif ct.startswith("text/html"):
+        resp.headers.setdefault("Cache-Control", "no-cache, must-revalidate")
+    return resp
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 MARKETING_DIR = os.path.join(FRONTEND_DIR, "marketing")
