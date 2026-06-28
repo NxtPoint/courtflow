@@ -99,9 +99,10 @@
     }
 
     var plans = (state.mem.plans || []).filter(function (p) { return p.active !== false; });
-    var memModes = state.mem.allowed_payment_modes || [];
-    var canBuy = plans.length > 0 && state.mem.sold && memModes.length > 0;
     if (state.selMem == null && plans.length) state.selMem = plans[0].price_id;
+    var selPlan = plans.filter(function (p) { return p.price_id === state.selMem; })[0] || plans[0];
+    var memModes = (selPlan && selPlan.allowed_payment_modes) || state.mem.allowed_payment_modes || [];
+    var canBuy = plans.length > 0 && state.mem.sold && memModes.length > 0;
     var chooserHost = el("div", { style: "margin-top:10px" });
 
     var card = el("div", { class: "cf-card" }, [

@@ -247,13 +247,14 @@ def yoco_webhook():
 # SAME hosted-checkout + webhook seam as bookings.
 # ---------------------------------------------------------------------------
 
-def _membership_allowed_modes(session, club_id):
-    """The settlement modes a member may use to buy a membership: the membership product's per-service
-    preference (or, when unset, the club's globally-enabled methods), with 'online' kept only when the
-    platform + club both have online pay on. Always non-empty so a membership is always buyable."""
+def _membership_allowed_modes(session, club_id, price_id=None):
+    """The settlement modes a member may use to buy a membership — resolved per the chosen tier:
+    the tier's price-level preference, else the membership product default, else the club's globally
+    enabled methods; 'online' kept only when the platform + club both have online pay on. Always
+    non-empty so a membership is always buyable."""
     from services.repositories import club_payment_methods
     from billing import membership as membership_repo
-    pref = membership_repo.membership_payment_modes(session, club_id=club_id)
+    pref = membership_repo.membership_modes_pref(session, club_id=club_id, price_id=price_id)
     enabled = club_payment_methods(session, club_id=club_id)   # ['online'?, 'at_court', 'monthly_account']
     modes = pref if pref else enabled
     online_ok = _truthy("PAYMENTS_ENABLED") and _club_allows_online(session, club_id)
@@ -292,7 +293,7 @@ def membership_checkout():
     from billing import membership as membership_repo
 
     with session_scope() as s:
-        allowed = _membership_allowed_modes(s, p.club_id)
+        allowed = _membership_allowed_modes(s, p.club_id, price_id=price_id)
         # Resolve the mode: honour the request if allowed; else if there's exactly one option use it;
         # else make the client choose.
         if req_mode and req_mode in allowed:
@@ -349,10 +350,12 @@ def membership_status():
         st = membership_repo.membership_status(s, club_id=p.club_id, user_id=p.user_id)
         # Surface whether the club has online pay on, so the page can disable the Buy button.
         st["online_enabled"] = bool(_truthy("PAYMENTS_ENABLED") and _club_allows_online(s, p.club_id))
-        # Payment options for the purchase wizard: the membership's allowed modes (per-service pref ∩
-        # global, online-gated). The wizard applies the rule — choose when >1, immediate when a single
-        # non-online mode, Yoco when online.
+        # Payment options for the purchase wizard. The default (membership product / global) plus, on
+        # EACH plan, that tier's own allowed modes — so the wizard applies the rule per chosen tier
+        # (choose when >1, immediate when a single non-online mode, Yoco when online).
         st["allowed_payment_modes"] = _membership_allowed_modes(s, p.club_id)
+        for pl in (st.get("plans") or []):
+            pl["allowed_payment_modes"] = _membership_allowed_modes(s, p.club_id, price_id=pl.get("price_id"))
     return jsonify(st), 200
 
 

@@ -85,6 +85,10 @@ _DDL = [
     # (subset of the club-enabled methods), e.g. 'online,at_court'. NULL = all club-enabled. The
     # single source of truth the unified service editor writes + the booking flow reads. Idempotent.
     f"ALTER TABLE {SCHEMA}.product ADD COLUMN IF NOT EXISTS payment_modes text;",
+    # Per-price payment preference — lets a SINGLE membership tier (one price row, or the rows of a
+    # tier) carry its OWN payment options, since all membership tiers share one product. NULL =
+    # inherit the product's payment_modes, then the club's global enabled methods. CSV of modes.
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS payment_modes text;",
     # Service lifecycle (active | deactivated | terminated) — same 3-state model as memberships/coaches.
     # `active` boolean is kept in sync (active = status='active') so customer reads Just Work. Idempotent.
     f"ALTER TABLE {SCHEMA}.product ADD COLUMN IF NOT EXISTS status text;",

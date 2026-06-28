@@ -324,13 +324,27 @@ def sc_membership(s, fx):
 
 def sc_membership_purchase(s, fx):
     print("\n# Membership purchase: payment modes (per-service) + online vs offline settlement")
-    # Per-service payment preference round-trips on the membership product.
+    # Per-service payment preference round-trips on the membership product (the default).
     MB.set_membership_payment_modes(s, club_id=fx.club_id, modes=["at_court"])
     check("membership pay modes set to [at_court]",
           MB.membership_payment_modes(s, club_id=fx.club_id) == ["at_court"])
     MB.set_membership_payment_modes(s, club_id=fx.club_id, modes=None)
     check("membership pay modes cleared → inherit (None)",
           MB.membership_payment_modes(s, club_id=fx.club_id) is None)
+
+    # PER-TIER override: a single membership tier carries its OWN payment options, layered over the
+    # product default → global. The fixture price gets [at_court] only; clearing inherits again.
+    s.execute(text("UPDATE billing.price SET payment_modes = 'at_court' WHERE id = :p"),
+              {"p": fx.membership_price})
+    check("per-tier price pref resolves to [at_court]",
+          MB.membership_modes_pref(s, club_id=fx.club_id, price_id=fx.membership_price) == ["at_court"])
+    # product default takes over once the tier inherits
+    MB.set_membership_payment_modes(s, club_id=fx.club_id, modes=["online", "at_court"])
+    s.execute(text("UPDATE billing.price SET payment_modes = NULL WHERE id = :p"),
+              {"p": fx.membership_price})
+    check("cleared tier falls back to product default",
+          MB.membership_modes_pref(s, club_id=fx.club_id, price_id=fx.membership_price) == ["online", "at_court"])
+    MB.set_membership_payment_modes(s, club_id=fx.club_id, modes=None)  # reset for the rest of the scenario
 
     # ONLINE purchase → awaiting_payment order, NOT active until the webhook (needs_checkout).
     bu = _mk_user(s, "buy_online@bill.test", "BuyOnline")

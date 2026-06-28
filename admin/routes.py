@@ -413,7 +413,7 @@ def post_membership_plan():
             s, club_id=p.club_id, label=b.get("label"), tier=b.get("tier"),
             amount_minor=int(amount_minor), term_months=int(term_months),
             access_days=b.get("access_days"), access_start_min=b.get("access_start_min"),
-            access_end_min=b.get("access_end_min"))
+            access_end_min=b.get("access_end_min"), payment_modes=b.get("payment_modes"))
     return jsonify(plan=plan), 201
 
 
@@ -429,7 +429,8 @@ def patch_membership_plan(price_id):
             label=b.get("label"), amount_minor=b.get("amount_minor"), tier=b.get("tier"),
             term_months=b.get("term_months"), active=b.get("active"), status=b.get("status"),
             set_window=bool(b.get("set_window")), access_days=b.get("access_days"),
-            access_start_min=b.get("access_start_min"), access_end_min=b.get("access_end_min"))
+            access_start_min=b.get("access_start_min"), access_end_min=b.get("access_end_min"),
+            set_modes=bool(b.get("set_modes")), payment_modes=b.get("payment_modes"))
     if plan is None:
         return jsonify(error="NOT_FOUND"), 404
     return jsonify(plan=plan), 200

@@ -42,8 +42,6 @@
 
     main.appendChild(el("div", { class: "cf-row", style: "align-items:baseline;gap:10px;margin-bottom:8px" }, [
       el("h1", { text: "Club admin" }),
-      el("span", { class: "cf-spacer" }),
-      el("a", { class: "cf-btn cf-btn-sm", href: "/settings.html", text: "⚙ Settings" }),
     ]));
 
     // Operate-only: day-to-day running of the club. Configuration (courts, services, memberships,
@@ -55,6 +53,9 @@
       tabs.appendChild(el("a", { href: "#", text: t[1], "data-tab": t[0],
         onclick: function (e) { e.preventDefault(); showTab(t[0]); } }));
     });
+    // Settings (configure) is a sibling surface — a real link out, so it's right here on the
+    // admin menu alongside the operate tabs (Club profile · Courts · Services · Memberships · Coaches).
+    tabs.appendChild(el("a", { href: "/settings.html", text: "⚙ Settings", style: "margin-left:auto" }));
     main.appendChild(tabs);
     main.appendChild(el("div", { id: "admin-panel" }));
     showTab("diary");

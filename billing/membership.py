@@ -87,7 +87,8 @@ def membership_plans(session, *, club_id, active_only=True) -> List[Dict[str, An
     where = "AND p.active = true" if active_only else ""
     rows = session.execute(
         text("SELECT p.id AS price_id, p.label, p.amount_minor, p.term_months, p.membership_tier, "
-             "       p.currency_code, p.active, p.access_days, p.access_start_min, p.access_end_min "
+             "       p.currency_code, p.active, p.access_days, p.access_start_min, p.access_end_min, "
+             "       p.payment_modes "
              "FROM billing.product pr "
              "JOIN billing.price p ON p.product_id = pr.id "
              "WHERE pr.club_id = :c AND pr.kind = 'membership' "
@@ -106,6 +107,8 @@ def membership_plans(session, *, club_id, active_only=True) -> List[Dict[str, An
             "tier": (r["membership_tier"] or None),
             "currency": r["currency_code"],
             "active": bool(r["active"]),
+            # Per-tier payment preference (None = inherit the membership default / global).
+            "payment_modes": _csv_modes(r["payment_modes"]),
             # Access window (Phase 5): a human summary for the purchase page (None = covers any time).
             "access_summary": _window_summary(r["access_days"], r["access_start_min"], r["access_end_min"]),
         })
@@ -190,19 +193,34 @@ def membership_offer(session, *, club_id) -> Optional[Dict[str, Any]]:
 MEMBERSHIP_PAY_MODES = ("online", "at_court", "monthly_account")
 
 
-def membership_payment_modes(session, *, club_id) -> Optional[List[str]]:
-    """The membership product's per-service payment preference (a subset of the club's enabled
-    methods), or None = inherit the club's global enabled methods. Mirrors product.payment_modes
-    for lessons/courts/classes — memberships are just another product."""
-    pid = membership_product_id(session, club_id=club_id)
-    if not pid:
-        return None
-    csv = session.execute(
-        text("SELECT payment_modes FROM billing.product WHERE id = :p"), {"p": pid}).scalar()
+def _csv_modes(csv) -> Optional[List[str]]:
     if not csv:
         return None
     modes = [m.strip() for m in str(csv).split(",") if m.strip() in MEMBERSHIP_PAY_MODES]
     return modes or None
+
+
+def membership_payment_modes(session, *, club_id) -> Optional[List[str]]:
+    """The membership PRODUCT's payment preference (the default for every membership), or None =
+    inherit the club's global enabled methods. Mirrors product.payment_modes for other services."""
+    pid = membership_product_id(session, club_id=club_id)
+    if not pid:
+        return None
+    return _csv_modes(session.execute(
+        text("SELECT payment_modes FROM billing.product WHERE id = :p"), {"p": pid}).scalar())
+
+
+def membership_modes_pref(session, *, club_id, price_id=None) -> Optional[List[str]]:
+    """The LAYERED payment preference for buying a membership: the chosen tier's price-level
+    payment_modes if set, else the membership product's default, else None (= inherit the club's
+    global enabled methods). This is what makes payment options per-membership configurable."""
+    if price_id:
+        per_price = _csv_modes(session.execute(
+            text("SELECT payment_modes FROM billing.price WHERE club_id = :c AND id = :p"),
+            {"c": str(club_id), "p": str(price_id)}).scalar())
+        if per_price:
+            return per_price
+    return membership_payment_modes(session, club_id=club_id)
 
 
 def set_membership_payment_modes(session, *, club_id, modes) -> bool:

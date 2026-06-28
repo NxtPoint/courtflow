@@ -205,7 +205,7 @@
       } else line = "Pick a pack above to see your price.";
     } else {
       var pl = selectedPlan();
-      var memModes = data.mem.allowed_payment_modes || [];
+      var memModes = (pl && pl.allowed_payment_modes) || data.mem.allowed_payment_modes || [];
       if (pl) {
         line = "Membership · " + (pl.label || termLabel(pl.term_months)) + " · " + termLabel(pl.term_months) + " (courts free for the term)";
         total = money(pl.amount_minor, pl.currency || data.mem.currency);

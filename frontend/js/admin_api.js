@@ -1452,8 +1452,15 @@
         terms: (g ? g.plans : []).map(function (p) { return { price_id: p.price_id, term_months: p.term_months, amount_minor: p.amount_minor }; }),
         del: [],
         win: { days: (g && g.plans[0]) ? g.plans[0].access_days : null, start: (g && g.plans[0]) ? g.plans[0].access_start_min : null, end: (g && g.plans[0]) ? g.plans[0].access_end_min : null },
+        modes: (g && g.plans[0] && g.plans[0].payment_modes) ? g.plans[0].payment_modes.slice() : null,  // null = inherit
+        clubMethods: [],
       };
-      renderEditor();
+      // Need the club's enabled methods for the payment-options checkboxes; fetch then render.
+      UI.clear(host); host.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+      window.TFAuth.apiJSON("/api/admin/membership-config").then(function (r) {
+        m.clubMethods = r.club_payment_methods || [];
+        renderEditor();
+      }, function () { m.clubMethods = []; renderEditor(); });
 
       function renderEditor() {
         UI.clear(host);
@@ -1468,7 +1475,32 @@
         nameI.addEventListener("input", function () { m.name = nameI.value; });
         host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Details" }), field("Membership name", nameI)]));
         host.appendChild(accessCard());
+        host.appendChild(paymentCard());
         host.appendChild(termsCard());
+      }
+
+      // Per-membership payment options. Inherits the membership default (then the club's global
+      // methods) unless tailored here. Ticking a subset overrides for THIS membership only.
+      function paymentCard() {
+        var LABELS = { online: "Pay online (card)", at_court: "Pay at the club", monthly_account: "Monthly account" };
+        var c = el("div", { class: "cf-card" }, [el("h3", { text: "Payment options" }),
+          el("p", { class: "cf-muted cf-tiny", text: "How members pay for THIS membership. Leave all ticked to inherit the club default; untick to tailor. A single non-online option checks out immediately." })]);
+        if (!m.clubMethods.length) { c.appendChild(el("div", { class: "cf-muted cf-tiny", text: "Enable payment methods on Club profile first." })); return c; }
+        var checks = {};
+        m.clubMethods.forEach(function (mode) {
+          var lbl = el("label", { class: "cf-row", style: "gap:8px;align-items:center;cursor:pointer;margin-top:6px" });
+          var cb = el("input", { type: "checkbox" }); cb.style.width = "auto";
+          cb.checked = m.modes ? (m.modes.indexOf(mode) >= 0) : true;
+          checks[mode] = cb;
+          cb.addEventListener("change", function () {
+            var sel = m.clubMethods.filter(function (x) { return checks[x].checked; });
+            // all enabled selected → inherit (null); else the chosen subset.
+            m.modes = (sel.length === m.clubMethods.length) ? null : sel;
+          });
+          lbl.appendChild(cb); lbl.appendChild(el("span", { text: LABELS[mode] || mode }));
+          c.appendChild(lbl);
+        });
+        return c;
       }
 
       function accessCard() {
@@ -1508,8 +1540,8 @@
         try {
           for (var i = 0; i < m.terms.length; i++) {
             var t = m.terms[i]; if (!t.term_months) continue;
-            if (t.price_id) await window.AdminAPI.patchMembershipPlan(t.price_id, { tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, set_window: true, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end });
-            else await window.AdminAPI.createMembershipPlan({ tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end });
+            if (t.price_id) await window.AdminAPI.patchMembershipPlan(t.price_id, { tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, set_window: true, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end, set_modes: true, payment_modes: m.modes });
+            else await window.AdminAPI.createMembershipPlan({ tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end, payment_modes: m.modes });
           }
           for (var d = 0; d < m.del.length; d++) await window.AdminAPI.deleteMembershipPlan(m.del[d]);
           UI.toast("Saved.", "info"); membershipServices(host);

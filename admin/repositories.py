@@ -537,12 +537,29 @@ def _plan_row(row):
         "access_days": [int(x) for x in days.split(",") if x.strip()] if days else None,
         "access_start_min": int(row["access_start_min"]) if row.get("access_start_min") is not None else None,
         "access_end_min": int(row["access_end_min"]) if row.get("access_end_min") is not None else None,
+        # Per-tier payment preference (None = inherit the membership default / club global).
+        "payment_modes": ([m for m in str(row["payment_modes"]).split(",") if m]
+                          if ("payment_modes" in row.keys() and row["payment_modes"]) else None),
     }
 
 
 _MEMBERSHIP_PLAN_COLS = (
     "p.id AS price_id, p.label, p.amount_minor, p.term_months, p.currency_code, p.active, p.status, "
-    "p.membership_tier, p.access_days, p.access_start_min, p.access_end_min")
+    "p.membership_tier, p.access_days, p.access_start_min, p.access_end_min, p.payment_modes")
+
+
+_PAY_MODES = ("online", "at_court", "monthly_account")
+
+
+def _modes_csv(modes):
+    """Normalize a payment_modes value (list, CSV str, or None) to a clean CSV of valid modes, or
+    None = inherit. An empty list -> None (inherit)."""
+    if modes is None:
+        return None
+    if isinstance(modes, str):
+        modes = modes.split(",")
+    clean = [m.strip() for m in modes if str(m).strip() in _PAY_MODES]
+    return ",".join(clean) if clean else None
 
 
 def list_membership_plans(session, *, club_id):
@@ -601,22 +618,24 @@ def _days_csv(days):
 
 
 def create_membership_plan(session, *, club_id, label, amount_minor, term_months, tier=None,
-                           access_days=None, access_start_min=None, access_end_min=None):
+                           access_days=None, access_start_min=None, access_end_min=None,
+                           payment_modes=None):
     """Add a term plan = a billing.price (term_months, unit='per_month', audience='member') on the
     club's membership product (creating the product if missing). `tier` is the optional grouping name
     (Student/Family/…) the wizard drills (tier → term). Optional access window (Phase 5) time-boxes a
-    tier: NULL = unconstrained (covers any time)."""
+    tier. `payment_modes` (list/CSV/None) is the tier's payment preference (None = inherit)."""
     prod_id = _membership_product_id(session, club_id=club_id, create_if_missing=True)
     pid = session.execute(
         text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
              "currency_code, unit, term_months, label, membership_tier, active, "
-             "access_days, access_start_min, access_end_min) "
+             "access_days, access_start_min, access_end_min, payment_modes) "
              "VALUES (:c, :prod, 'member', :amt, :cur, 'per_month', :tm, :lbl, :tier, true, "
-             ":days, :smin, :emin) RETURNING id"),
+             ":days, :smin, :emin, :modes) RETURNING id"),
         {"c": club_id, "prod": prod_id, "amt": int(amount_minor),
          "cur": _club_currency(session, club_id=club_id), "tm": int(term_months),
          "lbl": (label or "").strip() or None, "tier": (tier or "").strip() or None,
-         "days": _days_csv(access_days), "smin": access_start_min, "emin": access_end_min},
+         "days": _days_csv(access_days), "smin": access_start_min, "emin": access_end_min,
+         "modes": _modes_csv(payment_modes)},
     ).scalar_one()
     return _get_membership_plan(session, club_id=club_id, price_id=pid)
 
@@ -624,11 +643,11 @@ def create_membership_plan(session, *, club_id, label, amount_minor, term_months
 def patch_membership_plan(session, *, club_id, price_id, label=None, amount_minor=None,
                           term_months=None, active=None, status=None, tier=None,
                           access_days=None, access_start_min=None, access_end_min=None,
-                          set_window=False):
+                          set_window=False, set_modes=False, payment_modes=None):
     """COALESCE partial update of a term plan. Scoped to the club + the membership product so a
     booking price can't be reshaped into a plan here. `label`='' clears to NULL (derive default).
     `status` (active|dormant|retired) keeps the `active` boolean in sync. `set_window=True` writes
-    the access window (any of the three may be NULL = unconstrained); else the window is untouched."""
+    the access window. `set_modes=True` writes the tier's payment preference (None = inherit)."""
     if status is not None and status not in ("active", "dormant", "retired"):
         return None
     lbl = label.strip() if isinstance(label, str) else None
@@ -645,6 +664,7 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
                 access_days      = CASE WHEN :set_win THEN :days ELSE p.access_days END,
                 access_start_min = CASE WHEN :set_win THEN :smin ELSE p.access_start_min END,
                 access_end_min   = CASE WHEN :set_win THEN :emin ELSE p.access_end_min END,
+                payment_modes    = CASE WHEN :set_modes THEN :modes ELSE p.payment_modes END,
                 updated_at   = now()
             FROM billing.product pr
             WHERE p.product_id = pr.id AND pr.club_id = :c AND pr.kind = 'membership'
@@ -657,7 +677,8 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
          "amount_minor": amount_minor, "term_months": term_months,
          "active": active, "status": status,
          "set_win": bool(set_window), "days": _days_csv(access_days),
-         "smin": access_start_min, "emin": access_end_min},
+         "smin": access_start_min, "emin": access_end_min,
+         "set_modes": bool(set_modes), "modes": _modes_csv(payment_modes)},
     ).mappings().first()
     if not res:
         return None
