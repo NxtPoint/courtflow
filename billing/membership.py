@@ -86,7 +86,7 @@ def membership_plans(session, *, club_id, active_only=True) -> List[Dict[str, An
     non-term price)."""
     where = "AND p.active = true" if active_only else ""
     rows = session.execute(
-        text("SELECT p.id AS price_id, p.label, p.amount_minor, p.term_months, "
+        text("SELECT p.id AS price_id, p.label, p.amount_minor, p.term_months, p.membership_tier, "
              "       p.currency_code, p.active, p.access_days, p.access_start_min, p.access_end_min "
              "FROM billing.product pr "
              "JOIN billing.price p ON p.product_id = pr.id "
@@ -103,6 +103,7 @@ def membership_plans(session, *, club_id, active_only=True) -> List[Dict[str, An
             "label": _plan_label(r["label"], tm),
             "amount_minor": int(r["amount_minor"] or 0),
             "term_months": tm,
+            "tier": (r["membership_tier"] or None),
             "currency": r["currency_code"],
             "active": bool(r["active"]),
             # Access window (Phase 5): a human summary for the purchase page (None = covers any time).

@@ -28,11 +28,13 @@
     return durs.sort(function (a, b) { return a - b; });
   }
   function packsForDur(d) { return courtPacks().filter(function (p) { return (p.duration_minutes || 0) === d; }).sort(function (a, b) { return a.sessions_count - b.sessions_count; }); }
+  // tier = the explicit membership_tier (admin field); falls back to the label when unset.
+  function tierOf(p) { return p.tier || p.label || termLabel(p.term_months); }
   function memTiers() {
-    var t = []; memPlans().forEach(function (p) { var l = p.label || termLabel(p.term_months); if (t.indexOf(l) < 0) t.push(l); });
+    var t = []; memPlans().forEach(function (p) { var l = tierOf(p); if (t.indexOf(l) < 0) t.push(l); });
     return t;
   }
-  function plansForTier(l) { return memPlans().filter(function (p) { return (p.label || termLabel(p.term_months)) === l; }).sort(function (a, b) { return (a.term_months || 0) - (b.term_months || 0); }); }
+  function plansForTier(l) { return memPlans().filter(function (p) { return tierOf(p) === l; }).sort(function (a, b) { return (a.term_months || 0) - (b.term_months || 0); }); }
   // Only treat membership as tier→term when a tier genuinely groups MORE THAN ONE term. Otherwise
   // (e.g. the default plans are labelled by term) show a flat list of plans — no redundant tier step.
   function memMultiTier() { var t = memTiers(); return t.length > 1 && t.some(function (l) { return plansForTier(l).length > 1; }); }

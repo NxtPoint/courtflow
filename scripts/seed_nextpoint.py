@@ -349,6 +349,18 @@ def _seed_membership_plans_if_possible(session, *, club_id, currency_code):
              "WHERE club_id=:c AND product_id=:p AND term_months IS NULL AND active=true"),
         {"c": club_id, "p": prod_id},
     )
+    # One-time backfill: give existing default term plans a tier so the wizard groups them ('Standard'
+    # = the base tier; the owner adds Student/Family tiers in Settings). Idempotent (NULLs only); the
+    # column may not exist on a not-yet-booted db — guard it.
+    try:
+        session.execute(
+            text("UPDATE billing.price SET membership_tier='Standard', updated_at=now() "
+                 "WHERE club_id=:c AND product_id=:p AND term_months IS NOT NULL "
+                 "  AND membership_tier IS NULL"),
+            {"c": club_id, "p": prod_id},
+        )
+    except Exception:
+        pass
 
     n = 0
     for label, amount_minor, term_months in MEMBERSHIP_PLANS_ZAR:
@@ -361,8 +373,8 @@ def _seed_membership_plans_if_possible(session, *, club_id, currency_code):
             continue
         session.execute(
             text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
-                 "currency_code, unit, term_months, label, active) "
-                 "VALUES (:c, :p, 'member', :amt, :cur, 'per_month', :tm, :lbl, true)"),
+                 "currency_code, unit, term_months, label, membership_tier, active) "
+                 "VALUES (:c, :p, 'member', :amt, :cur, 'per_month', :tm, :lbl, 'Standard', true)"),
             {"c": club_id, "p": prod_id, "amt": amount_minor, "cur": currency_code,
              "tm": term_months, "lbl": label},
         )

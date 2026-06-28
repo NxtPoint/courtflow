@@ -713,7 +713,8 @@
     }
 
     function planRow(plan) {
-      var labelI = input({ value: plan.label || "", placeholder: planTerm(plan.term_months), style: "max-width:150px" });
+      var tierI = input({ value: plan.tier || "", placeholder: "Tier (e.g. Standard)", style: "max-width:130px" });
+      var labelI = input({ value: plan.label || "", placeholder: planTerm(plan.term_months), style: "max-width:140px" });
       var amtI = input({ value: fromMinor(plan.amount_minor), placeholder: "0.00", style: "max-width:110px" });
       var monthsI = input({ type: "number", value: plan.term_months || 1, min: 1, style: "max-width:80px" });
       var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
@@ -727,13 +728,13 @@
         save.disabled = true;
         try {
           await window.AdminAPI.patchMembershipPlan(plan.price_id, {
-            label: labelI.value.trim(), amount_minor: toMinor(amtI.value), term_months: months,
+            label: labelI.value.trim(), tier: tierI.value.trim(), amount_minor: toMinor(amtI.value), term_months: months,
           });
           UI.toast("Plan updated.", "info"); reload();
         } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
       });
       var row = el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:6px" }, [
-        labelI, amtI,
+        tierI, labelI, amtI,
         el("div", { class: "cf-row", style: "gap:4px;align-items:center" }, [monthsI, el("span", { class: "cf-muted", text: "months" })]),
         el("span", { class: "cf-spacer" }), status, save,
       ]);
@@ -757,7 +758,8 @@
     }
 
     // add-plan form
-    var addLabel = input({ placeholder: "Label (optional, e.g. 3 months)", style: "max-width:170px" });
+    var addTier = input({ placeholder: "Tier (e.g. Student)", style: "max-width:130px" });
+    var addLabel = input({ placeholder: "Label (optional)", style: "max-width:140px" });
     var addAmt = input({ placeholder: "0.00", style: "max-width:110px" });
     var addMonths = input({ type: "number", value: 1, min: 1, placeholder: "Months", style: "max-width:80px" });
     var addBtn = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Add plan" });
@@ -768,14 +770,16 @@
       if (!months || months < 1) { UI.toast("Enter a duration in months (min 1).", "warn"); return; }
       addBtn.disabled = true;
       try {
-        await window.AdminAPI.createMembershipPlan({ label: addLabel.value.trim(), amount_minor: amount, term_months: months });
-        addLabel.value = ""; addAmt.value = ""; addMonths.value = 1;
+        await window.AdminAPI.createMembershipPlan({ label: addLabel.value.trim(), tier: addTier.value.trim(), amount_minor: amount, term_months: months });
+        addTier.value = ""; addLabel.value = ""; addAmt.value = ""; addMonths.value = 1;
         UI.toast("Plan added.", "info"); reload();
       } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { addBtn.disabled = false; }
     });
     card.appendChild(el("h3", { text: "Add a plan", style: "margin-top:14px" }));
-    card.appendChild(el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
-      addLabel, addAmt,
+    card.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:-6px 0 8px",
+      text: "Tier groups plans in the buy wizard (e.g. a 'Student' tier with 6- and 12-month terms). Leave blank for a standalone plan." }));
+    card.appendChild(el("div", { class: "cf-row", style: "gap:6px;align-items:center;flex-wrap:wrap" }, [
+      addTier, addLabel, addAmt,
       el("div", { class: "cf-row", style: "gap:4px;align-items:center" }, [addMonths, el("span", { class: "cf-muted", text: "months" })]),
       addBtn,
     ]));

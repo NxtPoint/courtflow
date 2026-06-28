@@ -509,6 +509,7 @@ def _plan_row(row):
         "currency": row["currency_code"],
         "active": bool(row["active"]),
         "status": row["status"] if "status" in row.keys() else ("active" if row["active"] else "retired"),
+        "tier": (row["membership_tier"] if "membership_tier" in row.keys() else None) or None,
         # Access window (Phase 5): NULL = unconstrained (covers any time). access_days = ISO list.
         "access_days": [int(x) for x in days.split(",") if x.strip()] if days else None,
         "access_start_min": int(row["access_start_min"]) if row.get("access_start_min") is not None else None,
@@ -518,7 +519,7 @@ def _plan_row(row):
 
 _MEMBERSHIP_PLAN_COLS = (
     "p.id AS price_id, p.label, p.amount_minor, p.term_months, p.currency_code, p.active, p.status, "
-    "p.access_days, p.access_start_min, p.access_end_min")
+    "p.membership_tier, p.access_days, p.access_start_min, p.access_end_min")
 
 
 def list_membership_plans(session, *, club_id):
@@ -576,28 +577,29 @@ def _days_csv(days):
     return ",".join(str(n) for n in nums)
 
 
-def create_membership_plan(session, *, club_id, label, amount_minor, term_months,
+def create_membership_plan(session, *, club_id, label, amount_minor, term_months, tier=None,
                            access_days=None, access_start_min=None, access_end_min=None):
     """Add a term plan = a billing.price (term_months, unit='per_month', audience='member') on the
-    club's membership product (creating the product if missing). Optional access window (Phase 5)
-    time-boxes a tier: NULL = unconstrained (covers any time)."""
+    club's membership product (creating the product if missing). `tier` is the optional grouping name
+    (Student/Family/…) the wizard drills (tier → term). Optional access window (Phase 5) time-boxes a
+    tier: NULL = unconstrained (covers any time)."""
     prod_id = _membership_product_id(session, club_id=club_id, create_if_missing=True)
     pid = session.execute(
         text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
-             "currency_code, unit, term_months, label, active, "
+             "currency_code, unit, term_months, label, membership_tier, active, "
              "access_days, access_start_min, access_end_min) "
-             "VALUES (:c, :prod, 'member', :amt, :cur, 'per_month', :tm, :lbl, true, "
+             "VALUES (:c, :prod, 'member', :amt, :cur, 'per_month', :tm, :lbl, :tier, true, "
              ":days, :smin, :emin) RETURNING id"),
         {"c": club_id, "prod": prod_id, "amt": int(amount_minor),
          "cur": _club_currency(session, club_id=club_id), "tm": int(term_months),
-         "lbl": (label or "").strip() or None, "days": _days_csv(access_days),
-         "smin": access_start_min, "emin": access_end_min},
+         "lbl": (label or "").strip() or None, "tier": (tier or "").strip() or None,
+         "days": _days_csv(access_days), "smin": access_start_min, "emin": access_end_min},
     ).scalar_one()
     return _get_membership_plan(session, club_id=club_id, price_id=pid)
 
 
 def patch_membership_plan(session, *, club_id, price_id, label=None, amount_minor=None,
-                          term_months=None, active=None, status=None,
+                          term_months=None, active=None, status=None, tier=None,
                           access_days=None, access_start_min=None, access_end_min=None,
                           set_window=False):
     """COALESCE partial update of a term plan. Scoped to the club + the membership product so a
@@ -611,6 +613,7 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
         text("""
             UPDATE billing.price p SET
                 label        = CASE WHEN :lbl_set THEN :lbl ELSE p.label END,
+                membership_tier = CASE WHEN :tier_set THEN :tier ELSE p.membership_tier END,
                 amount_minor = COALESCE(:amount_minor, p.amount_minor),
                 term_months  = COALESCE(:term_months, p.term_months),
                 status       = COALESCE(:status, p.status),
@@ -627,6 +630,7 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
         """),
         {"c": club_id, "pid": price_id,
          "lbl_set": label is not None, "lbl": (lbl or None),
+         "tier_set": tier is not None, "tier": ((tier or "").strip() or None) if isinstance(tier, str) else None,
          "amount_minor": amount_minor, "term_months": term_months,
          "active": active, "status": status,
          "set_win": bool(set_window), "days": _days_csv(access_days),

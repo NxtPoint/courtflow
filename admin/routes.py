@@ -409,7 +409,7 @@ def post_membership_plan():
         return jsonify(error="amount_minor required"), 400
     with session_scope() as s:
         plan = repo.create_membership_plan(
-            s, club_id=p.club_id, label=b.get("label"),
+            s, club_id=p.club_id, label=b.get("label"), tier=b.get("tier"),
             amount_minor=int(amount_minor), term_months=int(term_months),
             access_days=b.get("access_days"), access_start_min=b.get("access_start_min"),
             access_end_min=b.get("access_end_min"))
@@ -425,7 +425,7 @@ def patch_membership_plan(price_id):
     with session_scope() as s:
         plan = repo.patch_membership_plan(
             s, club_id=p.club_id, price_id=price_id,
-            label=b.get("label"), amount_minor=b.get("amount_minor"),
+            label=b.get("label"), amount_minor=b.get("amount_minor"), tier=b.get("tier"),
             term_months=b.get("term_months"), active=b.get("active"), status=b.get("status"),
             set_window=bool(b.get("set_window")), access_days=b.get("access_days"),
             access_start_min=b.get("access_start_min"), access_end_min=b.get("access_end_min"))

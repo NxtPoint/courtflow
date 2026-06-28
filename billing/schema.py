@@ -78,6 +78,9 @@ _DDL = [
     f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS access_days text;",
     f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS access_start_min int;",
     f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS access_end_min int;",
+    # Membership TIER name (Student/Family/…) — the grouping the plan wizard drills (tier → term),
+    # distinct from `label`. NULL = ungrouped. Only meaningful on membership term plans. Idempotent.
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS membership_tier text;",
     f"CREATE INDEX IF NOT EXISTS ix_price_product ON {SCHEMA}.price (product_id);",
     # Lifecycle (3-state) on an EXISTING db: add status, backfill from the active boolean
     # (active->'active', inactive->'retired'; only WHERE status IS NULL so a later 'dormant'
