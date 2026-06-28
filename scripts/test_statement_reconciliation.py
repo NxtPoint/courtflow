@@ -120,6 +120,9 @@ def sc_no_double_count(s, fx):
     check("total owed == R400 + R150 == R550 (NOT doubled)", st["total_owed_minor"] == 55000, str(st["total_owed_minor"]))
     check("lines carry their kind (court + lesson)", sorted(i["kind"] for i in st["items"]) == ["court", "lesson"])
     check("each line shows a pay type", all(i["pay_label"] for i in st["items"]))
+    check("lines carry a grouping category", sorted(i["category"] for i in st["items"]) == ["Coaching", "Court hire"],
+          str(sorted(i["category"] for i in st["items"])))
+    check("the coaching line names the coach", any(i["category"] == "Coaching" and i["coach_name"] for i in st["items"]))
 
 
 def sc_membership_r0(s, fx):

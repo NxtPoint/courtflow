@@ -58,7 +58,23 @@ def unpaid_orders(session, *, club_id, user_id) -> List[Dict[str, Any]]:
                           LEFT JOIN diary.booking b  ON b.id = ol.booking_id
                           LEFT JOIN billing.price   p  ON p.id = ol.price_id
                           LEFT JOIN billing.product pr ON pr.id = p.product_id
-                         WHERE ol.order_id = o.id ORDER BY ol.created_at LIMIT 1) AS kind
+                         WHERE ol.order_id = o.id ORDER BY ol.created_at LIMIT 1) AS kind,
+                       (SELECT COALESCE(cp.display_name,
+                                        NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)), ''), u.email)
+                          FROM billing.order_line ol
+                          LEFT JOIN diary.booking b  ON b.id = ol.booking_id
+                          LEFT JOIN billing.price   p  ON p.id = ol.price_id
+                          LEFT JOIN billing.product pr ON pr.id = p.product_id
+                          LEFT JOIN iam."user" u ON u.id = COALESCE(pr.coach_user_id, b.coach_user_id)
+                          LEFT JOIN iam.coach_profile cp ON cp.club_id = o.club_id
+                               AND cp.user_id = COALESCE(pr.coach_user_id, b.coach_user_id)
+                         WHERE ol.order_id = o.id AND COALESCE(pr.coach_user_id, b.coach_user_id) IS NOT NULL
+                         ORDER BY ol.created_at LIMIT 1) AS coach_name,
+                       (SELECT b.starts_at FROM billing.order_line ol
+                          JOIN diary.booking b ON b.id = ol.booking_id
+                         WHERE ol.order_id = o.id ORDER BY ol.created_at LIMIT 1) AS starts_at,
+                       EXISTS (SELECT 1 FROM billing.token_wallet w WHERE w.order_id = o.id) AS is_pack,
+                       EXISTS (SELECT 1 FROM billing.membership_subscription ms WHERE ms.order_id = o.id) AS is_membership
                 FROM billing."order" o
                 WHERE o.club_id = :c AND o.user_id = :u
                   AND o.status IN ('open')
@@ -73,15 +89,35 @@ def unpaid_orders(session, *, club_id, user_id) -> List[Dict[str, Any]]:
     out = []
     for r in rows:
         mode = r["settlement_mode"]
+        kind = (r["kind"] or "other")
+        # Category drives the statement's grouping headings.
+        if r["is_pack"]:
+            category = "Session packs"
+        elif r["is_membership"]:
+            category = "Membership"
+        elif kind == "lesson":
+            category = "Coaching"
+        elif kind == "court":
+            category = "Court hire"
+        elif kind == "class":
+            category = "Classes"
+        else:
+            category = "Other"
+        # The line's own date: a booking's start time if present, else when the order was raised.
+        when = r["starts_at"] or r["created_at"]
         out.append({
             "order_id": str(r["id"]),
             "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+            "date": when.isoformat() if hasattr(when, "isoformat") else when,
             "description": r["description"] or "Booking",
-            "kind": (r["kind"] or "other"),
+            "kind": kind,
+            "category": category,
+            "coach_name": r["coach_name"],
             "amount_minor": int(r["amount_minor"] or 0),
             "currency": r["currency_code"],
             "settlement_mode": mode,
             "pay_label": _PAY_LABEL.get(mode, mode),
+            "status": "Owed",
         })
     return out
 
