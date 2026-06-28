@@ -15,6 +15,16 @@
     return window.TFAuth;
   }
 
+  // The ONE payment rule, shared by booking + membership + pack purchases:
+  //   • >1 allowed mode      → the client chooses (render a chooser into `host`)
+  //   • exactly 1, online    → straight to Yoco
+  //   • exactly 1, NOT online → check out immediately, no payment prompt
+  // `modes` are the server-validated allowed settlement modes for the thing being bought.
+  function modeLabel(m) {
+    var S = (window.UI && window.UI.SETTLEMENT) || {};
+    return (S[m] && S[m].label) || m;
+  }
+
   var Pay = {
     // POST /api/billing/yoco/checkout {order_id} -> {redirect_url}; then redirect.
     // Returns the response if no redirect happened; throws on error (caller can show it).
@@ -30,6 +40,49 @@
         }
         throw new Error("no redirect_url from checkout");
       });
+    },
+
+    // Buy a membership term plan applying the one rule above.
+    //   opts = { priceId?, modes:[...], host?:Element, onActivated?(res), onError?(err) }
+    // host is where the mode chooser renders when there's a real choice (>1 mode). For a single
+    // non-online mode it never prompts — it just completes and calls onActivated.
+    buyMembership: function (opts) {
+      opts = opts || {};
+      var UI = window.UI, el = UI && UI.el;
+      var modes = (opts.modes || []).filter(function (m) { return m === "online" || m === "at_court" || m === "monthly_account"; });
+      var onErr = opts.onError || function (e) { if (UI) UI.toast(UI.errMsg(e), "error"); };
+
+      function checkout(mode) {
+        var body = {};
+        if (opts.priceId) body.price_id = opts.priceId;
+        if (mode) body.settlement_mode = mode;
+        return auth().apiJSON("/api/billing/membership/checkout", { method: "POST", body: body })
+          .then(function (res) {
+            if (res && (res.settlement_mode === "online" || res.needs_checkout) && res.order_id) {
+              return Pay.startYocoCheckout(res.order_id);
+            }
+            if (res && res.activated) { if (opts.onActivated) opts.onActivated(res); return res; }
+            // server asked us to choose (shouldn't reach here — we resolve below), surface allowed.
+            if (res && res.allowed) { renderChooser(res.allowed); return res; }
+            throw new Error("unexpected checkout response");
+          }, onErr);
+      }
+
+      function renderChooser(ms) {
+        if (!opts.host || !el) { return checkout(ms[0]); }   // no host → take the first allowed mode
+        var host = opts.host; UI.clear(host);
+        host.appendChild(el("div", { class: "cf-pref-h", text: "How would you like to pay?" }));
+        var wrap = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin-top:8px" });
+        ms.forEach(function (m) {
+          wrap.appendChild(el("button", { class: "cf-btn" + (m === "online" ? " cf-btn-primary" : ""), text: modeLabel(m),
+            onclick: function () { checkout(m); } }));
+        });
+        host.appendChild(wrap);
+      }
+
+      if (modes.length > 1) { renderChooser(modes); return; }
+      // 0 or 1 mode: let the server resolve the single allowed mode (it defaults safely).
+      checkout(modes[0]);
     },
   };
 

@@ -247,12 +247,33 @@ def yoco_webhook():
 # SAME hosted-checkout + webhook seam as bookings.
 # ---------------------------------------------------------------------------
 
+def _membership_allowed_modes(session, club_id):
+    """The settlement modes a member may use to buy a membership: the membership product's per-service
+    preference (or, when unset, the club's globally-enabled methods), with 'online' kept only when the
+    platform + club both have online pay on. Always non-empty so a membership is always buyable."""
+    from services.repositories import club_payment_methods
+    from billing import membership as membership_repo
+    pref = membership_repo.membership_payment_modes(session, club_id=club_id)
+    enabled = club_payment_methods(session, club_id=club_id)   # ['online'?, 'at_court', 'monthly_account']
+    modes = pref if pref else enabled
+    online_ok = _truthy("PAYMENTS_ENABLED") and _club_allows_online(session, club_id)
+    out = []
+    for m in modes:
+        if m == "online" and not online_ok:
+            continue
+        if m in membership_repo.MEMBERSHIP_PAY_MODES:
+            out.append(m)
+    return out or ["at_court"]
+
+
 @yoco_bp.post("/api/billing/membership/checkout")
 def membership_checkout():
-    """AUTH'd member. Create an online order for the CHOSEN membership term plan + a pending
-    subscription row linked to it, then return {order_id} so the page calls
-    Pay.startYocoCheckout(order_id). Body {price_id?} selects the term plan; omitted → the
-    cheapest active plan. Same gates as a booking online payment."""
+    """AUTH'd member. Buy the chosen membership term plan. Body {price_id?, settlement_mode?}:
+      online           -> returns {order_id, needs_checkout:true} so the page calls
+                          Pay.startYocoCheckout(order_id); the webhook activates on paid.
+      at_court/monthly -> activates the membership IMMEDIATELY (no Yoco) and returns
+                          {activated:true, needs_checkout:false}; the 'open' order is collected later.
+    The mode is validated against the membership's allowed modes (per-service preference / global)."""
     from auth import resolve_principal
 
     p = resolve_principal(request)
@@ -263,21 +284,34 @@ def membership_checkout():
     if not p.user_id:
         return jsonify(error="no_user"), 403
 
-    if not _truthy("PAYMENTS_ENABLED"):
-        return jsonify(error="online_payments_disabled"), 403
-
     body = request.get_json(silent=True) or {}
     price_id = (body.get("price_id") or "").strip() or None
+    req_mode = (body.get("settlement_mode") or "").strip().lower() or None
 
     from db import session_scope
     from billing import membership as membership_repo
 
     with session_scope() as s:
-        if not _club_allows_online(s, p.club_id):
-            return jsonify(error="online_payments_not_enabled_for_club"), 403
+        allowed = _membership_allowed_modes(s, p.club_id)
+        # Resolve the mode: honour the request if allowed; else if there's exactly one option use it;
+        # else make the client choose.
+        if req_mode and req_mode in allowed:
+            mode = req_mode
+        elif len(allowed) == 1:
+            mode = allowed[0]
+        elif req_mode:
+            return jsonify(error="payment_mode_not_allowed", allowed=allowed), 400
+        else:
+            return jsonify(error="payment_mode_required", allowed=allowed), 400
+
+        if mode == "online":
+            # Online keeps the platform + club gates (offline modes don't need them).
+            if not _truthy("PAYMENTS_ENABLED") or not _club_allows_online(s, p.club_id):
+                return jsonify(error="online_payments_not_enabled_for_club"), 403
+
         try:
             res = membership_repo.create_membership_order(
-                s, club_id=p.club_id, user_id=p.user_id, price_id=price_id)
+                s, club_id=p.club_id, user_id=p.user_id, price_id=price_id, settlement_mode=mode)
         except Exception as e:
             log.warning("create_membership_order failed club=%s: %s", p.club_id, e)
             return jsonify(error="membership_order_failed"), 500
@@ -289,7 +323,10 @@ def membership_checkout():
     return jsonify(order_id=res["order_id"], amount_minor=res["amount_minor"],
                    currency=res["currency"], price_id=res["price_id"],
                    term_months=res.get("term_months"), label=res.get("label"),
-                   provider="yoco"), 200
+                   settlement_mode=res.get("settlement_mode"),
+                   needs_checkout=bool(res.get("needs_checkout")),
+                   activated=bool(res.get("activated")),
+                   provider=res.get("settlement_mode") == "online" and "yoco" or "manual"), 200
 
 
 @yoco_bp.get("/api/billing/membership/status")
@@ -312,6 +349,10 @@ def membership_status():
         st = membership_repo.membership_status(s, club_id=p.club_id, user_id=p.user_id)
         # Surface whether the club has online pay on, so the page can disable the Buy button.
         st["online_enabled"] = bool(_truthy("PAYMENTS_ENABLED") and _club_allows_online(s, p.club_id))
+        # Payment options for the purchase wizard: the membership's allowed modes (per-service pref ∩
+        # global, online-gated). The wizard applies the rule — choose when >1, immediate when a single
+        # non-online mode, Yoco when online.
+        st["allowed_payment_modes"] = _membership_allowed_modes(s, p.club_id)
     return jsonify(st), 200
 
 

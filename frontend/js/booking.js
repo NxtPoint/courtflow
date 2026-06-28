@@ -449,6 +449,16 @@
       card.appendChild(el("p", { style: "text-align:center;margin-top:8px" }, [
         el("a", { href: "#", class: "cf-muted cf-tiny", text: "Pay another way instead", onclick: function (ev) { ev.preventDefault(); st.showPayOptions = true; renderConfirm(); } }),
       ]));
+    } else if (modes.length <= 1) {
+      // One way to pay → no choice to present (the rule). Online → the button says "Confirm & pay";
+      // a single offline method → just show what it is.
+      var only = modes[0] || "at_court";
+      if (only !== "online" && UI.SETTLEMENT[only]) {
+        card.appendChild(el("div", { class: "cf-confirm-sec" }, [
+          el("h3", { text: "Payment" }),
+          el("p", { class: "cf-muted cf-tiny", text: UI.SETTLEMENT[only].label + " — " + (UI.SETTLEMENT[only].hint || "") }),
+        ]));
+      }
     } else {
       card.appendChild(el("div", { class: "cf-confirm-sec" }, [ el("h3", { text: "How would you like to pay?" }), settlementBlocks(modes) ]));
     }

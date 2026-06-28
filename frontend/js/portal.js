@@ -34,6 +34,7 @@
     { href: "/coach.html",  label: "Coach",     roles: ["coach", "club_admin", "platform_admin"] },
     { href: "/statement.html", label: "Statement", roles: ["coach"] },
     { href: "/admin.html",  label: "Admin",     roles: ["club_admin", "platform_admin"] },
+    { href: "/settings.html", label: "Settings", roles: ["club_admin", "platform_admin"] },
   ];
 
   function allowed(item, role) {

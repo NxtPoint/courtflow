@@ -322,6 +322,41 @@ def sc_membership(s, fx):
     check("signup trial granted once, not double", n == 1, f"trial rows={n} g1={g1} g2={g2}")
 
 
+def sc_membership_purchase(s, fx):
+    print("\n# Membership purchase: payment modes (per-service) + online vs offline settlement")
+    # Per-service payment preference round-trips on the membership product.
+    MB.set_membership_payment_modes(s, club_id=fx.club_id, modes=["at_court"])
+    check("membership pay modes set to [at_court]",
+          MB.membership_payment_modes(s, club_id=fx.club_id) == ["at_court"])
+    MB.set_membership_payment_modes(s, club_id=fx.club_id, modes=None)
+    check("membership pay modes cleared → inherit (None)",
+          MB.membership_payment_modes(s, club_id=fx.club_id) is None)
+
+    # ONLINE purchase → awaiting_payment order, NOT active until the webhook (needs_checkout).
+    bu = _mk_user(s, "buy_online@bill.test", "BuyOnline")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": bu})
+    onl = MB.create_membership_order(s, club_id=fx.club_id, user_id=bu,
+                                     price_id=fx.membership_price, settlement_mode="online")
+    check("online order needs_checkout, not yet active",
+          onl["needs_checkout"] and not onl["activated"], str(onl))
+    check("online order is awaiting_payment", _order(s, onl["order_id"])["status"] == "awaiting_payment")
+    check("online buyer NOT a member until paid",
+          not PR.has_active_membership(s, club_id=fx.club_id, user_id=bu))
+
+    # OFFLINE (at the desk) → 'open' order + membership ACTIVE immediately (no checkout).
+    bu2 = _mk_user(s, "buy_desk@bill.test", "BuyDesk")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": bu2})
+    off = MB.create_membership_order(s, club_id=fx.club_id, user_id=bu2,
+                                     price_id=fx.membership_price, settlement_mode="at_court")
+    check("offline order: no checkout, activated immediately",
+          (not off["needs_checkout"]) and off["activated"], str(off))
+    check("offline order is 'open' (owed at desk)", _order(s, off["order_id"])["status"] == "open")
+    check("offline buyer IS a member straight away",
+          PR.has_active_membership(s, club_id=fx.club_id, user_id=bu2))
+
+
 def sc_refund_request(s, fx):
     print("\n# Refund request lifecycle: create → list → decline (terminal) → withdraw")
     # A paid order to refund.
@@ -401,6 +436,7 @@ SCENARIOS = [
     sc_commission,
     sc_tokens,
     sc_membership,
+    sc_membership_purchase,
     sc_refund_request,
 ]
 

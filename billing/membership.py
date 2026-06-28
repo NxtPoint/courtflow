@@ -184,12 +184,57 @@ def membership_offer(session, *, club_id) -> Optional[Dict[str, Any]]:
             "currency": p["currency"], "term_months": p["term_months"], "label": p["label"]}
 
 
-def create_membership_order(session, *, club_id, user_id, price_id=None) -> Optional[Dict[str, Any]]:
-    """Create an online (awaiting_payment) order for the chosen membership term plan + a pending
-    subscription row linked by order_id (the webhook's recognition key). `price_id` selects the
-    plan; if omitted, the CHEAPEST active plan is used. Returns
-    {order_id, amount_minor, currency, price_id, term_months, label} or None if the club sells no
-    membership / the chosen plan is invalid."""
+# A membership may be paid online (Yoco) OR settled offline (at the desk / on the monthly tab) —
+# exactly the same settlement vocabulary bookings use. Offline modes activate the membership
+# immediately (the member can play now) and leave an 'open' order that the desk collects later.
+MEMBERSHIP_PAY_MODES = ("online", "at_court", "monthly_account")
+
+
+def membership_payment_modes(session, *, club_id) -> Optional[List[str]]:
+    """The membership product's per-service payment preference (a subset of the club's enabled
+    methods), or None = inherit the club's global enabled methods. Mirrors product.payment_modes
+    for lessons/courts/classes — memberships are just another product."""
+    pid = membership_product_id(session, club_id=club_id)
+    if not pid:
+        return None
+    csv = session.execute(
+        text("SELECT payment_modes FROM billing.product WHERE id = :p"), {"p": pid}).scalar()
+    if not csv:
+        return None
+    modes = [m.strip() for m in str(csv).split(",") if m.strip() in MEMBERSHIP_PAY_MODES]
+    return modes or None
+
+
+def set_membership_payment_modes(session, *, club_id, modes) -> bool:
+    """Persist the membership product's payment preference (a list, or None = inherit global).
+    Creates the membership product if the club doesn't have one yet."""
+    pid = membership_product_id(session, club_id=club_id, create_if_missing=True)
+    if modes is None:
+        csv = None
+    else:
+        clean = [m for m in modes if m in MEMBERSHIP_PAY_MODES]
+        csv = ",".join(clean) if clean else None
+    session.execute(
+        text("UPDATE billing.product SET payment_modes = :m, updated_at = now() WHERE id = :p"),
+        {"m": csv, "p": pid})
+    return True
+
+
+def create_membership_order(session, *, club_id, user_id, price_id=None,
+                            settlement_mode="online") -> Optional[Dict[str, Any]]:
+    """Create an order for the chosen membership term plan + a subscription row linked by order_id.
+    `price_id` selects the plan; if omitted, the CHEAPEST active plan is used. `settlement_mode` is
+    one of MEMBERSHIP_PAY_MODES:
+      online           -> 'awaiting_payment' order; member pays via Yoco; the webhook activates.
+      at_court/monthly -> 'open' order (owed, settled at the desk / on the tab); the membership is
+                          activated IMMEDIATELY so the member can play now.
+    Returns {order_id, amount_minor, currency, price_id, term_months, label, settlement_mode,
+    needs_checkout, activated} or None if the club sells no membership / the chosen plan is invalid."""
+    mode = (settlement_mode or "online").strip().lower()
+    if mode not in MEMBERSHIP_PAY_MODES:
+        mode = "online"
+    online = (mode == "online")
+
     plan = None
     if price_id:
         plan = _plan_for_price(session, club_id=club_id, price_id=price_id)
@@ -206,15 +251,18 @@ def create_membership_order(session, *, club_id, user_id, price_id=None) -> Opti
     term_months = plan["term_months"]
     label = plan["label"]
 
+    order_status = "awaiting_payment" if online else "open"
+    provider = "yoco" if online else "manual"
+
     order_id = session.execute(
         text("""
             INSERT INTO billing."order"
                 (club_id, user_id, amount_minor, currency_code, settlement_mode, status)
-            VALUES (:c, :u, :amt, :cur, 'online', 'awaiting_payment')
+            VALUES (:c, :u, :amt, :cur, :mode, :st)
             RETURNING id
         """),
         {"c": str(club_id), "u": str(user_id) if user_id else None,
-         "amt": amount, "cur": currency},
+         "amt": amount, "cur": currency, "mode": mode, "st": order_status},
     ).scalar_one()
     order_id = str(order_id)
 
@@ -229,22 +277,37 @@ def create_membership_order(session, *, club_id, user_id, price_id=None) -> Opti
          "desc": f"Membership — Unlimited Courts ({label})", "pid": price_id, "amt": amount},
     )
 
-    # PENDING subscription row, linked by order_id + carrying the chosen plan's price_id — the
-    # webhook activates THIS row on paid and reads term_months off the linked price. status
-    # 'expired' is the placeholder pending-state (an unpaid intent must NOT count as active in
-    # has_active_membership); activation flips it to 'active'.
+    # Subscription row linked by order_id + carrying the chosen plan's price_id. status 'expired'
+    # is the placeholder pending-state (an unpaid intent must NOT count as active); activation flips
+    # it to 'active'. Online → the webhook activates on paid; offline → we activate right below.
     session.execute(
         text("""
             INSERT INTO billing.membership_subscription
                 (club_id, user_id, price_id, status, provider, order_id)
-            VALUES (:c, :u, :pid, 'expired', 'yoco', :oid)
+            VALUES (:c, :u, :pid, 'expired', :prov, :oid)
         """),
         {"c": str(club_id), "u": str(user_id) if user_id else None,
-         "pid": price_id, "oid": order_id},
+         "pid": price_id, "prov": provider, "oid": order_id},
     )
 
-    return {"order_id": order_id, "amount_minor": amount, "currency": currency,
-            "price_id": price_id, "term_months": term_months, "label": label}
+    out = {"order_id": order_id, "amount_minor": amount, "currency": currency,
+           "price_id": price_id, "term_months": term_months, "label": label,
+           "settlement_mode": mode, "needs_checkout": online, "activated": False}
+
+    if not online:
+        # Offline (at desk / monthly tab): activate the membership now — the member plays immediately;
+        # the 'open' order is collected later. No Yoco round-trip.
+        link = session.execute(
+            text("SELECT id, club_id, user_id, price_id, status, current_period_end "
+                 "FROM billing.membership_subscription WHERE order_id = :oid ORDER BY created_at LIMIT 1"),
+            {"oid": order_id},
+        ).mappings().first()
+        if link:
+            out["activation"] = _apply_term_grant(
+                session, link=link, months=max(1, int(term_months or 1)), provider=provider)
+            out["activated"] = True
+
+    return out
 
 
 def is_membership_order(session, *, order_id) -> bool:
@@ -290,6 +353,13 @@ def activate_membership_for_order(session, *, order_id, provider="yoco",
     if not paid:
         return {"ok": True, "status": "order_not_paid"}
 
+    return _apply_term_grant(session, link=link, months=months, provider=provider)
+
+
+def _apply_term_grant(session, *, link, months, provider) -> Dict[str, Any]:
+    """Core period grant for a subscription `link` row — NO paid-gate (callers decide when it's due).
+    Idempotent on an already-active row for this order; stacks onto an existing active membership if
+    the member already holds one. Used by both the paid-webhook path and the offline immediate path."""
     def _iso(v):
         return v.isoformat() if hasattr(v, "isoformat") else (str(v) if v is not None else None)
 

@@ -448,6 +448,38 @@ def delete_membership_plan(price_id):
     return jsonify(ok=True), 200
 
 
+@admin_bp.get("/membership-config")
+def get_membership_config():
+    """The membership product's payment preference + the club's enabled methods, for the editor.
+    {payment_modes: [...]|null (null = inherit), club_payment_methods: [...]}."""
+    p, err = _admin()
+    if err:
+        return err
+    from billing import membership as membership_repo
+    from services.repositories import club_payment_methods
+    with session_scope() as s:
+        modes = membership_repo.membership_payment_modes(s, club_id=p.club_id)
+        enabled = club_payment_methods(s, club_id=p.club_id)
+    return jsonify(payment_modes=modes, club_payment_methods=enabled), 200
+
+
+@admin_bp.patch("/membership-config")
+def patch_membership_config():
+    """Set the membership product's payment preference. Body {payment_modes: [...]|null} — null/empty
+    inherits the club's global methods."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    modes = b.get("payment_modes", None)
+    if modes is not None and not isinstance(modes, list):
+        return jsonify(error="payment_modes must be a list or null"), 400
+    from billing import membership as membership_repo
+    with session_scope() as s:
+        membership_repo.set_membership_payment_modes(s, club_id=p.club_id, modes=modes)
+    return jsonify(ok=True), 200
+
+
 # ---------------------------------------------------------------------------
 # session-pack (token bundle) plans — the owner-configured prepaid packs (docs/specs/02).
 # Each plan = a billing.bundle_plan row (service_kind, optional coach, label, #sessions, optional

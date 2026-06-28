@@ -191,25 +191,31 @@
 
   // ---- live quote + pay ------------------------------------------------------
   function quoteBar() {
-    var online = ui.mode === "payg" ? data.bundles.online_enabled : data.mem.online_enabled;
-    var line, total = null, onBuy = null;
+    var line, total = null, onBuy = null, buyable = false, note = null;
+    var chooserHost = el("div", { style: "margin-top:6px" });   // membership pay-mode chooser renders here
     if (ui.mode === "payg") {
       var p = selectedPack();
+      var online = data.bundles.online_enabled;
       if (p) {
         line = "Pay as you go · " + durLabel(p.duration_minutes || 0) + " · " + p.sessions_count + " session" + (p.sessions_count === 1 ? "" : "s") + " (drawn down as you book)";
         total = money(p.price_minor, p.currency || data.bundles.currency);
+        buyable = !!online;
+        if (!online) note = "Online payment isn't enabled yet — please contact the front desk.";
         onBuy = function (btn) { buyPack(btn, p.id); };
       } else line = "Pick a pack above to see your price.";
     } else {
       var pl = selectedPlan();
+      var memModes = data.mem.allowed_payment_modes || [];
       if (pl) {
         line = "Membership · " + (pl.label || termLabel(pl.term_months)) + " · " + termLabel(pl.term_months) + " (courts free for the term)";
         total = money(pl.amount_minor, pl.currency || data.mem.currency);
-        onBuy = function (btn) { buyMembership(btn, pl.price_id); };
+        buyable = memModes.length > 0;
+        if (!buyable) note = "This membership can't be purchased online yet — please contact the front desk.";
+        onBuy = function (btn) { buyMembership(btn, pl.price_id, memModes, chooserHost); };
       } else line = "Pick a plan above to see your price.";
     }
     var btn = el("button", { class: "cf-btn cf-btn-primary cf-btn-lg", text: total ? ("Pay " + total) : "Pay" });
-    if (!total || !online) btn.disabled = true; else btn.addEventListener("click", function () { onBuy(btn); });
+    if (!total || !buyable) btn.disabled = true; else btn.addEventListener("click", function () { onBuy(btn); });
     var wrap = el("div", { class: "cf-card", style: "margin-top:18px;background:var(--green-050);border-color:var(--green)" }, [
       el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px" }, [
         el("div", {}, [
@@ -219,16 +225,32 @@
         btn,
       ]),
     ]);
-    if (total && !online) wrap.appendChild(el("p", { class: "cf-membership-note", text: "Online payment isn't enabled yet — please contact the front desk." }));
+    if (note) wrap.appendChild(el("p", { class: "cf-membership-note", text: note }));
+    wrap.appendChild(chooserHost);
     return wrap;
   }
 
-  // ---- checkout (exact existing contracts) -----------------------------------
-  function buyMembership(btn, priceId) {
-    btn.disabled = true; var lbl = btn.textContent; btn.textContent = "Starting checkout…";
-    window.TFAuth.apiJSON("/api/billing/membership/checkout", { method: "POST", body: priceId ? { price_id: priceId } : {} })
-      .then(function (res) { if (!res || !res.order_id) throw new Error("no order returned"); return window.Pay.startYocoCheckout(res.order_id); })
-      .catch(function (e) { btn.disabled = false; btn.textContent = lbl; UI.toast(UI.errMsg(e) || "Could not start checkout.", "error"); });
+  // ---- checkout --------------------------------------------------------------
+  // Membership purchase via the shared rule (Pay.buyMembership): online → Yoco; a single non-online
+  // mode → immediate activation (no payment screen); multiple modes → a chooser in `host`.
+  function buyMembership(btn, priceId, modes, host) {
+    window.Pay.buyMembership({
+      priceId: priceId, modes: modes, host: host,
+      onActivated: function () { membershipActivated(); },
+      onError: function (e) { UI.toast(UI.errMsg(e) || "Could not complete.", "error"); },
+    });
+  }
+  function membershipActivated() {
+    var m = document.getElementById("cf-wiz");
+    if (m) {
+      m.innerHTML = "";
+      m.appendChild(el("div", { class: "cf-card", style: "text-align:center;padding:30px" }, [
+        el("div", { style: "font-size:2.2rem", text: "🎾" }),
+        el("h2", { text: "You're a member!" }),
+        el("p", { class: "cf-muted", text: "Courts are free for your term. Please settle at the front desk. Reloading your options…" }),
+      ]));
+    }
+    setTimeout(function () { try { ui.loaded = false; } catch (e) {} location.reload(); }, 1600);
   }
   function buyPack(btn, planId) {
     if (!planId) { UI.toast("Pick a pack first.", "error"); return; }

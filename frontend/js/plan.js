@@ -99,8 +99,10 @@
     }
 
     var plans = (state.mem.plans || []).filter(function (p) { return p.active !== false; });
-    var canBuy = plans.length > 0 && state.mem.sold && state.mem.online_enabled;
+    var memModes = state.mem.allowed_payment_modes || [];
+    var canBuy = plans.length > 0 && state.mem.sold && memModes.length > 0;
     if (state.selMem == null && plans.length) state.selMem = plans[0].price_id;
+    var chooserHost = el("div", { style: "margin-top:10px" });
 
     var card = el("div", { class: "cf-card" }, [
       el("h2", { text: "Go unlimited" }),
@@ -127,12 +129,14 @@
 
     var btn = el("button", { class: "cf-btn cf-btn-primary cf-btn-lg cf-btn-block", text: isTrial() ? "Get this membership" : "Buy membership" });
     if (!canBuy) btn.disabled = true;
-    else btn.addEventListener("click", function () { buyMembership(btn, state.selMem); });
+    else btn.addEventListener("click", function () { buyMembership(btn, state.selMem, memModes, chooserHost); });
     card.appendChild(btn);
+    card.appendChild(chooserHost);
 
     if (!state.mem.sold || !plans.length) card.appendChild(note("Membership isn't offered by your club yet."));
-    else if (!state.mem.online_enabled) card.appendChild(note("Online payment isn't enabled yet — please contact the front desk."));
-    else card.appendChild(note("Secure payment (card, Apple/Google Pay). Lasts for your chosen term; renew when it lapses."));
+    else if (!memModes.length) card.appendChild(note("This membership can't be purchased online yet — please contact the front desk."));
+    else if (memModes.length === 1 && memModes[0] !== "online") card.appendChild(note("You'll be a member straight away — settle at the front desk. Lasts for your chosen term."));
+    else card.appendChild(note("Secure payment (card, Apple/Google Pay) or pay at the club. Lasts for your chosen term; renew when it lapses."));
     wrap.appendChild(card);
     return wrap;
   }
@@ -223,11 +227,14 @@
   function note(t) { return el("p", { class: "cf-membership-note", text: t }); }
 
   // ---- checkout --------------------------------------------------------------
-  function buyMembership(btn, priceId) {
-    btn.disabled = true; var lbl = btn.textContent; btn.textContent = "Starting checkout…";
-    auth().apiJSON("/api/billing/membership/checkout", { method: "POST", body: priceId ? { price_id: priceId } : {} })
-      .then(function (res) { if (!res || !res.order_id) throw new Error("no order returned"); return window.Pay.startYocoCheckout(res.order_id); })
-      .catch(function (e) { btn.disabled = false; btn.textContent = lbl; UI.toast(UI.errMsg(e) || "Could not start checkout.", "error"); });
+  // Membership via the shared rule: online → Yoco; single non-online mode → immediate activation;
+  // multiple modes → a chooser in `host`.
+  function buyMembership(btn, priceId, modes, host) {
+    window.Pay.buyMembership({
+      priceId: priceId, modes: modes, host: host,
+      onActivated: function () { UI.toast("You're a member! Settle at the front desk.", "info"); setTimeout(function () { location.reload(); }, 1200); },
+      onError: function (e) { UI.toast(UI.errMsg(e) || "Could not complete.", "error"); },
+    });
   }
   function buyPack(btn, planId) {
     if (!planId) { UI.toast("Pick a pack first.", "error"); return; }
