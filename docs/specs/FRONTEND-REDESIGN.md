@@ -100,6 +100,23 @@ for any staff-role gating).
 - [x] **Settings consolidation (start)** — Hours folded into **Courts & hours**; the global payment
   methods (online · at-club · monthly) moved onto **Club profile**. 8 → 6 tabs.
 
+### Unified Service Editor — BUILT (2026-06-28, paired) ✅
+Golden rule realised: **one service, one API, one editor, edited in one place.**
+- **One API:** `services/` lane → `/api/services/*` (both owner + coach call it; the route enforces
+  who edits what — coach: name/variations/payment/packages of their OWN service; **never** commission).
+- **One read:** `GET /api/services/<id>` composes EVERYTHING (variations · per-service payment
+  preference `billing.product.payment_modes` · packages · commission · the club's enabled methods).
+- **One component:** `service_editor.js` (`window.ServiceEditor.open(productId)`) — a single modal:
+  Pricing & variations · Payment preference · Packages · Commission (owner edits; coach greyed).
+- **Wired:** coach **Services** tab + admin **Settings → Services** are both a summary-card list →
+  "Manage" → the same editor. The scattered editors (court rates / coach services / packs / per-service
+  commission table) collapse into this one place.
+- **Remaining for full one-place purity:** (a) **enforce** `payment_modes` in the booking flow
+  (durations response carries it → `booking.js` intersects pay options) — editable now, not yet
+  enforced; (b) retire the old `Pricing (advanced)` court-rate/pack editors + the per-service column
+  of "Coach pay" (keep rent + the global/per-coach default %) once the editor is validated;
+  (c) membership term-plans (the only non-per-service catalogue) stay on the Pricing tab.
+
 ### Consolidation — remaining (the bigger, careful piece; do with Tomo)
 Tomo's principle: **all of a thing's config in ONE place; summary blocks + popup edit; no duplicate
 screens.** Still to do:
