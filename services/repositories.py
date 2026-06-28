@@ -38,24 +38,26 @@ def club_payment_methods(session, *, club_id):
 
 def list_services(session, *, club_id, role, user_id):
     """Services the caller may manage. Owner → all; coach → their OWN lesson/class services."""
-    where = ["p.club_id = :c", "p.kind IN ('court_booking','lesson','class')", "p.active = true"]
+    # Include INACTIVE (hidden) services too — admin shows them greyed with an Unhide.
+    where = ["p.club_id = :c", "p.kind IN ('court_booking','lesson','class')"]
     params = {"c": club_id}
     if role not in ("club_admin", "platform_admin"):
         where.append("p.coach_user_id = :u")
         params["u"] = str(user_id)
     rows = session.execute(
-        text("SELECT p.id, p.kind, p.name, p.coach_user_id, "
+        text("SELECT p.id, p.kind, p.name, p.coach_user_id, p.active, "
              "       (SELECT count(*) FROM billing.price pr WHERE pr.product_id = p.id "
              "          AND pr.term_months IS NULL AND pr.active = true) AS variation_count, "
              "       (SELECT min(pr.amount_minor) FROM billing.price pr WHERE pr.product_id = p.id "
              "          AND pr.term_months IS NULL AND pr.active = true) AS from_amount_minor "
-             "FROM billing.product p WHERE " + " AND ".join(where) + " ORDER BY p.kind, p.name"),
+             "FROM billing.product p WHERE " + " AND ".join(where) + " ORDER BY p.active DESC, p.kind, p.name"),
         params,
     ).mappings().all()
     out = []
     for r in rows:
         d = dict(r)
         d["id"] = str(d["id"])
+        d["active"] = bool(d["active"])
         d["service_kind"] = _KIND_TO_SERVICE.get(d["kind"], d["kind"])
         if d.get("coach_user_id") is not None:
             d["coach_user_id"] = str(d["coach_user_id"])

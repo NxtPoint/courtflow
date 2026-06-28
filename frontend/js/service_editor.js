@@ -1,10 +1,11 @@
-// service_editor.js — THE one place a service is edited (golden rule). A single modal over the
-// unified /api/services/<id> API, opened identically by the owner and the coach. Manages everything
-// that makes a service work: pricing variations · payment preference · packages · commission. The
-// owner edits all; the coach edits all EXCEPT commission (greyed). Self-contained over window.TFAuth.
+// service_editor.js — THE one place a service is edited (golden rule). A FULL-SCREEN view (not a
+// popup) over the unified /api/services/<id> API, opened identically by the owner and the coach.
+// Everything that makes a service work — pricing variations · payment preference · packages ·
+// commission — edited together, with a single "Save & close" (no inline saves; changes batch until
+// you save). Owner edits all; the coach edits all EXCEPT commission (greyed).
 (function () {
   var UI, el;
-  var st = { id: null, svc: null, bg: null, onSaved: null };
+  var st = { id: null, host: null, onClose: null, svc: null, m: null, del: null };
 
   function money(minor, ccy) { return UI.money(minor, ccy || (st.svc && st.svc.currency) || "ZAR"); }
   function fmtDur(m) {
@@ -13,179 +14,144 @@
     if (h) out.push(h + " hr"); if (mm) out.push(mm + " min");
     return out.join(" ");
   }
-  function MODE_LABEL(m) {
-    return { online: "Pay online (card)", at_court: "Pay at the club", monthly_account: "Monthly account" }[m] || m;
-  }
-
+  function MODE_LABEL(m) { return { online: "Pay online (card)", at_court: "Pay at the club", monthly_account: "Monthly account" }[m] || m; }
   function api(path, opts) { return window.TFAuth.apiJSON("/api/services/" + encodeURIComponent(st.id) + path, opts); }
-  function refresh(r) { if (r && r.service) { st.svc = r.service; render(); } }
-  function fail(e) { UI.toast(UI.errMsg(e) || "Couldn't save.", "error"); }
+  function inp(value, attrs) { return el("input", Object.assign({ class: "cf-input", value: value == null ? "" : value }, attrs || {})); }
 
-  // ---- shell ----------------------------------------------------------------
+  // ---- open: render a full-screen editor into the caller's host ------------
   function open(productId, opts) {
-    UI = window.UI; el = UI.el;
-    st.id = productId; st.onSaved = (opts && opts.onSaved) || null; st.svc = null;
-    var bg = el("div", { class: "cf-modal-bg" });
-    bg.appendChild(el("div", { class: "cf-modal cf-modal-lg", id: "cf-svc" }, [el("div", { class: "cf-loading", text: "Loading service…" })]));
-    document.body.appendChild(bg); st.bg = bg;
+    UI = window.UI; el = UI.el; opts = opts || {};
+    st.id = productId; st.host = opts.host || document.getElementById("cf-main"); st.onClose = opts.onClose || null;
+    UI.clear(st.host); st.host.appendChild(el("div", { class: "cf-loading", text: "Loading service…" }));
     window.TFAuth.apiJSON("/api/services/" + encodeURIComponent(productId)).then(function (r) {
-      st.svc = r.service; render();
-    }, function (e) {
-      var m = document.getElementById("cf-svc"); if (m) { m.innerHTML = ""; m.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); m.appendChild(closeRow()); }
-    });
+      st.svc = r.service; buildModel(); render();
+    }, function (e) { UI.clear(st.host); st.host.appendChild(el("div", { class: "cf-card cf-empty", text: UI.errMsg(e) })); st.host.appendChild(backBtn()); });
   }
-  function close() { if (st.bg && st.bg.parentNode) document.body.removeChild(st.bg); st.bg = null; if (st.onSaved) st.onSaved(); }
-  function closeRow() { return el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:14px" }, [el("button", { class: "cf-btn", text: "Done", onclick: close })]); }
+  function backBtn() { return el("button", { class: "cf-btn", style: "margin-top:12px", text: "← Back", onclick: close }); }
+  function close() { if (st.onClose) st.onClose(); }
 
-  function sectionCard(title, hint) {
-    var c = el("div", { class: "cf-card" });
-    c.appendChild(el("h3", { text: title }));
-    if (hint) c.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:-4px 0 10px", text: hint }));
+  function buildModel() {
+    var s = st.svc;
+    st.m = {
+      name: s.name || "",
+      payment_modes: (s.payment_modes ? s.payment_modes.slice() : (s.club_payment_methods || []).slice()),
+      commission_pct: (s.commission && s.commission.effective_pct) || 0,
+      variations: (s.variations || []).map(function (v) { return { price_id: v.price_id, duration_minutes: v.duration_minutes, amount_minor: v.amount_minor }; }),
+      packages: (s.packages || []).map(function (p) { return { id: p.id, label: p.label, sessions_count: p.sessions_count, duration_minutes: p.duration_minutes, price_minor: p.price_minor }; }),
+    };
+    st.del = { variations: [], packages: [] };
+  }
+
+  // ---- render ---------------------------------------------------------------
+  function render() {
+    var host = st.host, s = st.svc, m = st.m; UI.clear(host);
+
+    // sticky header: Cancel · title · Save & close
+    var saveB = el("button", { class: "cf-btn cf-btn-primary", text: "Save & close" });
+    saveB.addEventListener("click", function () { saveAndClose(saveB); });
+    host.appendChild(el("div", { class: "cf-editbar" }, [
+      el("button", { class: "cf-btn", text: "← Cancel", onclick: close }),
+      el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [
+        el("span", { class: "cf-chip " + (s.service_kind || ""), text: s.service_kind || "service" }),
+        el("strong", { text: s.name || "Service" }),
+      ]),
+      el("span", { class: "cf-spacer" }), saveB,
+    ]));
+
+    // details
+    var nameI = inp(m.name, { style: "max-width:360px" }); nameI.addEventListener("input", function () { m.name = nameI.value; });
+    host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Details" }), field("Name", nameI)]));
+
+    host.appendChild(variationsCard());
+    host.appendChild(paymentCard());
+    host.appendChild(packagesCard());
+    if (s.commission && s.commission.applies) host.appendChild(commissionCard());
+  }
+  function field(label, control, hint) { return el("div", { class: "cf-field" }, [el("label", { text: label }), control, hint ? el("div", { class: "cf-pref-note", text: hint }) : null].filter(Boolean)); }
+  function card(title, hint) { var c = el("div", { class: "cf-card" }); c.appendChild(el("h3", { text: title })); if (hint) c.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:-4px 0 10px", text: hint })); return c; }
+
+  function variationsCard() {
+    var c = card("Pricing & variations", "The same service at different lengths — each its own price.");
+    var list = el("div", { class: "cf-list" });
+    st.m.variations.forEach(function (v) {
+      var durI = inp(v.duration_minutes, { type: "number", min: 1, style: "max-width:90px" });
+      durI.addEventListener("input", function () { v.duration_minutes = parseInt(durI.value, 10) || null; });
+      var amtI = inp((v.amount_minor / 100).toFixed(2), { style: "max-width:120px" });
+      amtI.addEventListener("input", function () { v.amount_minor = Math.round(parseFloat(amtI.value || "0") * 100); });
+      var rm = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove" });
+      rm.addEventListener("click", function () { if (v.price_id) st.del.variations.push(v.price_id); st.m.variations.splice(st.m.variations.indexOf(v), 1); render(); });
+      list.appendChild(el("div", { class: "cf-item" }, [durI, el("span", { class: "cf-muted", text: "min →" }), amtI, el("span", { class: "cf-spacer" }), rm]));
+    });
+    if (!st.m.variations.length) list.appendChild(el("div", { class: "cf-empty", text: "No prices yet. Add one below." }));
+    c.appendChild(list);
+    c.appendChild(el("button", { class: "cf-btn cf-btn-sm", style: "margin-top:10px", text: "+ Add variation", onclick: function () { st.m.variations.push({ duration_minutes: 60, amount_minor: 0 }); render(); } }));
     return c;
   }
 
-  // ---- 1. header ------------------------------------------------------------
-  function header(svc) {
-    var nameI = el("input", { class: "cf-input", value: svc.name || "", style: "max-width:320px;font-weight:700" });
-    var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
-    save.addEventListener("click", function () { api("", { method: "PATCH", body: { name: nameI.value.trim() } }).then(refresh, fail).then(function () { UI.toast("Saved.", "info"); }); });
-    return el("div", { class: "cf-card" }, [
-      el("div", { class: "cf-row", style: "justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px" }, [
-        el("div", { class: "cf-row", style: "gap:8px;align-items:center;flex-wrap:wrap" }, [
-          el("span", { class: "cf-chip " + (svc.service_kind || ""), text: svc.service_kind || "service" }),
-          nameI, save,
-        ]),
-        el("button", { class: "cf-btn cf-btn-sm", text: "✕", title: "Close", onclick: close }),
-      ]),
-    ]);
+  function paymentCard() {
+    var c = card("Payment preference", "How clients can pay for THIS service (from the methods your club enables).");
+    var enabled = st.svc.club_payment_methods || [];
+    if (!enabled.length) { c.appendChild(el("div", { class: "cf-empty", text: "Enable payment methods in Settings → Club profile first." })); return c; }
+    enabled.forEach(function (mode) {
+      var cb = el("input", { type: "checkbox" }); cb.style.width = "auto"; cb.checked = st.m.payment_modes.indexOf(mode) >= 0;
+      cb.addEventListener("change", function () { var i = st.m.payment_modes.indexOf(mode); if (cb.checked && i < 0) st.m.payment_modes.push(mode); else if (!cb.checked && i >= 0) st.m.payment_modes.splice(i, 1); });
+      c.appendChild(el("label", { class: "cf-row", style: "gap:10px;align-items:center;cursor:pointer;margin-top:6px" }, [cb, el("span", { style: "font-weight:600", text: MODE_LABEL(mode) })]));
+    });
+    return c;
   }
 
-  // ---- 2. variations (per-duration prices) ----------------------------------
-  function variationsSection(svc) {
-    var card = sectionCard("Pricing & variations", "The same service at different lengths — each its own price.");
+  function packagesCard() {
+    var c = card("Packages", "Prepaid bundles for this service — buy several upfront and draw them down.");
     var list = el("div", { class: "cf-list" });
-    (svc.variations || []).forEach(function (v) {
-      var amt = el("input", { class: "cf-input", value: (v.amount_minor / 100).toFixed(2), style: "max-width:120px" });
-      var saveB = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
-      saveB.addEventListener("click", function () {
-        api("/variations/" + v.price_id, { method: "PATCH", body: { amount_minor: Math.round(parseFloat(amt.value || "0") * 100) } }).then(refresh, fail).then(function () { UI.toast("Saved.", "info"); });
-      });
-      var rmB = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove" });
-      rmB.addEventListener("click", function () { if (confirm("Remove the " + fmtDur(v.duration_minutes) + " option?")) api("/variations/" + v.price_id, { method: "DELETE" }).then(refresh, fail); });
-      var row = el("div", { class: "cf-item" }, [
-        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: fmtDur(v.duration_minutes) })]),
-        el("span", { class: "cf-muted", text: (svc.currency || "R") === "ZAR" ? "R" : svc.currency }), amt,
-        el("span", { class: "cf-spacer" }), saveB, rmB,
-      ]);
-      if ((v.status || "active") !== "active") row.style.opacity = "0.6";
-      list.appendChild(row);
+    st.m.packages.forEach(function (p) {
+      var nI = inp(p.sessions_count, { type: "number", min: 1, style: "max-width:90px" }); nI.addEventListener("input", function () { p.sessions_count = parseInt(nI.value, 10) || null; });
+      var dI = inp(p.duration_minutes, { type: "number", min: 1, placeholder: "mins", style: "max-width:90px" }); dI.addEventListener("input", function () { p.duration_minutes = parseInt(dI.value, 10) || null; });
+      var aI = inp((p.price_minor / 100).toFixed(2), { style: "max-width:120px" }); aI.addEventListener("input", function () { p.price_minor = Math.round(parseFloat(aI.value || "0") * 100); });
+      var rm = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove" });
+      rm.addEventListener("click", function () { if (p.id) st.del.packages.push(p.id); st.m.packages.splice(st.m.packages.indexOf(p), 1); render(); });
+      list.appendChild(el("div", { class: "cf-item" }, [nI, el("span", { class: "cf-muted", text: "× " }), dI, el("span", { class: "cf-muted", text: "min · R" }), aI, el("span", { class: "cf-spacer" }), rm]));
     });
-    if (!(svc.variations || []).length) list.appendChild(el("div", { class: "cf-empty", text: "No prices yet. Add the first below." }));
-    card.appendChild(list);
-    // add
-    var nDur = el("input", { class: "cf-input", type: "number", min: 1, placeholder: "mins (e.g. 60)", style: "max-width:130px" });
-    var nAmt = el("input", { class: "cf-input", placeholder: "0.00", style: "max-width:120px" });
-    var addB = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Add variation" });
-    addB.addEventListener("click", function () {
-      var d = parseInt(nDur.value, 10);
-      if (!d || d < 1) { UI.toast("Enter the length in minutes.", "warn"); return; }
-      api("/variations", { method: "POST", body: { duration_minutes: d, amount_minor: Math.round(parseFloat(nAmt.value || "0") * 100) } }).then(refresh, fail).then(function () { UI.toast("Added.", "info"); });
-    });
-    card.appendChild(el("div", { class: "cf-row", style: "gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap" }, [nDur, nAmt, addB]));
-    return card;
+    if (!st.m.packages.length) list.appendChild(el("div", { class: "cf-empty", text: "No packages yet." }));
+    c.appendChild(list);
+    c.appendChild(el("button", { class: "cf-btn cf-btn-sm", style: "margin-top:10px", text: "+ Add package", onclick: function () { st.m.packages.push({ sessions_count: 5, duration_minutes: st.m.variations[0] ? st.m.variations[0].duration_minutes : 60, price_minor: 0 }); render(); } }));
+    return c;
   }
 
-  // ---- 3. payment preference -------------------------------------------------
-  function paymentSection(svc) {
-    var card = sectionCard("Payment preference", "How clients can pay for THIS service (from the methods your club enables).");
-    var enabled = svc.club_payment_methods || [];
-    if (!enabled.length) { card.appendChild(el("div", { class: "cf-empty", text: "Enable payment methods in Settings → Club profile first." })); return card; }
-    var current = svc.payment_modes; // null = all enabled
-    var boxes = {};
-    enabled.forEach(function (m) {
-      var cb = el("input", { type: "checkbox" }); cb.style.width = "auto";
-      cb.checked = (current == null) || current.indexOf(m) >= 0;
-      boxes[m] = cb;
-      card.appendChild(el("label", { class: "cf-row", style: "gap:10px;align-items:center;cursor:pointer;margin-top:6px" }, [cb, el("span", { style: "font-weight:600", text: MODE_LABEL(m) })]));
-    });
-    var save = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", style: "margin-top:10px", text: "Save payment options" });
-    save.addEventListener("click", function () {
-      var chosen = enabled.filter(function (m) { return boxes[m].checked; });
-      if (!chosen.length) { UI.toast("Pick at least one way to pay.", "warn"); return; }
-      api("", { method: "PATCH", body: { payment_modes: chosen } }).then(refresh, fail).then(function () { UI.toast("Saved.", "info"); });
-    });
-    card.appendChild(save);
-    return card;
-  }
-
-  // ---- 4. packages -----------------------------------------------------------
-  function packagesSection(svc) {
-    var card = sectionCard("Packages", "Prepaid bundles for this service — buy several upfront and draw them down.");
-    var list = el("div", { class: "cf-list" });
-    (svc.packages || []).forEach(function (pk) {
-      var per = pk.sessions_count ? Math.round(pk.price_minor / pk.sessions_count) : pk.price_minor;
-      var rmB = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Retire" });
-      rmB.addEventListener("click", function () { if (confirm("Retire this package?")) api("/packages/" + pk.id, { method: "PATCH", body: { status: "retired" } }).then(refresh, fail); });
-      var row = el("div", { class: "cf-item" }, [
-        el("div", { class: "cf-item-main" }, [
-          el("div", { class: "cf-item-t", text: (pk.label || (pk.sessions_count + " sessions")) }),
-          el("div", { class: "cf-item-s", text: pk.sessions_count + " × " + fmtDur(pk.duration_minutes) + " · " + money(per) + " each" }),
-        ]),
-        el("strong", { text: money(pk.price_minor) }),
-        el("span", { class: "cf-spacer" }), rmB,
-      ]);
-      if ((pk.status || "active") !== "active") row.style.opacity = "0.6";
-      list.appendChild(row);
-    });
-    if (!(svc.packages || []).length) list.appendChild(el("div", { class: "cf-empty", text: "No packages yet." }));
-    card.appendChild(list);
-    var nN = el("input", { class: "cf-input", type: "number", min: 1, placeholder: "# sessions", style: "max-width:110px" });
-    var nDur = el("input", { class: "cf-input", type: "number", min: 1, placeholder: "mins each", style: "max-width:110px" });
-    var nAmt = el("input", { class: "cf-input", placeholder: "0.00 total", style: "max-width:120px" });
-    var addB = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Add package" });
-    addB.addEventListener("click", function () {
-      var n = parseInt(nN.value, 10);
-      if (!n || n < 1) { UI.toast("How many sessions?", "warn"); return; }
-      api("/packages", { method: "POST", body: { sessions_count: n, duration_minutes: parseInt(nDur.value, 10) || null, price_minor: Math.round(parseFloat(nAmt.value || "0") * 100) } }).then(refresh, fail).then(function () { UI.toast("Package added.", "info"); });
-    });
-    card.appendChild(el("div", { class: "cf-row", style: "gap:6px;align-items:center;margin-top:10px;flex-wrap:wrap" }, [nN, nDur, nAmt, addB]));
-    return card;
-  }
-
-  // ---- 5. commission (owner edits; coach greyed) ----------------------------
-  function commissionSection(svc) {
-    var c = svc.commission || {};
-    var card = sectionCard("Commission", "What the club keeps on this service. Only the club can change it.");
-    var owner = !!svc.can_edit_commission;
-    var pctI = el("input", { class: "cf-input", type: "number", min: 0, max: 100, value: (c.effective_pct || 0), style: "max-width:100px" });
+  function commissionCard() {
+    var co = st.svc.commission || {}, owner = !!st.svc.can_edit_commission;
+    var c = card("Commission", "What the club keeps on this service. Only the club can change it.");
+    var pctI = inp(st.m.commission_pct, { type: "number", min: 0, max: 100, style: "max-width:100px" });
     if (!owner) { pctI.disabled = true; pctI.style.opacity = "0.6"; }
-    var rowKids = [pctI, el("span", { class: "cf-muted", text: "% to the club" })];
-    if (owner) {
-      var save = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Save" });
-      save.addEventListener("click", function () {
-        var v = parseFloat(pctI.value);
-        if (isNaN(v) || v < 0 || v > 100) { UI.toast("Enter 0–100.", "warn"); return; }
-        api("", { method: "PATCH", body: { commission_pct: v } }).then(refresh, fail).then(function () { UI.toast("Commission saved.", "info"); });
-      });
-      rowKids.push(save);
-      card.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:-4px 0 8px", text: "Club default is " + (c.club_default_pct || 0) + "%. Setting a value here overrides it for this service." }));
-    } else {
-      card.appendChild(el("span", { class: "cf-chip", text: "Set by the club" }));
-    }
-    card.appendChild(el("div", { class: "cf-row", style: "gap:8px;align-items:center;margin-top:6px" }, rowKids));
-    return card;
+    else pctI.addEventListener("input", function () { st.m.commission_pct = parseFloat(pctI.value); });
+    if (owner) c.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:-4px 0 8px", text: "Club default is " + (co.club_default_pct || 0) + "%. A value here overrides it for this service." }));
+    else c.appendChild(el("span", { class: "cf-chip", text: "Set by the club" }));
+    c.appendChild(el("div", { class: "cf-row", style: "gap:8px;align-items:center;margin-top:6px" }, [pctI, el("span", { class: "cf-muted", text: "% to the club" })]));
+    return c;
   }
 
-  function render() {
-    var m = document.getElementById("cf-svc"); if (!m) return;
-    m.innerHTML = "";
-    var svc = st.svc;
-    m.appendChild(header(svc));
-    m.appendChild(variationsSection(svc));
-    m.appendChild(paymentSection(svc));
-    m.appendChild(packagesSection(svc));
-    if (svc.commission && svc.commission.applies) m.appendChild(commissionSection(svc));
+  // ---- save (batch) ---------------------------------------------------------
+  async function saveAndClose(btn) {
+    btn.disabled = true; var lbl = btn.textContent; btn.textContent = "Saving…";
+    var m = st.m, del = st.del;
+    try {
+      var body = { name: m.name, payment_modes: m.payment_modes };
+      if (st.svc.can_edit_commission) { var v = parseFloat(m.commission_pct); if (!isNaN(v)) body.commission_pct = Math.max(0, Math.min(100, v)); }
+      await api("", { method: "PATCH", body: body });
+      for (var i = 0; i < m.variations.length; i++) {
+        var vr = m.variations[i]; if (!vr.duration_minutes) continue;
+        if (vr.price_id) await api("/variations/" + vr.price_id, { method: "PATCH", body: { duration_minutes: vr.duration_minutes, amount_minor: vr.amount_minor || 0 } });
+        else await api("/variations", { method: "POST", body: { duration_minutes: vr.duration_minutes, amount_minor: vr.amount_minor || 0 } });
+      }
+      for (var d = 0; d < del.variations.length; d++) await api("/variations/" + del.variations[d], { method: "DELETE" });
+      for (var j = 0; j < m.packages.length; j++) {
+        var pk = m.packages[j]; if (!pk.sessions_count) continue;
+        if (pk.id) await api("/packages/" + pk.id, { method: "PATCH", body: { label: pk.label, sessions_count: pk.sessions_count, duration_minutes: pk.duration_minutes, price_minor: pk.price_minor || 0 } });
+        else await api("/packages", { method: "POST", body: { sessions_count: pk.sessions_count, duration_minutes: pk.duration_minutes, price_minor: pk.price_minor || 0 } });
+      }
+      for (var pd = 0; pd < del.packages.length; pd++) await api("/packages/" + del.packages[pd], { method: "PATCH", body: { status: "retired" } });
+      UI.toast("Saved.", "info"); close();
+    } catch (e) { btn.disabled = false; btn.textContent = lbl; UI.toast(UI.errMsg(e) || "Couldn't save.", "error"); }
   }
 
-  window.ServiceEditor = { open: open, close: close };
+  window.ServiceEditor = { open: open };
 })();

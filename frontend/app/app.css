@@ -528,3 +528,7 @@ p{margin:0 0 10px}
 
 /* --- client redesign (2026-06-28): wider modal for the edit-profile form --- */
 .cf-modal-lg{max-width:560px}
+
+/* --- full-screen editor bar (service / membership editors, 2026-06-28) --- */
+.cf-editbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;
+  padding:12px 0;margin:-6px 0 10px;background:var(--canvas);border-bottom:1px solid var(--border)}

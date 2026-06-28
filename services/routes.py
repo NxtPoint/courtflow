@@ -94,6 +94,8 @@ def patch_service(product_id):
         if "name" in b or "description" in b:
             admin_repo.patch_product(s, club_id=p.club_id, product_id=product_id,
                                      name=b.get("name"), description=b.get("description"))
+        if "active" in b:   # Hide (active=false) / Unhide (true) — keeps history, drops from customers
+            admin_repo.patch_product(s, club_id=p.club_id, product_id=product_id, active=bool(b.get("active")))
         if "payment_modes" in b:
             repo.set_payment_modes(s, club_id=p.club_id, product_id=product_id,
                                    modes=b.get("payment_modes"))
