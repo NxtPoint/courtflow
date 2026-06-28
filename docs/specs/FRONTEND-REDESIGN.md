@@ -120,6 +120,21 @@ Golden rule realised: **one service, one API, one editor, edited in one place.**
   **default %**; per-service override is on the service). `AdminUI.courtRates/bundlePlans/pricingHome`
   remain defined-but-unreferenced (safe to delete later). Membership term-plans stay (club-wide).
 
+### Editor design pass (2026-06-28, paired) — applies to ALL services + memberships
+- [x] **Full-screen editors** (no popups) — Service Editor + Membership editor render in place with a
+  sticky **Cancel / Save & close** bar.
+- [x] **Save & close (batch)** — no inline saves; edits/adds/removes batch in memory and apply on save;
+  Cancel discards.
+- [x] **Edit · Hide · Delete** on every service/membership summary row (services: Edit + Hide via
+  `product.active`, shown greyed + Unhide; memberships: Edit + Hide=dormant + Delete=retire).
+- [ ] **Per-day access times** (membership) — NEXT. Make the membership access window **per weekday**,
+  each day **seeded from the club's court hours**, then narrowed for limited tiers (e.g. Off-peak).
+  Plan: add `billing.price.access_windows jsonb` ({weekday→{start,end}}; NULL = legacy single window,
+  so existing memberships are untouched) → extend `diary.pricing.membership_covers` to check the
+  booking's weekday window when access_windows is set (else legacy) → membership editor shows a 7-day
+  grid defaulting to court hours → reads return access_windows + summary → harness scenario. Additive
+  + revenue-critical (gates free courts), so do it as a focused, tested pass.
+
 ### Consolidation — remaining (the bigger, careful piece; do with Tomo)
 Tomo's principle: **all of a thing's config in ONE place; summary blocks + popup edit; no duplicate
 screens.** Still to do:
