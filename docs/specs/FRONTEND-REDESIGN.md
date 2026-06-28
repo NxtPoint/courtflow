@@ -150,3 +150,17 @@ screens.** Still to do:
   tabs.
 
 - [ ] Retire `/my`, `/account`, `/plans` (301 → Home) once validated.
+
+### Admin vs Settings — consolidated to "Operate vs Configure" (2026-06-28)
+Two surfaces, one hard line, no lost functionality:
+- **Admin console (`admin.html`) = OPERATE** — Master diary · Classes (scheduling/rosters/attendance)
+  · People · Billing · Cockpit · Overview.
+- **Settings (`settings.html`) = CONFIGURE** — Club profile · Courts & hours · Services · Memberships
+  · Coaches.
+- The read-only **Resources** tab was **retired** (it duplicated Courts & hours / Coaches / Services and
+  couldn't edit anything). Courts → Settings → Courts & hours; coaches → Settings → Coaches; classes →
+  Admin → Classes (run) + Settings → Services (price).
+- **Class pricing/packages/payment** live only in **Settings → Services**; Admin → Classes keeps the
+  operational half (create + schedule + rosters + attendance) and links out for pricing.
+- People remains the members hub (directory + grant/revoke membership + 360); coach *config* stays in
+  Settings → Coaches.

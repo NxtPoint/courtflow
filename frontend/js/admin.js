@@ -46,8 +46,11 @@
       el("a", { class: "cf-btn cf-btn-sm", href: "/settings.html", text: "⚙ Settings" }),
     ]));
 
+    // Operate-only: day-to-day running of the club. Configuration (courts, services, memberships,
+    // coaches, club profile) lives in Settings. The old read-only "Resources" tab was a duplicate of
+    // those Settings screens, so it's been retired.
     var tabs = el("div", { class: "cf-nav", style: "margin-bottom:12px;flex-wrap:wrap" });
-    [["diary", "Master diary"], ["classes", "Classes"], ["resources", "Resources"], ["people", "People"],
+    [["diary", "Master diary"], ["classes", "Classes"], ["people", "People"],
      ["billing", "Billing"], ["cockpit", "Cockpit"], ["overview", "Overview"]].forEach(function (t) {
       tabs.appendChild(el("a", { href: "#", text: t[1], "data-tab": t[0],
         onclick: function (e) { e.preventDefault(); showTab(t[0]); } }));
@@ -64,7 +67,6 @@
     var p = document.getElementById("admin-panel"); UI.clear(p);
     if (tab === "diary") return renderDiary(p);
     if (tab === "classes") return renderClasses(p);
-    if (tab === "resources") return renderResources(p);
     if (tab === "people") return renderPeople(p);
     if (tab === "billing") return renderBilling(p);
     if (tab === "cockpit") return renderCockpit(p);
@@ -427,7 +429,8 @@
           onclick: function () { openNewClass(); } }),
       ]),
       el("p", { class: "cf-muted", style: "margin:-2px 0 12px",
-        text: "Create class types, schedule recurring or one-off sessions, and manage rosters & attendance." }),
+        text: "Create class types, schedule recurring or one-off sessions, and manage rosters & attendance. " +
+              "Pricing, payment options and packages for a class live in Settings → Services." }),
       el("div", { id: "cls-list", class: "cf-loading", text: "Loading classes…" }),
       el("div", { id: "cls-sessions" }),
     ]);
@@ -485,23 +488,8 @@
   }
 
   // ---- console section reads (live where available) ------------------------
-  async function renderResources(panel) {
-    panel.appendChild(el("div", { class: "cf-card" }, [ el("h2", { text: "Resources" }), el("div", { id: "res-list", class: "cf-loading", text: "Loading…" }) ]));
-    try {
-      var r = await window.API.resources();
-      var box = document.getElementById("res-list"); UI.clear(box);
-      var t = el("table", { class: "cf-table" });
-      t.appendChild(el("tr", {}, [el("th", { text: "Name" }), el("th", { text: "Kind" }), el("th", { text: "Surface" }), el("th", { text: "Capacity" }), el("th", { text: "Active" })]));
-      (r.resources || []).forEach(function (res) {
-        t.appendChild(el("tr", {}, [
-          el("td", { text: res.name }), el("td", { text: res.kind }), el("td", { text: res.surface || "—" }),
-          el("td", { text: res.capacity != null ? String(res.capacity) : "—" }), el("td", { text: res.is_active ? "✓" : "—" }),
-        ]));
-      });
-      box.appendChild(t);
-      box.appendChild(el("p", { class: "cf-muted", style: "margin-top:8px", text: "Editing resources (create/disable/reorder) needs a club-admin write API — see report." }));
-    } catch (e) { document.getElementById("res-list").textContent = UI.errMsg(e); }
-  }
+  // (The read-only "Resources" tab was retired — courts live in Settings → Courts & hours, coaches in
+  //  Settings → Coaches, classes here + Settings → Services. Nothing it showed was unique.)
 
   // Cache of recent online payments, lazily fetched once, so the People 360 drawer can show a
   // person's payment history without a per-person endpoint (composed client-side by email).
