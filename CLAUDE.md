@@ -28,6 +28,22 @@ NextPoint Tennis is club #1, migrating off Wix.
   `OUTSTANDING.md` what's left · `UNIFIED-STATEMENT.md` the money-reconciliation design). The original
   design docs are `docs/` (`00`→`12`); `docs/11` = locked decisions + the 1050 reuse map. Where they
   differ, `docs/specs/` reflects as-built reality.
+- **2026-07-02 — FRONT-END REDESIGN (three role SPAs) + ADMIN in progress:** the old tab consoles are
+  replaced by mobile-first (admin: responsive) **drill-through SPAs** on the one `cf-*` design system,
+  each with exactly ONE booking "event story" reused everywhere (the **golden rule**). **Client** =
+  one-page, no bottom nav (`frontend/app/app.html` + `frontend/js/client.js`; billing-by-category +
+  `GET /api/me/bookings/<id>` booking-story drill). **Coach** = bottom-nav SPA (`coach_app.html` +
+  `coach_app.js`): weekly calendar, client record drilling **by service → sessions (real paid/owed/
+  written-off/discounted state) → the event story** (`GET /api/coach/bookings/<id>`), **Total billed**
+  on cockpit + record, money actions (collect/discount/write-off) inside the event story, and **classes
+  create/schedule/roster in Setup** (now bookable end-to-end). **.ics add-to-calendar** fixed on both
+  (authed `apiFetch` → blob). **Owner/Admin** = a responsive SPA **IN PROGRESS at `/admin-app`**
+  (`admin_app.html` + `admin_app.js`; bottom-nav ↔ desktop side-rail; command-center Home shipped via
+  `GET /api/admin/home`) — **design LOCKED in `docs/specs/ADMIN-REDESIGN.md`**, classic `/admin` stays
+  live until sign-off. New readers: `commission.client_service_breakdown` + `_coach_billed`,
+  `billing_me.billing_summary`, `diary.bookings.booking_story`/`coach_booking_story`,
+  `admin.repositories.admin_home`. `cancel_booking` now voids the linked unpaid order (no phantom debt).
+  **Gates: `python -m scripts.test_all` → booking 43 / billing 118 / statement 35.**
 - **2026-06-28 additions (all live + harness-gated):** the **unified client statement** (`billing/statement.py`
   — one debt = one `billing.order`, settled once; account page shows ONE reconciled "Your statement",
   grouped by category with tick-to-part-settle; admin void/write-off; coach `coach_arrears` kept in
@@ -98,11 +114,13 @@ NextPoint Tennis is club #1, migrating off Wix.
     "Overview" tab + standalone `/overview.html`. Per-business (the Ten-Fifty5 bridge was deprecated).
   - **Frontend:** `frontend/app/` (shells) + `frontend/js/` — **ONE design system in `frontend/app/app.css`**
     (bright/modern; every page uses its `cf-*` classes — keep it the single source, do NOT inline component
-    styles). **Full-screen booking** (`booking.js` — month calendar + inline per-duration chips; replaced
-    `book.js`/`quickbook.js`), **action-first cockpit** (`portal.js`, with a ~2-tap quick-book), **My
-    Bookings** (`my.js`), consolidated **Plan** page (`plan.js`/`plans.html`), **coach + owner consoles**
-    (both render from the SHARED **`crm_ui.js`** — `CRMUI.stats/bars/statementTable/lineItems/requestQueue/
-    drawer`), **master-diary calendar** (custom resource-timeline), owner/coach onboarding + Settings.
+    styles). **THREE role SPAs (2026-07-02 redesign, drill-through, one event story each — the golden
+    rule):** **client** (`app.html`+`client.js`, one page), **coach** (`coach_app.html`+`coach_app.js`,
+    bottom nav + weekly calendar + by-service client record + classes), **admin** (`admin_app.html`+
+    `admin_app.js`, responsive, IN PROGRESS at `/admin-app` — see `docs/specs/ADMIN-REDESIGN.md`). They
+    reuse `booking.js` (full-screen booking), `crm_ui.js` (`CRMUI.*`), `service_editor.js`, `class_ui.js`,
+    `admin_api.js`/`coach_api.js`, and the master-diary timeline. Old pages (`portal.js`, `my.js`,
+    `plan.js`, `coach.js`, `admin.js`) are kept as fallbacks; standalone `/account`,`/my`,`/book` 302→ SPA.
     **Asset/nav links are ABSOLUTE** (`/app.css`, `/js/…`) so pages work at sub-paths.
   - **Web/SEO:** `web_app.py` (+ `web_wsgi.py`), `frontend/marketing/` (restyled to the design system, stock
     court imagery), `frontend/_shared/` (`theme.css` + `chrome.py` + `branding.py` host→club resolver),
@@ -241,8 +259,9 @@ request→accept→settle chain green on a scratch DB.
 - **Scratch-DB scenario harnesses — the primary gate:** `python -m scripts.test_all` runs THREE
   rollback-only harnesses against the local sandbox DB (each its own scratch club, always rolled back):
   **booking** (`test_booking_scenarios`, 43 checks — double-book, lesson coach∩court, off-peak per-slot
-  pricing, lifecycle), **billing/commercial** (`test_billing_scenarios`, 56 — settlement modes, commission,
-  tokens, membership incl. offline + per-tier modes, refunds), and **statement reconciliation**
+  pricing, lifecycle), **billing/commercial** (`test_billing_scenarios`, 118 — settlement modes, commission,
+  tokens, membership incl. offline + per-tier modes, refunds, refund clawback, dispute routing, void/
+  lockstep, the client/coach event stories + the by-service breakdown), and **statement reconciliation**
   (`test_statement_reconciliation`, 35 — no double-count, pay-all-once, part-settle, reclaim,
   membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, pack offline). Run alongside
   `python -m db` twice + `py_compile`.

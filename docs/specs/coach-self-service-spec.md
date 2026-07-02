@@ -1,5 +1,27 @@
 # Coach Self-Service + Business Cockpit — Spec
 
+> **AS-BUILT (2026-07-02): redesigned coach SPA.** The `crm_ui.js` tab console described below has been
+> **replaced** by a mobile-first drill-through SPA (`frontend/app/coach_app.html` +
+> `frontend/js/coach_app.js`, served at `/coach`, `/coach.html`; non-coaches bounced). The detailed
+> sections that follow reflect the earlier console; the SPA is the current shape. In short:
+> - **Bottom nav: Home · Schedule · Clients · Money · Setup.** Home = business-cockpit KPIs + approval
+>   queue + today + book-for-client.
+> - **Schedule = a WEEKLY CALENDAR** (week-of-today, prev/this/next): tap a lesson → the event story;
+>   tap a class → its roster.
+> - **Clients** = list → **full client record**, which drills **BY SERVICE** (name + Total billed →
+>   services e.g. "Private lesson · 60 min · 3 · R750" → sessions → the event story), each session's
+>   REAL state (paid / owed / written-off / discounted / covered) via `commission.client_service_breakdown`.
+> - **THE ONE COACH EVENT STORY** (`#/event/:id`, `diary.bookings.coach_booking_story`,
+>   `GET /api/coach/bookings/<id>`): client + contact, when, court, charge, the **coaching arrears line**,
+>   players + attendance, actions (accept/propose/decline/reschedule/cancel/mark-completed/no-show) and
+>   the **money actions Mark collected / Discount / Write off** — arrears actions moved HERE (the old
+>   "Owed & written-off" + "Upcoming" lists are gone) — plus **Add to calendar**.
+> - **Money** = account + disputes + per-client rollup → record + activity. **Setup** = Services
+>   (Deactivate/Reactivate/Terminate + filter) + **Classes** (create/schedule/roster via `ClassUI` —
+>   this is where classes are now managed end-to-end) + commission + Edit-profile / Weekly-hours as pages.
+> - **Total billed** leads the cockpit KPI strip (`cockpit.kpis.billed_minor`, gross before
+>   write-off/discount/collection), distinct from collected gross.
+
 > **AS-BUILT NOTE (2026-06-26):** the coach console SHIPPED (2026-06-25/26), built on the shared
 > `crm_ui.js`: 4-step onboarding, service builder, the **lesson approval queue** (accept/propose/decline),
 > book-for-a-client (auto-confirms), clients-360, statement (mark-collected + discount/write-off), cockpit

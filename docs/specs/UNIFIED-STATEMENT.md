@@ -161,7 +161,7 @@ every settlement mode and service type:
 8. **Idempotent re-accrual** — re-running the month-end accrual adds nothing for already-settled orders.
 
 Gate: this harness must be green (and `python -m db` twice) before the UI ships. Existing
-`test_billing_scenarios.py` (56/56) must stay green.
+`test_billing_scenarios.py` (now 118/118) must stay green.
 
 ---
 

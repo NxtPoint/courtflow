@@ -17,11 +17,17 @@ operating guide; **this folder is the detail.**
 > payment options** + one payment rule (choose / immediate / online); **memberships & packs buy offline**;
 > **off-peak coverage priced per slot**; **Operate (Admin) vs Configure (Settings)** split; unified
 > **Active/Deactivated/Terminated lifecycle** + real coach/court deletes.
-> **2026-07-02:** **business-first coach & owner consoles** (coach: Dashboard/Schedule-week-timeline/Clients/
-> Money/Setup; owner: Dashboard-"Today at the club"/Diary/People/Money/Insights) behind **role-focused nav**
-> (staff land on their own console, not the client screen) + a today-glimpse + **"Book for myself"**; and
-> **multi-tenant transactional SES email is CODE-COMPLETE** (one verified domain, per-club From-name +
-> Reply-To, `.ics` attachment — dark until AWS is keyed; see [SES-SETUP.md](SES-SETUP.md)).
+> **2026-07-02:** the **FRONT-END REDESIGN — three role SPAs** on one design system, drill-through
+> everywhere, one booking "event story" per app (the golden rule). **Client** = one-page, no bottom nav
+> (`app.html`+`client.js`); **Coach** = bottom-nav SPA (`coach_app.html`+`coach_app.js`) with a weekly
+> calendar, a client record that drills **by service → sessions (real paid/owed/written-off/discounted
+> state) → the event story**, **Total billed**, money actions in the event story, and **classes wired
+> into Setup** (create/schedule/roster — now bookable end-to-end); **.ics add-to-calendar** fixed on both.
+> **Owner/Admin** = a responsive drill-through SPA **IN PROGRESS at `/admin-app`** (bottom-nav ↔ desktop
+> side-rail; command-center Home shipped) — design locked in **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)**,
+> the classic `/admin` stays live until sign-off. Also **multi-tenant transactional SES email is
+> CODE-COMPLETE** (one verified domain, per-club From-name + Reply-To, `.ics` attachment — dark until AWS
+> is keyed; see [SES-SETUP.md](SES-SETUP.md)). Gated green: **booking 43 / billing 118 / statement 35**.
 > Remaining: **OUTSTANDING.md**.
 
 ## Read in this order
@@ -35,7 +41,7 @@ operating guide; **this folder is the detail.**
 4. **[OUTSTANDING.md](OUTSTANDING.md)** — everything still to do: build items, config (needs Tomo),
    and consciously-deferred pieces. *"What's left."*
 5. **[TESTING.md](TESTING.md)** — the **end-to-end test plan** (3 profiles, role-by-role, with expected
-   results). *"How to verify it all."* **← CURRENT PHASE: Tomo is running E2E testing.**
+   results). *"How to verify it all."*
 6. **[FEATURES.md](FEATURES.md)** — the **white-label feature & function catalogue** (plain-language,
    grouped by area, with automated-test coverage flags). *"What can it do."* The scratch-DB scenario
    harnesses (`python -m scripts.test_all`) back the ✅-flagged items.
@@ -45,9 +51,12 @@ operating guide; **this folder is the detail.**
 8. **[UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md)** — the unified client-statement design + reconciliation
    plan (BUILT 2026-06-28): one debt = one `billing.order`, settled once; no double-count; the
    reconciliation harness that gates it. *"How the money reconciles."*
-9. **[FRONTEND-REDESIGN.md](FRONTEND-REDESIGN.md)** — the front-end simplification log (one-page-per-role,
-   Operate-vs-Configure, the statement card, lifecycle UI). *"How the UI got simpler."*
-10. **[SES-SETUP.md](SES-SETUP.md)** — the config guide to turn transactional email on: verify `courtflow.app`
+9. **[FRONTEND-REDESIGN.md](FRONTEND-REDESIGN.md)** — the front-end simplification log + the **three
+   role SPAs** (client/coach/admin) drill-through redesign. *"How the UI got simpler."*
+10. **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)** — **CURRENT PHASE.** The owner/admin console SPA redesign
+    (responsive, command-center Home, unified person 360, one admin event story). Design LOCKED; building
+    incrementally at `/admin-app` (step 1 shipped). *"The console we're building now."*
+11. **[SES-SETUP.md](SES-SETUP.md)** — the config guide to turn transactional email on: verify `courtflow.app`
     in SES af-south-1, exit the sandbox, IAM keys, `SES_SENDER`. Multi-tenant (one domain, per-club identity),
     `.ics`-attaching engine is code-complete; this is the AWS-side setup. *"How to switch email on."*
 

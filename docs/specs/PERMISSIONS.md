@@ -25,6 +25,13 @@ Grounded in the live code: `iam/permissions.py` (`can()`), `frontend/js/portal.j
    `home.js` redirects staff off `/portal.html` to their console unless `?stay=1` (a testing bypass).
    The client booking pages still exist and are reachable — staff can **book for themselves** (see §4/§5).
 
+   > **AS-BUILT (2026-07-02): redesigned role SPAs.** Landing surfaces are now the drill-through SPAs:
+   > **member/guest → `/`** (client SPA, `frontend/js/client.js`; also `/portal`, `/app`) · **coach → `/coach`**
+   > (coach SPA, `coach_app.js`; non-coaches bounced) · **club_admin/platform_admin → `/admin`** (classic
+   > console, still live) with the new responsive owner SPA in progress at **`/admin-app`** (`admin_app.js` —
+   > see [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)). Old `/account.html`, `/my.html`, `/book.html` **302 → the
+   > client SPA**. The role gate + `can()` boundary below are unchanged — only the surfaces were rebuilt.
+
 **Verdict:** no cross-role leakage. A member/coach cannot use the admin console. The gaps below are
 about **granularity** and **surfacing**, not a security hole.
 
@@ -98,6 +105,14 @@ Cockpit and Overview tabs are folded into the five above (Diary/Money/Insights).
 
 All **ownership-scoped** by `can()` (`_is_coachs_own`); commission is view-only. Looks correctly scoped —
 flag anything a coach sees that they shouldn't.
+
+> **AS-BUILT (2026-07-02): coach SPA + the single event story.** The coach console is now the drill-through
+> SPA at `/coach` (bottom nav **Home · Schedule · Clients · Money · Setup**). The per-session **money
+> actions — Mark collected / Discount / Write off** — now live in **the one coach event story**
+> (`GET /api/coach/bookings/<id>`), reached by tapping a session anywhere; they remain coach-own-scoped
+> (a coach only ever settles arrears on their own sessions). **Lesson lifecycle** (accept / propose /
+> decline) stays gated so **only the awaited party — or an admin — can act** (matches §7: coach on own,
+> admin on any), and a coach/admin on-behalf booking always auto-confirms (no acceptance step).
 
 ## 6. Client/member surface (`/portal`, `/book`, `/my`, `/plan`, `/account`)
 Cockpit + quick-book · full booking · My Bookings (reschedule/cancel/needs-attention/calendar) · Plan

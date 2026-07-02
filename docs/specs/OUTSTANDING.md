@@ -3,9 +3,28 @@
 The single source of truth for remaining work. Grouped by type. (Everything NOT here is built & live —
 see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 
-> **▶ CURRENT PHASE (2026-06-26): end-to-end testing.** Tomo is testing every flow with 3 profiles
-> (owner / coach / client) — the checklist is **[TESTING.md](TESTING.md)**. Bugs found there feed the
-> next build session; the items below are the known remaining work regardless.
+> **▶ CURRENT PHASE (2026-07-02): OWNER/ADMIN console redesign — the third & hardest SPA.** Design is
+> LOCKED in **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)**; building incrementally at **`/admin-app`** (the
+> classic `/admin` console stays live until sign-off). **Step 1 SHIPPED** (shell + responsive
+> side-rail/bottom nav + command-center Home + `GET /api/admin/home`). **Remaining steps:** 2) People
+> roster + **unified person 360** (`GET /api/admin/people/<id>`, mirrors coach `get_client`) · 3) the ONE
+> admin **event story** (`GET /api/admin/bookings/<id>`, god-view: any booking, full actions incl.
+> void/refund/reassign/desk-pay) · 4) **Money** cockpit + per-coach settlement drill + refund/dispute
+> approvals + payments + activity · 5) **Diary** resource-timeline + Classes (reuse) · 6) **Setup** —
+> embed the `AdminUI` editors as in-app pages (retire the `/settings.html` jump) · 7) **Insights** embed.
+
+> **Recently shipped (2026-07-02 — NOT outstanding): the FRONT-END REDESIGN — three role SPAs.** The
+> old tab-based consoles are replaced by mobile-first (admin: responsive) **drill-through SPAs** on one
+> design system, with the **golden rule** of exactly one booking "event story" per app reused everywhere.
+> **Client** = one-page, no bottom nav (`app.html`+`client.js`), billing-by-category + booking-story drill.
+> **Coach** = bottom-nav SPA (`coach_app.html`+`coach_app.js`): **weekly calendar**, client record that
+> drills **BY SERVICE** → sessions (each showing its REAL state paid/owed/**written-off**/**discounted**)
+> → the event story, **Total billed** on the cockpit + record, money actions (collect/discount/write-off)
+> living in the event story, and **classes** (create/schedule/roster) wired into Setup — classes now work
+> end-to-end and are bookable. **Add-to-calendar (.ics)** download fixed on both apps (authed fetch).
+> New backend: `GET /api/me/bookings/<id>` + `/api/me/billing/summary`, `GET /api/coach/bookings/<id>`,
+> `commission.client_service_breakdown` + `_coach_billed`. Gated green (**booking 43 / billing 118 /
+> statement 35**). `cancel_booking` now voids the linked unpaid order (no more phantom-owed courts).
 
 > **Recently shipped (2026-07-02 — NOT outstanding):** **role-focused nav** (member→Home·Account,
 > coach→Coach·Account, owner→Admin·Settings; staff land on their own console, never the client screen);
@@ -27,7 +46,7 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > **unified lifecycle** (Active / Deactivated / Terminated across services/memberships/coaches) with
 > **real coach & court deletes**; the **Admin-vs-Settings split** (Operate vs Configure; Resources tab
 > retired; Settings on the nav); the **People category slicer**; and **stopped seeding demo coaches**.
-> Gated green (`python -m scripts.test_all` → booking 43 / billing 56 / statement 35).
+> Gated green (`python -m scripts.test_all` → booking 43 / billing 118 / statement 35).
 >
 > **Recently shipped (2026-06-25/26 — NOT outstanding):** the redesigned client journey (action-first
 > cockpit + full-screen calendar booking + consolidated `/plan`), the **lesson approval lifecycle**
@@ -73,15 +92,17 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       effect, credit/refund). Backlog — needs a proper spec before building.
 - [ ] **Platform / super-admin cockpit** — cross-club view (all clubs' revenue/health) for
       `platform_admin`. Low priority while there's one club; the `scope_clause` design supports it.
-- [ ] **Owner per-person 360 endpoint** — the owner People drawer composes from people+payments today;
-      a dedicated `GET /api/admin/people/<id>` 360 (like the coach's `clients/<id>`) is a nice-to-have.
+- [ ] **Owner per-person 360 endpoint** — `GET /api/admin/people/<id>` (a unified member+coach 360 like
+      the coach's `clients/<id>`). **Now scheduled as step 2 of the admin-console redesign** (see the
+      CURRENT PHASE banner + [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)); the classic People drawer still
+      composes from people+payments until then.
 - [ ] **Reminders** — booking reminders (the `/api/cron/reminders` handler exists but cron services are
       off). Needs a scheduler: re-enable a Render cron, or an external pinger, or a lazy "due reminders"
       sweep. Same blocker for scheduled rent accrual + the reconcile/membership-refill sweeps.
 - [ ] **Reschedule UX polish** — `PATCH /api/diary/bookings/<id>` exists; ensure member/admin
       reschedule flows are smooth + policy-guarded.
-- [ ] **My Bookings** — confirm the member `/my.html` cancel path surfaces token credit-back / refund
-      clearly.
+- [ ] **My Bookings** — confirm the client SPA (`client.js`) cancel path surfaces token credit-back /
+      refund clearly (the standalone `/my.html` now 302-redirects into the SPA).
 - [ ] **Self-serve coach/admin role transitions** — e.g. a dependent **aging out at 18** into their own
       login (foundations spec open question).
 

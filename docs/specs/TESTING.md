@@ -13,8 +13,11 @@ the coach sets up services, then the client books against them. Expected results
 > own scratch club, always rolled back, never persisted):
 > - **booking** (`test_booking_scenarios`, **43** checks) — double-book refusal, coach∩court integrity,
 >   recurrence/waitlist, lazy hold-expiry.
-> - **billing / commercial** (`test_billing_scenarios`, **56** checks) — PAYG/membership/bundle settlement,
->   desk-payment idempotency, refunds, commission.
+> - **billing / commercial** (`test_billing_scenarios`, **118** checks) — PAYG/membership/bundle settlement,
+>   desk-payment idempotency, refunds, commission, refund clawback, membership-cancel-voids-order, the
+>   transaction log, dispute routing, client month-end, void clears arrears, abandoned reclaim on read, the
+>   booking + coach event stories, cancel-voids-order + phantom cleanup, and the **client by-service breakdown**
+>   (incl. the written-off + discounted states, billed vs effective).
 > - **statement reconciliation** (`test_statement_reconciliation`, **35** checks) — the unified-statement
 >   money invariant: a client owes the SUM of unpaid orders with **no double-count** (ledger/arrears never
 >   added in), **pay-all** settles every debt **once + idempotent** (replay = no re-charge, no double
@@ -38,6 +41,18 @@ the coach sets up services, then the client books against them. Expected results
   `/book` · `/my` · `/plan` · `/account.html` (client) · `/coach` · `/admin` · `/settings.html` ·
   `/overview.html` · `/login`. (At go-live these move to `nextpointtennis.com`.)
 - API: `https://courtflow-api.onrender.com` (the SPA calls it directly).
+
+> **AS-BUILT (2026-07-02): smoke the three redesigned SPAs first.** The front-end is now three
+> drill-through SPAs — before the flows below, confirm each landing surface loads and its lists drill:
+> - **Client SPA at `/`** (also `/portal`, `/app`) — one page, no bottom nav; Home tiles → Book;
+>   **Your sessions** + **Billing by category** rows each **drill to their full story** (booking story /
+>   receipt). Old `/account.html`, `/my.html`, `/book.html` should **302 → the SPA**.
+> - **Coach SPA at `/coach`** — bottom nav **Home · Schedule · Clients · Money · Setup**; **Schedule is a
+>   weekly calendar** (tap a lesson → the event story, tap a class → its roster); a **Client record drills
+>   BY SERVICE** → sessions → the event story. Non-coaches are bounced.
+> - **Admin SPA at `/admin-app`** (IN PROGRESS) — responsive (mobile bottom-nav / desktop side-rail),
+>   **command-center Home** (Today / Money / People-attention / Approvals) via `GET /api/admin/home`; the
+>   classic `/admin` console stays live. Steps 2–7 are placeholders (see [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)).
 
 **The three profiles** (use **three separate Clerk accounts / emails** — a user has one role by default):
 - **Owner/Admin** — the seeded platform admin **`info@nextpointtennis.com`** (full admin).
@@ -137,6 +152,14 @@ not the client Home.
 - [ ] Add a **second lesson duration** (e.g. 90 min) with a rate → the client sees it as a chip.
 - [ ] Create a **lesson pack** (e.g. 10 × 60-min) → appears on the client's `/plan` page.
 
+**Classes end-to-end (fixed 2026-07-02 — previously "not bookable")**
+- [ ] **Setup → Classes** → **create** a class type, then **schedule** a recurring/one-off **session**
+      (capacity). → the session appears on the **coach Schedule weekly calendar**.
+- [ ] Tap the class on the calendar → its **roster** opens (mark attendance / no-show).
+- [ ] **Client books it** — as the client, the class now shows a bookable **session**; enrol via `/book`
+      (`POST /api/diary/classes/:id/enrol`). Fill past capacity → **waitlist** (auto-promote on a cancel).
+      (Classes only become bookable once a coach has scheduled at least one session.)
+
 **Book for a client** (auto-confirms)
 - [ ] Coach console → **"Book a session for a client"** → enter the client's email, pick a time →
       **confirms immediately**; the client gets an in-app notification and sees it in **My Bookings**
@@ -144,6 +167,11 @@ not the client Home.
 
 **Clients, statement, cockpit**
 - [ ] **My Clients** → open a client's **360** → history **+ upcoming** sessions.
+- [ ] **By-service money drill (SPA)** — in a client record, **Total billed** breaks down **by service**
+      ("Private lesson · 60 min · 3 · R750") → tap a service → its **sessions** → tap one → **the coach event
+      story**. Each session shows its REAL state: **paid / owed / written-off** (struck through) **/ discounted**
+      (old price beside new) **/ covered**. The per-session **Mark collected / Discount / Write off** actions
+      now live **in the event story**.
 - [ ] **Statement** (month-end) → per-client paid (Yoco) + owed (arrears) = net. **Mark an arrear
       collected**; **discount / write-off** an owed line → totals update; **commission accrues** on the
       collection.
@@ -183,6 +211,8 @@ not the client Home.
       **"Your plan"** card shows the tier + access-window summary + renew date.
 - [ ] **My Bookings (`/my`)** — **reschedule** + **cancel** an upcoming booking (token credit-back / refund
       per policy); **"Add to calendar"** downloads a working **.ics** (imports into Google/Apple/Outlook).
+      *(Fixed 2026-07-02 — the .ics now fetches **authenticated** via `TFAuth.apiFetch` in BOTH the client and
+      coach apps, so it no longer 404s against the DB-less web host.)*
 - [ ] **Statement (unified)** — Account → **"Your statement"**: owed lines **grouped by category** (Coaching /
       Court hire / Classes / Membership / Session packs) with a subtotal each. **Pay all** → one Yoco
       settlement (every line clears at once); or **tick a subset** → **part-settle** (unticked lines stay owed).

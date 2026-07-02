@@ -137,29 +137,44 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   **Home · Account**, coaches get their **Coach** console, owners get **Admin · Settings** (staff no
   longer see the client screens). 🔭
 
-## 8. Self-service consoles
-- **Client** — action-first cockpit (`/portal`), full-screen booking, **My Bookings** (reschedule/
-  cancel, "needs your attention", add-to-calendar), consolidated **Plan** page (buy membership/packs),
-  financials + statement, refund requests, dependents, notifications. 🔭
-- **Coach — a business console** (tabs **Dashboard · Schedule · Clients · Money · Setup**):
-  - **Dashboard** = the **business cockpit** (net-of-commission earnings / lessons / hours / fill-rate /
-    trend / month-end position / lessons-left-on-plans / top clients / upcoming) with the **lesson
-    approval queue** ("needs your attention") on top. 🔭
-  - **Schedule** = a **week timeline** of the coach's lessons + classes (prev/next week; tap a lesson to
-    mark completed/no-show, tap a class for the roster) + **book for a client / for myself** + block
-    time off. 🔭
-  - **Clients** = **My Clients 360** (history + upcoming). **Money** = the month-end settlement
-    **statement** (per-client paid/owed/net, mark-collected + discount/write-off). **Setup** =
-    services/rates + classes + own packs + club-commission card + profile. 🔭
-- **Owner — a business dashboard + operate/configure split.** The **Admin console** (Operate) leads with
-  a **Dashboard**: **Today at the club** (today's diary) + this-month **money KPIs** (net revenue /
-  commission kept / rent due / active members / MRR / lessons paid) + net-revenue trend + last-30-days
-  **growth & NPS** (from first-party analytics) + a **Quick actions** row. Remaining tabs: **Diary**
-  (master timeline + classes management) · **People** (Members/Coaches/Guests/Admins slicer + 360 drawer
-  + membership grant) · **Money** (billing/refunds + the financial cockpit) · **Insights** (the analytics
-  Overview). **Configure** = Settings (club profile · **Courts & hours** with **per-court** weekly playing
-  hours · **Services** sub-tabs Lessons/Classes/Courts with a coach filter · Memberships · Coaches);
-  **Coach pay** = per-service commission editor; payments toggle; branding; policy. 🔭
+## 8. Self-service consoles — three drill-through SPAs
+Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.css`, `cf-*`), rebuilt
+2026-07-02. **Drill-through everywhere** — every list row opens its full story, no data dumps.
+**Golden rule:** exactly ONE booking capability per app (the "event story"), reused from everywhere
+(calendar, client record, money) — never a second booking sheet.
+- **Client** (`app.html` + `client.js`, at `/`,`/portal`,`/app`) — **ONE page, no bottom nav**
+  (Book from Home tiles; avatar top-right → profile). Green profile ribbon (name + email + membership
+  + Edit profile / Manage membership). Home = book tiles + **Your sessions** (all, upcoming + past) +
+  **Billing by category** (month nav → category → items → the booking story / receipt) + Plan & credits.
+  Every booking/charge drills to its **booking story** (`GET /api/me/bookings/<id>`), every line to its
+  order/receipt. My-Bookings needs-attention (accept/decline a proposed time) + **add-to-calendar**. 🔭
+- **Coach** (`coach_app.html` + `coach_app.js`, at `/coach`; bottom nav **Home · Schedule · Clients ·
+  Money · Setup**):
+  - **Home** = business cockpit KPIs (**Total billed** + net-of-commission earnings / lessons / hours /
+    fill-rate) + the **lesson approval queue** + today + book-for-a-client. 🔭
+  - **Schedule** = a **weekly calendar** (week-of-today, prev/this/next) — tap a lesson → the event
+    story; tap a class → its roster. 🔭
+  - **Clients** = list → the **full client record**: name + **Total billed**, then **BY SERVICE**
+    ("Private lesson · 60 min · 3 · R750") → sessions → each → the event story. Each session shows its
+    REAL money state (paid / owed / **written-off** / **discounted** / covered). 🔭
+  - **Money** = account balance/rent/net + disputes + per-client rollup → record + activity log.
+    **Setup** = Services (lifecycle Deactivate/Reactivate/Terminate + filter) + **Classes**
+    (create / schedule / roster) + club-commission card + Edit-profile & Weekly-hours (as pages). 🔭
+  - **THE ONE COACH EVENT STORY** (`#/event/:id`, `GET /api/coach/bookings/<id>`): client + contact,
+    when, court, charge, **coaching line**, players + attendance, and the actions — accept / propose /
+    decline / reschedule / cancel / mark-completed / no-show **+ Mark collected / Discount / Write off**
+    (the money is managed right here) + add-to-calendar. 🔭
+- **Owner / Admin** (`admin_app.html` + `admin_app.js`, at **`/admin-app`** — **IN PROGRESS**; the
+  classic `/admin` console stays live until sign-off). **Responsive**: bottom-nav on mobile, **left
+  side-rail on desktop**. Nav **Home · People · Money · Diary · Setup** (+ Insights). **Home = a
+  command center** surfacing all four owner focuses, each drilling to its section: **Today at the club**
+  (live diary), **Money** (owed to the club / net revenue / coach settlements due / active members),
+  **People needing attention** (new signups / pending coach invites / expiring memberships), **To
+  approve / decide** (pending refund requests) — via `GET /api/admin/home`. People/Money/Diary/Setup/
+  Insights build out per `docs/specs/ADMIN-REDESIGN.md` (People → unified person 360; Money → per-coach
+  settlement drill; Diary → the resource-timeline + classes; Setup → all club config in-app; Insights →
+  the Overview). The classic Admin console (Operate/Configure + Settings at `/settings.html`) remains
+  the full working surface until the SPA reaches parity. 🔭
 
 ## 9. Notifications, calendar & CRM
 - In-app **bell + inbox** for every member, driven off the event feed: booking confirmed, payment
@@ -206,12 +221,16 @@ lesson needs a free court · **coach∩class conflict** (read + write) · 30-min
 class enrol/capacity/waitlist/promote · lesson approval lifecycle (request → accept/decline/propose →
 client accept).
 
-**Commercial engines — `scripts/test_billing_scenarios.py` (56 checks):** settlement per mode
+**Commercial engines — `scripts/test_billing_scenarios.py` (118 checks):** settlement per mode
 (at-court desk, online held→paid, monthly-account ledger) · **idempotent payment replay** · commission
 30%/40% scoping + accrual + idempotency · token pack buy→activate→**unit/minute draw-down**→credit-back
 + NO_TOKEN · membership coverage (R0) + **access window** inside/outside + trial idempotency · refund-
 request lifecycle (create/duplicate/list/decline/NOT_PENDING) · membership/pack **offline buy** + the
-per-tier/per-service payment-mode resolution.
+per-tier/per-service payment-mode resolution · **refund clawback** split · membership-cancel & cancel-
+booking **void the order** · **transaction log** + **dispute routing** (coach vs club) · lockstep
+desk-pay & **void clears arrears** · abandoned-checkout **reclaim on read** · the client + coach
+**event/booking stories** · the **client BY-SERVICE breakdown** (incl. written-off + discounted per-
+session state, billed vs effective, total-billed unchanged by write-off/discount).
 
 **Unified statement — `scripts/test_statement_reconciliation.py` (35 checks):** no double-count
 (orders only, never ledger + arrears too) · pay-all-once · **partial settle** (selected lines only) ·

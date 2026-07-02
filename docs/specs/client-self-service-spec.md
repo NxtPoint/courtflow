@@ -1,5 +1,20 @@
 # Client Self-Service — "My Account" Spec
 
+> **AS-BUILT (2026-07-02): redesigned client SPA.** The tab-based "My Account" console described below
+> has been **replaced** by a single drill-through SPA (`frontend/app/app.html` + `frontend/js/client.js`,
+> served at `/`, `/portal`, `/app`). The detailed sections that follow reflect the earlier console; the
+> SPA is the current shape. In short:
+> - **ONE page, NO bottom nav** — Book is reached from Home tiles; the avatar (top-right) opens the profile.
+> - **Green profile ribbon** — name + email + membership, with **Edit profile** / **Manage membership**.
+> - **Home** = greeting + book tiles + **Your sessions** (all, Upcoming + Past) + **Billing by category**
+>   (month nav → category → items → the booking story / receipt) + **Plan & credits**.
+> - **Drill-through everywhere** — every row opens its full story: `GET /api/me/bookings/<id>`
+>   (`diary.bookings.booking_story`) and `GET /api/me/billing/summary` (`billing_me.billing_summary`,
+>   ORDER-based monthly by-category).
+> - **One booking capability** (the shared "event story"), reused everywhere — never a second sheet.
+> - **Add-to-calendar (.ics)** now fetches via `TFAuth.apiFetch` (authenticated) → blob download.
+> - Old pages `/account.html`, `/my.html`, `/book.html` **302 → the SPA**.
+
 > **AS-BUILT NOTE (2026-06-26):** this is the original *design* spec — the feature shipped and the UI
 > evolved. The booking SPA is now `booking.js` (full-screen calendar; `book.js`/`quickbook.js` retired),
 > membership/packs are the consolidated **`/plan`** page, and the client has a statement + a "Needs your

@@ -1,5 +1,18 @@
 # Owner Self-Service + Commission/Rental Revenue Model + Owner Cockpit — Spec
 
+> **AS-BUILT (2026-07-02): owner SPA in progress → see [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md).** A new
+> responsive drill-through admin SPA (`frontend/app/admin_app.html` + `frontend/js/admin_app.js`) is
+> being built, served at **`/admin-app`** — the classic `/admin` console (`admin.js`) stays live until
+> sign-off. The detailed sections below reflect the classic console; the SPA is the emerging shape. In short:
+> - **Responsive** — bottom-nav on mobile, **left side-rail on desktop** (`.cf-admin` CSS).
+> - **Nav: Home · People · Money · Diary · Setup** (+ Insights).
+> - **Step 1 SHIPPED** — shell + nav + a **command-center Home**: four focus cards (Today / Money /
+>   People-attention / Approvals) via new `GET /api/admin/home` (`admin.repositories.admin_home`, guarded).
+> - **Steps 2–7 = placeholders** (People / Money / Diary / Setup / Insights build out per the
+>   [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md) build order).
+> - One design system (`cf-*`), the same drill-through + single-event-story golden rule as the client and
+>   coach SPAs.
+
 > **AS-BUILT NOTE (2026-06-26):** the owner console SHIPPED (2026-06-25/26) on the shared `crm_ui.js`:
 > a **per-service commission editor** (club/coach/per-service incl. classes), the financial cockpit
 > (per-coach settlement, refund-aware), and People-360. Read this for design intent; see

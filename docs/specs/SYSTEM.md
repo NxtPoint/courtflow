@@ -25,6 +25,27 @@ Two Render web services + one Postgres:
 The browser holds a **Clerk** session; the SPA attaches the JWT to every `/api/*` call; the API verifies
 it (JWKS) and resolves a club-scoped `Principal`.
 
+## Front-end — three role SPAs (the 2026-07-02 redesign)
+The tab-based consoles above are superseded by **three mobile-first, drill-through single-page apps**, one
+per role, all built on the **one shared design system** (`frontend/app/app.css`, every page in `cf-*`
+classes — the single source; no inline component styles). **GOLDEN RULE:** each app has exactly **one**
+booking capability — the "**event story**" — and every list row (a session, a billing line, a client's
+service) drills into that same story; there is never a second booking sheet.
+- **Client** — `frontend/app/app.html` + `frontend/js/client.js`. ONE page, no bottom nav: Home (book tiles
+  + Your sessions + Billing-by-category) drilling into the booking story (`GET /api/me/bookings/<id>`) and
+  the ORDER-based billing view (`GET /api/me/billing/summary`). Served at `/`, `/portal`, `/app`.
+- **Coach** — `frontend/app/coach_app.html` + `frontend/js/coach_app.js`. Bottom nav Home · Schedule ·
+  Clients · Money · Setup; Schedule is a weekly calendar; the **one coach event story**
+  (`GET /api/coach/bookings/<id>`) carries the arrears actions (mark-collected / discount / write-off).
+  Served at `/coach` (non-coaches bounced).
+- **Admin (in progress)** — `frontend/app/admin_app.html` + `frontend/js/admin_app.js`, served at
+  **`/admin-app`** (the classic `/admin` console stays live until sign-off). It is **responsive** —
+  bottom-nav on mobile, a **left side-rail on desktop** (`.cf-admin`). Step 1 shipped: shell + nav +
+  command-center Home (`GET /api/admin/home`); steps 2–7 follow the build order in
+  [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md). Full blueprint: [FRONTEND-REDESIGN.md](FRONTEND-REDESIGN.md).
+
+Old standalone pages 302-redirect into the client SPA; `admin.html`/`coach.html` are kept as fallbacks.
+
 ## Auth & multi-tenancy (the spine)
 `auth/principal.py`: verify the Clerk JWT → upsert `iam.user` (link-by-email) → load memberships →
 resolve the **active `(club_id, role)`**. Resolution order: explicit `X-Club` header (admin switcher) →

@@ -25,7 +25,7 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `club/` | `schema.py` | club, branding, location, policy |
 | `core/` | `schema.py`, `repositories/` | core.user/account/person, usage_event, consent, nps, **notification** |
 | `diary/` | bookings, availability, classes, recurrence, pricing, routes | The booking engine (the heart) |
-| `billing/` | orders, ledger, gateway, membership, bundles, commission, refunds, statement, me, events, routes | Orders/ledger + the commercial engines (`statement.py` = unified client statement) |
+| `billing/` | orders, ledger, gateway, membership, bundles, commission, refunds, statement, me, activity, events, routes | Orders/ledger + the commercial engines (`statement.py` = unified client statement; `activity.py::transaction_log` = unified per-client/coach money log; `me.py::billing_summary` = ORDER-based monthly by-category) |
 | `yoco_billing/` | client, adapter, routes, reconcile, receipt | Yoco online payments (adapter behind the gateway registry) |
 | `marketing_crm/` | tracking (`emit`), notifications (+`_club_identity`), email/ses, klaviyo, consent, cockpit | Event feed + **notifications** + CRM + **club-branded transactional email** |
 | `admin/` | routes, repositories, schema | `/api/admin/*` owner self-service + config |
@@ -40,7 +40,8 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 ## 3. API endpoints (by lane)
 **Diary `/api/diary/*`:** `GET availability` (membership coverage priced PER-SLOT — R0 only inside the
 access window, PAYG outside) · `GET resources` · `GET durations` · `GET/POST bookings` ·
-`GET bookings/<id>` · `PATCH bookings/<id>` (reschedule) · `POST bookings/<id>/cancel` ·
+`GET bookings/<id>` · `PATCH bookings/<id>` (reschedule) · `POST bookings/<id>/cancel` (now **voids the
+linked unpaid order** via `billing.statement.void_order` — a cancelled court no longer stays phantom-owed) ·
 `POST bookings/<id>/status` · **`POST bookings/<id>/{accept,propose,decline}`** (lesson lifecycle — only
 the awaited party; admin always) · **`GET bookings/<id>/calendar.ics`** (booking .ics) ·
 `GET master` · `GET classes` · `POST classes` ·
@@ -56,7 +57,9 @@ the awaited party; admin always) · **`GET bookings/<id>/calendar.ics`** (bookin
 **Yoco `/api/billing/yoco/*`:** `POST checkout` · `POST webhook` · `POST refund` · `GET order/<id>` ·
 `POST reconcile/<order_id>`.
 
-**Admin `/api/admin/*`:** `GET/POST onboarding` (+`/complete`) · `GET/PATCH club` · `PUT location` ·
+**Admin `/api/admin/*`:** **`GET home`** (the owner **command-center** for the redesigned admin app —
+guarded focus cards: today / money (owed-to-club, net revenue, rent due) / people-needing-attention /
+approvals; `admin/repositories.py::admin_home`) · `GET/POST onboarding` (+`/complete`) · `GET/PATCH club` · `PUT location` ·
 `PATCH branding` · `PATCH policy` · `GET/POST resources` (+`PATCH/DELETE /<id>` — DELETE now real:
 hard-delete a court with no bookings/sessions, else soft-archive) · `GET/PUT hours` ·
 `GET/POST products` (+`PATCH /<id>`) · `GET/POST prices` (+`PATCH/DELETE /<id>`) ·
@@ -75,13 +78,23 @@ history, else archive) · `GET people` · `GET payments` · `POST|DELETE members
 **Coach `/api/coach/*`:** `GET/PATCH profile` · `GET onboarding` · `POST/PATCH services`
 (+`POST services/<pid>/rate`, `PATCH/DELETE services/<id>`) · `GET/POST bundle-plans`
 (+`PATCH bundle-plans/<id>` — own lesson packs, scoped + ownership-guarded) · `PUT hours` ·
-`GET/POST/DELETE time-off` · `GET clients` · `GET clients/<id>` (360: history + **upcoming**) ·
-`GET cockpit` (+ **plan_balances**, month-end-after-commission) · `POST photo-presign` ·
+`GET/POST/DELETE time-off` · `GET clients` · **`GET clients/<id>`** (`?month=` — the client 360;
+now returns a **by-service breakdown** `services[]` + `services_billed_minor` with the REAL per-session
+state paid/owed/written_off/discounted/covered, via `billing/commission.py::client_service_breakdown`) ·
+**`GET bookings/<id>`** (the coach **event story** — client/contact, court, charge, coaching-arrears line,
+players+attendance, can-flags for accept/propose/decline/reschedule/cancel/mark-completed/no-show +
+mark-collected/discount/write-off; `diary/bookings.py::coach_booking_story`) ·
+`GET cockpit` (+ **plan_balances**, month-end-after-commission, + **`billed_minor`** = gross coaching value
+for the month before write-off/discount/collection, distinct from collected `gross_minor`;
+`coach/repositories.py::_coach_billed`) · `POST photo-presign` ·
 `GET classes*` (shared) · `POST coach-statement/...` (shared admin route, coach-gated for own).
 
 **Client `/api/me/*`:** `GET/PATCH profile` · `GET/POST dependents` (+`PATCH/DELETE /<id>`) ·
 `GET plan` (current plan + `is_trial`/`trial_days_left` + `membership_window`) ·
 **`POST membership/cancel`** (self-cancel a paid membership) · `GET financials` ·
+**`GET billing/summary`** (`?month=` — the client SPA's ORDER-based monthly by-category billing view;
+`billing/me.py::billing_summary`) · **`GET bookings/<id>`** (the client **event story** for a booking —
+`diary/bookings.py::booking_story`) ·
 **`GET statement`** (unified statement — unpaid `billing.order` rows, grouped by category) ·
 **`POST statement/pay`** (`{order_ids?}` → `create_settlement_order` → Yoco; pay all or a subset) · `GET orders` ·
 `GET/POST refund-requests` (+`POST /<id>/cancel`) · `GET notifications` · `POST notifications/read`.
@@ -131,6 +144,32 @@ Settlement modes on `billing.order`: `at_court`, `monthly_account`, `online`, `m
 `token`, `free` (complimentary). Boot order + `BOOT_MODULES` in `db.py`.
 
 ## 5. Frontend (host-switched by `web_app.py`)
+**Three role SPAs (the 2026-07-02 redesign — mobile-first drill-through; one `cf-*` design system).**
+The old tab-based consoles are superseded by three single-page drill-through apps where every list row opens
+its full **event story** (GOLDEN RULE: exactly ONE booking capability per app, reused everywhere). Blueprints:
+[FRONTEND-REDESIGN.md](FRONTEND-REDESIGN.md) + [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md).
+- **Client** — `frontend/app/app.html` + `frontend/js/client.js`. ONE page, **no bottom nav** (Book from
+  Home tiles; avatar top-right → profile). Home = greeting + book tiles + **Your sessions** (all,
+  upcoming+past) + **Billing by category** (month nav → category → items → booking story / receipt) + Plan &
+  credits. Drills via `GET /api/me/bookings/<id>` + `GET /api/me/billing/summary`. Served at `/`, `/portal`, `/app`.
+- **Coach** — `frontend/app/coach_app.html` + `frontend/js/coach_app.js`. **Bottom nav Home · Schedule ·
+  Clients · Money · Setup.** Schedule = a **weekly calendar** (tap lesson → the event story; tap class →
+  roster). Clients → full client record (by-service breakdown). Money = account + disputes + per-client
+  rollup. Setup = Services (lifecycle) + Classes (create/schedule/roster via `ClassUI`) + commission +
+  Edit-profile/Weekly-hours pages. **THE ONE COACH EVENT STORY** (`#/event/:id` → `GET /api/coach/bookings/<id>`)
+  carries the arrears actions (mark-collected / discount / write-off). Served at `/coach`, `/coach.html`
+  (non-coaches bounced).
+- **Admin (IN PROGRESS)** — `frontend/app/admin_app.html` + `frontend/js/admin_app.js`, served at
+  **`/admin-app`** (the classic `/admin` console stays live until sign-off). **Responsive:** bottom-nav on
+  mobile, **left side-rail on desktop** (`.cf-admin`). Nav Home · People · Money · Diary · Setup (+Insights).
+  Step 1 shipped: shell + nav + **command-center Home** (4 focus cards) via `GET /api/admin/home`
+  (`AdminAPI.home()`); steps 2–7 are placeholders (see ADMIN-REDESIGN.md).
+- **Web routes / redirects (`web_app.py`):** `/`,`/portal`,`/app` → `app.html` · `/coach`,`/coach.html` →
+  `coach_app.html` · `/admin` → `admin.html` (classic) · **`/admin-app`** → `admin_app.html` (new). Old
+  standalone pages **302 → the client SPA**: `/book.html`→`/portal#/book/court`, `/book/<kind>`→`/portal#/book/<kind>`,
+  `/my`,`/my.html`→`/portal#/bookings`, `/account.html`→`/portal#/billing`. The old `admin.html`/`admin.js` +
+  `coach.html`/`coach.js` are kept as fallbacks.
+
 **Portal SPA shells** (`frontend/app/*.html`, each `cf-*` design system, absolute asset links):
 `portal` (dashboard) · `book` (full-screen booking) · `my` (my bookings) · `plans` (consolidated
 Membership/Packs/PAYG — served at `/plan`; `/membership` + `/packs` 301 here) · `account` (profile/family/
@@ -163,7 +202,10 @@ money KPIs + net-revenue trend + last-30-days growth/NPS from analytics + a Quic
 + the full **financial cockpit** — the old Cockpit tab folded in) · **Insights** (the analytics Business
 Overview, was "Overview").
 
-**JS modules** (`frontend/js/*.js`): `portal` (role-focused nav + `landingFor` + notification bell) ·
+**JS modules** (`frontend/js/*.js`): **`client`** (client SPA — Home/sessions/billing-by-category/event
+story) · **`coach_app`** (coach SPA — bottom-nav Home·Schedule·Clients·Money·Setup + the one coach event
+story) · **`admin_app`** (admin SPA, in progress — responsive shell + command-center Home) ·
+`portal` (role-focused nav + `landingFor` + notification bell) ·
 `home` (client Home + staff redirect) · `booking` (full-screen; replaced `book`/`quickbook`) · `my` ·
 `plan` · `account` · `coach` (5-tab console; +`coach_api`, `coach_onboarding`) · `statement` (fallback page) ·
 `admin` (5-tab console; +`admin_api`, `class_ui`; `AdminUI.courtsManage` = per-court click-to-edit hours) ·
@@ -172,8 +214,9 @@ Overview, was "Overview").
 `analytics` (page-view beacon) · `overview` (Business Overview dashboard) · `api` · `auth_client` ·
 `ui` (+`UI.lifecycleBar`/`lifeActions`/`statusChip`/`subtabs` lifecycle helpers). `account.js` renders the
 grouped tick-to-pay "Your statement" card. **One design system:** `frontend/app/app.css` (all `cf-*`
-classes — incl. `.cf-lifefilter`/`.cf-subtabs`/`.cf-cal*`). Marketing site: `frontend/marketing/`,
-`frontend/_shared/`.
+classes — incl. `.cf-lifefilter`/`.cf-subtabs`/`.cf-cal*`; the SPA redesign added `.cf-bottomnav*`,
+`.cf-appbar`, `.cf-avatar`, `.cf-kv*`, `.cf-owe`, `.cf-amountbig`, and `.cf-admin` for the desktop
+side-rail). Marketing site: `frontend/marketing/`, `frontend/_shared/`.
 
 ## 6. Env / config
 **Full reference: `docs/specs/ENV-STATUS.md`** — every var, live/dark status, copy-paste checklist.

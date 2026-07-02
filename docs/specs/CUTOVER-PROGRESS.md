@@ -26,6 +26,8 @@ Durable record of the Wix→Render cutover work (survives chat compaction). Full
 - **5 Google env values** (all blank in render.yaml now): `GA4_MEASUREMENT_ID`, `GOOGLE_ADS_ID`,
   `GOOGLE_ADS_CONVERSIONS` (JSON of Ads labels), `GSC_VERIFICATION_FILE` or `GSC_META_TOKEN`.
 - **DNS**: pre-lower TTL to 300s (apex+www only — ⚠️ NEVER `api.nextpointtennis.com`); flip at cutover.
+- **AWS locked out (2026-07-02):** Tomo bounced from AWS, reset ticket logged. NON-BLOCKING — SES + S3
+  are optional (email stays in-app until sorted). Park SES; wire it post-reset (15 min, SES-SETUP.md).
 - **Render**: attach custom domain, bump Free→Starter. **GSC/Ads/GA4 consoles**, pre-cutover client email.
 
 ## ⬜ AGENT — STILL TO DO (all BLOCKED on Tomo's weekend crawl/CSV)
