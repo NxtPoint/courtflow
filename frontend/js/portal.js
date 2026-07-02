@@ -23,19 +23,27 @@
     return principalP;
   }
 
-  // Absolute hrefs so nav works at any URL depth (e.g. /book/court, a sub-path, would
-  // break relative links). Pages still pass `active` as a bare filename ("/book.html").
-  // Front-end redesign (2026-06-27): the client surfaces (My Bookings, Plan, Account) are now
-  // SECTIONS of the one-page Home — so the top nav is just Home + Book + the role consoles. The
-  // old /my, /account, /plans pages still resolve as a fallback but are no longer linked here.
+  // Absolute hrefs so nav works at any URL depth. Front-end redesign (2026-07): the nav is now
+  // ROLE-FOCUSED — a coach/owner no longer sees the CLIENT "Home" (the booking cockpit) as their
+  // face. Members book (Home + Account); a coach lives in their Coach console; an owner in the
+  // Admin console + Settings. `landingFor()` sends staff straight to their console on sign-in.
+  //   member/guest → Home · Account
+  //   coach        → Coach · Account      (Account = their own money/bookings as a member)
+  //   owner/admin  → Admin · Settings
   var NAV = [
-    { href: "/portal.html", label: "Home", roles: ["*"] },
-    { href: "/account.html", label: "Account", roles: ["member", "coach", "club_admin", "platform_admin", "guest"] },
-    { href: "/coach.html",  label: "Coach",     roles: ["coach", "club_admin", "platform_admin"] },
-    { href: "/statement.html", label: "Statement", roles: ["coach"] },
-    { href: "/admin.html",  label: "Admin",     roles: ["club_admin", "platform_admin"] },
+    { href: "/portal.html",   label: "Home",     roles: ["member", "guest"] },
+    { href: "/coach.html",    label: "Coach",    roles: ["coach"] },
+    { href: "/admin.html",    label: "Admin",    roles: ["club_admin", "platform_admin"] },
+    { href: "/account.html",  label: "Account",  roles: ["member", "guest", "coach"] },
     { href: "/settings.html", label: "Settings", roles: ["club_admin", "platform_admin"] },
   ];
+
+  // Where a role lands on sign-in (the client Home is not a coach/owner's face).
+  function landingFor(role) {
+    if (role === "coach") return "/coach.html";
+    if (role === "club_admin" || role === "platform_admin") return "/admin.html";
+    return "/portal.html";
+  }
 
   function allowed(item, role) {
     return item.roles.indexOf("*") >= 0 || item.roles.indexOf(role) >= 0;
@@ -125,5 +133,5 @@
     if (typeof opts.onReady === "function") opts.onReady(p);
   }
 
-  window.Portal = { principal: principal, boot: boot, renderShell: renderShell };
+  window.Portal = { principal: principal, boot: boot, renderShell: renderShell, landingFor: landingFor };
 })();

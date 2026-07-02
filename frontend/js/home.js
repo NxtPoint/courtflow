@@ -335,6 +335,10 @@
   window.Home = {
     start: async function (principal) {
       UI = window.UI; el = UI.el; P = principal;
+      // Staff land on their OWN console, not the client booking Home (role-focused nav, 2026-07).
+      // `?stay=1` bypasses the redirect so an owner/coach can still view the client Home for testing.
+      var landing = window.Portal && window.Portal.landingFor && window.Portal.landingFor(principal && principal.role);
+      if (landing && landing !== "/portal.html" && !/[?&]stay=/.test(location.search)) { location.replace(landing); return; }
       var main = document.getElementById("cf-main");
       UI.clear(main); main.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
       await loadAll();
