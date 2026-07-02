@@ -122,12 +122,27 @@ NextPoint Tennis is club #1, migrating off Wix.
     `admin_api.js`/`coach_api.js`, and the master-diary timeline. Old pages (`portal.js`, `my.js`,
     `plan.js`, `coach.js`, `admin.js`) are kept as fallbacks; standalone `/account`,`/my`,`/book` 302→ SPA.
     **Asset/nav links are ABSOLUTE** (`/app.css`, `/js/…`) so pages work at sub-paths.
-  - **Web/SEO:** `web_app.py` (+ `web_wsgi.py`), `frontend/marketing/` (restyled to the design system, stock
-    court imagery), `frontend/_shared/` (`theme.css` + `chrome.py` + `branding.py` host→club resolver),
-    `build_blog.py`, `frontend/login.html`, `migration/`. **PUBLIC-SITE REDESIGN (in progress):** the
-    authoritative spec for the new lean, photo-rich, conversion-focused public site is
-    **`docs/public-site/`** (START at `docs/public-site/README.md`; paste-ready kickoff in
-    `docs/public-site/BUILD-PROMPT.md`). Optimized real-photo assets are in `frontend/img/`.
+  - **Web/SEO:** `web_app.py` (+ `web_wsgi.py`), `frontend/marketing/`, `frontend/_shared/` (`theme.css` +
+    **`marketing.css`** + `chrome.py` + `branding.py` host→club resolver), `build_blog.py`,
+    `frontend/login.html`, `migration/`. **PUBLIC-SITE REDESIGN — SHIPPED & LIVE (2026-07-02):** a
+    cinematic, photo-rich, conversion-focused public site across the lean page set (`home` · `coaches` ·
+    `programs` · `pricing` · `contact` + `careers`/`404`), hero → free-week hook → ticker marquee →
+    numbered service features → clay statement → portal-cockpit showcase → founders → **HP video** →
+    Ten-Fifty5 band → testimonials → gallery → CTA. **TWO-STYLESHEET MODEL (respect it):**
+    `frontend/_shared/theme.css` is the **cross-lane design-system contract** (consumed by the portal +
+    login) — **never add marketing styling there**; all public-site CSS lives in **`frontend/_shared/marketing.css`**
+    (the `mk-*` layer, additive, marketing-only, loads **Fraunces** display type per-page so the portal is
+    unaffected). Marketing pages link BOTH (`/shared/theme.css` then `/shared/marketing.css`), use the
+    server-injected **`<!--#include nav-->`/`<!--#include footer-->`** chrome (nav logo = `branding.logo_url`
+    → `/img/logo.webp`), ABSOLUTE `/img` `/shared` paths, and **local optimized WebP only** (no external
+    stock). Real NextPoint photography is localized in `frontend/img/` (hero splash, clay aerial, feature +
+    gallery shots, coach portraits) plus the **HP video** (`hp-intro.mp4`, transcoded ~6MB, served from
+    `/img/` via `send_file` — range requests work; poster `hp-intro-poster.webp`, click-to-play). Club fact:
+    **7 hard courts + 1 clay = 8 total** (the only clay in Gauteng). Approved visual source of truth =
+    **`docs/public-site/prototype-home-v3.html`**; spec folder **`docs/public-site/`** (START at `README.md`).
+    Verify with the DB-less Flask test-client (routes 200 + chrome injection, sitemap, branded 404); preview
+    locally with `MARKETING_HOSTS=localhost python -c "import web_app; web_app.app.run(port=5061, threaded=True)"`
+    (Chrome needs `threaded=True` to load parallel assets).
 - **Shipped & working (~90%):** owner/coach onboarding + **auto-member** signup · book courts/lessons
   (coach∩court)/classes (recurring, waitlists, rosters, attendance) · book-on-behalf + **book-for-a-child** ·
   **three configurable purchasing models — PAYG (per-duration) · membership (term plans) · tokens/bundles
