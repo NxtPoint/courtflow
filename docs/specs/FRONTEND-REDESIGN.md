@@ -55,6 +55,26 @@ Likely: Diary · People · Services & Pricing · Coaches & Pay · Reporting & Fi
 today's 7 admin tabs + 8 Settings tabs into fewer, role-aware groups (see [PERMISSIONS.md](PERMISSIONS.md)
 for any staff-role gating).
 
+### Coach & owner consoles restructured (2026-07-02, shipped) ✅
+Finishing-touches pass — role-focused, business-first, reusing the client-flow learnings + our own
+built components (the master-diary grid, the cockpit, the analytics Overview, CRMUI). Front-end only.
+- **Role-aware nav + landing** (`portal.js`): the client **Home**/**Account** no longer clutter a
+  coach/owner's top bar. member/guest → Home · Account · coach → **Coach** (landing) · Account ·
+  owner → **Admin** (landing) · Settings. `landingFor()` sends staff to their console on sign-in;
+  `/portal.html?stay=1` bypasses it for testing.
+- **Coach console** (`coach.js`) → **Dashboard · Schedule · Clients · Money · Setup**: Dashboard =
+  "needs your attention" (approval queue) + the cockpit (net-of-commission KPIs · earnings trend ·
+  month-end position · top clients · upcoming); Schedule = a NEW **week timeline** (master-diary grid
+  reused, prev/next week, tap lesson → done/no-show, tap class → roster) + book-for-client + time off;
+  Money = the settlement statement (supersedes standalone `/statement.html`); Setup = sub-tabbed
+  Services & pricing (+ the club-commission card, previously dead code) + classes + Profile. Dead code
+  removed (`renderTrend`, old list `loadWeek/renderWeek`).
+- **Owner console** (`admin.js`) → **Dashboard · Diary · People · Money · Insights** (+ Settings):
+  Dashboard = this-month money KPIs + net-revenue trend + last-30-days growth (analytics: visits/
+  visitors/new-customers/bookings/NPS) + quick-action row (review N refund requests, jump to any tab);
+  Diary = Timeline + Classes (sub-tabs); Money = Billing + the full financial cockpit; Insights = the
+  analytics Business Overview. The old Cockpit/Overview/Classes tabs folded in.
+
 ## Revision (2026-06-28, from Tomo testing the first cut)
 - **Single top menu only** — the lower chip strip is removed (it read as a second menu on mobile).
   Nav = **Home · Account** (+ role consoles), same look/feel all devices.
