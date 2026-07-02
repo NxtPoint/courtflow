@@ -727,6 +727,29 @@ def sc_cancel_voids_order(s, fx):
           f"still owed count={st1['count']}")
 
 
+def sc_phantom_cleanup(s, fx):
+    print("\n# Self-heal: a cancelled-booking order stuck 'open' is voided on statement read")
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=iso(at(fx, 17)), ends_at=iso(at(fx, 18)), settlement_mode="at_court")
+    bid = r["booking"]["id"]; oid = r["booking"]["order_id"]
+    # Simulate a PRE-FIX phantom: cancel the booking directly, leaving the order 'open'.
+    s.execute(text("UPDATE diary.booking SET status='cancelled' WHERE id=:b"), {"b": bid})
+    check("phantom order is 'open' before heal", _order(s, oid)["status"] == "open")
+    st = ST.statement(s, club_id=fx.club_id, user_id=fx.member)     # read → self-heal
+    check("phantom order voided on statement read", _order(s, oid)["status"] == "void")
+    check("phantom no longer owed", not any(i["order_id"] == str(oid) for i in st["items"]))
+    # A non-booking owed order (membership bought offline) is NEVER touched.
+    bu = _mk_user(s, "phantomsafe@bill.test", "PhantomSafe")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": bu})
+    mo = MB.create_membership_order(s, club_id=fx.club_id, user_id=bu,
+                                    price_id=fx.membership_price, settlement_mode="at_court")
+    ST.statement(s, club_id=fx.club_id, user_id=bu)                 # read → heal runs
+    check("owed membership order is left intact (not a phantom)",
+          _order(s, mo["order_id"])["status"] == "open", str(_order(s, mo["order_id"])["status"]))
+
+
 def sc_coach_event_story(s, fx):
     print("\n# Coach event story: a lesson the coach runs → client + charge + coach actions")
     r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
@@ -828,6 +851,7 @@ SCENARIOS = [
     sc_abandoned_reclaim_on_read,
     sc_booking_story,
     sc_cancel_voids_order,
+    sc_phantom_cleanup,
     sc_coach_event_story,
     sc_transaction_log,
 ]

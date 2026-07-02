@@ -72,11 +72,38 @@ def _reclaim_abandoned_settlements(session, *, club_id, user_id, grace_minutes=3
         log.debug("reclaim skipped (billing not ready)", exc_info=False)
 
 
+def _void_phantom_cancelled_orders(session, *, club_id, user_id) -> None:
+    """Self-heal PHANTOM owed orders: an 'open' order whose booking(s) were ALL cancelled but the
+    order was never voided (a cancel BEFORE cancel_booking learned to void — you shouldn't owe for a
+    cancelled booking). Voids each via void_order (which also clears any coach_arrears). SAFE + narrow:
+    only touches an order that (a) has ≥1 booking line and (b) has NO active (non-cancelled) booking —
+    so membership/pack orders (no booking) and any order with a live booking are never touched.
+    Guarded — a failure never blanks the read."""
+    try:
+        ids = session.execute(
+            text("""
+                SELECT o.id FROM billing."order" o
+                WHERE o.club_id = :c AND o.user_id = :u AND o.status = 'open'
+                  AND o.settled_by_order_id IS NULL
+                  AND EXISTS (SELECT 1 FROM billing.order_line ol JOIN diary.booking b ON b.id = ol.booking_id
+                               WHERE ol.order_id = o.id)
+                  AND NOT EXISTS (SELECT 1 FROM billing.order_line ol JOIN diary.booking b ON b.id = ol.booking_id
+                                   WHERE ol.order_id = o.id AND b.status <> 'cancelled')
+            """),
+            {"c": str(club_id), "u": str(user_id) if user_id else None},
+        ).scalars().all()
+        for oid in ids:
+            void_order(session, club_id=club_id, order_id=oid, reason="booking cancelled (cleanup)")
+    except Exception:
+        log.debug("phantom-void skipped (billing not ready)", exc_info=False)
+
+
 def unpaid_orders(session, *, club_id, user_id) -> List[Dict[str, Any]]:
     """The client's OWED orders (status='open', not already being settled by an in-flight settlement
     order), one line each, oldest-first. kind is derived from the order's first line (its booking
     type, else the product kind, else 'other'). Guarded -> []."""
     _reclaim_abandoned_settlements(session, club_id=club_id, user_id=user_id)  # stale-only (grace)
+    _void_phantom_cancelled_orders(session, club_id=club_id, user_id=user_id)  # clear cancelled-booking debt
     try:
         rows = session.execute(
             text("""
