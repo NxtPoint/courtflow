@@ -1279,47 +1279,20 @@
     if (t.written_off_minor) strip.push({ value: window.CRMUI.money(t.written_off_minor, cur), label: "Written off" });
     body.appendChild(window.CRMUI.stats(strip));
 
-    // Per-client table.
+    // Per-client rollup — READ-ONLY here (the month-end overview). Managing an individual client's
+    // lessons (collect / discount / write off) + issuing their invoice lives in the CLIENTS tab, so
+    // there's ONE place per client. Tap a row to jump straight there.
     body.appendChild(el("div", { style: "margin-top:14px" }));
     body.appendChild(window.CRMUI.sectionHead("By client"));
+    body.appendChild(el("p", { class: "cf-muted", style: "margin:-6px 0 8px;font-size:.85rem",
+      text: "Tap a client to open their full record and manage or invoice them." }));
     body.appendChild(window.CRMUI.statementTable(d.clients, {
       nameKey: "client_name", nameLabel: "Client", currency: cur,
+      onRow: function (r) {
+        if (!r.client_user_id) return;
+        clientView.selected = r.client_user_id; clientView.month = stmtState.month; TAB = "clients"; render();
+      },
     }));
-
-    // Lessons on the tab (owed + written-off, which stay visible for transparency) with actions.
-    body.appendChild(el("div", { style: "margin-top:16px" }));
-    body.appendChild(window.CRMUI.sectionHead("Lessons on the tab (off-platform)"));
-    body.appendChild(window.CRMUI.lineItems(d.arrears_items, {
-      currency: cur,
-      label: function (it) { return it.client_name || "Lesson"; },
-      sub: function (it) { return it.starts_at ? UI.fmtDate(it.starts_at) : ""; },
-      empty: "Nothing outstanding.",
-      actions: [
-        { label: "Mark collected", tone: "primary", onClick: function (it) { arrearsCollected(it.id); } },
-        { label: "Discount", onClick: function (it) { arrearsDiscount(it); } },
-        { label: "Write off", tone: "danger", onClick: function (it) { arrearsWriteOff(it.id); } },
-      ],
-    }));
-  }
-
-  async function arrearsCollected(id) {
-    try { await window.CoachAPI.arrearsCollected(id); UI.toast("Marked collected.", "info"); loadStatement(); loadDashboard(); }
-    catch (e) { UI.toast(UI.errMsg(e), "error"); }
-  }
-  async function arrearsDiscount(it) {
-    var cur = window.prompt("New amount for this lesson (in your currency, e.g. 250.00):",
-      ((it.gross_minor || 0) / 100).toFixed(2));
-    if (cur === null) return;
-    var f = parseFloat(cur);
-    if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; }
-    try { await window.CoachAPI.arrearsAdjust(it.id, { gross_minor: Math.round(f * 100) }); UI.toast("Discount applied.", "info"); loadStatement(); }
-    catch (e) { UI.toast(UI.errMsg(e), "error"); }
-  }
-  async function arrearsWriteOff(id) {
-    var reason = window.prompt("Write off this lesson? No commission will be charged and the client won’t owe it.\n\nReason (shown to you, the client and the club):", "");
-    if (reason === null) return;                       // cancelled
-    try { await window.CoachAPI.arrearsAdjust(id, { status: "written_off", reason: reason }); UI.toast("Written off.", "info"); loadStatement(); }
-    catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
   // ---- tab shell ------------------------------------------------------------

@@ -512,51 +512,6 @@ def mark_arrears_collected(session, *, club_id, arrears_id, coach_user_id=None,
             "commission_pct": str(pct)}
 
 
-def create_statement_payment(session, *, club_id, client_user_id):
-    """Create an ONLINE order for the client's outstanding coaching statement (their owed arrears) so
-    they can pay it by card. Links the covered arrears to the order (pay_order_id); on charge_succeeded
-    settle_arrears_for_order marks them collected (commission accrues then). Returns {order_id,
-    amount_minor, currency, items} or None when nothing is owed. Re-callable: arrears tied to an UNPAID
-    prior order are reclaimed onto the new order, so an abandoned checkout never locks them."""
-    rows = session.execute(
-        text("""
-            SELECT a.id, a.gross_minor, a.currency
-            FROM billing.coach_arrears a
-            WHERE a.club_id = :c AND a.client_user_id = :u AND a.status = 'owed'
-              AND (a.pay_order_id IS NULL OR a.pay_order_id IN (
-                    SELECT id FROM billing."order" WHERE status <> 'paid'))
-        """),
-        {"c": club_id, "u": str(client_user_id)},
-    ).mappings().all()
-    if not rows:
-        return None
-    total = sum(int(r["gross_minor"] or 0) for r in rows)
-    if total <= 0:
-        return None
-    currency = rows[0]["currency"] or "ZAR"
-    order_id = session.execute(
-        text('INSERT INTO billing."order" (club_id, user_id, amount_minor, currency_code, '
-             "settlement_mode, status) VALUES (:c, :u, :amt, :cur, 'online', 'awaiting_payment') "
-             "RETURNING id"),
-        {"c": club_id, "u": str(client_user_id), "amt": total, "cur": currency},
-    ).scalar_one()
-    order_id = str(order_id)
-    # A single summary line with NO price_id/product, so the generic commission fan-out skips it —
-    # arrears commission accrues via settle_arrears_for_order instead, never double-counted.
-    session.execute(
-        text("INSERT INTO billing.order_line (order_id, club_id, description, qty, amount_minor) "
-             "VALUES (:o, :c, 'Coaching statement', 1, :amt)"),
-        {"o": order_id, "c": club_id, "amt": total},
-    )
-    ids = [str(r["id"]) for r in rows]
-    session.execute(
-        text("UPDATE billing.coach_arrears SET pay_order_id = :o, updated_at = now() "
-             "WHERE club_id = :c AND id = ANY(:ids)"),
-        {"o": order_id, "c": club_id, "ids": ids},
-    )
-    return {"order_id": order_id, "amount_minor": total, "currency": currency, "items": len(ids)}
-
-
 def notify_statements_for_club(session, *, club_id) -> int:
     """Month-end run: accrue arrears, then notify each client with an outstanding balance that their
     invoice is ready (in-app + email when keyed) with a link to their dashboard to pay online. Returns
@@ -680,23 +635,6 @@ def issue_client_invoice(session, *, club_id, coach_user_id, client_user_id, mon
         except Exception:
             log.info("issue_client_invoice: notify skipped (tracking unavailable) client=%s", client_user_id)
     return {"invoice": inv, "owed_minor": owed, "notified": notified}
-
-
-def settle_arrears_for_order(session, *, order_id) -> int:
-    """Mark every owed arrears linked to a paid statement-payment order as collected (accruing the
-    commission per item). Idempotent — mark_arrears_collected no-ops an already-collected row. Called
-    from apply_payment_event on charge_succeeded. Returns the count settled."""
-    rows = session.execute(
-        text("SELECT id, club_id FROM billing.coach_arrears "
-             "WHERE pay_order_id = :o AND status = 'owed'"),
-        {"o": str(order_id)},
-    ).mappings().all()
-    n = 0
-    for r in rows:
-        res = mark_arrears_collected(session, club_id=r["club_id"], arrears_id=r["id"])
-        if res.get("ok"):
-            n += 1
-    return n
 
 
 def adjust_arrears(session, *, club_id, arrears_id, coach_user_id=None,

@@ -149,12 +149,6 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
             split = _accrue_commission(session, club_id, order_id, payment_id)
             if split:
                 result["commission"] = split
-            # Statement-payment: if this order is a client paying their coaching statement online,
-            # mark the linked arrears collected (commission accrues per item). Savepoint-guarded +
-            # idempotent, exactly like the commission fan-out — never blocks settlement.
-            settled = _settle_statement_arrears(session, order_id)
-            if settled:
-                result["arrears_settled"] = settled
             # Unified statement: if this order is a 'pay all' settlement vehicle, mark each child
             # order paid + fan out its commission (docs/specs/UNIFIED-STATEMENT.md). Savepoint-guarded
             # + idempotent (only acts on still-'open' children). One debt settled exactly once.
@@ -301,19 +295,6 @@ def _accrue_refund_clawback(session, event, club_id, order_id, refund_payment_id
                 refund_payment_id=pid, refund_minor=int(event.amount_minor or 0))
     except Exception:
         log.info("refund clawback skipped (engine/tables unavailable) order=%s", order_id)
-        return None
-
-
-def _settle_statement_arrears(session, order_id):
-    """If `order_id` is a client's online statement payment, mark the linked coach_arrears collected
-    (commission accrues per item). SAVEPOINT-guarded + idempotent (no double-settle on a replayed
-    webhook). Returns the count settled, or None when the engine/tables aren't present."""
-    try:
-        with session.begin_nested():
-            from billing import commission as _commission
-            return _commission.settle_arrears_for_order(session, order_id=order_id)
-    except Exception:
-        log.info("arrears settlement skipped (engine/tables unavailable) order=%s", order_id)
         return None
 
 

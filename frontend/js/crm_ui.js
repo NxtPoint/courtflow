@@ -64,13 +64,15 @@
     ]);
     var tb = el("tbody");
     rows.forEach(function (r) {
-      tb.appendChild(el("tr", {}, [
+      var tr = el("tr", {}, [
         el("td", { text: r[nameKey] || "—" }),
         el("td", { class: "num", text: String(r.lessons || 0) }),
         el("td", { class: "num", text: money(r.paid_minor, cur) }),
         el("td", { class: "num", text: money(r.owed_minor, cur) }),
         el("td", { class: "num", text: money(r.net_minor, cur) }),
-      ]));
+      ]);
+      if (opts.onRow) { tr.style.cursor = "pointer"; tr.addEventListener("click", function () { opts.onRow(r); }); }
+      tb.appendChild(tr);
     });
     t.appendChild(tb);
     return t;
