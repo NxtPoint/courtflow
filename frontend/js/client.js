@@ -53,9 +53,7 @@
   // ---- shell (appbar + view + bottom nav) ----------------------------------
   var NAV = [
     { k: "home", ic: "⌂", label: "Home" },
-    { k: "book", ic: "+", label: "Book", cls: "book" },
-    { k: "bookings", ic: "🎾", label: "Bookings" },
-    { k: "billing", ic: "🧾", label: "Billing" },
+    { k: "book", ic: "🎾", label: "Book" },
   ];
   function renderShell() {
     document.body.classList.add("cf-app");
@@ -103,16 +101,18 @@
     var h = (location.hash || "").replace(/^#\/?/, "");
     var parts = h.split("/").filter(Boolean);
     var top = parts[0] || "home";
-    setActive(["home", "book", "bookings", "billing"].indexOf(top) >= 0 ? top : (top === "booking" ? "bookings" : (top === "profile" ? "" : top)));
+    setActive(top === "book" ? "book" : "home");   // everything else lives on Home now
     window.scrollTo(0, 0);
-    if (top === "home") return renderHome();
     if (top === "book") return renderBook(parts[1]);
-    if (top === "bookings") return renderBookings();
     if (top === "booking") return renderBookingStory(parts[1]);
-    if (top === "billing") return parts[1] === "order" ? renderOrder(parts[2]) : renderBilling();
+    if (top === "billing") {                        // drill-through screens under Home's billing
+      if (parts[1] === "order") return renderOrder(parts[2]);
+      if (parts[1] === "cat") return renderBillingCategory(parts[2]);
+      return renderHome();
+    }
     if (top === "plan") return renderPlan();
     if (top === "profile") return parts[1] === "edit" ? renderProfileEdit() : (parts[1] === "child" ? renderChildEdit(parts[2]) : renderProfile());
-    return renderHome();
+    return renderHome();                            // home / bookings / anything else
   }
 
   // ---- small render helpers ------------------------------------------------
@@ -151,72 +151,178 @@
     return el("span", { class: "cf-chip " + m[0], text: m[1] });
   }
 
-  // ---- HOME ----------------------------------------------------------------
+  // ---- HOME (the hub: sessions + billing + plan, all in one) ---------------
+  var homeTab = "up";      // sessions segment
+  var HBMONTH = null;      // billing month
+  function curMonth() { var d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); }
+  function shiftM(ym, d) { var p = ym.split("-"); var dt = new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1 + d, 1); return dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0"); }
+  function mLabel(ym) { var p = ym.split("-"); try { return new Date(p[0], parseInt(p[1], 10) - 1, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" }); } catch (e) { return ym; } }
+
   async function renderHome() {
+    if (!HBMONTH) HBMONTH = curMonth();
     loading();
     var fin = {}, bookings = [];
     try { fin = await window.API.financials(); } catch (e) {}
-    try { bookings = (await window.API.bookings({ date_from: UI.dateKey(new Date()), date_to: UI.dateKey(UI.addDays(new Date(), 120)) })).bookings || []; } catch (e) {}
-    DATA.fin = fin;
-    var wrap = el("div", {});
+    try { bookings = (await window.API.bookings({ date_from: UI.dateKey(UI.addDays(new Date(), -365)), date_to: UI.dateKey(UI.addDays(new Date(), 180)) })).bookings || []; } catch (e) {}
+    DATA.fin = fin; DATA.bookings = bookings;
     var plan = fin.plan || {}, cur = fin.currency || "ZAR";
+    var wrap = el("div", {});
 
-    // Greeting ribbon
-    var chip = plan.is_trial ? ("🎁 Free week · " + (plan.trial_days_left || 0) + "d")
-      : (plan.active ? "⭐ Member" : "Pay as you go");
+    // Greeting ribbon (unchanged look)
+    var chip = plan.is_trial ? ("🎁 Free week · " + (plan.trial_days_left || 0) + "d") : (plan.active ? "⭐ Member" : "Pay as you go");
     wrap.appendChild(el("div", { class: "cf-greet" }, [
       el("div", {}, [el("h1", { text: greet() + ", " + firstName() }), el("p", { text: "Ready to play?" })]),
       el("span", { class: "cf-greet-plan", text: chip }),
     ]));
 
-    // Needs attention (requested/proposed)
+    // Needs attention
     var attn = bookings.filter(function (b) { return b.status === "proposed" || b.status === "requested"; });
     if (attn.length) {
-      var ac = card([el("h2", { style: "margin:0 0 8px", text: "Needs your attention" })], "");
-      var al = el("div", { class: "cf-list" });
-      attn.forEach(function (b) { al.appendChild(attnRow(b)); });
-      ac.appendChild(al); wrap.appendChild(ac);
+      var ac = card([el("h2", { style: "margin:0 0 8px", text: "Needs your attention" })]);
+      var al = el("div", { class: "cf-list" }); attn.forEach(function (b) { al.appendChild(attnRow(b)); }); ac.appendChild(al);
+      wrap.appendChild(ac);
     }
-
-    // Next up
-    var upcoming = bookings.filter(function (b) { return ["confirmed", "held", "completed"].indexOf(b.status) >= 0; });
-    var nextCard = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [
-      el("h2", { style: "margin:0", text: "Next up" }),
-      upcoming.length ? el("a", { href: "#/bookings", class: "cf-muted", style: "font-size:.85rem", text: "All bookings ›" }) : null,
-    ].filter(Boolean))]);
-    if (!upcoming.length) nextCard.appendChild(el("div", { class: "cf-empty", text: "No upcoming sessions — book one below." }));
-    else { var nl = el("div", { class: "cf-list" }); upcoming.slice(0, 3).forEach(function (b) { nl.appendChild(bookingRow(b)); }); nextCard.appendChild(nl); }
-    wrap.appendChild(nextCard);
 
     // Book quick tiles
     var qb = card([el("h2", { style: "margin:0 0 10px", text: "Book" })]);
     var tiles = el("div", { class: "cf-qb" });
     [["court", "🎾", "Court"], ["lesson", "🎓", "Lesson"], ["class", "👥", "Class"]].forEach(function (t) {
-      tiles.appendChild(el("button", { class: "cf-qb-btn", onclick: function () { go("#/book/" + t[0]); } }, [
-        el("span", { class: "cf-qb-ic", text: t[1] }), el("span", { class: "cf-qb-t", text: t[2] }),
-      ]));
+      tiles.appendChild(el("button", { class: "cf-qb-btn", onclick: function () { go("#/book/" + t[0]); } }, [el("span", { class: "cf-qb-ic", text: t[1] }), el("span", { class: "cf-qb-t", text: t[2] })]));
     });
     qb.appendChild(tiles); wrap.appendChild(qb);
 
-    // What you owe
+    // Your sessions (Upcoming / Past) — the Bookings function, now on Home.
+    wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your sessions" }), el("div", { id: "home-sessions" })]));
+
+    // Billing — what you owe + a monthly breakdown by category.
     var owe = (fin.account && fin.account.balance_minor) || 0;
-    if (owe > 0) {
-      wrap.appendChild(el("div", { class: "cf-card cf-tap", onclick: function () { go("#/billing"); } }, [
-        el("div", { class: "cf-owe" }, [
-          el("div", {}, [el("div", { class: "cf-muted", style: "font-size:.8rem;font-weight:700", text: "YOU OWE" }),
-            el("div", { class: "cf-amountbig", text: money(owe, cur) })]),
-          el("span", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Settle ›" }),
-        ]),
+    var bc = card([el("h2", { style: "margin:0 0 8px", text: "Billing" })]);
+    if (owe > 0) bc.appendChild(el("div", { class: "cf-owe cf-tap", style: "margin-bottom:12px", onclick: function () { payOrders(null); } }, [
+      el("div", {}, [el("div", { class: "cf-muted", style: "font-size:.78rem;font-weight:700", text: "YOU OWE" }), el("div", { class: "cf-amountbig", text: money(owe, cur) })]),
+      el("span", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Settle ›" }),
+    ]));
+    bc.appendChild(el("div", { id: "home-billing", class: "cf-loading", text: "…" }));
+    wrap.appendChild(bc);
+
+    // Plan & credits — moved to Home (the look you liked, with Manage).
+    wrap.appendChild(planCard(plan, cur));
+
+    set(wrap);
+    paintSessions();
+    loadHomeBilling(cur);
+    loadWallets(cur);
+  }
+  function greet() { var h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
+
+  // sessions: upcoming/past segment (client-side, no refetch)
+  function paintSessions() {
+    var box = document.getElementById("home-sessions"); if (!box) return;
+    UI.clear(box);
+    var seg = el("div", { class: "cf-segment cf-seg-lg" });
+    [["up", "Upcoming"], ["past", "Past"]].forEach(function (s) {
+      seg.appendChild(el("button", { type: "button", class: homeTab === s[0] ? "on" : "", text: s[1], onclick: function () { homeTab = s[0]; paintSessions(); } }));
+    });
+    box.appendChild(seg);
+    var now = new Date(), bks = DATA.bookings || [], up = [], past = [];
+    bks.forEach(function (b) { if (b.status === "cancelled" || b.status === "no_show") past.push(b); else if (new Date(b.ends_at || b.starts_at) >= now) up.push(b); else past.push(b); });
+    up.sort(function (a, b) { return new Date(a.starts_at) - new Date(b.starts_at); });
+    past.sort(function (a, b) { return new Date(b.starts_at) - new Date(a.starts_at); });
+    var list = homeTab === "up" ? up : past;
+    if (!list.length) box.appendChild(el("div", { class: "cf-empty", text: homeTab === "up" ? "No upcoming sessions — book one above." : "No past sessions." }));
+    else { var l = el("div", { class: "cf-list" }); list.slice(0, homeTab === "up" ? 12 : 20).forEach(function (b) { l.appendChild(bookingRow(b)); }); box.appendChild(l); }
+  }
+
+  // billing: monthly breakdown by category (month nav + tap-through)
+  function billMonthNav(cur) {
+    return el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
+      el("button", { class: "cf-btn cf-btn-sm", text: "‹", onclick: function () { HBMONTH = shiftM(HBMONTH, -1); loadHomeBilling(cur); } }),
+      el("span", { class: "cf-chip", text: mLabel(HBMONTH) }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "›", onclick: function () { HBMONTH = shiftM(HBMONTH, 1); loadHomeBilling(cur); } }),
+    ]);
+  }
+  async function loadHomeBilling(cur) {
+    var box = document.getElementById("home-billing"); if (!box) return;
+    var d = { categories: [] };
+    try { d = await window.API.billingSummary(HBMONTH); } catch (e) {}
+    cur = cur || d.currency || "ZAR";
+    UI.clear(box);
+    box.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
+      el("div", { class: "cf-muted", style: "font-size:.78rem;font-weight:700", text: "THIS MONTH" }), billMonthNav(cur),
+    ]));
+    if (!(d.categories || []).length) box.appendChild(el("div", { class: "cf-empty", text: "No activity in " + mLabel(HBMONTH) + "." }));
+    else {
+      var l = el("div", { class: "cf-list" });
+      d.categories.forEach(function (c) {
+        l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/billing/cat/" + c.key + "/" + HBMONTH); } }, [
+          el("span", { class: "cf-chip " + c.key, text: c.label }),
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: c.count + " " + (c.count === 1 ? "session" : "sessions") })]),
+          el("span", { style: "font-weight:700", text: money(c.total_minor, cur) }),
+          el("span", { class: "cf-muted", text: "›" }),
+        ]));
+      });
+      box.appendChild(l);
+    }
+  }
+
+  // plan & credits
+  function planCard(plan, cur) {
+    var c = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [
+      el("h2", { style: "margin:0", text: "Plan & credits" }),
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Manage ›", onclick: openPlan }),
+    ])]);
+    var line = plan.is_trial ? ("🎁 Free week — " + (plan.trial_days_left || 0) + " days left")
+      : plan.active ? (plan.name || "Membership") + (plan.current_period_end ? " · renews " + plan.current_period_end : "")
+      : "Pay as you go — no membership";
+    c.appendChild(el("div", { class: "cf-item" }, [
+      el("span", { class: "cf-chip " + (plan.active ? "confirmed" : ""), text: plan.active ? "Active" : "PAYG" }),
+      el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: line })]),
+    ]));
+    c.appendChild(el("div", { id: "home-wallets" }));
+    return c;
+  }
+  async function loadWallets(cur) {
+    var box = document.getElementById("home-wallets"); if (!box) return;
+    var wallets = [];
+    try { wallets = (await window.TFAuth.apiJSON("/api/billing/bundles/wallets?active=1")).wallets || []; } catch (e) {}
+    if (!wallets.length) return;
+    var l = el("div", { class: "cf-list" });
+    wallets.forEach(function (w) {
+      l.appendChild(el("div", { class: "cf-item" }, [
+        el("span", { class: "cf-chip " + (w.service_kind || ""), text: w.service_kind || "pack" }),
+        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: w.label || "Session pack" }), el("div", { class: "cf-item-s", text: (w.sessions_remaining != null ? w.sessions_remaining : "–") + " left" + (w.expires_at ? " · expires " + UI.fmtDate(w.expires_at) : "") })]),
       ]));
-    } else if (!plan.active) {
-      wrap.appendChild(el("div", { class: "cf-nudge cf-tap", onclick: function () { openPlan(); } }, [
-        el("div", { class: "cf-nudge-t", text: "Save with a membership or pack" }),
-        el("div", { class: "cf-nudge-s", text: "Free courts or prepaid sessions — see your options ›" }),
-      ]));
+    });
+    box.appendChild(l);
+  }
+
+  // billing category → its items → each drills into the booking story
+  async function renderBillingCategory(key, month) {
+    loading();
+    var d;
+    try { d = await window.API.billingSummary(month); } catch (e) { set(el("div", {}, [backBar("Home", "#/"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    var cat = (d.categories || []).filter(function (c) { return c.key === key; })[0];
+    var cur = d.currency || "ZAR";
+    var wrap = el("div", {});
+    wrap.appendChild(backBar("Home", "#/"));
+    wrap.appendChild(el("h1", { style: "margin:0 0 2px", text: (cat ? cat.label : key) }));
+    wrap.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 12px", text: mLabel(month) + " · " + (cat ? cat.count : 0) + " · " + money(cat ? cat.total_minor : 0, cur) }));
+    if (!cat || !cat.items.length) wrap.appendChild(el("div", { class: "cf-empty", text: "Nothing here." }));
+    else {
+      var box = el("div", { class: "cf-card", style: "padding:6px 14px" }), l = el("div", { class: "cf-list" });
+      cat.items.forEach(function (it) {
+        l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/booking/" + it.booking_id); } }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: UI.fmtDate(it.starts_at) + (it.coach_name ? " · " + it.coach_name : "") }),
+            el("div", { class: "cf-item-s", text: [it.court_name, (function () { try { return UI.fmtTime(it.starts_at); } catch (e) { return ""; } })()].filter(Boolean).join(" · ") }),
+          ]),
+          el("span", { style: "font-weight:600", text: money(it.amount_minor, cur) }),
+          statusChip(it.status),
+        ]));
+      });
+      box.appendChild(l); wrap.appendChild(box);
     }
     set(wrap);
   }
-  function greet() { var h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
 
   function bookingRow(b) {
     return el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/booking/" + b.id); } }, [
@@ -254,46 +360,14 @@
     else set(el("div", { class: "cf-empty", text: "Booking is unavailable." }));
   }
 
-  // ---- BOOKINGS ------------------------------------------------------------
-  async function renderBookings() {
-    loading();
-    var bookings = [];
-    try { bookings = (await window.API.bookings({ date_from: UI.dateKey(UI.addDays(new Date(), -365)), date_to: UI.dateKey(UI.addDays(new Date(), 180)) })).bookings || []; } catch (e) {}
-    var now = new Date();
-    var up = [], past = [];
-    bookings.forEach(function (b) {
-      if (b.status === "cancelled" || b.status === "no_show") past.push(b);
-      else if (new Date(b.ends_at || b.starts_at) >= now) up.push(b); else past.push(b);
-    });
-    up.sort(function (a, b) { return new Date(a.starts_at) - new Date(b.starts_at); });
-    past.sort(function (a, b) { return new Date(b.starts_at) - new Date(a.starts_at); });
-    var st = (renderBookings._tab = renderBookings._tab || "up");
-    var wrap = el("div", {});
-    wrap.appendChild(el("h1", { style: "margin:0 0 12px", text: "My bookings" }));
-    var seg = el("div", { class: "cf-segment cf-seg-lg" });
-    [["up", "Upcoming (" + up.length + ")"], ["past", "Past"]].forEach(function (s) {
-      seg.appendChild(el("button", { type: "button", class: st === s[0] ? "on" : "", text: s[1], onclick: function () { renderBookings._tab = s[0]; renderBookings(); } }));
-    });
-    wrap.appendChild(seg);
-    var list = (st === "up") ? up : past;
-    if (!list.length) wrap.appendChild(el("div", { class: "cf-empty", text: st === "up" ? "Nothing booked yet — tap Book below." : "No past sessions." }));
-    else {
-      var box = el("div", { class: "cf-card", style: "padding:6px 14px" });
-      var ll = el("div", { class: "cf-list" });
-      list.forEach(function (b) { ll.appendChild(bookingRow(b)); });
-      box.appendChild(ll); wrap.appendChild(box);
-    }
-    set(wrap);
-  }
-
   // ---- BOOKING STORY (the full drill-through) ------------------------------
   async function renderBookingStory(id) {
     loading();
     var b;
-    try { b = (await window.API.bookingStory(id)).booking; } catch (e) { set(el("div", {}, [backBar("Bookings", "#/bookings"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    try { b = (await window.API.bookingStory(id)).booking; } catch (e) { set(el("div", {}, [backBar("Home", "#/"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
     var ch = b.charge || {}, cur = ch.currency || "ZAR";
     var wrap = el("div", {});
-    wrap.appendChild(backBar("Bookings", "#/bookings"));
+    wrap.appendChild(backBar("Back"));
 
     // Header
     var head = card([
@@ -341,7 +415,7 @@
 
   function cancelBooking(b) {
     if (!window.confirm("Cancel this " + typeLabel(b.booking_type).toLowerCase() + " on " + UI.fmtDate(b.starts_at) + "?")) return;
-    window.API.cancelBooking(b.id, { reason: "client cancelled" }).then(function () { UI.toast("Cancelled.", "info"); go("#/bookings"); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+    window.API.cancelBooking(b.id, { reason: "client cancelled" }).then(function () { UI.toast("Cancelled.", "info"); go("#/"); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
   }
   function requestRefund(orderId) {
     var reason = window.prompt("Request a refund for this booking? Add a reason (optional):", "");
@@ -366,116 +440,6 @@
     ]));
   }
 
-  // ---- BILLING -------------------------------------------------------------
-  async function renderBilling() {
-    loading();
-    var stmt = { items: [], total_owed_minor: 0 }, fin = {}, orders = [], refunds = [], wallets = [];
-    try { stmt = await window.API.myStatement(); } catch (e) {}
-    try { fin = await window.API.financials(); } catch (e) {}
-    try { orders = (await window.API.myOrders()).orders || []; } catch (e) {}
-    try { refunds = (await window.API.refundRequests()).requests || []; } catch (e) {}
-    try { wallets = (await window.TFAuth.apiJSON("/api/billing/bundles/wallets?active=1")).wallets || []; } catch (e) {}
-    var cur = stmt.currency || fin.currency || "ZAR";
-    var plan = fin.plan || {};
-    var wrap = el("div", {});
-    wrap.appendChild(el("h1", { style: "margin:0 0 12px", text: "Billing" }));
-
-    // What you owe
-    var owe = stmt.total_owed_minor || 0;
-    var oweCard = card([el("div", { class: "cf-owe", style: "margin-bottom:" + (owe ? "12px" : "0") }, [
-      el("div", {}, [el("div", { class: "cf-muted", style: "font-size:.78rem;font-weight:700", text: "WHAT YOU OWE" }),
-        el("div", { class: "cf-amountbig", text: money(owe, cur) })]),
-      owe ? el("button", { class: "cf-btn cf-btn-primary", text: "Pay all", onclick: function () { payOrders(null); } }) : el("span", { class: "cf-chip confirmed", text: "All settled" }),
-    ])]);
-    if (owe) {
-      var ol = el("div", { class: "cf-list" });
-      (stmt.items || []).forEach(function (it) {
-        ol.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { itemOpen(it); } }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: pretty(it.description || it.category) }),
-            el("div", { class: "cf-item-s", text: [it.category, it.coach_name, it.date ? UI.fmtDate(it.date) : ""].filter(Boolean).join(" · ") }),
-          ]),
-          el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [
-            el("span", { style: "font-weight:700", text: money(it.amount_minor, cur) }),
-            el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Pay", onclick: function (ev) { ev.stopPropagation(); payOrders([it.order_id]); } }),
-          ]),
-        ]));
-      });
-      oweCard.appendChild(ol);
-    }
-    wrap.appendChild(oweCard);
-
-    // Plan & credits
-    var planCard = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [
-      el("h2", { style: "margin:0", text: "Plan & credits" }),
-      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Manage ›", onclick: function () { openPlan(); } }),
-    ])]);
-    var planLine = plan.is_trial ? ("🎁 Free week — " + (plan.trial_days_left || 0) + " days left")
-      : plan.active ? (plan.name || "Membership") + (plan.current_period_end ? " · renews " + plan.current_period_end : "")
-      : "Pay as you go — no membership";
-    planCard.appendChild(el("div", { class: "cf-item" }, [
-      el("span", { class: "cf-chip " + (plan.active ? "confirmed" : ""), text: plan.active ? "Active" : "PAYG" }),
-      el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: planLine })]),
-    ]));
-    if (wallets.length) {
-      var wl = el("div", { class: "cf-list" });
-      wallets.forEach(function (w) {
-        wl.appendChild(el("div", { class: "cf-item" }, [
-          el("span", { class: "cf-chip " + (w.service_kind || ""), text: (w.service_kind || "pack") }),
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: w.label || "Session pack" }),
-            el("div", { class: "cf-item-s", text: (w.sessions_remaining != null ? w.sessions_remaining : "–") + " sessions left" + (w.expires_at ? " · expires " + UI.fmtDate(w.expires_at) : "") }),
-          ]),
-        ]));
-      });
-      planCard.appendChild(wl);
-    }
-    wrap.appendChild(planCard);
-
-    // History (paid/refunded orders → receipt)
-    var histCard = card([el("h2", { style: "margin:0 0 8px", text: "History" })]);
-    if (!orders.length) histCard.appendChild(el("div", { class: "cf-empty", text: "No payments yet." }));
-    else {
-      var hl = el("div", { class: "cf-list" });
-      orders.slice(0, 20).forEach(function (o) {
-        hl.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/billing/order/" + o.id); } }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: o.description || "Payment" }),
-            el("div", { class: "cf-item-s", text: (o.created_at ? o.created_at.slice(0, 10) : "") + " · " + money(o.amount_minor, o.currency_code) }),
-          ]),
-          statusChip(o.status),
-        ]));
-      });
-      histCard.appendChild(hl);
-    }
-    wrap.appendChild(histCard);
-
-    // Refund requests
-    var openRefunds = refunds.filter(function (r) { return ["pending", "approved", "refunded", "declined"].indexOf(r.status) >= 0; });
-    if (openRefunds.length) {
-      var rc = card([el("h2", { style: "margin:0 0 8px", text: "Refund requests" })]);
-      var rl = el("div", { class: "cf-list" });
-      openRefunds.slice(0, 8).forEach(function (r) {
-        rl.appendChild(el("div", { class: "cf-item" }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: money(r.amount_minor, cur) + (r.routed_to === "coach" ? " · with your coach" : "") }),
-            el("div", { class: "cf-item-s", text: r.reason || "" }),
-          ]),
-          statusChip(r.status),
-          r.status === "pending" ? el("button", { class: "cf-btn cf-btn-sm", text: "Withdraw", onclick: function () { window.API.cancelRefundRequest(r.id).then(function () { UI.toast("Withdrawn.", "info"); route(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }) : null,
-        ].filter(Boolean)));
-      });
-      rc.appendChild(rl); wrap.appendChild(rc);
-    }
-    set(wrap);
-  }
-  // A statement line points at its booking story when it's a booking; else the order receipt.
-  function itemOpen(it) {
-    if (it.kind === "court" || it.kind === "lesson" || it.kind === "class") {
-      // No booking_id on the statement line — fall back to the order receipt (still full detail).
-      go("#/billing/order/" + it.order_id);
-    } else { go("#/billing/order/" + it.order_id); }
-  }
   // Pay a set of owed orders (null = pay all) via the unified statement settlement → Yoco.
   function payOrders(orderIds) {
     var body = orderIds ? { order_ids: orderIds } : {};
@@ -493,12 +457,12 @@
     loading();
     var r;
     try { var raw = await window.TFAuth.apiJSON("/api/billing/receipt/" + encodeURIComponent(orderId)); r = raw.receipt || raw; }
-    catch (e) { set(el("div", {}, [backBar("Billing", "#/billing"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    catch (e) { set(el("div", {}, [backBar("Back"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
     var cur = r.currency || "ZAR";
     var refunded = (r.refunded_minor || 0) > 0;
     var paid = r.status === "paid" || refunded;
     var wrap = el("div", {});
-    wrap.appendChild(backBar("Billing", "#/billing"));
+    wrap.appendChild(backBar("Back"));
     var c = card([
       el("div", { class: "cf-detail-h" }, [
         el("div", {}, [el("div", { class: "cf-muted", style: "font-size:.78rem;font-weight:700", text: (paid ? "RECEIPT " : "CHARGE ") + (r.receipt_no || "") }),
@@ -531,7 +495,7 @@
     if (window.PlanWizard && window.PlanWizard.open) window.PlanWizard.open();
     else location.href = "/plan";
   }
-  function renderPlan() { renderBilling(); openPlan(); }
+  function renderPlan() { renderHome(); openPlan(); }
 
   // ---- PROFILE + edit + family --------------------------------------------
   async function renderProfile() {

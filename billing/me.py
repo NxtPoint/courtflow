@@ -30,6 +30,69 @@ def _iso(v) -> Optional[str]:
     return v.isoformat() if hasattr(v, "isoformat") else (str(v) if v is not None else None)
 
 
+def billing_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]:
+    """The client's MONTHLY billing, grouped BY CATEGORY (Court hire / Lessons / Classes) — each with
+    a count, a total, and the individual sessions (drill-through). Composes this month's bookings with
+    their order amount + payment status + coach/court, so a client sees 'Lessons · 2 · R1500' → the 2
+    lessons → each lesson's full detail (via the booking story). Guarded → empty. Principal-scoped."""
+    ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    currency = session.execute(
+        text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": str(club_id)}).scalar() or "ZAR"
+    try:
+        rows = session.execute(
+            text("""
+                SELECT b.id AS booking_id, b.booking_type, b.starts_at, b.status AS bstatus,
+                       o.amount_minor, o.status AS ostatus, o.settlement_mode,
+                       r.name AS resource_name,
+                       (SELECT cr.name FROM diary.booking cb JOIN diary.resource cr ON cr.id = cb.resource_id
+                         WHERE cb.club_id = b.club_id AND cb.order_id = b.order_id
+                           AND cb.booking_type = 'court' AND b.order_id IS NOT NULL
+                           AND b.booking_type = 'lesson' LIMIT 1) AS held_court,
+                       COALESCE(cp.display_name,
+                                NULLIF(TRIM(COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.surname,'')),''))
+                         AS coach_name
+                FROM diary.booking b
+                LEFT JOIN billing."order" o ON o.id = b.order_id
+                LEFT JOIN diary.resource r ON r.id = b.resource_id
+                LEFT JOIN iam."user" cu ON cu.id = b.coach_user_id
+                LEFT JOIN iam.coach_profile cp ON cp.user_id = b.coach_user_id AND cp.club_id = b.club_id
+                WHERE b.club_id = :c AND b.booked_by_user_id = :u
+                  AND to_char(b.starts_at,'YYYY-MM') = :ym
+                  AND b.booking_type IN ('court','lesson','class')
+                  AND b.status IN ('confirmed','held','completed','no_show')
+                  AND NOT (b.booking_type = 'court' AND b.notes = '(court held for lesson)')
+                ORDER BY b.starts_at DESC
+            """),
+            {"c": str(club_id), "u": str(user_id), "ym": ym},
+        ).mappings().all()
+    except Exception:
+        log.debug("billing_summary suppressed (billing/diary not ready)", exc_info=False)
+        rows = []
+
+    LABEL = {"court": "Court hire", "lesson": "Lessons", "class": "Classes"}
+    ORDER = ["lesson", "court", "class"]
+    _ST = {"paid": "paid", "open": "owed", "awaiting_payment": "pending", "refunded": "refunded",
+           "void": "cancelled", "written_off": "written_off"}
+    cats: Dict[str, Any] = {}
+    total = 0
+    for r in rows:
+        k = r["booking_type"]
+        amt = int(r["amount_minor"] or 0)
+        covered = r["settlement_mode"] in ("membership_covered", "free", "token")
+        st = "covered" if (covered and amt == 0) else _ST.get(r["ostatus"], r["ostatus"] or "—")
+        court = r["held_court"] if k == "lesson" else r["resource_name"]
+        c = cats.setdefault(k, {"key": k, "label": LABEL.get(k, k), "count": 0, "total_minor": 0, "items": []})
+        c["count"] += 1
+        c["total_minor"] += amt
+        total += amt
+        c["items"].append({
+            "booking_id": str(r["booking_id"]), "starts_at": _iso(r["starts_at"]),
+            "amount_minor": amt, "status": st, "coach_name": r["coach_name"], "court_name": court,
+        })
+    categories = [cats[k] for k in ORDER if k in cats]
+    return {"month": ym, "currency": currency, "total_minor": total, "categories": categories}
+
+
 # ---------------------------------------------------------------------------
 # plan (REUSE membership_status — single source of truth)
 # ---------------------------------------------------------------------------

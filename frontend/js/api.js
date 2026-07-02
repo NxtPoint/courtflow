@@ -171,6 +171,9 @@
     //   charge:{amount_minor,currency,status,settlement_mode,order_id,refundable,has_open_refund},
     //   ics_url,can:{...}}} — the full "booking story" for the detail view.
     bookingStory: function (id) { return A().apiJSON("/api/me/bookings/" + encodeURIComponent(id)); },
+    // GET /api/me/billing/summary?month= -> {month,currency,total_minor,categories:[{key,label,count,
+    //   total_minor,items:[{booking_id,starts_at,amount_minor,status,coach_name,court_name}]}]}
+    billingSummary: function (month) { return A().apiJSON("/api/me/billing/summary" + (month ? ("?month=" + encodeURIComponent(month)) : "")); },
     // GET /api/me/activity -> {activity:[{at,kind,title,detail,amount_minor,currency,direction}]}
     //   the client's transaction log (payments, refunds, charges, coaching, memberships).
     activity: function (limit) { return A().apiJSON("/api/me/activity" + (limit ? ("?limit=" + limit) : "")); },

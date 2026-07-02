@@ -539,6 +539,20 @@ def mark_notifications_read():
 #   GET /api/me/activity  -> {activity:[…]}   — always scoped to the caller's own rows
 # ---------------------------------------------------------------------------
 
+@me_bp.get("/billing/summary")
+def my_billing_summary():
+    """This month's billing grouped by category (Court hire / Lessons / Classes) — count + total +
+    the individual sessions (each drills into its booking story). ?month=YYYY-MM (default: current)."""
+    p, err = _principal()
+    if err:
+        return err
+    month = (request.args.get("month") or "").strip() or None
+    from billing import me as billing_me
+    with session_scope() as s:
+        data = billing_me.billing_summary(s, club_id=p.club_id, user_id=p.user_id, month=month)
+    return jsonify(data), 200
+
+
 @me_bp.get("/bookings/<booking_id>")
 def my_booking_story(booking_id):
     """The full 'story' of one of the caller's bookings — what/when/where (club+court)/who (players)/
