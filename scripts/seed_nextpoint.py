@@ -125,8 +125,8 @@ COURT_PACKS_ZAR = [
 ]
 
 # --- diary.resource content (Agent B owns the schema; we seed IF it exists) ----
-# 8 hard courts + 1 clay (docs/02 §4, §7). Class resources are left to Agent B.
-COURTS = [dict(name=f"Court {i}", surface="hard") for i in range(1, 9)]
+# 7 hard courts + 1 clay = 8 total (Tomo-confirmed 2026-07-02). Class resources are left to Agent B.
+COURTS = [dict(name=f"Court {i}", surface="hard") for i in range(1, 8)]
 COURTS.append(dict(name="Clay Court", surface="clay"))
 
 
@@ -203,6 +203,15 @@ def _seed_courts_if_possible(session, *, club_id, location_id):
     if not _table_exists(session, "diary", "resource"):
         log.info("TODO(diary): diary.resource not present yet — skipping court seed "
                  "(Agent B owns diary.*; re-run seed after diary lands).")
+        return 0
+    # Seed the default courts ONCE (only when the club has none). A re-seed must NEVER
+    # resurrect a court the owner deleted in-app — same rule as coaches/packs above. So
+    # if any court already exists, leave the owner's real court set alone.
+    existing = session.execute(
+        text("SELECT count(*) FROM diary.resource WHERE club_id = :c AND kind = 'court'"),
+        {"c": club_id},
+    ).scalar()
+    if existing and int(existing) > 0:
         return 0
     n = 0
     for rank, court in enumerate(COURTS, start=1):

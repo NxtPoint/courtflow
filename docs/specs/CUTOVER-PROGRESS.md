@@ -38,11 +38,9 @@ Durable record of the Wix→Render cutover work (survives chat compaction). Full
 - **`build_blog.py` rebuilt** + pushed — blog HTML regenerated so slugs carry over. Court count
   corrected to **7 hard + 1 clay = 8 total** (Tomo-confirmed 2026-07-02).
 
-## 🔎 FLAGGED (not urgent, awaiting Tomo's ok to act)
-- **Seed resurrects deleted courts:** `scripts/seed_nextpoint.py` seeds Court 1–8 (8 hard) by name.
-  Reality is 7 hard. If `SEED_NEXTPOINT=1` re-seeds on boot, it may RE-ADD a hard court Tomo deleted
-  in prod (same class of bug the seed fixed for coaches). Fix = align COURTS to reality / stop
-  re-adding. Not touched yet — confirm which court is gone first.
+## ✅ FIXED
+- **Seed court resurrection** — `seed_nextpoint.py` now defaults to 7 hard + 1 clay AND seeds courts
+  only when the club has none (re-seed can never re-add a court the owner deleted). Verified no-op.
 
 ## ⚠️ Notes
 - Multiple chats commit to `master` in parallel (this chat = cutover; others = coach/money/public-site).
