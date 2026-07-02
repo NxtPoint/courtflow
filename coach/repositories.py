@@ -872,6 +872,28 @@ def _coach_activity_kpis(session, *, club_id, user_id, start_d, end_d):
     }
 
 
+def _coach_billed(session, *, club_id, user_id, start_d, end_d):
+    """Total GROSS coaching billed in the month: the sum of what was charged for this coach's
+    lessons — BEFORE any write-off / discount / (non-)collection. This is the 'Total billed'
+    headline that mirrors the client record, and unlike gross_minor (collected payments only)
+    it reflects the real business done. Guarded → 0."""
+    try:
+        v = session.execute(
+            text("""
+                SELECT COALESCE(SUM(ol.amount_minor), 0)
+                FROM diary.booking b
+                JOIN billing.order_line ol ON ol.booking_id = b.id AND ol.club_id = b.club_id
+                WHERE b.club_id = :c AND b.coach_user_id = :u AND b.booking_type = 'lesson'
+                  AND b.starts_at >= :s AND b.starts_at < :e
+                  AND b.status IN ('confirmed','completed','no_show','held')
+            """),
+            {"c": club_id, "u": user_id, "s": start_d, "e": end_d},
+        ).scalar()
+        return int(v or 0)
+    except Exception:
+        return 0
+
+
 def _coach_earnings(session, *, club_id, user_id, start_d, end_d):
     """Earnings for the month, NET of commission (docs/specs/01). Two reads, both guarded:
       gross  = succeeded charge payments (minus refunds) on orders attributable to this
@@ -1186,6 +1208,8 @@ def cockpit(session, *, club_id, user_id, month=None):
                                start_d=start_d, end_d=end_d)
     earn = _coach_earnings(session, club_id=club_id, user_id=user_id,
                            start_d=start_d, end_d=end_d)
+    billed = _coach_billed(session, club_id=club_id, user_id=user_id,
+                           start_d=start_d, end_d=end_d)
     arrears = _coach_arrears_owed(session, club_id=club_id, user_id=user_id)
     fill = _coach_fill_rate(session, club_id=club_id, user_id=user_id,
                             start_d=start_d, end_d=end_d)
@@ -1196,6 +1220,7 @@ def cockpit(session, *, club_id, user_id, month=None):
         "lessons_count": act["lessons_count"],
         "hours": act["hours"],
         "classes_count": act["classes_count"],
+        "billed_minor": billed,
         "gross_minor": earn["gross_minor"],
         "net_minor": earn["net_minor"],
         "commission_minor": earn["commission_minor"],

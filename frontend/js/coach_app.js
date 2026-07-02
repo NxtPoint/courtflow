@@ -139,6 +139,7 @@
         el("h2", { style: "margin:0", text: "This month" }), monthNav(renderHome),
       ]),
       window.CRMUI.stats([
+        { value: money(k.billed_minor, cur), label: "Total billed" },
         { value: money(k.net_minor, cur), label: "Earned (net)" },
         { value: (k.lessons_count || 0), label: "Lessons" },
         { value: (k.hours != null ? k.hours : 0), label: "Hours" },
