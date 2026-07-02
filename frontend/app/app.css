@@ -134,6 +134,38 @@ p{margin:0 0 10px}
 .cf-act .cf-act-ic{opacity:.85}
 .cf-item.cf-item-off{opacity:.66}
 
+/* ============ client app shell (bottom-nav SPA) ============ */
+.cf-app{padding-bottom:78px}
+.cf-appbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:10px;
+  padding:10px 16px;background:rgba(255,255,255,.92);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border)}
+.cf-appbar .cf-brand{font-weight:800;font-size:1.02rem}
+.cf-avatar{width:38px;height:38px;border-radius:50%;background:var(--green-050);color:var(--green-700);
+  display:flex;align-items:center;justify-content:center;font-weight:800;cursor:pointer;
+  border:1px solid var(--border);flex:none}
+.cf-bottomnav{position:fixed;left:0;right:0;bottom:0;z-index:30;background:#fff;
+  border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom,0)}
+.cf-bottomnav-in{max-width:560px;margin:0 auto;display:flex}
+.cf-bottomnav a{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;
+  padding:9px 0 8px;color:var(--muted);font-size:.66rem;font-weight:700;text-decoration:none;
+  letter-spacing:.01em}
+.cf-bottomnav a .ic{font-size:1.22rem;line-height:1}
+.cf-bottomnav a.active{color:var(--green-700)}
+.cf-bottomnav a.book .ic{width:34px;height:34px;border-radius:50%;background:var(--green);color:#fff;
+  display:flex;align-items:center;justify-content:center;margin-top:-14px;box-shadow:var(--shadow-md);font-size:1.3rem}
+/* key/value detail rows */
+.cf-kv{display:flex;gap:12px;padding:11px 0;border-bottom:1px solid var(--border)}
+.cf-kv:last-child{border-bottom:0}
+.cf-kv-k{width:66px;flex:none;color:var(--muted);font-size:.68rem;font-weight:700;
+  text-transform:uppercase;letter-spacing:.03em;padding-top:3px}
+.cf-kv-v{flex:1;font-weight:500;line-height:1.5}
+.cf-backbar{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.cf-detail-h{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.cf-amountbig{font-size:1.7rem;font-weight:800;letter-spacing:-.01em}
+.cf-owe{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.cf-tap{cursor:pointer}
+.cf-seg-lg{margin:2px 0 14px}
+
 /* ---- tables (ONE consistent table everywhere) ----------------------------- */
 .cf-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.9rem;background:var(--surface);
   border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}

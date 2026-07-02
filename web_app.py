@@ -192,8 +192,9 @@ def _app_placeholder(name: str):
 def index():
     if is_marketing_host(request.host or ""):
         return _marketing("home.html")
-    # Non-marketing host (the onrender URL / app host) -> the portal shell.
-    return _app_shell("portal.html")
+    # Non-marketing host (the onrender URL / app host) -> the client app shell (the redesigned
+    # bottom-nav SPA; staff are redirected to their consoles by client.js).
+    return _app_shell("app.html")
 
 
 # The clean marketing URL structure (docs/public-site/03). Lean 6-page set; retired
@@ -340,8 +341,10 @@ def blog_image(filename: str):
 # ---------------------------------------------------------------------------
 
 @app.get("/portal")
+@app.get("/app")
 def portal():
-    return _app_shell("portal.html")
+    # The client app (redesigned SPA). /portal kept as an alias so existing links/CTAs still land.
+    return _app_shell("app.html")
 
 
 @app.get("/book")

@@ -602,7 +602,7 @@
       el("p", { class: "cf-muted", text: msg }),
       detail,
       el("div", { class: "cf-row cf-success-actions", style: "margin-top:16px" }, [
-        el("a", { class: "cf-btn cf-btn-primary cf-btn-lg", href: "/my.html", text: "View my bookings" }),
+        el("a", { class: "cf-btn cf-btn-primary cf-btn-lg", href: window.Client ? "#/bookings" : "/my.html", text: "View my bookings" }),
         el("button", { class: "cf-btn cf-btn-ghost cf-btn-lg", type: "button", text: "Book another", onclick: function () {
           st.slot = null; st.selClass = null; st.view = "schedule"; st.showPayOptions = false; render();
         } }),
