@@ -165,6 +165,7 @@ p{margin:0 0 10px}
 .cf-owe{display:flex;justify-content:space-between;align-items:center;gap:12px}
 .cf-tap{cursor:pointer}
 .cf-seg-lg{margin:2px 0 14px}
+.cf-card.cf-mt{margin-top:16px}
 
 /* ---- tables (ONE consistent table everywhere) ----------------------------- */
 .cf-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.9rem;background:var(--surface);

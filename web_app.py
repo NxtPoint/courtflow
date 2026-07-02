@@ -372,8 +372,10 @@ def plan_page():
 
 
 @app.get("/coach")
+@app.get("/coach.html")
 def coach_console():
-    return _app_shell("coach.html")
+    # The redesigned coach app (bottom-nav SPA). The old console stays on disk as a fallback.
+    return _app_shell("coach_app.html")
 
 
 @app.get("/admin")
