@@ -768,6 +768,7 @@ def get_client(session, *, club_id, user_id, client_user_id, month=None):
                                                 client_user_id=client_user_id, month=month)
             head["services"] = bd["services"]
             head["services_total_minor"] = bd["total_minor"]
+            head["services_billed_minor"] = bd["billed_minor"]
         except Exception:
             log.info("get_client: month money skipped (commission unavailable) client=%s", client_user_id)
             head["money"] = None

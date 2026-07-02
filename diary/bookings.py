@@ -1305,6 +1305,23 @@ def coach_booking_story(session, *, club_id, coach_user_id, booking_id):
                 "attended": p["attended"]} for p in parties]
 
     charge = _booking_charge(session, club_id, b["order_id"], b["settlement_mode"])
+    # The coaching money for THIS lesson (the coach's arrears line) — so collect / discount / write-off
+    # live inside the one event story rather than a separate list. Accrue first (idempotent) so an owed
+    # lesson has a line to act on.
+    arrears = None
+    if b["booking_type"] == "lesson":
+        try:
+            from billing.commission import accrue_arrears_for_club
+            accrue_arrears_for_club(session, club_id=club_id)
+        except Exception:
+            pass
+        arr = session.execute(
+            text("SELECT id, status, gross_minor FROM billing.coach_arrears "
+                 "WHERE club_id = :c AND booking_id = :b ORDER BY created_at DESC LIMIT 1"),
+            {"c": str(club_id), "b": str(booking_id)},
+        ).mappings().first()
+        arrears = ({"id": str(arr["id"]), "status": arr["status"], "gross_minor": int(arr["gross_minor"] or 0)}
+                   if arr else None)
     starts, ends = b["starts_at"], b["ends_at"]
     dur = int((ends - starts).total_seconds() // 60) if (starts and ends) else None
     is_future = bool(starts and starts > datetime.now(timezone.utc))
@@ -1324,6 +1341,10 @@ def coach_booking_story(session, *, club_id, coach_user_id, booking_id):
         "mark_completed": status == "confirmed" and started and is_lesson,
         "mark_no_show": status == "confirmed" and started and is_lesson,
         "add_to_calendar": status in ("confirmed", "held", "completed"),
+        # coaching-money actions live here (the one event story), when there's an OWED line to act on
+        "collect": bool(arrears and arrears["status"] == "owed"),
+        "discount": bool(arrears and arrears["status"] == "owed"),
+        "write_off": bool(arrears and arrears["status"] == "owed"),
     }
     return {
         "id": str(b["id"]),
@@ -1339,6 +1360,7 @@ def coach_booking_story(session, *, club_id, coach_user_id, booking_id):
         "venue": {"club_name": venue.get("club_name"), "address": addr},
         "players": players,
         "charge": charge,
+        "arrears": arrears,
         "ics_url": "/api/diary/bookings/" + str(b["id"]) + "/calendar.ics",
         "can": can,
     }

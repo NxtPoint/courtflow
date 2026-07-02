@@ -650,9 +650,26 @@ def sc_client_by_service(s, fx):
                                      client_user_id=fx.member, month=None)
     check("by-service groups the 2 lessons into one service",
           len(bd["services"]) == 1 and bd["services"][0]["count"] == 2, str(bd.get("services")))
-    check("service total = both lessons", bd["total_minor"] == bd["services"][0]["total_minor"] and bd["total_minor"] > 0, str(bd["total_minor"]))
+    check("service billed = both lessons (gross)", bd["billed_minor"] == bd["services"][0]["billed_minor"] and bd["billed_minor"] > 0, str(bd["billed_minor"]))
     check("each session carries booking_id for the event drill",
           all(it.get("booking_id") for it in bd["services"][0]["items"]), str(bd["services"][0]["items"]))
+    # Write one lesson off + discount the other → the breakdown reflects the REAL state (not just 'owed').
+    CM.accrue_arrears_for_club(s, club_id=fx.club_id)
+    aids = s.execute(text("SELECT id, gross_minor FROM billing.coach_arrears WHERE club_id=:c AND coach_user_id=:co "
+                          "AND client_user_id=:cl ORDER BY created_at"),
+                     {"c": fx.club_id, "co": str(fx.coach_uid), "cl": str(fx.member)}).mappings().all()
+    check("both lessons accrued an arrears line", len(aids) == 2, str(len(aids)))
+    orig = int(aids[0]["gross_minor"] or 0)
+    CM.adjust_arrears(s, club_id=fx.club_id, arrears_id=aids[0]["id"], status="written_off", reason="waived")
+    CM.adjust_arrears(s, club_id=fx.club_id, arrears_id=aids[1]["id"], gross_minor=orig - 5000)  # discount R50
+    bd2 = CM.client_service_breakdown(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
+                                      client_user_id=fx.member, month=None)
+    sts = sorted(it["status"] for it in bd2["services"][0]["items"])
+    check("statuses now reflect written_off + discounted", sts == ["discounted", "written_off"], str(sts))
+    disc = [it for it in bd2["services"][0]["items"] if it["status"] == "discounted"][0]
+    check("discounted session shows reduced effective + original billed",
+          disc["amount_minor"] == orig - 5000 and disc["billed_minor"] == orig, str(disc))
+    check("total billed unchanged by write-off/discount (still gross)", bd2["billed_minor"] == bd["billed_minor"], str(bd2["billed_minor"]))
 
 
 def sc_dispute_routing(s, fx):

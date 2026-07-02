@@ -11,6 +11,12 @@
   function money(m, c) { return UI.money(m || 0, c || "ZAR"); }
   function go(hash) { location.hash = hash; }
   function esc(s) { return UI.esc(s); }
+  // .ics lives on the API host and needs auth — fetch via apiFetch (base + Bearer), then download.
+  function addToCalendar(icsUrl) {
+    window.TFAuth.apiFetch(icsUrl).then(function (r) { if (!r.ok) throw new Error("Couldn't build the calendar file."); return r.blob(); })
+      .then(function (blob) { var u = URL.createObjectURL(blob); var a = document.createElement("a"); a.href = u; a.download = "booking.ics"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(u); }, 1500); })
+      .catch(function (e) { UI.toast(UI.errMsg(e), "error"); });
+  }
 
   // ---- boot ----------------------------------------------------------------
   async function start() {
@@ -396,7 +402,7 @@
     var acts = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin-top:14px" });
     if (b.can.pay) acts.appendChild(el("button", { class: "cf-btn cf-btn-primary", text: "Pay now · " + money(ch.amount_minor, cur), onclick: function () { payOrders([ch.order_id]); } }));
     if (b.can.accept) acts.appendChild(el("button", { class: "cf-btn cf-btn-primary", text: "Accept time", onclick: function () { act(function () { return window.API.acceptBooking(b.id); }, "Confirmed."); } }));
-    if (b.can.add_to_calendar) acts.appendChild(el("a", { class: "cf-btn cf-btn-ghost", href: b.ics_url, text: "Add to calendar" }));
+    if (b.can.add_to_calendar) acts.appendChild(el("button", { class: "cf-btn cf-btn-ghost", text: "Add to calendar", onclick: function () { addToCalendar(b.ics_url); } }));
     if (b.can.receipt) acts.appendChild(el("button", { class: "cf-btn cf-btn-ghost", text: "Receipt", onclick: function () { go("#/billing/order/" + ch.order_id); } }));
     if (b.can.reschedule) acts.appendChild(el("button", { class: "cf-btn cf-btn-ghost", text: "Reschedule", onclick: function () { rescheduleSheet(b); } }));
     if (b.can.cancel) acts.appendChild(el("button", { class: "cf-btn cf-btn-danger", text: "Cancel", onclick: function () { cancelBooking(b); } }));
