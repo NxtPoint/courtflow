@@ -126,6 +126,12 @@
     //   services:[{product_id,name,effective_pct}]} — READ-ONLY (owner sets it in admin).
     commission: function () { return A().apiJSON("/api/coach/commission"); },
 
+    // GET /api/coach/activity -> {activity:[{at,kind,title,detail,amount_minor,currency,direction}]}
+    //   the coach's transaction log (lessons earned, refund clawbacks, per-client arrears).
+    activity: function (limit) {
+      return A().apiJSON("/api/coach/activity" + (limit ? ("?limit=" + enc(limit)) : ""));
+    },
+
     // ---- month-end statement (commission settlement; a coach sees their OWN) ----
     // GET /api/admin/coach-statement?month=YYYY-MM ->
     //   {month, currency, clients:[{client_name,lessons,paid_minor,owed_minor,net_minor}],

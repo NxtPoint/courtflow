@@ -1118,6 +1118,23 @@ def post_arrears_collected(arrears_id):
     return jsonify(res), 200
 
 
+@admin_bp.get("/activity")
+def admin_activity():
+    """The club-wide transaction log — every payment, refund, order raised/void/written-off,
+    commission earned/clawed back, arrears, and membership event, newest first. Owner oversight."""
+    pr, err = _admin()
+    if err:
+        return err
+    try:
+        limit = max(1, min(300, int(request.args.get("limit") or 150)))
+    except (TypeError, ValueError):
+        limit = 150
+    from billing import activity as act
+    with session_scope() as s:
+        rows = act.transaction_log(s, club_id=pr.club_id, scope="owner", limit=limit)
+    return jsonify(activity=rows, count=len(rows)), 200
+
+
 @admin_bp.patch("/coach-statement/arrears/<arrears_id>")
 def patch_arrears(arrears_id):
     """The coach (or admin) edits an OWED arrears line before collection: DISCOUNT (body

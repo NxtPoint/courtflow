@@ -27,6 +27,12 @@
     //   {completed, steps:{profile,hours,courts,services,coaches},
     //    club, location, branding, policy, counts:{courts,products,coaches}}
     onboarding: function () { return A().apiJSON("/api/admin/onboarding"); },
+
+    // GET /api/admin/activity -> {activity:[{at,kind,title,detail,amount_minor,currency,direction}]}
+    //   the club-wide transaction log (payments, refunds, orders, commission, arrears, memberships).
+    activity: function (limit) {
+      return A().apiJSON("/api/admin/activity" + (limit ? ("?limit=" + limit) : ""));
+    },
     // POST /api/admin/onboarding/complete -> {ok:true}
     completeOnboarding: function () {
       return A().apiJSON("/api/admin/onboarding/complete", { method: "POST", body: {} });

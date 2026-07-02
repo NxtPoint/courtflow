@@ -165,6 +165,9 @@
     // GET /api/me/orders -> {orders:[{id,created_at,amount_minor,currency_code,status,settlement_mode,
     //   description,has_open_refund,refund_status,refundable}], count}
     myOrders: function () { return A().apiJSON("/api/me/orders"); },
+    // GET /api/me/activity -> {activity:[{at,kind,title,detail,amount_minor,currency,direction}]}
+    //   the client's transaction log (payments, refunds, charges, coaching, memberships).
+    activity: function (limit) { return A().apiJSON("/api/me/activity" + (limit ? ("?limit=" + limit) : "")); },
     // GET /api/me/refund-requests -> {requests:[{id,order_id,amount_minor,reason,status,...}], count}
     refundRequests: function () { return A().apiJSON("/api/me/refund-requests"); },
     // POST /api/me/refund-requests  body: {order_id(req), amount_minor?, reason?} -> {refund_request}

@@ -532,3 +532,24 @@ def mark_notifications_read():
             notification_id=notif_id, all_unread=mark_all)
         count = notif_repo.unread_count(s, club_id=p.club_id, user_id=p.user_id)
     return jsonify(ok=True, updated=updated, unread_count=count), 200
+
+
+# ---------------------------------------------------------------------------
+# transaction log  (the client's chronological "what happened to my money" feed)
+#   GET /api/me/activity  -> {activity:[…]}   — always scoped to the caller's own rows
+# ---------------------------------------------------------------------------
+
+@me_bp.get("/activity")
+def my_activity():
+    p, err = _principal()
+    if err:
+        return err
+    try:
+        limit = max(1, min(200, int(request.args.get("limit") or 120)))
+    except (TypeError, ValueError):
+        limit = 120
+    from billing import activity as act
+    with session_scope() as s:
+        rows = act.transaction_log(s, club_id=p.club_id, scope="client",
+                                   user_id=p.user_id, limit=limit)
+    return jsonify(activity=rows, count=len(rows)), 200

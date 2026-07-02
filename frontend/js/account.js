@@ -5,7 +5,7 @@
 // next charge, coaching statement (if any), payments/receipts (+ request refund), refund requests.
 (function () {
   var UI, el;
-  var st = { fin: null, orders: [], refunds: [], statement: null, bookings: [] };
+  var st = { fin: null, orders: [], refunds: [], statement: null, bookings: [], activity: [] };
   // Statement UI state (survives re-renders): which categories are expanded + which lines are ticked.
   var STMT = { open: {}, sel: {} };
   var CAT_ICON = { "Coaching": "🎾", "Court hire": "🏟", "Classes": "👥", "Membership": "⭐", "Session packs": "🎟", "Other": "•" };
@@ -168,6 +168,13 @@
     }
     host.appendChild(ordCard);
 
+    // ---- activity (the full transparent transaction log) ----
+    var actCard = card("Activity");
+    actCard.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 10px",
+      text: "Everything that's happened on your account — payments, refunds, charges and coaching." }));
+    actCard.appendChild(window.CRMUI.activityFeed(st.activity || [], { empty: "No activity yet." }));
+    host.appendChild(actCard);
+
     // ---- refund requests ----
     if (st.refunds.length) {
       var rc = card("Refund requests");
@@ -327,6 +334,7 @@
     try { st.fin = await window.API.financials(); } catch (e) {}
     try { st.orders = (await window.API.myOrders()).orders || []; } catch (e) { st.orders = []; }
     try { st.refunds = (await window.API.refundRequests()).requests || []; } catch (e) { st.refunds = []; }
+    try { st.activity = (await window.API.activity()).activity || []; } catch (e) { st.activity = []; }
     render();
   }
 
@@ -336,6 +344,7 @@
       window.API.myOrders().then(function (r) { st.orders = r.orders || []; }, function () {}),
       window.API.refundRequests().then(function (r) { st.refunds = r.requests || []; }, function () {}),
       window.API.myStatement().then(function (r) { st.statement = r; }, function () {}),
+      window.API.activity().then(function (r) { st.activity = r.activity || []; }, function () {}),
       window.API.bookings({ date_from: UI.dateKey(UI.addDays(new Date(), -365)), date_to: UI.dateKey(new Date()) }).then(function (r) { st.bookings = r.bookings || []; }, function () {}),
     ]);
   }

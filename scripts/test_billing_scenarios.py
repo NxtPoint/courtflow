@@ -491,6 +491,52 @@ def sc_membership_cancel_voids_order(s, fx):
     check("paid plan order stays 'paid' after cancel", _order(s, oid2)["status"] == "paid")
 
 
+def sc_transaction_log(s, fx):
+    print("\n# Transaction log: one chronological feed, role-scoped (client / coach / owner)")
+    from billing import activity as ACT
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',30,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+    # Pay a lesson online, then refund it → the feed should carry payment, commission, refund, clawback.
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 15)), ends_at=iso(at(fx, 16)), settlement_mode="online")
+    oid = r["booking"]["order_id"]
+    apply_payment_event(NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
+                        provider_payment_id="p_log_1", amount_minor=40000, currency="ZAR",
+                        status="succeeded", direction="charge", club_id=str(fx.club_id),
+                        user_id=str(fx.member), raw={"t": 30}), session=s)
+    apply_payment_event(NormalizedPaymentEvent(provider="yoco", kind="refunded", order_ref=oid,
+                        provider_payment_id="rf_log_1", amount_minor=0, currency="ZAR",
+                        status="refunded", direction="refund", club_id=str(fx.club_id),
+                        user_id=str(fx.member), raw={"t": 31}), session=s)
+
+    owner = ACT.transaction_log(s, club_id=fx.club_id, scope="owner")
+    kinds = {e["kind"] for e in owner}
+    check("owner feed has the payment", "payment" in kinds, str(sorted(kinds)))
+    check("owner feed has the refund", "refund" in kinds, str(sorted(kinds)))
+    check("owner feed has commission earned", "commission_earned" in kinds, str(sorted(kinds)))
+    check("owner feed has the refund clawback", "refund_clawback" in kinds, str(sorted(kinds)))
+    check("owner feed is newest-first",
+          all((owner[i]["at"] or "") >= (owner[i + 1]["at"] or "") for i in range(len(owner) - 1)))
+
+    client = ACT.transaction_log(s, club_id=fx.club_id, scope="client", user_id=fx.member)
+    ckinds = {e["kind"] for e in client}
+    check("client sees their payment + refund", {"payment", "refund"} <= ckinds, str(sorted(ckinds)))
+    check("client does NOT see commission internals",
+          "commission_earned" not in ckinds and "refund_clawback" not in ckinds, str(sorted(ckinds)))
+
+    coach = ACT.transaction_log(s, club_id=fx.club_id, scope="coach", user_id=fx.coach_uid)
+    kkinds = {e["kind"] for e in coach}
+    check("coach sees commission earned + clawback",
+          {"commission_earned", "refund_clawback"} <= kkinds, str(sorted(kkinds)))
+    # A coach must never see another coach's money: scope by coach_user_id.
+    other = _mk_user(s, "othercoach@bill.test", "OtherCoach")
+    empty = ACT.transaction_log(s, club_id=fx.club_id, scope="coach", user_id=other)
+    check("a different coach sees none of this coach's commission",
+          not any(e["kind"] in ("commission_earned", "refund_clawback") for e in empty), str(len(empty)))
+
+
 def sc_payment_preference(s, fx):
     print("\n# Per-service payment preference: a service offering only 'at_court' refuses online")
     s.execute(text("UPDATE billing.product SET payment_modes='at_court' WHERE id=:p"), {"p": fx.court_product})
@@ -549,6 +595,7 @@ SCENARIOS = [
     sc_refund_request,
     sc_refund_clawback,
     sc_membership_cancel_voids_order,
+    sc_transaction_log,
 ]
 
 

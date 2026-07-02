@@ -201,6 +201,28 @@
   function renderMoney(panel) {
     renderBilling(panel);
     renderCockpit(panel);
+    renderActivity(panel);
+  }
+
+  // Club-wide transaction log — the transparent record of every money event across the club.
+  async function renderActivity(panel) {
+    var card = el("div", { class: "cf-card", style: "margin-top:16px" }, [
+      el("h2", { text: "Activity", style: "margin:0 0 4px" }),
+      el("p", { class: "cf-muted", style: "margin:-2px 0 12px",
+        text: "Every payment, refund, charge, commission and adjustment across the club — newest first." }),
+      el("div", { id: "admin-act-body", class: "cf-loading", text: "Loading activity…" }),
+    ]);
+    panel.appendChild(card);
+    var body = document.getElementById("admin-act-body");
+    try {
+      if (!window.AdminAPI) await ensureClassDeps();
+      var d = await window.AdminAPI.activity();
+      if (!body) return;
+      UI.clear(body);
+      body.appendChild(window.CRMUI.activityFeed((d && d.activity) || [], { empty: "No activity yet." }));
+    } catch (e) {
+      if (body) { UI.clear(body); body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
+    }
   }
 
   // Business Overview — rendered INLINE in this tab (no iframe, no navigation). We build the

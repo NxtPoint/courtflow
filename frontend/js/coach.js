@@ -1045,6 +1045,14 @@
       el("div", { id: "coach-stmt-body", class: "cf-loading", text: "Loading statement…" }),
     ]);
     host.appendChild(card);
+    // Transaction log — a transparent, chronological record of every money event on this coach.
+    var actCard = el("div", { class: "cf-card", style: "margin-top:16px" }, [
+      el("h2", { text: "Activity", style: "margin:0 0 4px" }),
+      el("p", { class: "cf-muted", style: "margin:-2px 0 12px",
+        text: "Every lesson, payment, refund and adjustment — the full record." }),
+      el("div", { id: "coach-act-body", class: "cf-loading", text: "Loading activity…" }),
+    ]);
+    host.appendChild(actCard);
     stmtState.month = thisMonthKey();
     document.getElementById("coach-stmt-prev").addEventListener("click", function () {
       stmtState.month = shiftMonthKey(stmtState.month, -1); loadStatement();
@@ -1053,6 +1061,17 @@
       stmtState.month = shiftMonthKey(stmtState.month, 1); loadStatement();
     });
     loadStatement();
+    loadActivity();
+  }
+
+  async function loadActivity() {
+    var body = document.getElementById("coach-act-body"); if (!body) return;
+    try {
+      var d = await window.CoachAPI.activity();
+      UI.clear(body);
+      body.appendChild(window.CRMUI.activityFeed((d && d.activity) || [],
+        { empty: "No activity yet." }));
+    } catch (e) { UI.clear(body); body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
   }
 
   async function loadStatement() {
@@ -1073,12 +1092,14 @@
     var t = d.totals || {};
 
     // Totals strip — incl. the month-end position after commission (ledger balance + rent).
-    body.appendChild(window.CRMUI.stats([
+    var strip = [
       { value: window.CRMUI.money(t.paid_minor, cur), label: "Collected (net)" },
       { value: window.CRMUI.money(t.owed_minor, cur), label: "Outstanding" },
       { value: window.CRMUI.money(t.rent_minor, cur), label: "Rent this month" },
       { value: window.CRMUI.money(t.balance_minor, cur), label: "Account balance" },
-    ]));
+    ];
+    if (t.written_off_minor) strip.push({ value: window.CRMUI.money(t.written_off_minor, cur), label: "Written off" });
+    body.appendChild(window.CRMUI.stats(strip));
 
     // Per-client table.
     body.appendChild(el("div", { style: "margin-top:14px" }));
@@ -1087,9 +1108,9 @@
       nameKey: "client_name", nameLabel: "Client", currency: cur,
     }));
 
-    // Outstanding arrears with actions.
+    // Lessons on the tab (owed + written-off, which stay visible for transparency) with actions.
     body.appendChild(el("div", { style: "margin-top:16px" }));
-    body.appendChild(window.CRMUI.sectionHead("Outstanding lessons (off-platform)"));
+    body.appendChild(window.CRMUI.sectionHead("Lessons on the tab (off-platform)"));
     body.appendChild(window.CRMUI.lineItems(d.arrears_items, {
       currency: cur,
       label: function (it) { return it.client_name || "Lesson"; },

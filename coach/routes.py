@@ -556,3 +556,21 @@ def get_commission():
     with session_scope() as s:
         data = repo.coach_commission_overview(s, club_id=p.club_id, user_id=p.user_id)
     return jsonify(data), 200
+
+
+@coach_bp.get("/activity")
+def get_activity():
+    """The coach's chronological transaction log — lessons earned on, refund clawbacks, and each
+    client's arrears (accrued/paid/written-off). Scoped to THIS coach."""
+    p, err = _coach()
+    if err:
+        return err
+    try:
+        limit = max(1, min(200, int(request.args.get("limit") or 120)))
+    except (TypeError, ValueError):
+        limit = 120
+    from billing import activity as act
+    with session_scope() as s:
+        rows = act.transaction_log(s, club_id=p.club_id, scope="coach",
+                                   user_id=p.user_id, limit=limit)
+    return jsonify(activity=rows, count=len(rows)), 200

@@ -127,6 +127,12 @@ p{margin:0 0 10px}
 .cf-chip.confirmed,.cf-chip.ok{background:var(--success-bg);color:var(--success)}
 .cf-chip.cancelled,.cf-chip.no_show{background:var(--danger-bg);color:var(--danger)}
 .cf-chip.held,.cf-chip.waitlisted{background:var(--warning-bg);color:#946017}
+/* transaction-log / statement amount chips */
+.cf-chip-good{background:var(--success-bg);color:var(--success)}
+.cf-chip-bad{background:var(--danger-bg);color:var(--danger)}
+.cf-chip-muted{background:var(--surface-2,#eef1f4);color:var(--text-muted,#6b7683)}
+.cf-act .cf-act-ic{opacity:.85}
+.cf-item.cf-item-off{opacity:.66}
 
 /* ---- tables (ONE consistent table everywhere) ----------------------------- */
 .cf-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.9rem;background:var(--surface);
