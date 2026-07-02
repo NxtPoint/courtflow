@@ -56,9 +56,9 @@
     { k: "book", ic: "🎾", label: "Book" },
   ];
   function renderShell() {
-    document.body.classList.add("cf-app");
-    var root = document.getElementById("cf-main") || document.body;
-    // Appbar
+    // The client experience is ONE page — no bottom nav. (Book is reached from the Home tiles;
+    // the coach & owner apps keep their bottom nav.) The TS avatar (top-right) opens the profile.
+    document.body.style.paddingBottom = "20px";
     if (!document.getElementById("cf-appbar")) {
       var bar = el("div", { class: "cf-appbar", id: "cf-appbar" }, [
         el("div", { class: "cf-brand" }, [el("span", { class: "cf-logo", text: "NP" }), el("span", { text: "NextPoint" })]),
@@ -69,25 +69,10 @@
       document.body.insertBefore(bar, document.body.firstChild);
       mountBell(document.getElementById("cf-bell"));
     }
-    // View container = #cf-main (booking.js also renders here).
     view = document.getElementById("cf-main");
     if (!view) { view = el("main", { class: "cf-main", id: "cf-main" }); document.body.appendChild(view); }
-    // Bottom nav
-    if (!document.getElementById("cf-bottomnav")) {
-      var inner = el("div", { class: "cf-bottomnav-in" });
-      NAV.forEach(function (n) {
-        inner.appendChild(el("a", { href: "#/" + n.k, "data-nav": n.k, class: (n.cls || "") }, [
-          el("span", { class: "ic", text: n.ic }), el("span", { text: n.label }),
-        ]));
-      });
-      document.body.appendChild(el("nav", { class: "cf-bottomnav", id: "cf-bottomnav" }, [inner]));
-    }
   }
-  function setActive(k) {
-    document.querySelectorAll("#cf-bottomnav a").forEach(function (a) {
-      a.classList.toggle("active", a.getAttribute("data-nav") === k);
-    });
-  }
+  function setActive(k) { /* no bottom nav on the client */ }
   function mountBell(hostEl) {
     if (!hostEl) return;
     if (window.Notifications) { window.Notifications.mount(hostEl); return; }
@@ -151,8 +136,7 @@
     return el("span", { class: "cf-chip " + m[0], text: m[1] });
   }
 
-  // ---- HOME (the hub: sessions + billing + plan, all in one) ---------------
-  var homeTab = "up";      // sessions segment
+  // ---- HOME (the hub: everything on one page — no bottom nav for the client) --
   var HBMONTH = null;      // billing month
   function curMonth() { var d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); }
   function shiftM(ym, d) { var p = ym.split("-"); var dt = new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1 + d, 1); return dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0"); }
@@ -163,16 +147,27 @@
     loading();
     var fin = {}, bookings = [];
     try { fin = await window.API.financials(); } catch (e) {}
-    try { bookings = (await window.API.bookings({ date_from: UI.dateKey(UI.addDays(new Date(), -365)), date_to: UI.dateKey(UI.addDays(new Date(), 180)) })).bookings || []; } catch (e) {}
+    try { bookings = (await window.API.bookings({ date_from: UI.dateKey(UI.addDays(new Date(), -730)), date_to: UI.dateKey(UI.addDays(new Date(), 365)) })).bookings || []; } catch (e) {}
     DATA.fin = fin; DATA.bookings = bookings;
     var plan = fin.plan || {}, cur = fin.currency || "ZAR";
     var wrap = el("div", {});
 
-    // Greeting ribbon (unchanged look)
-    var chip = plan.is_trial ? ("🎁 Free week · " + (plan.trial_days_left || 0) + "d") : (plan.active ? "⭐ Member" : "Pay as you go");
-    wrap.appendChild(el("div", { class: "cf-greet" }, [
-      el("div", {}, [el("h1", { text: greet() + ", " + firstName() }), el("p", { text: "Ready to play?" })]),
-      el("span", { class: "cf-greet-plan", text: chip }),
+    // Greeting ribbon — profile at a glance: name, email, membership + Manage + Edit profile.
+    // (The TS avatar top-right also opens the profile — kept as a shortcut for those who spot it.)
+    var email = (DATA.profile && DATA.profile.email) || (principal && principal.email) || "";
+    var mLine = plan.is_trial ? ("🎁 Free week — " + (plan.trial_days_left || 0) + " days left")
+      : plan.active ? ("⭐ " + (plan.name || "Member") + (plan.current_period_end ? " · renews " + plan.current_period_end : ""))
+      : "Pay as you go — no membership";
+    wrap.appendChild(el("div", { class: "cf-greet", style: "padding:22px 24px;align-items:flex-start" }, [
+      el("div", { style: "flex:1" }, [
+        el("h1", { text: greet() + ", " + firstName() }),
+        email ? el("p", { style: "opacity:.92;margin-top:2px", text: email }) : null,
+        el("p", { style: "margin-top:8px;font-weight:600", text: mLine }),
+        el("div", { class: "cf-row", style: "gap:8px;margin-top:12px;flex-wrap:wrap" }, [
+          el("button", { class: "cf-btn cf-btn-sm", text: "Edit profile", onclick: function () { go("#/profile/edit"); } }),
+          el("button", { class: "cf-btn cf-btn-sm", text: "Manage membership", onclick: openPlan }),
+        ]),
+      ].filter(Boolean)),
     ]));
 
     // Needs attention
@@ -214,23 +209,22 @@
   }
   function greet() { var h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
 
-  // sessions: upcoming/past segment (client-side, no refetch)
+  // sessions: ALL of them — Upcoming then Past, organised, each drilling into its detail. Nothing hidden.
   function paintSessions() {
     var box = document.getElementById("home-sessions"); if (!box) return;
     UI.clear(box);
-    var seg = el("div", { class: "cf-segment cf-seg-lg" });
-    [["up", "Upcoming"], ["past", "Past"]].forEach(function (s) {
-      seg.appendChild(el("button", { type: "button", class: homeTab === s[0] ? "on" : "", text: s[1], onclick: function () { homeTab = s[0]; paintSessions(); } }));
-    });
-    box.appendChild(seg);
     var now = new Date(), bks = DATA.bookings || [], up = [], past = [];
-    bks.forEach(function (b) { if (b.status === "cancelled" || b.status === "no_show") past.push(b); else if (new Date(b.ends_at || b.starts_at) >= now) up.push(b); else past.push(b); });
+    bks.forEach(function (b) {
+      if (b.status === "cancelled") return;                       // cancelled sessions drop off
+      if (new Date(b.ends_at || b.starts_at) >= now && b.status !== "no_show") up.push(b); else past.push(b);
+    });
     up.sort(function (a, b) { return new Date(a.starts_at) - new Date(b.starts_at); });
     past.sort(function (a, b) { return new Date(b.starts_at) - new Date(a.starts_at); });
-    var list = homeTab === "up" ? up : past;
-    if (!list.length) box.appendChild(el("div", { class: "cf-empty", text: homeTab === "up" ? "No upcoming sessions — book one above." : "No past sessions." }));
-    else { var l = el("div", { class: "cf-list" }); list.slice(0, homeTab === "up" ? 12 : 20).forEach(function (b) { l.appendChild(bookingRow(b)); }); box.appendChild(l); }
+    if (!up.length && !past.length) { box.appendChild(el("div", { class: "cf-empty", text: "No sessions yet — book one above." })); return; }
+    if (up.length) { box.appendChild(subHead("Upcoming")); var l1 = el("div", { class: "cf-list" }); up.forEach(function (b) { l1.appendChild(bookingRow(b)); }); box.appendChild(l1); }
+    if (past.length) { box.appendChild(subHead("Past")); var l2 = el("div", { class: "cf-list" }); past.slice(0, 40).forEach(function (b) { l2.appendChild(bookingRow(b)); }); box.appendChild(l2); }
   }
+  function subHead(t) { return el("div", { class: "cf-muted", style: "font-weight:700;font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;margin:12px 2px 4px", text: t }); }
 
   // billing: monthly breakdown by category (month nav + tap-through)
   function billMonthNav(cur) {
