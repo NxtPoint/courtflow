@@ -11,10 +11,15 @@ Two Render web services + one Postgres:
 - **`courtflow-web`** (`web_wsgi:app`) — DB-less. **Host-switched** (`web_app.py`, mirroring 1050's
   `locker_room_app.py`): a marketing host serves the public site at `/` and the portal SPA shells at
   `/portal`, `/book`, `/admin`, `/settings`, …; a club host would serve that club's branded site. Serves
-  static `cf-*` pages + JS, proxies nothing — the SPAs call `courtflow-api` directly. The admin surface is
-  split **Operate vs Configure**: the **Admin console** (`admin.html`) runs the club day-to-day (Master
-  diary · Classes · People · Billing · Cockpit · Overview), while **Settings** (`settings.html`, on the main
-  nav) holds configuration (Club profile · Courts & hours · Services · Memberships · Coaches).
+  static `cf-*` pages + JS, proxies nothing — the SPAs call `courtflow-api` directly. **Nav is
+  role-focused** (`Portal.landingFor`): members/guests land on the client **Home · Account**, coaches on
+  their **Coach** console, owners on **Admin · Settings**. The coach and owner consoles are
+  **business-health-first cockpits**: the **Coach console** (`coach.html`, business tabs Dashboard ·
+  Schedule · Clients · Money · Setup — cockpit KPIs, a week-timeline schedule, and the settlement statement
+  folded into Money) and the **Admin console** (`admin.html`, Dashboard · Diary · People · Money · Insights
+  — a money-KPI + Today-at-the-club dashboard, the master diary, the financial cockpit, and the analytics
+  Overview), with **Settings** (`settings.html`) holding configuration (Club profile · Courts & hours ·
+  Services · Memberships · Coaches).
 - **Postgres** (separate Render DB). **One DB, five schemas** (below).
 
 The browser holds a **Clerk** session; the SPA attaches the JWT to every `/api/*` call; the API verifies
@@ -104,11 +109,23 @@ immediately (no prompt); online → Yoco. Offline modes settle through the unifi
 Producers call `marketing_crm.emit(event, payload)` → writes `core.usage_event` (the decoupled event
 contract, `contracts/events.md`; includes the `lesson_requested|proposed|accepted|declined` lifecycle
 events). `emit()` also drives **notifications** (`marketing_crm/notifications.py`, non-fatal): mapped
-transactional kinds → a `core.notification` (in-app inbox, always) + a transactional email (SES, dark
-without keys). Klaviyo lifecycle flows hang off the same event feed (dark without `KLAVIYO_API_KEY`).
+transactional kinds → a `core.notification` (in-app inbox, always) + a transactional email (SES).
 Child bookings route notifications to the **guardian**. Every booking has a downloadable **`.ics`**
 (`diary/calendar.py` → `GET /api/diary/bookings/<id>/calendar.ics`; `ics_url` on the confirmation
 payload) — in-app "Add to calendar" now, the email attaches the same file once email is live.
+
+**Transactional email — multi-tenant SES (code-complete, config-gated).** Improving on 1050's
+single-tenant bare-From sender: ONE verified CourtFlow domain (`SES_SENDER`, e.g. `no-reply@courtflow.app`)
+carries **every** club, so adding a tenant needs no new SES verification. Each club rides it with its OWN
+identity — a **From display name** (`club.name`) + **Reply-To** (its first `club.location` email) —
+resolved by `marketing_crm/notifications.py::_club_identity`. `marketing_crm/email/ses.py` self-gates on
+creds (no `SES_SENDER` → email is dark, in-app notifications only, never errors); `send_raw_email` (MIME
+`SendRawEmail`) attaches the booking **.ics** to confirmations (the piece 1050 lacked), `send_email` takes
+`from_name`/`reply_to`, and `send_booking_confirmation` is club-branded. `notifications.deliver` threads
+the club identity into every mapped event. No new endpoints, no schema change. Klaviyo lifecycle flows hang
+off the same event feed (dark without `KLAVIYO_API_KEY`). Config to go live (AWS only): verify the domain
+in SES `af-south-1`, exit the sandbox, set `SES_SENDER` + the club contact email — full guide in
+[SES-SETUP.md](SES-SETUP.md).
 
 ## Request flow (a booking, end to end)
 1. SPA `booking.js` (full-screen): pick service → schedule on a month calendar with **inline per-duration

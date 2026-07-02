@@ -16,7 +16,13 @@ operating guide; **this folder is the detail.**
 > arrears held in lockstep (commission accrues exactly once); **service-specific & per-membership-tier
 > payment options** + one payment rule (choose / immediate / online); **memberships & packs buy offline**;
 > **off-peak coverage priced per slot**; **Operate (Admin) vs Configure (Settings)** split; unified
-> **Active/Deactivated/Terminated lifecycle** + real coach/court deletes. Remaining: **OUTSTANDING.md**.
+> **Active/Deactivated/Terminated lifecycle** + real coach/court deletes.
+> **2026-07-02:** **business-first coach & owner consoles** (coach: Dashboard/Schedule-week-timeline/Clients/
+> Money/Setup; owner: Dashboard-"Today at the club"/Diary/People/Money/Insights) behind **role-focused nav**
+> (staff land on their own console, not the client screen) + a today-glimpse + **"Book for myself"**; and
+> **multi-tenant transactional SES email is CODE-COMPLETE** (one verified domain, per-club From-name +
+> Reply-To, `.ics` attachment — dark until AWS is keyed; see [SES-SETUP.md](SES-SETUP.md)).
+> Remaining: **OUTSTANDING.md**.
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,
@@ -41,6 +47,9 @@ operating guide; **this folder is the detail.**
    reconciliation harness that gates it. *"How the money reconciles."*
 9. **[FRONTEND-REDESIGN.md](FRONTEND-REDESIGN.md)** — the front-end simplification log (one-page-per-role,
    Operate-vs-Configure, the statement card, lifecycle UI). *"How the UI got simpler."*
+10. **[SES-SETUP.md](SES-SETUP.md)** — the config guide to turn transactional email on: verify `courtflow.app`
+    in SES af-south-1, exit the sandbox, IAM keys, `SES_SENDER`. Multi-tenant (one domain, per-club identity),
+    `.ics`-attaching engine is code-complete; this is the AWS-side setup. *"How to switch email on."*
 
 ## The build-era spec docs (design intent, still useful)
 - [00-roadmap.md](00-roadmap.md) — the phased self-service/CRM roadmap (most phases now built).

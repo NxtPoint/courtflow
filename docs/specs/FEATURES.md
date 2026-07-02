@@ -133,20 +133,33 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   refund-aware. 🔭
 - *(Deferred: refund clawback split, coach-payout objects, scheduled rent accrual — see OUTSTANDING.)*
 
+- **Role-focused nav** — each role lands on and sees only its own surface: members/guests get
+  **Home · Account**, coaches get their **Coach** console, owners get **Admin · Settings** (staff no
+  longer see the client screens). 🔭
+
 ## 8. Self-service consoles
 - **Client** — action-first cockpit (`/portal`), full-screen booking, **My Bookings** (reschedule/
   cancel, "needs your attention", add-to-calendar), consolidated **Plan** page (buy membership/packs),
   financials + statement, refund requests, dependents, notifications. 🔭
-- **Coach** — onboarding, services/rates + classes + own packs, availability + time-off, **lesson
-  approval queue**, **book for a client**, **My Clients 360** (history + upcoming), **statement**
-  (mark-collected + discount/write-off), **business cockpit** (lessons/hours/net-of-commission
-  earnings/fill-rate/trend/lessons-left-on-plans). 🔭
-- **Owner** — split into **Operate** (the admin console: master diary · classes · **People** with a
-  Members/Coaches/Guests/Admins category slicer + 360 drawer + membership grant · billing/refunds ·
-  financial cockpit · Overview) and **Configure** (Settings: club profile · **Courts & hours** with
-  **per-court** weekly playing hours · **Services** sub-tabs Lessons/Classes/Courts with a coach filter ·
-  Memberships · Coaches). **Coach pay** = per-service commission editor; payments toggle + refunds +
-  refund-requests; branding; policy. 🔭
+- **Coach — a business console** (tabs **Dashboard · Schedule · Clients · Money · Setup**):
+  - **Dashboard** = the **business cockpit** (net-of-commission earnings / lessons / hours / fill-rate /
+    trend / month-end position / lessons-left-on-plans / top clients / upcoming) with the **lesson
+    approval queue** ("needs your attention") on top. 🔭
+  - **Schedule** = a **week timeline** of the coach's lessons + classes (prev/next week; tap a lesson to
+    mark completed/no-show, tap a class for the roster) + **book for a client / for myself** + block
+    time off. 🔭
+  - **Clients** = **My Clients 360** (history + upcoming). **Money** = the month-end settlement
+    **statement** (per-client paid/owed/net, mark-collected + discount/write-off). **Setup** =
+    services/rates + classes + own packs + club-commission card + profile. 🔭
+- **Owner — a business dashboard + operate/configure split.** The **Admin console** (Operate) leads with
+  a **Dashboard**: **Today at the club** (today's diary) + this-month **money KPIs** (net revenue /
+  commission kept / rent due / active members / MRR / lessons paid) + net-revenue trend + last-30-days
+  **growth & NPS** (from first-party analytics) + a **Quick actions** row. Remaining tabs: **Diary**
+  (master timeline + classes management) · **People** (Members/Coaches/Guests/Admins slicer + 360 drawer
+  + membership grant) · **Money** (billing/refunds + the financial cockpit) · **Insights** (the analytics
+  Overview). **Configure** = Settings (club profile · **Courts & hours** with **per-court** weekly playing
+  hours · **Services** sub-tabs Lessons/Classes/Courts with a coach filter · Memberships · Coaches);
+  **Coach pay** = per-service commission editor; payments toggle; branding; policy. 🔭
 
 ## 9. Notifications, calendar & CRM
 - In-app **bell + inbox** for every member, driven off the event feed: booking confirmed, payment
@@ -154,7 +167,11 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   spot-open, coach invited, lesson requested/proposed/accepted/declined. 🔭
 - **Child → guardian** notification routing. 🔭
 - Booking **`.ics` calendar** (in-app now; email attachment when SES is live). 🔭
-- **Transactional email** (SES) + **Klaviyo** lifecycle/marketing — built, dark until keyed. 🌐
+- **Transactional email — per-club branded, multi-tenant SES** (built, dark until keyed 🌐): confirmations
+  + invites go out from **one verified CourtFlow domain** but under **each club's own From name and
+  Reply-To**, so a new tenant needs no new sender verification; booking emails **attach the `.ics`**
+  calendar. Self-gates on creds → until AWS keys land, in-app notification only (see `SES-SETUP.md`). Plus
+  **Klaviyo** lifecycle/marketing — same feed, dark until keyed. 🌐
 - **Consent** capture; no minor PII in marketing payloads. 🔭
 
 ## 10. Business Overview analytics

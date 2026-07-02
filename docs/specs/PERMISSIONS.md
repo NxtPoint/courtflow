@@ -5,8 +5,9 @@ the consoles expose the right things to the right roles and (b) decide whether t
 needs finer **staff sub-roles** beyond today's 5. This is a **review artifact** — read it, mark what's
 misplaced, and we build to the corrected version. Nothing here changes behaviour yet.
 
-Grounded in the live code: `iam/permissions.py` (`can()`), `frontend/js/portal.js` (nav + shell gate),
-`admin.js` / `settings.js` / `coach.js` / `account.js` (console tabs).
+Grounded in the live code: `iam/permissions.py` (`can()`), `frontend/js/portal.js` (nav + shell gate +
+`landingFor(role)`), `home.js` (staff redirect to their console), `admin.js` / `settings.js` / `coach.js` /
+`account.js` (console tabs).
 
 ---
 
@@ -16,7 +17,13 @@ Grounded in the live code: `iam/permissions.py` (`can()`), `frontend/js/portal.j
    client can never assert it. Every endpoint gates on it.
 2. **Frontend shell gate** — each privileged page calls `Portal.boot({requireRoles:[…]})`; a wrong
    role sees *"not available for your role"* and the console code never runs (`portal.js:110`).
-3. **Role-filtered nav** — `portal.js:28` only renders the links a role is allowed.
+3. **Role-focused nav + landing** — `portal.js` renders a *role-precise* nav (staff no longer see the
+   client Home/Account clutter) and `landingFor(role)` sends each role to its own home on sign-in:
+   - **member/guest → Home · Account** (Home is the client cockpit).
+   - **coach → Coach (landing) · Account.**
+   - **club_admin/platform_admin → Admin (landing) · Settings.**
+   `home.js` redirects staff off `/portal.html` to their console unless `?stay=1` (a testing bypass).
+   The client booking pages still exist and are reachable — staff can **book for themselves** (see §4/§5).
 
 **Verdict:** no cross-role leakage. A member/coach cannot use the admin console. The gaps below are
 about **granularity** and **surfacing**, not a security hole.
@@ -26,32 +33,40 @@ about **granularity** and **surfacing**, not a security hole.
 - **platform_admin** — cross-club, everything (us, the platform operator).
 - **club_admin** — full control of ONE club. **Monolithic: gets every admin tab + all of Settings.**
 - **coach** — own diary/availability/clients/statement (services self-scoped — the coach console shows
-  only the coach's own services); cannot touch prices/finances/other coaches.
+  only the coach's own services); cannot touch prices/finances/other coaches. **Own commission is
+  READ-ONLY** (surfaced, greyed, in Setup). Can **book a court for themselves** (auto-member).
 - **member** — book + manage own bookings/profile/plan/financials (incl. own unified statement +
   self-cancel membership).
 - **guest** — book as a visitor; minimal profile.
 
 ## 3. Page / nav access (who gets which shell) — `portal.js` NAV + `requireRoles`
-| Page | Home `/portal` | Book | My Bookings | Plan | Account | **Coach** | **Statement** | **Admin** | **Settings** |
-|---|---|---|---|---|---|---|---|---|---|
-| member | ✓ | ✓ | ✓ | ✓ | ✓ | — | — | — | — |
-| coach | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | — |
-| club_admin | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ |
-| platform_admin | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ |
+Nav is now **role-focused**: each role lands on its own home and sees only its own links (the client
+Home/Account no longer clutter the staff nav; "Statement" is folded into the coach console's Money tab).
+A ✓ = a **nav link** the role sees; a page a role can still *reach* (e.g. staff booking for themselves via
+`/book/court`) but that is no longer in their nav is marked `(reach)`.
 
-*(guest ≈ member minus account depth.)* This part looks correct — flag anything you'd change.
+| Page | Home `/portal` | Book | My Bookings | Plan | Account | **Coach** | **Admin** | **Settings** |
+|---|---|---|---|---|---|---|---|---|
+| member / guest | ✓ | ✓ | ✓ | ✓ | ✓ | — | — | — |
+| coach | (reach) | (reach) | (reach) | (reach) | ✓ | ✓ (landing) | — | — |
+| club_admin | (reach) | (reach) | (reach) | (reach) | (reach) | (reach) | ✓ (landing) | ✓ |
+| platform_admin | (reach) | (reach) | (reach) | (reach) | (reach) | (reach) | ✓ (landing) | ✓ |
+
+*(guest ≈ member minus account depth.)* Staff **land on their console** on sign-in (`landingFor`); the
+standalone `/statement.html` is kept as an unlinked fallback (its content now lives in the coach Money tab).
 
 ## 4. Owner/Admin surface — what each tab does + sensitivity
-**Admin console (`/admin`, `admin.js`) — 7 tabs:**
+**Admin console (`/admin`, `admin.js`) — 5 tabs (+ ⚙ Settings link); default = Dashboard:**
 | Tab | What it does | Sensitivity |
 |---|---|---|
-| **Diary** | Master resource-timeline; view/manage all bookings | operational |
-| **Classes** | Create class types, schedule sessions, rosters/attendance | operational |
-| **Resources** | Add/edit/disable courts & resources | config |
+| **Dashboard** | Business-health landing: **Today at the club** (today's diary) + this-month money KPIs (net revenue · commission kept · rent due · active members · MRR · lessons paid) + net-revenue trend + last-30-days growth (visits/visitors/new customers/bookings/**NPS**) + **Quick actions** (incl. **Book a court for myself** → `/book/court`) | **financial-ish** |
+| **Diary** | Sub-tabbed **Timeline** (master resource-timeline; view/manage all bookings) + **Classes** (create class types, schedule sessions, rosters/attendance) | operational |
 | **People** | Member 360 drawer; **grant/revoke membership**; member's unified statement + **void / write-off** an owed order | operational + *financial (grant / write-off)* |
-| **Billing** | Recent payments, **refunds**, refund-requests | **financial** |
-| **Cockpit** | Per-coach settlement, revenue, commission owed, MRR | **financial** |
-| **Overview** | Business analytics (visits/customers/revenue/NPS) | financial-ish |
+| **Money** | **Billing** (config · recent payments · **refunds** · refund-requests) + the full **financial cockpit** (per-coach settlement, revenue-by-service, commission owed, MRR, range toggle) | **financial** |
+| **Insights** | Business analytics / Business Overview (visits/customers/revenue/NPS) | financial-ish |
+
+Court/resource config moved into **Settings → Courts**; the old separate Classes, Resources, Billing,
+Cockpit and Overview tabs are folded into the five above (Diary/Money/Insights).
 
 **Settings (`/settings.html`, `settings.js`) — 8 tabs:**
 | Tab | What it does | Sensitivity |
@@ -69,10 +84,20 @@ about **granularity** and **surfacing**, not a security hole.
 > wants staff who can run the desk (Diary/Classes/People) **without** seeing finances, commission, or
 > changing prices/branding. That's the "screens that shouldn't be there for everyone."
 
-## 5. Coach surface (`/coach`, `coach.js`) — own-scope only
-My Week (lessons + classes) · My Classes (manage) · Availability + time-off · My Clients (360, private) ·
-Dashboard cockpit · Statement (month-end, mark-collected + discount/write-off). All **ownership-scoped**
-by `can()` (`_is_coachs_own`). Looks correctly scoped — flag anything a coach sees that they shouldn't.
+## 5. Coach surface (`/coach`, `coach.js`) — own-scope only, **5 tabs; default = Dashboard:**
+- **Dashboard** — "Needs your attention" (approval queue) + the cockpit (net-of-commission KPIs · earnings
+  trend · month-end position · top clients · upcoming).
+- **Schedule** — a week TIMELINE of the coach's lessons + classes (prev/next-week); tap a lesson →
+  completed/no-show, tap a class → roster; + **Book for a client** + **Book for myself** (→ `/book/court`) +
+  block time off.
+- **Clients** — the 360 (private, derived).
+- **Money** — the month-end settlement statement (mark-collected + discount/write-off); supersedes the
+  standalone `/statement.html`.
+- **Setup** — sub-tabbed **Services & pricing** (own services, self-scoped) **+ the club-commission card
+  (READ-ONLY, greyed — surfaced but not editable)** + classes, and **My profile**.
+
+All **ownership-scoped** by `can()` (`_is_coachs_own`); commission is view-only. Looks correctly scoped —
+flag anything a coach sees that they shouldn't.
 
 ## 6. Client/member surface (`/portal`, `/book`, `/my`, `/plan`, `/account`)
 Cockpit + quick-book · full booking · My Bookings (reschedule/cancel/needs-attention/calendar) · Plan
@@ -134,7 +159,8 @@ calls; coach/client surfaces 100%.
 ### 8c. Things to confirm aren't misplaced
 - **People → grant/revoke membership** sits in the operational console but is a *financial* grant — should
   it require `manager`+ under a staff split? (flagged above)
-- **Overview/analytics** for `club_admin` is own-club only (platform_admin = all clubs) — correct.
+- **Insights/analytics** (the admin **Insights** tab) for `club_admin` is own-club only (platform_admin =
+  all clubs) — correct.
 
 ---
 

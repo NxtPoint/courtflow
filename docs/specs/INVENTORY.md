@@ -27,7 +27,7 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `diary/` | bookings, availability, classes, recurrence, pricing, routes | The booking engine (the heart) |
 | `billing/` | orders, ledger, gateway, membership, bundles, commission, refunds, statement, me, events, routes | Orders/ledger + the commercial engines (`statement.py` = unified client statement) |
 | `yoco_billing/` | client, adapter, routes, reconcile, receipt | Yoco online payments (adapter behind the gateway registry) |
-| `marketing_crm/` | tracking (`emit`), notifications, email/ses, klaviyo, consent, cockpit | Event feed + **notifications** + CRM |
+| `marketing_crm/` | tracking (`emit`), notifications (+`_club_identity`), email/ses, klaviyo, consent, cockpit | Event feed + **notifications** + CRM + **club-branded transactional email** |
 | `admin/` | routes, repositories, schema | `/api/admin/*` owner self-service + config |
 | `coach/` | routes, repositories, schema | `/api/coach/*` coach self-service + cockpit |
 | `me/` | routes | `/api/me/*` client self-service (profile, dependents, financials, refund-requests, notifications) |
@@ -96,6 +96,14 @@ here — emails the club via SES, self-gating; logs the lead if SES unset).
 `POST /api/track/page` (first-party page-view beacon;
 geolocation via Cloudflare `CF-IPCountry`). **Core:** `GET /healthz` · `GET /api/whoami`.
 
+**Transactional email (`marketing_crm/email/ses.py`)** — no HTTP surface; called from `notifications.deliver`.
+Self-gates on creds (dark = in-app only, never errors). Functions: `_from_source` ("Name <addr>"),
+`html_wrap` (brand shell), `send_email(…, from_name, reply_to)`, `send_raw_email(…, attachments=)` (MIME
+`SendRawEmail` for the booking **.ics** invite), `send_booking_confirmation` (club-branded + .ics).
+**Multi-tenant identity:** ONE verified CourtFlow domain (`SES_SENDER`); each club rides it with its own From
+display name (`club.club.name`) + Reply-To (its first `club.location.email`), resolved in
+`notifications.py::_club_identity`. Go-live config guide: **`docs/specs/SES-SETUP.md`** (NEW). No schema change.
+
 ## 4. Database — 5 schemas (idempotent boot DDL)
 - **`club`**: `club`, `branding`, `location`, `policy`
 - **`iam`**: `user`, `membership`, `coach_profile` (+`review_bookings`), `coach_invite`, `player_profile`, `dependent`
@@ -126,18 +134,46 @@ Settlement modes on `billing.order`: `at_court`, `monthly_account`, `online`, `m
 **Portal SPA shells** (`frontend/app/*.html`, each `cf-*` design system, absolute asset links):
 `portal` (dashboard) · `book` (full-screen booking) · `my` (my bookings) · `plans` (consolidated
 Membership/Packs/PAYG — served at `/plan`; `/membership` + `/packs` 301 here) · `account` (profile/family/
-financials) · `coach` (+`coach-onboarding`) · `statement` (coach month-end) · `admin` · `onboarding`
-(owner) · `settings` · `overview` (**Business Overview dashboard**, ECharts) · `receipt` · `pay-return` · `styleguide`.
+financials) · `coach` (+`coach-onboarding`) · `statement` (**superseded** — the coach month-end statement
+now lives in the coach console's **Money** tab; `/statement.html` is kept as a fallback page, no longer
+linked) · `admin` · `onboarding` (owner) · `settings` · `overview` (**Business Overview dashboard**, ECharts) ·
+`receipt` · `pay-return` · `styleguide`.
 
-**JS modules** (`frontend/js/*.js`): `portal` (nav + notification bell) · `booking` (full-screen; replaced
-`book`/`quickbook`) · `my` · `plan` · `account` · `coach` (+`coach_api`, `coach_onboarding`) · `statement` ·
-`admin` (+`admin_api`, `class_ui`; `AdminUI.courtsManage` = per-court click-to-edit hours) ·
+**Role-focused nav (`frontend/js/portal.js` + `home.js`).** Nav is role-precise — the client booking Home +
+Account no longer show to staff:
+- member/guest → **Home · Account**
+- coach → **Coach** (landing) · Account
+- club_admin/platform_admin → **Admin** (landing) · Settings
+
+`Portal.landingFor(role)` redirects staff to their own console on sign-in; `home.js` redirects off
+`/portal.html` unless `?stay=1` (a testing bypass so staff can still view the client Home). "Statement" is
+gone from the nav (folded into the coach Money tab).
+
+**Coach console (`coach.js`) — 5 tabs:** **Dashboard** ("Needs your attention" approval queue + cockpit:
+net-of-commission KPIs/earnings trend/month-end position/top clients/upcoming) · **Schedule** (a week
+**timeline** reusing the master-diary `cf-cal*` grid — lessons + classes, prev/next-week nav; tap a lesson →
+completed/no-show, tap a class → roster; + Book for a client / Book for myself / block time off) ·
+**Clients** (the 360) · **Money** (month-end settlement statement — supersedes `/statement.html`) ·
+**Setup** (sub-tabbed **Services & pricing** incl. the club-commission card + classes, and **My profile**).
+
+**Owner console (`admin.js`) — 5 tabs (+ ⚙ Settings link):** **Dashboard** (Today at the club + this-month
+money KPIs + net-revenue trend + last-30-days growth/NPS from analytics + a Quick actions row) · **Diary**
+(sub-tabbed **Timeline** master diary + **Classes** management — the old separate Classes tab folded in) ·
+**People** (directory + 360 + outstanding/void) · **Money** (**Billing** config/refund queue/recent payments
++ the full **financial cockpit** — the old Cockpit tab folded in) · **Insights** (the analytics Business
+Overview, was "Overview").
+
+**JS modules** (`frontend/js/*.js`): `portal` (role-focused nav + `landingFor` + notification bell) ·
+`home` (client Home + staff redirect) · `booking` (full-screen; replaced `book`/`quickbook`) · `my` ·
+`plan` · `account` · `coach` (5-tab console; +`coach_api`, `coach_onboarding`) · `statement` (fallback page) ·
+`admin` (5-tab console; +`admin_api`, `class_ui`; `AdminUI.courtsManage` = per-court click-to-edit hours) ·
 **`crm_ui`** (shared CRMUI components for both consoles) · `settings` · `onboarding` · `notifications` ·
 `pay` (`Pay.purchase`/`buyMembership`/`buyPack` — THE payment rule) · `pay_return` · `receipt` ·
 `analytics` (page-view beacon) · `overview` (Business Overview dashboard) · `api` · `auth_client` ·
 `ui` (+`UI.lifecycleBar`/`lifeActions`/`statusChip`/`subtabs` lifecycle helpers). `account.js` renders the
 grouped tick-to-pay "Your statement" card. **One design system:** `frontend/app/app.css` (all `cf-*`
-classes — incl. `.cf-lifefilter`/`.cf-subtabs`). Marketing site: `frontend/marketing/`, `frontend/_shared/`.
+classes — incl. `.cf-lifefilter`/`.cf-subtabs`/`.cf-cal*`). Marketing site: `frontend/marketing/`,
+`frontend/_shared/`.
 
 ## 6. Env / config
 **Full reference: `docs/specs/ENV-STATUS.md`** — every var, live/dark status, copy-paste checklist.

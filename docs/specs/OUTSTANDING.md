@@ -7,6 +7,15 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > (owner / coach / client) — the checklist is **[TESTING.md](TESTING.md)**. Bugs found there feed the
 > next build session; the items below are the known remaining work regardless.
 
+> **Recently shipped (2026-07-02 — NOT outstanding):** **role-focused nav** (member→Home·Account,
+> coach→Coach·Account, owner→Admin·Settings; staff land on their own console, never the client screen);
+> the **business-first coach console** (Dashboard cockpit + "needs your attention" · Schedule **week
+> timeline** · Clients-360 · Money settlement · Setup) and **owner console** (Dashboard **"Today at the
+> club"** + money KPIs + growth/NPS + quick actions · Diary · People · Money · Insights); a **today-glimpse**
+> on both dashboards + **"Book for myself"** (coach & owner → /book/court). Plus **transactional SES email is
+> now CODE-COMPLETE** (multi-tenant: one verified domain, per-club From-name + Reply-To, HTML+text, `.ics`
+> attachment via `SendRawEmail`) — see §A (config-only, waiting on Tomo's AWS setup).
+>
 > **Recently shipped (2026-06-28 — NOT outstanding):** the **unified client statement**
 > (`billing/statement.py` single source of truth = unpaid `billing.order` rows; grouped tick-to-pay
 > client UI + part-settle; admin void/write-off in the People 360; coach_arrears/account_ledger kept in
@@ -28,10 +37,14 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > and the booking **`.ics` calendar** (in-app "Add to calendar"). Verified on a scratch DB.
 
 ## A. Config — needs Tomo (not code; flips features from dark → live)
-- [ ] **SES verified sender** → transactional **emails** start sending (notifications engine is built &
-      waiting; until then in-app inbox only). Also enables invite/confirmation emails. **To attach the
-      booking `.ics` to the confirmation email, SES needs `SendRawEmail`/MIME** — the `.ics` generator
-      (`diary/calendar.py`) + `ics_url` are done; only the MIME send is left (a small add when SES lands).
+- [ ] **SES verified sender** → transactional **emails** start sending. **The email engine is now
+      CODE-COMPLETE** (multi-tenant, `.ics` attached via `SendRawEmail`/MIME) — self-gates on creds, so it's
+      dark = in-app only until AWS is configured, never errors. **This is config, not code:** verify
+      `courtflow.app` in SES **af-south-1** (DKIM+SPF), request production access (exit the sandbox), create
+      IAM `ses:SendEmail`+`ses:SendRawEmail` keys → Render, set `SES_SENDER` (e.g. `no-reply@courtflow.app`)
+      + each club's contact email. One verified domain covers every club (per-club From-name + Reply-To);
+      adding a club needs no new SES verification. Enables invite + booking-confirmation + statement emails,
+      with the booking `.ics` attached. Full guide: **[SES-SETUP.md](SES-SETUP.md)**.
 - [ ] **`KLAVIYO_API_KEY`** → CRM lifecycle/marketing flows go live (event feed already emits).
 - [ ] **`S3_BUCKET` + AWS keys** → coach **photo uploads** (until then coaches paste a photo URL).
 - [ ] **DNS / SEO cutover** for `nextpointtennis.com` (supervised — never an agent; see `docs/07`,

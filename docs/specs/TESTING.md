@@ -23,6 +23,10 @@ the coach sets up services, then the client books against them. Expected results
 >   balance (a paid order can't be voided), **arrears ↔ orders stay in lockstep** both directions, a **pack
 >   bought offline** is usable now + shows owed, and each line carries its **category + coach name**.
 >
+> **Transactional email** is separately verified by a scratch smoke (from-name resolves to the club, the
+> booking `.ics` attaches, per-club identity/Reply-To) — it self-gates on creds, so it stays **dark until the
+> AWS config in [SES-SETUP.md](SES-SETUP.md)** lands, then goes live with no code change.
+>
 > The manual checklist below exercises the **UI flows** on top of those proven engines.
 
 ---
@@ -51,6 +55,21 @@ the coach sets up services, then the client books against them. Expected results
 ---
 
 ## 1. Owner / Admin  (do this FIRST — it defines what coach & client can use)
+
+**Console shape** — the admin console is now **business-health first**: five tabs **Dashboard · Diary ·
+People · Money · Insights** (+ a ⚙ Settings link), landing on **Dashboard**. Your nav is role-focused —
+you land on **Admin**, not the client Home (append `?stay=1` to `/portal.html` if you want to see the
+client screen for testing).
+- [ ] **Dashboard** — **"Today at the club"** (today's diary) + this-month money KPIs (net revenue ·
+      commission you keep · rent due · active members · MRR · lessons paid) + a net-revenue trend + last-30-
+      days **growth** from first-party analytics (visits · unique visitors · new customers · bookings · **NPS**)
+      + a **Quick actions** row (review N refund requests, open Diary/People/Insights/Settings, **Book a court
+      for myself**).
+- [ ] **Book a court for myself** (Dashboard quick action) → opens `/book/court` as the owner's own booking.
+- [ ] **Diary** — sub-tabbed **Timeline** (master diary) + **Classes** (management) in one tab.
+- [ ] **Money** — **Billing** (config · refund queue · recent payments) + the full **financial cockpit**
+      (KPIs/trend/per-coach settlement/revenue-by-service) folded into one tab.
+- [ ] **Insights** — the analytics **Business Overview** (was the "Overview" tab).
 
 **Onboarding & club config** (`/admin`, `/settings.html`)
 - [ ] First login as owner → **onboarding wizard** (if `onboarding_completed` is false): club profile,
@@ -94,6 +113,18 @@ the coach sets up services, then the client books against them. Expected results
 ---
 
 ## 2. Coach
+
+**Console shape** — the coach console is now a **business cockpit**: five tabs **Dashboard · Schedule ·
+Clients · Money · Setup**, landing on **Dashboard**. Nav is role-focused — the coach lands on **Coach**,
+not the client Home.
+- [ ] **Dashboard** — "Needs your attention" (approval queue) + the cockpit (net-of-commission KPIs ·
+      earnings trend · month-end position · top clients · upcoming), with a today-glimpse of the day's sessions.
+- [ ] **Schedule** — the **week TIMELINE** (a calendar grid of the coach's lessons + classes, prev/next-week
+      nav): tap a lesson → completed/no-show; tap a class → roster. Buttons: **Book for a client**, **Book for
+      myself** (→ `/book/court`), block time off.
+- [ ] **Money** — the month-end settlement statement (this **supersedes** the standalone `/statement.html`).
+- [ ] **Setup** — sub-tabbed **Services & pricing** (incl. the club-commission card) + classes, and **My
+      profile**.
 
 **Onboarding (4-step)** — open the **invite link** from §1 → log in as the coach email:
 - [ ] Step through: **profile** (bio, **photo** — paste a URL, see §6), **languages/qualifications**,
@@ -187,7 +218,9 @@ the coach sets up services, then the client books against them. Expected results
 ## 6. Known limitations during testing (do NOT log these as bugs)
 - **Email is dark** (no SES/Klaviyo key) → confirmations/invites/statements are **in-app only**; the coach
   **invite link is copied from the UI**, not emailed. The `.ics` "Add to calendar" works in-app; the email
-  *attachment* lands when SES is wired.
+  *attachment* lands when SES is wired. The transactional engine is now **code-complete** (multi-tenant,
+  `.ics`-attaching) and verified by a scratch smoke — it goes live on the AWS config in
+  [SES-SETUP.md](SES-SETUP.md), no code change.
 - **Coach photo upload** needs S3 → until then **paste a photo URL**.
 - **Gated (review-coach) lessons** settle **pay-at-court** — no online prepay for an unconfirmed lesson.
 - **Cold starts** (~30–60s first call after idle) on the Free plan — not a bug.
