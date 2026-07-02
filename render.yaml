@@ -81,7 +81,11 @@ services:
       - key: KLAVIYO_API_KEY
         sync: false
 
-      # --- AWS S3 (assets) + SES (transactional fallback to Klaviyo) ---
+      # --- AWS S3 (assets) + SES (transactional email) ---
+      # SES: verify ONE CourtFlow domain (courtflow.app) in af-south-1 (DKIM + SPF), then SES_SENDER
+      # is a bare no-reply@courtflow.app. Per-club From-name (club.name) + Reply-To (club location
+      # email) are added in code, so adding a club needs NO new SES work. Exit the SES sandbox
+      # (request production access) before real members receive mail. Setup: docs/specs/SES-SETUP.md.
       - key: S3_BUCKET
         sync: false
       - key: AWS_REGION
@@ -90,7 +94,7 @@ services:
         sync: false
       - key: AWS_SECRET_ACCESS_KEY
         sync: false
-      - key: SES_SENDER
+      - key: SES_SENDER            # verified CourtFlow address, e.g. no-reply@courtflow.app
         sync: false
 
   # =========================================

@@ -251,7 +251,12 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
     )
 
     # 4) best-effort transactional email. Self-gates on SES creds; no keys → 'skipped'.
-    status = _try_email(recipient.get("email"), title, body, recipient.get("name"))
+    #    MULTI-TENANT: the club's name becomes the email's From display name + signature, and the
+    #    club's contact email its Reply-To — all riding one verified CourtFlow SES identity.
+    ident = _club_identity(session, club_id)
+    status = _try_email(recipient.get("email"), title, body, recipient.get("name"),
+                        from_name=ident.get("from_name"), reply_to=ident.get("reply_to"),
+                        kind=kind, ctx=ctx)
     if status and status != "skipped" and notif_id:
         try:
             notif_repo.set_email_status(session, notification_id=notif_id, email_status=status)
@@ -261,13 +266,31 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
     return notif_id
 
 
-def _try_email(to_email, title, body, name=None):
-    """Send a minimal transactional email via the existing SES path. Returns one of
-    'sent'|'failed'|'skipped'. With no AWS/SES creds → 'skipped' (a clean no-op + a log line),
-    so the engine is fully usable with NO keys configured. NEVER raises.
+# Booking-ish events that carry a start/end time → attach a calendar invite (.ics).
+_ICS_KINDS = {"booking_confirmed", "lesson_accepted", "lesson_proposed", "class_enrolled"}
 
-    Klaviyo flows already own the RICH confirmation sends downstream of emit(); this is the
-    guaranteed transactional fallback (same posture as marketing_crm/email/ses.py)."""
+
+def _club_identity(session, club_id):
+    """The club's email identity: {from_name, reply_to} = the club's name + a contact email (its first
+    location email). Drives the per-club From display name + Reply-To. Guarded → {} on any failure."""
+    try:
+        from sqlalchemy import text
+        row = session.execute(text(
+            "SELECT c.name AS club_name, "
+            "(SELECT email FROM club.location WHERE club_id = c.id AND email IS NOT NULL "
+            " ORDER BY created_at LIMIT 1) AS reply_to "
+            "FROM club.club c WHERE c.id = :c"), {"c": club_id}).mappings().first()
+        return {"from_name": row["club_name"], "reply_to": row["reply_to"]} if row else {}
+    except Exception:
+        log.debug("club identity lookup failed for %s", club_id, exc_info=False)
+        return {}
+
+
+def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, kind=None, ctx=None):
+    """Send a transactional email via SES: HTML + plain-text, the club's From-name + Reply-To, and a
+    calendar (.ics) attachment for booking-type events. Returns 'sent'|'failed'|'skipped'. With no
+    AWS/SES creds → 'skipped' (a clean no-op), so the engine is fully usable with NO keys. NEVER raises.
+    Klaviyo flows own the RICH confirmation sends downstream of emit(); this is the guaranteed fallback."""
     if not to_email:
         return "skipped"
     try:
@@ -275,9 +298,16 @@ def _try_email(to_email, title, body, name=None):
         if not ses.enabled():
             log.debug("notification email skipped (SES not configured) -> %s", to_email)
             return "skipped"
-        greeting = f"Hi {name},\n\n" if name else ""
-        text_body = f"{greeting}{body or title}\n\nNextPoint Tennis"
-        ok = ses.send_email(to_email, title, text_body)
+        sig = from_name or "Your club"
+        greeting = ("Hi %s,\n\n" % name) if name else ""
+        text_body = "%s%s\n\n%s" % (greeting, body or title, sig)
+        html_greeting = ("Hi %s,<br><br>" % ses._esc(name)) if name else ""
+        html_body = ses.html_wrap(title, "<p>%s%s</p>" % (html_greeting, ses._esc(body or title)), footer=sig)
+        attachments = None
+        if kind in _ICS_KINDS and ctx:
+            attachments = ses._ics_attachment(ctx) or None
+        ok = ses.send_raw_email(to_email, title, text_body, body_html=html_body,
+                                attachments=attachments, from_name=from_name, reply_to=reply_to)
         return "sent" if ok else "failed"
     except Exception:
         log.exception("notification email send failed -> %s", to_email)

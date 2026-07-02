@@ -35,9 +35,46 @@ def enabled():
     return bool(_sender() and _has_aws_creds())
 
 
-def send_email(to_email, subject, body_text, body_html=None):
-    """Low-level SES send. No-op (False) unless enabled(). Never raises."""
+def _from_source(from_name=None):
+    """The RFC 5322 From header. MULTI-TENANT: the verified SES identity (SES_SENDER) is ONE
+    CourtFlow address (e.g. no-reply@courtflow.app); each club rides it with its OWN display name,
+    so a member sees mail 'from' their club. A verified DOMAIN identity lets any local-part +
+    display name through — so adding a club needs NO new SES verification, just a name + reply-to."""
+    addr = _sender()
+    if not addr:
+        return None
+    if from_name:
+        clean = str(from_name).replace('"', "").replace("\n", " ").replace("\r", " ").strip()
+        if clean:
+            return '"%s" <%s>' % (clean, addr)
+    return addr
+
+
+def _esc(s):
+    return (str(s if s is not None else "").replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
+
+def html_wrap(title, body_html, footer=None):
+    """A light, brand-consistent HTML shell for a transactional email (the app's cf-* palette).
+    `body_html` is trusted markup the caller built; `title`/`footer` are escaped."""
+    return (
+        '<div style="font-family:Inter,Segoe UI,Arial,sans-serif;max-width:560px;margin:0 auto;color:#10231A">'
+        '<div style="background:#0E7A47;color:#fff;padding:16px 20px;border-radius:14px 14px 0 0;'
+        'font-weight:800;font-size:18px">' + _esc(title) + '</div>'
+        '<div style="border:1px solid #E2E9E5;border-top:0;border-radius:0 0 14px 14px;padding:20px 22px;'
+        'background:#fff;font-size:15px;line-height:1.5">' + (body_html or "") +
+        ('<p style="color:#5F7268;font-size:12px;margin:18px 0 0">' + _esc(footer) + "</p>" if footer else "") +
+        "</div></div>")
+
+
+def send_email(to_email, subject, body_text, body_html=None, from_name=None, reply_to=None):
+    """Low-level SES send (structured Subject/Text/Html). No-op (False) unless enabled(). Never raises.
+    `from_name` = the club's display name; `reply_to` = the club's contact (member replies reach them)."""
     if not enabled() or not to_email:
+        return False
+    src = _from_source(from_name)
+    if not src:
         return False
     try:
         import boto3
@@ -45,14 +82,68 @@ def send_email(to_email, subject, body_text, body_html=None):
         body = {"Text": {"Data": body_text, "Charset": "UTF-8"}}
         if body_html:
             body["Html"] = {"Data": body_html, "Charset": "UTF-8"}
-        client.send_email(
-            Source=_sender(),
+        kw = dict(
+            Source=src,
             Destination={"ToAddresses": [to_email]},
             Message={"Subject": {"Data": subject, "Charset": "UTF-8"}, "Body": body},
         )
+        if reply_to:
+            kw["ReplyToAddresses"] = [reply_to]
+        client.send_email(**kw)
         return True
     except Exception:
         log.exception("ses: send_email failed for %s", to_email)
+        return False
+
+
+def send_raw_email(to_email, subject, body_text, body_html=None, attachments=None,
+                   from_name=None, reply_to=None):
+    """MIME send (SES SendRawEmail) — like send_email but supports file ATTACHMENTS, e.g. a booking's
+    .ics calendar invite. `attachments` = [{"filename", "content" (str|bytes), "mimetype"}]. With no
+    attachments it falls back to send_email. No-op (False) unless enabled(). Never raises."""
+    if not attachments:
+        return send_email(to_email, subject, body_text, body_html=body_html,
+                          from_name=from_name, reply_to=reply_to)
+    if not enabled() or not to_email:
+        return False
+    src = _from_source(from_name)
+    if not src:
+        return False
+    try:
+        import boto3
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.base import MIMEBase
+        from email import encoders
+
+        msg = MIMEMultipart("mixed")
+        msg["Subject"] = subject
+        msg["From"] = src
+        msg["To"] = to_email
+        if reply_to:
+            msg["Reply-To"] = reply_to
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText(body_text or "", "plain", "utf-8"))
+        if body_html:
+            alt.attach(MIMEText(body_html, "html", "utf-8"))
+        msg.attach(alt)
+        for a in attachments:
+            content = a.get("content")
+            if content is None:
+                continue
+            if isinstance(content, str):
+                content = content.encode("utf-8")
+            maintype, _, subtype = (a.get("mimetype") or "application/octet-stream").partition("/")
+            part = MIMEBase(maintype or "application", subtype or "octet-stream")
+            part.set_payload(content)
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", 'attachment; filename="%s"' % (a.get("filename") or "attachment"))
+            msg.attach(part)
+        client = boto3.client("ses", region_name=_region())
+        client.send_raw_email(Source=src, Destinations=[to_email], RawMessage={"Data": msg.as_string()})
+        return True
+    except Exception:
+        log.exception("ses: send_raw_email failed for %s", to_email)
         return False
 
 
@@ -93,5 +184,32 @@ def send_booking_confirmation(payload):
     if payload.get("cancel_url"):
         lines.append("")
         lines.append(f"Cancel / reschedule: {payload['cancel_url']}")
-    lines += ["", "See you on court.", "NextPoint Tennis"]
-    return send_email(to_email, subject, "\n".join(lines))
+    club = payload.get("club_name") or payload.get("from_name")
+    lines += ["", "See you on court.", (club or "Your club")]
+    # Attach the booking's calendar invite (.ics) when we have the times — the piece 1050 never did.
+    attachments = _ics_attachment(payload)
+    return send_raw_email(to_email, subject, "\n".join(lines),
+                          attachments=attachments,
+                          from_name=club, reply_to=payload.get("reply_to"))
+
+
+def _ics_attachment(payload):
+    """Build a [.ics] attachment list from a booking_confirmed-style payload (needs starts_at+ends_at).
+    Returns [] when the times are absent or the builder is unavailable — never raises."""
+    try:
+        if not payload.get("starts_at") or not payload.get("ends_at"):
+            return []
+        from diary.calendar import build_ics
+        summary = payload.get("resource_name") or "Court booking"
+        if payload.get("coach_name"):
+            summary += " with " + payload["coach_name"]
+        ics = build_ics(
+            uid=str(payload.get("ref_id") or payload.get("booking_id") or payload.get("id") or "booking")
+                + "@courtflow",
+            summary=summary, starts_at=payload["starts_at"], ends_at=payload["ends_at"],
+            location=payload.get("location") or "", url=payload.get("cancel_url") or payload.get("ics_url") or "",
+        )
+        return [{"filename": "booking.ics", "content": ics, "mimetype": "text/calendar"}]
+    except Exception:
+        log.debug("ses: could not build .ics attachment", exc_info=False)
+        return []
