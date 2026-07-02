@@ -1,8 +1,10 @@
 <!DOCTYPE html>
-<!-- DESIGN PROTOTYPE v3 — "the generational leap" pass on the public homepage.
+<!-- DESIGN PROTOTYPE v3.1 — owner-revision pass on the v3 homepage.
      Fully self-contained (one <style>, one <script>). Double-click to open.
-     Stock photography via Unsplash with onerror fallbacks to the real optimized
-     club assets in frontend/img/ (served at /img/... on the live site).
+     Hero + features 01/02/03 now use REAL NextPoint photography (Wix CDN,
+     size-transformed) with onerror fallbacks to the optimized club assets in
+     frontend/img/ (served at /img/... on the live site). Tasteful stock remains
+     only where no real club shot fits (clay statement + two gallery tiles).
      Real founder headshots are ALWAYS the primary source (never stock).
      Keep fast at production time: preload hero, lazy-load the rest. -->
 <html lang="en-ZA"><head><meta charset="utf-8">
@@ -12,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,480;0,9..144,560;0,9..144,640;1,9..144,480;1,9..144,560&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="preload" as="image" href="https://images.unsplash.com/photo-1554068865-24cecd4e34b8?auto=format&fit=crop&w=2200&q=75" fetchpriority="high">
+<link rel="preload" as="image" href="https://static.wixstatic.com/media/da2daf29b9404953a5944f1f74ec609a.jpg/v1/fill/w_2200,h_1650,al_c,q_85,enc_auto/da2daf29b9404953a5944f1f74ec609a.jpg" fetchpriority="high">
 <style>
 /* ============================================================
    NEXTPOINT v3 — cinematic editorial system
@@ -47,7 +49,8 @@ h1,h2,h3{font-family:var(--disp);font-weight:560;letter-spacing:-.015em;line-hei
 /* ---- preview ribbon ---- */
 .preview{position:fixed;top:0;left:0;right:0;z-index:120;height:var(--rib);display:flex;align-items:center;justify-content:center;
   background:linear-gradient(90deg,var(--pit),var(--g7) 50%,var(--pit));color:var(--lime);
-  font-size:.68rem;font-weight:700;letter-spacing:.22em;text-transform:uppercase}
+  font-size:.68rem;font-weight:700;letter-spacing:.22em;text-transform:uppercase;white-space:nowrap;overflow:hidden}
+@media(max-width:560px){.preview{font-size:.56rem;letter-spacing:.1em}}
 
 /* ---- grain (cinematic film texture, decorative) ---- */
 .grain::after{content:"";position:absolute;inset:0;z-index:3;pointer-events:none;opacity:.5;mix-blend-mode:overlay;
@@ -88,7 +91,20 @@ h1,h2,h3{font-family:var(--disp);font-weight:560;letter-spacing:-.015em;line-hei
 nav{position:fixed;top:var(--rib);left:0;right:0;z-index:100;transition:background .35s,box-shadow .35s,border-color .35s;border-bottom:1px solid transparent}
 .nav-in{max-width:var(--maxw);margin:0 auto;padding:0 clamp(20px,4vw,44px);height:78px;display:flex;align-items:center;justify-content:space-between;gap:20px;transition:height .3s}
 .logo{display:flex;align-items:center;gap:11px;font-weight:800;font-size:1.16rem;letter-spacing:-.02em;color:#fff;transition:color .3s}
-.logo svg{width:26px;height:26px;flex:none;filter:drop-shadow(0 2px 8px rgba(200,232,92,.4))}
+/* real NextPoint brandmark — JPG on white, so it lives in a premium white chip
+   that reads cleanly over both the dark hero and the light scrolled glass nav */
+.logochip{display:inline-flex;align-items:center;background:#fff;border-radius:12px;padding:6px 13px;flex:none;
+  border:1px solid rgba(255,255,255,.55);box-shadow:0 6px 22px -8px rgba(4,21,12,.5);transition:box-shadow .35s,border-color .35s,transform .3s var(--ease)}
+.logochip img{height:34px;width:auto;display:block}
+.logo:hover .logochip{transform:translateY(-1px)}
+nav.scrolled .logochip{border-color:var(--line);box-shadow:0 3px 12px -6px rgba(6,17,11,.25)}
+nav.scrolled .logochip img{height:30px}
+.logotxt{display:none}
+.logochip.failed{display:none}
+.logochip.failed+.logotxt{display:inline}
+footer .logochip{padding:5px 11px;border-color:rgba(255,255,255,.14);box-shadow:none}
+footer .logochip img{height:26px}
+@media(max-width:400px){.logochip img{height:28px}nav.scrolled .logochip img{height:26px}}
 .nlinks{display:flex;gap:2px}
 .nlinks a{position:relative;color:rgba(255,255,255,.85);font-weight:600;font-size:.92rem;padding:10px 16px;border-radius:999px;transition:color .2s,background .2s}
 .nlinks a:hover{color:#fff;background:rgba(255,255,255,.1)}
@@ -108,12 +124,12 @@ nav.scrolled .si:hover{background:rgba(14,122,71,.08)}
 
 /* ============ HERO ============ */
 .hero{position:relative;min-height:min(calc(100svh - var(--rib)),1150px);display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;color:#fff;background:var(--pit)}
-.hero .bg{position:absolute;inset:-4%;width:108%;height:108%;object-fit:cover;object-position:50% 32%;z-index:0}
-.hero .kb{animation:kb 34s var(--ease) infinite alternate;transform-origin:60% 40%}
+.hero .bg{position:absolute;inset:-4%;width:108%;height:108%;object-fit:cover;object-position:62% 62%;z-index:0}
+.hero .kb{animation:kb 34s var(--ease) infinite alternate;transform-origin:64% 58%}
 @keyframes kb{from{transform:scale(1) translateY(0)}to{transform:scale(1.14) translateY(-1.6%)}}
 .hero .grade{position:absolute;inset:0;z-index:1;background:
-  linear-gradient(180deg,rgba(4,21,12,.74) 0%,rgba(4,21,12,.2) 34%,rgba(4,21,12,.46) 64%,rgba(4,21,12,.97) 100%),
-  linear-gradient(112deg,rgba(8,67,31,.6) 0%,rgba(14,122,71,.18) 46%,rgba(200,232,92,.08) 100%)}
+  linear-gradient(180deg,rgba(4,21,12,.68) 0%,rgba(4,21,12,.26) 34%,rgba(4,21,12,.54) 64%,rgba(4,21,12,.97) 100%),
+  linear-gradient(112deg,rgba(8,67,31,.68) 0%,rgba(14,122,71,.26) 46%,rgba(200,232,92,.1) 100%)}
 .hero .vig{position:absolute;inset:0;z-index:2;background:radial-gradient(130% 90% at 50% 42%,transparent 52%,rgba(4,21,12,.55) 100%)}
 #dust{position:absolute;inset:0;z-index:4;pointer-events:none}
 .hero .in{position:relative;z-index:5;width:100%;padding-top:150px;padding-bottom:clamp(46px,6vh,84px)}
@@ -183,9 +199,12 @@ nav.scrolled .si:hover{background:rgba(14,122,71,.08)}
 .svc.flip .txt{order:2}.svc.flip .media{order:1}
 @media(max-width:860px){.svc{grid-template-columns:1fr;gap:26px}.svc.flip .txt{order:1}.svc.flip .media{order:2}.svc .num{font-size:4rem}}
 
-/* ============ CLAY STATEMENT ============ */
+/* ============ CLAY STATEMENT (the cinematic Ken-Burns moment lives HERE now) ============ */
 .clay{position:relative;color:#fff;overflow:hidden;background:var(--pit)}
-.clay .bg{position:absolute;inset:-10% 0;width:100%;height:120%;object-fit:cover;z-index:0;will-change:transform}
+.clay .plx{position:absolute;inset:-10% 0;z-index:0;overflow:hidden;will-change:transform}
+.clay .bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:50% 55%}
+.clay .kbc{animation:kbc 30s var(--ease) infinite alternate;transform-origin:46% 60%}
+@keyframes kbc{from{transform:scale(1)}to{transform:scale(1.12) translateY(-1.2%)}}
 .clay .grade{position:absolute;inset:0;z-index:1;background:
   linear-gradient(90deg,rgba(4,21,12,.94) 0%,rgba(8,67,31,.62) 44%,rgba(120,53,22,.28) 100%),
   radial-gradient(120% 130% at 88% 100%,rgba(196,100,59,.34),transparent 55%)}
@@ -342,6 +361,7 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
   *,*::before,*::after{animation-duration:.001s!important;animation-iteration-count:1!important;transition-duration:.001s!important}
   .reveal,.reveal-l,.reveal-r,.hload{opacity:1!important;transform:none!important}
   .hero .kb{animation:none}
+  .clay .kbc{animation:none}
   .mq .track{animation:none;transform:none}
   .phone{transform:none}
   .phone .bars .bar{height:var(--h)}
@@ -358,8 +378,9 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
 <nav id="nav" aria-label="Main">
   <div class="nav-in">
     <a class="logo" href="/" aria-label="NextPoint Tennis — home">
-      <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="15" fill="#C8E85C"/><path d="M4.5 7.5c5 3.4 8 8.3 8 15.8M27.5 7.5c-5 3.4-8 8.3-8 15.8" fill="none" stroke="#0B5C36" stroke-width="2.2" stroke-linecap="round"/></svg>
-      NextPoint Tennis
+      <span class="logochip"><img src="https://static.wixstatic.com/media/7b1ac1_9cf02c81ec134dbf8ca8cde0bfe1a4ac~mv2.jpg/v1/crop/x_90,y_160,w_1370,h_410/nextpoint-logo.jpg"
+        alt="NextPoint Tennis Centre" width="1370" height="410"
+        onerror="this.onerror=null;this.parentElement.classList.add('failed')"></span><span class="logotxt">NextPoint Tennis</span>
     </a>
     <div class="nlinks">
       <a href="/coaches">Coaches</a><a href="/programs">Programs</a><a href="/pricing">Pricing</a><a href="/contact">Contact</a>
@@ -374,8 +395,8 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
 <main id="main">
 <!-- ================= HERO ================= -->
 <header class="hero grain">
-  <img class="bg kb" src="https://images.unsplash.com/photo-1554068865-24cecd4e34b8?auto=format&fit=crop&w=2200&q=75"
-       alt="Aerial view of a player serving on a sun-drenched clay court" width="2200" height="1467" fetchpriority="high"
+  <img class="bg kb" src="https://static.wixstatic.com/media/da2daf29b9404953a5944f1f74ec609a.jpg/v1/fill/w_2200,h_1650,al_c,q_85,enc_auto/da2daf29b9404953a5944f1f74ec609a.jpg"
+       alt="A tennis ball resting on the sideline of a NextPoint hard court, the net cutting across above it" width="2200" height="1650" fetchpriority="high"
        onerror="this.onerror=null;this.src='/img/hero-splash-1600.webp'">
   <div class="grade" aria-hidden="true"></div>
   <div class="vig" aria-hidden="true"></div>
@@ -383,15 +404,16 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
   <div class="in wrap">
     <span class="hero-eyebrow hload"><span class="live" aria-hidden="true"></span>Killarney Country Club · Houghton, Johannesburg</span>
     <h1 class="hload d1">Your club.<br><em>One tap away.</em></h1>
-    <p class="sub hload d2">Eight resurfaced hard courts and the only clay court in Gauteng — with ATP-level coaching, squads and socials. Book it all from your phone.</p>
+    <p class="sub hload d2">Nine championship courts at Killarney — eight resurfaced hard courts, plus the only clay in Gauteng — with ATP-level coaching, squads and socials. Book it all from your phone.</p>
     <div class="cta hload d3">
       <a class="btn b-lime b-big btn-mag" href="/login#/sign-up">Start your free week <span class="arr" aria-hidden="true">→</span></a>
       <a class="btn b-ghost b-big btn-mag" href="/login">Sign in</a>
     </div>
     <div class="trust hload d4">
-      <div class="t"><b><span class="star" aria-hidden="true">★</span><span class="lm count" data-count="5" data-dec="1">0.0</span></b>from members</div>
+      <div class="t"><b><span class="count" data-count="9">0</span>&nbsp;<span class="lm">courts</span></b>8 hard · 1 clay</div>
       <div class="t"><b><span class="count" data-count="1200" data-sep="1">0</span><span class="lm">+</span></b>lessons delivered</div>
-      <div class="t"><b><span class="lm">Only</span>&nbsp;clay court</b>in Gauteng</div>
+      <div class="t"><b>ATP<span class="lm">-level</span></b>coaching, on court</div>
+      <div class="t"><b><span class="star" aria-hidden="true">★</span><span class="lm count" data-count="5" data-dec="1">0.0</span></b>from members</div>
     </div>
   </div>
   <div class="cue" aria-hidden="true"></div>
@@ -422,7 +444,7 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
     <div class="head reveal">
       <span class="eyebrow">Everything NextPoint</span>
       <h2 id="svc-h">One club. <em>Everything</em> in one place.</h2>
-      <p>Courts, coaching, programs and membership — described here, booked in seconds from your member cockpit.</p>
+      <p>Courts, coaching and programs — described here, booked in seconds from your member cockpit.</p>
     </div>
 
     <article class="svc">
@@ -434,7 +456,7 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
         <a class="btn b-green btn-mag" href="/login#/sign-up">Book a court <span class="arr" aria-hidden="true">→</span></a>
       </div>
       <div class="media reveal-r">
-        <img loading="lazy" src="https://images.unsplash.com/photo-1542144582-1ba00456b5e3?auto=format&fit=crop&w=1500&q=72" alt="Racquet and ball resting on a pristine green hard court" width="1500" height="1000"
+        <img loading="lazy" src="https://static.wixstatic.com/media/819f012d29d545a18890ebd61a681cd7.jpg/v1/fill/w_1600,h_1240,al_c,q_82,enc_auto/819f012d29d545a18890ebd61a681cd7.jpg" alt="Four members catching up between doubles points on a NextPoint hard court" width="1600" height="1240"
              onerror="this.onerror=null;this.src='/img/club-courts.webp'">
         <span class="chip"><i>●</i> Live availability</span>
       </div>
@@ -449,7 +471,7 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
         <a class="btn b-green btn-mag" href="/coaches">Meet the coaches <span class="arr" aria-hidden="true">→</span></a>
       </div>
       <div class="media reveal-l">
-        <img loading="lazy" src="https://images.unsplash.com/photo-1599586120429-48281b6f0ece?auto=format&fit=crop&w=1500&q=72" alt="On-court coaching detail — racquet, ball and footwork" width="1500" height="1000"
+        <img loading="lazy" src="https://static.wixstatic.com/media/11062b_0489fe0a98de4f22b5ebb784889139d7~mv2.jpg/v1/fill/w_1600,h_1240,al_c,q_82,enc_auto/11062b_0489fe0a98de4f22b5ebb784889139d7~mv2.jpg" alt="A coach on the clay, racquet and ball ready to feed the next drill" width="1600" height="1240"
              onerror="this.onerror=null;this.src='/img/club-singles.webp'">
         <span class="chip"><i>●</i> Real coach diaries</span>
       </div>
@@ -464,42 +486,30 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
         <a class="btn b-green btn-mag" href="/programs">See programs <span class="arr" aria-hidden="true">→</span></a>
       </div>
       <div class="media reveal-r">
-        <img loading="lazy" src="https://images.unsplash.com/photo-1601646761285-65bfa67cd7a3?auto=format&fit=crop&w=1500&q=72" alt="Training balls scattered at the net after a squad session at dusk" width="1500" height="1000"
+        <img loading="lazy" src="https://static.wixstatic.com/media/b9e6f93d990049769bd86d8d8f5aa2dc.jpg/v1/fill/w_1600,h_1240,al_c,q_82,enc_auto/b9e6f93d990049769bd86d8d8f5aa2dc.jpg" alt="A junior settling into the ready position during a squad session" width="1600" height="1240"
              onerror="this.onerror=null;this.src='/img/club-juniors.webp'">
         <span class="chip"><i>●</i> Rosters &amp; waitlists</span>
       </div>
     </article>
 
-    <article class="svc flip">
-      <div class="txt reveal-r">
-        <div class="num" aria-hidden="true">04</div>
-        <span class="tag">Membership</span>
-        <h3>Go <em>unlimited</em></h3>
-        <p>Members get free court bookings and member pricing across the club. Manage it all — including the whole family — from one login.</p>
-        <a class="btn b-green btn-mag" href="/pricing">See pricing <span class="arr" aria-hidden="true">→</span></a>
-      </div>
-      <div class="media reveal-l">
-        <img loading="lazy" src="https://images.unsplash.com/photo-1541744573515-478c959628a0?auto=format&fit=crop&w=1500&q=72" alt="A single ball waiting on the baseline — your court, reserved" width="1500" height="1000"
-             onerror="this.onerror=null;this.src='/img/club-house.webp'">
-        <span class="chip"><i>●</i> Whole-family login</span>
-      </div>
-    </article>
   </div>
 </section>
 
-<!-- ================= CLAY ================= -->
+<!-- ================= CLAY STATEMENT ================= -->
 <section class="clay grain" aria-labelledby="clay-h">
-  <img class="bg" id="clayBg" loading="lazy" src="https://images.unsplash.com/photo-1620742820748-87c09249a72a?auto=format&fit=crop&w=2000&q=72"
-       alt="The red clay court from above — lines freshly swept" width="2000" height="1333"
-       onerror="this.onerror=null;this.src='/img/club-clay.webp'">
+  <div class="plx" id="clayPlx">
+    <img class="bg kbc" loading="lazy" src="https://images.unsplash.com/photo-1620742820748-87c09249a72a?auto=format&fit=crop&w=2000&q=72"
+         alt="Red clay from above — lines freshly swept" width="2000" height="1333"
+         onerror="this.onerror=null;this.src='/img/club-clay.webp'">
+  </div>
   <div class="grade" aria-hidden="true"></div>
   <div class="vig" aria-hidden="true"></div>
   <div class="wrap"><div class="in reveal">
-    <span class="eyebrow lt">The clay experience</span>
-    <h2 class="big" id="clay-h">The only <em>clay court</em> experience in Gauteng.</h2>
-    <p>Step onto the surface the pros slide on — European feel, match-ready bounce, and a genuine tennis bucket-list tick. Right here in Houghton.</p>
+    <span class="eyebrow lt">Court Nº 9 — the clay</span>
+    <h2 class="big" id="clay-h">Nine courts. <em>One of them</em>, the only clay in Gauteng.</h2>
+    <p>Eight resurfaced hard courts carry the daily play. And then there's court nine — true terre battue, the surface the pros slide on, and the only one of its kind in the province. Book it like any other court.</p>
     <div class="facts">
-      <div><b>Nº 1</b>and only, in Gauteng</div>
+      <div><b>1 of 9</b>our one special court</div>
       <div><b>Terre battue</b>true European clay feel</div>
       <div><b>Swept daily</b>match-ready, always</div>
     </div>
@@ -545,7 +555,7 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
               </div>
               <div class="slotcard">
                 <div class="ic" aria-hidden="true">🎾</div>
-                <div><b>Court 3 · Clay</b><small>Today · 07:00 – 08:00</small></div>
+                <div><b>Court 9 · Clay</b><small>Today · 07:00 – 08:00</small></div>
                 <span class="ok">Confirmed ✓</span>
               </div>
             </div>
@@ -567,7 +577,7 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
     <div class="fgrid">
       <article class="fc reveal">
         <div class="photo">
-          <img src="/img/coach-neville.webp" alt="Neville Godwin, Program Director" width="700" height="700" loading="lazy"
+          <img src="https://static.wixstatic.com/media/bea588_d09a8ebb79b64593bff214961984b325~mv2.jpg" alt="Neville Godwin, Program Director" width="2021" height="3000" loading="lazy"
                onerror="this.onerror=null;this.src='../../frontend/img/coach-neville.webp'">
           <span class="role">Program Director</span>
         </div>
@@ -580,7 +590,7 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
       </article>
       <article class="fc reveal">
         <div class="photo">
-          <img src="/img/coach-ross.webp" alt="Ross Nemeth, Head Coach" width="700" height="700" loading="lazy"
+          <img src="https://static.wixstatic.com/media/7b1ac1_a651d3118b5a4eae9c895e0b6ac7fd80~mv2.jpg" alt="Ross Nemeth, Head Coach" width="960" height="953" loading="lazy"
                onerror="this.onerror=null;this.src='../../frontend/img/coach-ross.webp'">
           <span class="role">Head Coach</span>
         </div>
@@ -668,24 +678,24 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
     </div>
     <div class="gal reveal">
       <figure class="w2 h2">
-        <img loading="lazy" src="https://images.unsplash.com/photo-1622279457486-62dcc4a431d6?auto=format&fit=crop&w=1400&q=72" alt="A forehand in full flight during afternoon match play" width="1400" height="1400"
+        <img loading="lazy" src="https://static.wixstatic.com/media/11062b_2e22868a0a9f40e7995bd67c736db0c9~mv2.jpg/v1/fill/w_1400,h_1400,al_c,q_80,enc_auto/11062b_2e22868a0a9f40e7995bd67c736db0c9~mv2.jpg" alt="A member laughing between points, towel over her shoulder" width="1400" height="1400"
              onerror="this.onerror=null;this.src='/img/club-courts.webp'">
-        <figcaption><i>●</i> Afternoon match play</figcaption>
+        <figcaption><i>●</i> Between points</figcaption>
       </figure>
       <figure>
-        <img loading="lazy" src="https://images.unsplash.com/photo-1558365849-6ebd8b0454b2?auto=format&fit=crop&w=900&q=72" alt="A ball resting on a rain-glazed court" width="900" height="600"
+        <img loading="lazy" src="https://static.wixstatic.com/media/df58b9235be54ead966592f4eafe750d.jpg/v1/fill/w_900,h_600,al_c,q_80,enc_auto/df58b9235be54ead966592f4eafe750d.jpg" alt="A ball waiting at the net cord, up close" width="900" height="600"
              onerror="this.onerror=null;this.src='/img/club-sign.webp'">
-        <figcaption><i>●</i> After the rain</figcaption>
+        <figcaption><i>●</i> Court-side, up close</figcaption>
       </figure>
       <figure>
-        <img loading="lazy" src="https://images.unsplash.com/photo-1614743758466-e569f4791116?auto=format&fit=crop&w=900&q=72" alt="A junior tossing the ball to serve" width="900" height="600"
+        <img loading="lazy" src="https://static.wixstatic.com/media/1e5f0a813fe34326889f97e0f9e6aa05.jpg/v1/fill/w_900,h_600,al_c,q_80,enc_auto/1e5f0a813fe34326889f97e0f9e6aa05.jpg" alt="A coach guiding a junior through the backhand grip" width="900" height="600"
              onerror="this.onerror=null;this.src='/img/club-juniors.webp'">
-        <figcaption><i>●</i> Junior squads</figcaption>
+        <figcaption><i>●</i> Junior development</figcaption>
       </figure>
       <figure class="w2">
-        <img loading="lazy" src="https://images.unsplash.com/photo-1620742820748-87c09249a72a?auto=format&fit=crop&w=1400&q=72" alt="The clay court, seen from above" width="1400" height="700"
+        <img loading="lazy" src="https://static.wixstatic.com/media/bea588_0c17a5ef3cbb4e159ee153b59f81a3d7~mv2.png/v1/fill/w_1080,h_540,al_c,q_85,enc_auto/bea588_0c17a5ef3cbb4e159ee153b59f81a3d7~mv2.png" alt="Court nine — the clay, net and lines ready for play" width="1080" height="540"
              onerror="this.onerror=null;this.src='/img/club-clay.webp'">
-        <figcaption><i>●</i> The clay, freshly swept</figcaption>
+        <figcaption><i>●</i> Court nine — the clay</figcaption>
       </figure>
       <figure>
         <img loading="lazy" src="https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?auto=format&fit=crop&w=900&q=72" alt="A ball cutting through spray, frozen mid-flight" width="900" height="600"
@@ -720,7 +730,7 @@ footer .nap b{color:rgba(255,255,255,.78);font-weight:700}
   <div class="wrap">
     <div class="fcols">
       <div class="fb">
-        <div class="logo"><svg viewBox="0 0 32 32" aria-hidden="true" style="width:24px;height:24px"><circle cx="16" cy="16" r="15" fill="#C8E85C"/><path d="M4.5 7.5c5 3.4 8 8.3 8 15.8M27.5 7.5c-5 3.4-8 8.3-8 15.8" fill="none" stroke="#0B5C36" stroke-width="2.2" stroke-linecap="round"/></svg>NextPoint Tennis</div>
+        <div class="logo"><span class="logochip"><img src="https://static.wixstatic.com/media/7b1ac1_9cf02c81ec134dbf8ca8cde0bfe1a4ac~mv2.jpg/v1/crop/x_90,y_160,w_1370,h_410/nextpoint-logo.jpg" alt="NextPoint Tennis Centre" width="1370" height="410" loading="lazy" onerror="this.onerror=null;this.parentElement.classList.add('failed')"></span><span class="logotxt">NextPoint Tennis</span></div>
         <p>Court booking, ATP-level coaching and classes at Killarney Country Club, Houghton, Johannesburg. The only clay court experience in Gauteng.</p>
         <div class="nap">
           <b>Killarney Country Club</b>, 60 5th Street, Houghton Estate, Johannesburg, 2191<br>
@@ -834,8 +844,8 @@ if (!reduced && window.matchMedia("(pointer: fine)").matches){
   });
 }
 
-/* ---------- clay parallax ---------- */
-var clayBg = document.getElementById("clayBg");
+/* ---------- clay parallax (on the wrapper; Ken-Burns runs on the img inside) ---------- */
+var clayBg = document.getElementById("clayPlx");
 if (clayBg && !reduced){
   var ticking = false;
   function plx(){
