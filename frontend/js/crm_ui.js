@@ -190,6 +190,30 @@
     return el("div", { class: "cf-sec-head" }, [el("h2", { text: title }), trailing || null].filter(Boolean));
   }
 
+  // ---- green greeting ribbon (the shared console header) ----------------------
+  // opts: {title, subtitle?, chip?, actions:[{label, tone?, onClick}]}. Mirrors the client Home
+  // ribbon (.cf-greet) so the coach + owner consoles carry the SAME header pattern, with the
+  // profile-edit actions living right in the ribbon.
+  function greetBand(opts) {
+    opts = opts || {};
+    var left = el("div", {}, [el("h1", { text: opts.title || "" })]);
+    if (opts.subtitle) left.appendChild(el("p", { text: opts.subtitle }));
+    if (opts.actions && opts.actions.length) {
+      var row = el("div", { class: "cf-row", style: "gap:8px;margin-top:10px;flex-wrap:wrap" });
+      opts.actions.forEach(function (a) {
+        if (!a) return;
+        row.appendChild(el("button", {
+          class: "cf-btn cf-btn-sm" + (a.tone ? (" cf-btn-" + a.tone) : ""),
+          type: "button", text: a.label, onclick: function () { if (a.onClick) a.onClick(); },
+        }));
+      });
+      left.appendChild(row);
+    }
+    var kids = [left];
+    if (opts.chip) kids.push(el("span", { class: "cf-greet-plan", text: opts.chip }));
+    return el("div", { class: "cf-greet" }, kids);
+  }
+
   // ---- transaction log / activity feed ---------------------------------------
   // entries: [{at, kind, title, detail, amount_minor, currency, direction('in'|'out'|'neutral')}]
   // One chronological, transparent "what happened" list shared by client / coach / owner.
@@ -238,5 +262,6 @@
     drawer: drawer,
     sectionHead: sectionHead,
     activityFeed: activityFeed,
+    greetBand: greetBand,
   };
 })();

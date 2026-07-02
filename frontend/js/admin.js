@@ -36,14 +36,49 @@
     return (d.getHours() - DAY_START) * 60 + d.getMinutes();
   }
 
+  // ---- a simple modal shell (edit-profile lives in the ribbon, opened here) ---
+  function modalShell(title) {
+    var bg = el("div", { class: "cf-modal-bg" });
+    var body = el("div", {});
+    var modal = el("div", { class: "cf-modal cf-modal-lg" }, [
+      el("div", { class: "cf-row", style: "justify-content:space-between;align-items:flex-start" }, [
+        el("h2", { text: title }),
+        el("button", { class: "cf-btn cf-btn-sm", text: "✕", onclick: function () { if (bg.parentNode) document.body.removeChild(bg); } }),
+      ]),
+      body,
+    ]);
+    bg.appendChild(modal); document.body.appendChild(bg);
+    return { bg: bg, body: body, close: function () { if (bg.parentNode) document.body.removeChild(bg); } };
+  }
+
+  // Edit the club profile from the ribbon (the same AdminUI.clubProfile editor the Settings page
+  // uses) — lazy-loads admin_api.js/class_ui.js first, then loads the club payload into a modal.
+  async function editClubProfile() {
+    var m = modalShell("Club profile");
+    m.body.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+    try {
+      if (!window.AdminAPI || !window.AdminUI) await ensureClassDeps();
+      var d = await window.AdminAPI.onboarding();
+      UI.clear(m.body);
+      window.AdminUI.clubProfile(m.body, d || {}, {
+        saveLabel: "Save changes",
+        onSaved: function () { m.close(); UI.toast("Club profile saved.", "info"); shell(); },
+      });
+    } catch (e) { UI.clear(m.body); m.body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
+  }
+
   // ---- top controls + tabs --------------------------------------------------
   function shell() {
     var main = document.getElementById("cf-main"); UI.clear(main);
 
-    main.appendChild(el("div", { class: "cf-row", style: "align-items:baseline;gap:10px;margin-bottom:8px" }, [
-      el("h1", { text: "Club admin" }),
-      el("span", { class: "cf-muted", text: (state.billing && state.billing.club_name) || "" }),
-    ]));
+    main.appendChild(window.CRMUI.greetBand({
+      title: "Club admin",
+      subtitle: (state.billing && state.billing.club_name) || "",
+      actions: [
+        { label: "Club profile", onClick: editClubProfile },
+        { label: "All settings", onClick: function () { window.location.href = "/settings.html"; } },
+      ],
+    }));
 
     // Business-first: Dashboard (health at a glance) · Diary (run the day, incl. classes) · People ·
     // Money (billing + per-coach settlement) · Insights (analytics). Configuration lives in Settings.

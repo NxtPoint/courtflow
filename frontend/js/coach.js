@@ -884,7 +884,9 @@
       } catch (e2) {}
       profileState.data = ob;
     } catch (e) { profileState.data = {}; }
-    if (TAB === "profile") renderTab();
+    // Re-render so the greeting ribbon (name + Bookable/Hidden chip) reflects the loaded/edited
+    // profile; renderTab() clears+rebuilds the current tab so nothing duplicates.
+    render();
   }
 
   // ---- pending lesson queue (approval lifecycle) ----------------------------
@@ -1209,10 +1211,16 @@
     var main = document.getElementById("cf-main"); if (!main) return;
     UI.clear(main);
     var name = ((principal.email || "").split("@")[0]) || "Coach";
-    main.appendChild(el("div", { class: "cf-row", style: "align-items:baseline;gap:10px;margin-bottom:4px" }, [
-      el("h1", { text: "Coach console" }),
-      el("span", { class: "cf-muted", text: name }),
-    ]));
+    var pr = (profileState.data && profileState.data.profile) || {};
+    main.appendChild(window.CRMUI.greetBand({
+      title: "Coach console",
+      subtitle: (pr.display_name || name),
+      chip: (pr.is_bookable === false ? "Hidden" : "Bookable"),
+      actions: [
+        { label: "Edit profile", onClick: editProfileModal },
+        { label: "Edit hours", onClick: editHoursModal },
+      ],
+    }));
     var bar = el("nav", { class: "cf-nav", style: "margin:8px 0 18px;flex-wrap:wrap" });
     TABS.forEach(function (t) {
       var a = el("a", { href: "#" + t.k, text: t.t });
