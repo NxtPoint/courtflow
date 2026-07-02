@@ -104,9 +104,23 @@
     //   email,phone,first_seen,last_seen,lessons_count,classes_count,no_show_count,
     //   upcoming_count,lifetime_spend_minor}], count}
     clients: function (opts) { return A().apiJSON("/api/coach/clients" + _qs(opts)); },
-    // GET /api/coach/clients/:user_id -> {client:{...headline, history:[{kind,starts_at,
-    //   status,order_id}]}}
-    client: function (userId) { return A().apiJSON("/api/coach/clients/" + enc(userId)); },
+    // GET /api/coach/clients/:user_id[?month=YYYY-MM] -> {client:{...headline,
+    //   history:[{kind,starts_at,status,order_id,booking_id}], upcoming:[…],
+    //   money?:{paid_minor,owed_minor,net_minor,written_off_minor,currency},
+    //   arrears?:[{id,gross_minor,status,note,starts_at,client_user_id}]}}
+    client: function (userId, month) {
+      return A().apiJSON("/api/coach/clients/" + enc(userId) + (month ? ("?month=" + enc(month)) : ""));
+    },
+    // GET /api/coach/clients/:id/invoice?month= -> {invoice:{month,currency,club_name,coach_name,
+    //   client_name,client_email,lines:[{at,description,gross_minor,status,note?}],totals:{...}}}
+    clientInvoice: function (userId, month) {
+      return A().apiJSON("/api/coach/clients/" + enc(userId) + "/invoice" + (month ? ("?month=" + enc(month)) : ""));
+    },
+    // POST /api/coach/clients/:id/issue-invoice?month= -> {invoice, owed_minor, notified}
+    issueInvoice: function (userId, month) {
+      return A().apiJSON("/api/coach/clients/" + enc(userId) + "/issue-invoice" + (month ? ("?month=" + enc(month)) : ""),
+        { method: "POST", body: {} });
+    },
 
     // ---- business cockpit (read-only; THIS coach's own numbers only) -----
     // GET /api/coach/cockpit[?month=YYYY-MM] ->

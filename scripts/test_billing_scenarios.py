@@ -491,6 +491,50 @@ def sc_membership_cancel_voids_order(s, fx):
     check("paid plan order stays 'paid' after cancel", _order(s, oid2)["status"] == "paid")
 
 
+def sc_client_month_end(s, fx):
+    print("\n# Coach month-end: single-client invoice (paid + owed) + issue + 360 money merge")
+    from coach import repositories as CR
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',30,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+    ym = s.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    # A PAID online lesson → the client is a real coaching relationship + a 'paid' invoice line.
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="online")
+    apply_payment_event(NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded",
+                        order_ref=r["booking"]["order_id"], provider_payment_id="p_inv_1",
+                        amount_minor=40000, currency="ZAR", status="succeeded", direction="charge",
+                        club_id=str(fx.club_id), user_id=str(fx.member), raw={"t": 40}), session=s)
+    # An OWED off-platform lesson on the tab.
+    s.execute(text("INSERT INTO billing.coach_arrears (club_id, coach_user_id, client_user_id, "
+                   "gross_minor, currency, status) VALUES (:c,:coach,:u,40000,'ZAR','owed')"),
+              {"c": fx.club_id, "coach": fx.coach_uid, "u": fx.member})
+
+    inv = CM.client_invoice_data(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
+                                 client_user_id=fx.member, month=ym)
+    check("invoice shows a PAID line + an OWED line",
+          inv["totals"]["paid_minor"] > 0 and inv["totals"]["owed_minor"] == 40000, str(inv["totals"]))
+    res = CM.issue_client_invoice(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
+                                  client_user_id=fx.member, month=ym)
+    check("issue-invoice reports owed + notifies", res["owed_minor"] == 40000 and res["notified"], str(res))
+
+    c = CR.get_client(s, club_id=fx.club_id, user_id=fx.coach_uid, client_user_id=fx.member, month=ym)
+    check("coach 360 merges month money (paid + owed)",
+          c and c.get("money") and c["money"]["owed_minor"] == 40000 and c["money"]["paid_minor"] > 0,
+          str(c and c.get("money")))
+    check("coach 360 lists this client's owed arrears line",
+          any(a.get("status") == "owed" for a in (c.get("arrears") or [])), str(len(c.get("arrears") or [])))
+    check("coach 360 history carries booking_id (for reschedule/cancel)",
+          any(h.get("booking_id") for h in (c.get("history") or [])), "no booking_id surfaced")
+    # A coach can only invoice THEIR OWN client — an unrelated user yields an empty invoice.
+    other = _mk_user(s, "stranger@bill.test", "Stranger")
+    empty = CM.client_invoice_data(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
+                                   client_user_id=other, month=ym)
+    check("no coaching relationship → empty invoice",
+          empty["totals"]["paid_minor"] == 0 and empty["totals"]["owed_minor"] == 0, str(empty["totals"]))
+
+
 def sc_dispute_routing(s, fx):
     print("\n# Dispute routing: a coaching refund → the coach decides; a court refund → the club")
     # A paid LESSON (coaching service) → routes to the coach.
@@ -650,6 +694,7 @@ SCENARIOS = [
     sc_refund_clawback,
     sc_membership_cancel_voids_order,
     sc_dispute_routing,
+    sc_client_month_end,
     sc_transaction_log,
 ]
 

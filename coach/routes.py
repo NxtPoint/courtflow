@@ -519,12 +519,43 @@ def get_client(client_user_id):
     p, err = _coach()
     if err:
         return err
+    month = (request.args.get("month") or "").strip() or None
     with session_scope() as s:
         client = repo.get_client(s, club_id=p.club_id, user_id=p.user_id,
-                                 client_user_id=client_user_id)
+                                 client_user_id=client_user_id, month=month)
     if client is None:
         return jsonify(error="NOT_FOUND"), 404
     return jsonify(client=client), 200
+
+
+@coach_bp.get("/clients/<client_user_id>/invoice")
+def get_client_invoice(client_user_id):
+    """The printable coaching invoice for one client + month (paid/owed/written-off lines + totals).
+    Coach-scoped — only this coach's coaching with this client."""
+    p, err = _coach()
+    if err:
+        return err
+    month = (request.args.get("month") or "").strip() or None
+    from billing import commission as comm
+    with session_scope() as s:
+        inv = comm.client_invoice_data(s, club_id=p.club_id, coach_user_id=p.user_id,
+                                       client_user_id=client_user_id, month=month)
+    return jsonify(invoice=inv), 200
+
+
+@coach_bp.post("/clients/<client_user_id>/issue-invoice")
+def issue_client_invoice(client_user_id):
+    """Month-end: send this client their coaching statement (notification + pay link to their unified
+    statement). Returns {invoice, owed_minor, notified}."""
+    p, err = _coach()
+    if err:
+        return err
+    month = (request.args.get("month") or (_body().get("month")) or "").strip() or None
+    from billing import commission as comm
+    with session_scope() as s:
+        res = comm.issue_client_invoice(s, club_id=p.club_id, coach_user_id=p.user_id,
+                                        client_user_id=client_user_id, month=month)
+    return jsonify(res), 200
 
 
 # ---------------------------------------------------------------------------

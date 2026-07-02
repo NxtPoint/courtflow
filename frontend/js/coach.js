@@ -637,20 +637,45 @@
     return card;
   }
 
+  // The Clients tab is CLIENT-CENTRIC: a month-scoped list of clients (lessons / paid / owed with
+  // you) that drills into ONE full-screen client view — everything about that client in one place
+  // (bookings + money + manage actions + month-end "issue invoice"). clientView holds the state.
+  var clientView = { selected: null, month: null };
+
   function initMyClients(host) {
     if (!host) return;
+    if (!clientView.month) clientView.month = thisMonthKey();
+    if (clientView.selected) return renderClientPage(host, clientView.selected);
+    renderClientList(host);
+  }
+
+  function monthNav(idPrefix, onChange) {
+    var wrap = el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
+      el("button", { class: "cf-btn cf-btn-sm", text: "‹ Prev",
+        onclick: function () { clientView.month = shiftMonthKey(clientView.month, -1); onChange(); } }),
+      el("span", { class: "cf-chip", text: monthLabel(clientView.month) }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "Next ›",
+        onclick: function () { clientView.month = shiftMonthKey(clientView.month, 1); onChange(); } }),
+    ]);
+    return wrap;
+  }
+
+  // ---- the client LIST (month overview) --------------------------------------
+  function renderClientList(host) {
     var card = el("div", { class: "cf-card", id: "coach-clients-card" }, [
-      el("div", { class: "cf-row", style: "margin-bottom:6px;align-items:center" }, [
+      el("div", { class: "cf-row", style: "margin-bottom:6px;align-items:center;gap:8px;flex-wrap:wrap" }, [
         el("h2", { text: "My clients", style: "margin:0" }),
         el("span", { class: "cf-spacer" }),
+        monthNav("clients", function () { renderClientList(host2()); }),
         el("input", { class: "cf-input", id: "coach-clients-search",
-          placeholder: "Search name or email…", style: "max-width:240px" }),
+          placeholder: "Search name or email…", style: "max-width:220px" }),
       ]),
       el("p", { class: "cf-muted", style: "margin:-2px 0 12px",
-        text: "Everyone who has had a lesson or class with you. Gross activity with you only." }),
+        text: "Your clients and what they've paid / still owe you this month. Tap a client to see everything and run month-end." }),
       el("div", { id: "coach-clients-body", class: "cf-loading", text: "Loading clients…" }),
     ]);
-    host.appendChild(card);
+    // renderClientList may be called to refresh; clear the host first when re-rendering.
+    UI.clear(host); host.appendChild(card);
     var search = document.getElementById("coach-clients-search");
     var t = null;
     search.addEventListener("input", function () {
@@ -658,13 +683,23 @@
     });
     loadClients("");
   }
+  function host2() { return document.getElementById("coach-tab"); }
 
   async function loadClients(q) {
     var box = document.getElementById("coach-clients-body"); if (!box) return;
     UI.clear(box); box.appendChild(el("div", { class: "cf-loading", text: "Loading clients…" }));
     try {
-      var r = await window.CoachAPI.clients(q ? { search: q } : {});
-      renderClients(r.clients || []);
+      var pair = await Promise.all([
+        window.CoachAPI.clients(q ? { search: q } : {}),
+        window.CoachAPI.statement(clientView.month).catch(function () { return { clients: [] }; }),
+      ]);
+      var clients = (pair[0].clients) || [];
+      var money = {};
+      ((pair[1] && pair[1].clients) || []).forEach(function (m) { money[String(m.client_user_id)] = m; });
+      renderClients(clients.map(function (c) {
+        var m = money[String(c.user_id)] || {};
+        return Object.assign({}, c, { paid_minor: m.paid_minor || 0, owed_minor: m.owed_minor || 0 });
+      }));
     } catch (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
   }
 
@@ -677,12 +712,12 @@
       return;
     }
     var table = el("table", { class: "cf-table" });
-    var thead = el("thead", {}, [el("tr", {}, [
+    table.appendChild(el("thead", {}, [el("tr", {}, [
       el("th", { text: "Client" }), el("th", { text: "Contact" }),
-      el("th", { text: "Lessons" }), el("th", { text: "Classes" }),
-      el("th", { text: "No-shows" }), el("th", { text: "Last seen" }),
-      el("th", { text: "Spend (with you)" }),
-    ])]);
+      el("th", { text: "Lessons" }),
+      el("th", { class: "num", text: "Paid (mo)" }), el("th", { class: "num", text: "Owed" }),
+      el("th", { text: "" }),
+    ])]));
     var tbody = el("tbody");
     list.forEach(function (c) {
       var tr = el("tr", { style: "cursor:pointer" });
@@ -690,95 +725,184 @@
       tr.appendChild(el("td", {}, [el("strong", { text: clientName(c) })]));
       tr.appendChild(el("td", { text: c.email || c.phone || "—" }));
       tr.appendChild(el("td", { text: String(c.lessons_count || 0) }));
-      tr.appendChild(el("td", { text: String(c.classes_count || 0) }));
-      tr.appendChild(el("td", { text: String(c.no_show_count || 0) }));
-      tr.appendChild(el("td", { text: fmtDate(c.last_seen) }));
-      tr.appendChild(el("td", { text: fmtMoney(c.lifetime_spend_minor) }));
+      tr.appendChild(el("td", { class: "num", text: fmtMoney(c.paid_minor) }));
+      tr.appendChild(el("td", { class: "num" }, [c.owed_minor
+        ? el("span", { class: "cf-chip held", text: fmtMoney(c.owed_minor) })
+        : el("span", { class: "cf-muted", text: "—" })]));
+      tr.appendChild(el("td", { text: "›" }));
       tbody.appendChild(tr);
     });
-    table.appendChild(thead); table.appendChild(tbody);
+    table.appendChild(tbody);
     box.appendChild(table);
   }
 
-  // Client 360 — a slide-over (CRMUI.drawer) showing this client's history WITH THIS
-  // coach only: headline metrics, spend-with-you, attendance, upcoming + full history.
-  async function openClient(userId) {
-    // Show the drawer immediately with a loading section, then refill once loaded.
-    var close = window.CRMUI.drawer({ title: "Client", sections: [{ node: el("div", { class: "cf-loading", text: "Loading…" }) }] });
+  function openClient(userId) { clientView.selected = userId; renderTab(); }
+  function backToClients() { clientView.selected = null; renderTab(); }
+
+  // ---- the full-screen SINGLE CLIENT view ------------------------------------
+  async function renderClientPage(host, userId) {
+    UI.clear(host);
+    host.appendChild(el("div", { class: "cf-row", style: "margin-bottom:10px;gap:8px;align-items:center;flex-wrap:wrap" }, [
+      el("button", { class: "cf-btn cf-btn-sm", text: "‹ Back to clients", onclick: backToClients }),
+      el("span", { class: "cf-spacer" }),
+      monthNav("client", function () { renderClientPage(host2(), userId); }),
+    ]));
+    var body = el("div", { id: "coach-client-body", class: "cf-loading", text: "Loading client…" });
+    host.appendChild(body);
     var c;
-    try {
-      var r = await window.CoachAPI.client(userId);
-      c = r.client || {};
-    } catch (e) {
-      close();
-      window.CRMUI.drawer({ title: "Client", sections: [{ node: el("div", { class: "cf-empty", text: UI.errMsg(e) }) }] });
-      return;
-    }
-    close();  // replace the loading drawer with the full one
+    try { c = (await window.CoachAPI.client(userId, clientView.month)).client || {}; }
+    catch (e) { UI.clear(body); body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); return; }
+    UI.clear(body);
+    var money = c.money || {}, cur = money.currency || "ZAR";
 
-    // Spend-with-this-coach + attendance summary as a stat strip.
-    var statsNode = window.CRMUI.stats([
-      { value: c.lessons_count || 0, label: "Lessons" },
-      { value: c.classes_count || 0, label: "Classes" },
-      { value: c.no_show_count || 0, label: "No-shows" },
-      { value: fmtMoney(c.lifetime_spend_minor), label: "Spend with you" },
+    // Header: who + money summary + month-end "issue invoice".
+    var head = el("div", { class: "cf-card" }, [
+      el("div", { class: "cf-row", style: "justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap" }, [
+        el("div", {}, [
+          el("h2", { style: "margin:0", text: clientName(c) }),
+          el("div", { class: "cf-muted", text: (c.email || "—") + (c.phone ? " · " + c.phone : "") }),
+        ]),
+        el("button", { class: "cf-btn cf-btn-primary", text: "Issue invoice →",
+          onclick: function () { issueInvoice(userId, c); } }),
+      ]),
     ]);
+    head.appendChild(el("div", { style: "margin-top:12px" }, [window.CRMUI.stats([
+      { value: c.lessons_count || 0, label: "Lessons (all time)" },
+      { value: fmtMoney(money.paid_minor), label: "Paid this month" },
+      { value: fmtMoney(money.owed_minor), label: "Owed now" },
+      { value: fmtMoney(money.written_off_minor), label: "Written off" },
+    ])]));
+    body.appendChild(head);
 
-    // Upcoming sessions (if the payload carries them; else derived from history is omitted).
-    var upcomingNode = null;
-    if ((c.upcoming || []).length) {
-      var ul = el("div", { class: "cf-list" });
-      (c.upcoming || []).forEach(function (h) {
-        ul.appendChild(el("div", { class: "cf-item" }, [
-          el("span", { class: "cf-chip " + (h.kind || ""), text: h.kind || "session" }),
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: fmtDate(h.starts_at) }),
-            el("div", { class: "cf-item-s", text: (function () {
-              try { return new Date(h.starts_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) { return ""; } })() }),
-          ]),
-        ]));
-      });
-      upcomingNode = ul;
-    }
+    // Owed lessons (with actions) — the heart of month-end review.
+    var owedCard = el("div", { class: "cf-card", style: "margin-top:16px" }, [
+      window.CRMUI.sectionHead("Owed & written-off lessons"),
+      window.CRMUI.lineItems((c.arrears || []), {
+        currency: cur,
+        label: function () { return "Lesson"; },
+        sub: function (it) { return it.starts_at ? fmtDate(it.starts_at) : ""; },
+        empty: "Nothing outstanding with you.",
+        actions: [
+          { label: "Mark collected", tone: "primary", onClick: function (it) { cpArrears(it.id, "collect", userId); } },
+          { label: "Discount", onClick: function (it) { cpArrears(it.id, "discount", userId, it); } },
+          { label: "Write off", tone: "danger", onClick: function (it) { cpArrears(it.id, "writeoff", userId); } },
+        ],
+      }),
+    ]);
+    body.appendChild(owedCard);
 
-    // Full history with this coach.
-    var histNode;
-    var hist = c.history || [];
-    if (!hist.length) { histNode = el("div", { class: "cf-empty", text: "No sessions yet." }); }
+    // Upcoming sessions — with cancel / reschedule on lessons (booking_id present).
+    var upCard = el("div", { class: "cf-card", style: "margin-top:16px" }, [window.CRMUI.sectionHead("Upcoming")]);
+    var up = (c.upcoming || []);
+    if (!up.length) upCard.appendChild(el("div", { class: "cf-empty", text: "No upcoming sessions." }));
     else {
-      var list = el("div", { class: "cf-list" });
-      hist.forEach(function (h) {
-        var time = "";
-        try { time = new Date(h.starts_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e3) {}
-        list.appendChild(el("div", { class: "cf-item" }, [
-          el("span", { class: "cf-chip " + (h.kind || ""), text: h.kind || "session" }),
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: fmtDate(h.starts_at) }),
-            el("div", { class: "cf-item-s", text: time }),
-          ]),
-          el("span", { class: "cf-chip " + (h.status || ""), text: h.status || "" }),
-        ]));
-      });
-      histNode = list;
+      var ul = el("div", { class: "cf-list" });
+      up.forEach(function (h) { ul.appendChild(bookingRow(h, userId, true)); });
+      upCard.appendChild(ul);
     }
+    body.appendChild(upCard);
 
-    var sections = [
-      { node: statsNode },
-      { h: "At a glance", rows: [
-        ["Contact", (c.email || "—") + (c.phone ? " · " + c.phone : "")],
-        ["First seen", fmtDate(c.first_seen)],
-        ["Last seen", fmtDate(c.last_seen)],
-        ["Upcoming", (c.upcoming_count || 0)],
-      ] },
+    // Sessions this month (history filtered to the selected month) — read-only record.
+    var ym = clientView.month;
+    var monthHist = (c.history || []).filter(function (h) { return (h.starts_at || "").slice(0, 7) === ym; });
+    var histCard = el("div", { class: "cf-card", style: "margin-top:16px" }, [
+      window.CRMUI.sectionHead("Sessions in " + monthLabel(ym)),
+    ]);
+    if (!monthHist.length) histCard.appendChild(el("div", { class: "cf-empty", text: "No sessions this month." }));
+    else {
+      var hl = el("div", { class: "cf-list" });
+      monthHist.forEach(function (h) { hl.appendChild(bookingRow(h, userId, false)); });
+      histCard.appendChild(hl);
+    }
+    body.appendChild(histCard);
+  }
+
+  function bookingRow(h, userId, allowActions) {
+    var time = "";
+    try { time = new Date(h.starts_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); } catch (e) {}
+    var kids = [
+      el("span", { class: "cf-chip " + (h.kind || ""), text: h.kind || "session" }),
+      el("div", { class: "cf-item-main" }, [
+        el("div", { class: "cf-item-t", text: fmtDate(h.starts_at) + (time ? " · " + time : "") }),
+        el("div", { class: "cf-item-s", text: h.status || "" }),
+      ]),
     ];
-    if (upcomingNode) sections.push({ h: "Upcoming", node: upcomingNode });
-    sections.push({ h: "History with you", node: histNode });
+    // Manage a future LESSON (classes have no booking_id → managed on the class roster).
+    if (allowActions && h.booking_id && h.kind === "lesson") {
+      var row = el("div", { class: "cf-row", style: "gap:6px" }, [
+        el("button", { class: "cf-btn cf-btn-sm", text: "Reschedule", onclick: function () { rescheduleModal(h, userId); } }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Cancel", onclick: function () { cancelBooking(h, userId); } }),
+      ]);
+      kids.push(row);
+    }
+    return el("div", { class: "cf-item" }, kids);
+  }
 
-    window.CRMUI.drawer({
-      title: clientName(c),
-      subtitle: c.email || c.phone || "",
-      sections: sections,
-    });
+  // arrears actions from the client page (refresh the client page, not the Money tab).
+  async function cpArrears(id, action, userId, it) {
+    try {
+      if (action === "collect") { await window.CoachAPI.arrearsCollected(id); UI.toast("Marked collected.", "info"); }
+      else if (action === "discount") {
+        var v = window.prompt("New amount for this lesson (e.g. 250.00):", (((it && it.gross_minor) || 0) / 100).toFixed(2));
+        if (v === null) return;
+        var f = parseFloat(v); if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; }
+        await window.CoachAPI.arrearsAdjust(id, { gross_minor: Math.round(f * 100) }); UI.toast("Discount applied.", "info");
+      } else {
+        var reason = window.prompt("Write off this lesson? Reason (shown to you, the client and the club):", "");
+        if (reason === null) return;
+        await window.CoachAPI.arrearsAdjust(id, { status: "written_off", reason: reason }); UI.toast("Written off.", "info");
+      }
+      renderClientPage(host2(), userId);
+    } catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+
+  async function cancelBooking(h, userId) {
+    if (!window.confirm("Cancel this lesson on " + fmtDate(h.starts_at) + "? The slot is freed and the client is notified.")) return;
+    var reason = window.prompt("Reason (optional, shown to the client):", "") || "";
+    try { await window.API.cancelBooking(h.booking_id, { reason: reason }); UI.toast("Lesson cancelled.", "info"); renderClientPage(host2(), userId); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+
+  function rescheduleModal(h, userId) {
+    var m = modalShell("Reschedule lesson");
+    var startInput = el("input", { class: "cf-input", type: "datetime-local", value: toLocalInput(h.starts_at) });
+    var durSel = el("select", { class: "cf-input" }, [30, 45, 60, 90, 120].map(function (d) {
+      return el("option", { value: String(d), text: d + " min" + (d === 60 ? " (default)" : "") });
+    }));
+    durSel.value = "60";
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "New start" }), startInput]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), durSel]));
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
+      el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }),
+      el("button", { class: "cf-btn cf-btn-primary", text: "Reschedule", onclick: async function () {
+        if (!startInput.value) { UI.toast("Pick a new time.", "warn"); return; }
+        var start = new Date(startInput.value);
+        var end = new Date(start.getTime() + parseInt(durSel.value, 10) * 60000);
+        try {
+          await window.API.rescheduleBooking(h.booking_id, { starts_at: start.toISOString(), ends_at: end.toISOString(), scope: "this" });
+          UI.toast("Lesson rescheduled.", "info"); m.close(); renderClientPage(host2(), userId);
+        } catch (e) { UI.toast(UI.errMsg(e), "error"); }
+      } }),
+    ]));
+  }
+
+  function toLocalInput(iso) {
+    try {
+      var d = new Date(iso);
+      var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+      return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+    } catch (e) { return ""; }
+  }
+
+  async function issueInvoice(userId, c) {
+    if (!window.confirm("Send " + clientName(c) + " their statement for " + monthLabel(clientView.month) + "?\n\nThey'll be notified with the amount owed and a link to pay online.")) return;
+    try {
+      var res = await window.CoachAPI.issueInvoice(userId, clientView.month);
+      if (res.notified) UI.toast("Statement sent — " + fmtMoney(res.owed_minor) + " owed.", "info");
+      else UI.toast("Nothing owed — nothing to send.", "info");
+      // Open the printable invoice in a new tab.
+      window.open("/invoice.html?client=" + encodeURIComponent(userId) + "&month=" + encodeURIComponent(clientView.month), "_blank");
+    } catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
   // ---- my profile (clean summary + edit popups) -----------------------------

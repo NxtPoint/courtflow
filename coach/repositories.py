@@ -10,7 +10,11 @@
 # coach's own diary.resource(kind='coach') (created on demand), lesson services
 # (billing.product kind='lesson' + billing.price) CRUD, and onboarding step derivation.
 
+import logging
+
 from sqlalchemy import text
+
+log = logging.getLogger("coach.repositories")
 
 
 # ---------------------------------------------------------------------------
@@ -560,7 +564,7 @@ _CLIENT_CLASS_STATUSES = "('enrolled','attended','no_show')"
 _COACH_ACTIVITY_CTE = """
 WITH coach_bookings AS (
     SELECT b.booked_by_user_id AS user_id, 'lesson' AS kind,
-           b.starts_at, b.status, b.order_id
+           b.starts_at, b.status, b.order_id, b.id AS booking_id
     FROM diary.booking b
     WHERE b.club_id = :c AND b.coach_user_id = :u
       AND b.booking_type = 'lesson'
@@ -568,7 +572,8 @@ WITH coach_bookings AS (
       AND b.status IN """ + _CLIENT_LESSON_STATUSES + """
 ),
 coach_classes AS (
-    SELECT e.user_id, 'class' AS kind, cs.starts_at, e.status, e.order_id
+    SELECT e.user_id, 'class' AS kind, cs.starts_at, e.status, e.order_id,
+           NULL::uuid AS booking_id      -- classes are enrolments; managed separately
     FROM diary.class_session cs
     JOIN diary.enrolment e ON e.class_session_id = cs.id AND e.club_id = cs.club_id
     WHERE cs.club_id = :c AND cs.coach_user_id = :u
@@ -681,11 +686,16 @@ def list_clients(session, *, club_id, user_id, search=None, limit=200):
     return _rows(rows)
 
 
-def get_client(session, *, club_id, user_id, client_user_id):
+def get_client(session, *, club_id, user_id, client_user_id, month=None):
     """A single client's 360 WITH THIS COACH only: the same headline counts as the list row
-    plus the full session history (lessons + classes, date/type/status/spend). Returns None
-    if the user has no coaching relationship with this coach (privacy: can't probe arbitrary
-    users — they must appear in this coach's activity)."""
+    plus the full session history (lessons + classes, with booking_id so the coach can
+    reschedule/cancel a lesson). Returns None if the user has no coaching relationship with
+    this coach (privacy: can't probe arbitrary users — they must appear in this coach's activity).
+
+    When `month` (YYYY-MM) is given, also returns the per-client MONEY for that month
+    (paid/owed/net/written-off) + this client's owed/written-off arrears line items (each with
+    collect/discount/write-off affordances) — the single client-centric statement the coach
+    reviews at month-end. Reuses billing.commission.coach_statement so the figures never drift."""
     with_spend = _billing_present(session)
     params = {"c": club_id, "u": user_id, "cu": client_user_id}
 
@@ -712,26 +722,50 @@ def get_client(session, *, club_id, user_id, client_user_id):
         return None
 
     # Full per-session history (most recent first), scoped to this coach + this client.
+    # booking_id lets the client view wire reschedule/cancel to a lesson (classes carry none).
     hist_sql = _COACH_ACTIVITY_CTE + """
-        SELECT a.kind, a.starts_at, a.status, a.order_id
+        SELECT a.kind, a.starts_at, a.status, a.order_id, a.booking_id
         FROM activity a
         WHERE a.user_id = :cu
         ORDER BY a.starts_at DESC
         LIMIT 200
     """
-    history = _rows(session.execute(text(hist_sql), params).mappings().all())
-    head["history"] = history
+    head["history"] = _rows(session.execute(text(hist_sql), params).mappings().all())
 
-    # Upcoming sessions (future, soonest first) — the list behind upcoming_count, so the
-    # client-360 drawer can show what's next, not just a number.
+    # Upcoming sessions (future, soonest first) — with booking_id for reschedule/cancel.
     upcoming_sql = _COACH_ACTIVITY_CTE + """
-        SELECT a.kind, a.starts_at, a.status
+        SELECT a.kind, a.starts_at, a.status, a.booking_id
         FROM activity a
         WHERE a.user_id = :cu AND a.starts_at >= now()
         ORDER BY a.starts_at ASC
         LIMIT 20
     """
     head["upcoming"] = _rows(session.execute(text(upcoming_sql), params).mappings().all())
+
+    # Month-end money for THIS client (reuse the coach statement so figures never drift).
+    if month:
+        head["month"] = month
+        try:
+            from billing import commission as _comm
+            stmt = _comm.coach_statement(session, club_id=club_id, coach_user_id=user_id, month=month)
+            cid = str(client_user_id)
+            row = next((c for c in (stmt.get("clients") or [])
+                        if str(c.get("client_user_id")) == cid), None)
+            head["money"] = {
+                "currency": stmt.get("currency", "ZAR"),
+                "paid_minor": int((row or {}).get("paid_minor") or 0),
+                "owed_minor": int((row or {}).get("owed_minor") or 0),
+                "net_minor": int((row or {}).get("net_minor") or 0),
+                "written_off_minor": sum(int(a.get("gross_minor") or 0)
+                    for a in (stmt.get("arrears_items") or [])
+                    if str(a.get("client_user_id")) == cid and a.get("status") == "written_off"),
+            }
+            head["arrears"] = [a for a in (stmt.get("arrears_items") or [])
+                               if str(a.get("client_user_id")) == cid]
+        except Exception:
+            log.info("get_client: month money skipped (commission unavailable) client=%s", client_user_id)
+            head["money"] = None
+            head["arrears"] = []
     return head
 
 

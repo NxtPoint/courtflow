@@ -547,6 +547,103 @@ def notify_statements_for_club(session, *, club_id) -> int:
     return n
 
 
+def client_invoice_data(session, *, club_id, coach_user_id, client_user_id, month=None) -> Dict[str, Any]:
+    """Build ONE client's coaching invoice for a month: the coach's lessons/classes with this client,
+    each line paid / owed / written-off, plus totals. Coach-scoped (only this coach's coaching — never
+    the client's court/membership spend). Drives both the printable invoice and the issue-invoice notify.
+    """
+    try:
+        accrue_arrears_for_club(session, club_id=club_id)   # so a not-yet-tracked owed lesson shows
+    except Exception:
+        pass
+    ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    currency = session.execute(
+        text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": club_id}).scalar() or "ZAR"
+    club_name = session.execute(
+        text("SELECT name FROM club.club WHERE id = :c"), {"c": club_id}).scalar() or "Your club"
+
+    def _name(uid):
+        r = session.execute(
+            text('SELECT first_name, surname, email FROM iam."user" WHERE id = :id'),
+            {"id": str(uid)}).mappings().first()
+        if not r:
+            return (None, None)
+        full = " ".join(x for x in [r["first_name"], r["surname"]] if x).strip()
+        return (full or r["email"] or "—", r["email"])
+
+    coach_name, _ = _name(coach_user_id)
+    client_name, client_email = _name(client_user_id)
+
+    lines: List[Dict[str, Any]] = []
+    # Paid this month (online or collected off-platform) — coach commission split rows.
+    for r in session.execute(
+        text("""
+            SELECT cs.gross_minor, cs.occurred_at, b.starts_at, b.booking_type
+            FROM billing.commission_split cs
+            LEFT JOIN diary.booking b ON b.id = cs.booking_id
+            WHERE cs.club_id = :c AND cs.coach_user_id = :coach AND cs.party_type = 'coach'
+              AND cs.basis IN ('lesson_commission','class_commission','arrears_commission')
+              AND b.booked_by_user_id = :cu
+              AND to_char(cs.occurred_at,'YYYY-MM') = :ym
+            ORDER BY COALESCE(b.starts_at, cs.occurred_at)
+        """),
+        {"c": club_id, "coach": str(coach_user_id), "cu": str(client_user_id), "ym": ym},
+    ).mappings().all():
+        lines.append({
+            "at": (r["starts_at"] or r["occurred_at"]).isoformat() if (r["starts_at"] or r["occurred_at"]) else None,
+            "description": ("Class" if r["booking_type"] == "class" else "Lesson"),
+            "gross_minor": int(r["gross_minor"] or 0), "status": "paid",
+        })
+    # Owed + written-off (the running tab — not month-bound; a written-off line stays visible).
+    for r in session.execute(
+        text("""
+            SELECT a.gross_minor, a.status, a.note, b.starts_at, a.created_at
+            FROM billing.coach_arrears a
+            LEFT JOIN diary.booking b ON b.id = a.booking_id
+            WHERE a.club_id = :c AND a.coach_user_id = :coach AND a.client_user_id = :cu
+              AND a.status IN ('owed','written_off')
+            ORDER BY COALESCE(b.starts_at, a.created_at)
+        """),
+        {"c": club_id, "coach": str(coach_user_id), "cu": str(client_user_id)},
+    ).mappings().all():
+        lines.append({
+            "at": (r["starts_at"] or r["created_at"]).isoformat() if (r["starts_at"] or r["created_at"]) else None,
+            "description": "Lesson" + (" — written off" if r["status"] == "written_off" else ""),
+            "gross_minor": int(r["gross_minor"] or 0), "status": r["status"], "note": r["note"] or None,
+        })
+
+    paid = sum(l["gross_minor"] for l in lines if l["status"] == "paid")
+    owed = sum(l["gross_minor"] for l in lines if l["status"] == "owed")
+    woff = sum(l["gross_minor"] for l in lines if l["status"] == "written_off")
+    return {
+        "month": ym, "currency": currency, "club_name": club_name,
+        "coach_name": coach_name, "client_name": client_name, "client_email": client_email,
+        "lines": lines,
+        "totals": {"paid_minor": paid, "owed_minor": owed, "written_off_minor": woff},
+    }
+
+
+def issue_client_invoice(session, *, club_id, coach_user_id, client_user_id, month=None) -> Dict[str, Any]:
+    """Month-end: send THIS client their coaching statement/invoice. Builds the invoice, and if the
+    client still owes something, emits a `statement_ready` notification (in-app now, email once SES is
+    keyed) with the owed amount + a pay link to their unified statement (which they settle online to
+    zero). Returns {invoice, owed_minor, notified}. Notify is best-effort — never raises."""
+    inv = client_invoice_data(session, club_id=club_id, coach_user_id=coach_user_id,
+                              client_user_id=client_user_id, month=month)
+    owed = int(inv["totals"]["owed_minor"] or 0)
+    notified = False
+    if owed > 0:
+        try:
+            from marketing_crm.tracking import emit
+            emit("statement_ready", {
+                "club_id": str(club_id), "user_id": str(client_user_id),
+                "amount_minor": owed, "currency": inv["currency"]})
+            notified = True
+        except Exception:
+            log.info("issue_client_invoice: notify skipped (tracking unavailable) client=%s", client_user_id)
+    return {"invoice": inv, "owed_minor": owed, "notified": notified}
+
+
 def settle_arrears_for_order(session, *, order_id) -> int:
     """Mark every owed arrears linked to a paid statement-payment order as collected (accruing the
     commission per item). Idempotent — mark_arrears_collected no-ops an already-collected row. Called
