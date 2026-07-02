@@ -42,23 +42,22 @@
 
     main.appendChild(el("div", { class: "cf-row", style: "align-items:baseline;gap:10px;margin-bottom:8px" }, [
       el("h1", { text: "Club admin" }),
+      el("span", { class: "cf-muted", text: (state.billing && state.billing.club_name) || "" }),
     ]));
 
-    // Operate-only: day-to-day running of the club. Configuration (courts, services, memberships,
-    // coaches, club profile) lives in Settings. The old read-only "Resources" tab was a duplicate of
-    // those Settings screens, so it's been retired.
+    // Business-first: Dashboard (health at a glance) · Diary (run the day, incl. classes) · People ·
+    // Money (billing + per-coach settlement) · Insights (analytics). Configuration lives in Settings.
     var tabs = el("div", { class: "cf-nav", style: "margin-bottom:12px;flex-wrap:wrap" });
-    [["diary", "Master diary"], ["classes", "Classes"], ["people", "People"],
-     ["billing", "Billing"], ["cockpit", "Cockpit"], ["overview", "Overview"]].forEach(function (t) {
+    [["dashboard", "Dashboard"], ["diary", "Diary"], ["people", "People"],
+     ["money", "Money"], ["insights", "Insights"]].forEach(function (t) {
       tabs.appendChild(el("a", { href: "#", text: t[1], "data-tab": t[0],
         onclick: function (e) { e.preventDefault(); showTab(t[0]); } }));
     });
-    // Settings (configure) is a sibling surface — a real link out, so it's right here on the
-    // admin menu alongside the operate tabs (Club profile · Courts · Services · Memberships · Coaches).
+    // Settings (configure) is a sibling surface — a real link out on the admin menu.
     tabs.appendChild(el("a", { href: "/settings.html", text: "⚙ Settings", style: "margin-left:auto" }));
     main.appendChild(tabs);
     main.appendChild(el("div", { id: "admin-panel" }));
-    showTab("diary");
+    showTab("dashboard");
   }
 
   function showTab(tab) {
@@ -66,12 +65,103 @@
       a.classList.toggle("active", a.getAttribute("data-tab") === tab);
     });
     var p = document.getElementById("admin-panel"); UI.clear(p);
-    if (tab === "diary") return renderDiary(p);
-    if (tab === "classes") return renderClasses(p);
+    if (tab === "dashboard") return renderDashboard(p);
+    if (tab === "diary") return renderDiaryTab(p);
     if (tab === "people") return renderPeople(p);
-    if (tab === "billing") return renderBilling(p);
-    if (tab === "cockpit") return renderCockpit(p);
-    if (tab === "overview") return renderOverview(p);
+    if (tab === "money") return renderMoney(p);
+    if (tab === "insights") return renderOverview(p);
+  }
+
+  // ---- Dashboard — business health at a glance ------------------------------
+  async function renderDashboard(panel) {
+    panel.appendChild(el("div", { class: "cf-card" }, [
+      el("h2", { text: "Business dashboard" }),
+      el("p", { class: "cf-muted", style: "margin:-4px 0 0",
+        text: "Your club at a glance — money this month, growth, and what needs action." }),
+    ]));
+    var host = el("div"); panel.appendChild(host);
+    host.appendChild(el("div", { class: "cf-loading", text: "Loading your dashboard…" }));
+    try {
+      if (!window.AdminAPI) await ensureClassDeps();
+      var opts = monthRange("this");
+      var res = await Promise.all([
+        window.AdminAPI.cockpitSummary(opts),
+        window.AdminAPI.cockpitRevenue(opts),
+        window.AdminAPI.refundRequests().catch(function () { return { requests: [] }; }),
+        window.TFAuth.apiJSON("/api/analytics/overview?days=30").catch(function () { return {}; }),
+      ]);
+      var summary = res[0] || {}, revenue = res[1] || {}, refunds = res[2] || {}, analytics = res[3] || {};
+      var cur = summary.currency || "ZAR", C = window.CRMUI;
+      UI.clear(host);
+
+      // Money this month.
+      host.appendChild(C.sectionHead("This month — money"));
+      host.appendChild(C.stats([
+        { value: UI.money(summary.net_revenue_minor, cur), label: "Net revenue" },
+        { value: UI.money(summary.commission_earned_minor, cur), label: "Commission — you keep" },
+        { value: UI.money(summary.rent_due_minor, cur), label: "Rent due" },
+        { value: String(summary.active_members || 0), label: "Active members" },
+        { value: UI.money(summary.mrr_minor, cur), label: "MRR" },
+        { value: String(summary.lessons_paid || 0), label: "Lessons paid" },
+      ]));
+
+      // Net-revenue trend.
+      var byMonth = {};
+      ((revenue && revenue.revenue) || []).forEach(function (r) { byMonth[r.month] = (byMonth[r.month] || 0) + (r.net_minor || 0); });
+      var months = Object.keys(byMonth).sort();
+      if (months.length) {
+        var trendCard = el("div", { class: "cf-card", style: "margin-top:12px" });
+        trendCard.appendChild(C.sectionHead("Net revenue — by month"));
+        trendCard.appendChild(C.bars(months.map(function (m) {
+          return { label: m.slice(5) + "/" + m.slice(2, 4), value: byMonth[m] / 100, title: m + " · " + UI.money(byMonth[m], cur) };
+        }), { fmt: function (v) { return UI.money(Math.round(v * 100), cur); }, empty: "No revenue yet." }));
+        host.appendChild(trendCard);
+      }
+
+      // Growth & customers (first-party analytics, last 30 days).
+      var ak = analytics.kpis || {}, nps = analytics.nps || {};
+      host.appendChild(el("div", { style: "margin-top:18px" }));
+      host.appendChild(C.sectionHead("Last 30 days — growth"));
+      host.appendChild(C.stats([
+        { value: String(ak.visits || 0), label: "Website visits" },
+        { value: String(ak.unique_visitors || 0), label: "Unique visitors" },
+        { value: String(ak.new_customers || 0), label: "New customers" },
+        { value: String(ak.bookings || 0), label: "Bookings" },
+        { value: (nps.total ? String(nps.score) : "—"), label: "NPS" + (nps.total ? " (" + nps.total + ")" : "") },
+      ]));
+
+      // What needs action.
+      var pending = ((refunds && refunds.requests) || []).filter(function (r) { return r.status === "pending"; }).length;
+      var actions = el("div", { class: "cf-card", style: "margin-top:18px" });
+      actions.appendChild(C.sectionHead("Quick actions"));
+      var row = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap" });
+      row.appendChild(el("button", { class: "cf-btn" + (pending ? " cf-btn-primary" : ""),
+        text: pending ? "Review " + pending + " refund request" + (pending === 1 ? "" : "s") + " →" : "Billing & refunds →",
+        onclick: function () { showTab("money"); } }));
+      row.appendChild(el("button", { class: "cf-btn", text: "Open the diary →", onclick: function () { showTab("diary"); } }));
+      row.appendChild(el("button", { class: "cf-btn", text: "People →", onclick: function () { showTab("people"); } }));
+      row.appendChild(el("button", { class: "cf-btn", text: "Full insights →", onclick: function () { showTab("insights"); } }));
+      row.appendChild(el("a", { class: "cf-btn", href: "/settings.html", text: "⚙ Settings" }));
+      actions.appendChild(row);
+      host.appendChild(actions);
+    } catch (e) {
+      UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) }));
+    }
+  }
+
+  // ---- Diary tab — the timeline + class management (sub-tabbed) --------------
+  var diaryTab = "timeline";
+  function renderDiaryTab(panel) {
+    panel.appendChild(UI.subtabs(diaryTab, [["timeline", "Timeline"], ["classes", "Classes"]],
+      function (k) { diaryTab = k; showTab("diary"); }));
+    var body = el("div"); panel.appendChild(body);
+    if (diaryTab === "classes") renderClasses(body); else renderDiary(body);
+  }
+
+  // ---- Money tab — billing (refunds/payments) + the financial cockpit --------
+  function renderMoney(panel) {
+    renderBilling(panel);
+    renderCockpit(panel);
   }
 
   // Business Overview — rendered INLINE in this tab (no iframe, no navigation). We build the
