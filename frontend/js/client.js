@@ -127,6 +127,9 @@
   function kv(k, v) { return el("div", { class: "cf-kv" }, [el("div", { class: "cf-kv-k", text: k }), el("div", { class: "cf-kv-v" }, typeof v === "string" ? [document.createTextNode(v)] : [v])]); }
   var TYPE_LABEL = { court: "Court", lesson: "Lesson", class: "Class" };
   function typeLabel(t) { return TYPE_LABEL[t] || "Booking"; }
+  var DESC = { court: "Court booking", lesson: "Private lesson", class: "Class", membership: "Membership" };
+  function pretty(s) { if (!s) return "Charge"; var k = String(s).toLowerCase(); return DESC[k] || (s.charAt(0).toUpperCase() + s.slice(1)); }
+  function firstName() { var n = NAME || (principal && principal.email ? principal.email.split("@")[0] : ""); return (n || "there").split(" ")[0]; }
   function timeRange(b) {
     try { return UI.fmtTime(b.starts_at) + "–" + UI.fmtTime(b.ends_at); } catch (e) { return ""; }
   }
@@ -157,7 +160,7 @@
     var chip = plan.is_trial ? ("🎁 Free week · " + (plan.trial_days_left || 0) + "d")
       : (plan.active ? "⭐ Member" : "Pay as you go");
     wrap.appendChild(el("div", { class: "cf-greet" }, [
-      el("div", {}, [el("h1", { text: greet() + ", " + (NAME.split(" ")[0] || "there") }), el("p", { text: "Ready to play?" })]),
+      el("div", {}, [el("h1", { text: greet() + ", " + firstName() }), el("p", { text: "Ready to play?" })]),
       el("span", { class: "cf-greet-plan", text: chip }),
     ]));
 
@@ -384,7 +387,7 @@
       (stmt.items || []).forEach(function (it) {
         ol.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { itemOpen(it); } }, [
           el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: it.description || it.category || "Charge" }),
+            el("div", { class: "cf-item-t", text: pretty(it.description || it.category) }),
             el("div", { class: "cf-item-s", text: [it.category, it.coach_name, it.date ? UI.fmtDate(it.date) : ""].filter(Boolean).join(" · ") }),
           ]),
           el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [
@@ -488,20 +491,21 @@
     catch (e) { set(el("div", {}, [backBar("Billing", "#/billing"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
     var cur = r.currency || "ZAR";
     var refunded = (r.refunded_minor || 0) > 0;
+    var paid = r.status === "paid" || refunded;
     var wrap = el("div", {});
     wrap.appendChild(backBar("Billing", "#/billing"));
     var c = card([
       el("div", { class: "cf-detail-h" }, [
-        el("div", {}, [el("div", { class: "cf-muted", style: "font-size:.78rem;font-weight:700", text: "RECEIPT " + (r.receipt_no || "") }),
+        el("div", {}, [el("div", { class: "cf-muted", style: "font-size:.78rem;font-weight:700", text: (paid ? "RECEIPT " : "CHARGE ") + (r.receipt_no || "") }),
           el("h1", { style: "margin:4px 0 2px;font-size:1.3rem", text: money(r.amount_minor, cur) })]),
-        statusChip(refunded ? "refunded" : (r.status || "paid")),
+        statusChip(refunded ? "refunded" : (r.status === "open" ? "owed" : (r.status || "paid"))),
       ]),
       el("div", { class: "cf-muted", style: "margin-bottom:6px", text: (r.issued_at ? UI.fmtDate(r.issued_at) : "") + (r.payer_email ? " · " + r.payer_email : "") }),
     ]);
     var lines = el("div", { style: "margin-top:6px" });
     (r.lines || []).forEach(function (l) {
       lines.appendChild(el("div", { class: "cf-item" }, [
-        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: l.description || "Item" + (l.qty > 1 ? " ×" + l.qty : "") })]),
+        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: pretty(l.description) + (l.qty > 1 ? " ×" + l.qty : "") })]),
         el("span", { style: "font-weight:600", text: money(l.amount_minor, cur) }),
       ]));
     });
@@ -510,9 +514,9 @@
       el("div", { class: "cf-kv-k", text: "Total" }), el("div", { class: "cf-kv-v", style: "font-weight:800;text-align:right", text: money(r.amount_minor, cur) })]));
     if (refunded) c.appendChild(kv("Refunded", el("span", { style: "color:var(--danger);font-weight:700", text: "−" + money(r.refunded_minor, cur) })));
     wrap.appendChild(c);
-    var acts = el("div", { class: "cf-row", style: "gap:8px;margin-top:14px" }, [
-      el("a", { class: "cf-btn cf-btn-ghost", href: "/receipt.html?order=" + encodeURIComponent(orderId), target: "_blank", text: "Print / PDF" }),
-    ]);
+    var acts = el("div", { class: "cf-row", style: "gap:8px;margin-top:14px" });
+    if (r.status === "open") acts.appendChild(el("button", { class: "cf-btn cf-btn-primary", text: "Pay now · " + money(r.amount_minor, cur), onclick: function () { payOrders([orderId]); } }));
+    if (paid) acts.appendChild(el("a", { class: "cf-btn cf-btn-ghost", href: "/receipt.html?order=" + encodeURIComponent(orderId), target: "_blank", text: "Print / PDF" }));
     wrap.appendChild(acts);
     set(wrap);
   }
