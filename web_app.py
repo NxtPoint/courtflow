@@ -92,6 +92,59 @@ CLERK_PUBLISHABLE_KEY = os.environ.get("CLERK_PUBLISHABLE_KEY", "").strip()
 AUTH_ENABLED = os.environ.get("AUTH_ENABLED", "0").strip()
 AFTER_LOGIN_URL = os.environ.get("AUTH_AFTER_LOGIN_URL", "/portal").strip()
 
+# --- Google marketing tags (go-live cutover §5). ALL env-gated + DARK by default:
+# nothing renders until Tomo sets the IDs in Render. The platform's own first-party
+# beacon (analytics.js) is unaffected — this is the campaign-attribution layer.
+GA4_MEASUREMENT_ID = os.environ.get("GA4_MEASUREMENT_ID", "").strip()      # G-XXXXXXX
+GOOGLE_ADS_ID = os.environ.get("GOOGLE_ADS_ID", "").strip()                # AW-XXXXXXX
+# JSON map of semantic event -> Ads conversion send_to, e.g.
+#   {"purchase":"AW-123/abcXYZ","sign_up":"AW-123/defQRS"}  (labels from the Ads console)
+GOOGLE_ADS_CONVERSIONS_RAW = os.environ.get("GOOGLE_ADS_CONVERSIONS", "").strip()
+# Search Console verification: the HTML-file method (1050 pattern) and/or a meta tag.
+GSC_VERIFICATION_FILE = os.environ.get("GSC_VERIFICATION_FILE", "").strip()  # googleXXduration.html
+GSC_META_TOKEN = os.environ.get("GSC_META_TOKEN", "").strip()               # <meta> content value
+
+
+def _ads_conversions() -> dict:
+    """Parse GOOGLE_ADS_CONVERSIONS (event -> Ads send_to). Bad JSON -> {} (never 500s a page)."""
+    if not GOOGLE_ADS_CONVERSIONS_RAW:
+        return {}
+    try:
+        m = json.loads(GOOGLE_ADS_CONVERSIONS_RAW)
+        return m if isinstance(m, dict) else {}
+    except Exception:
+        log.warning("GOOGLE_ADS_CONVERSIONS is not valid JSON; ignoring")
+        return {}
+
+
+def _google_tag_head() -> str:
+    """The gtag.js loader + GA4/Ads config, injected into <head>. Empty string (dark)
+    until GA4_MEASUREMENT_ID or GOOGLE_ADS_ID is set. cfTrack/cfConversion are defined
+    separately as safe no-ops, so call sites work whether or not this is present."""
+    if not (GA4_MEASUREMENT_ID or GOOGLE_ADS_ID):
+        return ""
+    primary = GA4_MEASUREMENT_ID or GOOGLE_ADS_ID
+    cfgs = ""
+    if GA4_MEASUREMENT_ID:
+        cfgs += f"gtag('config',{json.dumps(GA4_MEASUREMENT_ID)});"
+    if GOOGLE_ADS_ID:
+        cfgs += f"gtag('config',{json.dumps(GOOGLE_ADS_ID)});"
+    gmap = json.dumps({"ga4": GA4_MEASUREMENT_ID or None, "adsId": GOOGLE_ADS_ID or None,
+                       "adsConversions": _ads_conversions()})
+    return (
+        f"<script async src=\"https://www.googletagmanager.com/gtag/js?id={primary}\"></script>\n"
+        "<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}"
+        f"gtag('js',new Date());{cfgs}"
+        f"window.__CF=Object.assign(window.__CF||{{}},{{gtag:{gmap}}});</script>\n"
+    )
+
+
+def _gsc_meta() -> str:
+    """Search Console meta-tag verification (dark unless GSC_META_TOKEN set)."""
+    if not GSC_META_TOKEN:
+        return ""
+    return f"<meta name=\"google-site-verification\" content=\"{GSC_META_TOKEN}\">\n"
+
 
 # ---------------------------------------------------------------------------
 # Wix -> Render 301 layer (go-live cutover, CUTOVER_RUNBOOK.md step 2)
@@ -137,13 +190,26 @@ def _inject_head(html: str, b: Branding) -> str:
         "__SITE_BASE": site_base,
     }
     head = (
-        f"<style id=\"cf-theme\">{theme_css_vars(b)}</style>\n"
-        f"<script>window.__CF=Object.assign(window.__CF||{{}},{json.dumps(cfg)});"
+        # GSC verification meta (dark unless GSC_META_TOKEN set) — early in <head> as Google prefers.
+        _gsc_meta()
+        + f"<style id=\"cf-theme\">{theme_css_vars(b)}</style>\n"
+        + f"<script>window.__CF=Object.assign(window.__CF||{{}},{json.dumps(cfg)});"
         f"window.__API_BASE={json.dumps(API_BASE)};"
-        f"window.__CLERK_PUBLISHABLE_KEY={json.dumps(CLERK_PUBLISHABLE_KEY)};</script>\n"
+        f"window.__CLERK_PUBLISHABLE_KEY={json.dumps(CLERK_PUBLISHABLE_KEY)};"
+        # Conversion API — always defined as SAFE NO-OPS so call sites (pay-return, signup, ...)
+        # can call them whether or not the Google tag is configured. When gtag is present
+        # (_google_tag_head below), cfTrack fires a GA4 event and cfConversion also fires the
+        # mapped Ads conversion (send_to from window.__CF.gtag.adsConversions).
+        "window.cfTrack=window.cfTrack||function(n,p){if(window.gtag){gtag('event',n,p||{});}};"
+        "window.cfConversion=window.cfConversion||function(n,p){if(window.cfTrack)window.cfTrack(n,p);"
+        "var m=(window.__CF&&window.__CF.gtag&&window.__CF.gtag.adsConversions)||{};"
+        "if(window.gtag&&m[n]){gtag('event','conversion',Object.assign({send_to:m[n]},p||{}));}};"
+        "</script>\n"
         # First-party page-view beacon (powers the Business Overview dashboard). Loaded on every
         # served page; reads window.__API_BASE set just above. Privacy-first, no third parties.
-        f"<script src=\"/js/analytics.js\" async></script>\n"
+        + f"<script src=\"/js/analytics.js\" async></script>\n"
+        # Google tag (GA4 + Ads) — campaign attribution + conversions. Dark until IDs set.
+        + _google_tag_head()
     )
     if "</head>" in html:
         return html.replace("</head>", head + "</head>", 1)
@@ -423,6 +489,11 @@ def app_shell_html(page: str):
     /book, /my, ... routes serve, so every in-app link resolves. App pages only."""
     if "/" in page or "\\" in page or page.startswith("."):
         abort(404)
+    # Google Search Console HTML-file verification (1050 pattern) — dark unless the env
+    # token is set. Google's file at /google<hash>.html just contains this one line.
+    if GSC_VERIFICATION_FILE and (page + ".html").lower() == GSC_VERIFICATION_FILE.lower():
+        return Response(f"google-site-verification: {GSC_VERIFICATION_FILE}",
+                        mimetype="text/html")
     if os.path.isfile(os.path.join(APP_DIR, page + ".html")):
         return _app_shell(page + ".html")
     abort(404)

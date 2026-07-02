@@ -55,6 +55,17 @@
         try {
           var res = await auth.apiJSON("/api/billing/yoco/order/" + encodeURIComponent(orderId));
           if (res && res.status === "paid") {
+            // Google Ads / GA4 conversion (go-live cutover §5b). Safe no-op until the tag
+            // is configured (cfConversion is always defined by web_app's head injection).
+            // Fires once — we return immediately after. Covers online booking / membership
+            // / pack revenue (all online-paid orders land here).
+            try {
+              if (window.cfConversion) window.cfConversion("purchase", {
+                value: (res.amount_minor || 0) / 100,
+                currency: res.currency_code || "ZAR",
+                transaction_id: orderId
+              });
+            } catch (e) {}
             setStatus("Payment received ✓",
               "Your booking is confirmed. A receipt is on its way to your inbox.");
             actions(receiptLink + '<a ' + GHOST + ' href="/my.html">My bookings</a>');

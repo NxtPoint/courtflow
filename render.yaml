@@ -126,6 +126,20 @@ services:
       # the real domains are here too (also in branding.py registry) for go-live.
       - key: MARKETING_HOSTS
         value: "courtflow-web.onrender.com,nextpointtennis.com,www.nextpointtennis.com"
+      # --- Google marketing tags (go-live cutover §5). All DARK until filled at cutover.
+      # Values are PUBLIC (they appear in page source), so committed inline (blank) not sync:false.
+      # GA4 + Ads inject via web_app._inject_head; conversions fire through window.cfConversion.
+      - key: GA4_MEASUREMENT_ID          # G-XXXXXXXXXX  (GA4 web stream)
+        value: ""
+      - key: GOOGLE_ADS_ID               # AW-XXXXXXXXXX (Google Ads global tag)
+        value: ""
+      - key: GOOGLE_ADS_CONVERSIONS      # JSON {"purchase":"AW-123/abcXYZ","sign_up":"AW-123/defQRS"}
+        value: ""
+      # Search Console verification — set EITHER the HTML-file name OR the meta token.
+      - key: GSC_VERIFICATION_FILE       # e.g. google1234abcd.html (served at that path)
+        value: ""
+      - key: GSC_META_TOKEN              # <meta google-site-verification content=...> alternative
+        value: ""
 
   # =========================================
   # Crons — DEFERRED (not created at launch; nothing depends on them yet).
