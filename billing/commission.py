@@ -512,6 +512,64 @@ def mark_arrears_collected(session, *, club_id, arrears_id, coach_user_id=None,
             "commission_pct": str(pct)}
 
 
+def client_service_breakdown(session, *, club_id, coach_user_id, client_user_id, month=None) -> Dict[str, Any]:
+    """One client's coaching grouped BY SERVICE (product + duration): e.g. 'Private lesson · 45 min ·
+    3 · R750', with the individual sessions (booking_id → the event story). Composes diary.booking +
+    order_line + price + product, scoped to this coach + client. `month` (YYYY-MM) filters by the
+    lesson date; omit for all-time. Returns {total_minor, services:[{key,label,count,total_minor,
+    items:[{booking_id,starts_at,amount_minor,status}]}]}. Guarded → empty."""
+    where_month = "AND to_char(b.starts_at,'YYYY-MM') = :ym" if month else ""
+    params: Dict[str, Any] = {"c": club_id, "coach": str(coach_user_id), "client": str(client_user_id)}
+    if month:
+        params["ym"] = month
+    try:
+        rows = session.execute(
+            text("""
+                SELECT b.id AS booking_id, b.starts_at, b.ends_at, b.status AS bstatus,
+                       ol.amount_minor, o.status AS ostatus, o.settlement_mode,
+                       pr.duration_minutes AS price_dur, prod.id AS product_id, prod.name AS product_name
+                FROM diary.booking b
+                LEFT JOIN billing.order_line ol ON ol.booking_id = b.id
+                LEFT JOIN billing."order" o ON o.id = ol.order_id
+                LEFT JOIN billing.price pr ON pr.id = ol.price_id
+                LEFT JOIN billing.product prod ON prod.id = pr.product_id
+                WHERE b.club_id = :c AND b.coach_user_id = :coach AND b.booked_by_user_id = :client
+                  AND b.booking_type = 'lesson'
+                  AND b.status IN ('confirmed','held','completed','no_show')
+                  """ + where_month + """
+                ORDER BY b.starts_at DESC
+            """),
+            params,
+        ).mappings().all()
+    except Exception:
+        log.debug("client_service_breakdown suppressed", exc_info=False)
+        rows = []
+
+    _ST = {"paid": "paid", "open": "owed", "awaiting_payment": "pending", "refunded": "refunded",
+           "void": "cancelled", "written_off": "written_off"}
+    groups: Dict[str, Any] = {}
+    total = 0
+    for r in rows:
+        dur = int(r["price_dur"] or 0)
+        if not dur and r["starts_at"] and r["ends_at"]:
+            dur = int((r["ends_at"] - r["starts_at"]).total_seconds() // 60)
+        name = r["product_name"] or "Lesson"
+        key = (str(r["product_id"]) if r["product_id"] else "x") + "-" + str(dur)
+        label = name + ((" · " + str(dur) + " min") if dur else "")
+        amt = int(r["amount_minor"] or 0)
+        covered = r["settlement_mode"] in ("membership_covered", "free", "token")
+        st = "covered" if (covered and amt == 0) else _ST.get(r["ostatus"], r["ostatus"] or "—")
+        g = groups.setdefault(key, {"key": key, "label": label, "count": 0, "total_minor": 0, "items": []})
+        g["count"] += 1
+        g["total_minor"] += amt
+        total += amt
+        g["items"].append({"booking_id": str(r["booking_id"]),
+                           "starts_at": r["starts_at"].isoformat() if r["starts_at"] else None,
+                           "amount_minor": amt, "status": st})
+    services = sorted(groups.values(), key=lambda x: -x["total_minor"])
+    return {"total_minor": total, "services": services}
+
+
 def client_invoice_data(session, *, club_id, coach_user_id, client_user_id, month=None) -> Dict[str, Any]:
     """Build ONE client's coaching invoice for a month: the coach's lessons/classes with this client,
     each line paid / owed / written-off, plus totals. Coach-scoped (only this coach's coaching — never

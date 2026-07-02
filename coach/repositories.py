@@ -762,10 +762,17 @@ def get_client(session, *, club_id, user_id, client_user_id, month=None):
             }
             head["arrears"] = [a for a in (stmt.get("arrears_items") or [])
                                if str(a.get("client_user_id")) == cid]
+            # By-service breakdown (client → services → sessions → event story) — same drill as the
+            # client billing pattern.
+            bd = _comm.client_service_breakdown(session, club_id=club_id, coach_user_id=user_id,
+                                                client_user_id=client_user_id, month=month)
+            head["services"] = bd["services"]
+            head["services_total_minor"] = bd["total_minor"]
         except Exception:
             log.info("get_client: month money skipped (commission unavailable) client=%s", client_user_id)
             head["money"] = None
             head["arrears"] = []
+            head["services"] = []
     return head
 
 

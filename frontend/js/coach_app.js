@@ -403,6 +403,33 @@
     ])]));
     wrap.appendChild(head);
 
+    // By service — client → services → sessions → the ONE event story (same drill as client billing).
+    var svcCard = card([window.CRMUI.sectionHead("By service · " + monthLabel(MONTH))], "cf-mt");
+    var services = c.services || [];
+    if (!services.length) svcCard.appendChild(el("div", { class: "cf-empty", text: "No coaching this month." }));
+    else {
+      var sl = el("div", { class: "cf-list" });
+      services.forEach(function (svc) {
+        var sessBox = el("div", { style: "display:none" });
+        (svc.items || []).forEach(function (it) {
+          sessBox.appendChild(el("div", { class: "cf-item cf-item-tap", style: "padding-left:18px", onclick: function () { go("#/event/" + it.booking_id); } }, [
+            el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: UI.fmtDate(it.starts_at) }), el("div", { class: "cf-item-s", text: (function () { try { return UI.fmtTime(it.starts_at); } catch (e) { return ""; } })() })]),
+            el("span", { style: "font-weight:600", text: money(it.amount_minor, cur) }),
+            statusChip(it.status),
+          ]));
+        });
+        var chev = el("span", { class: "cf-muted", text: "▾" });
+        var rowHead = el("div", { class: "cf-item cf-item-tap", onclick: function () { var open = sessBox.style.display === "none"; sessBox.style.display = open ? "" : "none"; chev.textContent = open ? "▴" : "▾"; } }, [
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: svc.label }), el("div", { class: "cf-item-s", text: svc.count + " " + (svc.count === 1 ? "session" : "sessions") })]),
+          el("span", { style: "font-weight:700", text: money(svc.total_minor, cur) }),
+          chev,
+        ]);
+        sl.appendChild(el("div", {}, [rowHead, sessBox]));
+      });
+      svcCard.appendChild(sl);
+    }
+    wrap.appendChild(svcCard);
+
     // Owed & written-off (with actions)
     wrap.appendChild(card([window.CRMUI.sectionHead("Owed & written-off"), window.CRMUI.lineItems((c.arrears || []), {
       currency: cur, label: function () { return "Lesson"; }, sub: function (it) { return it.starts_at ? UI.fmtDate(it.starts_at) : ""; },
@@ -414,18 +441,12 @@
       ],
     })], "cf-mt"));
 
-    // Upcoming + sessions this month → each drills to the event story
+    // Upcoming → each drills to the event story
     var up = (c.upcoming || []);
     var upC = card([window.CRMUI.sectionHead("Upcoming")], "cf-mt");
     if (!up.length) upC.appendChild(el("div", { class: "cf-empty", text: "No upcoming sessions." }));
     else { var ul = el("div", { class: "cf-list" }); up.forEach(function (h) { ul.appendChild(sessionRow(h)); }); upC.appendChild(ul); }
     wrap.appendChild(upC);
-
-    var ym = MONTH, hist = (c.history || []).filter(function (h) { return (h.starts_at || "").slice(0, 7) === ym; });
-    var hC = card([window.CRMUI.sectionHead("Sessions in " + monthLabel(ym))], "cf-mt");
-    if (!hist.length) hC.appendChild(el("div", { class: "cf-empty", text: "No sessions this month." }));
-    else { var hl = el("div", { class: "cf-list" }); hist.forEach(function (h) { hl.appendChild(sessionRow(h)); }); hC.appendChild(hl); }
-    wrap.appendChild(hC);
     set(wrap);
   }
   // A session row inside a client record (has booking_id) → event story.

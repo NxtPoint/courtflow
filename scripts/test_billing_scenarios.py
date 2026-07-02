@@ -640,6 +640,21 @@ def sc_abandoned_reclaim_on_read(s, fx):
           str(st.get("count")) + "/" + str(st.get("total_owed_minor")))
 
 
+def sc_client_by_service(s, fx):
+    print("\n# Coach client record: sessions grouped BY SERVICE, drillable to the event")
+    for hh in (9, 11):
+        B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, hh)), ends_at=iso(at(fx, hh + 1)), settlement_mode="at_court")
+    bd = CM.client_service_breakdown(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
+                                     client_user_id=fx.member, month=None)
+    check("by-service groups the 2 lessons into one service",
+          len(bd["services"]) == 1 and bd["services"][0]["count"] == 2, str(bd.get("services")))
+    check("service total = both lessons", bd["total_minor"] == bd["services"][0]["total_minor"] and bd["total_minor"] > 0, str(bd["total_minor"]))
+    check("each session carries booking_id for the event drill",
+          all(it.get("booking_id") for it in bd["services"][0]["items"]), str(bd["services"][0]["items"]))
+
+
 def sc_dispute_routing(s, fx):
     print("\n# Dispute routing: a coaching refund → the coach decides; a court refund → the club")
     # A paid LESSON (coaching service) → routes to the coach.
@@ -844,6 +859,7 @@ SCENARIOS = [
     sc_refund_clawback,
     sc_membership_cancel_voids_order,
     sc_dispute_routing,
+    sc_client_by_service,
     sc_client_month_end,
     sc_lockstep_desk_pay,
     sc_void_clears_arrears,
