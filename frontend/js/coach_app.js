@@ -192,40 +192,84 @@
   }
 
   // ---- SCHEDULE (agenda + time-off + book-for-client) ----------------------
+  // ---- SCHEDULE (the weekly calendar — tap any booking → the ONE event story) --------------
+  var WK_H0 = 7, WK_H1 = 21, WK_ROW = 46, WK = null;   // 07:00–21:00, 46px/hour (matches .cf-cal-cell)
+  function mondayOf(d) { var x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
   async function renderSchedule() {
-    loading();
-    var from = UI.dateKey(new Date()), to = UI.dateKey(UI.addDays(new Date(), 28));
-    var bookings = [];
-    try { bookings = (await window.API.bookings({ as_coach: 1, date_from: from, date_to: to })).bookings || []; } catch (e) {}
-    bookings = bookings.filter(function (b) { return ["confirmed", "held", "completed", "requested", "proposed"].indexOf(b.status) >= 0; });
-    bookings.sort(function (a, b) { return new Date(a.starts_at) - new Date(b.starts_at); });
+    if (!WK) WK = mondayOf(new Date());
+    var range = UI.fmtDate(WK.toISOString()) + " – " + UI.fmtDate(UI.addDays(WK, 6).toISOString());
     var wrap = el("div", {});
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:12px" }, [
+    wrap.appendChild(el("div", { class: "cf-row", style: "align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap" }, [
       el("h1", { style: "margin:0", text: "Schedule" }),
-      el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ Book", onclick: bookForClient }),
+      el("span", { class: "cf-chip", text: range }),
+      el("span", { class: "cf-spacer" }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "‹", title: "Previous week", onclick: function () { WK = UI.addDays(WK, -7); renderSchedule(); } }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "This week", onclick: function () { WK = mondayOf(new Date()); renderSchedule(); } }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "›", title: "Next week", onclick: function () { WK = UI.addDays(WK, 7); renderSchedule(); } }),
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ Book a client", onclick: bookForClient }),
     ]));
-    if (!bookings.length) wrap.appendChild(el("div", { class: "cf-empty", text: "Nothing booked in the next 4 weeks." }));
-    else {
-      // group by day
-      var byDay = {};
-      bookings.forEach(function (b) { var d = (b.starts_at || "").slice(0, 10); (byDay[d] = byDay[d] || []).push(b); });
-      Object.keys(byDay).sort().forEach(function (d) {
-        wrap.appendChild(el("div", { class: "cf-muted", style: "font-weight:700;font-size:.8rem;margin:14px 4px 6px;text-transform:uppercase;letter-spacing:.03em", text: UI.fmtDate(d) }));
-        var c = el("div", { class: "cf-card", style: "padding:6px 14px" });
-        var l = el("div", { class: "cf-list" }); byDay[d].forEach(function (b) { l.appendChild(eventRow(b)); }); c.appendChild(l);
-        wrap.appendChild(c);
-      });
-    }
-    // Time off
+    var gridHost = el("div", {}); gridHost.appendChild(el("div", { class: "cf-loading", text: "Loading your week…" }));
+    wrap.appendChild(gridHost);
     var toCard = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
       el("h2", { style: "margin:0", text: "Time off" }),
       el("button", { class: "cf-btn cf-btn-sm", text: "+ Block time", onclick: timeOffModal }),
-    ])], "");
+    ])]);
     toCard.style.marginTop = "16px";
     toCard.appendChild(el("div", { id: "coach-timeoff", class: "cf-loading", text: "Loading…" }));
     wrap.appendChild(toCard);
     set(wrap);
     loadTimeOff();
+    var from = UI.dateKey(WK), to = UI.dateKey(UI.addDays(WK, 7)), lessons = [], classes = [];
+    try { lessons = (await window.API.bookings({ date_from: from, date_to: to, as_coach: 1 })).bookings || []; } catch (e) {}
+    try { classes = ((await window.API.classes({ date_from: from, date_to: to })).classes || []).filter(function (c) { return String(c.coach_user_id) === String(principal.user_id); }); } catch (e) {}
+    drawWeek(gridHost, lessons, classes);
+  }
+  function drawWeek(box, lessons, classes) {
+    UI.clear(box);
+    var days = []; for (var i = 0; i < 7; i++) days.push(UI.addDays(WK, i));
+    var dayKey = {}; days.forEach(function (d, i) { dayKey[UI.dateKey(d)] = i; });
+    var slots = WK_H1 - WK_H0, todayKey = UI.dateKey(new Date());
+    var wrapEl = el("div", { class: "cf-cal-wrap" });
+    var grid = el("div", { class: "cf-cal" });
+    grid.style.gridTemplateColumns = "52px repeat(7, minmax(84px,1fr))";
+    grid.style.gridTemplateRows = "auto repeat(" + slots + ", " + WK_ROW + "px)";
+    grid.appendChild(el("div", { class: "cf-cal-head" }));
+    days.forEach(function (d) {
+      grid.appendChild(el("div", { class: "cf-cal-head",
+        text: d.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", timeZone: UI.CLUB_TZ }),
+        style: UI.dateKey(d) === todayKey ? "color:var(--green-600);font-weight:800" : "" }));
+    });
+    var cellByDay = {};
+    for (var s = 0; s < slots; s++) {
+      grid.appendChild(el("div", { class: "cf-cal-time", text: ("0" + (WK_H0 + s)).slice(-2) + ":00" }));
+      days.forEach(function (d, di) { var cell = el("div", { class: "cf-cal-cell", style: "cursor:default" }); if (s === 0) cellByDay[di] = cell; grid.appendChild(cell); });
+    }
+    function place(startIso, endIso, kind, text, title, onclick, cancelled) {
+      var start = new Date(startIso), end = new Date(endIso);
+      var di = dayKey[UI.dateKey(start)]; if (di === undefined || !cellByDay[di]) return;
+      var mins = (start.getHours() - WK_H0) * 60 + start.getMinutes();
+      var dur = Math.max(30, (end - start) / 60000), winMins = (WK_H1 - WK_H0) * 60;
+      if (mins >= winMins || mins + dur <= 0) return;
+      var top = Math.max(0, mins) / 60 * WK_ROW;
+      var height = Math.max(16, (Math.min(mins + dur, winMins) - Math.max(0, mins)) / 60 * WK_ROW - 2);
+      cellByDay[di].appendChild(el("div", { class: "cf-ev " + kind + (cancelled ? " cancelled" : ""),
+        style: "top:" + top + "px;height:" + height + "px", title: title,
+        onclick: function (e) { e.stopPropagation(); if (onclick) onclick(); } }, [el("div", { text: text })]));
+    }
+    lessons.forEach(function (b) {
+      var who = b.booked_by_name || "Lesson";
+      // GOLDEN RULE: a booking always opens the ONE event story (accept/reschedule/cancel/mark live there).
+      place(b.starts_at, b.ends_at, "lesson", UI.fmtTime(b.starts_at) + " " + who,
+        who + " · " + UI.fmtRange(b.starts_at, b.ends_at) + (b.court_name ? " · " + b.court_name : "") + " · " + (b.status || ""),
+        function () { go("#/event/" + b.id); }, b.status === "cancelled" || b.status === "no_show");
+    });
+    classes.forEach(function (c) {
+      place(c.starts_at, c.ends_at, "class", UI.fmtTime(c.starts_at) + " " + (c.class_name || "Class"),
+        (c.class_name || "Class") + " · " + (c.enrolled || 0) + "/" + (c.capacity || 0) + " enrolled", null, c.status === "cancelled");
+    });
+    if (!lessons.length && !classes.length) box.appendChild(el("div", { class: "cf-empty", style: "margin-bottom:8px", text: "Nothing scheduled this week." }));
+    wrapEl.appendChild(grid); box.appendChild(wrapEl);
+    box.appendChild(el("p", { class: "cf-muted", style: "margin-top:8px;font-size:.8rem", text: "Tap a lesson to open it — accept, reschedule, cancel or mark it done." }));
   }
   async function loadTimeOff() {
     var box = document.getElementById("coach-timeoff"); if (!box) return;
@@ -544,18 +588,15 @@
     });
     wrap.appendChild(you);
 
-    // Services & packages
+    // Services & packages — with lifecycle (activate / hide / terminate) per service & class.
     var sc = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [el("h2", { style: "margin:0", text: "Services & packages" }), el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ New", onclick: newServiceModal })])]);
+    sc.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 8px;font-size:.85rem", text: "Prices, payment options & packages per service. Tap a service to edit; use the buttons to deactivate/hide or terminate." }));
     var mine = services.filter(function (s) { return s.coach_user_id && String(s.coach_user_id) === String(principal.user_id); });
-    var list = mine.length ? mine : services;
-    if (!list.length) sc.appendChild(el("div", { class: "cf-empty", text: "No services yet — add your first." }));
-    else { var sl = el("div", { class: "cf-list" }); list.forEach(function (s) {
-      sl.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/service/" + s.id); } }, [
-        el("span", { class: "cf-chip " + (s.service_kind || s.kind || ""), text: (s.service_kind || s.kind || "service") }),
-        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: s.name }), el("div", { class: "cf-item-s", text: (s.variation_count || (s.variations || []).length || 0) + " option(s) · from " + money(s.from_amount_minor) })]),
-        el("span", { class: "cf-muted", text: "›" }),
-      ]));
-    }); sc.appendChild(sl); }
+    var all = mine.length ? mine : services;
+    sc.appendChild(UI.lifecycleBar(svcFilter, function (f) { svcFilter = f; renderSetup(); }));
+    var list = all.filter(function (s) { return svcFilter === "all" || (s.status || "active") === svcFilter; });
+    if (!list.length) sc.appendChild(el("div", { class: "cf-empty", text: "No " + (svcFilter === "all" ? "" : svcFilter + " ") + "services." }));
+    else { var sl = el("div", { class: "cf-list" }); list.forEach(function (s) { sl.appendChild(serviceRow(s)); }); sc.appendChild(sl); }
     wrap.appendChild(sc);
 
     // Commission (read-only)
@@ -566,6 +607,21 @@
       ]));
     }
     set(wrap);
+  }
+  var svcFilter = "active";
+  function serviceRow(s) {
+    function setStatus(ns) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { status: ns } }).then(function () { UI.toast("Updated.", "info"); renderSetup(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
+    var main = el("div", { class: "cf-item-main", style: "cursor:pointer" }, [
+      el("div", { class: "cf-row", style: "gap:8px;align-items:center;flex-wrap:wrap" }, [
+        el("span", { class: "cf-chip " + (s.service_kind || s.kind || ""), text: (s.service_kind || s.kind || "service") }),
+        el("strong", { text: s.name || "Service" }),
+        (s.status && s.status !== "active") ? UI.statusChip(s.status) : null,
+      ].filter(Boolean)),
+      el("div", { class: "cf-item-s", text: (s.variation_count || (s.variations || []).length || 0) + " option(s) · from " + money(s.from_amount_minor) }),
+    ]);
+    main.addEventListener("click", function () { go("#/service/" + s.id); });
+    var acts = el("div", { class: "cf-row", style: "gap:6px;flex-wrap:wrap" }, UI.lifeActions(s.status || "active", setStatus, { terminateConfirm: "Terminate this service? Kept for history, removed from use." }));
+    return el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:8px" + ((s.status && s.status !== "active") ? ";opacity:.6" : "") }, [main, acts]);
   }
   function newServiceModal() {
     var m = modal("New service");
