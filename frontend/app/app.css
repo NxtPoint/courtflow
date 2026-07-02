@@ -153,6 +153,17 @@ p{margin:0 0 10px}
 .cf-bottomnav a.active{color:var(--green-700)}
 .cf-bottomnav a.book .ic{width:34px;height:34px;border-radius:50%;background:var(--green);color:#fff;
   display:flex;align-items:center;justify-content:center;margin-top:-14px;box-shadow:var(--shadow-md);font-size:1.3rem}
+/* admin is responsive: the SAME nav becomes a left side-rail on desktop (owner runs the club from a desk too) */
+@media(min-width:900px){
+  .cf-admin .cf-bottomnav{top:57px;bottom:0;right:auto;width:214px;border-top:none;
+    border-right:1px solid var(--border);padding-bottom:0;background:#fff;z-index:15}
+  .cf-admin .cf-bottomnav-in{flex-direction:column;max-width:none;width:100%;margin:0;padding-top:10px}
+  .cf-admin .cf-bottomnav a{flex-direction:row;justify-content:flex-start;gap:12px;padding:12px 20px;font-size:.9rem;border-radius:0}
+  .cf-admin .cf-bottomnav a .ic{font-size:1.15rem}
+  .cf-admin .cf-bottomnav a.active{background:var(--green-050);color:var(--green-700)}
+  .cf-admin.cf-app{padding-bottom:24px}
+  .cf-admin .cf-main{margin-left:214px}
+}
 /* key/value detail rows */
 .cf-kv{display:flex;gap:12px;padding:11px 0;border-bottom:1px solid var(--border)}
 .cf-kv:last-child{border-bottom:0}

@@ -22,6 +22,11 @@
   function enc(id) { return encodeURIComponent(id); }
 
   var AdminAPI = {
+    // ---- home command-center --------------------------------------------
+    // GET /api/admin/home -> {money:{currency,owed_to_club_minor,net_revenue_minor,rent_due_minor,
+    //   active_members}, people:{new_signups_7d,coach_invites_pending,memberships_expiring_14d},
+    //   approvals:{refund_requests_pending}}
+    home: function () { return A().apiJSON("/api/admin/home"); },
     // ---- onboarding ------------------------------------------------------
     // GET /api/admin/onboarding ->
     //   {completed, steps:{profile,hours,courts,services,coaches},

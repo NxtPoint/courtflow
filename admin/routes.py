@@ -1015,6 +1015,17 @@ def _range():
             (request.args.get("to") or "").strip() or None)
 
 
+@admin_bp.get("/home")
+def get_admin_home():
+    """Owner Home command-center: money · people-attention · approvals (each guarded → zeros)."""
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        data = repo.admin_home(s, club_id=p.club_id)
+    return jsonify(data), 200
+
+
 @admin_bp.get("/financials/summary")
 def get_cockpit_summary():
     p, err = _admin()

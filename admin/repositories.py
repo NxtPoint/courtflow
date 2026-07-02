@@ -1418,6 +1418,61 @@ def cockpit_summary(session, *, club_id, dt_from=None, dt_to=None):
     }
 
 
+def admin_home(session, *, club_id):
+    """The owner Home command-center payload — money · people-attention · approvals. Every block is
+    guarded (missing/empty table -> zeros) so Home never 500s. 'Today at the club' is composed on the
+    frontend from the tz-correct diary master read; this endpoint supplies the other three focuses."""
+    from datetime import datetime, timezone
+    cur = _club_currency(session, club_id=club_id)
+
+    def _scalar(sql, params=None):
+        try:
+            return int(session.execute(text(sql), params or {"c": club_id}).scalar() or 0)
+        except Exception:
+            return 0
+
+    # Money — what the club is owed (open orders = the unified statement's unpaid debt), plus a
+    # this-month headline + coach settlement due. tz-approximate (UTC month); Money tab is precise.
+    owed = _scalar("SELECT COALESCE(SUM(amount_minor),0) FROM billing.\"order\" "
+                   "WHERE club_id = :c AND status = 'open'")
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    try:
+        summ = cockpit_summary(session, club_id=club_id, dt_from=month_start, dt_to=now)
+    except Exception:
+        summ = {}
+    money = {
+        "currency": cur,
+        "owed_to_club_minor": owed,
+        "net_revenue_minor": summ.get("net_revenue_minor", 0),
+        "rent_due_minor": summ.get("rent_due_minor", 0),
+        "active_members": summ.get("active_members", 0),
+    }
+
+    # People needing attention
+    people = {
+        "new_signups_7d": _scalar("SELECT COUNT(*) FROM iam.membership WHERE club_id = :c "
+                                  "AND role = 'member' AND created_at >= now() - interval '7 days'"),
+        "coach_invites_pending": _scalar("SELECT COUNT(*) FROM iam.coach_invite "
+                                         "WHERE club_id = :c AND status = 'pending'"),
+        "memberships_expiring_14d": _scalar(
+            "SELECT COUNT(*) FROM billing.membership_subscription WHERE club_id = :c "
+            "AND status = 'active' AND current_period_end IS NOT NULL "
+            "AND current_period_end <= now() + interval '14 days'"),
+    }
+
+    # Approvals / decisions
+    refunds_pending = 0
+    try:
+        from billing.refunds import list_refund_requests_admin
+        refunds_pending = len(list_refund_requests_admin(session, club_id=club_id, status="pending"))
+    except Exception:
+        refunds_pending = 0
+    approvals = {"refund_requests_pending": refunds_pending}
+
+    return {"money": money, "people": people, "approvals": approvals}
+
+
 def coach_user_ids(session, *, club_id):
     """Coach user_ids for the club (membership role=coach). Used to scope the statement route."""
     return [str(r) for r in session.execute(

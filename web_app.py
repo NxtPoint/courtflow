@@ -475,6 +475,13 @@ def admin_console():
     return _app_shell("admin.html")
 
 
+@app.get("/admin-app")
+def admin_console_new():
+    # The redesigned owner/admin app (responsive drill-through SPA). Served alongside the classic
+    # /admin console during the build; /admin flips here once signed off (docs/specs/ADMIN-REDESIGN.md).
+    return _app_shell("admin_app.html")
+
+
 @app.get("/dashboard")
 def dashboard():
     # Non host-switched dashboard shell (portal nav loads this, not '/').
