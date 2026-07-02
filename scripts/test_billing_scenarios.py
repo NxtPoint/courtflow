@@ -29,6 +29,7 @@ from billing import bundles as BN
 from billing import membership as MB
 from billing import refunds as RF
 from billing import ledger as LG
+from billing import statement as ST
 from billing.events import apply_payment_event
 from billing.gateway import NormalizedPaymentEvent
 from diary import pricing as PR
@@ -535,6 +536,110 @@ def sc_client_month_end(s, fx):
           empty["totals"]["paid_minor"] == 0 and empty["totals"]["owed_minor"] == 0, str(empty["totals"]))
 
 
+def _line_of(s, oid):
+    return s.execute(text("SELECT id FROM billing.order_line WHERE order_id=:o ORDER BY created_at LIMIT 1"),
+                     {"o": str(oid)}).scalar()
+
+
+def _seed_owed_arrears(s, fx, order_line_id, gross=40000):
+    s.execute(text("INSERT INTO billing.coach_arrears (club_id, coach_user_id, client_user_id, "
+                   "order_line_id, gross_minor, currency, status) "
+                   "VALUES (:c,:coach,:u,:ol,:g,'ZAR','owed')"),
+              {"c": fx.club_id, "coach": fx.coach_uid, "u": fx.member, "ol": order_line_id, "g": gross})
+
+
+def _arrears_status(s, order_line_id):
+    return s.execute(text("SELECT status FROM billing.coach_arrears WHERE order_line_id=:ol"),
+                     {"ol": order_line_id}).scalar()
+
+
+def sc_lockstep_desk_pay(s, fx):
+    print("\n# Lockstep: desk-paying an at-court lesson clears arrears + no double-commission")
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',30,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    oid = r["booking"]["order_id"]; ol = _line_of(s, oid)
+    _seed_owed_arrears(s, fx, ol)                                # an owed lesson on the coach tab
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=oid, amount_minor=40000, provider="cash",
+                          provider_payment_id="RCPT-DESK", user_id=fx.member)
+    check("desk pay cleared the coach's owed tab (lockstep)", _arrears_status(s, ol) == "collected",
+          str(_arrears_status(s, ol)))
+    bal = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    check("coach earned commission exactly once on desk pay", bal == 28000, f"bal={bal}")
+    # Simulate drift (arrears back to 'owed') then a stray 'mark collected' → guard = no double.
+    s.execute(text("UPDATE billing.coach_arrears SET status='owed' WHERE order_line_id=:ol"), {"ol": ol})
+    aid = s.execute(text("SELECT id FROM billing.coach_arrears WHERE order_line_id=:ol"), {"ol": ol}).scalar()
+    res = CM.mark_arrears_collected(s, club_id=fx.club_id, arrears_id=aid)
+    check("re-collect on an already-paid order is a no-op (guard)",
+          res.get("status") == "reconciled" and res.get("splits") == 0, str(res))
+    check("coach commission NOT doubled after stray re-collect",
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == 28000, "doubled!")
+
+
+def sc_void_clears_arrears(s, fx):
+    print("\n# Void/write-off an order also drops it off the coach tab (no commission on a forgiven lesson)")
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 11)), ends_at=iso(at(fx, 12)), settlement_mode="at_court")
+    oid = r["booking"]["order_id"]; ol = _line_of(s, oid)
+    _seed_owed_arrears(s, fx, ol)
+    ST.void_order(s, club_id=fx.club_id, order_id=oid, write_off=True, reason="goodwill")
+    check("write-off dropped the lesson off the coach tab", _arrears_status(s, ol) == "written_off",
+          str(_arrears_status(s, ol)))
+    aid = s.execute(text("SELECT id FROM billing.coach_arrears WHERE order_line_id=:ol"), {"ol": ol}).scalar()
+    res = CM.mark_arrears_collected(s, club_id=fx.club_id, arrears_id=aid)
+    check("can't collect commission on a written-off lesson",
+          res.get("splits") == 0 and CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == 0,
+          str(res))
+
+
+def sc_settlement_refund_clawback(s, fx):
+    print("\n# Refund of a 'pay all' settlement order claws back the child lesson's commission")
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',30,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    settle = ST.create_settlement_order(s, club_id=fx.club_id, user_id=fx.member)
+    check("settlement order covers the owed lesson", settle and settle["amount_minor"] == 40000, str(settle))
+    sid = settle["order_id"]
+    apply_payment_event(NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=sid,
+                        provider_payment_id="p_settle_cb", amount_minor=40000, currency="ZAR",
+                        status="succeeded", direction="charge", club_id=str(fx.club_id),
+                        user_id=str(fx.member), raw={"t": 50}), session=s)
+    check("coach earned R280 via the settlement", CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == 28000,
+          str(CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)))
+    apply_payment_event(NormalizedPaymentEvent(provider="yoco", kind="refunded", order_ref=sid,
+                        provider_payment_id="rf_settle_cb", amount_minor=0, currency="ZAR",
+                        status="refunded", direction="refund", club_id=str(fx.club_id),
+                        user_id=str(fx.member), raw={"t": 51}), session=s)
+    check("refunding the settlement claws back the child lesson's commission (→ R0)",
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == 0,
+          str(CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)))
+
+
+def sc_abandoned_reclaim_on_read(s, fx):
+    print("\n# Abandoned 'pay all' checkout re-surfaces the debt on READ (not just on retry)")
+    for hh in (9, 11):
+        B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=iso(at(fx, hh)), ends_at=iso(at(fx, hh + 1)), settlement_mode="at_court")
+    settle = ST.create_settlement_order(s, club_id=fx.club_id, user_id=fx.member)
+    sid = settle["order_id"]
+    check("while settling (in-flight), statement shows nothing owed",
+          ST.statement(s, club_id=fx.club_id, user_id=fx.member)["count"] == 0)
+    # Client abandons; the checkout ages past the in-flight grace window.
+    s.execute(text("UPDATE billing.\"order\" SET created_at = created_at - interval '40 minutes' WHERE id=:o"),
+              {"o": sid})
+    st = ST.statement(s, club_id=fx.club_id, user_id=fx.member)
+    check("an abandoned checkout re-surfaces the debt on read", st["count"] == 2 and st["total_owed_minor"] == 30000,
+          str(st.get("count")) + "/" + str(st.get("total_owed_minor")))
+
+
 def sc_dispute_routing(s, fx):
     print("\n# Dispute routing: a coaching refund → the coach decides; a court refund → the club")
     # A paid LESSON (coaching service) → routes to the coach.
@@ -695,6 +800,10 @@ SCENARIOS = [
     sc_membership_cancel_voids_order,
     sc_dispute_routing,
     sc_client_month_end,
+    sc_lockstep_desk_pay,
+    sc_void_clears_arrears,
+    sc_settlement_refund_clawback,
+    sc_abandoned_reclaim_on_read,
     sc_transaction_log,
 ]
 

@@ -43,10 +43,40 @@ def _club_currency(session, club_id) -> str:
         text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": str(club_id)}).scalar() or "ZAR"
 
 
+def _reclaim_abandoned_settlements(session, *, club_id, user_id, grace_minutes=30) -> None:
+    """Free any owed order still linked to an ABANDONED (unpaid) settlement order, so its debt shows
+    again. An abandoned 'Pay All' checkout would otherwise hide the debt (the child is filtered out by
+    settled_by_order_id) until the client retried. `grace_minutes` distinguishes an IN-FLIGHT checkout
+    (recent — leave it, the client is paying right now) from an ABANDONED one (older — reclaim):
+      - read path (statement) uses the grace so it never disturbs a live checkout but self-heals a
+        stale one (like the lazy hold-expiry);
+      - an explicit retry (create_settlement_order) passes grace_minutes=0 to free everything unpaid.
+    Guarded — a failure never blanks the read."""
+    try:
+        session.execute(
+            text("""
+                UPDATE billing."order" child
+                SET settled_by_order_id = NULL, updated_at = now()
+                WHERE child.club_id = :c AND child.user_id = :u AND child.status = 'open'
+                  AND child.settled_by_order_id IS NOT NULL
+                  AND child.settled_by_order_id IN (
+                        SELECT id FROM billing."order"
+                        WHERE status <> 'paid'
+                          -- clock_timestamp() (real wall-clock, not the fixed transaction now())
+                          -- so the age test is correct both in prod and within one test transaction.
+                          AND created_at < clock_timestamp() - make_interval(mins => :g))
+            """),
+            {"c": str(club_id), "u": str(user_id) if user_id else None, "g": int(grace_minutes)},
+        )
+    except Exception:
+        log.debug("reclaim skipped (billing not ready)", exc_info=False)
+
+
 def unpaid_orders(session, *, club_id, user_id) -> List[Dict[str, Any]]:
     """The client's OWED orders (status='open', not already being settled by an in-flight settlement
     order), one line each, oldest-first. kind is derived from the order's first line (its booking
     type, else the product kind, else 'other'). Guarded -> []."""
+    _reclaim_abandoned_settlements(session, club_id=club_id, user_id=user_id)  # stale-only (grace)
     try:
         rows = session.execute(
             text("""
@@ -142,19 +172,9 @@ def create_settlement_order(session, *, club_id, user_id, order_ids=None) -> Opt
     each child paid + fans out its commission. Re-callable: children tied to an UNPAID prior settlement
     order are reclaimed (an abandoned checkout never locks them). Returns {order_id, amount_minor,
     currency, items} or None when nothing is owed."""
-    # Reclaim children stuck on an abandoned (unpaid) settlement order so they're owed again.
-    session.execute(
-        text("""
-            UPDATE billing."order" child
-            SET settled_by_order_id = NULL, updated_at = now()
-            WHERE child.club_id = :c AND child.user_id = :u AND child.status = 'open'
-              AND child.settled_by_order_id IS NOT NULL
-              AND child.settled_by_order_id IN (
-                    SELECT id FROM billing."order" WHERE status <> 'paid')
-        """),
-        {"c": str(club_id), "u": str(user_id) if user_id else None},
-    )
-
+    # An explicit retry frees EVERY still-unpaid prior settlement (grace 0), so a client who abandons
+    # and immediately clicks Pay again isn't blocked by the in-flight window unpaid_orders honours.
+    _reclaim_abandoned_settlements(session, club_id=club_id, user_id=user_id, grace_minutes=0)
     items = unpaid_orders(session, club_id=club_id, user_id=user_id)
     if order_ids:
         want = {str(o) for o in order_ids}
@@ -215,22 +235,13 @@ def settle_settlement_order(session, *, settlement_order_id) -> Dict[str, Any]:
         settled += 1
         try:
             from billing.commission import record_split_for_order
+            # record_split_for_order ALSO clears the child's owed coach_arrears (the lockstep now
+            # lives in one place — every settle path drops the lesson off the coach's owed tab).
             res = record_split_for_order(session, club_id=ch["club_id"], order_id=ch["id"],
                                          payment_id=str(pay_id) if pay_id else None)
             splits += int(res.get("splits") or 0)
         except Exception:
             log.info("settle_settlement_order: split skipped for child=%s", ch["id"], exc_info=False)
-        # Keep the coach's arrears view in lockstep: a lesson paid here drops off the coach's "owed"
-        # tab. Status-only (commission already accrued via the split above — never double-counted).
-        try:
-            session.execute(
-                text("UPDATE billing.coach_arrears SET status = 'collected', collected_at = now(), "
-                     "updated_at = now() WHERE club_id = :c AND status = 'owed' "
-                     "AND order_line_id IN (SELECT id FROM billing.order_line WHERE order_id = :o)"),
-                {"c": ch["club_id"], "o": ch["id"]},
-            )
-        except Exception:
-            pass
     return {"settled": settled, "splits": splits}
 
 
@@ -255,4 +266,12 @@ def void_order(session, *, club_id, order_id, write_off=False, reason=None) -> D
     ).first()
     if not row:
         return {"ok": False, "error": "NOT_OPEN"}
+    # LOCKSTEP: a voided/written-off lesson must NOT stay 'owed' on the coach's tab — otherwise the
+    # coach could 'mark collected' a debt the club just forgave and earn commission on it. Drop it.
+    session.execute(
+        text("UPDATE billing.coach_arrears SET status = 'written_off', updated_at = now() "
+             "WHERE club_id = :c AND status = 'owed' AND order_line_id IN "
+             "(SELECT id FROM billing.order_line WHERE order_id = :o)"),
+        {"c": str(club_id), "o": str(order_id)},
+    )
     return {"ok": True, "status": new_status}

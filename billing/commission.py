@@ -188,6 +188,18 @@ def record_split_for_order(session, *, club_id, order_id, payment_id, at=None) -
         splits += wrote["splits"]
         earnings += wrote["earnings"]
 
+    # LOCKSTEP: a lesson whose commission just accrued on a real charge (desk OR online) must also
+    # drop off the coach's OWED tab — otherwise it reads as BOTH paid and owed and could be
+    # re-collected, stacking a second (arrears) split on top of this charge split. Status-only; the
+    # commission accrued above is the single accrual. Runs for the desk-pay path (via the
+    # charge_succeeded fan-out) AND the 'pay all' settlement path (per child), so no path settles an
+    # order without clearing its arrears.
+    session.execute(
+        text("UPDATE billing.coach_arrears SET status = 'collected', collected_at = now(), "
+             "updated_at = now() WHERE club_id = :club AND status = 'owed' AND order_line_id IN "
+             "(SELECT id FROM billing.order_line WHERE order_id = :oid)"),
+        {"club": club_id, "oid": str(order_id)},
+    )
     return {"ok": True, "splits": splits, "earnings": earnings, "skipped": skipped}
 
 
@@ -291,8 +303,10 @@ def record_refund_clawback(session, *, club_id, order_id, refund_payment_id,
                    cs.amount_minor, cs.currency
             FROM billing.commission_split cs
             JOIN billing.order_line ol ON ol.id = cs.order_line_id
-            WHERE ol.order_id = :o AND cs.club_id = :club
+            WHERE cs.club_id = :club
               AND cs.basis IN ('lesson_commission','class_commission','arrears_commission')
+              AND (ol.order_id = :o
+                   OR ol.order_id IN (SELECT id FROM billing."order" WHERE settled_by_order_id = :o))
             ORDER BY cs.order_line_id, cs.party_type
         """),
         {"o": str(order_id), "club": club_id},
@@ -433,6 +447,30 @@ def mark_arrears_collected(session, *, club_id, arrears_id, coach_user_id=None,
         return {"ok": False, "error": "FORBIDDEN"}
     if row["status"] == "collected":
         return {"ok": True, "status": "already_collected", "splits": 0}
+
+    # GUARD (double-commission): if the linked order was ALREADY settled or cleared elsewhere — a
+    # desk/online charge, a 'pay all' settlement, or a void/write-off — the commission has either
+    # already accrued on that charge or the debt was forgiven. Do NOT accrue again; just reconcile
+    # the arrears status to match. This makes a stray "mark collected" a no-op regardless of lockstep
+    # state (the unique index can't dedupe an arrears split (payment NULL) vs a charge split).
+    order_status = None
+    if row["order_line_id"]:
+        order_status = session.execute(
+            text('SELECT o.status FROM billing."order" o '
+                 "JOIN billing.order_line ol ON ol.order_id = o.id WHERE ol.id = :olid"),
+            {"olid": str(row["order_line_id"])},
+        ).scalar()
+    if order_status in ("paid", "refunded"):
+        session.execute(
+            text("UPDATE billing.coach_arrears SET status='collected', collected_at=now(), "
+                 "collected_by=:by, updated_at=now() WHERE club_id=:club AND id=:id"),
+            {"club": club_id, "id": str(arrears_id), "by": str(collected_by) if collected_by else None})
+        return {"ok": True, "status": "reconciled", "splits": 0}
+    if order_status in ("void", "written_off"):
+        session.execute(
+            text("UPDATE billing.coach_arrears SET status='written_off', updated_at=now() "
+                 "WHERE club_id=:club AND id=:id"), {"club": club_id, "id": str(arrears_id)})
+        return {"ok": True, "status": "reconciled", "splits": 0}
 
     session.execute(
         text("""
