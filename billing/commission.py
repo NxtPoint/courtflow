@@ -512,34 +512,6 @@ def mark_arrears_collected(session, *, club_id, arrears_id, coach_user_id=None,
             "commission_pct": str(pct)}
 
 
-def notify_statements_for_club(session, *, club_id) -> int:
-    """Month-end run: accrue arrears, then notify each client with an outstanding balance that their
-    invoice is ready (in-app + email when keyed) with a link to their dashboard to pay online. Returns
-    the number of clients notified. Best-effort — a notification failure never aborts the run."""
-    try:
-        accrue_arrears_for_club(session, club_id=club_id)
-    except Exception:
-        session.rollback()
-    rows = session.execute(
-        text("SELECT client_user_id, SUM(gross_minor) AS owed, MAX(currency) AS currency "
-             "FROM billing.coach_arrears "
-             "WHERE club_id = :c AND status = 'owed' AND client_user_id IS NOT NULL "
-             "GROUP BY client_user_id HAVING SUM(gross_minor) > 0"),
-        {"c": club_id},
-    ).mappings().all()
-    n = 0
-    for r in rows:
-        try:
-            from marketing_crm.tracking import emit
-            emit("statement_ready", {
-                "club_id": str(club_id), "user_id": str(r["client_user_id"]),
-                "amount_minor": int(r["owed"] or 0), "currency": r["currency"] or "ZAR"})
-            n += 1
-        except Exception:
-            pass
-    return n
-
-
 def client_invoice_data(session, *, club_id, coach_user_id, client_user_id, month=None) -> Dict[str, Any]:
     """Build ONE client's coaching invoice for a month: the coach's lessons/classes with this client,
     each line paid / owed / written-off, plus totals. Coach-scoped (only this coach's coaching — never

@@ -139,51 +139,6 @@ def desk_payment():
     return jsonify(result), 200
 
 
-# ---------------------------------------------------------------------------
-# POST /api/cron/monthly-invoice — OPS-only statement builder (cron)
-# ---------------------------------------------------------------------------
-
-@billing_bp.post("/api/cron/monthly-invoice")
-def cron_monthly_invoice():
-    """OPS-only (crons/trigger.py posts here with X-Ops-Key). Builds per-member statements
-    from billing.account_ledger for each club (or one club via ?club_id / body.club_id).
-    Returns the statements; emailing them is wired at Phase 4 (Klaviyo/SES). Idempotent —
-    a statement build is a pure read, safe to re-run."""
-    from auth import resolve_principal
-    p = resolve_principal(request)
-    if p is None or not p.is_platform_admin:
-        return jsonify(error="unauthorized"), 401
-
-    body = request.get_json(silent=True) or {}
-    club_id = (body.get("club_id") or request.args.get("club_id") or "").strip() or None
-    period_start = body.get("period_start")
-    period_end = body.get("period_end")
-
-    from db import session_scope
-    from sqlalchemy import text
-    from billing import ledger
-    from billing import commission
-
-    out = []
-    with session_scope() as s:
-        if club_id:
-            club_ids = [club_id]
-        else:
-            rows = s.execute(text("SELECT id FROM club.club WHERE status = 'active'")).mappings().all()
-            club_ids = [str(r["id"]) for r in rows]
-
-        for cid in club_ids:
-            statements = ledger.build_statements(
-                s, club_id=cid, period_start=period_start, period_end=period_end)
-            # Month-end: accrue arrears + notify each client with an outstanding balance ("your
-            # invoice is ready — pay online", linking the dashboard). Best-effort; never aborts.
-            notified = 0
-            try:
-                notified = commission.notify_statements_for_club(s, club_id=cid)
-            except Exception:
-                pass
-            out.append({"club_id": cid, "statement_count": len(statements or []),
-                        "clients_notified": notified,
-                        "statements": statements})
-
-    return jsonify({"ok": True, "clubs": len(out), "results": out}), 200
+# The monthly-invoice cron route was RETIRED with the account_ledger monthly tab — the unified
+# statement (billing/statement.py) is the single debt of record, settleable online any time, and a
+# coach issues a client's month-end statement per-client via POST /api/coach/clients/<id>/issue-invoice.

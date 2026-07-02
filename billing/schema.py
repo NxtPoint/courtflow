@@ -227,7 +227,9 @@ _DDL = [
     """,
     f"CREATE INDEX IF NOT EXISTS ix_payment_attempt_order ON {SCHEMA}.payment_attempt (order_id);",
 
-    # --- billing.account_ledger : the "pay end of month" tab --------------
+    # --- billing.account_ledger : RETIRED (the monthly "pay end of month" tab) ------------
+    # No longer written or read: the unified statement (unpaid billing.order rows) is the single
+    # debt of record. Table kept (not dropped — destructive) as a harmless empty orphan.
     f"""
     CREATE TABLE IF NOT EXISTS {SCHEMA}.account_ledger (
         id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),

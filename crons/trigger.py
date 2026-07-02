@@ -17,7 +17,8 @@ import sys
 JOB_ROUTES = {
     "reminders":         "/api/cron/reminders",
     "capacity-sweep":    "/api/cron/capacity-sweep",
-    "monthly-invoice":   "/api/cron/monthly-invoice",
+    # monthly-invoice was retired with the account_ledger monthly tab (the unified statement is the
+    # single debt of record; coaches issue per-client month-end statements from their console).
     "membership-refill": "/api/cron/membership-refill",
 }
 

@@ -27,7 +27,6 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 
-from billing import ledger
 from billing.gateway import NormalizedPaymentEvent, MANUAL_PROVIDERS
 from billing.events import apply_payment_event
 
@@ -128,12 +127,9 @@ def create_order_for_booking(session, *, club_id, user_id, lines: List[Dict[str,
              "enrolment_id": l.get("enrolment_id")},
         )
 
-    # monthly_account: the order total accrues on the member's tab immediately (the booking
-    # is already confirmed; settlement is the monthly statement).
-    if mode == "monthly_account" and total > 0:
-        ledger.post_charge(session, club_id=club_id, user_id=user_id,
-                           amount_minor=total, order_id=order_id,
-                           note="court/lesson booking")
+    # monthly_account: the order itself IS the debt (status='open' → the unified statement counts
+    # it as owed, settleable online any time). No separate ledger tab — that parallel store was
+    # retired (the order is the single source of truth for what a client owes).
 
     return order_id
 
@@ -145,9 +141,6 @@ def record_desk_payment(session, *, club_id, order_id, amount_minor, provider="c
     settlement close-out. Routes through the SAME apply_payment_event core (via a manual
     charge_succeeded event) so the order flips to 'paid' and any held booking confirms,
     exactly like a gateway charge. Writes billing.payment with provider=cash/card_at_desk/eft.
-
-    For monthly_account settlement (paying down a tab) record a ledger PAYMENT instead
-    (ledger.post_payment) — that is a separate flow, not an order close-out.
 
     Idempotent: pass a provider_payment_id (e.g. a receipt number) to dedupe re-submits;
     the apply_payment_event hash + the payment unique index both guard double-recording."""

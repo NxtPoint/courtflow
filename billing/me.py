@@ -147,36 +147,17 @@ def _spend(session, *, club_id, user_id, months=6) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _account(session, *, club_id, user_id) -> Dict[str, Any]:
-    """Latest running balance from billing.account_ledger (the 'pay end of month' tab) +
-    a count of the member's unpaid monthly_account orders. Both default to 0/absent."""
-    balance = 0
+    """What the member owes — derived from the UNIFIED STATEMENT (the single source of truth: unpaid
+    orders), not a separate ledger tab (that parallel store was retired). balance_minor = total owed;
+    open_charges = number of owed lines. Guarded → 0/absent."""
     try:
-        bal = session.execute(
-            text("""
-                SELECT balance_after_minor FROM billing.account_ledger
-                WHERE club_id = :c AND user_id = :u
-                ORDER BY created_at DESC LIMIT 1
-            """),
-            {"c": str(club_id), "u": str(user_id)},
-        ).scalar()
-        if bal is not None:
-            balance = int(bal)
+        from billing import statement as _statement
+        st = _statement.statement(session, club_id=club_id, user_id=user_id)
+        return {"balance_minor": int(st.get("total_owed_minor") or 0),
+                "open_charges": int(st.get("count") or 0)}
     except Exception:
         log.debug("account balance suppressed", exc_info=False)
-    open_charges = 0
-    try:
-        open_charges = int(session.execute(
-            text("""
-                SELECT count(*) FROM billing."order"
-                WHERE club_id = :c AND user_id = :u
-                  AND settlement_mode = 'monthly_account'
-                  AND status IN ('open','awaiting_payment')
-            """),
-            {"c": str(club_id), "u": str(user_id)},
-        ).scalar() or 0)
-    except Exception:
-        open_charges = 0
-    return {"balance_minor": balance, "open_charges": open_charges}
+        return {"balance_minor": 0, "open_charges": 0}
 
 
 # ---------------------------------------------------------------------------

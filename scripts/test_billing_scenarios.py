@@ -28,7 +28,6 @@ from billing import commission as CM
 from billing import bundles as BN
 from billing import membership as MB
 from billing import refunds as RF
-from billing import ledger as LG
 from billing import statement as ST
 from billing.events import apply_payment_event
 from billing.gateway import NormalizedPaymentEvent
@@ -190,14 +189,15 @@ def sc_settlement_online(s, fx):
 
 
 def sc_settlement_monthly(s, fx):
-    print("\n# Settlement: monthly_account → the order total accrues on the member's ledger")
-    before = LG.current_balance_minor(s, club_id=fx.club_id, user_id=fx.member)
+    print("\n# Settlement: monthly_account → the order itself is the debt (unified statement)")
+    before = ST.statement(s, club_id=fx.club_id, user_id=fx.member)["total_owed_minor"]
     B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
                      booking_type="court", resource_id=fx.courts[0],
                      starts_at=iso(at(fx, 13)), ends_at=iso(at(fx, 14)),
                      settlement_mode="monthly_account")
-    after = LG.current_balance_minor(s, club_id=fx.club_id, user_id=fx.member)
-    check("ledger charged R150 on the tab", after - before == 15000, f"delta={after-before}")
+    after = ST.statement(s, club_id=fx.club_id, user_id=fx.member)["total_owed_minor"]
+    check("monthly_account booking is owed on the unified statement (R150)",
+          after - before == 15000, f"delta={after-before}")
 
 
 def sc_commission(s, fx):
