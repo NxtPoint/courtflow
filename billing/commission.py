@@ -252,6 +252,106 @@ def _write_split_pair(session, *, club_id, payment_id, order_line_id, booking_id
     return {"splits": splits, "earnings": earnings}
 
 
+def record_refund_clawback(session, *, club_id, order_id, refund_payment_id,
+                           refund_minor, at=None) -> Dict[str, Any]:
+    """On a REFUND of an online-paid order, reverse the coach's commission PROPORTIONALLY.
+
+    The club already absorbs the customer refund (the negative billing.payment row); WITHOUT this
+    the coach keeps 100% of their commission on a lesson that was refunded and the club eats the
+    whole loss. Policy (docs/specs/owner-self-service-spec §10, confirmed): proportional clawback —
+    a full refund reverses the full commission, a half refund reverses half.
+
+    For each coach+owner commission_split of the refunded order it writes a NEGATIVE
+    'refund_clawback' split (proportion = refund / original charge) and, for the coach leg, a
+    negative coach_ledger adjustment so the coach's balance drops. IDEMPOTENT on the refund payment
+    (unique (payment_id, order_line_id, party_type) keyed to the REFUND payment id, so a replayed
+    refund webhook writes nothing new; the ledger entry is gated on a fresh split). Returns
+    {clawbacks, ledger, proportion} — {clawbacks:0, reason} when there's nothing to reverse
+    (court/membership refund, not online-paid, or no coach commission)."""
+    charge_total = int(session.execute(
+        text("SELECT amount_minor FROM billing.payment WHERE order_id = :o "
+             "AND direction = 'charge' AND status = 'succeeded' ORDER BY created_at LIMIT 1"),
+        {"o": str(order_id)},
+    ).scalar() or 0)
+    if charge_total <= 0:
+        return {"clawbacks": 0, "reason": "no_online_charge"}
+    refund_minor = int(refund_minor or 0)
+    if refund_minor <= 0:
+        refund_minor = charge_total          # Yoco sends NO amount for a FULL refund → treat as full
+    p = Decimal(refund_minor) / Decimal(charge_total)
+    if p <= 0:
+        return {"clawbacks": 0, "reason": "zero_refund"}
+    if p > 1:
+        p = Decimal(1)
+
+    splits = session.execute(
+        text("""
+            SELECT cs.id, cs.order_line_id, cs.booking_id, cs.coach_user_id, cs.product_id,
+                   cs.rule_id, cs.party_type, cs.gross_minor, cs.commission_pct,
+                   cs.amount_minor, cs.currency
+            FROM billing.commission_split cs
+            JOIN billing.order_line ol ON ol.id = cs.order_line_id
+            WHERE ol.order_id = :o AND cs.club_id = :club
+              AND cs.basis IN ('lesson_commission','class_commission','arrears_commission')
+            ORDER BY cs.order_line_id, cs.party_type
+        """),
+        {"o": str(order_id), "club": club_id},
+    ).mappings().all()
+    if not splits:
+        return {"clawbacks": 0, "reason": "no_commission"}
+
+    def _neg(v):
+        return -int((Decimal(int(v or 0)) * p).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+    clawbacks = 0
+    ledger = 0
+    for s in splits:
+        neg_amount = _neg(s["amount_minor"])
+        neg_gross = _neg(s["gross_minor"])
+        if neg_amount == 0 and neg_gross == 0:
+            continue
+        row = session.execute(
+            text("""
+                INSERT INTO billing.commission_split
+                    (club_id, payment_id, order_line_id, booking_id, coach_user_id, product_id,
+                     rule_id, party_type, basis, gross_minor, commission_pct, amount_minor,
+                     currency, occurred_at)
+                VALUES (:club, :pay, :line, :booking, :coach, :product, :rule, :party,
+                        'refund_clawback', :gross, :pct, :amount, :cur, COALESCE(:at, now()))
+                ON CONFLICT (payment_id, order_line_id, party_type) DO NOTHING
+                RETURNING id
+            """),
+            {"club": club_id, "pay": str(refund_payment_id) if refund_payment_id else None,
+             "line": str(s["order_line_id"]) if s["order_line_id"] else None,
+             "booking": str(s["booking_id"]) if s["booking_id"] else None,
+             "coach": str(s["coach_user_id"]) if s["coach_user_id"] else None,
+             "product": str(s["product_id"]) if s["product_id"] else None,
+             "rule": s["rule_id"], "party": s["party_type"],
+             "gross": neg_gross, "pct": str(s["commission_pct"] or 0),
+             "amount": neg_amount, "cur": s["currency"] or "ZAR", "at": at},
+        ).mappings().first()
+        if not row:
+            continue                        # already clawed back for this refund payment (idempotent)
+        clawbacks += 1
+        # Reverse the coach's earning on the signed ledger. Plain INSERT — the fresh-split gate above
+        # makes this idempotent (a replay writes no split, so never reaches here).
+        if s["party_type"] == "coach" and s["coach_user_id"] and neg_amount != 0:
+            session.execute(
+                text("""
+                    INSERT INTO billing.coach_ledger
+                        (club_id, coach_user_id, entry_type, amount_minor, currency,
+                         ref_type, ref_id, note, occurred_at)
+                    VALUES (:club, :coach, 'adjustment', :amount, :cur,
+                            'split', :ref, 'refund clawback', COALESCE(:at, now()))
+                """),
+                {"club": club_id, "coach": str(s["coach_user_id"]),
+                 "amount": neg_amount, "cur": s["currency"] or "ZAR",
+                 "ref": str(row["id"]), "at": at},
+            )
+            ledger += 1
+    return {"clawbacks": clawbacks, "ledger": ledger, "proportion": float(p)}
+
+
 # ---------------------------------------------------------------------------
 # arrears — off-platform lessons posted to the coach's per-client tab
 # ---------------------------------------------------------------------------
@@ -465,7 +565,7 @@ def settle_arrears_for_order(session, *, order_id) -> int:
 
 
 def adjust_arrears(session, *, club_id, arrears_id, coach_user_id=None,
-                   gross_minor=None, status=None, actor_user_id=None) -> Dict[str, Any]:
+                   gross_minor=None, status=None, actor_user_id=None, reason=None) -> Dict[str, Any]:
     """Edit an OWED arrears line before collection: DISCOUNT (set a new gross_minor) and/or
     WRITE IT OFF (status='written_off' — the coach waives the lesson; no commission accrues and it
     leaves the outstanding tab). A coach may only edit their OWN arrears (self-service guard); a
@@ -499,6 +599,10 @@ def adjust_arrears(session, *, club_id, arrears_id, coach_user_id=None,
             return {"ok": False, "error": "BAD_STATUS"}
         sets.append("status = 'written_off'")
         sets.append("collected_by = :by"); params["by"] = str(actor_user_id) if actor_user_id else None
+    # Persist the reason (discount OR write-off) so the audit trail shows WHY — visible on every
+    # statement. A blank reason leaves any prior note intact.
+    if reason is not None and str(reason).strip():
+        sets.append("note = :note"); params["note"] = str(reason).strip()[:500]
 
     session.execute(
         text("UPDATE billing.coach_arrears SET " + ", ".join(sets) + " WHERE club_id = :c AND id = :id"),
@@ -552,11 +656,13 @@ def client_statement(session, *, club_id, user_id, month=None) -> Dict[str, Any]
 
     items = session.execute(
         text("""
-            SELECT a.id, a.coach_user_id, a.gross_minor, a.status, a.created_at, b.starts_at
+            SELECT a.id, a.coach_user_id, a.gross_minor, a.status, a.note,
+                   a.created_at, b.starts_at
             FROM billing.coach_arrears a
             LEFT JOIN diary.booking b ON b.id = a.booking_id
-            WHERE a.club_id = :club AND a.client_user_id = :u AND a.status = 'owed'
-            ORDER BY a.created_at DESC
+            WHERE a.club_id = :club AND a.client_user_id = :u
+              AND a.status IN ('owed','written_off')
+            ORDER BY (a.status = 'owed') DESC, a.created_at DESC
         """),
         {"club": club_id, "u": str(user_id)},
     ).mappings().all()
@@ -598,11 +704,15 @@ def client_statement(session, *, club_id, user_id, month=None) -> Dict[str, Any]
         "coach_user_id": (str(r["coach_user_id"]) if r["coach_user_id"] else None),
         "coach_name": names.get(str(r["coach_user_id"]), "Coach"),
         "gross_minor": int(r["gross_minor"] or 0),
+        "status": r["status"],                                  # 'owed' | 'written_off'
+        "note": r["note"] or None,                              # why it was written off
         "starts_at": (r["starts_at"].isoformat() if r["starts_at"] else None),
     } for r in items]
 
+    written_off_minor = sum(int(r["gross_minor"] or 0) for r in items if r["status"] == "written_off")
     totals = {"paid_minor": sum(s["paid_minor"] for s in by_coach.values()),
-              "owed_minor": sum(s["owed_minor"] for s in by_coach.values())}
+              "owed_minor": sum(s["owed_minor"] for s in by_coach.values()),
+              "written_off_minor": written_off_minor}   # forgiven — informational, NOT in net
     totals["net_minor"] = totals["paid_minor"] + totals["owed_minor"]
     return {"month": ym, "currency": currency,
             "coaches": sorted(by_coach.values(), key=lambda x: -x["net_minor"]),
@@ -663,17 +773,21 @@ def coach_statement(session, *, club_id, coach_user_id, month=None) -> Dict[str,
     accrue_arrears_for_club(session, club_id=club_id)
     ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
 
-    # Paid-online lessons this month (from succeeded charge splits — coach party = net).
+    # Paid-online lessons this month (from succeeded charge splits — coach party = net). A
+    # refund_clawback is a NEGATIVE coach split: include it in coach_net_minor so a refunded lesson
+    # reduces what the coach earned this month, but don't count it as a lesson/gross.
     paid = session.execute(
         text("""
             SELECT b.booked_by_user_id AS client_user_id,
-                   count(*) AS lesson_count,
-                   COALESCE(SUM(cs.gross_minor),0) AS gross_minor,
+                   count(*) FILTER (WHERE cs.basis <> 'refund_clawback') AS lesson_count,
+                   COALESCE(SUM(cs.gross_minor) FILTER (WHERE cs.basis <> 'refund_clawback'),0)
+                       AS gross_minor,
                    COALESCE(SUM(cs.amount_minor),0) AS coach_net_minor
             FROM billing.commission_split cs
             LEFT JOIN diary.booking b ON b.id = cs.booking_id
             WHERE cs.club_id = :club AND cs.coach_user_id = :coach
-              AND cs.party_type = 'coach' AND cs.basis IN ('lesson_commission','class_commission')
+              AND cs.party_type = 'coach'
+              AND cs.basis IN ('lesson_commission','class_commission','refund_clawback')
               AND to_char(cs.occurred_at,'YYYY-MM') = :ym
             GROUP BY 1
         """),
@@ -693,17 +807,21 @@ def coach_statement(session, *, club_id, coach_user_id, month=None) -> Dict[str,
         {"club": club_id, "coach": str(coach_user_id)},
     ).mappings().all()
 
-    # Per-arrears line items (for the statement detail + the mark-collected buttons).
+    # Per-arrears line items (for the statement detail + the mark-collected buttons). Include
+    # WRITTEN-OFF lines so a waived lesson stays visible (badged, no action) instead of vanishing —
+    # transparency for coach, client and owner. Owed lines still drive the collect/discount/write-off
+    # buttons; written-off lines are read-only. (Collected lines are covered by the paid rollup above.)
     items = session.execute(
         text("""
             SELECT a.id, a.client_user_id, a.gross_minor, a.currency, a.status,
-                   a.created_at, b.starts_at,
+                   a.note, a.created_at, a.updated_at, b.starts_at,
                    u.first_name, u.surname, u.email
             FROM billing.coach_arrears a
             LEFT JOIN diary.booking b ON b.id = a.booking_id
             LEFT JOIN iam."user" u    ON u.id = a.client_user_id
-            WHERE a.club_id = :club AND a.coach_user_id = :coach AND a.status = 'owed'
-            ORDER BY a.created_at DESC
+            WHERE a.club_id = :club AND a.coach_user_id = :coach
+              AND a.status IN ('owed','written_off')
+            ORDER BY (a.status = 'owed') DESC, a.created_at DESC
         """),
         {"club": club_id, "coach": str(coach_user_id)},
     ).mappings().all()
@@ -750,14 +868,19 @@ def coach_statement(session, *, club_id, coach_user_id, month=None) -> Dict[str,
         s["net_minor"] = s["paid_minor"] + s["owed_minor"]
 
     arrears_items = []
+    written_off_minor = 0
     for it in items:
         full = " ".join(x for x in [it["first_name"], it["surname"]] if x).strip()
+        if it["status"] == "written_off":
+            written_off_minor += int(it["gross_minor"] or 0)
         arrears_items.append({
             "id": str(it["id"]),
             "client_user_id": str(it["client_user_id"]) if it["client_user_id"] else None,
             "client_name": full or it["email"] or "Client",
             "gross_minor": int(it["gross_minor"] or 0),
             "currency": it["currency"] or "ZAR",
+            "status": it["status"],                                  # 'owed' | 'written_off'
+            "note": it["note"] or None,                              # why it was written off / discounted
             "starts_at": it["starts_at"].isoformat() if it["starts_at"] else None,
         })
 
@@ -782,6 +905,7 @@ def coach_statement(session, *, club_id, coach_user_id, month=None) -> Dict[str,
             "paid_minor": sum(c["paid_minor"] for c in clients),
             "owed_minor": sum(c["owed_minor"] for c in clients),
             "net_minor": sum(c["net_minor"] for c in clients),
+            "written_off_minor": written_off_minor,     # forgiven — informational, NOT in net
             "rent_minor": period_rent,
             "balance_minor": coach_balance(session, club_id=club_id, coach_user_id=coach_user_id),
         },

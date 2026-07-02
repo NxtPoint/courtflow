@@ -1117,8 +1117,9 @@
     catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
   async function arrearsWriteOff(id) {
-    if (!window.confirm("Write off this lesson? No commission will be charged and the client won’t owe it.")) return;
-    try { await window.CoachAPI.arrearsAdjust(id, { status: "written_off" }); UI.toast("Written off.", "info"); loadStatement(); }
+    var reason = window.prompt("Write off this lesson? No commission will be charged and the client won’t owe it.\n\nReason (shown to you, the client and the club):", "");
+    if (reason === null) return;                       // cancelled
+    try { await window.CoachAPI.arrearsAdjust(id, { status: "written_off", reason: reason }); UI.toast("Written off.", "info"); loadStatement(); }
     catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 

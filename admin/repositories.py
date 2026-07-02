@@ -993,13 +993,18 @@ def grant_membership(session, *, club_id, user_id, months=1):
 
 
 def revoke_membership(session, *, club_id, user_id):
-    """Admin cancels a member's active membership (their courts revert to PAYG)."""
-    session.execute(
+    """Admin cancels a member's active membership (their courts revert to PAYG). An UNPAID plan's
+    order is voided so it drops off the member's statement; a PAID term is left intact (refund is a
+    separate flow). Mirrors billing.membership.cancel_membership."""
+    rows = session.execute(
         text("UPDATE billing.membership_subscription SET status = 'cancelled', updated_at = now() "
-             "WHERE club_id = :c AND user_id = :u AND status = 'active'"),
+             "WHERE club_id = :c AND user_id = :u AND status = 'active' "
+             "RETURNING order_id"),
         {"c": club_id, "u": user_id},
-    )
-    return {"ok": True}
+    ).mappings().all()
+    from billing.membership import _void_unpaid_orders
+    voided = _void_unpaid_orders(session, club_id, [r["order_id"] for r in rows])
+    return {"ok": True, "voided_orders": voided}
 
 
 def onboarding_counts_and_steps(session, *, club_id):
@@ -1311,13 +1316,17 @@ def cockpit_coach_earnings(session, *, club_id, dt_from=None, dt_to=None):
     rows = session.execute(
         text("""
             WITH splits AS (
+              -- refund_clawback rows are NEGATIVE splits: INCLUDE them in the money sums so a
+              -- refunded lesson nets out of the coach's earning + club commission, but EXCLUDE
+              -- them from lesson_count (a clawback isn't another lesson taught).
               SELECT coach_user_id,
                      SUM(amount_minor) FILTER (WHERE party_type='coach') AS coach_earn_minor,
                      SUM(amount_minor) FILTER (WHERE party_type='owner') AS owner_cut_minor,
                      SUM(gross_minor)  FILTER (WHERE party_type='owner') AS gross_lesson_minor,
-                     count(*) FILTER (WHERE party_type='coach')          AS lesson_count
+                     count(*) FILTER (WHERE party_type='coach' AND basis <> 'refund_clawback')
+                                                                         AS lesson_count
               FROM billing.commission_split
-              WHERE club_id = :c AND basis <> 'refund_clawback'
+              WHERE club_id = :c
                 AND (CAST(:dt_from AS text) IS NULL OR occurred_at >= CAST(:dt_from AS timestamptz))
                 AND (CAST(:dt_to AS text) IS NULL OR occurred_at <  CAST(:dt_to   AS timestamptz))
               GROUP BY coach_user_id),

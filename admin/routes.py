@@ -1134,7 +1134,7 @@ def patch_arrears(arrears_id):
             s, club_id=pr.club_id, arrears_id=arrears_id,
             coach_user_id=None if is_admin else pr.user_id,
             gross_minor=body.get("gross_minor"), status=body.get("status"),
-            actor_user_id=pr.user_id)
+            reason=body.get("reason"), actor_user_id=pr.user_id)
     if not res.get("ok"):
         err_code = res.get("error")
         code = 404 if err_code == "NOT_FOUND" else (403 if err_code == "FORBIDDEN" else 422)

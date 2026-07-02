@@ -405,6 +405,92 @@ def sc_refund_request(s, fx):
     check("re-deciding a closed request → NOT_PENDING", derr2 == "NOT_PENDING", str(derr2))
 
 
+def sc_refund_clawback(s, fx):
+    print("\n# Refund clawback: a refunded lesson reverses the coach's commission PROPORTIONALLY")
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',30,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+    # Lesson online R400, paid → coach earns R280 (70% of R400 @ 30% club cut).
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 15)), ends_at=iso(at(fx, 16)), settlement_mode="online")
+    oid = r["booking"]["order_id"]
+    ev = NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
+                                provider_payment_id="p_claw_1", amount_minor=40000, currency="ZAR",
+                                status="succeeded", direction="charge", club_id=str(fx.club_id),
+                                user_id=str(fx.member), raw={"t": 20})
+    apply_payment_event(ev, session=s)
+    check("coach earns R280 on the paid lesson",
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == 28000,
+          str(CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)))
+    # FULL refund (Yoco sends NO amount) → full clawback → coach back to R0, club eats only its own cut.
+    rev = NormalizedPaymentEvent(provider="yoco", kind="refunded", order_ref=oid,
+                                 provider_payment_id="rf_claw_1", amount_minor=0, currency="ZAR",
+                                 status="refunded", direction="refund", club_id=str(fx.club_id),
+                                 user_id=str(fx.member), raw={"t": 21})
+    res = apply_payment_event(rev, session=s)
+    check("full refund claws back the coach's commission (→ R0)",
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == 0,
+          f"bal={CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)} "
+          f"claw={res.get('commission_clawback')}")
+    check("order marked refunded", _order(s, oid)["status"] == "refunded")
+    apply_payment_event(rev, session=s)   # replay
+    check("refund replay is idempotent (still R0, no double clawback)",
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == 0)
+
+    # PARTIAL refund on a second lesson: half back → half the commission clawed (R140 of R280).
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=iso(at(fx, 17)), ends_at=iso(at(fx, 18)), settlement_mode="online")
+    oid2 = r2["booking"]["order_id"]
+    apply_payment_event(NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid2,
+                        provider_payment_id="p_claw_2", amount_minor=40000, currency="ZAR",
+                        status="succeeded", direction="charge", club_id=str(fx.club_id),
+                        user_id=str(fx.member), raw={"t": 22}), session=s)
+    bal_before = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    apply_payment_event(NormalizedPaymentEvent(provider="yoco", kind="refunded", order_ref=oid2,
+                        provider_payment_id="rf_claw_2", amount_minor=20000, currency="ZAR",
+                        status="refunded", direction="refund", club_id=str(fx.club_id),
+                        user_id=str(fx.member), raw={"t": 23}), session=s)
+    bal_after = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    check("half refund claws back half the commission (R140 of R280)",
+          bal_before - bal_after == 14000, f"before={bal_before} after={bal_after}")
+
+
+def sc_membership_cancel_voids_order(s, fx):
+    print("\n# Cancel an UNPAID plan → its owed order is voided (drops off the statement); PAID untouched")
+    from billing import statement as ST
+    bu = _mk_user(s, "cancel_void@bill.test", "CancelVoid")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": bu})
+    off = MB.create_membership_order(s, club_id=fx.club_id, user_id=bu,
+                                     price_id=fx.membership_price, settlement_mode="at_court")
+    oid = off["order_id"]
+    check("offline plan is an owed 'open' order", _order(s, oid)["status"] == "open")
+    check("statement shows the owed plan before cancel",
+          ST.statement(s, club_id=fx.club_id, user_id=bu)["count"] >= 1)
+    canc = MB.cancel_membership(s, club_id=fx.club_id, user_id=bu)
+    check("cancel voided exactly one unpaid order", canc.get("voided_orders") == 1, str(canc))
+    check("cancelled plan's order is now 'void'", _order(s, oid)["status"] == "void")
+    check("statement is clear after cancel (unpaid plan gone)",
+          ST.statement(s, club_id=fx.club_id, user_id=bu)["count"] == 0)
+
+    # A PAID plan is NOT voided on cancel (a refund is a separate flow).
+    bu2 = _mk_user(s, "cancel_paid@bill.test", "CancelPaid")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": bu2})
+    off2 = MB.create_membership_order(s, club_id=fx.club_id, user_id=bu2,
+                                      price_id=fx.membership_price, settlement_mode="at_court")
+    oid2 = off2["order_id"]
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=oid2,
+                          amount_minor=_order(s, oid2)["amount_minor"], provider="cash",
+                          provider_payment_id="RCPT-PAIDPLAN", user_id=bu2)
+    check("paid plan order is 'paid'", _order(s, oid2)["status"] == "paid")
+    canc2 = MB.cancel_membership(s, club_id=fx.club_id, user_id=bu2)
+    check("cancel does NOT void a paid plan", canc2.get("voided_orders") == 0, str(canc2))
+    check("paid plan order stays 'paid' after cancel", _order(s, oid2)["status"] == "paid")
+
+
 def sc_payment_preference(s, fx):
     print("\n# Per-service payment preference: a service offering only 'at_court' refuses online")
     s.execute(text("UPDATE billing.product SET payment_modes='at_court' WHERE id=:p"), {"p": fx.court_product})
@@ -461,6 +547,8 @@ SCENARIOS = [
     sc_membership,
     sc_membership_purchase,
     sc_refund_request,
+    sc_refund_clawback,
+    sc_membership_cancel_voids_order,
 ]
 
 

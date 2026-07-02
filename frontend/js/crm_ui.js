@@ -88,15 +88,22 @@
     var list = el("div", { class: "cf-list" });
     items.forEach(function (it) {
       var title = opts.label ? opts.label(it) : (it.client_name || it.coach_name || "Lesson");
+      var written = it.status === "written_off";
       var sub = opts.sub ? opts.sub(it) : (it.starts_at ? UI.fmtDate(it.starts_at) : "");
+      // A written-off line stays VISIBLE for transparency — badged, read-only, with its reason.
+      if (written && it.note) sub = (sub ? sub + " · " : "") + "Reason: " + it.note;
+      var amt = el("span", { class: "cf-chip" + (written ? " cf-chip-muted" : ""),
+        text: (written ? "Written off · " : "") + money(it.gross_minor, cur) });
+      if (written) amt.style.textDecoration = "line-through";
       var kids = [
         el("div", { class: "cf-item-main" }, [
           el("div", { class: "cf-item-t", text: title }),
           el("div", { class: "cf-item-s", text: sub }),
         ]),
-        el("span", { class: "cf-chip", text: money(it.gross_minor, cur) }),
+        amt,
       ];
-      if (actions.length) {
+      // Actions only on still-owed lines; a written-off/collected line is immutable.
+      if (actions.length && !written) {
         var row = el("div", { class: "cf-row", style: "gap:6px" });
         actions.forEach(function (a) {
           row.appendChild(el("button", {
@@ -106,7 +113,7 @@
         });
         kids.push(row);
       }
-      list.appendChild(el("div", { class: "cf-item" }, kids));
+      list.appendChild(el("div", { class: "cf-item" + (written ? " cf-item-off" : "") }, kids));
     });
     return list;
   }

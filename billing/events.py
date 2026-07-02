@@ -178,12 +178,26 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
             _mark_order(session, order_id, "awaiting_payment")
 
     elif kind == "refunded":
-        # Record-only. NEVER auto-reverse the booking (docs/05 §8, the 1050 decision).
-        _record_payment(session, event, order, club_id, direction="refund", status="refunded")
+        # Record-only for the booking. NEVER auto-reverse the booking (docs/05 §8, the 1050 decision).
+        refund_pay_id = _record_payment(session, event, order, club_id,
+                                        direction="refund", status="refunded")
         if order_id:
             _mark_order(session, order_id, "refunded")
+            # Reverse the coach's commission PROPORTIONALLY so the club doesn't eat the coach's
+            # share of a refunded lesson (and the coach sees the refund). Savepoint-guarded +
+            # idempotent, exactly like the charge fan-out — never blocks the refund record.
+            clawback = _accrue_refund_clawback(session, event, club_id, order_id, refund_pay_id)
+            if clawback:
+                result["commission_clawback"] = clawback
         result["payment_recorded"] = True
         result["note"] = "refund recorded; booking NOT auto-reversed"
+        _emit("payment_refunded",
+              club_id=str(club_id) if club_id else None,
+              order_id=str(order_id) if order_id else None,
+              ref_type="order", ref_id=str(order_id) if order_id else None,
+              user_id=str(order["user_id"]) if (order and order.get("user_id")) else None,
+              amount_minor=event.amount_minor, currency=event.currency,
+              provider=event.provider)
 
     elif kind == "subscription_active":
         sub_id = _upsert_membership(session, event, club_id, status="active")
@@ -261,6 +275,32 @@ def _accrue_commission(session, club_id, order_id, payment_id):
                 session, club_id=club_id, order_id=order_id, payment_id=pid)
     except Exception:
         log.info("commission fan-out skipped (engine/tables unavailable) order=%s", order_id)
+        return None
+
+
+def _accrue_refund_clawback(session, event, club_id, order_id, refund_payment_id):
+    """Proportional coach-commission clawback on a refund (the mirror of _accrue_commission).
+    Resolves the refund payment id if `_record_payment` dedup'd it (a replayed refund webhook),
+    keying idempotently by the event's provider_payment_id. SAVEPOINT-guarded so a failure never
+    blocks the refund record, and idempotent on the refund payment. Returns the engine result or
+    None."""
+    try:
+        with session.begin_nested():
+            pid = refund_payment_id
+            if pid is None and order_id:
+                pid = session.execute(
+                    text("SELECT id FROM billing.payment WHERE order_id = :o "
+                         "AND direction = 'refund' AND status = 'refunded' "
+                         "AND (CAST(:ppid AS text) IS NULL OR provider_payment_id = :ppid) "
+                         "ORDER BY created_at DESC LIMIT 1"),
+                    {"o": str(order_id), "ppid": event.provider_payment_id},
+                ).scalar()
+            from billing import commission as _commission
+            return _commission.record_refund_clawback(
+                session, club_id=club_id, order_id=order_id,
+                refund_payment_id=pid, refund_minor=int(event.amount_minor or 0))
+    except Exception:
+        log.info("refund clawback skipped (engine/tables unavailable) order=%s", order_id)
         return None
 
 

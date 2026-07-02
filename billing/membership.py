@@ -503,14 +503,34 @@ def membership_status(session, *, club_id, user_id) -> Dict[str, Any]:
 def cancel_membership(session, *, club_id, user_id) -> Dict[str, Any]:
     """Member self-cancel: end the caller's ACTIVE membership(s) now → courts revert to PAYG. Mirrors
     the admin cancel (status='cancelled'). Idempotent: no active sub → {cancelled: 0}. The paid term
-    isn't refunded here (a refund is a separate request); cancelling just stops coverage."""
-    res = session.execute(
+    isn't refunded here (a refund is a separate request); cancelling just stops coverage.
+
+    An UNPAID offline plan (order still open/awaiting_payment) is voided so it drops off the client's
+    statement — a cancelled plan you never paid for is not a debt. A PAID plan's order is left intact
+    (void_order refuses anything already paid); refunding a paid term is a separate refund request."""
+    rows = session.execute(
         text("UPDATE billing.membership_subscription SET status = 'cancelled', updated_at = now() "
              "WHERE club_id = :c AND user_id = :u AND status = 'active' "
-             "  AND (current_period_end IS NULL OR current_period_end >= CURRENT_DATE)"),
+             "  AND (current_period_end IS NULL OR current_period_end >= CURRENT_DATE) "
+             "RETURNING order_id"),
         {"c": str(club_id), "u": str(user_id) if user_id else None},
-    )
-    return {"cancelled": int(res.rowcount or 0)}
+    ).mappings().all()
+    voided = _void_unpaid_orders(session, club_id, [r["order_id"] for r in rows])
+    return {"cancelled": len(rows), "voided_orders": voided}
+
+
+def _void_unpaid_orders(session, club_id, order_ids) -> int:
+    """Void each still-unpaid order behind a cancelled/revoked membership (paid orders untouched).
+    Reuses statement.void_order — the single sanctioned place to clear an unpaid order."""
+    from billing.statement import void_order
+    voided = 0
+    for oid in order_ids:
+        if not oid:
+            continue                                    # trial subs carry no order
+        res = void_order(session, club_id=club_id, order_id=oid, reason="membership cancelled")
+        if res.get("ok"):
+            voided += 1
+    return voided
 
 
 def grant_signup_trial(session, *, club_id, user_id, days=7) -> Dict[str, Any]:
