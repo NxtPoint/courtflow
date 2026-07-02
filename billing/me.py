@@ -31,37 +31,45 @@ def _iso(v) -> Optional[str]:
 
 
 def billing_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]:
-    """The client's MONTHLY billing, grouped BY CATEGORY (Court hire / Lessons / Classes) — each with
-    a count, a total, and the individual sessions (drill-through). Composes this month's bookings with
-    their order amount + payment status + coach/court, so a client sees 'Lessons · 2 · R1500' → the 2
-    lessons → each lesson's full detail (via the booking story). Guarded → empty. Principal-scoped."""
+    """The client's MONTHLY billing, grouped BY CATEGORY (Lessons / Court hire / Classes / Session
+    packs / Membership) — each with a count, a total, and the individual items (drill-through). Built
+    from the client's ORDERS (the same source of truth as the statement), so it always matches what
+    they owe/paid: 'Lessons · 2 · R1500' → the 2 lessons → each lesson's full detail (booking story;
+    membership/packs drill to their receipt). Month = the booking date, else the order date. Guarded."""
     ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
     currency = session.execute(
         text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": str(club_id)}).scalar() or "ZAR"
     try:
         rows = session.execute(
             text("""
-                SELECT b.id AS booking_id, b.booking_type, b.starts_at, b.status AS bstatus,
-                       o.amount_minor, o.status AS ostatus, o.settlement_mode,
+                SELECT o.id AS order_id, o.amount_minor, o.status AS ostatus, o.settlement_mode,
+                       o.created_at,
+                       ol.booking_id,
+                       b.starts_at AS booking_at, b.booking_type AS b_kind,
+                       pr.kind AS p_kind,
                        r.name AS resource_name,
                        (SELECT cr.name FROM diary.booking cb JOIN diary.resource cr ON cr.id = cb.resource_id
-                         WHERE cb.club_id = b.club_id AND cb.order_id = b.order_id
-                           AND cb.booking_type = 'court' AND b.order_id IS NOT NULL
-                           AND b.booking_type = 'lesson' LIMIT 1) AS held_court,
+                         WHERE cb.club_id = o.club_id AND cb.order_id = o.id
+                           AND cb.booking_type = 'court' LIMIT 1) AS held_court,
                        COALESCE(cp.display_name,
                                 NULLIF(TRIM(COALESCE(cu.first_name,'') || ' ' || COALESCE(cu.surname,'')),''))
-                         AS coach_name
-                FROM diary.booking b
-                LEFT JOIN billing."order" o ON o.id = b.order_id
+                         AS coach_name,
+                       EXISTS (SELECT 1 FROM billing.token_wallet w WHERE w.order_id = o.id) AS is_pack,
+                       EXISTS (SELECT 1 FROM billing.membership_subscription ms WHERE ms.order_id = o.id) AS is_membership
+                FROM billing."order" o
+                LEFT JOIN LATERAL (SELECT id, booking_id, price_id FROM billing.order_line
+                                    WHERE order_id = o.id ORDER BY created_at LIMIT 1) ol ON true
+                LEFT JOIN diary.booking b ON b.id = ol.booking_id
                 LEFT JOIN diary.resource r ON r.id = b.resource_id
+                LEFT JOIN billing.price p ON p.id = ol.price_id
+                LEFT JOIN billing.product pr ON pr.id = p.product_id
                 LEFT JOIN iam."user" cu ON cu.id = b.coach_user_id
-                LEFT JOIN iam.coach_profile cp ON cp.user_id = b.coach_user_id AND cp.club_id = b.club_id
-                WHERE b.club_id = :c AND b.booked_by_user_id = :u
-                  AND to_char(b.starts_at,'YYYY-MM') = :ym
-                  AND b.booking_type IN ('court','lesson','class')
-                  AND b.status IN ('confirmed','held','completed','no_show')
-                  AND NOT (b.booking_type = 'court' AND b.notes = '(court held for lesson)')
-                ORDER BY b.starts_at DESC
+                LEFT JOIN iam.coach_profile cp ON cp.user_id = b.coach_user_id AND cp.club_id = o.club_id
+                WHERE o.club_id = :c AND o.user_id = :u
+                  AND o.status IN ('paid','open','refunded')
+                  AND o.settled_by_order_id IS NULL
+                  AND to_char(COALESCE(b.starts_at, o.created_at),'YYYY-MM') = :ym
+                ORDER BY COALESCE(b.starts_at, o.created_at) DESC
             """),
             {"c": str(club_id), "u": str(user_id), "ym": ym},
         ).mappings().all()
@@ -69,24 +77,35 @@ def billing_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]:
         log.debug("billing_summary suppressed (billing/diary not ready)", exc_info=False)
         rows = []
 
-    LABEL = {"court": "Court hire", "lesson": "Lessons", "class": "Classes"}
-    ORDER = ["lesson", "court", "class"]
+    LABEL = {"lesson": "Lessons", "court": "Court hire", "class": "Classes",
+             "pack": "Session packs", "membership": "Membership", "other": "Other"}
+    ORDER = ["lesson", "court", "class", "pack", "membership", "other"]
     _ST = {"paid": "paid", "open": "owed", "awaiting_payment": "pending", "refunded": "refunded",
            "void": "cancelled", "written_off": "written_off"}
     cats: Dict[str, Any] = {}
     total = 0
     for r in rows:
-        k = r["booking_type"]
+        # Category: pack / membership first (order-level), else the booking/product kind.
+        if r["is_pack"]:
+            k = "pack"
+        elif r["is_membership"]:
+            k = "membership"
+        else:
+            k = (r["b_kind"] or r["p_kind"] or "other")
+            if k not in ("court", "lesson", "class"):
+                k = "other"
         amt = int(r["amount_minor"] or 0)
         covered = r["settlement_mode"] in ("membership_covered", "free", "token")
         st = "covered" if (covered and amt == 0) else _ST.get(r["ostatus"], r["ostatus"] or "—")
-        court = r["held_court"] if k == "lesson" else r["resource_name"]
+        court = r["held_court"] if r["b_kind"] == "lesson" else r["resource_name"]
         c = cats.setdefault(k, {"key": k, "label": LABEL.get(k, k), "count": 0, "total_minor": 0, "items": []})
         c["count"] += 1
         c["total_minor"] += amt
         total += amt
         c["items"].append({
-            "booking_id": str(r["booking_id"]), "starts_at": _iso(r["starts_at"]),
+            "order_id": str(r["order_id"]),
+            "booking_id": str(r["booking_id"]) if r["booking_id"] else None,
+            "starts_at": _iso(r["booking_at"] or r["created_at"]),
             "amount_minor": amt, "status": st, "coach_name": r["coach_name"], "court_name": court,
         })
     categories = [cats[k] for k in ORDER if k in cats]

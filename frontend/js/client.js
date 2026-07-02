@@ -310,7 +310,7 @@
     else {
       var box = el("div", { class: "cf-card", style: "padding:6px 14px" }), l = el("div", { class: "cf-list" });
       cat.items.forEach(function (it) {
-        l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/booking/" + it.booking_id); } }, [
+        l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go(it.booking_id ? ("#/booking/" + it.booking_id) : ("#/billing/order/" + it.order_id)); } }, [
           el("div", { class: "cf-item-main" }, [
             el("div", { class: "cf-item-t", text: UI.fmtDate(it.starts_at) + (it.coach_name ? " · " + it.coach_name : "") }),
             el("div", { class: "cf-item-s", text: [it.court_name, (function () { try { return UI.fmtTime(it.starts_at); } catch (e) { return ""; } })()].filter(Boolean).join(" · ") }),
