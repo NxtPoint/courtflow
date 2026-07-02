@@ -84,7 +84,11 @@
 
   // ---- helpers -------------------------------------------------------------
   function set(node) { view.style.opacity = 0; UI.clear(view); view.appendChild(node); requestAnimationFrame(function () { view.style.transition = "opacity .16s"; view.style.opacity = 1; }); }
-  function loading() { set(el("div", { class: "cf-loading", style: "min-height:200px", text: "Loading…" })); }
+  function loading() {
+    var n = el("div", { class: "cf-loading", style: "min-height:200px", text: "Loading…" });
+    set(n);
+    setTimeout(function () { if (n.isConnected && n.textContent === "Loading…") n.textContent = "Waking the club up — one moment…"; }, 3500);
+  }
   function card(children, extra) { return el("div", { class: "cf-card" + (extra ? " " + extra : "") }, children); }
   function backBar(label, hash) { return el("div", { class: "cf-backbar" }, [el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹ " + (label || "Back"), onclick: function () { hash ? go(hash) : history.back(); } })]); }
   function kv(k, v) { return el("div", { class: "cf-kv" }, [el("div", { class: "cf-kv-k", text: k }), el("div", { class: "cf-kv-v" }, typeof v === "string" ? [document.createTextNode(v)] : [v])]); }

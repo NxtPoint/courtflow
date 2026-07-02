@@ -347,22 +347,30 @@ def portal():
     return _app_shell("app.html")
 
 
+# The member area is now the single-page client app at /portal. The old standalone pages
+# (book/my/account) redirect INTO it so there's one cohesive experience (no stray old screens).
 @app.get("/book")
+@app.get("/book.html")
 def book():
-    return _app_shell("book.html")
+    return redirect("/portal#/book/court", code=302)
 
 
 @app.get("/book/<kind>")
 def book_kind(kind: str):
-    # court / lesson / class — single SPA shell, the client reads the path.
     if "/" in kind or "\\" in kind or kind.startswith("."):
         abort(404)
-    return _app_shell("book.html")
+    return redirect("/portal#/book/" + kind, code=302)
 
 
 @app.get("/my")
+@app.get("/my.html")
 def my_area():
-    return _app_shell("my.html")
+    return redirect("/portal#/bookings", code=302)
+
+
+@app.get("/account.html")
+def account_area():
+    return redirect("/portal#/billing", code=302)
 
 
 @app.get("/plan")
