@@ -94,6 +94,24 @@ AFTER_LOGIN_URL = os.environ.get("AUTH_AFTER_LOGIN_URL", "/portal").strip()
 
 
 # ---------------------------------------------------------------------------
+# Wix -> Render 301 layer (go-live cutover, CUTOVER_RUNBOOK.md step 2)
+# ---------------------------------------------------------------------------
+# Registered as a before_request hook so every retired Wix path resolves to a SINGLE
+# 301 to its final destination AHEAD of routing and the 404 handler. Marketing-host
+# only, so portal/app paths on other hosts are never shadowed. The map is
+# migration/redirects.csv (curated from the SEO crawl), chain-flattened so each old
+# path is one hop to a LIVE page (no 301->301 chains). Reversible: rollback = DNS back
+# to Wix (agents never touch DNS). Wrapped so a malformed CSV can never break web boot.
+try:
+    from migration.redirects import register_redirects
+    _REDIRECT_RULES = register_redirects(app)
+    log.info("cutover: registered %d Wix->Render 301 rule(s)", len(_REDIRECT_RULES))
+except Exception:  # pragma: no cover - defensive: never 500 the whole service on a bad map
+    log.exception("cutover: failed to register the redirect layer (continuing without it)")
+    _REDIRECT_RULES = {}
+
+
+# ---------------------------------------------------------------------------
 # HTML serving with per-club theme + config injection
 # ---------------------------------------------------------------------------
 

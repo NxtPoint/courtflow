@@ -50,7 +50,23 @@ def load_redirects(path: str = REDIRECTS_CSV) -> dict:
             new = row[1].strip()
             status = int(row[2]) if len(row) > 2 and row[2].strip().isdigit() else 301
             out[old] = (new, status)
-    return out
+    return _flatten_chains(out)
+
+
+def _flatten_chains(table: dict) -> dict:
+    """Collapse any intra-table redirect chain so each old path maps STRAIGHT to its
+    final destination (docs/07 §5: no chains). If A->B and B->C both exist, A resolves
+    to C. Cycle-guarded (a loop stops at the first repeat, keeping the last good hop).
+    Targets that leave the table (a live page, or an app-internal route) are final."""
+    resolved = {}
+    for old, (new, status) in table.items():
+        seen = {old}
+        dest = new
+        while _norm(dest) in table and _norm(dest) not in seen:
+            seen.add(_norm(dest))
+            dest = table[_norm(dest)][0]
+        resolved[old] = (dest, status)
+    return resolved
 
 
 def _norm(p: str) -> str:
