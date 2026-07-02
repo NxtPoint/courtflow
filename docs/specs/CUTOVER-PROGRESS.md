@@ -28,11 +28,21 @@ Durable record of the Wix→Render cutover work (survives chat compaction). Full
 - **DNS**: pre-lower TTL to 300s (apex+www only — ⚠️ NEVER `api.nextpointtennis.com`); flip at cutover.
 - **Render**: attach custom domain, bump Free→Starter. **GSC/Ads/GA4 consoles**, pre-cutover client email.
 
-## ⬜ AGENT — STILL TO DO
+## ⬜ AGENT — STILL TO DO (all BLOCKED on Tomo's weekend crawl/CSV)
 - Curate FINAL `migration/redirects.csv` once url_inventory.csv exists.
 - Decide (with Tomo) whether old booking/service Wix URLs should 301 to `/pricing` (indexable) instead
   of the noindex `/portal#/book/*`.
-- Run `build_blog.py` + commit generated HTML (preserve blog slugs).
+- Import: once CSVs land in `migration/wix/`, dry-run → confirm tiers → `--commit`.
+
+## ✅ DONE (later)
+- **`build_blog.py` rebuilt** + pushed — blog HTML regenerated so slugs carry over. Court count
+  corrected to **7 hard + 1 clay = 8 total** (Tomo-confirmed 2026-07-02).
+
+## 🔎 FLAGGED (not urgent, awaiting Tomo's ok to act)
+- **Seed resurrects deleted courts:** `scripts/seed_nextpoint.py` seeds Court 1–8 (8 hard) by name.
+  Reality is 7 hard. If `SEED_NEXTPOINT=1` re-seeds on boot, it may RE-ADD a hard court Tomo deleted
+  in prod (same class of bug the seed fixed for coaches). Fix = align COURTS to reality / stop
+  re-adding. Not touched yet — confirm which court is gone first.
 
 ## ⚠️ Notes
 - Multiple chats commit to `master` in parallel (this chat = cutover; others = coach/money/public-site).
