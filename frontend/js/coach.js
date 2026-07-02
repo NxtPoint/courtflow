@@ -6,7 +6,9 @@
 // GET /api/coach/clients[/:id].
 (function () {
   var UI, el, principal;
-  var TAB = "schedule";  // active console tab: schedule · services · clients · reporting · profile
+  var TAB = "dashboard";  // active console tab: dashboard · schedule · clients · money · setup
+  var setupTab = "services";  // sub-tab within Setup: services · profile
+  var wkStart = null;    // Monday of the visible week (Schedule timeline)
   var resCache = null;   // {coachRes:[...], courts:[...]} — cached resources for the booking modal
   var classState = { list: [] };
 
@@ -24,73 +26,114 @@
     if (!window.ClassUI) await loadScript("/js/class_ui.js");
   }
 
-  async function loadWeek() {
-    var box = document.getElementById("coach-week");
-    UI.clear(box); box.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
-    try {
-      var from = UI.dateKey(new Date());
-      var to = UI.dateKey(UI.addDays(new Date(), 7));
-      var [bk, cls] = await Promise.all([
-        window.API.bookings({ date_from: from, date_to: to, as_coach: "1" }),
-        window.API.classes({ date_from: from, date_to: to }),
-      ]);
-      renderWeek(bk.bookings || [], (cls.classes || []).filter(function (c) {
-        return String(c.coach_user_id) === String(principal.user_id);
-      }));
-    } catch (e) { box.innerHTML = ""; box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
+  // ---- my schedule (week TIMELINE — master-diary style) ----------------------
+  var WK_H0 = 7, WK_H1 = 21, WK_ROW = 46;   // 07:00–21:00 window; px per hour row (matches cf-cal-cell)
+  function mondayOf(d) {
+    var x = new Date(d); x.setHours(0, 0, 0, 0);
+    x.setDate(x.getDate() - ((x.getDay() + 6) % 7));   // step back to Monday
+    return x;
+  }
+  function coachWeek(host) {
+    if (!wkStart) wkStart = mondayOf(new Date());
+    var range = UI.fmtDate(wkStart.toISOString()) + " – " + UI.fmtDate(UI.addDays(wkStart, 6).toISOString());
+    var nav = el("div", { class: "cf-row", style: "align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap" }, [
+      el("h2", { text: "My schedule", style: "margin:0" }),
+      el("span", { class: "cf-chip", text: range }),
+      el("span", { class: "cf-spacer" }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "‹", title: "Previous week", onclick: function () { wkStart = UI.addDays(wkStart, -7); renderTab(); } }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "This week", onclick: function () { wkStart = mondayOf(new Date()); renderTab(); } }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "›", title: "Next week", onclick: function () { wkStart = UI.addDays(wkStart, 7); renderTab(); } }),
+      el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "+ Book for a client", onclick: function () { openBookForClient(); } }),
+    ]);
+    var gridHost = el("div", { class: "cf-loading", text: "Loading your week…" });
+    host.appendChild(el("div", { class: "cf-card" }, [nav, gridHost]));
+    var from = UI.dateKey(wkStart), to = UI.dateKey(UI.addDays(wkStart, 7));
+    Promise.all([
+      window.API.bookings({ date_from: from, date_to: to, as_coach: "1" }),
+      window.API.classes({ date_from: from, date_to: to }),
+    ]).then(function (res) {
+      var lessons = res[0].bookings || [];
+      var classes = (res[1].classes || []).filter(function (c) { return String(c.coach_user_id) === String(principal.user_id); });
+      drawWeek(gridHost, lessons, classes);
+    }, function (e) { UI.clear(gridHost); gridHost.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
   }
 
-  function renderWeek(lessons, classes) {
-    var box = document.getElementById("coach-week"); UI.clear(box);
-    // "Book a session for a client" — a coach can create a booking ON BEHALF of a member
-    // (it shows in THAT member's bookings) or a walk-in guest (docs/08).
-    box.appendChild(el("div", { class: "cf-row", style: "margin-bottom:12px" }, [
-      el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Book a session for a client",
-        onclick: function () { openBookForClient(); } }),
+  function drawWeek(box, lessons, classes) {
+    UI.clear(box);
+    var days = []; for (var i = 0; i < 7; i++) days.push(UI.addDays(wkStart, i));
+    var dayKey = {}; days.forEach(function (d, i) { dayKey[UI.dateKey(d)] = i; });
+    var slots = WK_H1 - WK_H0;
+    var todayKey = UI.dateKey(new Date());
+    var wrap = el("div", { class: "cf-cal-wrap" });
+    var grid = el("div", { class: "cf-cal" });
+    grid.style.gridTemplateColumns = "52px repeat(7, minmax(84px,1fr))";
+    grid.style.gridTemplateRows = "auto repeat(" + slots + ", " + WK_ROW + "px)";
+    grid.appendChild(el("div", { class: "cf-cal-head" }));
+    days.forEach(function (d) {
+      grid.appendChild(el("div", { class: "cf-cal-head",
+        text: d.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", timeZone: UI.CLUB_TZ }),
+        style: UI.dateKey(d) === todayKey ? "color:var(--green-600);font-weight:800" : "" }));
+    });
+    var cellByDay = {};
+    for (var s = 0; s < slots; s++) {
+      grid.appendChild(el("div", { class: "cf-cal-time", text: ("0" + (WK_H0 + s)).slice(-2) + ":00" }));
+      days.forEach(function (d, di) {
+        var cell = el("div", { class: "cf-cal-cell", style: "cursor:default" });
+        if (s === 0) cellByDay[di] = cell;
+        grid.appendChild(cell);
+      });
+    }
+    function place(startIso, endIso, kind, text, title, onclick, cancelled) {
+      var start = new Date(startIso), end = new Date(endIso);
+      var di = dayKey[UI.dateKey(start)];
+      if (di === undefined || !cellByDay[di]) return;
+      var mins = (start.getHours() - WK_H0) * 60 + start.getMinutes();
+      var dur = Math.max(30, (end - start) / 60000);
+      var winMins = (WK_H1 - WK_H0) * 60;
+      if (mins >= winMins || mins + dur <= 0) return;               // outside the visible window
+      var top = Math.max(0, mins) / 60 * WK_ROW;
+      var height = Math.max(16, (Math.min(mins + dur, winMins) - Math.max(0, mins)) / 60 * WK_ROW - 2);
+      cellByDay[di].appendChild(el("div", {
+        class: "cf-ev " + kind + (cancelled ? " cancelled" : ""),
+        style: "top:" + top + "px;height:" + height + "px", title: title,
+        onclick: function (e) { e.stopPropagation(); if (onclick) onclick(); },
+      }, [el("div", { text: text })]));
+    }
+    lessons.forEach(function (b) {
+      var who = b.booked_by_name || "Lesson";
+      place(b.starts_at, b.ends_at, "lesson", UI.fmtTime(b.starts_at) + " " + who,
+        who + " · " + UI.fmtRange(b.starts_at, b.ends_at) + (b.court_name ? " · " + b.court_name : "") + " · " + (b.status || ""),
+        function () { openLessonSheet(b); }, b.status === "cancelled" || b.status === "no_show");
+    });
+    classes.forEach(function (c) {
+      place(c.starts_at, c.ends_at, "class", UI.fmtTime(c.starts_at) + " " + (c.class_name || "Class"),
+        (c.class_name || "Class") + " · " + (c.enrolled || 0) + "/" + (c.capacity || 0) + " enrolled",
+        function () { openWeekRoster(c); }, c.status === "cancelled");
+    });
+    if (!lessons.length && !classes.length) {
+      box.appendChild(el("div", { class: "cf-empty", style: "margin-bottom:8px", text: "Nothing scheduled this week." }));
+    }
+    wrap.appendChild(grid); box.appendChild(wrap);
+    box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:8px", text: "Tap a lesson to mark it done / no-show; tap a class for its roster." }));
+  }
+
+  // Tap a lesson block → mark completed / no-show (or just view).
+  function openLessonSheet(b) {
+    var bg = el("div", { class: "cf-modal-bg" });
+    function close() { if (bg.parentNode) document.body.removeChild(bg); }
+    var actions = [];
+    if (["held", "confirmed"].indexOf(b.status) >= 0) {
+      actions.push(el("button", { class: "cf-btn cf-btn-primary", text: "Mark completed", onclick: function () { close(); setStatus(b.id, "completed"); } }));
+      actions.push(el("button", { class: "cf-btn cf-btn-danger", text: "No-show", onclick: function () { close(); setStatus(b.id, "no_show"); } }));
+    }
+    bg.appendChild(el("div", { class: "cf-modal" }, [
+      el("h2", { text: b.booked_by_name || "Lesson" }),
+      el("p", { class: "cf-muted", text: UI.fmtRange(b.starts_at, b.ends_at) + (b.court_name ? " · " + b.court_name : "") }),
+      el("p", {}, [el("span", { class: "cf-chip " + b.status, text: b.status })]),
+      el("div", { class: "cf-row", style: "gap:8px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap" },
+        actions.concat([el("button", { class: "cf-btn", text: "Close", onclick: close })])),
     ]));
-    if (!lessons.length && !classes.length) { box.appendChild(el("div", { class: "cf-empty", text: "Nothing scheduled this week." })); return; }
-
-    if (lessons.length) {
-      box.appendChild(el("h3", { text: "Lessons" }));
-      var ll = el("div", { class: "cf-list" });
-      lessons.forEach(function (b) {
-        var actions = [];
-        if (["held", "confirmed"].indexOf(b.status) >= 0) {
-          actions.push(el("button", { class: "cf-btn cf-btn-sm", text: "Completed", onclick: function () { setStatus(b.id, "completed"); } }));
-          actions.push(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "No-show", onclick: function () { setStatus(b.id, "no_show"); } }));
-        }
-        // One line per lesson (the auto-held court is collapsed server-side). Title = the
-        // CLIENT (the coach's own name as the resource is unhelpful here); the court the lesson
-        // sits on is shown inline as "· Court 3".
-        var sub = UI.fmtRange(b.starts_at, b.ends_at) + (b.court_name ? " · " + b.court_name : "");
-        ll.appendChild(el("div", { class: "cf-item" }, [
-          el("span", { class: "cf-chip lesson", text: "lesson" }),
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: b.booked_by_name || b.resource_name || "Lesson" }),
-            el("div", { class: "cf-item-s", text: sub }),
-          ]),
-          el("span", { class: "cf-chip " + b.status, text: b.status }),
-        ].concat(actions)));
-      });
-      box.appendChild(ll);
-    }
-
-    if (classes.length) {
-      box.appendChild(el("h3", { text: "Class sessions this week", style: "margin-top:16px" }));
-      var cl = el("div", { class: "cf-list" });
-      classes.forEach(function (c) {
-        cl.appendChild(el("div", { class: "cf-item" }, [
-          el("span", { class: "cf-chip class", text: "class" }),
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: c.class_name || "Class" }),
-            el("div", { class: "cf-item-s", text: UI.fmtRange(c.starts_at, c.ends_at) +
-              " · " + (c.enrolled || 0) + " enrolled" + (c.waitlisted ? " · " + c.waitlisted + " waitlisted" : "") }),
-          ]),
-          el("button", { class: "cf-btn cf-btn-sm", text: "Roster", onclick: function () { openWeekRoster(c); } }),
-        ]));
-      });
-      box.appendChild(cl);
-    }
+    document.body.appendChild(bg);
   }
 
   // A class session from this week's /api/diary/classes glance -> open its roster via
@@ -106,7 +149,7 @@
   }
 
   async function setStatus(id, status) {
-    try { await window.API.setBookingStatus(id, { status: status }); UI.toast("Updated.", "info"); loadWeek(); }
+    try { await window.API.setBookingStatus(id, { status: status }); UI.toast("Updated.", "info"); if (TAB === "schedule") renderTab(); }
     catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
@@ -228,7 +271,7 @@
         await window.API.createBooking(body);
         close();
         UI.toast("Booked for client.", "info");
-        loadWeek(); loadPending();
+        if (TAB === "schedule") renderTab();
       } catch (e3) { UI.toast(UI.errMsg(e3), "error"); }
     }
   }
@@ -445,8 +488,8 @@
         el("button", { class: "cf-btn cf-btn-sm", id: "coach-dash-prev", text: "‹ Prev" }),
         el("span", { class: "cf-chip", id: "coach-dash-month", text: "…" }),
         el("button", { class: "cf-btn cf-btn-sm", id: "coach-dash-next", text: "Next ›" }),
-        el("a", { class: "cf-btn cf-btn-sm cf-btn-primary", href: "/statement.html",
-          text: "Month-end statement →" }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Money & statement →",
+          onclick: function () { TAB = "money"; render(); } }),
       ]),
       el("p", { class: "cf-muted", style: "margin:-2px 0 12px",
         text: "Your coaching business at a glance. Earnings are net of commission." }),
@@ -543,39 +586,6 @@
     }
   }
 
-  // No-library trend: a row of vertical bars whose height is proportional to net
-  // earnings that month, with the lesson count under each. Pure cf-* + inline layout
-  // (heights are data-driven, which CSS classes can't express) — vanilla JS principle.
-  function renderTrend(trend) {
-    var wrap = el("div", { style: "margin-top:18px" }, [
-      el("h3", { text: "Net earnings — last 6 months", style: "margin:0 0 10px" }),
-    ]);
-    if (!trend.length) {
-      wrap.appendChild(el("div", { class: "cf-empty", text: "No history yet." }));
-      return wrap;
-    }
-    var maxNet = trend.reduce(function (m, t) { return Math.max(m, t.net_minor || 0); }, 0);
-    var bars = el("div", {
-      style: "display:flex;align-items:flex-end;flex-wrap:nowrap;gap:10px;height:170px;" +
-             "padding:6px 2px;overflow-x:auto" });
-    trend.forEach(function (t) {
-      var h = maxNet > 0 ? Math.max(4, Math.round((t.net_minor || 0) / maxNet * 120)) : 4;
-      var lbl = "font-size:.8rem;margin:0";
-      var col = el("div", {
-        style: "flex:1;min-width:46px;align-items:center;gap:4px;display:flex;" +
-               "flex-direction:column;justify-content:flex-end" }, [
-        el("div", { class: "cf-muted", style: lbl, text: fmtMoney(t.net_minor) }),
-        el("div", { title: monthLabel(t.month) + " · " + fmtMoney(t.net_minor) + " · " + (t.lessons || 0) + " lessons",
-          style: "width:100%;height:" + h + "px;border-radius:8px 8px 0 0;" +
-                 "background:linear-gradient(180deg,var(--green,#2e9e6b),#1f7d52)" }),
-        el("div", { style: lbl + ";font-weight:700", text: shortMonth(t.month) }),
-        el("div", { class: "cf-muted", style: lbl, text: (t.lessons || 0) + "L" }),
-      ]);
-      bars.appendChild(col);
-    });
-    wrap.appendChild(bars);
-    return wrap;
-  }
 
   function renderTopClients(list) {
     var card = el("div", {}, [el("h3", { text: "Top clients this month", style: "margin:0 0 8px" })]);
@@ -957,7 +967,7 @@
   }
 
   async function acceptPending(id) {
-    try { await window.API.acceptBooking(id); UI.toast("Lesson confirmed.", "info"); loadPending(); loadWeek(); }
+    try { await window.API.acceptBooking(id); UI.toast("Lesson confirmed.", "info"); loadPending(); if (TAB === "schedule") renderTab(); }
     catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
   async function declinePending(id) {
@@ -1113,11 +1123,11 @@
 
   // ---- tab shell ------------------------------------------------------------
   var TABS = [
+    { k: "dashboard", t: "Dashboard" },
     { k: "schedule", t: "Schedule" },
-    { k: "services", t: "Services" },
     { k: "clients", t: "Clients" },
-    { k: "reporting", t: "Reporting" },
-    { k: "profile", t: "Profile" },
+    { k: "money", t: "Money" },
+    { k: "setup", t: "Setup" },
   ];
 
   function render() {
@@ -1143,21 +1153,27 @@
   function renderTab() {
     var host = document.getElementById("coach-tab"); if (!host) return;
     UI.clear(host);
-    if (TAB === "schedule") tabSchedule(host);
-    else if (TAB === "services") tabServices(host);
+    if (TAB === "dashboard") tabDashboard(host);
+    else if (TAB === "schedule") tabSchedule(host);
     else if (TAB === "clients") tabClients(host);
-    else if (TAB === "reporting") tabReporting(host);
-    else tabProfile(host);
+    else if (TAB === "money") tabMoney(host);
+    else tabSetup(host);
   }
 
-  // Schedule — lesson requests + my week + book-for-a-client + time off.
+  // Dashboard — what needs action + the business cockpit (net of commission).
+  function tabDashboard(host) {
+    initPending(host);      // "Needs your attention" — lesson requests / proposed times
+    initDashboard(host);    // KPIs · earnings trend · month-end position · top clients · upcoming
+  }
+
+  // Schedule — a week TIMELINE of my lessons + classes (master-diary style) + book-for-a-client
+  // + block time off.
   function tabSchedule(host) {
-    initPending(host);
-    host.appendChild(el("div", { class: "cf-card" }, [
-      el("h2", { text: "My week" }),
-      el("div", { id: "coach-week" }, [el("div", { class: "cf-loading", text: "Loading…" })]),
-    ]));
-    loadWeek();
+    coachWeek(host);
+    timeOffCard(host);
+  }
+
+  function timeOffCard(host) {
     var toResource = el("select", { class: "cf-select", id: "to-resource" }, [el("option", { text: "Loading…" })]);
     var toReason = el("input", { class: "cf-input", id: "to-reason", placeholder: "e.g. holiday" });
     var toStart = el("input", { class: "cf-input", id: "to-start", type: "datetime-local" });
@@ -1165,6 +1181,7 @@
     var toSubmit = el("button", { class: "cf-btn cf-btn-primary", id: "to-submit", text: "Block time" });
     host.appendChild(el("div", { class: "cf-card" }, [
       el("h2", { text: "Block time off" }),
+      el("p", { class: "cf-muted cf-tiny", style: "margin:-2px 0 10px", text: "Blocked time is removed from your bookable slots." }),
       el("div", { class: "cf-grid cf-grid-2" }, [
         fieldEl("Resource", toResource), fieldEl("Reason", toReason),
         fieldEl("From", toStart), fieldEl("To", toEnd),
@@ -1175,13 +1192,26 @@
     loadResources(); loadTimeOff();
   }
 
-  // Services — each service is ONE summary card → "Manage" opens the unified Service Editor
-  // (prices · payment · packages · commission, all in one place). Class scheduling stays separate
-  // (operational), below. The editor is the single place a service is edited.
-  function tabServices(host) {
-    var box = el("div"); host.appendChild(box); renderServiceList(box);
-    initMyClasses(host);  // class scheduling (sessions/rosters) — operational, not config
+  function tabClients(host) { initMyClients(host); }
+
+  // Money — the month-end settlement statement (per-client paid/owed + arrears actions). This is the
+  // coach's single money view (the old standalone /statement.html is superseded).
+  function tabMoney(host) { initStatement(host); }
+
+  // Setup — everything the coach configures, in one place: services & pricing (+ the club's
+  // commission, greyed) + classes, and the coach's own profile. Sub-tabbed to stay clean.
+  function tabSetup(host) {
+    host.appendChild(UI.subtabs(setupTab, [["services", "Services & pricing"], ["profile", "My profile"]],
+      function (k) { setupTab = k; renderTab(); }));
+    var body = el("div"); host.appendChild(body);
+    if (setupTab === "profile") { tabProfile(body); return; }
+    var box = el("div"); body.appendChild(box); renderServiceList(box);
+    commissionCard(body);   // read-only "what the club keeps" — surfaced here so the coach can see it
+    initMyClasses(body);    // class scheduling (sessions/rosters)
   }
+
+  // Services — each service is ONE summary card → "Manage" opens the unified Service Editor
+  // (prices · payment · packages · commission, all in one place). Rendered inside the Setup tab.
   var svcFilter = "active";
   function renderServiceList(box) {
     UI.clear(box);
@@ -1259,11 +1289,6 @@
       host.appendChild(el("div", { class: "cf-card" }, rows));
     }, function () { UI.clear(host); });
   }
-
-  function tabClients(host) { initMyClients(host); }
-
-  // Reporting — the business cockpit + the month-end settlement statement.
-  function tabReporting(host) { initDashboard(host); initStatement(host); }
 
   window.CoachConsole = {
     start: function (p) {
