@@ -75,6 +75,11 @@ NextPoint Tennis is club #1, migrating off Wix.
     (club/coach/per-service incl. classes → `commission_rule`), the **financial cockpit** (per-coach
     settlement, refund-aware), and **statement arrears adjust** (`PATCH /api/admin/coach-statement/arrears/<id>`).
     Console = `admin.js` on `crm_ui.js`. Added `club.onboarding_completed`, `iam.coach_invite`.
+  - **Service editing (owner + coach):** `services/` — `/api/services/*` is the ONE API a service is
+    edited through by BOTH roles; the route enforces who may change what (owner = everything incl.
+    commission; coach = their OWN lesson/class name/variations/payment/packages, NEVER commission).
+    Writes delegate to the existing `billing/`/`admin/` repos (no duplicated logic — this lane just
+    unifies the surface); reads via `services.repositories.get_service` (one composed payload).
   - **Coach (self-service):** `coach/` — `/api/coach/*`; **4-step onboarding** (profile/photo/languages/
     quals/visibility + `review_bookings`, weekly hours → `diary.resource(kind=coach)`, per-duration
     services/rates + classes/packs; full pre-fill); **lesson approval queue** (accept/propose/decline);
@@ -244,7 +249,9 @@ request→accept→settle chain green on a scratch DB.
 - **Backend integration:** boot all schemas + a booking→order→event chain against a throwaway Postgres
   (`docker run postgres:16`, set `DATABASE_URL`, `python -m db` twice for the idempotency gate, then
   `python -m scripts.seed_nextpoint`). The cross-lane flow (diary→billing→CRM), the double-book refusal,
-  and desk-payment idempotency were proven this way (12/12).
+  and desk-payment idempotency were proven this way (12/12). **Against the REAL Render Postgres:**
+  `python -m scripts.verify_live` reads `DATABASE_URL` from a gitignored `.env.local` (never printed),
+  proves boot + seed are idempotent, and reports status only — safe to re-run.
 - **Web service:** Flask test client against `web_app.py` (DB-less) — host-switch, portal-shell serving,
   robots/sitemap, branded 404 (14/14).
 - **Yoco payments:** offline signature verify (valid / tampered / stale / missing / wrong-secret) +
