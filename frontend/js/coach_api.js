@@ -132,6 +132,23 @@
       return A().apiJSON("/api/coach/activity" + (limit ? ("?limit=" + enc(limit)) : ""));
     },
 
+    // ---- disputes (refund requests on THIS coach's coaching services) ----------
+    // GET /api/coach/refund-requests?status= -> {requests:[{id,routed_to,coach_name,requester_name,
+    //   item_description,amount_minor,order_amount_minor,currency_code,reason,status,...}]}
+    refundRequests: function (status) {
+      return A().apiJSON("/api/coach/refund-requests" + (status ? ("?status=" + enc(status)) : ""));
+    },
+    // POST /api/coach/refund-requests/:id/approve  body {note?} -> {refund_request}
+    approveRefund: function (id, body) {
+      return A().apiJSON("/api/coach/refund-requests/" + enc(id) + "/approve",
+        { method: "POST", body: body || {} });
+    },
+    // POST /api/coach/refund-requests/:id/decline  body {note?} -> {refund_request}
+    declineRefund: function (id, body) {
+      return A().apiJSON("/api/coach/refund-requests/" + enc(id) + "/decline",
+        { method: "POST", body: body || {} });
+    },
+
     // ---- month-end statement (commission settlement; a coach sees their OWN) ----
     // GET /api/admin/coach-statement?month=YYYY-MM ->
     //   {month, currency, clients:[{client_name,lessons,paid_minor,owed_minor,net_minor}],

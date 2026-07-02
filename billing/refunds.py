@@ -45,6 +45,8 @@ def _row_to_dict(r) -> Dict[str, Any]:
         "id": str(r["id"]),
         "order_id": str(r["order_id"]),
         "user_id": str(r["user_id"]) if r["user_id"] is not None else None,
+        "coach_user_id": str(r["coach_user_id"]) if r["coach_user_id"] is not None else None,
+        "routed_to": ("coach" if r["coach_user_id"] is not None else "club"),
         "amount_minor": int(r["amount_minor"]) if r["amount_minor"] is not None else None,
         "reason": r["reason"],
         "status": r["status"],
@@ -56,8 +58,32 @@ def _row_to_dict(r) -> Dict[str, Any]:
     }
 
 
-_SELECT_COLS = ("id, order_id, user_id, amount_minor, reason, status, decided_by, "
+_SELECT_COLS = ("id, order_id, user_id, coach_user_id, amount_minor, reason, status, decided_by, "
                 "decided_at, note, created_at, updated_at")
+
+
+def _resolve_order_coach(session, order_id) -> Optional[str]:
+    """The coach who owns this order's COACHING service (lesson/class), or None for a non-coaching
+    order (court / membership). Resolves via order_line -> price -> product.coach_user_id, falling
+    back to the booking's coach. This is the dispute-routing key: a coaching dispute routes to the
+    coach (who decides), a non-coaching one routes to the club."""
+    try:
+        return session.execute(
+            text("""
+                SELECT COALESCE(pr.coach_user_id, b.coach_user_id) AS coach
+                FROM billing.order_line ol
+                LEFT JOIN billing.price   p  ON p.id  = ol.price_id
+                LEFT JOIN billing.product pr ON pr.id = p.product_id
+                LEFT JOIN diary.booking   b  ON b.id  = ol.booking_id
+                WHERE ol.order_id = :o
+                  AND (pr.kind IN ('lesson','class') OR b.booking_type IN ('lesson','class'))
+                  AND COALESCE(pr.coach_user_id, b.coach_user_id) IS NOT NULL
+                LIMIT 1
+            """),
+            {"o": str(order_id)},
+        ).scalar()
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -106,16 +132,18 @@ def create_refund_request(session, *, club_id, user_id, order_id,
             amt = order_amt
 
     reason = (reason or "").strip() or None
+    # Route the dispute: a coaching service (lesson/class) → its coach decides; else → the club.
+    coach = _resolve_order_coach(session, order_id)
 
     try:
         row = session.execute(
             text("""
                 INSERT INTO billing.refund_request
-                    (club_id, order_id, user_id, amount_minor, reason, status)
-                VALUES (:c, :oid, :u, :amt, :reason, 'pending')
+                    (club_id, order_id, user_id, coach_user_id, amount_minor, reason, status)
+                VALUES (:c, :oid, :u, :coach, :amt, :reason, 'pending')
                 RETURNING """ + _SELECT_COLS),
             {"c": str(club_id), "oid": str(order_id), "u": str(user_id),
-             "amt": amt, "reason": reason},
+             "coach": str(coach) if coach else None, "amt": amt, "reason": reason},
         ).mappings().first()
     except Exception:
         # The partial unique index can still race a concurrent insert -> treat as a duplicate.
@@ -173,9 +201,10 @@ def cancel_refund_request(session, *, club_id, user_id, request_id
 # route emits refund_decided after a successful decision.
 # ---------------------------------------------------------------------------
 
-def _load_pending_admin(session, *, club_id, request_id):
+def _load_pending_admin(session, *, club_id, request_id, require_coach_user_id=None):
     """Load a request scoped to club_id; return (row_dict, error). error is NOT_FOUND (wrong
-    club / missing → 404) or NOT_PENDING (already decided/cancelled → 409)."""
+    club / missing → 404), FORBIDDEN (a coach may only decide their OWN coaching dispute → 403),
+    or NOT_PENDING (already decided/cancelled → 409)."""
     row = session.execute(
         text("SELECT " + _SELECT_COLS + " FROM billing.refund_request "
              "WHERE id = :id AND club_id = :c"),
@@ -183,13 +212,17 @@ def _load_pending_admin(session, *, club_id, request_id):
     ).mappings().first()
     if not row:
         return None, "NOT_FOUND"
+    # Coach path: the request must be routed to THIS coach (coaching dispute they own). The club
+    # (admin) path passes no require_coach_user_id → it can decide any dispute (oversight/override).
+    if require_coach_user_id is not None and str(row["coach_user_id"]) != str(require_coach_user_id):
+        return None, "FORBIDDEN"
     if row["status"] != "pending":
         return None, "NOT_PENDING"
     return _row_to_dict(row), None
 
 
 def approve_refund_request(session, *, club_id, request_id, decided_by,
-                           amount_minor=None, note=None
+                           amount_minor=None, note=None, require_coach_user_id=None
                            ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Approve a 'pending' request: execute the Yoco refund for the request's order, then mark
     it 'refunded'. Returns (request_dict, None) | (None, error_code).
@@ -200,7 +233,8 @@ def approve_refund_request(session, *, club_id, request_id, decided_by,
     The refunded amount defaults to the request's amount_minor (the member's requested figure);
     an explicit amount_minor overrides it; None throughout → a full refund (the helper sends no
     amount → Yoco's full balance)."""
-    req, err = _load_pending_admin(session, club_id=club_id, request_id=request_id)
+    req, err = _load_pending_admin(session, club_id=club_id, request_id=request_id,
+                                   require_coach_user_id=require_coach_user_id)
     if err:
         return None, err
 
@@ -229,11 +263,14 @@ def approve_refund_request(session, *, club_id, request_id, decided_by,
     return _row_to_dict(upd), None
 
 
-def decline_refund_request(session, *, club_id, request_id, decided_by, note=None
+def decline_refund_request(session, *, club_id, request_id, decided_by, note=None,
+                           require_coach_user_id=None
                            ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Decline a 'pending' request → 'declined' (terminal), stamping the decider + optional note.
-    No money moves. Errors: NOT_FOUND (wrong club / missing) | NOT_PENDING (already decided)."""
-    _, err = _load_pending_admin(session, club_id=club_id, request_id=request_id)
+    No money moves. Errors: NOT_FOUND (wrong club / missing) | FORBIDDEN (coach, not their dispute)
+    | NOT_PENDING (already decided)."""
+    _, err = _load_pending_admin(session, club_id=club_id, request_id=request_id,
+                                 require_coach_user_id=require_coach_user_id)
     if err:
         return None, err
     note = (note or "").strip() or None
@@ -253,25 +290,24 @@ def decline_refund_request(session, *, club_id, request_id, decided_by, note=Non
 # admin: read-only queue (the thin admin follow-up; approve/decline is another lane)
 # ---------------------------------------------------------------------------
 
-def list_refund_requests_admin(session, *, club_id, status=None) -> List[Dict[str, Any]]:
-    """The club's refund-request queue for the admin view, most-recent first. Joins the
-    order amount/currency + the requester email (the payer). Optionally filtered by status.
-    Read-only — executing the refund stays on the existing admin Yoco-refund path."""
-    where = "rr.club_id = :c"
-    params: Dict[str, Any] = {"c": str(club_id)}
-    if status:
-        where += " AND rr.status = :st"
-        params["st"] = status
+def _list_requests_enriched(session, *, where, params) -> List[Dict[str, Any]]:
+    """Shared reader: refund requests + order amount/currency + requester + routed-to coach name,
+    most-recent first. `where`/`params` scope it (whole club for admin, one coach for the coach)."""
     rows = session.execute(
         text("""
-            SELECT rr.id, rr.order_id, rr.user_id, rr.amount_minor, rr.reason, rr.status,
-                   rr.decided_by, rr.decided_at, rr.note, rr.created_at, rr.updated_at,
+            SELECT rr.id, rr.order_id, rr.user_id, rr.coach_user_id, rr.amount_minor, rr.reason,
+                   rr.status, rr.decided_by, rr.decided_at, rr.note, rr.created_at, rr.updated_at,
                    o.amount_minor AS order_amount_minor, o.currency_code, o.status AS order_status,
                    u.email AS requester_email,
-                   trim(coalesce(u.first_name,'') || ' ' || coalesce(u.surname,'')) AS requester_name
+                   trim(coalesce(u.first_name,'') || ' ' || coalesce(u.surname,'')) AS requester_name,
+                   trim(coalesce(cu.first_name,'') || ' ' || coalesce(cu.surname,'')) AS coach_name,
+                   ol.description AS item_description
             FROM billing.refund_request rr
             JOIN billing."order" o ON o.id = rr.order_id
-            LEFT JOIN iam.user u ON u.id = rr.user_id
+            LEFT JOIN iam.user u  ON u.id  = rr.user_id
+            LEFT JOIN iam.user cu ON cu.id = rr.coach_user_id
+            LEFT JOIN LATERAL (SELECT description FROM billing.order_line
+                                WHERE order_id = o.id ORDER BY created_at LIMIT 1) ol ON true
             WHERE """ + where + """
             ORDER BY rr.created_at DESC
         """),
@@ -286,6 +322,30 @@ def list_refund_requests_admin(session, *, club_id, status=None) -> List[Dict[st
             "order_status": r["order_status"],
             "requester_email": r["requester_email"],
             "requester_name": (r["requester_name"] or "").strip() or None,
+            "coach_name": (r["coach_name"] or "").strip() or None,
+            "item_description": r["item_description"],
         })
         out.append(d)
     return out
+
+
+def list_refund_requests_admin(session, *, club_id, status=None) -> List[Dict[str, Any]]:
+    """The club's refund-request queue for the admin view (whole club — the owner sees + can decide
+    every dispute, coaching or not: oversight/override). Optionally filtered by status."""
+    where = "rr.club_id = :c"
+    params: Dict[str, Any] = {"c": str(club_id)}
+    if status:
+        where += " AND rr.status = :st"
+        params["st"] = status
+    return _list_requests_enriched(session, where=where, params=params)
+
+
+def list_refund_requests_coach(session, *, club_id, coach_user_id, status=None) -> List[Dict[str, Any]]:
+    """The COACH's dispute queue — refund requests on THEIR coaching services only. The coach
+    decides these (approve/decline); the club owner still oversees them from the admin queue."""
+    where = "rr.club_id = :c AND rr.coach_user_id = :coach"
+    params: Dict[str, Any] = {"c": str(club_id), "coach": str(coach_user_id)}
+    if status:
+        where += " AND rr.status = :st"
+        params["st"] = status
+    return _list_requests_enriched(session, where=where, params=params)

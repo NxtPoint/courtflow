@@ -491,6 +491,60 @@ def sc_membership_cancel_voids_order(s, fx):
     check("paid plan order stays 'paid' after cancel", _order(s, oid2)["status"] == "paid")
 
 
+def sc_dispute_routing(s, fx):
+    print("\n# Dispute routing: a coaching refund → the coach decides; a court refund → the club")
+    # A paid LESSON (coaching service) → routes to the coach.
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    loid = r["booking"]["order_id"]
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=loid,
+                          amount_minor=_order(s, loid)["amount_minor"], provider="cash",
+                          provider_payment_id="RCPT-LSN", user_id=fx.member)
+    lreq, lerr = RF.create_refund_request(s, club_id=fx.club_id, user_id=fx.member, order_id=loid,
+                                          reason="coach late")
+    check("coaching dispute routes to the coach",
+          lerr is None and lreq["routed_to"] == "coach" and lreq["coach_user_id"] == str(fx.coach_uid),
+          str(lreq))
+
+    # A paid COURT (non-coaching) → routes to the club (no coach).
+    rc = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=iso(at(fx, 11)), ends_at=iso(at(fx, 12)), settlement_mode="at_court")
+    coid = rc["booking"]["order_id"]
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=coid,
+                          amount_minor=_order(s, coid)["amount_minor"], provider="cash",
+                          provider_payment_id="RCPT-CRT", user_id=fx.member)
+    creq, cerr = RF.create_refund_request(s, club_id=fx.club_id, user_id=fx.member, order_id=coid)
+    check("court dispute routes to the club",
+          cerr is None and creq["routed_to"] == "club" and creq["coach_user_id"] is None, str(creq))
+
+    # The coach sees only THEIR dispute; the club oversees BOTH.
+    coach_q = RF.list_refund_requests_coach(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    check("coach queue = only their coaching dispute",
+          len(coach_q) == 1 and coach_q[0]["id"] == lreq["id"], f"n={len(coach_q)}")
+    admin_q = RF.list_refund_requests_admin(s, club_id=fx.club_id, status="pending")
+    check("club queue oversees both disputes", len(admin_q) == 2, f"n={len(admin_q)}")
+
+    # A DIFFERENT coach cannot decide this coach's dispute.
+    other = _mk_user(s, "othercoach2@bill.test", "OtherCoach2")
+    _, ferr = RF.decline_refund_request(s, club_id=fx.club_id, request_id=lreq["id"],
+                                        decided_by=other, require_coach_user_id=other)
+    check("another coach is forbidden from deciding it", ferr == "FORBIDDEN", str(ferr))
+
+    # The owning coach declines their own dispute (no money moves).
+    dec, derr = RF.decline_refund_request(s, club_id=fx.club_id, request_id=lreq["id"],
+                                          decided_by=fx.coach_uid, require_coach_user_id=fx.coach_uid,
+                                          note="offered a make-up lesson")
+    check("the owning coach can decline their dispute",
+          derr is None and dec["status"] == "declined", str(derr))
+    # The club can still decide the court dispute (oversight path, no coach guard).
+    cdec, cderr = RF.decline_refund_request(s, club_id=fx.club_id, request_id=creq["id"],
+                                            decided_by=fx.member, note="not eligible")
+    check("the club decides the non-coaching dispute", cderr is None and cdec["status"] == "declined",
+          str(cderr))
+
+
 def sc_transaction_log(s, fx):
     print("\n# Transaction log: one chronological feed, role-scoped (client / coach / owner)")
     from billing import activity as ACT
@@ -595,6 +649,7 @@ SCENARIOS = [
     sc_refund_request,
     sc_refund_clawback,
     sc_membership_cancel_voids_order,
+    sc_dispute_routing,
     sc_transaction_log,
 ]
 

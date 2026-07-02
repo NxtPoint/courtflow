@@ -574,3 +574,71 @@ def get_activity():
         rows = act.transaction_log(s, club_id=p.club_id, scope="coach",
                                    user_id=p.user_id, limit=limit)
     return jsonify(activity=rows, count=len(rows)), 200
+
+
+# ---------------------------------------------------------------------------
+# disputes — refund requests on THIS coach's coaching services (coach decides; club oversees)
+#   GET  /api/coach/refund-requests?status=      -> {requests:[…]}
+#   POST /api/coach/refund-requests/<id>/approve -> execute the refund + clawback, mark refunded
+#   POST /api/coach/refund-requests/<id>/decline -> decline (no money moves)
+# A coach may ONLY act on a request routed to them (coach_user_id = them); anything else is 403.
+# ---------------------------------------------------------------------------
+
+_REFUND_ERR = {
+    "NOT_FOUND": (404, "That request no longer exists."),
+    "FORBIDDEN": (403, "That dispute isn’t yours to decide."),
+    "NOT_PENDING": (409, "That request has already been decided."),
+    "NOT_REFUNDABLE": (409, "That order can’t be refunded."),
+    "refund_failed": (502, "The refund could not be processed — the request is still pending."),
+}
+
+
+@coach_bp.get("/refund-requests")
+def coach_refund_requests():
+    p, err = _coach()
+    if err:
+        return err
+    status = (request.args.get("status") or "").strip() or None
+    from billing import refunds
+    with session_scope() as s:
+        rows = refunds.list_refund_requests_coach(
+            s, club_id=p.club_id, coach_user_id=p.user_id, status=status)
+    return jsonify(requests=rows, count=len(rows)), 200
+
+
+@coach_bp.post("/refund-requests/<request_id>/approve")
+def coach_approve_refund(request_id):
+    """The coach approves a dispute on their coaching service → the refund (and the proportional
+    commission clawback) executes. Scoped to THEIR own disputes."""
+    p, err = _coach()
+    if err:
+        return err
+    b = _body()
+    from billing import refunds
+    with session_scope() as s:
+        req, ecode = refunds.approve_refund_request(
+            s, club_id=p.club_id, request_id=request_id, decided_by=p.user_id,
+            amount_minor=b.get("amount_minor"), note=b.get("note"),
+            require_coach_user_id=p.user_id)
+    if ecode:
+        code, msg = _REFUND_ERR.get(ecode, (400, "Could not approve the request."))
+        return jsonify(error=ecode, message=msg), code
+    return jsonify(refund_request=req), 200
+
+
+@coach_bp.post("/refund-requests/<request_id>/decline")
+def coach_decline_refund(request_id):
+    """The coach declines a dispute on their coaching service (no money moves). Own disputes only."""
+    p, err = _coach()
+    if err:
+        return err
+    b = _body()
+    from billing import refunds
+    with session_scope() as s:
+        req, ecode = refunds.decline_refund_request(
+            s, club_id=p.club_id, request_id=request_id, decided_by=p.user_id,
+            note=b.get("note"), require_coach_user_id=p.user_id)
+    if ecode:
+        code, msg = _REFUND_ERR.get(ecode, (400, "Could not decline the request."))
+        return jsonify(error=ecode, message=msg), code
+    return jsonify(refund_request=req), 200

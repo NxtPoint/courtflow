@@ -1032,6 +1032,14 @@
 
   function initStatement(host) {
     if (!host) return;
+    // Disputes — refund requests on this coach's coaching services (they decide; club oversees).
+    var dispCard = el("div", { class: "cf-card", id: "coach-disp-card", style: "margin-bottom:16px;display:none" }, [
+      el("h2", { text: "Refund requests", style: "margin:0 0 4px" }),
+      el("p", { class: "cf-muted", style: "margin:-2px 0 12px",
+        text: "A client has asked for a refund on one of your lessons — you decide. Approving refunds the client and reverses your commission." }),
+      el("div", { id: "coach-disp-body" }),
+    ]);
+    host.appendChild(dispCard);
     var card = el("div", { class: "cf-card", id: "coach-stmt-card" }, [
       el("div", { class: "cf-row", style: "margin-bottom:6px;align-items:center;gap:8px" }, [
         el("h2", { text: "Month-end statement", style: "margin:0" }),
@@ -1062,6 +1070,50 @@
     });
     loadStatement();
     loadActivity();
+    loadDisputes();
+  }
+
+  async function loadDisputes() {
+    var card = document.getElementById("coach-disp-card");
+    var body = document.getElementById("coach-disp-body");
+    if (!card || !body) return;
+    try {
+      var d = await window.CoachAPI.refundRequests("pending");
+      var reqs = (d && d.requests) || [];
+      if (!reqs.length) { card.style.display = "none"; return; }
+      card.style.display = "";
+      UI.clear(body);
+      body.appendChild(window.CRMUI.lineItems(reqs.map(function (r) {
+        return {
+          id: r.id, gross_minor: (r.amount_minor != null ? r.amount_minor : r.order_amount_minor),
+          currency: r.currency_code, _name: r.requester_name || "A client",
+          _sub: [r.item_description || "Lesson", r.reason ? ("“" + r.reason + "”") : ""].filter(Boolean).join(" · "),
+        };
+      }), {
+        currency: reqs[0].currency_code || "ZAR",
+        label: function (it) { return it._name; },
+        sub: function (it) { return it._sub; },
+        empty: "No refund requests.",
+        actions: [
+          { label: "Approve refund", tone: "primary", onClick: function (it) { decideDispute(it.id, "approve"); } },
+          { label: "Decline", tone: "danger", onClick: function (it) { decideDispute(it.id, "decline"); } },
+        ],
+      }));
+    } catch (e) { card.style.display = "none"; }
+  }
+
+  async function decideDispute(id, action) {
+    var isApprove = action === "approve";
+    var note = window.prompt(isApprove
+      ? "Approve this refund? The client is refunded and your commission is reversed.\n\nNote (optional):"
+      : "Decline this refund request?\n\nReason (shown to the client):", "");
+    if (note === null) return;
+    try {
+      if (isApprove) await window.CoachAPI.approveRefund(id, { note: note });
+      else await window.CoachAPI.declineRefund(id, { note: note });
+      UI.toast(isApprove ? "Refund approved." : "Request declined.", "info");
+      loadDisputes(); loadStatement(); loadActivity();
+    } catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
   async function loadActivity() {

@@ -473,6 +473,11 @@ _DDL = [
     f"ON {SCHEMA}.refund_request (order_id);",
     f"CREATE INDEX IF NOT EXISTS ix_refund_request_user "
     f"ON {SCHEMA}.refund_request (club_id, user_id);",
+    # Dispute routing: the coaching service's coach owns coaching disputes (coach decides, club
+    # oversees). NULL = a non-coaching dispute (court/membership) — the club decides. Idempotent add.
+    f"ALTER TABLE {SCHEMA}.refund_request ADD COLUMN IF NOT EXISTS coach_user_id uuid;",
+    f"CREATE INDEX IF NOT EXISTS ix_refund_request_coach "
+    f"ON {SCHEMA}.refund_request (club_id, coach_user_id, status) WHERE coach_user_id IS NOT NULL;",
     # At most ONE open (pending) request per order — the member can't spam duplicates.
     f"CREATE UNIQUE INDEX IF NOT EXISTS ux_refund_request_open "
     f"ON {SCHEMA}.refund_request (order_id) WHERE status = 'pending';",

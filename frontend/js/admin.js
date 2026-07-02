@@ -891,7 +891,7 @@
         box.appendChild(el("div", { class: "cf-empty", text: "No refund requests." })); return;
       }
       var t = el("table", { class: "cf-table" });
-      t.appendChild(el("thead", {}, [ el("tr", {}, ["When", "Member", "Order", "Requested", "Reason", "Status", ""]
+      t.appendChild(el("thead", {}, [ el("tr", {}, ["When", "Member", "Routed to", "Order", "Requested", "Reason", "Status", ""]
         .map(function (h) { return el("th", { text: h }); })) ]));
       var tb = el("tbody");
       reqs.forEach(function (rq) {
@@ -912,9 +912,14 @@
         } else {
           actionCell = [ el("span", { class: "cf-muted", text: rq.note || "—" }) ];
         }
+        // Routing (coach decides coaching disputes; club oversees & can override any).
+        var routed = (rq.routed_to === "coach")
+          ? el("span", { class: "cf-chip lesson", text: "Coach" + (rq.coach_name ? (" · " + rq.coach_name) : "") })
+          : el("span", { class: "cf-chip", text: "Club" });
         tb.appendChild(el("tr", {}, [
           el("td", { text: String(rq.created_at || "").replace("T", " ").slice(0, 16) }),
           el("td", { text: rq.requester_name || rq.requester_email || "—" }),
+          el("td", {}, [routed]),
           el("td", { class: "num", text: UI.money(rq.order_amount_minor, cur) }),
           el("td", { class: "num", text: UI.money(rq.amount_minor, cur) }),
           el("td", { text: rq.reason || "—" }),

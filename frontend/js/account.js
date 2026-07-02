@@ -198,7 +198,7 @@
     save.addEventListener("click", function () { submitRefund(order, reason.value.trim() || null, save, bg); });
     bg.appendChild(el("div", { class: "cf-modal" }, [
       el("h2", { text: "Request a refund" }),
-      el("p", { class: "cf-muted cf-tiny", text: (order.description || "Payment") + " · " + money(order.amount_minor, order.currency_code) + ". The club will review your request." }),
+      el("p", { class: "cf-muted cf-tiny", text: (order.description || "Payment") + " · " + money(order.amount_minor, order.currency_code) + ". Your coach or the club will review your request." }),
       el("div", { class: "cf-field" }, [el("label", { text: "Reason" }), reason]),
       el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:12px;gap:8px" }, [
         el("button", { class: "cf-btn", text: "Cancel", onclick: function () { document.body.removeChild(bg); } }), save,
