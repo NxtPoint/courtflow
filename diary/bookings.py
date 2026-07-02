@@ -1246,6 +1246,93 @@ def booking_story(session, *, club_id, user_id, booking_id):
     }
 
 
+def coach_booking_story(session, *, club_id, coach_user_id, booking_id):
+    """The COACH's full view of a lesson/class they RUN: the client (name + contact), when, court,
+    the charge + payment status, players + attendance, and the coach's action eligibility
+    (accept/propose/decline/reschedule/cancel/mark-completed/mark-no-show). Scoped so a coach only
+    sees a booking they run (coach_user_id = them). Composes diary + club + billing. None if not
+    found / not theirs — the coach-side mirror of booking_story."""
+    b = session.execute(
+        text("""
+            SELECT b.id, b.club_id, b.booking_type, b.status, b.starts_at, b.ends_at,
+                   b.resource_id, r.name AS resource_name, b.coach_user_id, b.order_id,
+                   b.settlement_mode, b.booked_by_user_id,
+                   (SELECT cr.name FROM diary.booking cb JOIN diary.resource cr ON cr.id = cb.resource_id
+                     WHERE cb.club_id = b.club_id AND cb.order_id = b.order_id
+                       AND cb.booking_type = 'court' AND b.order_id IS NOT NULL
+                       AND b.booking_type = 'lesson' LIMIT 1) AS held_court,
+                   u.first_name, u.surname, u.email, u.phone
+            FROM diary.booking b
+            LEFT JOIN diary.resource r ON r.id = b.resource_id
+            LEFT JOIN iam."user" u ON u.id = b.booked_by_user_id
+            WHERE b.id = :bid AND b.club_id = :c
+        """),
+        {"bid": str(booking_id), "c": str(club_id)},
+    ).mappings().first()
+    if not b or str(b["coach_user_id"]) != str(coach_user_id):
+        return None
+
+    venue = session.execute(
+        text("SELECT c.name AS club_name, l.address_line, l.city "
+             "FROM club.club c LEFT JOIN club.location l ON l.club_id = c.id "
+             "WHERE c.id = :c ORDER BY l.id LIMIT 1"),
+        {"c": str(club_id)},
+    ).mappings().first() or {}
+
+    parties = session.execute(
+        text("""
+            SELECT bp.user_id, bp.party_role, bp.guest_name, bp.attended,
+                   NULLIF(TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.surname,'')),'') AS name
+            FROM diary.booking_party bp
+            LEFT JOIN iam."user" u ON u.id = bp.user_id
+            WHERE bp.booking_id = :b
+        """),
+        {"b": str(booking_id)},
+    ).mappings().all()
+    players = [{"name": (p["guest_name"] or p["name"] or "Player"),
+                "kind": ("guest" if p["guest_name"] else "player"),
+                "attended": p["attended"]} for p in parties]
+
+    charge = _booking_charge(session, club_id, b["order_id"], b["settlement_mode"])
+    starts, ends = b["starts_at"], b["ends_at"]
+    dur = int((ends - starts).total_seconds() // 60) if (starts and ends) else None
+    is_future = bool(starts and starts > datetime.now(timezone.utc))
+    started = bool(starts and starts <= datetime.now(timezone.utc))
+    status = b["status"]
+    is_lesson = b["booking_type"] == "lesson"
+    court = b["held_court"] if is_lesson else b["resource_name"]
+    addr = ", ".join(x for x in [venue.get("address_line"), venue.get("city")] if x) or None
+    client_name = " ".join(x for x in [b["first_name"], b["surname"]] if x).strip() or (b["email"] or "Client")
+
+    can = {
+        "accept": status == "requested",
+        "propose": status in ("requested", "proposed"),
+        "decline": status in ("requested", "proposed"),
+        "reschedule": status in ("confirmed", "held") and is_future,
+        "cancel": status in ("confirmed", "held", "requested", "proposed"),
+        "mark_completed": status == "confirmed" and started and is_lesson,
+        "mark_no_show": status == "confirmed" and started and is_lesson,
+        "add_to_calendar": status in ("confirmed", "held", "completed"),
+    }
+    return {
+        "id": str(b["id"]),
+        "booking_type": b["booking_type"],
+        "status": status,
+        "starts_at": starts.isoformat() if starts else None,
+        "ends_at": ends.isoformat() if ends else None,
+        "duration_minutes": dur,
+        "is_future": is_future,
+        "court_name": court,
+        "client": {"name": client_name, "email": b["email"], "phone": b["phone"],
+                   "user_id": str(b["booked_by_user_id"]) if b["booked_by_user_id"] else None},
+        "venue": {"club_name": venue.get("club_name"), "address": addr},
+        "players": players,
+        "charge": charge,
+        "ics_url": "/api/diary/bookings/" + str(b["id"]) + "/calendar.ics",
+        "can": can,
+    }
+
+
 def _parties(session, booking_id):
     rows = session.execute(
         text("SELECT id, user_id, party_role, guest_name, guest_email, price_id, attended "

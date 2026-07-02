@@ -528,6 +528,22 @@ def get_client(client_user_id):
     return jsonify(client=client), 200
 
 
+@coach_bp.get("/bookings/<booking_id>")
+def get_booking_story(booking_id):
+    """The coach's full 'event story' for a lesson/class they run — client + contact, when, court,
+    charge + payment status, players + attendance, and the actions the coach can take."""
+    p, err = _coach()
+    if err:
+        return err
+    from diary import bookings as diary_bookings
+    with session_scope() as s:
+        story = diary_bookings.coach_booking_story(
+            s, club_id=p.club_id, coach_user_id=p.user_id, booking_id=booking_id)
+    if story is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(booking=story), 200
+
+
 @coach_bp.get("/clients/<client_user_id>/invoice")
 def get_client_invoice(client_user_id):
     """The printable coaching invoice for one client + month (paid/owed/written-off lines + totals).

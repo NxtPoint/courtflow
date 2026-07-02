@@ -111,6 +111,12 @@
     client: function (userId, month) {
       return A().apiJSON("/api/coach/clients/" + enc(userId) + (month ? ("?month=" + enc(month)) : ""));
     },
+    // GET /api/coach/bookings/:id -> {booking:{id,booking_type,status,starts_at,ends_at,
+    //   duration_minutes,is_future,court_name,client:{name,email,phone,user_id},venue:{club_name,address},
+    //   players:[{name,kind,attended}],charge:{amount_minor,currency,status,settlement_mode,order_id,...},
+    //   ics_url,can:{accept,propose,decline,reschedule,cancel,mark_completed,mark_no_show,add_to_calendar}}}
+    //   the coach EVENT STORY (drill-through on any lesson/class they run).
+    bookingStory: function (id) { return A().apiJSON("/api/coach/bookings/" + enc(id)); },
     // GET /api/coach/clients/:id/invoice?month= -> {invoice:{month,currency,club_name,coach_name,
     //   client_name,client_email,lines:[{at,description,gross_minor,status,note?}],totals:{...}}}
     clientInvoice: function (userId, month) {

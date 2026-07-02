@@ -711,6 +711,23 @@ def sc_booking_story(s, fx):
           B.booking_story(s, club_id=fx.club_id, user_id=other, booking_id=bid) is None)
 
 
+def sc_coach_event_story(s, fx):
+    print("\n# Coach event story: a lesson the coach runs → client + charge + coach actions")
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    bid = r["booking"]["id"]
+    story = B.coach_booking_story(s, club_id=fx.club_id, coach_user_id=fx.coach_uid, booking_id=bid)
+    check("coach story carries the client + owed charge + coach actions",
+          story and story["client"]["name"] and story["charge"]["status"] == "owed"
+          and story["can"]["cancel"] and story["can"]["reschedule"], str(story and story.get("charge")))
+    check("coach story exposes client contact (email)",
+          story and ("email" in story["client"]), str(story and story.get("client")))
+    other = _mk_user(s, "othercoach3@bill.test", "OtherCoach3")
+    check("another coach can't read this coach's event story",
+          B.coach_booking_story(s, club_id=fx.club_id, coach_user_id=other, booking_id=bid) is None)
+
+
 def sc_transaction_log(s, fx):
     print("\n# Transaction log: one chronological feed, role-scoped (client / coach / owner)")
     from billing import activity as ACT
@@ -794,6 +811,7 @@ SCENARIOS = [
     sc_settlement_refund_clawback,
     sc_abandoned_reclaim_on_read,
     sc_booking_story,
+    sc_coach_event_story,
     sc_transaction_log,
 ]
 
