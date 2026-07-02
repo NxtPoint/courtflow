@@ -61,6 +61,8 @@
   }
   function setActive(k) { document.querySelectorAll("#cf-bottomnav a").forEach(function (a) { a.classList.toggle("active", a.getAttribute("data-nav") === k); }); }
   function mountBell(h) { if (!h) return; if (window.Notifications) { window.Notifications.mount(h); return; } var s = document.createElement("script"); s.src = "/js/notifications.js"; s.onload = function () { if (window.Notifications) window.Notifications.mount(h); }; document.head.appendChild(s); }
+  function loadScript(src) { return new Promise(function (res, rej) { var s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = function () { rej(new Error("Failed to load " + src)); }; document.head.appendChild(s); }); }
+  async function ensureClassDeps() { if (!window.ClassUI) await loadScript("/js/class_ui.js"); }
 
   // ---- router --------------------------------------------------------------
   function route() {
@@ -266,7 +268,8 @@
     });
     classes.forEach(function (c) {
       place(c.starts_at, c.ends_at, "class", UI.fmtTime(c.starts_at) + " " + (c.class_name || "Class"),
-        (c.class_name || "Class") + " · " + (c.enrolled || 0) + "/" + (c.capacity || 0) + " enrolled", null, c.status === "cancelled");
+        (c.class_name || "Class") + " · " + (c.enrolled || 0) + "/" + (c.capacity || 0) + " enrolled",
+        function () { openClassRoster(c); }, c.status === "cancelled");
     });
     if (!lessons.length && !classes.length) box.appendChild(el("div", { class: "cf-empty", style: "margin-bottom:8px", text: "Nothing scheduled this week." }));
     wrapEl.appendChild(grid); box.appendChild(wrapEl);
@@ -610,6 +613,18 @@
     else { var sl = el("div", { class: "cf-list" }); list.forEach(function (s) { sl.appendChild(serviceRow(s)); }); sc.appendChild(sl); }
     wrap.appendChild(sc);
 
+    // Classes — create a class type, schedule its sessions, manage rosters (reuses ClassUI + CoachAPI).
+    var clsCard = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
+      el("h2", { style: "margin:0", text: "Classes" }),
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ New class", onclick: openNewClass }),
+    ])]);
+    clsCard.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 8px;font-size:.85rem", text: "Create a class, schedule its sessions, and manage rosters & attendance. Scheduled sessions appear on your calendar and become bookable by clients." }));
+    var clsList = el("div", { id: "coach-cls-list" }, [el("div", { class: "cf-loading", text: "Loading classes…" })]);
+    var clsSessions = el("div", { id: "coach-cls-sessions" });
+    clsCard.appendChild(clsList); clsCard.appendChild(clsSessions);
+    wrap.appendChild(clsCard);
+    loadClasses();
+
     // Commission (read-only)
     if (commission && commission.effective_pct != null) {
       wrap.appendChild(card([
@@ -620,6 +635,39 @@
     set(wrap);
   }
   var svcFilter = "active";
+  // ---- Classes (management) — ClassUI + CoachAPI, blueprint ported from the old console ----------
+  async function loadClasses() {
+    var box = document.getElementById("coach-cls-list"); if (!box) return;
+    try { await ensureClassDeps(); } catch (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); return; }
+    window.CoachAPI.classes().then(function (r) {
+      UI.clear(box);
+      window.ClassUI.renderClassList({ host: box, classes: r.classes || [],
+        onSchedule: function (c) { openSchedule(c); }, onSessions: function (c) { showSessions(c); } });
+    }).catch(function (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+  }
+  function openNewClass() {
+    ensureClassDeps().then(function () {
+      window.ClassUI.openClassForm({ api: window.CoachAPI, title: "New class", onSaved: function () { loadClasses(); } });
+    }).catch(function (e) { UI.toast(UI.errMsg(e), "error"); });
+  }
+  function openSchedule(c) {
+    window.ClassUI.openScheduleForm({ api: window.CoachAPI,
+      cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity, duration_minutes: c.duration_minutes },
+      onSaved: function () { loadClasses(); showSessions(c); } });
+  }
+  // Tap a class on the calendar → its roster (enrolled/waitlist + attendance). c is a diary.classes session.
+  function openClassRoster(c) {
+    ensureClassDeps().then(function () {
+      window.ClassUI.openRoster({ api: window.CoachAPI, cls: { name: c.class_name || "Class" },
+        session: { session_id: c.id, starts_at: c.starts_at, ends_at: c.ends_at } });
+    }).catch(function (e) { UI.toast(UI.errMsg(e), "error"); });
+  }
+  function showSessions(c) {
+    var host = document.getElementById("coach-cls-sessions"); if (!host) return;
+    UI.clear(host);
+    host.appendChild(el("div", { style: "margin-top:14px" }, [el("h3", { style: "margin:0 0 6px", text: "Sessions · " + (c.name || "Class") }), el("div", { id: "coach-cls-sessions-body" })]));
+    window.ClassUI.renderSessions({ api: window.CoachAPI, cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity }, host: document.getElementById("coach-cls-sessions-body") });
+  }
   function serviceRow(s) {
     function setStatus(ns) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { status: ns } }).then(function () { UI.toast("Updated.", "info"); renderSetup(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
     var main = el("div", { class: "cf-item-main", style: "cursor:pointer" }, [
