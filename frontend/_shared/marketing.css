@@ -313,6 +313,15 @@ html, body { overflow-x: hidden; overflow-x: clip; }
 .mk-moreteam a { display: inline-flex; align-items: center; gap: 9px; color: var(--primary); font-weight: 800; font-size: 1.02rem; border-bottom: 2px solid var(--accent); padding-bottom: 3px; text-decoration: none; transition: gap .25s var(--mk-ease); }
 .mk-moreteam a:hover { gap: 14px; text-decoration: none; }
 
+/* ============ MARQUEE / TICKER (dark) ============ */
+.mk-marquee { background: var(--mk-abyss, #081711); color: rgba(255,255,255,.92); overflow: hidden; padding: 22px 0; border-top: 1px solid rgba(200,232,92,.14); border-bottom: 1px solid rgba(200,232,92,.14); }
+.mk-marquee-track { display: inline-flex; white-space: nowrap; animation: mk-marquee 36s linear infinite; will-change: transform; }
+.mk-marquee span { display: inline-flex; align-items: center; gap: 34px; padding-right: 34px; font-family: var(--mk-display, 'Fraunces', Georgia, serif); font-size: clamp(1.2rem, 2.4vw, 1.8rem); font-weight: 480; letter-spacing: .02em; }
+.mk-marquee i { font-style: normal; color: var(--accent); font-size: .62em; }
+.mk-marquee em { font-style: italic; color: var(--accent); }
+@keyframes mk-marquee { to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) { .mk-marquee-track { animation: none; } }
+
 /* ============ TEN-FIFTY5 LAB BAND (dark) ============ */
 .mk-lab { position: relative; background: radial-gradient(130% 120% at 82% -10%, #12301F 0%, #081711 46%, var(--mk-abyss) 100%); color: #fff; overflow: hidden; }
 .mk-lab::before { content: ""; position: absolute; inset: 0; background-image: linear-gradient(rgba(200,232,92,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(200,232,92,.05) 1px, transparent 1px); background-size: 56px 56px; mask-image: radial-gradient(90% 80% at 70% 30%, #000 30%, transparent 75%); -webkit-mask-image: radial-gradient(90% 80% at 70% 30%, #000 30%, transparent 75%); pointer-events: none; }
