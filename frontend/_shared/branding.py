@@ -65,6 +65,7 @@ NEXTPOINT = Branding(
     ink="#13241b",
     domain="nextpointtennis.com",
     marketing_hosts=("nextpointtennis.com", "www.nextpointtennis.com"),
+    logo_url="/img/logo.webp",   # real NextPoint brandmark (nav); footer uses the text name
     favicon_url="/favicon.svg",
     address_line="Killarney Country Club, 60 5th Street, Houghton Estate",
     city="Johannesburg",

@@ -4,20 +4,30 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Tennis Programs in Johannesburg — High Performance, Juniors, Cardio | NextPoint</title>
-<meta name="description" content="High Performance, junior squads, beginner classes, Cardio Tennis and social play at NextPoint Tennis, Houghton. A pathway for every level — start your free week.">
+<meta name="description" content="High Performance, junior squads, Cardio Tennis and social play at NextPoint Tennis, Houghton. Programs for every level — start your free week.">
 <link rel="canonical" href="https://www.nextpointtennis.com/programs">
 <meta name="robots" content="index, follow">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="NextPoint Tennis">
 <meta property="og:title" content="Tennis Programs in Johannesburg | NextPoint Tennis">
-<meta property="og:description" content="From beginner classes to ATP-led High Performance. Programs for every player at NextPoint Tennis.">
+<meta property="og:description" content="From first swing to college scholarship — High Performance, junior squads, Cardio Tennis and socials at NextPoint Tennis, Houghton.">
 <meta property="og:url" content="https://www.nextpointtennis.com/programs">
+<meta property="og:image" content="https://www.nextpointtennis.com/img/feat-programs.webp">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,480;0,9..144,560;1,9..144,480;1,9..144,560&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/shared/theme.css">
+<link rel="stylesheet" href="/shared/marketing.css">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://www.nextpointtennis.com/"},{"@type":"ListItem","position":2,"name":"Programs","item":"https://www.nextpointtennis.com/programs"}]}
+{"@context":"https://schema.org","@graph":[
+{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://www.nextpointtennis.com/"},{"@type":"ListItem","position":2,"name":"Programs","item":"https://www.nextpointtennis.com/programs"}]},
+{"@type":"Service","name":"High Performance Program","serviceType":"Tennis coaching","url":"https://www.nextpointtennis.com/programs#high-performance","description":"ATP-certified High Performance coaching — advanced skill development, mental conditioning and match strategy for teens targeting scholarships and tournaments.","provider":{"@type":"SportsActivityLocation","name":"NextPoint Tennis","address":{"@type":"PostalAddress","addressLocality":"Johannesburg","addressCountry":"ZA"}},"areaServed":"Johannesburg","offers":{"@type":"Offer","url":"https://www.nextpointtennis.com/login#/sign-up","description":"Try the club free for 7 days, then per-session or membership pricing."}},
+{"@type":"Service","name":"Junior Squads","serviceType":"Junior tennis development","url":"https://www.nextpointtennis.com/programs#juniors","description":"Beginner and intermediate junior squads — a structured pathway that builds technique, fitness and a love of the game.","provider":{"@type":"SportsActivityLocation","name":"NextPoint Tennis","address":{"@type":"PostalAddress","addressLocality":"Johannesburg","addressCountry":"ZA"}},"areaServed":"Johannesburg","offers":{"@type":"Offer","url":"https://www.nextpointtennis.com/login#/sign-up","description":"Try the club free for 7 days, then per-session or membership pricing."}},
+{"@type":"Service","name":"Cardio Tennis","serviceType":"Group fitness","url":"https://www.nextpointtennis.com/programs#cardio","description":"High-energy group fitness on court — all levels, fun-first. Burn, rally and have a great time getting fit.","provider":{"@type":"SportsActivityLocation","name":"NextPoint Tennis","address":{"@type":"PostalAddress","addressLocality":"Johannesburg","addressCountry":"ZA"}},"areaServed":"Johannesburg","offers":{"@type":"Offer","url":"https://www.nextpointtennis.com/login#/sign-up","description":"Try the club free for 7 days, then per-session pricing."}},
+{"@type":"Service","name":"Social Play","serviceType":"Social tennis","url":"https://www.nextpointtennis.com/programs#social","description":"Saturday and Wednesday socials — rotating doubles, all levels, and a proper community feel.","provider":{"@type":"SportsActivityLocation","name":"NextPoint Tennis","address":{"@type":"PostalAddress","addressLocality":"Johannesburg","addressCountry":"ZA"}},"areaServed":"Johannesburg","offers":{"@type":"Offer","url":"https://www.nextpointtennis.com/login#/sign-up","description":"Try the club free for 7 days."}}
+]}
 </script>
 </head>
 <body>
@@ -25,74 +35,174 @@
 <!--#include nav-->
 <span id="main" tabindex="-1"></span>
 
-<header class="cf-pagehero" style="--hero-img:url('/img/club-juniors.webp')">
-  <div class="cf-wrap" style="max-width:820px;padding-top:84px;padding-bottom:84px">
-    <div class="cf-eyebrow">Programs &amp; classes</div>
-    <h1 style="font-size:clamp(2.1rem,4.8vw,3.2rem);font-weight:800;letter-spacing:-.02em;margin:16px 0 14px;color:#fff">Programs for every player.</h1>
-    <p style="font-size:1.14rem">From first swing to college scholarship. Entry-level classes, junior squads, Cardio Tennis, socials — right up to our ATP-led High Performance Program.</p>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:22px">
-      <a class="cf-btn cf-btn--accent" href="#high-performance">High Performance</a>
-      <a class="cf-btn cf-btn--ghost" href="#juniors" style="color:#fff;border-color:rgba(255,255,255,.5)">Juniors &amp; classes</a>
-      <a class="cf-btn cf-btn--ghost" href="#cardio" style="color:#fff;border-color:rgba(255,255,255,.5)">Cardio Tennis</a>
-      <a class="cf-btn cf-btn--ghost" href="#social" style="color:#fff;border-color:rgba(255,255,255,.5)">Social</a>
-    </div>
-  </div>
+<!-- ================= PAGE HERO ================= -->
+<header class="mk-pagehero mk-grain">
+  <img class="mk-pagehero-bg" src="/img/feat-programs.webp" width="1600" height="1067" fetchpriority="high" decoding="async"
+       alt="A young player waits at the ready, racquet in both hands — programs start here">
+  <div class="mk-pagehero-grade" aria-hidden="true"></div>
+  <div class="cf-wrap"><div class="mk-pagehero-in">
+    <span class="mk-eyebrow mk-eyebrow--lt">Programs &amp; classes</span>
+    <h1>Programs for <em>every player.</em></h1>
+    <p>From first swing to college scholarship — a pathway that starts wherever you are, coached by the team behind national titles and tour careers.</p>
+    <nav class="mk-chips" aria-label="Jump to a program">
+      <a class="mk-chip" href="#high-performance"><i>01</i>High Performance</a>
+      <a class="mk-chip" href="#juniors"><i>02</i>Junior squads</a>
+      <a class="mk-chip" href="#cardio"><i>03</i>Cardio Tennis</a>
+      <a class="mk-chip" href="#social"><i>04</i>Social play</a>
+    </nav>
+  </div></div>
 </header>
 
-<section id="high-performance" class="cf-exp">
-  <img class="cf-exp-bg" loading="lazy" src="https://images.unsplash.com/photo-1622279457486-62dcc4a431d6?auto=format&fit=crop&w=1600&q=70" alt="High performance tennis training" width="1600" height="1067" onerror="this.onerror=null;this.src='/img/club-singles.webp'">
-  <div class="cf-exp-grade"></div>
-  <div class="cf-wrap"><div class="cf-exp-in cf-reveal">
-    <div class="cf-exp-num">HIGH PERFORMANCE</div>
-    <h2>Train with ATP-level coaching.</h2>
-    <p>Built for players who want to compete and win. Led by ATP-certified coaches, blending advanced skill development, mental conditioning and match strategy — ideal for teens targeting scholarships and tournaments.</p>
-    <p style="font-size:.96rem;color:rgba(255,255,255,.82)">Serious about improvement? Measure it with <a href="https://www.ten-fifty5.com" target="_blank" rel="noopener" style="color:var(--accent)">Ten-Fifty5 AI analysis</a> — first match free.</p>
-    <a class="cf-btn cf-btn--accent cf-btn--lg" href="/login#/sign-up" style="margin-top:8px">Start your free week</a>
-  </div></div>
+<!-- ================= THE FOUR PROGRAMS ================= -->
+<section class="mk-sec" aria-labelledby="prog-h">
+  <div class="cf-wrap">
+    <div class="mk-head mk-reveal">
+      <span class="mk-eyebrow">The pathway</span>
+      <h2 id="prog-h">Four programs. <em>One club.</em></h2>
+      <p>Every program runs on the same courts, the same coaches and the same booking — enrol in seconds, with rosters and waitlists handled for you.</p>
+    </div>
+
+    <article id="high-performance" class="mk-feat mk-anchor">
+      <div class="mk-feat-txt mk-reveal-l">
+        <div class="mk-feat-num" aria-hidden="true">01</div>
+        <span class="mk-feat-tag">High Performance</span>
+        <h3>Built to compete. <em>Built to win.</em></h3>
+        <p>ATP-certified coaching that blends advanced skill development, mental conditioning and match strategy — the program behind national junior titles and US college scholarships, led by coaches who've done it on tour.</p>
+        <p class="mk-who"><b>Who it's for</b>Teens targeting scholarships, national tournaments and the professional pathway.</p>
+        <div class="mk-cta">
+          <a class="mk-btn mk-btn--green mk-mag" href="/login#/sign-up">Start your free week <span class="mk-arr" aria-hidden="true">→</span></a>
+          <a class="mk-btn mk-btn--ink mk-mag" href="/contact">Talk to a coach</a>
+        </div>
+      </div>
+      <div class="mk-feat-media mk-reveal-r">
+        <img loading="lazy" decoding="async" src="/img/feat-coaching.webp" width="1600" height="1098"
+             alt="A player lines up a serve on clay during a High Performance training session">
+        <span class="mk-feat-chip"><i>●</i> ATP-certified coaching</span>
+      </div>
+    </article>
+
+    <article id="juniors" class="mk-feat mk-feat--flip mk-anchor">
+      <div class="mk-feat-txt mk-reveal-r">
+        <div class="mk-feat-num" aria-hidden="true">02</div>
+        <span class="mk-feat-tag">Junior squads</span>
+        <h3>From first racquet to <em>rising star.</em></h3>
+        <p>Beginner and intermediate junior squads that build technique, footwork, fitness and a real love of the game — a structured pathway that feeds straight into High Performance when your junior is ready.</p>
+        <p class="mk-who"><b>Who it's for</b>Kids and teens at every level — complete beginners welcome.</p>
+        <div class="mk-cta">
+          <a class="mk-btn mk-btn--green mk-mag" href="/login#/sign-up">Start your free week <span class="mk-arr" aria-hidden="true">→</span></a>
+        </div>
+      </div>
+      <div class="mk-feat-media mk-reveal-l">
+        <img loading="lazy" decoding="async" src="/img/club-singles.webp" width="1200" height="900"
+             alt="A NextPoint coach on court with two juniors during a squad session">
+        <span class="mk-feat-chip"><i>●</i> Beginner &amp; intermediate squads</span>
+      </div>
+    </article>
+
+    <article id="cardio" class="mk-feat mk-anchor">
+      <div class="mk-feat-txt mk-reveal-l">
+        <div class="mk-feat-num" aria-hidden="true">03</div>
+        <span class="mk-feat-tag">Cardio Tennis</span>
+        <h3>A workout that <em>doesn't feel like one.</em></h3>
+        <p>High-energy, music-driven group fitness on court — non-stop hitting, heart-rate up, zero standing around. All levels play together and everyone leaves grinning.</p>
+        <p class="mk-who"><b>Who it's for</b>Anyone chasing fitness with a racquet in hand — no experience needed.</p>
+        <div class="mk-cta">
+          <a class="mk-btn mk-btn--green mk-mag" href="/login#/sign-up">Start your free week <span class="mk-arr" aria-hidden="true">→</span></a>
+        </div>
+      </div>
+      <div class="mk-feat-media mk-reveal-r">
+        <img loading="lazy" decoding="async" src="/img/gal-social.webp" width="1200" height="800"
+             alt="A player grinning mid-session, towel around her neck — Cardio Tennis energy">
+        <span class="mk-feat-chip"><i>●</i> All levels, fun-first</span>
+      </div>
+    </article>
+
+    <article id="social" class="mk-feat mk-feat--flip mk-anchor">
+      <div class="mk-feat-txt mk-reveal-r">
+        <div class="mk-feat-num" aria-hidden="true">04</div>
+        <span class="mk-feat-tag">Social play</span>
+        <h3>Doubles, good vibes, <em>great people.</em></h3>
+        <p>Saturday and Wednesday socials are where the club comes alive — rotating doubles across all levels, new partners every few games, and a proper community feel long after the last point.</p>
+        <p class="mk-who"><b>Who it's for</b>Members and newcomers who want regular match play and a club that feels like one.</p>
+        <div class="mk-cta">
+          <a class="mk-btn mk-btn--green mk-mag" href="/login#/sign-up">Start your free week <span class="mk-arr" aria-hidden="true">→</span></a>
+        </div>
+      </div>
+      <div class="mk-feat-media mk-reveal-l">
+        <img loading="lazy" decoding="async" src="/img/club-house.webp" width="1200" height="900"
+             alt="Members relaxing under the umbrellas on the NextPoint clubhouse lawn after a social">
+        <span class="mk-feat-chip"><i>●</i> Saturdays &amp; Wednesdays</span>
+      </div>
+    </article>
+
+  </div>
 </section>
 
-<section id="juniors" class="cf-exp cf-exp--right">
-  <img class="cf-exp-bg" loading="lazy" src="/img/club-juniors.webp" alt="Junior tennis squads" width="1200" height="800">
-  <div class="cf-exp-grade"></div>
-  <div class="cf-wrap"><div class="cf-exp-in cf-reveal">
-    <div class="cf-exp-num">JUNIORS &amp; BEGINNERS</div>
-    <h2>From first racquet to rising star.</h2>
-    <p>Entry-level group classes and structured junior squads — beginner and intermediate — that build technique, fitness and a love of the game in a fun, supportive environment.</p>
-    <a class="cf-btn cf-btn--accent cf-btn--lg" href="/login#/sign-up">Start your free week</a>
+<!-- ================= FINAL CTA ================= -->
+<section class="mk-final mk-grain" aria-labelledby="cta-h">
+  <div class="cf-wrap"><div class="mk-final-in mk-reveal">
+    <span class="mk-eyebrow mk-eyebrow--lt" style="justify-content:center">Free for 7 days · no commitment</span>
+    <h2 id="cta-h">Find <em>your program.</em></h2>
+    <p>Create a free account and enrol in seconds — waitlists and rosters handled for you.</p>
+    <div class="mk-cta" style="justify-content:center">
+      <a class="mk-btn mk-btn--lime mk-btn--big mk-mag" href="/login#/sign-up">Start your free week <span class="mk-arr" aria-hidden="true">→</span></a>
+      <a class="mk-btn mk-btn--ghost mk-btn--big mk-mag" href="/login">Sign in</a>
+    </div>
   </div></div>
 </section>
-
-<section id="cardio" class="cf-exp">
-  <img class="cf-exp-bg" loading="lazy" src="/img/club-courts.webp" alt="Cardio Tennis group" width="1200" height="800">
-  <div class="cf-exp-grade"></div>
-  <div class="cf-wrap"><div class="cf-exp-in cf-reveal">
-    <div class="cf-exp-num">CARDIO TENNIS</div>
-    <h2>A workout that doesn't feel like one.</h2>
-    <p>High-energy, music-driven group fitness on court — all levels welcome. Burn, rally and have fun. The most fun you'll have getting fit.</p>
-    <a class="cf-btn cf-btn--accent cf-btn--lg" href="/login#/sign-up">Start your free week</a>
-  </div></div>
-</section>
-
-<section id="social" class="cf-exp cf-exp--right">
-  <img class="cf-exp-bg" loading="lazy" src="/img/club-house.webp" alt="Social tennis at NextPoint" width="1200" height="800">
-  <div class="cf-exp-grade"></div>
-  <div class="cf-wrap"><div class="cf-exp-in cf-reveal">
-    <div class="cf-exp-num">SOCIAL PLAY</div>
-    <h2>Doubles, good vibes, great people.</h2>
-    <p>Our weekend and midweek socials are where the club comes alive — rotating doubles, all levels, and a proper community feel afterwards.</p>
-    <a class="cf-btn cf-btn--accent cf-btn--lg" href="/login#/sign-up">Start your free week</a>
-  </div></div>
-</section>
-
-<section class="cf-band--green cf-section"><div class="cf-wrap" style="text-align:center">
-  <h2 style="font-size:clamp(1.8rem,4vw,2.6rem);font-weight:800;margin-bottom:12px">Find your program.</h2>
-  <p style="font-size:1.08rem;margin-bottom:24px">Create a free account and enrol in seconds — with waitlists and rosters handled for you.</p>
-  <a class="cf-btn cf-btn--accent cf-btn--lg" href="/login#/sign-up">Start your free week</a>
-</div></section>
 
 <!--#include footer-->
+
 <script>
-(function(){var els=document.querySelectorAll('.cf-reveal');if(!('IntersectionObserver'in window)){els.forEach(function(e){e.classList.add('in');});return;}var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12});els.forEach(function(el){io.observe(el);});})();
+(function(){
+"use strict";
+var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* ---------- reveal on scroll (with sibling stagger) ---------- */
+var revealEls = document.querySelectorAll(".mk-reveal,.mk-reveal-l,.mk-reveal-r");
+if (reduced || !("IntersectionObserver" in window)) {
+  revealEls.forEach(function(el){ el.classList.add("in"); });
+} else {
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (!e.isIntersecting) return;
+      var el = e.target;
+      var sibs = el.parentElement ? Array.prototype.filter.call(el.parentElement.children, function(c){
+        return c.classList && (c.classList.contains("mk-reveal")||c.classList.contains("mk-reveal-l")||c.classList.contains("mk-reveal-r")) && !c.classList.contains("in");
+      }) : [];
+      var idx = sibs.indexOf(el);
+      el.style.transitionDelay = (idx > 0 ? Math.min(idx * 110, 440) : 0) + "ms";
+      el.classList.add("in");
+      io.unobserve(el);
+    });
+  },{threshold:.14, rootMargin:"0px 0px -6% 0px"});
+  revealEls.forEach(function(el){ io.observe(el); });
+}
+
+/* ---------- magnetic buttons (fine pointers only) ---------- */
+if (!reduced && window.matchMedia("(pointer: fine)").matches){
+  document.querySelectorAll(".mk-mag").forEach(function(btn){
+    btn.addEventListener("pointermove", function(ev){
+      var r = btn.getBoundingClientRect();
+      var dx = (ev.clientX - (r.left + r.width/2)) / (r.width/2);
+      var dy = (ev.clientY - (r.top + r.height/2)) / (r.height/2);
+      btn.style.transform = "translate(" + (dx*5).toFixed(1) + "px," + (dy*4).toFixed(1) + "px)";
+    });
+    btn.addEventListener("pointerleave", function(){ btn.style.transform = ""; });
+  });
+}
+
+/* ---------- reveal any section arrived at via a #hash deep link ---------- */
+function openHashTarget(){
+  var id = (location.hash || "").slice(1);
+  if (!id) return;
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.querySelectorAll(".mk-reveal,.mk-reveal-l,.mk-reveal-r").forEach(function(r){ r.classList.add("in"); });
+}
+openHashTarget();
+window.addEventListener("hashchange", openHashTarget);
+})();
 </script>
 </body>
 </html>

@@ -7,26 +7,34 @@
 <title>Page not found · NextPoint Tennis</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,480;0,9..144,560;1,9..144,480;1,9..144,560&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/shared/theme.css">
+<link rel="stylesheet" href="/shared/marketing.css">
 </head>
-<body>
+<body style="background:var(--mk-pit)">
 <a class="cf-skip" href="#main">Skip to content</a>
 <!--#include nav-->
 <span id="main" tabindex="-1"></span>
 
-<section class="cf-section" style="padding:120px 0;text-align:center">
-  <div class="cf-wrap" style="max-width:560px">
-    <div class="cf-eyebrow" style="justify-content:center">404</div>
-    <h1 style="font-size:2.2rem;font-weight:800;margin:16px 0 12px">We couldn't find that page</h1>
-    <p style="color:var(--muted);margin-bottom:26px">The page may have moved. Try one of these instead:</p>
-    <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-      <a class="cf-btn cf-btn--primary" href="/login#/sign-up">Start your free week</a>
-      <a class="cf-btn cf-btn--ghost" href="/">Home</a>
-      <a class="cf-btn cf-btn--ghost" href="/coaches">Coaches</a>
-      <a class="cf-btn cf-btn--ghost" href="/programs">Programs</a>
+<!-- Served by the web app's 404 handler (head-injection only — the include markers
+     above/below stay inert), so this page is designed to stand alone. -->
+<section class="mk-final mk-grain" style="min-height:100vh;min-height:100svh;display:grid;place-items:center" aria-labelledby="nf-h">
+  <div class="cf-wrap"><div class="mk-final-in" style="padding:72px 0">
+    <div class="mk-oops" aria-hidden="true">404</div>
+    <h1 id="nf-h">Out. <em>Just wide.</em></h1>
+    <p>That page isn't on our court map — it may have moved when we rebuilt the site.<br>Here's where the play is:</p>
+    <div class="mk-cta" style="justify-content:center">
+      <a class="mk-btn mk-btn--lime mk-btn--big" href="/login#/sign-up">Start your free week <span class="mk-arr" aria-hidden="true">→</span></a>
     </div>
-  </div>
+    <div class="mk-cta" style="justify-content:center;margin-top:14px">
+      <a class="mk-btn mk-btn--ghost" href="/">Home</a>
+      <a class="mk-btn mk-btn--ghost" href="/coaches">Coaches</a>
+      <a class="mk-btn mk-btn--ghost" href="/programs">Programs</a>
+      <a class="mk-btn mk-btn--ghost" href="/pricing">Pricing</a>
+      <a class="mk-btn mk-btn--ghost" href="/contact">Contact</a>
+    </div>
+  </div></div>
 </section>
 
 <!--#include footer-->

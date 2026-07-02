@@ -12,13 +12,17 @@
 <meta property="og:title" content="NextPoint Tennis — Courts, Coaching & Classes in Houghton, Johannesburg">
 <meta property="og:description" content="8 hard courts + the only clay court in Gauteng, ATP-level coaching, squads and socials. Book it all from your phone. Start your free week.">
 <meta property="og:url" content="https://www.nextpointtennis.com/">
+<meta property="og:image" content="https://www.nextpointtennis.com/img/hero-ball-1600.webp">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,480;0,9..144,560;1,9..144,480;1,9..144,560&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/shared/theme.css">
-<link rel="preload" as="image" href="/img/hero-splash-1600.webp" fetchpriority="high">
+<link rel="stylesheet" href="/shared/marketing.css">
+<link rel="preload" as="image" href="/img/hero-ball-1600.webp"
+      imagesrcset="/img/hero-ball-640.webp 640w, /img/hero-ball-1024.webp 1024w, /img/hero-ball-1600.webp 1600w, /img/hero-ball-1920.webp 1920w"
+      imagesizes="100vw" fetchpriority="high">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"SportsActivityLocation","name":"NextPoint Tennis","description":"Tennis club offering court booking, coaching and classes in Houghton, Johannesburg. 8 hard courts and the only clay court in Gauteng.","url":"https://www.nextpointtennis.com/","telephone":"+27769907439","email":"info@nextpointtennis.com","address":{"@type":"PostalAddress","streetAddress":"Killarney Country Club, 60 5th Street, Houghton Estate","addressLocality":"Johannesburg","postalCode":"2191","addressCountry":"ZA"},"sport":"Tennis","priceRange":"R90–R400","openingHours":"Mo-Su 06:00-21:00"}
 </script>
@@ -31,219 +35,488 @@
 <!--#include nav-->
 <span id="main" tabindex="-1"></span>
 
-<!-- HERO ============================================================= -->
-<header class="cf-hero--cinematic">
-  <img class="cf-hero-bg cf-kb" src="/img/hero-splash-1600.webp"
-       srcset="/img/hero-splash-640.webp 640w, /img/hero-splash-1024.webp 1024w, /img/hero-splash-1600.webp 1600w, /img/hero-splash-1920.webp 1920w"
-       sizes="100vw" alt="Tennis ball striking a NextPoint court" fetchpriority="high" width="1600" height="1000">
-  <div class="cf-hero-grade"></div>
-  <div class="cf-hero-in"><div class="cf-wrap" style="max-width:var(--maxw)">
-    <span class="cf-eyebrow cf-accent-text">Killarney Country Club · Houghton, Johannesburg</span>
-    <h1>Your club.<br><em>One tap away.</em></h1>
-    <p>Eight resurfaced hard courts and the only clay court in Gauteng — with ATP-level coaching, squads and socials. Book it all from your phone.</p>
-    <div style="display:flex;gap:13px;flex-wrap:wrap">
-      <a class="cf-btn cf-btn--accent cf-btn--lg" href="/login#/sign-up">Start your free week</a>
-      <a class="cf-btn cf-btn--ghost cf-btn--lg" href="/login" style="color:#fff;border-color:rgba(255,255,255,.55)">Sign in</a>
+<!-- ================= HERO (cinematic ball) ================= -->
+<header class="mk-hero mk-grain">
+  <img class="mk-hero-bg mk-kb" src="/img/hero-ball-1600.webp"
+       srcset="/img/hero-ball-640.webp 640w, /img/hero-ball-1024.webp 1024w, /img/hero-ball-1600.webp 1600w, /img/hero-ball-1920.webp 1920w"
+       sizes="100vw" width="1600" height="1200" fetchpriority="high" decoding="async"
+       alt="A tennis ball resting on the sideline of a NextPoint hard court, the net cutting across above it">
+  <div class="mk-hero-grade" aria-hidden="true"></div>
+  <div class="mk-hero-vig" aria-hidden="true"></div>
+  <canvas class="mk-hero-particles" id="mkDust" aria-hidden="true"></canvas>
+  <div class="mk-hero-in cf-wrap">
+    <span class="mk-hero-eyebrow mk-hload"><span class="mk-live" aria-hidden="true"></span>Killarney Country Club · Houghton, Johannesburg</span>
+    <h1 class="mk-hero-title mk-hload mk-d1">Your club.<br><em>One tap away.</em></h1>
+    <p class="mk-hero-sub mk-hload mk-d2">Nine championship courts at Killarney — eight resurfaced hard courts, plus the only clay in Gauteng — with ATP-level coaching, squads and socials. Book it all from your phone.</p>
+    <div class="mk-cta mk-hload mk-d3">
+      <a class="mk-btn mk-btn--lime mk-btn--big mk-mag" href="/login#/sign-up">Start your free week <span class="mk-arr" aria-hidden="true">→</span></a>
+      <a class="mk-btn mk-btn--ghost mk-btn--big mk-mag" href="/login">Sign in</a>
     </div>
-    <div class="cf-trust">
-      <div><b>★ <span class="lm">5.0</span></b>from members</div>
-      <div><b>1,200<span class="lm">+</span></b>lessons delivered</div>
-      <div><b><span class="lm">Only</span> clay</b>court in Gauteng</div>
+    <div class="mk-trust mk-hload mk-d4">
+      <div class="mk-t"><b><span class="mk-count" data-count="9">0</span>&nbsp;<span class="mk-lm">courts</span></b>8 hard · 1 clay</div>
+      <div class="mk-t"><b><span class="mk-count" data-count="1200" data-sep="1">0</span><span class="mk-lm">+</span></b>lessons delivered</div>
+      <div class="mk-t"><b>ATP<span class="mk-lm">-level</span></b>coaching, on court</div>
+      <div class="mk-t"><b><span class="mk-star" aria-hidden="true">★</span><span class="mk-lm mk-count" data-count="5" data-dec="1">0.0</span></b>from members</div>
     </div>
-  </div></div>
+  </div>
+  <div class="mk-cue" aria-hidden="true"></div>
 </header>
 
-<!-- FREE WEEK BAND =================================================== -->
-<section class="cf-band cf-band--lime"><div class="cf-wrap cf-band-in">
-  <div>
-    <h3>Your first week is on us.</h3>
-    <p>7 days of full access, free — book courts, try a class, see live coach availability. No commitment.</p>
-  </div>
-  <a class="cf-btn cf-btn--primary cf-btn--lg" href="/login#/sign-up">Start your free week →</a>
-</div></section>
-
-<!-- TEN-FIFTY5 (elevated near top — international guests) ============= -->
-<section class="cf-band--tenfifty5 cf-section"><div class="cf-wrap cf-tf-in">
-  <div class="cf-reveal">
-    <div class="cf-tf-kicker">NEXTPOINT × TEN-FIFTY5</div>
-    <h2>Take your game further with AI match analysis.</h2>
-    <p>Upload a match and get point-by-point breakdowns, biomechanical stroke analysis and an AI coach trained on your data — built by the same team behind NextPoint. Your first match is free.</p>
-    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-      <a class="cf-btn cf-btn--accent cf-btn--lg" href="https://www.ten-fifty5.com" target="_blank" rel="noopener">Explore Ten-Fifty5 →</a>
-      <small style="color:rgba(255,255,255,.5)">ten-fifty5.com · first match on us</small>
+<!-- ================= FREE WEEK ================= -->
+<section class="mk-freeband" aria-labelledby="fw-h">
+  <div class="cf-wrap"><div class="mk-freeband-in">
+    <div>
+      <h2 id="fw-h">Your first week is <em>on us.</em></h2>
+      <p>7 days of full access, free — book courts, try a class, see live coach availability. No commitment.</p>
     </div>
-  </div>
-  <div class="cf-tf-card cf-reveal">
-    <div class="ct"><b>1st serve % · 6-month trend</b><span class="up">▲ +22%</span></div>
-    <svg viewBox="0 0 320 120" width="100%" height="120" preserveAspectRatio="none" role="img" aria-label="Serve percentage trending up over six months">
-      <defs><linearGradient id="tfg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#C8E85C" stop-opacity=".35"/><stop offset="1" stop-color="#C8E85C" stop-opacity="0"/></linearGradient></defs>
-      <path d="M0,92 L46,86 L92,90 L138,70 L184,64 L230,44 L276,34 L320,20" fill="none" stroke="#C8E85C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M0,92 L46,86 L92,90 L138,70 L184,64 L230,44 L276,34 L320,20 L320,120 L0,120 Z" fill="url(#tfg)"/>
-      <circle cx="320" cy="20" r="4.5" fill="#C8E85C"/>
-    </svg>
-    <div class="cf-tf-kpis"><div><div class="n">450+</div><div class="l">Data pts / match</div></div><div><div class="n">18</div><div class="l">KPIs tracked</div></div><div><div class="n">1-2h</div><div class="l">Upload to insight</div></div></div>
-  </div>
-</div></section>
-
-<!-- SERVICES (3, full-width experience style) ======================== -->
-<section class="cf-exp">
-  <img class="cf-exp-bg" loading="lazy" src="/img/club-clay.webp" alt="Clay court at NextPoint Tennis" width="1200" height="800">
-  <div class="cf-exp-grade"></div>
-  <div class="cf-wrap"><div class="cf-exp-in cf-reveal">
-    <div class="cf-exp-num">01 · COURTS</div>
-    <span class="cf-eyebrow">Clay &amp; hard court bookings</span>
-    <h2>Book the only clay court in Gauteng — and 8 hard courts.</h2>
-    <p>Step onto the surface the pros slide on, or play on our resurfaced hard courts. See live availability and book in seconds — no calls, no waiting.</p>
-    <a class="cf-btn cf-btn--accent cf-btn--lg" href="/login#/sign-up">Start your free week</a>
+    <a class="mk-btn mk-btn--ink mk-btn--big mk-mag" href="/login#/sign-up">Start your free week <span class="mk-arr" aria-hidden="true">→</span></a>
   </div></div>
 </section>
 
-<section class="cf-exp cf-exp--right">
-  <img class="cf-exp-bg" loading="lazy" src="https://images.unsplash.com/photo-1530915534664-4ac6423816f6?auto=format&fit=crop&w=1600&q=70" alt="Professional tennis coaching" width="1600" height="1067" onerror="this.onerror=null;this.src='/img/club-singles.webp'">
-  <div class="cf-exp-grade"></div>
-  <div class="cf-wrap"><div class="cf-exp-in cf-reveal">
-    <div class="cf-exp-num">02 · COACHING</div>
-    <span class="cf-eyebrow">Professional coaching</span>
-    <h2>Coaching for every player, at every level.</h2>
-    <p>From your first swing to tour-level prep. Pick a named, ATP-level coach, see their real diary, and book a 1:1 or group lesson tailored to your game.</p>
-    <a class="cf-btn cf-btn--accent cf-btn--lg" href="/coaches">Meet the coaches</a>
-  </div></div>
-</section>
+<!-- ================= FEATURES 01 / 02 / 03 ================= -->
+<section class="mk-sec" aria-labelledby="svc-h">
+  <div class="cf-wrap">
+    <div class="mk-head mk-reveal">
+      <span class="mk-eyebrow">Everything NextPoint</span>
+      <h2 id="svc-h">One club. <em>Everything</em> in one place.</h2>
+      <p>Courts, coaching and programs — described here, booked in seconds from your member cockpit.</p>
+    </div>
 
-<section class="cf-exp">
-  <img class="cf-exp-bg" loading="lazy" src="/img/club-juniors.webp" alt="Junior tennis squads at NextPoint" width="1200" height="800">
-  <div class="cf-exp-grade"></div>
-  <div class="cf-wrap"><div class="cf-exp-in cf-reveal">
-    <div class="cf-exp-num">03 · PROGRAMS</div>
-    <span class="cf-eyebrow">Programs &amp; classes</span>
-    <h2>Beginner classes to high performance.</h2>
-    <p>Entry-level group classes, junior squads, Cardio Tennis and socials — right up to our ATP-led High Performance Program. A pathway for every player.</p>
-    <a class="cf-btn cf-btn--accent cf-btn--lg" href="/programs">See programs</a>
-  </div></div>
-</section>
-
-<!-- COCKPIT SHOWCASE ================================================= -->
-<section class="cf-section"><div class="cf-wrap"><div class="cf-showcase">
-  <div class="cf-reveal">
-    <span class="cf-eyebrow">Your cockpit</span>
-    <h2 style="font-size:clamp(1.9rem,4vw,2.7rem);font-weight:800;margin:16px 0 12px">Everything NextPoint, in your pocket.</h2>
-    <p style="color:var(--muted);font-size:1.08rem">Signing up takes a minute — then your whole club is one tap away. No more phone calls or WhatsApp back-and-forth.</p>
-    <ul class="cf-checks">
-      <li>Book courts, lessons &amp; classes in seconds</li>
-      <li>Reschedule or cancel yourself — anytime</li>
-      <li>Manage your whole family from one login</li>
-      <li>Buy packs or go unlimited with membership</li>
-      <li>Pay securely online, or at the desk</li>
-      <li>See every coach's live availability</li>
-    </ul>
-    <a class="cf-btn cf-btn--primary cf-btn--lg" href="/login#/sign-up" style="margin-top:24px">Start your free week</a>
-  </div>
-  <div class="cf-device cf-reveal">
-    <div class="cf-device-bar"><span></span><span></span><span></span></div>
-    <div class="cf-device-body">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <div style="font-weight:800;font-size:1.05rem">This week</div>
-        <div class="cf-badge">Member · Unlimited</div>
+    <article class="mk-feat">
+      <div class="mk-feat-txt mk-reveal-l">
+        <div class="mk-feat-num" aria-hidden="true">01</div>
+        <span class="mk-feat-tag">Courts</span>
+        <h3>Nine courts, <em>instant</em> booking</h3>
+        <p>Eight resurfaced hard courts plus the premium clay court. See live availability and book in seconds — no calls, no waiting, no WhatsApp back-and-forth.</p>
+        <a class="mk-btn mk-btn--green mk-mag" href="/login#/sign-up">Book a court <span class="mk-arr" aria-hidden="true">→</span></a>
       </div>
-      <div class="cf-device-kpis"><div class="cf-device-kpi"><div class="n">4</div><div class="l">Courts booked</div></div><div class="cf-device-kpi"><div class="n">2</div><div class="l">Lessons</div></div><div class="cf-device-kpi"><div class="n">R0</div><div class="l">Court fees</div></div></div>
-      <div class="cf-device-bars"><i style="height:40%"></i><i style="height:65%"></i><i style="height:52%"></i><i style="height:88%"></i><i style="height:70%"></i><i style="height:95%"></i><i style="height:60%"></i></div>
-    </div>
-  </div>
-</div></div></section>
+      <div class="mk-feat-media mk-reveal-r">
+        <img loading="lazy" decoding="async" src="/img/feat-courts.webp" width="1600" height="1253"
+             alt="Members playing doubles on a resurfaced NextPoint hard court">
+        <span class="mk-feat-chip"><i>●</i> Live availability</span>
+      </div>
+    </article>
 
-<!-- FOUNDERS ========================================================= -->
-<section class="cf-section" style="padding-top:0"><div class="cf-wrap">
-  <div class="cf-head cf-reveal"><span class="cf-eyebrow">Coached by the best</span><h2>Founders with real pedigree.</h2><p>People read this — and it's credible. Full bios and the wider coaching team live on the Coaches page.</p></div>
-  <div class="cf-founders">
-    <div class="cf-fc cf-reveal">
-      <div class="cf-fc-top"><img src="/img/coach-neville.webp" alt="Neville Godwin" width="108" height="108" loading="lazy"><div><div class="cf-badge">Program Director</div><h3>Neville Godwin</h3></div></div>
-      <div class="cf-fc-body"><p>2017 ATP Coach of the Year. Has coached Kevin Anderson (to a Grand Slam final &amp; world No. 5), Hyeon Chung and Reilly Opelka — and currently coaches Alexei Popyrin on tour.</p>
-        <div class="cf-fc-meta"><span>Since <b>2004</b></span><span>Lang <b>English</b></span><span><b>Johannesburg</b></span></div></div>
-    </div>
-    <div class="cf-fc cf-reveal">
-      <div class="cf-fc-top"><img src="/img/coach-ross.webp" alt="Ross Nemeth" width="108" height="108" loading="lazy"><div><div class="cf-badge">Head Coach</div><h3>Ross Nemeth</h3></div></div>
-      <div class="cf-fc-body"><p>30+ years coaching. Has guided several juniors to National Singles &amp; Doubles titles and helped many players earn college scholarships in the USA.</p>
-        <div class="cf-fc-meta"><span>Since <b>1993</b></span><span>Lang <b>English</b></span><span><b>Johannesburg</b></span></div></div>
-    </div>
-  </div>
-  <p style="text-align:center;margin-top:26px"><a class="cf-btn cf-btn--ghost" href="/coaches">Meet the full team →</a></p>
-</div></section>
+    <article class="mk-feat mk-feat--flip">
+      <div class="mk-feat-txt mk-reveal-r">
+        <div class="mk-feat-num" aria-hidden="true">02</div>
+        <span class="mk-feat-tag">Coaching</span>
+        <h3>Lessons with <em>named, ATP-level</em> coaches</h3>
+        <p>Pick your coach, see their real diary, and book a 1:1 or group lesson. Coached by the best — from tour professionals to junior specialists.</p>
+        <a class="mk-btn mk-btn--green mk-mag" href="/coaches">Meet the coaches <span class="mk-arr" aria-hidden="true">→</span></a>
+      </div>
+      <div class="mk-feat-media mk-reveal-l">
+        <img loading="lazy" decoding="async" src="/img/feat-coaching.webp" width="1600" height="1098"
+             alt="A NextPoint coach feeding balls during a one-on-one lesson">
+        <span class="mk-feat-chip"><i>●</i> Real coach diaries</span>
+      </div>
+    </article>
 
-<!-- TESTIMONIALS ===================================================== -->
-<section class="cf-section" style="padding-top:0"><div class="cf-wrap">
-  <div class="cf-head cf-head--center cf-reveal"><span class="cf-eyebrow">What members say</span><h2>When you play here, you stay here.</h2></div>
-  <div class="cf-quotes">
-    <div class="cf-q cf-reveal"><div class="st">★★★★★</div><h4>"Friendly coaches and a great vibe"</h4><p>We joined for a few casual lessons for the kids and ended up signing up properly. The coaches are incredibly patient and the kids look forward to every session.</p><div class="who">Tarryn K</div></div>
-    <div class="cf-q cf-reveal"><div class="st">★★★★★</div><h4>"Best tennis courts in Joburg!"</h4><p>The facilities are top quality — these resurfaced courts are in another league. Booking is easy and the clay court is a real gem.</p><div class="who">Gareth R</div></div>
-    <div class="cf-q cf-reveal"><div class="st">★★★★★</div><h4>"Professional, yet personal"</h4><p>My daughter's been in junior development for six months and improved so much. Coach Ross and the team are hands-on and really care.</p><div class="who">Anita R</div></div>
-  </div>
-</div></section>
+    <article class="mk-feat">
+      <div class="mk-feat-txt mk-reveal-l">
+        <div class="mk-feat-num" aria-hidden="true">03</div>
+        <span class="mk-feat-tag">Programs</span>
+        <h3>Squads, Cardio Tennis <em>&amp; socials</em></h3>
+        <p>High Performance, junior beginner &amp; intermediate squads, Cardio Tennis and weekend socials — with enrolment, rosters and waitlists built in.</p>
+        <a class="mk-btn mk-btn--green mk-mag" href="/programs">See programs <span class="mk-arr" aria-hidden="true">→</span></a>
+      </div>
+      <div class="mk-feat-media mk-reveal-r">
+        <img loading="lazy" decoding="async" src="/img/feat-programs.webp" width="1600" height="1067"
+             alt="A junior squad session in full swing at NextPoint">
+        <span class="mk-feat-chip"><i>●</i> Rosters &amp; waitlists</span>
+      </div>
+    </article>
 
-<!-- GALLERY CAROUSEL ================================================= -->
-<section class="cf-section" style="padding-top:0"><div class="cf-wrap">
-  <div class="cf-head cf-reveal"><span class="cf-eyebrow">The real NextPoint</span><h2>Lots of court. Lots of vibe.</h2></div>
-  <div class="cf-carousel cf-reveal">
-    <div class="cf-track" id="galleryTrack">
-      <div class="cf-slide cf-gallery-slide"><img loading="lazy" src="/img/club-courts.webp" alt="Hard courts at NextPoint"></div>
-      <div class="cf-slide cf-gallery-slide"><img loading="lazy" src="/img/club-juniors.webp" alt="Junior squads on open day"></div>
-      <div class="cf-slide cf-gallery-slide"><img loading="lazy" src="/img/club-singles.webp" alt="Singles match"></div>
-      <div class="cf-slide cf-gallery-slide"><img loading="lazy" src="/img/club-house.webp" alt="Clubhouse and patio"></div>
-      <div class="cf-slide cf-gallery-slide"><img loading="lazy" src="/img/club-clay.webp" alt="Clay court"></div>
-      <div class="cf-slide cf-gallery-slide"><img loading="lazy" src="/img/club-sign.webp" alt="NextPoint Tennis signage"></div>
-    </div>
-    <div class="cf-carousel-btns">
-      <button class="cf-cbtn" aria-label="Previous" data-carousel="galleryTrack" data-dir="-1">‹</button>
-      <button class="cf-cbtn" aria-label="Next" data-carousel="galleryTrack" data-dir="1">›</button>
-    </div>
   </div>
-</div></section>
+</section>
 
-<!-- FINAL CTA ======================================================== -->
-<section class="cf-band--green cf-section"><div class="cf-wrap" style="text-align:center">
-  <div class="cf-reveal">
-    <h2 style="font-size:clamp(2rem,4.4vw,3rem);font-weight:800;margin-bottom:14px">Ready to play?</h2>
-    <p style="font-size:1.12rem;margin-bottom:28px">Create your free account and your whole club is one tap away.</p>
-    <div style="display:flex;gap:13px;flex-wrap:wrap;justify-content:center">
-      <a class="cf-btn cf-btn--accent cf-btn--lg" href="/login#/sign-up">Start your free week</a>
-      <a class="cf-btn cf-btn--ghost cf-btn--lg" href="/login" style="color:#fff;border-color:rgba(255,255,255,.55)">Sign in</a>
+<!-- ================= CLAY STATEMENT ================= -->
+<section class="mk-clay mk-grain" aria-labelledby="clay-h">
+  <div class="mk-clay-plx" id="mkClayPlx">
+    <img class="mk-clay-bg mk-kb-slow" loading="lazy" decoding="async" src="/img/club-clay.webp" width="1200" height="875"
+         alt="Court nine at NextPoint — the clay, lines freshly swept">
+  </div>
+  <div class="mk-clay-grade" aria-hidden="true"></div>
+  <div class="mk-clay-vig" aria-hidden="true"></div>
+  <div class="cf-wrap"><div class="mk-clay-in mk-reveal">
+    <span class="mk-eyebrow mk-eyebrow--lt">Court Nº 9 — the clay</span>
+    <h2 id="clay-h">Nine courts. <em>One of them</em>, the only clay in Gauteng.</h2>
+    <p>Eight resurfaced hard courts carry the daily play. And then there's court nine — true terre battue, the surface the pros slide on, and the only one of its kind in the province. Book it like any other court.</p>
+    <div class="mk-facts">
+      <div><b>1 of 9</b>our one special court</div>
+      <div><b>Terre battue</b>true European clay feel</div>
+      <div><b>Swept daily</b>match-ready, always</div>
+    </div>
+    <a class="mk-btn mk-btn--lime mk-btn--big mk-mag" href="/login#/sign-up">Play on clay — start free <span class="mk-arr" aria-hidden="true">→</span></a>
+  </div></div>
+</section>
+
+<!-- ================= COCKPIT ================= -->
+<section class="mk-sec" aria-labelledby="cock-h">
+  <div class="mk-cockpit">
+    <div class="cf-wrap"><div class="mk-cockpit-in">
+      <div class="mk-reveal">
+        <span class="mk-eyebrow mk-eyebrow--lt">Your cockpit</span>
+        <h2 id="cock-h">Everything NextPoint, <em>in your pocket.</em></h2>
+        <p class="mk-lead">Signing up takes a minute — then your whole club is one tap away.</p>
+        <ul class="mk-checks">
+          <li>Book courts, lessons &amp; classes in seconds</li>
+          <li>Reschedule or cancel yourself — anytime</li>
+          <li>Manage your whole family from one login</li>
+          <li>Buy packs or go unlimited with membership</li>
+          <li>Pay securely online, or at the desk</li>
+          <li>See every coach's live availability</li>
+        </ul>
+        <a class="mk-btn mk-btn--lime mk-btn--big mk-mag" href="/login#/sign-up" style="margin-top:28px">Start your free week <span class="mk-arr" aria-hidden="true">→</span></a>
+      </div>
+      <div class="mk-phone-wr mk-reveal">
+        <div class="mk-phone" id="mkPhone" role="img" aria-label="Preview of the NextPoint member dashboard: bookings, play time and a confirmed court slot">
+          <div class="mk-screen">
+            <div class="mk-notch" aria-hidden="true"><i></i></div>
+            <div class="mk-scr-in">
+              <div class="mk-hey"><div class="mk-hi"><small>Tuesday · NextPoint</small>Morning, Sam ☀️</div><div class="mk-pill">Member · Unlimited</div></div>
+              <div class="mk-kpis">
+                <div class="mk-kpi"><div class="mk-n">4</div><div class="mk-l">Courts</div></div>
+                <div class="mk-kpi"><div class="mk-n">2</div><div class="mk-l">Lessons</div></div>
+                <div class="mk-kpi"><div class="mk-n">R0</div><div class="mk-l">Court fees</div></div>
+              </div>
+              <div class="mk-chart">
+                <div class="mk-cl"><span>Play this week</span><b>▲ 6h 30m</b></div>
+                <div class="mk-bars" aria-hidden="true">
+                  <div class="mk-bar" style="--h:38%"></div><div class="mk-bar" style="--h:62%"></div><div class="mk-bar" style="--h:48%"></div><div class="mk-bar" style="--h:86%"></div><div class="mk-bar" style="--h:66%"></div><div class="mk-bar" style="--h:96%"></div><div class="mk-bar" style="--h:58%"></div>
+                </div>
+                <div class="mk-days" aria-hidden="true"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+              </div>
+              <div class="mk-slotcard">
+                <div class="mk-ic" aria-hidden="true">🎾</div>
+                <div><b>Court 9 · Clay</b><small>Today · 07:00 – 08:00</small></div>
+                <span class="mk-ok">Confirmed ✓</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+</section>
+
+<!-- ================= FOUNDERS ================= -->
+<section class="mk-sec" style="padding-top:0" aria-labelledby="team-h">
+  <div class="cf-wrap">
+    <div class="mk-head mk-reveal">
+      <span class="mk-eyebrow">Coached by the best</span>
+      <h2 id="team-h">Founders with <em>real pedigree.</em></h2>
+      <p>The people running your lessons have coached at the very top of the game — and they're on court here, every week.</p>
+    </div>
+    <div class="mk-fgrid">
+      <article class="mk-fc mk-reveal">
+        <div class="mk-fc-photo">
+          <img loading="lazy" decoding="async" src="/img/coach-neville.webp" width="820" height="820" alt="Neville Godwin, Program Director at NextPoint Tennis">
+          <span class="mk-fc-role">Program Director</span>
+        </div>
+        <div class="mk-fc-body">
+          <h3>Neville Godwin</h3>
+          <div class="mk-fc-cred">2017 ATP Coach of the Year</div>
+          <p>Has coached Kevin Anderson to a Grand Slam final &amp; world No. 5, Hyeon Chung and Reilly Opelka — and currently coaches Alexei Popyrin on tour.</p>
+          <div class="mk-fc-meta"><span>Coaching since <b>2004</b></span><span><b>English</b></span><span><b>Johannesburg</b></span></div>
+        </div>
+      </article>
+      <article class="mk-fc mk-reveal">
+        <div class="mk-fc-photo">
+          <img loading="lazy" decoding="async" src="/img/coach-ross.webp" width="820" height="820" alt="Ross Nemeth, Head Coach at NextPoint Tennis">
+          <span class="mk-fc-role">Head Coach</span>
+        </div>
+        <div class="mk-fc-body">
+          <h3>Ross Nemeth</h3>
+          <div class="mk-fc-cred">30+ years developing champions</div>
+          <p>Guided several juniors to National Singles &amp; Doubles titles and helped many players earn US college scholarships.</p>
+          <div class="mk-fc-meta"><span>Coaching since <b>1993</b></span><span><b>English</b></span><span><b>Johannesburg</b></span></div>
+        </div>
+      </article>
+    </div>
+    <div class="mk-moreteam mk-reveal"><a href="/coaches">Meet the full team <span aria-hidden="true">→</span></a></div>
+  </div>
+</section>
+
+<!-- ================= TEN-FIFTY5 ================= -->
+<section class="mk-lab mk-sec" aria-labelledby="lab-h">
+  <div class="cf-wrap"><div class="mk-lab-grid">
+    <div class="mk-reveal-l">
+      <div class="mk-kick">NEXTPOINT × TEN-FIFTY5</div>
+      <h2 id="lab-h">Take your game further with <em>AI match analysis.</em></h2>
+      <p>Upload a match and get point-by-point breakdowns, biomechanical stroke analysis and an AI coach trained on your data — built by the same team behind NextPoint. Your first match is free.</p>
+      <div class="mk-lab-cta">
+        <a class="mk-btn mk-btn--lime mk-mag" href="https://www.ten-fifty5.com" target="_blank" rel="noopener">Explore Ten-Fifty5 <span class="mk-arr" aria-hidden="true">→</span></a>
+        <small>ten-fifty5.com · first match on us</small>
+      </div>
+    </div>
+    <div class="mk-chartcard mk-reveal-r" id="mkTchart">
+      <div class="mk-ct"><b>1st serve % · 6-month trend</b><span class="mk-up">▲ +22%</span></div>
+      <svg viewBox="0 0 320 130" width="100%" height="130" preserveAspectRatio="none" role="img" aria-label="Line chart: first-serve percentage improving 22 percent over six months">
+        <defs><linearGradient id="mkLg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#C8E85C" stop-opacity=".32"/><stop offset="1" stop-color="#C8E85C" stop-opacity="0"/></linearGradient></defs>
+        <g stroke="rgba(255,255,255,.08)" stroke-width="1"><line x1="0" y1="32" x2="320" y2="32"/><line x1="0" y1="66" x2="320" y2="66"/><line x1="0" y1="100" x2="320" y2="100"/></g>
+        <path class="mk-tfill" d="M0,98 L46,90 L92,94 L138,72 L184,66 L230,46 L276,36 L320,20 L320,130 L0,130 Z" fill="url(#mkLg)"/>
+        <path class="mk-tline" d="M0,98 L46,90 L92,94 L138,72 L184,66 L230,46 L276,36 L320,20" fill="none" stroke="#C8E85C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="320" cy="20" r="5" fill="#C8E85C"/>
+      </svg>
+      <div class="mk-kpis3">
+        <div><div class="mk-n">450+</div><div class="mk-l">Data pts / match</div></div>
+        <div><div class="mk-n">18</div><div class="mk-l">KPIs tracked</div></div>
+        <div><div class="mk-n">1–2h</div><div class="mk-l">Upload → insight</div></div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<!-- ================= TESTIMONIALS ================= -->
+<section class="mk-sec" aria-labelledby="quotes-h">
+  <div class="cf-wrap">
+    <div class="mk-head mk-head--center mk-reveal">
+      <span class="mk-eyebrow">What members say</span>
+      <h2 id="quotes-h">When you play here, <em>you stay here.</em></h2>
+    </div>
+    <div class="mk-qgrid">
+      <blockquote class="mk-q mk-reveal">
+        <div class="mk-q-mark" aria-hidden="true">“</div>
+        <div class="mk-q-st" aria-label="Five stars">★★★★★</div>
+        <h4>Friendly coaches and a great vibe</h4>
+        <p>We joined just for a few casual lessons for our kids but ended up signing up properly — the coaches are incredibly patient, and the kids look forward to every session.</p>
+        <div class="mk-q-who"><i aria-hidden="true">TK</i><span>Tarryn K<small>Parent · member</small></span></div>
+      </blockquote>
+      <blockquote class="mk-q mk-reveal">
+        <div class="mk-q-mark" aria-hidden="true">“</div>
+        <div class="mk-q-st" aria-label="Five stars">★★★★★</div>
+        <h4>Best tennis courts in Joburg!</h4>
+        <p>The facilities are top quality. These resurfaced courts are in another league, booking is easy, and the clay court is a real gem.</p>
+        <div class="mk-q-who"><i aria-hidden="true">GR</i><span>Gareth R<small>Member</small></span></div>
+      </blockquote>
+      <blockquote class="mk-q mk-reveal">
+        <div class="mk-q-mark" aria-hidden="true">“</div>
+        <div class="mk-q-st" aria-label="Five stars">★★★★★</div>
+        <h4>Professional, yet personal</h4>
+        <p>My daughter's been in junior development for six months and improved so much. Coach Ross and the team are hands-on and really care.</p>
+        <div class="mk-q-who"><i aria-hidden="true">AR</i><span>Anita R<small>Parent · junior program</small></span></div>
+      </blockquote>
     </div>
   </div>
-</div></section>
+</section>
+
+<!-- ================= GALLERY ================= -->
+<section class="mk-sec" style="padding-top:0" aria-labelledby="gal-h">
+  <div class="cf-wrap">
+    <div class="mk-head mk-reveal">
+      <span class="mk-eyebrow">The real NextPoint</span>
+      <h2 id="gal-h">Lots of court. <em>Lots of vibe.</em></h2>
+    </div>
+    <div class="mk-gal mk-reveal">
+      <figure class="mk-w2 mk-h2">
+        <img loading="lazy" decoding="async" src="/img/gal-social.webp" width="1200" height="800" alt="Members catching up between points at a NextPoint social">
+        <figcaption><i>●</i> Between points</figcaption>
+      </figure>
+      <figure>
+        <img loading="lazy" decoding="async" src="/img/gal-net.webp" width="1200" height="797" alt="A ball waiting at the net cord, up close">
+        <figcaption><i>●</i> Court-side, up close</figcaption>
+      </figure>
+      <figure>
+        <img loading="lazy" decoding="async" src="/img/club-juniors.webp" width="1200" height="900" alt="A coach guiding juniors through a squad drill">
+        <figcaption><i>●</i> Junior development</figcaption>
+      </figure>
+      <figure class="mk-w2">
+        <img loading="lazy" decoding="async" src="/img/gal-clay.webp" width="1080" height="750" alt="Court nine — the clay, net and lines ready for play">
+        <figcaption><i>●</i> Court nine — the clay</figcaption>
+      </figure>
+      <figure>
+        <img loading="lazy" decoding="async" src="/img/gal-backhand.webp" width="1200" height="801" alt="A one-handed backhand mid-swing on a NextPoint court">
+        <figcaption><i>●</i> Pace, frozen</figcaption>
+      </figure>
+      <figure>
+        <img loading="lazy" decoding="async" src="/img/club-courts.webp" width="1200" height="900" alt="NextPoint's hard courts under the Johannesburg sun">
+        <figcaption><i>●</i> Sun, shadow, serve</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FINAL CTA ================= -->
+<section class="mk-final mk-grain" aria-labelledby="final-h">
+  <div class="cf-wrap"><div class="mk-final-in mk-reveal">
+    <span class="mk-eyebrow mk-eyebrow--lt" style="justify-content:center">Free for 7 days · no commitment</span>
+    <h2 id="final-h">Ready to <em>play?</em></h2>
+    <p>Create your free account and your whole club is one tap away.</p>
+    <div class="mk-cta" style="justify-content:center">
+      <a class="mk-btn mk-btn--lime mk-btn--big mk-mag" href="/login#/sign-up">Start your free week <span class="mk-arr" aria-hidden="true">→</span></a>
+      <a class="mk-btn mk-btn--ghost mk-btn--big mk-mag" href="/login">Sign in</a>
+    </div>
+  </div></div>
+</section>
 
 <!--#include footer-->
 
 <script>
-/* Scroll reveal */
 (function(){
-  var els = document.querySelectorAll('.cf-reveal');
-  if (!('IntersectionObserver' in window)) { els.forEach(function(e){e.classList.add('in');}); return; }
-  var io = new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12});
-  els.forEach(function(el){io.observe(el);});
-})();
-/* Carousels: scroll by one card; hide controls when nothing overflows and
- * disable an arrow at each end. */
-(function(){
-  document.querySelectorAll('.cf-carousel').forEach(function(car){
-    var track=car.querySelector('.cf-track'), btns=car.querySelector('.cf-carousel-btns');
-    if(!track) return;
-    var prev=car.querySelector('.cf-cbtn[data-dir="-1"]'), next=car.querySelector('.cf-cbtn[data-dir="1"]');
-    function refresh(){
-      var overflow=track.scrollWidth-track.clientWidth>4;
-      if(btns) btns.style.display=overflow?'':'none';
-      if(prev) prev.disabled=track.scrollLeft<=2;
-      if(next) next.disabled=track.scrollLeft>=track.scrollWidth-track.clientWidth-2;
-    }
-    car.querySelectorAll('.cf-cbtn').forEach(function(btn){
-      btn.addEventListener('click',function(){
-        var c=track.querySelector('.cf-slide');
-        var step=c?c.getBoundingClientRect().width+16:300;
-        track.scrollBy({left:step*parseInt(btn.dataset.dir,10),behavior:'smooth'});
-      });
+"use strict";
+var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* ---------- reveal on scroll (with sibling stagger) ---------- */
+var revealEls = document.querySelectorAll(".mk-reveal,.mk-reveal-l,.mk-reveal-r");
+if (reduced || !("IntersectionObserver" in window)) {
+  revealEls.forEach(function(el){ el.classList.add("in"); });
+} else {
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (!e.isIntersecting) return;
+      var el = e.target;
+      var sibs = el.parentElement ? Array.prototype.filter.call(el.parentElement.children, function(c){
+        return c.classList && (c.classList.contains("mk-reveal")||c.classList.contains("mk-reveal-l")||c.classList.contains("mk-reveal-r")) && !c.classList.contains("in");
+      }) : [];
+      var idx = sibs.indexOf(el);
+      el.style.transitionDelay = (idx > 0 ? Math.min(idx * 110, 440) : 0) + "ms";
+      el.classList.add("in");
+      io.unobserve(el);
     });
-    track.addEventListener('scroll',refresh,{passive:true});
-    window.addEventListener('resize',refresh);
-    refresh();
+  },{threshold:.14, rootMargin:"0px 0px -6% 0px"});
+  revealEls.forEach(function(el){ io.observe(el); });
+}
+
+/* ---------- animated proof counters ---------- */
+function animateCount(el){
+  var target = parseFloat(el.getAttribute("data-count"));
+  var dec = parseInt(el.getAttribute("data-dec")||"0",10);
+  var sep = el.getAttribute("data-sep") === "1";
+  function fmt(v){
+    var s = v.toFixed(dec);
+    if (sep) s = s.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return s;
+  }
+  if (reduced){ el.textContent = fmt(target); return; }
+  var dur = 1500, t0 = null;
+  function step(ts){
+    if (t0 === null) t0 = ts;
+    var p = Math.min((ts - t0) / dur, 1);
+    var eased = 1 - Math.pow(1 - p, 4);
+    el.textContent = fmt(target * eased);
+    if (p < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+var counters = document.querySelectorAll(".mk-count");
+if (counters.length){
+  if (reduced || !("IntersectionObserver" in window)) {
+    counters.forEach(function(c){ animateCount(c); });
+  } else {
+    var cio = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if (e.isIntersecting){ animateCount(e.target); cio.unobserve(e.target); }
+      });
+    },{threshold:.4});
+    counters.forEach(function(c){ cio.observe(c); });
+  }
+}
+
+/* ---------- phone bar chart + ten-fifty5 line draw ---------- */
+var lateBits = [document.getElementById("mkPhone"), document.getElementById("mkTchart")];
+if ("IntersectionObserver" in window) {
+  var bio = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (e.isIntersecting){ e.target.classList.add("in"); bio.unobserve(e.target); }
+    });
+  },{threshold:.35});
+  lateBits.forEach(function(el){ if (el) bio.observe(el); });
+} else {
+  lateBits.forEach(function(el){ if (el) el.classList.add("in"); });
+}
+
+/* ---------- magnetic buttons (fine pointers only) ---------- */
+if (!reduced && window.matchMedia("(pointer: fine)").matches){
+  document.querySelectorAll(".mk-mag").forEach(function(btn){
+    btn.addEventListener("pointermove", function(ev){
+      var r = btn.getBoundingClientRect();
+      var dx = (ev.clientX - (r.left + r.width/2)) / (r.width/2);
+      var dy = (ev.clientY - (r.top + r.height/2)) / (r.height/2);
+      btn.style.transform = "translate(" + (dx*5).toFixed(1) + "px," + (dy*4).toFixed(1) + "px)";
+    });
+    btn.addEventListener("pointerleave", function(){ btn.style.transform = ""; });
   });
+}
+
+/* ---------- clay parallax (wrapper; Ken-Burns runs on the img inside) ---------- */
+var clayBg = document.getElementById("mkClayPlx");
+if (clayBg && !reduced){
+  var ticking = false;
+  function plx(){
+    ticking = false;
+    var r = clayBg.parentElement.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > window.innerHeight) return;
+    var mid = r.top + r.height/2 - window.innerHeight/2;
+    clayBg.style.transform = "translateY(" + (mid * -0.08).toFixed(1) + "px)";
+  }
+  window.addEventListener("scroll", function(){
+    if (!ticking){ ticking = true; requestAnimationFrame(plx); }
+  }, {passive:true});
+  plx();
+}
+
+/* ---------- hero lime dust (canvas, progressive enhancement) ---------- */
+var canvas = document.getElementById("mkDust");
+if (canvas && !reduced){
+  var ctx = canvas.getContext("2d");
+  if (ctx){
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var W = 0, H = 0, parts = [], running = true, raf = null;
+    function size(){
+      var r = canvas.parentElement.getBoundingClientRect();
+      W = r.width; H = r.height;
+      canvas.width = W * dpr; canvas.height = H * dpr;
+      canvas.style.width = W + "px"; canvas.style.height = H + "px";
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+    }
+    function seed(){
+      parts = [];
+      var n = Math.min(46, Math.max(22, Math.round(W / 34)));
+      for (var i = 0; i < n; i++){
+        parts.push({
+          x: Math.random()*W, y: Math.random()*H,
+          r: .7 + Math.random()*2.1,
+          vy: .12 + Math.random()*.4,
+          vx: (Math.random()-.5)*.16,
+          a: .12 + Math.random()*.4,
+          ph: Math.random()*Math.PI*2
+        });
+      }
+    }
+    function tick(t){
+      if (!running) return;
+      ctx.clearRect(0,0,W,H);
+      for (var i = 0; i < parts.length; i++){
+        var p = parts[i];
+        p.y -= p.vy; p.x += p.vx + Math.sin(t/2400 + p.ph)*.12;
+        if (p.y < -6){ p.y = H + 6; p.x = Math.random()*W; }
+        if (p.x < -6) p.x = W + 6; else if (p.x > W + 6) p.x = -6;
+        var tw = p.a * (0.7 + 0.3*Math.sin(t/900 + p.ph));
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+        ctx.fillStyle = "rgba(200,232,92," + tw.toFixed(3) + ")";
+        ctx.fill();
+      }
+      raf = requestAnimationFrame(tick);
+    }
+    size(); seed(); raf = requestAnimationFrame(tick);
+    window.addEventListener("resize", function(){ size(); seed(); }, {passive:true});
+    /* pause when the hero is offscreen or the tab is hidden */
+    if ("IntersectionObserver" in window){
+      var hio = new IntersectionObserver(function(entries){
+        var vis = entries[0].isIntersecting && !document.hidden;
+        if (vis && !running){ running = true; raf = requestAnimationFrame(tick); }
+        else if (!vis && running){ running = false; if (raf) cancelAnimationFrame(raf); }
+      },{threshold:0});
+      hio.observe(canvas.parentElement);
+    }
+    document.addEventListener("visibilitychange", function(){
+      if (document.hidden && running){ running = false; if (raf) cancelAnimationFrame(raf); }
+      else if (!document.hidden && !running){ running = true; raf = requestAnimationFrame(tick); }
+    });
+  }
+}
 })();
 </script>
 </body>
