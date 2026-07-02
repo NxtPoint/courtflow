@@ -748,6 +748,17 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
         _credit_linked_tokens(session, club_id=club_id, order_id=bk["order_id"],
                               except_booking_id=booking_id, reason=reason or "cancellation")
 
+    # A cancelled booking must NOT leave a phantom debt: void its owed order (open/awaiting_payment)
+    # so it drops off the client's statement AND off the coach's tab (void_order clears arrears too).
+    # A PAID order is left intact — refunding a paid booking is a separate, explicit flow. Mirrors
+    # cancel_membership. (Without this, a cancelled court still showed as owed in Billing.)
+    if bk.get("order_id"):
+        try:
+            from billing.statement import void_order
+            void_order(session, club_id=club_id, order_id=bk["order_id"], reason="booking cancelled")
+        except Exception:
+            log.info("cancel_booking: order void skipped (billing unavailable) order=%s", bk.get("order_id"))
+
     booking = _booking_dict(session, booking_id)
     res = _resource(session, club_id, booking["resource_id"])
     payload = _payload(booking, res)

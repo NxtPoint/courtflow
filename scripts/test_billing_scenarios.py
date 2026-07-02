@@ -711,6 +711,22 @@ def sc_booking_story(s, fx):
           B.booking_story(s, club_id=fx.club_id, user_id=other, booking_id=bid) is None)
 
 
+def sc_cancel_voids_order(s, fx):
+    print("\n# Cancelling a booking voids its unpaid order (no phantom 'owed' after cancel)")
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=iso(at(fx, 15)), ends_at=iso(at(fx, 16)), settlement_mode="at_court")
+    bid = r["booking"]["id"]; oid = r["booking"]["order_id"]
+    check("court is owed on the statement before cancel", _order(s, oid)["status"] == "open")
+    st0 = ST.statement(s, club_id=fx.club_id, user_id=fx.member)
+    check("statement lists the owed court", any(i["order_id"] == str(oid) for i in st0["items"]), str(st0["count"]))
+    B.cancel_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=fx.member, role="member")
+    check("cancelled booking's order is now void", _order(s, oid)["status"] == "void")
+    st1 = ST.statement(s, club_id=fx.club_id, user_id=fx.member)
+    check("cancelled booking no longer owed", not any(i["order_id"] == str(oid) for i in st1["items"]),
+          f"still owed count={st1['count']}")
+
+
 def sc_coach_event_story(s, fx):
     print("\n# Coach event story: a lesson the coach runs → client + charge + coach actions")
     r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
@@ -811,6 +827,7 @@ SCENARIOS = [
     sc_settlement_refund_clawback,
     sc_abandoned_reclaim_on_read,
     sc_booking_story,
+    sc_cancel_voids_order,
     sc_coach_event_story,
     sc_transaction_log,
 ]
