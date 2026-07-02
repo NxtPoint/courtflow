@@ -255,10 +255,11 @@ request→accept→settle chain green on a scratch DB.
 
 ## Still needs Tomo (config, not code) — infra is otherwise live
 - **S3** (`S3_BUCKET` + AWS keys) for coach **photo uploads** — until set, coaches paste a photo URL.
-- **SES** verified sender for **invite/confirmation emails** — until then coach invite links are shared
-  manually AND **booking confirmations notify in-app only** (no email; the built `.ics` calendar attaches
-  to the email once email is live — SES needs `SendRawEmail`/MIME for the attachment). Klaviyo marketing
-  also dark until `KLAVIYO_API_KEY`.
+- **SES** — the transactional email is **CODE-COMPLETE** (multi-tenant: one verified CourtFlow domain,
+  per-club From-name + Reply-To; HTML+text; **`.ics` attached** via `SendRawEmail`/MIME). It's DARK until
+  Tomo verifies `courtflow.app` in SES (af-south-1), exits the SES sandbox, and sets `SES_SENDER` + AWS
+  keys — until then confirmations/invites notify **in-app only**. Full guide: **`docs/specs/SES-SETUP.md`**.
+  Klaviyo marketing also dark until `KLAVIYO_API_KEY`.
 - **Yoco keys** (`YOCO_*`) — DONE (set in Render; payments live). Each club still opts in via the
   Settings → Payments toggle.
 - **DNS / SEO cutover** for `nextpointtennis.com` (supervised — never an agent). See `docs/11 §5`, `docs/07`.
