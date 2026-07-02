@@ -694,6 +694,23 @@ def sc_dispute_routing(s, fx):
           str(cderr))
 
 
+def sc_booking_story(s, fx):
+    print("\n# Booking story: one payload assembles court + charge + players + eligibility")
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    bid = r["booking"]["id"]
+    story = B.booking_story(s, club_id=fx.club_id, user_id=fx.member, booking_id=bid)
+    check("story assembles court name + owed charge + pay action",
+          story and story["court_name"] and story["charge"]["status"] == "owed"
+          and story["can"]["pay"] and story["can"]["receipt"] is False, str(story and story.get("charge")))
+    check("story lists the player(s)", story and len(story["players"]) >= 1, str(story and story.get("players")))
+    # Scoped: a different user cannot read someone else's booking story.
+    other = _mk_user(s, "peeker@bill.test", "Peeker")
+    check("another user can't read the booking story",
+          B.booking_story(s, club_id=fx.club_id, user_id=other, booking_id=bid) is None)
+
+
 def sc_transaction_log(s, fx):
     print("\n# Transaction log: one chronological feed, role-scoped (client / coach / owner)")
     from billing import activity as ACT
@@ -776,6 +793,7 @@ SCENARIOS = [
     sc_void_clears_arrears,
     sc_settlement_refund_clawback,
     sc_abandoned_reclaim_on_read,
+    sc_booking_story,
     sc_transaction_log,
 ]
 

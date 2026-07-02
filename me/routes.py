@@ -539,6 +539,22 @@ def mark_notifications_read():
 #   GET /api/me/activity  -> {activity:[…]}   — always scoped to the caller's own rows
 # ---------------------------------------------------------------------------
 
+@me_bp.get("/bookings/<booking_id>")
+def my_booking_story(booking_id):
+    """The full 'story' of one of the caller's bookings — what/when/where (club+court)/who (players)/
+    the charge + payment status + action eligibility — assembled in one payload for the detail view."""
+    p, err = _principal()
+    if err:
+        return err
+    from diary import bookings as diary_bookings
+    with session_scope() as s:
+        story = diary_bookings.booking_story(
+            s, club_id=p.club_id, user_id=p.user_id, booking_id=booking_id)
+    if story is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(booking=story), 200
+
+
 @me_bp.get("/activity")
 def my_activity():
     p, err = _principal()
