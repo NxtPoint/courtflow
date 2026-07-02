@@ -43,6 +43,7 @@
       el("button", { class: "cf-btn cf-btn-sm", text: "‹", title: "Previous week", onclick: function () { wkStart = UI.addDays(wkStart, -7); renderTab(); } }),
       el("button", { class: "cf-btn cf-btn-sm", text: "This week", onclick: function () { wkStart = mondayOf(new Date()); renderTab(); } }),
       el("button", { class: "cf-btn cf-btn-sm", text: "›", title: "Next week", onclick: function () { wkStart = UI.addDays(wkStart, 7); renderTab(); } }),
+      el("a", { class: "cf-btn cf-btn-sm", href: "/book/court", text: "🎾 Book for myself" }),
       el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "+ Book for a client", onclick: function () { openBookForClient(); } }),
     ]);
     var gridHost = el("div", { class: "cf-loading", text: "Loading your week…" });

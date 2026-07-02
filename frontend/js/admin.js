@@ -84,15 +84,21 @@
     try {
       if (!window.AdminAPI) await ensureClassDeps();
       var opts = monthRange("this");
+      var today = UI.dateKey(new Date());
       var res = await Promise.all([
         window.AdminAPI.cockpitSummary(opts),
         window.AdminAPI.cockpitRevenue(opts),
         window.AdminAPI.refundRequests().catch(function () { return { requests: [] }; }),
         window.TFAuth.apiJSON("/api/analytics/overview?days=30").catch(function () { return {}; }),
+        window.API.master({ date_from: today, date_to: today }).catch(function () { return { events: [] }; }),
       ]);
       var summary = res[0] || {}, revenue = res[1] || {}, refunds = res[2] || {}, analytics = res[3] || {};
+      var todayEvents = (res[4] && res[4].events) || [];
       var cur = summary.currency || "ZAR", C = window.CRMUI;
       UI.clear(host);
+
+      // Today at the club — a glimpse of the day's diary (full timeline is one tab away).
+      host.appendChild(todayCard(todayEvents));
 
       // Money this month.
       host.appendChild(C.sectionHead("This month — money"));
@@ -141,12 +147,45 @@
       row.appendChild(el("button", { class: "cf-btn", text: "Open the diary →", onclick: function () { showTab("diary"); } }));
       row.appendChild(el("button", { class: "cf-btn", text: "People →", onclick: function () { showTab("people"); } }));
       row.appendChild(el("button", { class: "cf-btn", text: "Full insights →", onclick: function () { showTab("insights"); } }));
+      row.appendChild(el("a", { class: "cf-btn", href: "/book/court", text: "🎾 Book a court for myself" }));
       row.appendChild(el("a", { class: "cf-btn", href: "/settings.html", text: "⚙ Settings" }));
       actions.appendChild(row);
       host.appendChild(actions);
     } catch (e) {
       UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) }));
     }
+  }
+
+  // "Today at the club" — a compact, time-sorted list of today's bookings + class sessions.
+  function todayCard(events) {
+    var card = el("div", { class: "cf-card" });
+    card.appendChild(el("div", { class: "cf-row", style: "align-items:center;gap:8px" }, [
+      window.CRMUI.sectionHead("Today at the club"),
+      el("span", { class: "cf-spacer" }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "Open the diary →", onclick: function () { showTab("diary"); } }),
+    ]));
+    var live = (events || []).filter(function (e) { return e.status !== "cancelled"; })
+      .sort(function (a, b) { return String(a.starts_at).localeCompare(String(b.starts_at)); });
+    if (!live.length) { card.appendChild(el("div", { class: "cf-empty", text: "Nothing booked today yet." })); return card; }
+    var list = el("div", { class: "cf-list" });
+    live.slice(0, 12).forEach(function (ev) {
+      var type = (ev.booking_type || "court").toLowerCase();
+      var isClass = type === "class";
+      var right = isClass && ev.capacity != null
+        ? el("span", { class: "cf-chip class", text: (ev.enrolled != null ? ev.enrolled : 0) + "/" + ev.capacity })
+        : el("span", { class: "cf-chip " + (ev.status || ""), text: ev.status || "" });
+      list.appendChild(el("div", { class: "cf-item" }, [
+        el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(type) >= 0 ? type : "court"), text: type }),
+        el("div", { class: "cf-item-main" }, [
+          el("div", { class: "cf-item-t", text: UI.fmtTime(ev.starts_at) + "  " + (ev.resource_name || "Booking") }),
+          el("div", { class: "cf-item-s", text: UI.fmtTime(ev.starts_at) + "–" + UI.fmtTime(ev.ends_at) }),
+        ]),
+        right,
+      ]));
+    });
+    card.appendChild(list);
+    if (live.length > 12) card.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:6px", text: "+ " + (live.length - 12) + " more — see the diary." }));
+    return card;
   }
 
   // ---- Diary tab — the timeline + class management (sub-tabbed) --------------
