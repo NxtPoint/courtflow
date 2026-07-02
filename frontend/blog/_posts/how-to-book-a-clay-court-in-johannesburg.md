@@ -19,7 +19,7 @@ Clay is a different game. The ball sits up, rallies last longer, and you're rewa
 Booking is quick and you don't have to be a member to play:
 
 1. Open the booking page and choose **Book a court**.
-2. Select the **Clay Court** (it's listed separately from the 8 hard courts).
+2. Select the **Clay Court** (it's listed separately from the 7 hard courts).
 3. Pick your time from the live availability and confirm.
 4. Pay online, at the court, or on your monthly account.
 
