@@ -311,13 +311,18 @@
       el("div", {}, [el("div", { style: "font-size:1.25rem;font-weight:800;color:" + (pn.owed_minor > 0 ? "var(--danger,#c0392b)" : "inherit"), text: money(pn.owed_minor, cur) }),
         el("div", { class: "cf-muted", style: "font-size:.8rem", text: "Owed to the club" })]),
     ]));
+    // Owed orders → the shared CRMUI.lineItems (same widget the coach money uses), with Void/Write-off.
     var owed = (pn.statement && pn.statement.items) || [];
-    if (!owed.length) moneyCard.appendChild(el("div", { class: "cf-empty", text: "Nothing owed — all settled. 🎉" }));
-    else {
-      var ol = el("div", { class: "cf-list" });
-      owed.forEach(function (it) { ol.appendChild(owedRow(it, cur, id)); });
-      moneyCard.appendChild(ol);
-    }
+    moneyCard.appendChild(window.CRMUI.lineItems(owed.map(function (it) { return Object.assign({}, it, { gross_minor: it.amount_minor }); }), {
+      currency: cur,
+      empty: "Nothing owed — all settled. 🎉",
+      label: function (it) { return it.description || it.category || "Owed"; },
+      sub: function (it) { return [it.category, it.coach_name, (function () { try { return it.date ? UI.fmtDate(it.date) : ""; } catch (e) { return ""; } })()].filter(Boolean).join(" · "); },
+      actions: [
+        { label: "Void", onClick: function (it) { voidOrder(id, it, false); } },
+        { label: "Write off", tone: "danger", onClick: function (it) { voidOrder(id, it, true); } },
+      ],
+    }));
     var pays = pn.payments || [];
     if (pays.length) {
       moneyCard.appendChild(el("div", { class: "cf-muted", style: "margin:14px 0 4px;font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em", text: "Online payments" }));
@@ -350,20 +355,6 @@
     if (m) box.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Revoke", onclick: function () { revokeMembership(id, pn.name); } }));
     else box.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Grant membership", onclick: function () { grantMembership(id, pn.name); } }));
     return box;
-  }
-  function owedRow(it, cur, id) {
-    var actions = el("div", { class: "cf-row", style: "gap:6px" }, [
-      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Void", onclick: function (e) { e.stopPropagation(); voidOrder(id, it, false); } }),
-      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Write off", onclick: function (e) { e.stopPropagation(); voidOrder(id, it, true); } }),
-    ]);
-    return el("div", { class: "cf-item" }, [
-      el("div", { class: "cf-item-main" }, [
-        el("div", { class: "cf-item-t", text: it.description || it.category || "Owed" }),
-        el("div", { class: "cf-item-s", text: [it.category, it.coach_name, (function () { try { return it.date ? UI.fmtDate(it.date) : ""; } catch (e) { return ""; } })()].filter(Boolean).join(" · ") }),
-      ]),
-      el("span", { style: "font-weight:700", text: money(it.amount_minor, it.currency || cur) }),
-      actions,
-    ]);
   }
   function bookingsCard(title, rows, empty) {
     var c = card([window.CRMUI.sectionHead(title)], "cf-mt");
@@ -556,23 +547,17 @@
     try { reqs = (await window.AdminAPI.refundRequests({ status: "pending" })).requests || []; } catch (e) {}
     var cur = clubCur();
     var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Approvals" })]);
-    if (!reqs.length) wrap.appendChild(el("div", { class: "cf-empty", text: "Nothing waiting for a decision. 🎉" }));
-    else {
-      var c = card([]), l = el("div", { class: "cf-list" });
-      reqs.forEach(function (rq) {
-        l.appendChild(el("div", { class: "cf-item" }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: (rq.requester_name || "A member") + " · " + money(rq.amount_minor != null ? rq.amount_minor : rq.order_amount_minor, rq.currency_code || cur) }),
-            el("div", { class: "cf-item-s", text: [rq.item_description || "Order", rq.reason ? "“" + rq.reason + "”" : ""].filter(Boolean).join(" · ") }),
-          ]),
-          el("div", { class: "cf-row", style: "gap:6px" }, [
-            el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Approve", onclick: function () { decideRefund(rq, "approve"); } }),
-            el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Decline", onclick: function () { decideRefund(rq, "decline"); } }),
-          ]),
-        ]));
-      });
-      c.appendChild(l); wrap.appendChild(c);
-    }
+    // Shared CRMUI.lineItems — the same refund-queue widget the coach money uses.
+    wrap.appendChild(card([window.CRMUI.lineItems(reqs.map(function (r) { return Object.assign({}, r, { gross_minor: (r.amount_minor != null ? r.amount_minor : r.order_amount_minor) }); }), {
+      currency: cur,
+      empty: "Nothing waiting for a decision. 🎉",
+      label: function (it) { return it.requester_name || "A member"; },
+      sub: function (it) { return [it.item_description || "Order", it.reason ? "“" + it.reason + "”" : ""].filter(Boolean).join(" · "); },
+      actions: [
+        { label: "Approve", tone: "primary", onClick: function (it) { decideRefund(it, "approve"); } },
+        { label: "Decline", tone: "danger", onClick: function (it) { decideRefund(it, "decline"); } },
+      ],
+    })]));
     set(wrap);
   }
 
