@@ -5,6 +5,7 @@
 // Design spec: docs/specs/ADMIN-REDESIGN.md. Non-admins are bounced to their own app.
 (function () {
   var UI, el, principal = null, view, CLUB = null;
+  var DIARY_TAB = "agenda";
   var money = function (m, c) { return UI.money(m || 0, c || "ZAR"); };
   function go(h) { location.hash = h; }
 
@@ -73,8 +74,8 @@
     if (top === "home") return renderHome();
     if (top === "people") return renderPeople();
     if (top === "money") return renderMoney();
-    if (top === "diary") return renderDiary();
-    if (top === "setup") return renderSetup();
+    if (top === "diary") return renderDiary(parts[1]);
+    if (top === "setup") return renderSetup(parts[1]);
     if (top === "insights") return renderInsights();
     if (top === "person") return renderPerson(parts[1]);
     if (top === "event") return renderEvent(parts[1]);
@@ -402,8 +403,193 @@
     try { await window.AdminAPI.voidOrder(it.order_id, { write_off: !!writeOff }); UI.toast(verb + " done.", "info"); renderPerson(id); }
     catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
-  function renderMoney() { set(soon("Money", "Financial cockpit, per-coach settlement drill, refund/dispute approvals, payments & the club transaction log land next.")); }
-  function renderDiary() { set(soon("Diary", "The resource-timeline (click-to-create, walk-in, block, desk-pay) + Classes land next.")); }
+  // ---- MONEY (financial cockpit — drill-through, reuses the cockpit endpoints) --------------
+  async function renderMoney() {
+    loading();
+    var r = await Promise.all([
+      window.AdminAPI.cockpitSummary().catch(function () { return {}; }),
+      window.AdminAPI.cockpitCoachEarnings().catch(function () { return { coaches: [] }; }),
+      window.AdminAPI.cockpitRevenue().catch(function () { return { revenue: [] }; }),
+      window.AdminAPI.refundRequests({ status: "pending" }).catch(function () { return { requests: [] }; }),
+      window.AdminAPI.payments().catch(function () { return { payments: [] }; }),
+      window.AdminAPI.activity(80).catch(function () { return { activity: [] }; }),
+    ]);
+    var summary = r[0] || {}, coaches = r[1].coaches || [], revenue = r[2].revenue || [],
+        reqs = r[3].requests || [], pays = r[4].payments || [], activity = r[5].activity || [];
+    var cur = summary.currency || "ZAR";
+    var wrap = el("div", {});
+    wrap.appendChild(el("h1", { style: "margin:0 0 12px", text: "Money" }));
+
+    wrap.appendChild(card([window.CRMUI.stats([
+      { value: money(summary.net_revenue_minor, cur), label: "Net revenue" },
+      { value: money(summary.commission_earned_minor, cur), label: "Commission kept" },
+      { value: money(summary.rent_due_minor, cur), label: "Rent due" },
+      { value: money(summary.mrr_minor, cur), label: "MRR" },
+      { value: (summary.active_members || 0), label: "Active members" },
+      { value: (summary.lessons_paid || 0), label: "Lessons" },
+    ])]));
+
+    // Approvals — refund requests (approve executes the Yoco refund; decline just closes it).
+    if (reqs.length) {
+      var apc = card([window.CRMUI.sectionHead("To approve · refund requests")], "cf-mt");
+      var al = el("div", { class: "cf-list" });
+      reqs.forEach(function (rq) {
+        al.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: (rq.requester_name || "A member") + " · " + money(rq.amount_minor != null ? rq.amount_minor : rq.order_amount_minor, rq.currency_code || cur) }),
+            el("div", { class: "cf-item-s", text: [rq.item_description || "Order", rq.reason ? "“" + rq.reason + "”" : ""].filter(Boolean).join(" · ") }),
+          ]),
+          el("div", { class: "cf-row", style: "gap:6px" }, [
+            el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Approve", onclick: function () { decideRefund(rq, "approve"); } }),
+            el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Decline", onclick: function () { decideRefund(rq, "decline"); } }),
+          ]),
+        ]));
+      });
+      apc.appendChild(al); wrap.appendChild(apc);
+    }
+
+    // Per-coach settlement → drill to the coach's record (the settlement block from the person 360).
+    var sc = card([window.CRMUI.sectionHead("Coach settlement")], "cf-mt");
+    if (!coaches.length) sc.appendChild(el("div", { class: "cf-empty", text: "No coach settlement yet." }));
+    else {
+      var sl = el("div", { class: "cf-list" });
+      coaches.forEach(function (c) {
+        sl.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/person/" + c.coach_user_id); } }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: c.coach_name || "Coach" }),
+            el("div", { class: "cf-item-s", text: (c.lesson_count || 0) + " lessons · commission " + money(c.commission_earned_minor, cur) }),
+          ]),
+          el("span", { style: "font-weight:700", text: money(c.net_to_coach_minor, cur) }),
+          el("span", { class: "cf-muted", text: "›" }),
+        ]));
+      });
+      sc.appendChild(sl); wrap.appendChild(sc);
+    }
+
+    // Revenue by service line (net).
+    if (revenue.length) {
+      var byKind = {};
+      revenue.forEach(function (x) { byKind[x.service_kind] = (byKind[x.service_kind] || 0) + (x.net_minor || 0); });
+      var rc = card([window.CRMUI.sectionHead("Revenue by service line")], "cf-mt");
+      var rl = el("div", { class: "cf-list" });
+      Object.keys(byKind).sort(function (a, b) { return byKind[b] - byKind[a]; }).forEach(function (k) {
+        rl.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: k })]),
+          el("span", { style: "font-weight:700", text: money(byKind[k], cur) }),
+        ]));
+      });
+      rc.appendChild(rl); wrap.appendChild(rc);
+    }
+
+    // Recent online payments (refund-only / refund & cancel).
+    if (pays.length) {
+      var pc = card([window.CRMUI.sectionHead("Recent online payments")], "cf-mt");
+      var pl = el("div", { class: "cf-list" });
+      pays.slice(0, 20).forEach(function (pay) {
+        pl.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: money(pay.amount_minor, pay.currency_code || cur) + (pay.payer_email ? " · " + pay.payer_email : "") }),
+            el("div", { class: "cf-item-s", text: (function () { try { return UI.fmtDate(pay.created_at); } catch (e) { return ""; } })() }),
+          ]),
+          pay.refunded ? el("span", { class: "cf-chip held", text: "refunded" })
+            : el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Refund", onclick: function () { refundPayment(pay, cur); } }),
+        ]));
+      });
+      pc.appendChild(pl); wrap.appendChild(pc);
+    }
+
+    // Club transaction log.
+    var actc = card([window.CRMUI.sectionHead("Club activity")], "cf-mt");
+    actc.appendChild(window.CRMUI.activityFeed(activity, { empty: "No activity yet." }));
+    wrap.appendChild(actc);
+    set(wrap);
+  }
+  async function decideRefund(rq, action) {
+    var isA = action === "approve";
+    var note = window.prompt(isA ? "Approve & refund this via Yoco? Optional note:" : "Decline this request? Reason (shown to the member):", "");
+    if (note === null) return;
+    try {
+      if (isA) { var alsoCancel = window.confirm("Also CANCEL the booking + free the slot?\n\nOK = refund + cancel.   Cancel = refund only."); await window.AdminAPI.approveRefundRequest(rq.id, { note: note, cancel_booking: alsoCancel }); }
+      else await window.AdminAPI.declineRefundRequest(rq.id, { note: note });
+      UI.toast(isA ? "Approved." : "Declined.", "info"); renderMoney();
+    } catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+  async function refundPayment(pay, cur) {
+    if (!window.confirm("Refund " + money(pay.amount_minor, pay.currency_code || cur) + " to " + (pay.payer_email || "the customer") + " via Yoco?")) return;
+    var alsoCancel = window.confirm("Also CANCEL the booking + free the slot?\n\nOK = refund + cancel.   Cancel = refund only.");
+    try { await window.AdminAPI.yocoRefund({ order_id: pay.order_id, cancel_booking: alsoCancel }); UI.toast("Refunded.", "info"); renderMoney(); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+
+  // ---- DIARY (day agenda + Classes; every booking → the event story) ------------------------
+  async function renderDiary(dateKey) {
+    var day = dateKey || UI.dateKey(new Date());
+    loading();
+    var events = [];
+    try { events = (await window.API.master({ date_from: day, date_to: day })).events || []; } catch (e) {}
+    events = events.filter(function (e) { return e.status !== "cancelled"; })
+      .sort(function (a, b) { return String(a.starts_at).localeCompare(String(b.starts_at)); });
+    var d = new Date(day + "T12:00:00");
+    function shift(n) { var x = new Date(d.getTime() + n * 86400000); go("#/diary/" + UI.dateKey(x)); }
+    var wrap = el("div", {});
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
+      el("h1", { style: "margin:0", text: "Diary" }),
+      el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹", onclick: function () { shift(-1); } }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Today", onclick: function () { go("#/diary/" + UI.dateKey(new Date())); } }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { shift(1); } }),
+      ]),
+    ]));
+    wrap.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 10px;font-size:.9rem", text: (function () { try { return d.toLocaleDateString("en-ZA", { weekday: "long", day: "numeric", month: "long" }); } catch (e) { return day; } })() }));
+    wrap.appendChild(el("div", { class: "cf-segment cf-seg-lg" }, [
+      el("button", { class: DIARY_TAB === "agenda" ? "on" : "", text: "Agenda", onclick: function () { DIARY_TAB = "agenda"; renderDiary(day); } }),
+      el("button", { class: DIARY_TAB === "classes" ? "on" : "", text: "Classes", onclick: function () { DIARY_TAB = "classes"; renderDiary(day); } }),
+    ]));
+    var body = el("div", {});
+    wrap.appendChild(body);
+    if (DIARY_TAB === "classes") { set(wrap); renderDiaryClasses(body); return; }
+
+    if (!events.length) body.appendChild(el("div", { class: "cf-empty", text: "Nothing booked on this day." }));
+    else {
+      var c = card([]), l = el("div", { class: "cf-list" });
+      events.forEach(function (ev) {
+        var t = (ev.booking_type || "court").toLowerCase();
+        l.appendChild(el("div", { class: "cf-item" + (ev.id ? " cf-item-tap" : "") , onclick: function () { if (ev.id) go("#/event/" + ev.id); } }, [
+          el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(t) >= 0 ? t : "court"), text: (function () { try { return UI.fmtTime(ev.starts_at); } catch (e) { return t; } })() }),
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: ev.resource_name || typeLabel(t) }),
+            el("div", { class: "cf-item-s", text: [ev.booked_by_name, ev.coach_name].filter(Boolean).join(" · ") || t }),
+          ]),
+          UI.statusChip(ev.status),
+        ]));
+      });
+      c.appendChild(l); body.appendChild(c);
+    }
+    // Full drag-and-drop timeline (walk-ins, block time, desk-pay) still lives in the classic console.
+    body.appendChild(el("p", { class: "cf-muted", style: "font-size:.82rem;margin-top:12px" }, [
+      document.createTextNode("Need the full drag-and-drop timeline (walk-ins · block time · desk-pay)? "),
+      el("a", { href: "/admin-classic#diary", text: "Open the classic diary ›" }),
+    ]));
+    set(wrap);
+  }
+  async function renderDiaryClasses(box) {
+    box.appendChild(el("div", { class: "cf-loading", text: "Loading classes…" }));
+    try { await ensureClassDeps(); } catch (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); return; }
+    box.appendChild(el("div", { class: "cf-row", style: "margin:8px 0" }, [
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "＋ New class", onclick: function () { window.ClassUI.openClassForm({ api: window.AdminAPI, title: "New class", onSaved: function () { renderDiaryClasses(box); } }); } }),
+    ]));
+    var listBox = el("div", {}), sessBox = el("div", {});
+    box.appendChild(listBox); box.appendChild(sessBox);
+    try {
+      var r = await window.AdminAPI.classes();
+      UI.clear(listBox);
+      window.ClassUI.renderClassList({
+        host: listBox, classes: r.classes || [],
+        onSchedule: function (c) { window.ClassUI.openScheduleForm({ api: window.AdminAPI, cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity, duration_minutes: c.duration_minutes }, onSaved: function () { renderDiaryClasses(box); } }); },
+        onSessions: function (c) { UI.clear(sessBox); sessBox.appendChild(el("div", { style: "margin-top:14px" }, [el("h3", { style: "margin:0 0 6px", text: "Sessions · " + (c.name || "Class") }), el("div", { id: "adm-cls-sessions" })])); window.ClassUI.renderSessions({ api: window.AdminAPI, cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity }, host: document.getElementById("adm-cls-sessions") }); },
+      });
+    } catch (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
+  }
   // ---- EVENT STORY (the ONE shared god-view — Home/People/Money/Diary all drill here) ------
   var TYPE_LABEL = { court: "Court", lesson: "Lesson", class: "Class" };
   function typeLabel(t) { return TYPE_LABEL[t] || "Session"; }
@@ -555,8 +741,126 @@
       footer.appendChild(el("button", { class: "cf-btn cf-btn-primary", text: "Reassign", onclick: function () { if (!sel.value) { UI.toast("Pick a coach.", "warn"); return; } window.AdminAPI.reassignCoach(b.id, { coach_user_id: sel.value }).then(function () { UI.toast("Reassigned.", "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }));
     } catch (e) { UI.clear(sel); sel.appendChild(el("option", { value: "", text: UI.errMsg(e) })); }
   }
-  function renderSetup() { set(soon("Setup", "Club profile, branding, payments, courts & hours, services, memberships, packs, coaches & commission, classes — all in-app, landing next.")); }
-  function renderInsights() { set(el("div", {}, [backBar("Home", "#/home"), soon("Business insights", "The Overview dashboard embeds here next.")])); }
+  // ---- SETUP (config brought into the SPA — reuses the AdminUI editor library) --------------
+  var SETUP_SECTIONS = [
+    ["profile", "Club profile & payments", "Name, contact, branding, accepted payment methods"],
+    ["courts", "Courts & hours", "Courts, surfaces and weekly playing hours"],
+    ["services", "Services & pricing", "Lessons, classes, court hire — prices, packages, commission"],
+    ["memberships", "Memberships", "Membership tiers and term plans"],
+    ["packs", "Session packs", "Prepaid bundles"],
+    ["coaches", "Coaches & commission", "Invite, hide or remove coaches · rent + commission"],
+  ];
+  function renderSetup(section) {
+    if (!section) return setupMenu();
+    var host = el("div", {});
+    set(el("div", {}, [backBar("Setup", "#/setup"), host]));
+    host.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+    (async function () {
+      try {
+        if (section === "profile") {
+          var d = await window.AdminAPI.onboarding().catch(function () { return {}; });
+          UI.clear(host);
+          window.AdminUI.clubProfile(host, d || {}, { saveLabel: "Save changes" });
+          setupPayments(host, (d && d.policy) || {});
+        } else if (section === "courts") { UI.clear(host); window.AdminUI.courtsManage(host); }
+        else if (section === "memberships") { UI.clear(host); window.AdminUI.membershipServices(host); }
+        else if (section === "packs") { UI.clear(host); window.AdminUI.bundlePlans(host); }
+        else if (section === "coaches") { UI.clear(host); window.AdminUI.coachManage(host); }
+        else if (section === "services") setupServices(host);
+        else { UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: "Unknown section." })); }
+      } catch (e) { UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
+    })();
+  }
+  function setupMenu() {
+    var wrap = el("div", {});
+    wrap.appendChild(el("h1", { style: "margin:0 0 4px", text: "Setup" }));
+    wrap.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 14px", text: "Configure your club. Changes save per section." }));
+    var c = card([]), l = el("div", { class: "cf-list" });
+    SETUP_SECTIONS.forEach(function (s) {
+      l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/setup/" + s[0]); } }, [
+        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: s[1] }), el("div", { class: "cf-item-s", text: s[2] })]),
+        el("span", { class: "cf-muted", text: "›" }),
+      ]));
+    });
+    c.appendChild(l); wrap.appendChild(c);
+    wrap.appendChild(el("p", { class: "cf-muted", style: "font-size:.82rem;margin-top:14px" }, [
+      document.createTextNode("Classes are scheduled under Diary → Classes. Prefer the classic console? "),
+      el("a", { href: "/admin-classic", text: "Open classic ›" }),
+    ]));
+    set(wrap);
+  }
+  function setupPayments(host, policy) {
+    var c = el("div", { class: "cf-card" }, [
+      el("h3", { text: "Payment methods" }),
+      el("p", { class: "cf-muted", text: "Which ways the club accepts payment. Each service can then choose which of these it offers." }),
+    ]);
+    function flag(key, label, hint) {
+      var lbl = el("label", { class: "cf-row", style: "cursor:pointer;gap:10px;align-items:flex-start;margin-top:8px" });
+      var cb = el("input", { type: "checkbox" }); cb.checked = !!policy[key]; cb.style.width = "auto";
+      cb.addEventListener("change", async function () {
+        cb.disabled = true; var body = {}; body[key] = cb.checked;
+        try { await window.AdminAPI.patchPolicy(body); policy[key] = cb.checked; UI.toast("Saved.", "info"); }
+        catch (e) { cb.checked = !cb.checked; UI.toast(UI.errMsg(e), "error"); }
+        finally { cb.disabled = false; }
+      });
+      lbl.appendChild(cb);
+      lbl.appendChild(el("div", {}, [el("div", { style: "font-weight:600", text: label }), hint ? el("div", { class: "cf-muted", style: "font-size:.82rem", text: hint }) : null].filter(Boolean)));
+      return lbl;
+    }
+    c.appendChild(flag("allow_online_payment", "Pay online (card)", "Yoco — card + Apple/Google/Samsung Pay."));
+    c.appendChild(flag("allow_pay_at_court", "Pay at the club", "Settle at the front desk."));
+    c.appendChild(flag("allow_monthly_account", "Monthly account", "Charges accrue on a tab, invoiced monthly."));
+    host.appendChild(c);
+  }
+  var SVC_KIND = "lesson", SVC_LIFE = "active";
+  function setupServices(host) {
+    UI.clear(host);
+    host.appendChild(el("div", { class: "cf-loading", text: "Loading services…" }));
+    window.TFAuth.apiJSON("/api/services").then(function (res) {
+      drawSetupServices(host, (res && res.services) || []);
+    }, function (e) { UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+  }
+  function drawSetupServices(host, svcs) {
+    UI.clear(host);
+    host.appendChild(el("div", { class: "cf-card" }, [
+      el("h2", { text: "Services" }),
+      el("p", { class: "cf-muted", text: "Lessons, classes and court hire. Prices, payment, packages and commission live behind each block — tap to edit." }),
+    ]));
+    host.appendChild(UI.subtabs(SVC_KIND, [["lesson", "Lessons"], ["class", "Classes"], ["court", "Courts"]], function (k) { SVC_KIND = k; drawSetupServices(host, svcs); }));
+    host.appendChild(UI.lifecycleBar(SVC_LIFE, function (f) { SVC_LIFE = f; drawSetupServices(host, svcs); }));
+    var shown = svcs.filter(function (s) { return s.service_kind === SVC_KIND && (SVC_LIFE === "all" || s.status === SVC_LIFE); });
+    if (!shown.length) { host.appendChild(el("div", { class: "cf-card cf-empty", text: "No " + (SVC_LIFE === "all" ? "" : SVC_LIFE + " ") + SVC_KIND + " services." })); return; }
+    shown.forEach(function (s) {
+      var sub = [];
+      if ((s.service_kind === "lesson" || s.service_kind === "class") && s.coach_name) sub.push("Coach: " + s.coach_name);
+      var v = s.variations || [];
+      sub.push(v.length ? v.slice(0, 4).map(function (x) { return x.duration_minutes ? (x.duration_minutes + " min " + money(x.amount_minor)) : money(x.amount_minor); }).join("  ·  ") : "No prices set yet");
+      var cardEl = el("div", { class: "cf-card cf-pickable" }, [
+        el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap" }, [
+          el("div", {}, [
+            el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" }), s.status !== "active" ? UI.statusChip(s.status) : null].filter(Boolean)),
+            el("div", { class: "cf-muted", style: "font-size:.82rem;margin-top:5px", text: sub.join("  ·  ") }),
+          ]),
+          el("span", { class: "cf-muted", text: "Edit ›" }),
+        ]),
+      ]);
+      if (s.status !== "active") cardEl.style.opacity = "0.6";
+      cardEl.addEventListener("click", function () { window.ServiceEditor.open(s.id, { host: host, onClose: function () { setupServices(host); } }); });
+      host.appendChild(cardEl);
+    });
+  }
+
+  // ---- INSIGHTS (embed the Business Overview dashboard) -------------------------------------
+  function renderInsights() {
+    var wrap = el("div", {});
+    wrap.appendChild(backBar("Home", "#/home"));
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:10px" }, [
+      el("h1", { style: "margin:0", text: "Business insights" }),
+      el("a", { class: "cf-btn cf-btn-sm cf-btn-ghost", href: "/overview.html", target: "_blank", text: "Open full page ›" }),
+    ]));
+    wrap.appendChild(el("iframe", { src: "/overview.html", title: "Business Overview", style: "width:100%;height:calc(100vh - 210px);min-height:560px;border:1px solid var(--border,#e5e7eb);border-radius:14px;background:#fff" }));
+    set(wrap);
+  }
 
   window.AdminApp = { start: start };
 })();

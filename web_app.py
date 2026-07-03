@@ -472,14 +472,24 @@ def coach_console():
 
 @app.get("/admin")
 def admin_console():
-    return _app_shell("admin.html")
+    # /admin now serves the redesigned owner/admin SPA (responsive drill-through — Home · People ·
+    # Money · Diary · Setup + the one event story; docs/specs/ADMIN-REDESIGN.md). The classic tab
+    # console stays reachable at /admin-classic (its full drag-timeline is linked from the new Diary)
+    # until the new diary reaches full parity, so nothing is lost.
+    return _app_shell("admin_app.html")
 
 
 @app.get("/admin-app")
 def admin_console_new():
-    # The redesigned owner/admin app (responsive drill-through SPA). Served alongside the classic
-    # /admin console during the build; /admin flips here once signed off (docs/specs/ADMIN-REDESIGN.md).
+    # Kept so the /admin-app URL used during the build still resolves to the new SPA.
     return _app_shell("admin_app.html")
+
+
+@app.get("/admin-classic")
+def admin_console_classic():
+    # The classic tab console (admin.html/admin.js) — kept as a fallback + for the full drag-and-drop
+    # master-diary timeline (walk-ins / block time / desk-pay) until that ports into the new SPA.
+    return _app_shell("admin.html")
 
 
 @app.get("/dashboard")
