@@ -966,11 +966,36 @@ def sc_court_utilisation(s, fx):
     check("util: a heatmap cell exists", len(u.get("cells") or []) >= 1, str(len(u.get("cells") or [])))
 
 
+def sc_sales_by_day(s, fx):
+    """insights.sales_by_day (Money → daily takings): a desk-settled court sale shows in the current
+    month grouped by day, with client + service type + amount + a booking_id detail link."""
+    from insights import repositories as INS
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    oid = r["booking"]["order_id"]
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=oid, amount_minor=15000,
+                          provider="cash", user_id=fx.member)
+    data = INS.sales_by_day(s, club_id=fx.club_id, month=None)  # current month (payment is now())
+    check("sales: total reflects the sale", (data.get("total_minor") or 0) >= 15000, str(data.get("total_minor")))
+    check("sales: at least one day bucket", len(data.get("days") or []) >= 1, str(len(data.get("days") or [])))
+    sale = None
+    for d in (data.get("days") or []):
+        for x in (d.get("sales") or []):
+            sale = x
+    check("sales: row has client + service type + amount",
+          sale is not None and sale.get("client_name") and sale.get("service_type") and (sale.get("amount_minor") or 0) > 0,
+          str(sale))
+    check("sales: court sale carries a booking_id (event-story link)",
+          sale is not None and sale.get("booking_id"), str(sale and sale.get("booking_id")))
+
+
 SCENARIOS = [
     sc_payment_preference,
     sc_person_360,
     sc_admin_event_story,
     sc_court_utilisation,
+    sc_sales_by_day,
     sc_settlement_at_court,
     sc_settlement_online,
     sc_settlement_monthly,

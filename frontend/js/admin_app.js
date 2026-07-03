@@ -5,7 +5,10 @@
 // Design spec: docs/specs/ADMIN-REDESIGN.md. Non-admins are bounced to their own app.
 (function () {
   var UI, el, principal = null, view, CLUB = null;
-  var DIARY_TAB = "agenda";
+  var DIARY_VIEW = "day";   // day | week | month | classes (standard calendar views)
+  var DIARY_COURT = "";     // resource_id filter ("" = all courts)
+  var DIARY_COACH = "";     // coach_user_id filter ("" = all coaches)
+  var DIARY_LISTS = null;   // cached {courts, coaches} for the filter dropdowns
   var money = function (m, c) { return UI.money(m || 0, c || "ZAR"); };
   function go(h) { location.hash = h; }
 
@@ -73,7 +76,7 @@
     window.scrollTo(0, 0);
     if (top === "home") return renderHome();
     if (top === "people") return renderPeople();
-    if (top === "money") return renderMoney();
+    if (top === "money") return renderMoney(parts[1]);
     if (top === "diary") return renderDiary(parts[1]);
     if (top === "setup") return renderSetup(parts[1]);
     if (top === "insights") return renderInsights();
@@ -403,38 +406,162 @@
     try { await window.AdminAPI.voidOrder(it.order_id, { write_off: !!writeOff }); UI.toast(verb + " done.", "info"); renderPerson(id); }
     catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
-  // ---- MONEY (financial cockpit — drill-through, reuses the cockpit endpoints) --------------
-  async function renderMoney() {
+  // ---- MONEY (Setup-style: a clean section menu → focused pages) ----------------------------
+  var MONEY_MONTH = null; // 'YYYY-MM' for Sales by day (null = current month)
+  var MONEY_SECTIONS = [
+    ["sales", "Sales by day", "Daily takings — client, service and amount"],
+    ["revenue", "Revenue by service", "Net revenue split by service line"],
+    ["settlement", "Coach settlement", "What each coach is owed · the club's cut"],
+    ["approvals", "Approvals", "Refund requests awaiting your decision"],
+    ["payments", "Online payments", "Recent card payments · refund"],
+    ["activity", "Club activity", "Every payment, refund and adjustment"],
+  ];
+  function clubCur() { return (CLUB && CLUB.currency_code) || "ZAR"; }
+  function renderMoney(section) {
+    if (section === "sales") return moneySales();
+    if (section === "revenue") return moneyRevenue();
+    if (section === "settlement") return moneySettlement();
+    if (section === "approvals") return moneyApprovals();
+    if (section === "payments") return moneyPayments();
+    if (section === "activity") return moneyActivity();
+    return moneyMenu();
+  }
+  async function moneyMenu() {
     loading();
-    var r = await Promise.all([
-      window.AdminAPI.cockpitSummary().catch(function () { return {}; }),
-      window.AdminAPI.cockpitCoachEarnings().catch(function () { return { coaches: [] }; }),
-      window.AdminAPI.cockpitRevenue().catch(function () { return { revenue: [] }; }),
-      window.AdminAPI.refundRequests({ status: "pending" }).catch(function () { return { requests: [] }; }),
-      window.AdminAPI.payments().catch(function () { return { payments: [] }; }),
-      window.AdminAPI.activity(80).catch(function () { return { activity: [] }; }),
-    ]);
-    var summary = r[0] || {}, coaches = r[1].coaches || [], revenue = r[2].revenue || [],
-        reqs = r[3].requests || [], pays = r[4].payments || [], activity = r[5].activity || [];
-    var cur = summary.currency || "ZAR";
+    var summary = {}, pending = 0;
+    try { summary = await window.AdminAPI.cockpitSummary(); } catch (e) {}
+    try { pending = ((await window.AdminAPI.refundRequests({ status: "pending" })).requests || []).length; } catch (e) {}
+    var cur = summary.currency || clubCur();
     var wrap = el("div", {});
     wrap.appendChild(el("h1", { style: "margin:0 0 12px", text: "Money" }));
-
     wrap.appendChild(card([window.CRMUI.stats([
       { value: money(summary.net_revenue_minor, cur), label: "Net revenue" },
       { value: money(summary.commission_earned_minor, cur), label: "Commission kept" },
       { value: money(summary.rent_due_minor, cur), label: "Rent due" },
       { value: money(summary.mrr_minor, cur), label: "MRR" },
       { value: (summary.active_members || 0), label: "Active members" },
-      { value: (summary.lessons_paid || 0), label: "Lessons" },
     ])]));
+    var c = card([]), l = el("div", { class: "cf-list" });
+    MONEY_SECTIONS.forEach(function (s) {
+      var badge = (s[0] === "approvals" && pending) ? el("span", { class: "cf-chip held", text: pending })
+        : el("span", { class: "cf-muted", text: "›" });
+      l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/money/" + s[0]); } }, [
+        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: s[1] }), el("div", { class: "cf-item-s", text: s[2] })]),
+        badge,
+      ]));
+    });
+    c.appendChild(l); wrap.appendChild(c);
+    set(wrap);
+  }
 
-    // Approvals — refund requests (approve executes the Yoco refund; decline just closes it).
-    if (reqs.length) {
-      var apc = card([window.CRMUI.sectionHead("To approve · refund requests")], "cf-mt");
-      var al = el("div", { class: "cf-list" });
+  // Sales by day — the daily takings, one month at a time; each sale drills to its detail.
+  async function moneySales() {
+    loading();
+    var data;
+    try { data = await window.AdminAPI.salesByDay(MONEY_MONTH); }
+    catch (e) { set(el("div", {}, [backBar("Money", "#/money"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    MONEY_MONTH = data.month;
+    var cur = data.currency || clubCur();
+    var wrap = el("div", {});
+    wrap.appendChild(backBar("Money", "#/money"));
+    function shiftMonth(n) { MONEY_MONTH = addMonth(data.month, n); moneySales(); }
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:4px" }, [
+      el("h1", { style: "margin:0", text: "Sales by day" }),
+      el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹", onclick: function () { shiftMonth(-1); } }),
+        el("span", { style: "font-weight:600;min-width:104px;text-align:center", text: monthLabel(data.month) }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { shiftMonth(1); } }),
+      ]),
+    ]));
+    wrap.appendChild(el("div", { class: "cf-muted", style: "margin:-2px 0 12px;font-size:.9rem", text: "Total " + money(data.total_minor, cur) + " · " + (data.count || 0) + " sale" + (data.count === 1 ? "" : "s") }));
+    var days = data.days || [];
+    if (!days.length) wrap.appendChild(el("div", { class: "cf-empty", text: "No sales this month." }));
+    else days.forEach(function (d) {
+      wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:14px 2px 6px" }, [
+        el("div", { style: "font-weight:700", text: dayLabel(d.date) }),
+        el("div", { class: "cf-muted", style: "font-weight:600", text: money(d.total_minor, cur) }),
+      ]));
+      var c = card([]), l = el("div", { class: "cf-list" });
+      (d.sales || []).forEach(function (x) {
+        var t = (["court", "lesson", "class"].indexOf(x.service_type) >= 0) ? x.service_type : "court";
+        l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { openSale(x); } }, [
+          el("span", { class: "cf-chip " + t, text: x.service_type }),
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: x.client_name }), el("div", { class: "cf-item-s", text: x.description || x.service_type })]),
+          el("span", { style: "font-weight:700", text: money(x.amount_minor, cur) }),
+        ]));
+      });
+      c.appendChild(l); wrap.appendChild(c);
+    });
+    set(wrap);
+  }
+  // Standard click-to-detail: a booking-backed sale → the event story; else its receipt.
+  function openSale(x) {
+    if (x.booking_id) go("#/event/" + x.booking_id);
+    else if (x.order_id) window.open("/receipt.html?order=" + encodeURIComponent(x.order_id), "_blank");
+    else UI.toast("No detail available for this sale.", "warn");
+  }
+  function addMonth(ym, n) { try { var p = (ym || "").split("-"), d = new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1 + n, 1); return d.getFullYear() + "-" + (d.getMonth() + 1 < 10 ? "0" : "") + (d.getMonth() + 1); } catch (e) { return ym; } }
+  function monthLabel(ym) { try { var p = ym.split("-"); return new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, 1).toLocaleDateString("en-ZA", { month: "long", year: "numeric" }); } catch (e) { return ym; } }
+  function dayLabel(iso) { try { return new Date(iso + "T12:00:00").toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }); } catch (e) { return iso; } }
+
+  async function moneyRevenue() {
+    loading();
+    var revenue = [];
+    try { revenue = (await window.AdminAPI.cockpitRevenue()).revenue || []; } catch (e) {}
+    var cur = clubCur();
+    var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Revenue by service" })]);
+    var byKind = {};
+    revenue.forEach(function (x) { byKind[x.service_kind] = (byKind[x.service_kind] || 0) + (x.net_minor || 0); });
+    var keys = Object.keys(byKind).sort(function (a, b) { return byKind[b] - byKind[a]; });
+    if (!keys.length) wrap.appendChild(el("div", { class: "cf-empty", text: "No revenue yet." }));
+    else {
+      var c = card([]), l = el("div", { class: "cf-list" });
+      keys.forEach(function (k) {
+        l.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: k })]),
+          el("span", { style: "font-weight:700", text: money(byKind[k], cur) }),
+        ]));
+      });
+      c.appendChild(l); wrap.appendChild(c);
+    }
+    set(wrap);
+  }
+
+  async function moneySettlement() {
+    loading();
+    var coaches = [];
+    try { coaches = (await window.AdminAPI.cockpitCoachEarnings()).coaches || []; } catch (e) {}
+    var cur = clubCur();
+    var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Coach settlement" })]);
+    if (!coaches.length) wrap.appendChild(el("div", { class: "cf-empty", text: "No coach settlement yet." }));
+    else {
+      var c = card([]), l = el("div", { class: "cf-list" });
+      coaches.forEach(function (co) {
+        l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/person/" + co.coach_user_id); } }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: co.coach_name || "Coach" }),
+            el("div", { class: "cf-item-s", text: (co.lesson_count || 0) + " lessons · commission " + money(co.commission_earned_minor, cur) }),
+          ]),
+          el("span", { style: "font-weight:700", text: money(co.net_to_coach_minor, cur) }),
+          el("span", { class: "cf-muted", text: "›" }),
+        ]));
+      });
+      c.appendChild(l); wrap.appendChild(c);
+    }
+    set(wrap);
+  }
+
+  async function moneyApprovals() {
+    loading();
+    var reqs = [];
+    try { reqs = (await window.AdminAPI.refundRequests({ status: "pending" })).requests || []; } catch (e) {}
+    var cur = clubCur();
+    var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Approvals" })]);
+    if (!reqs.length) wrap.appendChild(el("div", { class: "cf-empty", text: "Nothing waiting for a decision. 🎉" }));
+    else {
+      var c = card([]), l = el("div", { class: "cf-list" });
       reqs.forEach(function (rq) {
-        al.appendChild(el("div", { class: "cf-item" }, [
+        l.appendChild(el("div", { class: "cf-item" }, [
           el("div", { class: "cf-item-main" }, [
             el("div", { class: "cf-item-t", text: (rq.requester_name || "A member") + " · " + money(rq.amount_minor != null ? rq.amount_minor : rq.order_amount_minor, rq.currency_code || cur) }),
             el("div", { class: "cf-item-s", text: [rq.item_description || "Order", rq.reason ? "“" + rq.reason + "”" : ""].filter(Boolean).join(" · ") }),
@@ -445,48 +572,22 @@
           ]),
         ]));
       });
-      apc.appendChild(al); wrap.appendChild(apc);
+      c.appendChild(l); wrap.appendChild(c);
     }
+    set(wrap);
+  }
 
-    // Per-coach settlement → drill to the coach's record (the settlement block from the person 360).
-    var sc = card([window.CRMUI.sectionHead("Coach settlement")], "cf-mt");
-    if (!coaches.length) sc.appendChild(el("div", { class: "cf-empty", text: "No coach settlement yet." }));
+  async function moneyPayments() {
+    loading();
+    var pays = [];
+    try { pays = (await window.AdminAPI.payments()).payments || []; } catch (e) {}
+    var cur = clubCur();
+    var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Online payments" })]);
+    if (!pays.length) wrap.appendChild(el("div", { class: "cf-empty", text: "No online payments yet." }));
     else {
-      var sl = el("div", { class: "cf-list" });
-      coaches.forEach(function (c) {
-        sl.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/person/" + c.coach_user_id); } }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: c.coach_name || "Coach" }),
-            el("div", { class: "cf-item-s", text: (c.lesson_count || 0) + " lessons · commission " + money(c.commission_earned_minor, cur) }),
-          ]),
-          el("span", { style: "font-weight:700", text: money(c.net_to_coach_minor, cur) }),
-          el("span", { class: "cf-muted", text: "›" }),
-        ]));
-      });
-      sc.appendChild(sl); wrap.appendChild(sc);
-    }
-
-    // Revenue by service line (net).
-    if (revenue.length) {
-      var byKind = {};
-      revenue.forEach(function (x) { byKind[x.service_kind] = (byKind[x.service_kind] || 0) + (x.net_minor || 0); });
-      var rc = card([window.CRMUI.sectionHead("Revenue by service line")], "cf-mt");
-      var rl = el("div", { class: "cf-list" });
-      Object.keys(byKind).sort(function (a, b) { return byKind[b] - byKind[a]; }).forEach(function (k) {
-        rl.appendChild(el("div", { class: "cf-item" }, [
-          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: k })]),
-          el("span", { style: "font-weight:700", text: money(byKind[k], cur) }),
-        ]));
-      });
-      rc.appendChild(rl); wrap.appendChild(rc);
-    }
-
-    // Recent online payments (refund-only / refund & cancel).
-    if (pays.length) {
-      var pc = card([window.CRMUI.sectionHead("Recent online payments")], "cf-mt");
-      var pl = el("div", { class: "cf-list" });
-      pays.slice(0, 20).forEach(function (pay) {
-        pl.appendChild(el("div", { class: "cf-item" }, [
+      var c = card([]), l = el("div", { class: "cf-list" });
+      pays.slice(0, 50).forEach(function (pay) {
+        l.appendChild(el("div", { class: "cf-item" }, [
           el("div", { class: "cf-item-main" }, [
             el("div", { class: "cf-item-t", text: money(pay.amount_minor, pay.currency_code || cur) + (pay.payer_email ? " · " + pay.payer_email : "") }),
             el("div", { class: "cf-item-s", text: (function () { try { return UI.fmtDate(pay.created_at); } catch (e) { return ""; } })() }),
@@ -495,15 +596,20 @@
             : el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Refund", onclick: function () { refundPayment(pay, cur); } }),
         ]));
       });
-      pc.appendChild(pl); wrap.appendChild(pc);
+      c.appendChild(l); wrap.appendChild(c);
     }
-
-    // Club transaction log.
-    var actc = card([window.CRMUI.sectionHead("Club activity")], "cf-mt");
-    actc.appendChild(window.CRMUI.activityFeed(activity, { empty: "No activity yet." }));
-    wrap.appendChild(actc);
     set(wrap);
   }
+
+  async function moneyActivity() {
+    loading();
+    var activity = [];
+    try { activity = (await window.AdminAPI.activity(150)).activity || []; } catch (e) {}
+    var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Club activity" })]);
+    wrap.appendChild(card([window.CRMUI.activityFeed(activity, { empty: "No activity yet." })]));
+    set(wrap);
+  }
+
   async function decideRefund(rq, action) {
     var isA = action === "approve";
     var note = window.prompt(isA ? "Approve & refund this via Yoco? Optional note:" : "Decline this request? Reason (shown to the member):", "");
@@ -511,66 +617,141 @@
     try {
       if (isA) { var alsoCancel = window.confirm("Also CANCEL the booking + free the slot?\n\nOK = refund + cancel.   Cancel = refund only."); await window.AdminAPI.approveRefundRequest(rq.id, { note: note, cancel_booking: alsoCancel }); }
       else await window.AdminAPI.declineRefundRequest(rq.id, { note: note });
-      UI.toast(isA ? "Approved." : "Declined.", "info"); renderMoney();
+      UI.toast(isA ? "Approved." : "Declined.", "info"); moneyApprovals();
     } catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
   async function refundPayment(pay, cur) {
     if (!window.confirm("Refund " + money(pay.amount_minor, pay.currency_code || cur) + " to " + (pay.payer_email || "the customer") + " via Yoco?")) return;
     var alsoCancel = window.confirm("Also CANCEL the booking + free the slot?\n\nOK = refund + cancel.   Cancel = refund only.");
-    try { await window.AdminAPI.yocoRefund({ order_id: pay.order_id, cancel_booking: alsoCancel }); UI.toast("Refunded.", "info"); renderMoney(); }
+    try { await window.AdminAPI.yocoRefund({ order_id: pay.order_id, cancel_booking: alsoCancel }); UI.toast("Refunded.", "info"); moneyPayments(); }
     catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
-  // ---- DIARY (day agenda + Classes; every booking → the event story) ------------------------
+  // ---- DIARY (standard calendar: Day / Week / Month + court & coach filters, default today) --
+  async function ensureDiaryLists() {
+    if (DIARY_LISTS) return DIARY_LISTS;
+    var courts = [], coaches = [];
+    try { courts = ((await window.AdminAPI.resources()).resources || []).filter(function (r) { return r.kind === "court" && r.is_active !== false; }); } catch (e) {}
+    try { coaches = (await window.AdminAPI.coaches()).coaches || []; } catch (e) {}
+    DIARY_LISTS = { courts: courts, coaches: coaches };
+    return DIARY_LISTS;
+  }
+  function ymd(d) { return UI.dateKey(d); }
+  function parseDay(day) { return new Date(day + "T12:00:00"); }
+  function weekStartOf(d) { var x = new Date(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; } // Monday
+  function longDay(d) { try { return d.toLocaleDateString("en-ZA", { weekday: "long", day: "numeric", month: "long" }); } catch (e) { return ymd(d); } }
+  function evDateKey(ev) { try { return UI.dateKey(new Date(ev.starts_at)); } catch (e) { return (ev.starts_at || "").slice(0, 10); } }
+  function diaryRange(view, day) {
+    var d = parseDay(day);
+    if (view === "week") { var s = weekStartOf(d), e = new Date(s); e.setDate(s.getDate() + 6); return { from: ymd(s), to: ymd(e) }; }
+    if (view === "month") { return { from: ymd(new Date(d.getFullYear(), d.getMonth(), 1)), to: ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0)) }; }
+    return { from: day, to: day };
+  }
   async function renderDiary(dateKey) {
     var day = dateKey || UI.dateKey(new Date());
     loading();
-    var events = [];
-    try { events = (await window.API.master({ date_from: day, date_to: day })).events || []; } catch (e) {}
-    events = events.filter(function (e) { return e.status !== "cancelled"; })
-      .sort(function (a, b) { return String(a.starts_at).localeCompare(String(b.starts_at)); });
-    var d = new Date(day + "T12:00:00");
-    function shift(n) { var x = new Date(d.getTime() + n * 86400000); go("#/diary/" + UI.dateKey(x)); }
+    var lists = await ensureDiaryLists();
     var wrap = el("div", {});
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
-      el("h1", { style: "margin:0", text: "Diary" }),
-      el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
+    wrap.appendChild(el("h1", { style: "margin:0 0 8px", text: "Diary" }));
+    function seg(k, label) { return el("button", { class: DIARY_VIEW === k ? "on" : "", text: label, onclick: function () { DIARY_VIEW = k; renderDiary(day); } }); }
+    wrap.appendChild(el("div", { class: "cf-segment cf-seg-lg" }, [seg("day", "Day"), seg("week", "Week"), seg("month", "Month"), seg("classes", "Classes")]));
+
+    if (DIARY_VIEW === "classes") { var cbox = el("div", {}); wrap.appendChild(cbox); set(wrap); renderDiaryClasses(cbox); return; }
+
+    // Filters: court + coach.
+    var courtSel = el("select", { class: "cf-input", style: "max-width:180px" }, [el("option", { value: "", text: "All courts" })].concat(lists.courts.map(function (c) { return el("option", { value: c.id, text: c.name || "Court" }); })));
+    courtSel.value = DIARY_COURT; courtSel.addEventListener("change", function () { DIARY_COURT = courtSel.value; renderDiary(day); });
+    var coachSel = el("select", { class: "cf-input", style: "max-width:180px" }, [el("option", { value: "", text: "All coaches" })].concat(lists.coaches.map(function (c) { return el("option", { value: String(c.user_id), text: c.display_name || [c.first_name, c.surname].filter(Boolean).join(" ") || c.email }); })));
+    coachSel.value = DIARY_COACH; coachSel.addEventListener("change", function () { DIARY_COACH = coachSel.value; renderDiary(day); });
+    wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin:10px 0" }, [courtSel, coachSel]));
+
+    // Date navigation (unit follows the view).
+    var d = parseDay(day);
+    function shift(n) { var x = new Date(d); if (DIARY_VIEW === "month") x.setMonth(x.getMonth() + n); else if (DIARY_VIEW === "week") x.setDate(x.getDate() + 7 * n); else x.setDate(x.getDate() + n); go("#/diary/" + ymd(x)); }
+    var label = DIARY_VIEW === "month" ? monthLabel(ymd(d).slice(0, 7)) : (DIARY_VIEW === "week" ? ("Week of " + dayLabel(ymd(weekStartOf(d)))) : longDay(d));
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:10px" }, [
+      el("div", { style: "font-weight:600", text: label }),
+      el("div", { class: "cf-row", style: "gap:6px" }, [
         el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹", onclick: function () { shift(-1); } }),
         el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Today", onclick: function () { go("#/diary/" + UI.dateKey(new Date())); } }),
         el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { shift(1); } }),
       ]),
     ]));
-    wrap.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 10px;font-size:.9rem", text: (function () { try { return d.toLocaleDateString("en-ZA", { weekday: "long", day: "numeric", month: "long" }); } catch (e) { return day; } })() }));
-    wrap.appendChild(el("div", { class: "cf-segment cf-seg-lg" }, [
-      el("button", { class: DIARY_TAB === "agenda" ? "on" : "", text: "Agenda", onclick: function () { DIARY_TAB = "agenda"; renderDiary(day); } }),
-      el("button", { class: DIARY_TAB === "classes" ? "on" : "", text: "Classes", onclick: function () { DIARY_TAB = "classes"; renderDiary(day); } }),
-    ]));
-    var body = el("div", {});
+    var body = el("div", {}, [el("div", { class: "cf-loading", text: "Loading…" })]);
     wrap.appendChild(body);
-    if (DIARY_TAB === "classes") { set(wrap); renderDiaryClasses(body); return; }
+    set(wrap);
 
-    if (!events.length) body.appendChild(el("div", { class: "cf-empty", text: "Nothing booked on this day." }));
-    else {
-      var c = card([]), l = el("div", { class: "cf-list" });
-      events.forEach(function (ev) {
-        var t = (ev.booking_type || "court").toLowerCase();
-        l.appendChild(el("div", { class: "cf-item" + (ev.id ? " cf-item-tap" : "") , onclick: function () { if (ev.id) go("#/event/" + ev.id); } }, [
-          el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(t) >= 0 ? t : "court"), text: (function () { try { return UI.fmtTime(ev.starts_at); } catch (e) { return t; } })() }),
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: ev.resource_name || typeLabel(t) }),
-            el("div", { class: "cf-item-s", text: [ev.booked_by_name, ev.coach_name].filter(Boolean).join(" · ") || t }),
-          ]),
-          UI.statusChip(ev.status),
-        ]));
-      });
-      c.appendChild(l); body.appendChild(c);
-    }
-    // Full drag-and-drop timeline (walk-ins, block time, desk-pay) still lives in the classic console.
+    var range = diaryRange(DIARY_VIEW, day);
+    var events = [];
+    try { events = (await window.API.master({ date_from: range.from, date_to: range.to })).events || []; } catch (e) {}
+    events = events.filter(function (ev) {
+      if (ev.status === "cancelled") return false;
+      if (DIARY_COURT && String(ev.resource_id) !== String(DIARY_COURT)) return false;
+      if (DIARY_COACH && String(ev.coach_user_id) !== String(DIARY_COACH)) return false;
+      return true;
+    }).sort(function (a, b) { return String(a.starts_at).localeCompare(String(b.starts_at)); });
+
+    UI.clear(body);
+    if (DIARY_VIEW === "month") body.appendChild(diaryMonthView(day, events));
+    else if (DIARY_VIEW === "week") body.appendChild(diaryWeekView(day, events));
+    else body.appendChild(diaryDayView(events));
     body.appendChild(el("p", { class: "cf-muted", style: "font-size:.82rem;margin-top:12px" }, [
       document.createTextNode("Need the full drag-and-drop timeline (walk-ins · block time · desk-pay)? "),
       el("a", { href: "/admin-classic#diary", text: "Open the classic diary ›" }),
     ]));
-    set(wrap);
+  }
+  function diaryEventRow(ev) {
+    var t = (ev.booking_type || "court").toLowerCase();
+    return el("div", { class: "cf-item" + (ev.id ? " cf-item-tap" : ""), onclick: function () { if (ev.id) go("#/event/" + ev.id); } }, [
+      el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(t) >= 0 ? t : "court"), text: (function () { try { return UI.fmtTime(ev.starts_at); } catch (e) { return t; } })() }),
+      el("div", { class: "cf-item-main" }, [
+        el("div", { class: "cf-item-t", text: ev.resource_name || typeLabel(t) }),
+        el("div", { class: "cf-item-s", text: [ev.booked_by_name, ev.coach_name].filter(Boolean).join(" · ") || t }),
+      ]),
+      UI.statusChip(ev.status),
+    ]);
+  }
+  function diaryDayView(events) {
+    if (!events.length) return el("div", { class: "cf-empty", text: "Nothing booked." });
+    var c = card([]), l = el("div", { class: "cf-list" });
+    events.forEach(function (ev) { l.appendChild(diaryEventRow(ev)); });
+    c.appendChild(l); return c;
+  }
+  function diaryWeekView(day, events) {
+    var s = weekStartOf(parseDay(day)), byDate = {};
+    events.forEach(function (ev) { var k = evDateKey(ev); (byDate[k] = byDate[k] || []).push(ev); });
+    var box = el("div", {});
+    for (var i = 0; i < 7; i++) {
+      var dd = new Date(s); dd.setDate(s.getDate() + i); var k = ymd(dd); var evs = byDate[k] || [];
+      box.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:14px 2px 6px" }, [
+        el("div", { style: "font-weight:700", text: dayLabel(k) }),
+        el("div", { class: "cf-muted", style: "font-size:.82rem", text: evs.length ? (evs.length + " booked") : "—" }),
+      ]));
+      if (evs.length) { var c = card([]), l = el("div", { class: "cf-list" }); evs.forEach(function (ev) { l.appendChild(diaryEventRow(ev)); }); c.appendChild(l); box.appendChild(c); }
+    }
+    return box;
+  }
+  function diaryMonthView(day, events) {
+    var d = parseDay(day), y = d.getFullYear(), m = d.getMonth();
+    var counts = {}; events.forEach(function (ev) { var k = evDateKey(ev); counts[k] = (counts[k] || 0) + 1; });
+    var maxC = 0; Object.keys(counts).forEach(function (k) { if (counts[k] > maxC) maxC = counts[k]; });
+    var lead = (new Date(y, m, 1).getDay() + 6) % 7, dim = new Date(y, m + 1, 0).getDate(), todayKey = UI.dateKey(new Date());
+    var grid = el("div", { style: "display:grid;grid-template-columns:repeat(7,1fr);gap:5px" });
+    ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].forEach(function (h) { grid.appendChild(el("div", { style: "font-size:11px;color:var(--muted);text-align:center", text: h })); });
+    for (var i = 0; i < lead; i++) grid.appendChild(el("div", {}));
+    for (var dn = 1; dn <= dim; dn++) {
+      var k = ymd(new Date(y, m, dn)), cnt = counts[k] || 0;
+      var bg = cnt ? "rgba(31,122,77," + (0.12 + 0.7 * (maxC ? cnt / maxC : 0)).toFixed(2) + ")" : "var(--canvas,#f1f4ef)";
+      grid.appendChild(el("div", {
+        class: "cf-item-tap",
+        style: "border-radius:8px;padding:8px 6px;min-height:52px;cursor:pointer;background:" + bg + ";border:" + (k === todayKey ? "2px solid var(--green,#1f7a4d)" : "1px solid transparent"),
+        onclick: (function (kk) { return function () { DIARY_VIEW = "day"; go("#/diary/" + kk); }; })(k),
+      }, [
+        el("div", { style: "font-size:12px;font-weight:600", text: String(dn) }),
+        cnt ? el("div", { style: "font-size:11px;color:var(--muted);margin-top:2px", text: cnt + (cnt === 1 ? " booking" : " bookings") }) : null,
+      ].filter(Boolean)));
+    }
+    return el("div", {}, [el("div", { class: "cf-card" }, [grid])]);
   }
   async function renderDiaryClasses(box) {
     box.appendChild(el("div", { class: "cf-loading", text: "Loading classes…" }));

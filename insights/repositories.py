@@ -18,6 +18,89 @@ def _guard(fn, default):
         return default
 
 
+def _club_currency(session, club_id):
+    try:
+        return session.execute(
+            text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": str(club_id)}
+        ).scalar() or "ZAR"
+    except Exception:
+        return "ZAR"
+
+
+def sales_by_day(session, *, club_id, month=None):
+    """Sales (successful CHARGE payments) for ONE month, grouped by day — the owner's daily takings.
+    Each sale carries the client, the service type (court / lesson / class / membership / pack) and
+    the amount, and a link target for the standard transaction-detail widget: a booking-backed sale
+    -> the event story (booking_id); everything else -> its receipt (order_id). `month` = 'YYYY-MM'
+    (default = current month). Guarded -> empty. club_id-scoped."""
+    b = session.execute(
+        text("""
+            SELECT to_char(COALESCE(to_date(:m, 'YYYY-MM'), date_trunc('month', now())), 'YYYY-MM') AS ym,
+                   date_trunc('month', COALESCE(to_date(:m, 'YYYY-MM'), now()))::timestamptz AS start_d,
+                   (date_trunc('month', COALESCE(to_date(:m, 'YYYY-MM'), now()))
+                    + interval '1 month')::timestamptz AS end_d
+        """),
+        {"m": month},
+    ).mappings().first()
+    ym, start_d, end_d = b["ym"], b["start_d"], b["end_d"]
+
+    def _rows():
+        return session.execute(
+            text("""
+                SELECT p.id AS payment_id, p.order_id, p.amount_minor, p.currency_code, p.created_at,
+                       COALESCE(NULLIF(TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.surname,'')), ''),
+                                u.email, 'Walk-in') AS client_name,
+                       (SELECT COALESCE(bk.booking_type, pr.kind, 'other')
+                          FROM billing.order_line ol
+                          LEFT JOIN diary.booking bk ON bk.id = ol.booking_id
+                          LEFT JOIN billing.price prc ON prc.id = ol.price_id
+                          LEFT JOIN billing.product pr ON pr.id = prc.product_id
+                         WHERE ol.order_id = p.order_id ORDER BY ol.created_at LIMIT 1) AS service_type,
+                       (SELECT ol.booking_id FROM billing.order_line ol
+                         WHERE ol.order_id = p.order_id AND ol.booking_id IS NOT NULL LIMIT 1) AS booking_id,
+                       (SELECT ol.description FROM billing.order_line ol
+                         WHERE ol.order_id = p.order_id ORDER BY ol.created_at LIMIT 1) AS description
+                FROM billing.payment p
+                JOIN billing."order" o ON o.id = p.order_id
+                LEFT JOIN iam."user" u ON u.id = o.user_id
+                WHERE p.club_id = :c AND p.direction = 'charge' AND p.status = 'succeeded'
+                  AND p.created_at >= :s AND p.created_at < :e
+                ORDER BY p.created_at DESC
+            """),
+            {"c": str(club_id), "s": start_d, "e": end_d},
+        ).mappings().all()
+
+    rows = _guard(_rows, [])
+    days = {}
+    total = 0
+    currency = None
+    for r in rows:
+        currency = currency or r["currency_code"]
+        amt = int(r["amount_minor"] or 0)
+        total += amt
+        dkey = r["created_at"].date().isoformat()
+        d = days.setdefault(dkey, {"date": dkey, "total_minor": 0, "sales": []})
+        d["total_minor"] += amt
+        d["sales"].append({
+            "payment_id": str(r["payment_id"]),
+            "order_id": str(r["order_id"]) if r["order_id"] else None,
+            "booking_id": str(r["booking_id"]) if r["booking_id"] else None,
+            "client_name": r["client_name"],
+            "service_type": r["service_type"],
+            "description": r["description"],
+            "amount_minor": amt,
+            "at": r["created_at"].isoformat(),
+        })
+    day_list = sorted(days.values(), key=lambda x: x["date"], reverse=True)
+    return {
+        "month": ym,
+        "currency": currency or _club_currency(session, club_id),
+        "total_minor": total,
+        "count": len(rows),
+        "days": day_list,
+    }
+
+
 def court_utilisation(session, *, club_id, days=30):
     """Court occupancy over the trailing `days`, bucketed by weekday (0=Mon..6=Sun) x hour-of-day:
     booked court-hours vs available (open) court-hours, plus an overall utilisation %. Reads

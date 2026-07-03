@@ -40,3 +40,16 @@ def court_utilisation():
     with session_scope() as s:
         data = repo.court_utilisation(s, club_id=p.club_id, days=days)
     return jsonify(data), 200
+
+
+@insights_bp.get("/sales-by-day")
+def sales_by_day():
+    """Daily sales for one ?month=YYYY-MM (default current) — grouped by day, each sale with client +
+    service type + amount + a detail link. Powers the Money → 'Sales by day' section."""
+    p, err = _admin()
+    if err:
+        return err
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = repo.sales_by_day(s, club_id=p.club_id, month=month)
+    return jsonify(data), 200
