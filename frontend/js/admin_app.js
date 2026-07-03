@@ -774,89 +774,39 @@
   var TYPE_LABEL = { court: "Court", lesson: "Lesson", class: "Class" };
   function typeLabel(t) { return TYPE_LABEL[t] || "Session"; }
   function timeRange(b) { try { return UI.fmtTime(b.starts_at) + "–" + UI.fmtTime(b.ends_at); } catch (e) { return ""; } }
-  function evBtn(text, tone, onclick) { return el("button", { class: "cf-btn cf-btn-sm" + (tone ? " cf-btn-" + tone : ""), text: text, onclick: onclick }); }
-  function evAct(fn, ok, then) { fn().then(function () { UI.toast(ok, "info"); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
   var kv = window.UI.kv;   // shared (Wave 1)
 
-  async function renderEvent(id) {
-    loading();
-    var b;
-    try { b = (await window.AdminAPI.bookingStory(id)).booking; }
-    catch (e) { set(el("div", {}, [backBar("Back"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
-    var ch = b.charge || {}, cur = ch.currency || "ZAR", cl = b.client || {}, co = b.coach || {}, can = b.can || {};
-    var refresh = function () { renderEvent(id); };
-    var wrap = el("div", {});
-    wrap.appendChild(backBar("Back"));
-
-    // Header — type chip, date, time range, status.
-    var head = card([
-      el("div", { class: "cf-detail-h" }, [
-        el("div", {}, [
-          el("span", { class: "cf-chip " + b.booking_type, text: typeLabel(b.booking_type) + (b.duration_minutes ? " · " + b.duration_minutes + " min" : "") }),
-          el("h1", { style: "margin:8px 0 2px;font-size:1.3rem", text: (function () { try { return UI.fmtDate(b.starts_at); } catch (e) { return b.starts_at || ""; } })() }),
-          el("div", { class: "cf-muted", text: timeRange(b) }),
-        ]),
-        UI.statusChip(b.status),
-      ]),
-    ]);
-    var det = el("div", { style: "margin-top:6px" });
-    // Client — contact + drill to their person 360.
-    if (cl.name) {
-      var cc = el("div", { class: "cf-row", style: "gap:8px;margin-top:4px;flex-wrap:wrap" });
-      if (cl.phone) cc.appendChild(el("a", { class: "cf-btn cf-btn-sm cf-btn-ghost", href: "tel:" + cl.phone, text: "📞 Call" }));
-      if (cl.email) cc.appendChild(el("a", { class: "cf-btn cf-btn-sm cf-btn-ghost", href: "mailto:" + cl.email, text: "✉ Email" }));
-      if (cl.user_id) cc.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Full record ›", onclick: function () { go("#/person/" + cl.user_id); } }));
-      det.appendChild(kv("Client", el("div", {}, [el("div", { style: "font-weight:600", text: cl.name }), el("div", { class: "cf-muted", style: "font-size:.85rem", text: [cl.email, cl.phone].filter(Boolean).join(" · ") }), cc])));
-    }
-    // Coach — drill to their record too.
-    if (co.name) {
-      var coBox = el("div", { style: "font-weight:600" }, [document.createTextNode(co.name)]);
-      if (co.user_id) coBox = el("div", {}, [el("div", { style: "font-weight:600", text: co.name }), el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", style: "margin-top:4px", text: "Coach record ›", onclick: function () { go("#/person/" + co.user_id); } })]);
-      det.appendChild(kv("Coach", coBox));
-    }
-    if (b.venue && (b.venue.club_name || b.court_name)) det.appendChild(kv("Where", el("div", {}, [el("div", { text: [b.venue.club_name, b.court_name].filter(Boolean).join(" · ") || "—" }), b.venue.address ? el("div", { class: "cf-muted", style: "font-size:.85rem", text: b.venue.address }) : null].filter(Boolean))));
-    if (b.players && b.players.length) det.appendChild(kv("Players", b.players.map(function (p) { return p.name + (p.attended === true ? " ✓" : p.attended === false ? " ✗" : ""); }).join(", ")));
-    det.appendChild(kv("Charge", el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { style: "font-weight:700", text: ch.status === "covered" ? "Covered" : money(ch.amount_minor, cur) }), UI.statusChip(ch.status)])));
-    if (b.arrears) det.appendChild(kv("Coaching", el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { style: "font-weight:700", text: money(b.arrears.gross_minor, cur) }), UI.statusChip(b.arrears.status)])));
-    if (b.notes) det.appendChild(kv("Notes", b.notes));
-    head.appendChild(det);
-    wrap.appendChild(head);
-
-    // Actions — grouped: approval · lifecycle · order money · coaching money.
-    var order_id = b.order_id;
-    var groups = [
-      ["Approval", [
-        can.accept && evBtn("Accept", "primary", function () { evAct(function () { return window.API.acceptBooking(b.id); }, "Confirmed.", refresh); }),
-        can.propose && evBtn("Propose time", "", function () { timeModal("Propose a time", b, function (body) { return window.API.proposeTime(b.id, body); }, "Proposed.", refresh); }),
-        can.decline && evBtn("Decline", "danger", function () { evAct(function () { return window.API.declineBooking(b.id, {}); }, "Declined.", function () { history.back(); }); }),
-      ]],
-      ["Session", [
-        can.mark_completed && evBtn("Mark completed", "primary", function () { evAct(function () { return window.API.setBookingStatus(b.id, { status: "completed" }); }, "Marked completed.", refresh); }),
-        can.mark_no_show && evBtn("No-show", "", function () { evAct(function () { return window.API.setBookingStatus(b.id, { status: "no_show" }); }, "Marked no-show.", refresh); }),
-        can.reschedule && evBtn("Reschedule", "", function () { timeModal("Reschedule", b, function (body) { return window.API.rescheduleBooking(b.id, { starts_at: body.starts_at, ends_at: body.ends_at, scope: "this" }); }, "Rescheduled.", refresh); }),
-        can.reassign_coach && evBtn("Reassign coach", "", function () { reassignModal(b, refresh); }),
-        can.cancel && !can.decline && evBtn("Cancel booking", "danger", function () { if (!window.confirm("Cancel this booking and free the slot?")) return; evAct(function () { return window.API.cancelBooking(b.id, { reason: "admin cancelled" }); }, "Cancelled.", function () { history.back(); }); }),
-        can.add_to_calendar && el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Add to calendar", onclick: function () { addToCalendar(b.ics_url); } }),
-      ]],
-      ["Client charge", [
-        can.desk_pay && order_id && evBtn("Settle at desk", "primary", function () { deskPayModal(order_id, ch, refresh); }),
-        can.refund && order_id && evBtn("Refund", "", function () { refundModal(order_id, ch, refresh); }),
-        can.void && order_id && evBtn("Void", "", function () { if (!window.confirm("Void this charge (a mistake)? It drops off the client's statement.")) return; evAct(function () { return window.AdminAPI.voidOrder(order_id, { write_off: false }); }, "Voided.", refresh); }),
-        can.write_off && order_id && evBtn("Write off", "danger", function () { if (!window.confirm("Write off (forgive) this charge? No money is collected.")) return; evAct(function () { return window.AdminAPI.voidOrder(order_id, { write_off: true }); }, "Written off.", refresh); }),
-      ]],
-      ["Coaching charge", [
-        can.collect && b.arrears && evBtn("Mark collected", "primary", function () { evAct(function () { return window.AdminAPI.arrearsCollected(b.arrears.id); }, "Marked collected.", refresh); }),
-        can.discount && b.arrears && evBtn("Discount", "", function () { var v = window.prompt("New coaching amount (e.g. 250.00):", ((b.arrears.gross_minor || 0) / 100).toFixed(2)); if (v === null) return; var f = parseFloat(v); if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; } evAct(function () { return window.AdminAPI.arrearsAdjust(b.arrears.id, { gross_minor: Math.round(f * 100) }); }, "Discounted.", refresh); }),
-        can.write_off_coaching && b.arrears && evBtn("Write off coaching", "danger", function () { var r = window.prompt("Write off this coaching charge? Reason (shown to coach & client):", ""); if (r === null) return; evAct(function () { return window.AdminAPI.arrearsAdjust(b.arrears.id, { status: "written_off", reason: r }); }, "Written off.", refresh); }),
-      ]],
-    ];
-    groups.forEach(function (g) {
-      var kids = (g[1] || []).filter(Boolean);
-      if (!kids.length) return;
-      var row = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px" }, [el("span", { class: "cf-muted", style: "font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;width:100%", text: g[0] })].concat(kids));
-      wrap.appendChild(row);
+  // The ONE shared transaction detail (Widgets.TransactionDetail). Admin wires the god-view action
+  // handlers; the widget renders. The modals below (timeModal/deskPay/refund/reassign) are the admin
+  // action UIs those handlers open. (FRONTEND-STANDARDISATION Wave 2.)
+  function renderEvent(id) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.TransactionDetail.mount(host, {
+      role: "admin",
+      scope: { id: id },
+      fields: { showCoach: true, showNotes: true },
+      data: { get: function (i) { return window.AdminAPI.bookingStory(i).then(function (r) { return r.booking; }); } },
+      onNavigate: function (t) { if (t.kind === "person") go("#/person/" + t.id); },
+      actions: {
+        accept: { done: "Confirmed.", run: function (b) { return window.API.acceptBooking(b.id); } },
+        propose: { manual: true, run: function (b) { timeModal("Propose a time", b, function (body) { return window.API.proposeTime(b.id, body); }, "Proposed.", function () { renderEvent(id); }); } },
+        decline: { tone: "danger", back: true, done: "Declined.", run: function (b) { return window.API.declineBooking(b.id, {}); } },
+        mark_completed: { done: "Marked completed.", run: function (b) { return window.API.setBookingStatus(b.id, { status: "completed" }); } },
+        mark_no_show: { done: "Marked no-show.", run: function (b) { return window.API.setBookingStatus(b.id, { status: "no_show" }); } },
+        reschedule: { manual: true, run: function (b) { timeModal("Reschedule", b, function (body) { return window.API.rescheduleBooking(b.id, { starts_at: body.starts_at, ends_at: body.ends_at, scope: "this" }); }, "Rescheduled.", function () { renderEvent(id); }); } },
+        reassign_coach: { manual: true, run: function (b) { reassignModal(b, function () { renderEvent(id); }); } },
+        cancel: { tone: "danger", back: true, confirm: "Cancel this booking and free the slot?", done: "Cancelled.", run: function (b) { return window.API.cancelBooking(b.id, { reason: "admin cancelled" }); } },
+        add_to_calendar: { manual: true, run: function (b) { addToCalendar(b.ics_url); } },
+        desk_pay: { manual: true, run: function (b) { deskPayModal(b.order_id, b.charge, function () { renderEvent(id); }); } },
+        refund: { manual: true, run: function (b) { refundModal(b.order_id, b.charge, function () { renderEvent(id); }); } },
+        void: { confirm: "Void this charge (a mistake)? It drops off the client's statement.", done: "Voided.", run: function (b) { return window.AdminAPI.voidOrder(b.order_id, { write_off: false }); } },
+        write_off: { tone: "danger", confirm: "Write off (forgive) this charge? No money is collected.", done: "Written off.", run: function (b) { return window.AdminAPI.voidOrder(b.order_id, { write_off: true }); } },
+        collect: { done: "Marked collected.", run: function (b) { return window.AdminAPI.arrearsCollected(b.arrears.id); } },
+        discount: { manual: true, run: function (b) { var v = window.prompt("New coaching amount (e.g. 250.00):", ((b.arrears.gross_minor || 0) / 100).toFixed(2)); if (v === null) return; var f = parseFloat(v); if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; } window.AdminAPI.arrearsAdjust(b.arrears.id, { gross_minor: Math.round(f * 100) }).then(function () { UI.toast("Discounted.", "info"); renderEvent(id); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } },
+        write_off_coaching: { tone: "danger", manual: true, run: function (b) { var r = window.prompt("Write off this coaching charge? Reason (shown to coach & client):", ""); if (r === null) return; window.AdminAPI.arrearsAdjust(b.arrears.id, { status: "written_off", reason: r }).then(function () { UI.toast("Written off.", "info"); renderEvent(id); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } },
+      },
     });
-    set(wrap);
   }
 
   // ---- event-story modals + helpers ----------------------------------------

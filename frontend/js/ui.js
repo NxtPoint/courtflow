@@ -135,9 +135,20 @@
       b("Terminate", "cf-btn-danger", "terminated", opts.terminateConfirm || "Terminate this? It's kept for history but removed from use."),
     ];
   }
+  // One status vocabulary (booking · payment · lifecycle), role-NEUTRAL labels. Shared by every app
+  // + the widgets, so a chip reads the same everywhere (FRONTEND-STANDARDISATION).
   function statusChip(status) {
-    var m = { active: "ok", deactivated: "held", terminated: "cancelled" };
-    return el("span", { class: "cf-chip " + (m[status] || ""), text: status || "active" });
+    var m = {
+      confirmed: ["confirmed", "Confirmed"], held: ["held", "Pending"], completed: ["ok", "Completed"],
+      cancelled: ["cancelled", "Cancelled"], no_show: ["cancelled", "No-show"],
+      requested: ["held", "Requested"], proposed: ["held", "Proposed"],
+      paid: ["confirmed", "Paid"], owed: ["held", "Owed"], pending: ["held", "Pending"],
+      refunded: ["cancelled", "Refunded"], covered: ["court", "Covered"], written_off: ["cancelled", "Written off"],
+      discounted: ["confirmed", "Discounted"],
+      active: ["ok", "Active"], deactivated: ["held", "Deactivated"], terminated: ["cancelled", "Terminated"],
+    };
+    var e = m[status] || ["", status || "active"];
+    return el("span", { class: "cf-chip " + e[0], text: e[1] });
   }
 
   // ---- shared DOM helpers (promoted from the three role apps — ONE implementation each;
