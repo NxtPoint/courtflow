@@ -1202,6 +1202,49 @@ def member_statement(user_id):
     return jsonify(data), 200
 
 
+# ---------------------------------------------------------------------------
+# admin event story (the ONE shared drill target — docs/specs/ADMIN-REDESIGN.md, golden rule).
+# Read = the god-view of any booking; the write actions REUSE the existing diary/billing routes
+# (accept/propose/decline/reschedule/cancel/status via /api/diary/*, settle via /api/billing/
+# desk-payment, refund via /api/billing/yoco/refund, void/write-off via /orders/<id>/void, coaching
+# via /coach-statement/arrears/*). The only NEW write is reassign-coach (admin-only).
+# ---------------------------------------------------------------------------
+
+@admin_bp.get("/bookings/<booking_id>")
+def get_admin_booking(booking_id):
+    """The admin god-view of one booking: client + coach + charge + coaching arrears + full action
+    eligibility. Every People/Money/Diary/Home booking row drills here (#/event/:id)."""
+    p, err = _admin()
+    if err:
+        return err
+    from diary import bookings as bookings_mod
+    with session_scope() as s:
+        story = bookings_mod.admin_booking_story(s, club_id=p.club_id, booking_id=booking_id)
+    if story is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(booking=story), 200
+
+
+@admin_bp.post("/bookings/<booking_id>/reassign-coach")
+def reassign_coach(booking_id):
+    """Move a future, not-yet-paid lesson to a different bookable coach. Body {coach_user_id}.
+    The GiST exclusion constraint guarantees no double-book (busy -> 409, nothing changes)."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    coach = (b.get("coach_user_id") or "").strip()
+    if not coach:
+        return jsonify(error="coach_user_id required"), 400
+    from diary import bookings as bookings_mod
+    with session_scope() as s:
+        res = bookings_mod.admin_reassign_coach(
+            s, club_id=p.club_id, booking_id=booking_id, new_coach_user_id=coach)
+    if not res.get("ok"):
+        return jsonify(res), res.get("status", 400)
+    return jsonify(res), 200
+
+
 @admin_bp.post("/orders/<order_id>/void")
 def void_order(order_id):
     """Clear an UNPAID order: void (a mistake) or write-off (body {write_off:true} — forgive the debt).

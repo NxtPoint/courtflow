@@ -49,6 +49,26 @@
       return A().apiJSON("/api/admin/orders/" + enc(id) + "/void", { method: "POST", body: body || {} });
     },
 
+    // ---- admin event story (the ONE shared drill target) -----------------
+    // GET /api/admin/bookings/:id -> {booking:{id,booking_type,status,starts_at,ends_at,
+    //   duration_minutes,is_future,court_name,coach:{name,user_id},client:{name,email,phone,user_id},
+    //   venue,players,order_id,charge,arrears,ics_url,can:{...}}} — god-view of any booking.
+    bookingStory: function (id) { return A().apiJSON("/api/admin/bookings/" + enc(id)); },
+    // POST /api/admin/bookings/:id/reassign-coach  body: {coach_user_id} -> {ok, booking}. 409 busy.
+    reassignCoach: function (id, body) {
+      return A().apiJSON("/api/admin/bookings/" + enc(id) + "/reassign-coach", { method: "POST", body: body || {} });
+    },
+    // POST /api/admin/coach-statement/arrears/:id/collected -> accrue commission (off-platform pay).
+    arrearsCollected: function (id) {
+      return A().apiJSON("/api/admin/coach-statement/arrears/" + enc(id) + "/collected", { method: "POST", body: {} });
+    },
+    // PATCH /api/admin/coach-statement/arrears/:id  body: {gross_minor?}|{status:'written_off',reason?}
+    arrearsAdjust: function (id, body) {
+      return A().apiJSON("/api/admin/coach-statement/arrears/" + enc(id), { method: "PATCH", body: body || {} });
+    },
+    // POST /api/billing/yoco/refund  body: {order_id, amount_minor?, cancel_booking?} — admin refund.
+    yocoRefund: function (body) { return A().apiJSON("/api/billing/yoco/refund", { method: "POST", body: body || {} }); },
+
     // ---- onboarding ------------------------------------------------------
     // GET /api/admin/onboarding ->
     //   {completed, steps:{profile,hours,courts,services,coaches},

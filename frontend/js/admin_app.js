@@ -404,7 +404,157 @@
   }
   function renderMoney() { set(soon("Money", "Financial cockpit, per-coach settlement drill, refund/dispute approvals, payments & the club transaction log land next.")); }
   function renderDiary() { set(soon("Diary", "The resource-timeline (click-to-create, walk-in, block, desk-pay) + Classes land next.")); }
-  function renderEvent(id) { set(el("div", {}, [backBar("Back"), soon("Booking", "The one admin event story (full god-view actions) lands next.")])); }
+  // ---- EVENT STORY (the ONE shared god-view — Home/People/Money/Diary all drill here) ------
+  var TYPE_LABEL = { court: "Court", lesson: "Lesson", class: "Class" };
+  function typeLabel(t) { return TYPE_LABEL[t] || "Session"; }
+  function timeRange(b) { try { return UI.fmtTime(b.starts_at) + "–" + UI.fmtTime(b.ends_at); } catch (e) { return ""; } }
+  function evBtn(text, tone, onclick) { return el("button", { class: "cf-btn cf-btn-sm" + (tone ? " cf-btn-" + tone : ""), text: text, onclick: onclick }); }
+  function evAct(fn, ok, then) { fn().then(function () { UI.toast(ok, "info"); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
+  function kv(k, v) { return el("div", { class: "cf-kv" }, [el("div", { class: "cf-kv-k", text: k }), el("div", { class: "cf-kv-v" }, typeof v === "string" ? [document.createTextNode(v)] : [v])]); }
+
+  async function renderEvent(id) {
+    loading();
+    var b;
+    try { b = (await window.AdminAPI.bookingStory(id)).booking; }
+    catch (e) { set(el("div", {}, [backBar("Back"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    var ch = b.charge || {}, cur = ch.currency || "ZAR", cl = b.client || {}, co = b.coach || {}, can = b.can || {};
+    var refresh = function () { renderEvent(id); };
+    var wrap = el("div", {});
+    wrap.appendChild(backBar("Back"));
+
+    // Header — type chip, date, time range, status.
+    var head = card([
+      el("div", { class: "cf-detail-h" }, [
+        el("div", {}, [
+          el("span", { class: "cf-chip " + b.booking_type, text: typeLabel(b.booking_type) + (b.duration_minutes ? " · " + b.duration_minutes + " min" : "") }),
+          el("h1", { style: "margin:8px 0 2px;font-size:1.3rem", text: (function () { try { return UI.fmtDate(b.starts_at); } catch (e) { return b.starts_at || ""; } })() }),
+          el("div", { class: "cf-muted", text: timeRange(b) }),
+        ]),
+        UI.statusChip(b.status),
+      ]),
+    ]);
+    var det = el("div", { style: "margin-top:6px" });
+    // Client — contact + drill to their person 360.
+    if (cl.name) {
+      var cc = el("div", { class: "cf-row", style: "gap:8px;margin-top:4px;flex-wrap:wrap" });
+      if (cl.phone) cc.appendChild(el("a", { class: "cf-btn cf-btn-sm cf-btn-ghost", href: "tel:" + cl.phone, text: "📞 Call" }));
+      if (cl.email) cc.appendChild(el("a", { class: "cf-btn cf-btn-sm cf-btn-ghost", href: "mailto:" + cl.email, text: "✉ Email" }));
+      if (cl.user_id) cc.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Full record ›", onclick: function () { go("#/person/" + cl.user_id); } }));
+      det.appendChild(kv("Client", el("div", {}, [el("div", { style: "font-weight:600", text: cl.name }), el("div", { class: "cf-muted", style: "font-size:.85rem", text: [cl.email, cl.phone].filter(Boolean).join(" · ") }), cc])));
+    }
+    // Coach — drill to their record too.
+    if (co.name) {
+      var coBox = el("div", { style: "font-weight:600" }, [document.createTextNode(co.name)]);
+      if (co.user_id) coBox = el("div", {}, [el("div", { style: "font-weight:600", text: co.name }), el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", style: "margin-top:4px", text: "Coach record ›", onclick: function () { go("#/person/" + co.user_id); } })]);
+      det.appendChild(kv("Coach", coBox));
+    }
+    if (b.venue && (b.venue.club_name || b.court_name)) det.appendChild(kv("Where", el("div", {}, [el("div", { text: [b.venue.club_name, b.court_name].filter(Boolean).join(" · ") || "—" }), b.venue.address ? el("div", { class: "cf-muted", style: "font-size:.85rem", text: b.venue.address }) : null].filter(Boolean))));
+    if (b.players && b.players.length) det.appendChild(kv("Players", b.players.map(function (p) { return p.name + (p.attended === true ? " ✓" : p.attended === false ? " ✗" : ""); }).join(", ")));
+    det.appendChild(kv("Charge", el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { style: "font-weight:700", text: ch.status === "covered" ? "Covered" : money(ch.amount_minor, cur) }), UI.statusChip(ch.status)])));
+    if (b.arrears) det.appendChild(kv("Coaching", el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { style: "font-weight:700", text: money(b.arrears.gross_minor, cur) }), UI.statusChip(b.arrears.status)])));
+    if (b.notes) det.appendChild(kv("Notes", b.notes));
+    head.appendChild(det);
+    wrap.appendChild(head);
+
+    // Actions — grouped: approval · lifecycle · order money · coaching money.
+    var order_id = b.order_id;
+    var groups = [
+      ["Approval", [
+        can.accept && evBtn("Accept", "primary", function () { evAct(function () { return window.API.acceptBooking(b.id); }, "Confirmed.", refresh); }),
+        can.propose && evBtn("Propose time", "", function () { timeModal("Propose a time", b, function (body) { return window.API.proposeTime(b.id, body); }, "Proposed.", refresh); }),
+        can.decline && evBtn("Decline", "danger", function () { evAct(function () { return window.API.declineBooking(b.id, {}); }, "Declined.", function () { history.back(); }); }),
+      ]],
+      ["Session", [
+        can.mark_completed && evBtn("Mark completed", "primary", function () { evAct(function () { return window.API.setBookingStatus(b.id, { status: "completed" }); }, "Marked completed.", refresh); }),
+        can.mark_no_show && evBtn("No-show", "", function () { evAct(function () { return window.API.setBookingStatus(b.id, { status: "no_show" }); }, "Marked no-show.", refresh); }),
+        can.reschedule && evBtn("Reschedule", "", function () { timeModal("Reschedule", b, function (body) { return window.API.rescheduleBooking(b.id, { starts_at: body.starts_at, ends_at: body.ends_at, scope: "this" }); }, "Rescheduled.", refresh); }),
+        can.reassign_coach && evBtn("Reassign coach", "", function () { reassignModal(b, refresh); }),
+        can.cancel && !can.decline && evBtn("Cancel booking", "danger", function () { if (!window.confirm("Cancel this booking and free the slot?")) return; evAct(function () { return window.API.cancelBooking(b.id, { reason: "admin cancelled" }); }, "Cancelled.", function () { history.back(); }); }),
+        can.add_to_calendar && el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Add to calendar", onclick: function () { addToCalendar(b.ics_url); } }),
+      ]],
+      ["Client charge", [
+        can.desk_pay && order_id && evBtn("Settle at desk", "primary", function () { deskPayModal(order_id, ch, refresh); }),
+        can.refund && order_id && evBtn("Refund", "", function () { refundModal(order_id, ch, refresh); }),
+        can.void && order_id && evBtn("Void", "", function () { if (!window.confirm("Void this charge (a mistake)? It drops off the client's statement.")) return; evAct(function () { return window.AdminAPI.voidOrder(order_id, { write_off: false }); }, "Voided.", refresh); }),
+        can.write_off && order_id && evBtn("Write off", "danger", function () { if (!window.confirm("Write off (forgive) this charge? No money is collected.")) return; evAct(function () { return window.AdminAPI.voidOrder(order_id, { write_off: true }); }, "Written off.", refresh); }),
+      ]],
+      ["Coaching charge", [
+        can.collect && b.arrears && evBtn("Mark collected", "primary", function () { evAct(function () { return window.AdminAPI.arrearsCollected(b.arrears.id); }, "Marked collected.", refresh); }),
+        can.discount && b.arrears && evBtn("Discount", "", function () { var v = window.prompt("New coaching amount (e.g. 250.00):", ((b.arrears.gross_minor || 0) / 100).toFixed(2)); if (v === null) return; var f = parseFloat(v); if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; } evAct(function () { return window.AdminAPI.arrearsAdjust(b.arrears.id, { gross_minor: Math.round(f * 100) }); }, "Discounted.", refresh); }),
+        can.write_off_coaching && b.arrears && evBtn("Write off coaching", "danger", function () { var r = window.prompt("Write off this coaching charge? Reason (shown to coach & client):", ""); if (r === null) return; evAct(function () { return window.AdminAPI.arrearsAdjust(b.arrears.id, { status: "written_off", reason: r }); }, "Written off.", refresh); }),
+      ]],
+    ];
+    groups.forEach(function (g) {
+      var kids = (g[1] || []).filter(Boolean);
+      if (!kids.length) return;
+      var row = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px" }, [el("span", { class: "cf-muted", style: "font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;width:100%", text: g[0] })].concat(kids));
+      wrap.appendChild(row);
+    });
+    set(wrap);
+  }
+
+  // ---- event-story modals + helpers ----------------------------------------
+  function modal(title) {
+    var bg = el("div", { class: "cf-modal-bg" }), body = el("div", {});
+    bg.appendChild(el("div", { class: "cf-modal cf-modal-lg" }, [el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [el("h2", { style: "margin:0", text: title }), el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "✕", onclick: function () { close(); } })]), body]));
+    document.body.appendChild(bg);
+    function close() { if (bg.parentNode) document.body.removeChild(bg); }
+    return { body: body, close: close };
+  }
+  function toLocal(iso) { try { var d = new Date(iso), p = function (n) { return (n < 10 ? "0" : "") + n; }; return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + "T" + p(d.getHours()) + ":" + p(d.getMinutes()); } catch (e) { return ""; } }
+  function addToCalendar(icsUrl) {
+    window.TFAuth.apiFetch(icsUrl).then(function (r) { if (!r.ok) throw new Error("Couldn't build the calendar file."); return r.blob(); })
+      .then(function (blob) { var u = URL.createObjectURL(blob); var a = document.createElement("a"); a.href = u; a.download = "booking.ics"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(u); }, 1500); })
+      .catch(function (e) { UI.toast(UI.errMsg(e), "error"); });
+  }
+  // Reused by Propose + Reschedule — pick a datetime + duration, POST via `send`.
+  function timeModal(title, b, send, okMsg, then) {
+    var m = modal(title);
+    var s = el("input", { class: "cf-input", type: "datetime-local", value: toLocal(b.starts_at) });
+    var dur = el("select", { class: "cf-input" }, [30, 45, 60, 90, 120].map(function (d) { return el("option", { value: String(d), text: d + " min" }); })); dur.value = String(b.duration_minutes || 60);
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Time" }), s]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), dur]));
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
+      el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
+      el("button", { class: "cf-btn cf-btn-primary", text: "Save", onclick: function () { if (!s.value) { UI.toast("Pick a time.", "warn"); return; } var st = new Date(s.value), en = new Date(st.getTime() + parseInt(dur.value, 10) * 60000); send({ starts_at: st.toISOString(), ends_at: en.toISOString() }).then(function () { UI.toast(okMsg, "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }),
+    ]));
+  }
+  function deskPayModal(orderId, ch, then) {
+    var m = modal("Settle at desk");
+    var amt = el("input", { class: "cf-input", type: "number", step: "0.01", value: ((ch.amount_minor || 0) / 100).toFixed(2) });
+    var prov = el("select", { class: "cf-input" }, [["cash", "Cash"], ["card_at_desk", "Card at desk"], ["eft", "EFT"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); }));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Amount" }), amt]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Method" }), prov]));
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
+      el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
+      el("button", { class: "cf-btn cf-btn-primary", text: "Record payment", onclick: function () { var f = parseFloat(amt.value); if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; } window.API.deskPayment({ order_id: orderId, amount_minor: Math.round(f * 100), provider: prov.value }).then(function () { UI.toast("Payment recorded.", "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }),
+    ]));
+  }
+  function refundModal(orderId, ch, then) {
+    var m = modal("Refund");
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.9rem", text: "Refund " + money(ch.amount_minor, ch.currency || "ZAR") + " to the customer via Yoco." }));
+    var cancel = el("input", { type: "checkbox" });
+    m.body.appendChild(el("label", { class: "cf-row", style: "gap:8px;align-items:center" }, [cancel, el("span", { text: "Also cancel the booking + free the slot" })]));
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
+      el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
+      el("button", { class: "cf-btn cf-btn-primary", text: "Refund", onclick: function () { window.AdminAPI.yocoRefund({ order_id: orderId, cancel_booking: cancel.checked }).then(function () { UI.toast("Refunded.", "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }),
+    ]));
+  }
+  async function reassignModal(b, then) {
+    var m = modal("Reassign coach");
+    var sel = el("select", { class: "cf-input" }, [el("option", { value: "", text: "Loading coaches…" })]);
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "New coach" }), sel]));
+    var footer = el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [el("button", { class: "cf-btn", text: "Close", onclick: m.close })]);
+    m.body.appendChild(footer);
+    try {
+      var coaches = ((await window.AdminAPI.coaches()).coaches || []).filter(function (c) { return String(c.user_id) !== String((b.coach || {}).user_id) && c.is_bookable !== false; });
+      UI.clear(sel);
+      if (!coaches.length) { sel.appendChild(el("option", { value: "", text: "No other bookable coaches" })); return; }
+      sel.appendChild(el("option", { value: "", text: "Choose a coach…" }));
+      coaches.forEach(function (c) { sel.appendChild(el("option", { value: c.user_id, text: c.display_name || [c.first_name, c.surname].filter(Boolean).join(" ") || c.email })); });
+      footer.appendChild(el("button", { class: "cf-btn cf-btn-primary", text: "Reassign", onclick: function () { if (!sel.value) { UI.toast("Pick a coach.", "warn"); return; } window.AdminAPI.reassignCoach(b.id, { coach_user_id: sel.value }).then(function () { UI.toast("Reassigned.", "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }));
+    } catch (e) { UI.clear(sel); sel.appendChild(el("option", { value: "", text: UI.errMsg(e) })); }
+  }
   function renderSetup() { set(soon("Setup", "Club profile, branding, payments, courts & hours, services, memberships, packs, coaches & commission, classes — all in-app, landing next.")); }
   function renderInsights() { set(el("div", {}, [backBar("Home", "#/home"), soon("Business insights", "The Overview dashboard embeds here next.")])); }
 

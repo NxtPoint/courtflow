@@ -1366,6 +1366,196 @@ def coach_booking_story(session, *, club_id, coach_user_id, booking_id):
     }
 
 
+def admin_booking_story(session, *, club_id, booking_id):
+    """The ADMIN god-view of ANY booking in the club — the ONE shared event story that Home,
+    People, Money and Diary all drill into (docs/specs/ADMIN-REDESIGN.md — the golden rule). A
+    superset of the coach + client stories: the client (name + contact + user_id → person 360),
+    the coach (name + user_id), when / where / court, players + attendance, the CHARGE (client
+    order) AND the coaching arrears line, plus FULL action eligibility — accept/propose/decline ·
+    reschedule/cancel · mark completed/no-show · settle-at-desk/refund/void/write-off (the order) ·
+    collect/discount/write-off (the coaching arrears) · reassign coach. NOT user-scoped (an admin
+    sees everything in their club). Reuses _booking_charge + the arrears accrual so figures never
+    drift from the coach/client views. None if not found in this club."""
+    b = session.execute(
+        text("""
+            SELECT b.id, b.club_id, b.booking_type, b.status, b.starts_at, b.ends_at,
+                   b.resource_id, r.name AS resource_name, b.coach_user_id, b.order_id,
+                   b.settlement_mode, b.booked_by_user_id, b.notes,
+                   (SELECT cr.name FROM diary.booking cb JOIN diary.resource cr ON cr.id = cb.resource_id
+                     WHERE cb.club_id = b.club_id AND cb.order_id = b.order_id
+                       AND cb.booking_type = 'court' AND b.order_id IS NOT NULL
+                       AND b.booking_type = 'lesson' LIMIT 1) AS held_court,
+                   cl.first_name AS cl_first, cl.surname AS cl_surname, cl.email AS cl_email,
+                   cl.phone AS cl_phone,
+                   COALESCE(cp.display_name,
+                            NULLIF(TRIM(COALESCE(co.first_name,'') || ' ' || COALESCE(co.surname,'')),''))
+                     AS coach_name
+            FROM diary.booking b
+            LEFT JOIN diary.resource r ON r.id = b.resource_id
+            LEFT JOIN iam."user" cl ON cl.id = b.booked_by_user_id
+            LEFT JOIN iam."user" co ON co.id = b.coach_user_id
+            LEFT JOIN iam.coach_profile cp ON cp.user_id = b.coach_user_id AND cp.club_id = b.club_id
+            WHERE b.id = :bid AND b.club_id = :c
+        """),
+        {"bid": str(booking_id), "c": str(club_id)},
+    ).mappings().first()
+    if not b:
+        return None
+
+    venue = session.execute(
+        text("SELECT c.name AS club_name, l.address_line, l.city "
+             "FROM club.club c LEFT JOIN club.location l ON l.club_id = c.id "
+             "WHERE c.id = :c ORDER BY l.id LIMIT 1"),
+        {"c": str(club_id)},
+    ).mappings().first() or {}
+
+    parties = session.execute(
+        text("""
+            SELECT bp.user_id, bp.party_role, bp.guest_name, bp.attended,
+                   NULLIF(TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.surname,'')),'') AS name
+            FROM diary.booking_party bp
+            LEFT JOIN iam."user" u ON u.id = bp.user_id
+            WHERE bp.booking_id = :b
+        """),
+        {"b": str(booking_id)},
+    ).mappings().all()
+    players = [{"name": (p["guest_name"] or p["name"] or "Player"),
+                "kind": ("guest" if p["guest_name"] else "player"),
+                "attended": p["attended"]} for p in parties]
+
+    charge = _booking_charge(session, club_id, b["order_id"], b["settlement_mode"])
+    is_lesson = b["booking_type"] == "lesson"
+    # Coaching money for a lesson (the coach's arrears line) — accrue first (idempotent) so an owed
+    # lesson has a line the admin can collect/discount/write-off from inside the one story.
+    arrears = None
+    if is_lesson:
+        try:
+            from billing.commission import accrue_arrears_for_club
+            accrue_arrears_for_club(session, club_id=club_id)
+        except Exception:
+            pass
+        arr = session.execute(
+            text("SELECT id, status, gross_minor FROM billing.coach_arrears "
+                 "WHERE club_id = :c AND booking_id = :b ORDER BY created_at DESC LIMIT 1"),
+            {"c": str(club_id), "b": str(booking_id)},
+        ).mappings().first()
+        arrears = ({"id": str(arr["id"]), "status": arr["status"], "gross_minor": int(arr["gross_minor"] or 0)}
+                   if arr else None)
+
+    starts, ends = b["starts_at"], b["ends_at"]
+    dur = int((ends - starts).total_seconds() // 60) if (starts and ends) else None
+    is_future = bool(starts and starts > datetime.now(timezone.utc))
+    started = bool(starts and starts <= datetime.now(timezone.utc))
+    status = b["status"]
+    court = b["held_court"] if is_lesson else b["resource_name"]
+    addr = ", ".join(x for x in [venue.get("address_line"), venue.get("city")] if x) or None
+    client_name = " ".join(x for x in [b["cl_first"], b["cl_surname"]] if x).strip() or (b["cl_email"] or "Client")
+
+    order_settleable = charge["status"] in ("owed", "pending")
+    can = {
+        "accept": status == "requested",
+        "propose": status in ("requested", "proposed"),
+        "decline": status in ("requested", "proposed"),
+        "reschedule": status in ("confirmed", "held") and is_future,
+        "cancel": status in ("confirmed", "held", "requested", "proposed"),
+        "mark_completed": status == "confirmed" and started and is_lesson,
+        "mark_no_show": status == "confirmed" and started and is_lesson,
+        "add_to_calendar": status in ("confirmed", "held", "completed"),
+        # order money (client charge)
+        "desk_pay": order_settleable,
+        "refund": charge["refundable"],
+        "void": order_settleable,
+        "write_off": order_settleable,
+        # coaching money (coach arrears line)
+        "collect": bool(arrears and arrears["status"] == "owed"),
+        "discount": bool(arrears and arrears["status"] == "owed"),
+        "write_off_coaching": bool(arrears and arrears["status"] == "owed"),
+        # reassign is only clean while the lesson is future + unpaid (commission not yet attributed)
+        "reassign_coach": is_lesson and is_future and charge["status"] not in ("paid", "refunded"),
+    }
+    return {
+        "id": str(b["id"]),
+        "booking_type": b["booking_type"],
+        "status": status,
+        "starts_at": starts.isoformat() if starts else None,
+        "ends_at": ends.isoformat() if ends else None,
+        "duration_minutes": dur,
+        "is_future": is_future,
+        "court_name": court,
+        "coach": {"name": b["coach_name"],
+                  "user_id": str(b["coach_user_id"]) if b["coach_user_id"] else None},
+        "client": {"name": client_name, "email": b["cl_email"], "phone": b["cl_phone"],
+                   "user_id": str(b["booked_by_user_id"]) if b["booked_by_user_id"] else None},
+        "venue": {"club_name": venue.get("club_name"), "address": addr},
+        "players": players,
+        "order_id": str(b["order_id"]) if b["order_id"] else None,
+        "charge": charge,
+        "arrears": arrears,
+        "notes": b["notes"],
+        "ics_url": "/api/diary/bookings/" + str(b["id"]) + "/calendar.ics",
+        "can": can,
+    }
+
+
+def admin_reassign_coach(session, *, club_id, booking_id, new_coach_user_id):
+    """Admin god-view action (docs/specs/ADMIN-REDESIGN.md): move a lesson to a different coach.
+    Only a FUTURE, not-yet-paid lesson is reassignable — so commission attribution stays clean
+    (it accrues on collection to whoever runs the lesson). The lesson's PRIMARY resource IS the
+    coach resource, so we point it at the new coach's resource + update coach_user_id; the GiST
+    exclusion constraint then enforces no double-book for free (a busy coach -> COACH_BUSY, nothing
+    changes). A class the new coach runs at that time (not a diary.booking, so invisible to the
+    constraint) is caught explicitly. Returns {ok, booking} or {ok:False, error, status}."""
+    from sqlalchemy.exc import IntegrityError
+    bk = _booking_dict(session, booking_id)
+    if not bk or str(bk["club_id"]) != str(club_id):
+        return _err("NOT_FOUND", 404)
+    if bk["booking_type"] != "lesson":
+        return _err("NOT_A_LESSON", 422, message="only a lesson can be reassigned to a coach")
+    if bk["status"] not in ("confirmed", "held", "requested", "proposed"):
+        return _err("BAD_STATUS", 422, message="this lesson can't be reassigned")
+    starts = _parse_dt(bk["starts_at"])
+    ends = _parse_dt(bk["ends_at"])
+    if starts <= datetime.now(timezone.utc):
+        return _err("IN_THE_PAST", 422, message="only a future lesson can be reassigned")
+    if bk.get("order_id"):
+        ost = session.execute(
+            text('SELECT status FROM billing."order" WHERE id = :o'),
+            {"o": str(bk["order_id"])}).scalar()
+        if ost in ("paid", "refunded"):
+            return _err("ALREADY_PAID", 422, message="a paid lesson can't be reassigned — refund first")
+    # The target must be an active, bookable coach in THIS club with a coach resource.
+    new_res = session.execute(
+        text("""
+            SELECT r.id
+            FROM diary.resource r
+            JOIN iam.membership m ON m.user_id = r.coach_user_id AND m.club_id = r.club_id
+                                 AND m.role = 'coach' AND m.member_status = 'active'
+            LEFT JOIN iam.coach_profile cp ON cp.user_id = r.coach_user_id AND cp.club_id = r.club_id
+            WHERE r.club_id = :c AND r.kind = 'coach' AND r.coach_user_id = :u AND r.is_active
+              AND COALESCE(cp.is_bookable, true)
+            LIMIT 1
+        """),
+        {"c": str(club_id), "u": str(new_coach_user_id)},
+    ).scalar()
+    if not new_res:
+        return _err("COACH_NOT_BOOKABLE", 422, message="that coach isn't available for booking")
+    if str(new_res) == str(bk["resource_id"]):
+        return _err("SAME_COACH", 422, message="the lesson is already with this coach")
+    if _coach_class_conflict(session, club_id, new_coach_user_id, starts, ends):
+        return _err("COACH_BUSY", 409, message="that coach is running a class at this time")
+    sp = session.begin_nested()
+    try:
+        session.execute(
+            text("UPDATE diary.booking SET resource_id = :r, coach_user_id = :u, updated_at = now() "
+                 "WHERE id = :b AND club_id = :c"),
+            {"r": str(new_res), "u": str(new_coach_user_id), "b": str(booking_id), "c": str(club_id)})
+        sp.commit()
+    except IntegrityError:
+        sp.rollback()
+        return _err("COACH_BUSY", 409, message="that coach is already booked at this time")
+    return {"ok": True, "booking": _booking_dict(session, booking_id)}
+
+
 def _parties(session, booking_id):
     rows = session.execute(
         text("SELECT id, user_id, party_role, guest_name, guest_email, price_id, attended "

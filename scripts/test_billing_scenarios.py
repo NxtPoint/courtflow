@@ -900,9 +900,57 @@ def sc_person_360(s, fx):
           AR.get_person(s, club_id=fx.club_id, user_id=stranger) is None, "")
 
 
+def sc_admin_event_story(s, fx):
+    """admin_booking_story (the ONE god-view drill target) + admin_reassign_coach (ADMIN-REDESIGN
+    Step 3): a lesson resolves with client + coach + charge + full action eligibility; a future,
+    unpaid lesson reassigns to another bookable coach; reassigning to the same coach is rejected."""
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="club_admin",
+                         booking_type="lesson", resource_id=fx.coach_res,
+                         starts_at=iso(at(fx, 10)), ends_at=iso(at(fx, 11)),
+                         coach_user_id=fx.coach_uid, settlement_mode="at_court",
+                         booked_for_user_id=fx.member)
+    check("event: lesson created on-behalf", r.get("ok"), str(r))
+    bid = r["booking"]["id"]
+    story = B.admin_booking_story(s, club_id=fx.club_id, booking_id=bid)
+    check("event: story resolves", story is not None, "")
+    check("event: client + coach both present",
+          story and (story.get("client") or {}).get("user_id") and (story.get("coach") or {}).get("user_id"),
+          str(story and (story.get("client"), story.get("coach"))))
+    check("event: charge block present", story and isinstance(story.get("charge"), dict), "")
+    check("event: reassign offered on a future unpaid lesson",
+          story and (story.get("can") or {}).get("reassign_coach") is True, str(story and story.get("can")))
+    # Second bookable coach + resource + hours.
+    coach2 = _mk_user(s, "coach2-evt@bill.test", "Coachy2")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'coach','active') ON CONFLICT (club_id,user_id,role) DO NOTHING"),
+              {"c": fx.club_id, "u": coach2})
+    s.execute(text("INSERT INTO iam.coach_profile (club_id, user_id, display_name, is_bookable) "
+                   "VALUES (:c,:u,'Coachy2',true)"), {"c": fx.club_id, "u": coach2})
+    res2 = s.execute(text("INSERT INTO diary.resource (club_id, kind, name, coach_user_id) "
+                          "VALUES (:c,'coach','Coachy2',:u) RETURNING id"),
+                     {"c": fx.club_id, "u": coach2}).scalar_one()
+    s.execute(text("INSERT INTO diary.availability_rule (club_id, resource_id, weekday, start_time, "
+                   "end_time, slot_minutes) VALUES (:c,:r,:wd,'08:00','18:00',30)"),
+              {"c": fx.club_id, "r": res2, "wd": fx.target.weekday()})
+    res = B.admin_reassign_coach(s, club_id=fx.club_id, booking_id=bid, new_coach_user_id=coach2)
+    check("event: reassign ok", res.get("ok"), str(res))
+    story2 = B.admin_booking_story(s, club_id=fx.club_id, booking_id=bid)
+    check("event: coach changed after reassign",
+          story2 and str((story2.get("coach") or {}).get("user_id")) == str(coach2),
+          str(story2 and story2.get("coach")))
+    again = B.admin_reassign_coach(s, club_id=fx.club_id, booking_id=bid, new_coach_user_id=coach2)
+    check("event: reassign to the same coach rejected",
+          not again.get("ok") and again.get("error") == "SAME_COACH", str(again))
+    # A non-existent booking → None.
+    check("event: unknown booking → None",
+          B.admin_booking_story(s, club_id=fx.club_id,
+                                booking_id="00000000-0000-0000-0000-000000000000") is None, "")
+
+
 SCENARIOS = [
     sc_payment_preference,
     sc_person_360,
+    sc_admin_event_story,
     sc_settlement_at_court,
     sc_settlement_online,
     sc_settlement_monthly,
