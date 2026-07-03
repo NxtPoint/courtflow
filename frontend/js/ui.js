@@ -140,6 +140,44 @@
     return el("span", { class: "cf-chip " + (m[status] || ""), text: status || "active" });
   }
 
+  // ---- shared DOM helpers (promoted from the three role apps — ONE implementation each;
+  // FRONTEND-STANDARDISATION.md Wave 1). Pure builders: no role logic, no routing state. ----
+  function card(children, extra) { return el("div", { class: "cf-card" + (extra ? " " + extra : "") }, children); }
+  function backBar(label, hash) {
+    return el("div", { class: "cf-backbar" }, [
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹ " + (label || "Back"),
+        onclick: function () { if (hash) location.hash = hash; else history.back(); } }),
+    ]);
+  }
+  function kv(k, v) {
+    return el("div", { class: "cf-kv" }, [el("div", { class: "cf-kv-k", text: k }),
+      el("div", { class: "cf-kv-v" }, typeof v === "string" ? [document.createTextNode(v)] : [v])]);
+  }
+  function modal(title, opts) {
+    opts = opts || {};
+    var bg = el("div", { class: "cf-modal-bg" }), body = el("div", {});
+    bg.appendChild(el("div", { class: "cf-modal" + (opts.lg ? " cf-modal-lg" : "") }, [
+      el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
+        el("h2", { style: "margin:0", text: title }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "✕", onclick: function () { close(); } }),
+      ]), body,
+    ]));
+    document.body.appendChild(bg);
+    function close() { if (bg.parentNode) document.body.removeChild(bg); }
+    return { body: body, close: close };
+  }
+  function toLocal(iso) {
+    try { var d = new Date(iso), p = function (n) { return (n < 10 ? "0" : "") + n; };
+      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + "T" + p(d.getHours()) + ":" + p(d.getMinutes()); }
+    catch (e) { return ""; }
+  }
+  // The .ics lives on the API host and needs auth — fetch via apiFetch (base + Bearer), then download.
+  function addToCalendar(icsUrl) {
+    window.TFAuth.apiFetch(icsUrl).then(function (r) { if (!r.ok) throw new Error("Couldn't build the calendar file."); return r.blob(); })
+      .then(function (blob) { var u = URL.createObjectURL(blob); var a = document.createElement("a"); a.href = u; a.download = "booking.ics"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(u); }, 1500); })
+      .catch(function (e) { toast(errMsg(e), "error"); });
+  }
+
   window.UI = {
     CLUB_TZ: CLUB_TZ,
     fmtTime: fmtTime, fmtDate: fmtDate, fmtDateTime: fmtDateTime, fmtRange: fmtRange,
@@ -147,5 +185,6 @@
     SETTLEMENT: SETTLEMENT, settlementLabel: settlementLabel,
     el: el, esc: esc, clear: clear, toast: toast, errMsg: errMsg, groupByDay: groupByDay,
     lifecycleBar: lifecycleBar, subtabs: subtabs, lifeActions: lifeActions, statusChip: statusChip,
+    card: card, backBar: backBar, kv: kv, modal: modal, toLocal: toLocal, addToCalendar: addToCalendar,
   };
 })();

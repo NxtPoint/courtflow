@@ -91,9 +91,7 @@
     set(n);
     setTimeout(function () { if (n.isConnected && n.textContent === "Loading…") n.textContent = "Waking the club up — one moment…"; }, 3500);
   }
-  function card(children, extra) { return el("div", { class: "cf-card" + (extra ? " " + extra : "") }, children); }
-  function backBar(label, hash) { return el("div", { class: "cf-backbar" }, [el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹ " + (label || "Back"), onclick: function () { hash ? go(hash) : history.back(); } })]); }
-  function kv(k, v) { return el("div", { class: "cf-kv" }, [el("div", { class: "cf-kv-k", text: k }), el("div", { class: "cf-kv-v" }, typeof v === "string" ? [document.createTextNode(v)] : [v])]); }
+  var card = window.UI.card, backBar = window.UI.backBar, kv = window.UI.kv;   // shared (FRONTEND-STANDARDISATION Wave 1)
   var TYPE_LABEL = { court: "Court", lesson: "Lesson", class: "Class" };
   function typeLabel(t) { return TYPE_LABEL[t] || "Session"; }
   function timeRange(b) { try { return UI.fmtTime(b.starts_at) + "–" + UI.fmtTime(b.ends_at); } catch (e) { return ""; } }
@@ -735,20 +733,8 @@
   async function reloadProfile() { try { PROFILE = (await window.CoachAPI.profile()).profile || PROFILE; paintAvatar(); } catch (e) {} }
 
   // ---- modal + misc --------------------------------------------------------
-  function modal(title) {
-    var bg = el("div", { class: "cf-modal-bg" }), body = el("div", {});
-    bg.appendChild(el("div", { class: "cf-modal cf-modal-lg" }, [el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [el("h2", { style: "margin:0", text: title }), el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "✕", onclick: function () { close(); } })]), body]));
-    document.body.appendChild(bg);
-    function close() { if (bg.parentNode) document.body.removeChild(bg); }
-    return { body: body, close: close };
-  }
-  function toLocal(iso) { try { var d = new Date(iso), p = function (n) { return (n < 10 ? "0" : "") + n; }; return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + "T" + p(d.getHours()) + ":" + p(d.getMinutes()); } catch (e) { return ""; } }
-  // .ics lives on the API host and needs auth — fetch via apiFetch (base + Bearer), then download.
-  function addToCalendar(icsUrl) {
-    window.TFAuth.apiFetch(icsUrl).then(function (r) { if (!r.ok) throw new Error("Couldn't build the calendar file."); return r.blob(); })
-      .then(function (blob) { var u = URL.createObjectURL(blob); var a = document.createElement("a"); a.href = u; a.download = "booking.ics"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(u); }, 1500); })
-      .catch(function (e) { UI.toast(UI.errMsg(e), "error"); });
-  }
+  var modal = function (t) { return UI.modal(t, { lg: true }); };   // shared (Wave 1)
+  var toLocal = window.UI.toLocal, addToCalendar = window.UI.addToCalendar;
 
   window.CoachApp = { start: start };
 })();
