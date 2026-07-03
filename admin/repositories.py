@@ -957,6 +957,166 @@ def list_people(session, *, club_id):
     return _rows(rows)
 
 
+def get_person(session, *, club_id, user_id):
+    """The unified PERSON 360 for the admin console (docs/specs/ADMIN-REDESIGN.md §People) — one
+    record page merging what were the member-drawer and the coach-drawer, seen from the club's
+    god-view. Mirrors coach.get_client: identity + ALL roles, the active membership line
+    (grant/revoke acts on it), the person's UNIFIED owed statement (unpaid orders), their online
+    payments, their bookings (upcoming + history, each lesson/court row → the admin event story),
+    and — if they coach here — a settlement summary (gross / commission / rent / net / balance).
+    club_id-scoped throughout; returns None if the user has no membership in this club. Every
+    optional block is guarded so a partial DB degrades to empty rather than 500ing."""
+    ident = session.execute(
+        text("""
+            SELECT u.id AS user_id, u.email, u.first_name, u.surname, u.phone, u.created_at,
+                   cp.display_name,
+                   array_agg(DISTINCT m.role) AS roles,
+                   bool_or(m.member_status = 'active') AS any_active,
+                   max(m.member_status) AS a_status
+            FROM iam.membership m
+            JOIN iam.user u ON u.id = m.user_id
+            LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id AND cp.club_id = m.club_id
+            WHERE m.club_id = :c AND m.user_id = :u
+            GROUP BY u.id, u.email, u.first_name, u.surname, u.phone, u.created_at, cp.display_name
+        """),
+        {"c": club_id, "u": user_id},
+    ).mappings().first()
+    if ident is None:
+        return None
+    roles = [r for r in (ident["roles"] or []) if r]
+    is_coach = "coach" in roles
+    name = (ident["display_name"]
+            or " ".join(x for x in [ident["first_name"], ident["surname"]] if x).strip()
+            or ident["email"] or "Member")
+    out = {
+        "user_id": str(ident["user_id"]),
+        "email": ident["email"],
+        "first_name": ident["first_name"],
+        "surname": ident["surname"],
+        "phone": ident["phone"],
+        "name": name,
+        "display_name": ident["display_name"],
+        "roles": roles,
+        "is_coach": is_coach,
+        "member_status": "active" if ident["any_active"] else (ident["a_status"] or "inactive"),
+        "created_at": ident["created_at"].isoformat() if hasattr(ident["created_at"], "isoformat") else ident["created_at"],
+        "currency": _club_currency(session, club_id=club_id),
+    }
+
+    # Active membership line (what grant/revoke acts on).
+    try:
+        ms = session.execute(
+            text("""
+                SELECT ms.status, ms.current_period_end, ms.provider,
+                       COALESCE(pr.label, pr.membership_tier) AS plan_label
+                FROM billing.membership_subscription ms
+                LEFT JOIN billing.price pr ON pr.id = ms.price_id
+                WHERE ms.club_id = :c AND ms.user_id = :u AND ms.status = 'active'
+                  AND (ms.current_period_end IS NULL OR ms.current_period_end >= CURRENT_DATE)
+                ORDER BY ms.current_period_end DESC NULLS LAST LIMIT 1
+            """),
+            {"c": club_id, "u": user_id},
+        ).mappings().first()
+        out["membership"] = _row(ms) if ms else None
+    except Exception:
+        session.rollback()
+        out["membership"] = None
+
+    # Owed — the UNIFIED statement (unpaid orders + one reconciled total), reused verbatim so the
+    # admin sees exactly what the member sees (docs/specs/UNIFIED-STATEMENT.md).
+    try:
+        from billing import statement as _st
+        stmt = _st.statement(session, club_id=club_id, user_id=user_id)
+    except Exception:
+        session.rollback()
+        stmt = {"items": [], "count": 0, "total_owed_minor": 0, "currency": out["currency"]}
+    out["statement"] = stmt
+    out["owed_minor"] = int(stmt.get("total_owed_minor") or 0)
+
+    # Online payments by this person (succeeded charges, with refund flag). Guarded → [].
+    try:
+        pays = session.execute(
+            text("""
+                SELECT p.id, p.order_id, p.provider, p.amount_minor, p.currency_code, p.status,
+                       p.created_at, o.settlement_mode,
+                       EXISTS(SELECT 1 FROM billing.payment r
+                              WHERE r.order_id = p.order_id AND r.direction = 'refund') AS refunded
+                FROM billing.payment p
+                JOIN billing."order" o ON o.id = p.order_id
+                WHERE p.club_id = :c AND o.user_id = :u
+                  AND p.direction = 'charge' AND p.status = 'succeeded'
+                ORDER BY p.created_at DESC LIMIT 50
+            """),
+            {"c": club_id, "u": user_id},
+        ).mappings().all()
+        out["payments"] = _rows(pays)
+    except Exception:
+        session.rollback()
+        out["payments"] = []
+
+    # Bookings — this person as the party (booked_by_user_id is the client, even for on-behalf,
+    # matching the coach activity CTE) + class enrolments. Each
+    # lesson/court row carries booking_id → the admin event story (golden rule). is_upcoming is
+    # computed in SQL (matches the server clock); split in Python.
+    try:
+        rows = session.execute(
+            text("""
+                SELECT bk.id AS booking_id, bk.booking_type AS kind, bk.starts_at, bk.ends_at,
+                       bk.status, (bk.starts_at >= now()) AS is_upcoming, r.name AS resource_name,
+                       COALESCE(cp.display_name,
+                                NULLIF(TRIM(CONCAT_WS(' ', cu.first_name, cu.surname)), ''),
+                                cu.email) AS coach_name
+                FROM diary.booking bk
+                LEFT JOIN diary.resource r ON r.id = bk.resource_id
+                LEFT JOIN iam.user cu ON cu.id = bk.coach_user_id
+                LEFT JOIN iam.coach_profile cp ON cp.user_id = bk.coach_user_id AND cp.club_id = bk.club_id
+                WHERE bk.club_id = :c AND bk.booked_by_user_id = :u
+                  AND bk.status <> 'cancelled'
+                UNION ALL
+                SELECT NULL::uuid AS booking_id, 'class' AS kind, cs.starts_at, cs.ends_at,
+                       e.status, (cs.starts_at >= now()) AS is_upcoming, r.name AS resource_name,
+                       COALESCE(cp.display_name,
+                                NULLIF(TRIM(CONCAT_WS(' ', cu.first_name, cu.surname)), ''),
+                                cu.email) AS coach_name
+                FROM diary.enrolment e
+                JOIN diary.class_session cs ON cs.id = e.class_session_id AND cs.club_id = e.club_id
+                LEFT JOIN diary.resource r ON r.id = cs.resource_id
+                LEFT JOIN iam.user cu ON cu.id = cs.coach_user_id
+                LEFT JOIN iam.coach_profile cp ON cp.user_id = cs.coach_user_id AND cp.club_id = cs.club_id
+                WHERE e.club_id = :c AND e.user_id = :u AND e.status <> 'cancelled'
+                ORDER BY starts_at DESC LIMIT 100
+            """),
+            {"c": club_id, "u": user_id},
+        ).mappings().all()
+        allb = _rows(rows)
+    except Exception:
+        session.rollback()
+        allb = []
+    upcoming = [b for b in allb if b.get("is_upcoming")]
+    upcoming.reverse()  # soonest-first
+    out["upcoming"] = upcoming
+    out["history"] = [b for b in allb if not b.get("is_upcoming")]
+    out["bookings_count"] = len(allb)
+
+    # Coach settlement summary (if they coach here) — gross / commission / rent / net / balance,
+    # all-time, straight from the cockpit earnings read. Guarded → zeros. The deeper per-client →
+    # per-service → session drill lives in Money (Step 4).
+    if is_coach:
+        settle = {"gross_lesson_minor": 0, "commission_earned_minor": 0, "coach_earning_minor": 0,
+                  "rent_due_minor": 0, "net_to_coach_minor": 0, "lifetime_balance_minor": 0,
+                  "lesson_count": 0}
+        try:
+            uid = str(user_id)
+            match = next((r for r in cockpit_coach_earnings(session, club_id=club_id)
+                          if str(r.get("coach_user_id")) == uid), None)
+            if match:
+                settle = match
+        except Exception:
+            session.rollback()
+        out["settlement"] = settle
+    return out
+
+
 def grant_membership(session, *, club_id, user_id, months=1):
     """Admin grants a member an active membership (the club's 'membership' product). Makes
     their COURT bookings free (membership_covered) until current_period_end. Idempotent: an

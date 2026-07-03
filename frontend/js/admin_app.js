@@ -183,9 +183,225 @@
     set(wrap);
   }
 
-  // ---- sections (fleshed out in subsequent build steps — see ADMIN-REDESIGN.md) ------------
-  function renderPeople() { set(soon("People", "The unified person 360 (members + coaches, drill-through to every booking & the money story) lands next.")); }
-  function renderPerson(id) { set(el("div", {}, [backBar("People", "#/people"), soon("Person", "Full record coming next.")])); }
+  // ---- PEOPLE (roster + slicer + search → the unified person 360) -----------
+  var PEOPLE = { rows: [], slice: "all", q: "" };
+  var SLICES = [["all", "All"], ["members", "Members"], ["coaches", "Coaches"], ["guests", "Guests"], ["admins", "Admins"]];
+  function pName(r) { return r.display_name || [r.first_name, r.surname].filter(Boolean).join(" ").trim() || r.email || "Member"; }
+  function pInit(r) { var n = pName(r).split(/\s+/); return ((n[0] || "?")[0] + (n.length > 1 ? n[n.length - 1][0] : "")).toUpperCase(); }
+  function pSlice(r) {
+    if (r.role === "coach") return "coaches";
+    if (r.role === "guest") return "guests";
+    if (r.role === "club_admin" || r.role === "platform_admin") return "admins";
+    return "members";
+  }
+  function pRoleLabel(r) { return { coach: "Coach", guest: "Guest", club_admin: "Admin", platform_admin: "Admin", member: "Member" }[r.role] || r.role; }
+  function peopleFiltered() {
+    var q = (PEOPLE.q || "").trim().toLowerCase(), seen = {}, out = [];
+    PEOPLE.rows.forEach(function (r) {
+      if (PEOPLE.slice !== "all" && pSlice(r) !== PEOPLE.slice) return;
+      if (q && (pName(r) + " " + (r.email || "")).toLowerCase().indexOf(q) < 0) return;
+      if (PEOPLE.slice === "all") { if (seen[r.user_id]) return; seen[r.user_id] = 1; }
+      out.push(r);
+    });
+    return out;
+  }
+  function sliceCount(k) {
+    if (k === "all") { var s = {}; PEOPLE.rows.forEach(function (r) { s[r.user_id] = 1; }); return Object.keys(s).length; }
+    return PEOPLE.rows.filter(function (r) { return pSlice(r) === k; }).length;
+  }
+  async function renderPeople() {
+    loading();
+    try { PEOPLE.rows = (await window.AdminAPI.people()).people || []; }
+    catch (e) { set(el("div", {}, [el("h1", { text: "People" }), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    paintPeople();
+  }
+  function paintPeople() {
+    var wrap = el("div", {});
+    wrap.appendChild(el("h1", { style: "margin:0 0 10px", text: "People" }));
+    // Search (list-only re-render so focus is kept while typing).
+    var listBox = el("div", {});
+    wrap.appendChild(el("input", {
+      class: "cf-input", type: "search", placeholder: "Search name or email…", value: PEOPLE.q,
+      style: "margin-bottom:10px",
+      oninput: function (e) { PEOPLE.q = e.target.value; paintPeopleList(listBox); },
+    }));
+    // Slicer (segmented control).
+    var seg = el("div", { class: "cf-segment cf-seg-lg" });
+    SLICES.forEach(function (sl) {
+      seg.appendChild(el("button", {
+        class: PEOPLE.slice === sl[0] ? "on" : "", text: sl[1] + " · " + sliceCount(sl[0]),
+        onclick: function () { PEOPLE.slice = sl[0]; paintPeople(); },
+      }));
+    });
+    wrap.appendChild(seg);
+    wrap.appendChild(listBox);
+    paintPeopleList(listBox);
+    set(wrap);
+  }
+  function paintPeopleList(box) {
+    UI.clear(box);
+    var rows = peopleFiltered();
+    if (!rows.length) { box.appendChild(el("div", { class: "cf-empty", text: "No one here yet." })); return; }
+    var c = card([]), l = el("div", { class: "cf-list" });
+    rows.forEach(function (r) {
+      l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/person/" + r.user_id); } }, [
+        el("div", { class: "cf-avatar", style: "width:34px;height:34px;font-size:.8rem", text: pInit(r) }),
+        el("div", { class: "cf-item-main" }, [
+          el("div", { class: "cf-item-t", text: pName(r) }),
+          el("div", { class: "cf-item-s", text: r.email || "—" }),
+        ]),
+        r.has_membership ? el("span", { class: "cf-chip member", text: "Member" }) : null,
+        el("span", { class: "cf-chip", text: pRoleLabel(r) }),
+        el("span", { class: "cf-muted", text: "›" }),
+      ].filter(Boolean)));
+    });
+    c.appendChild(l); box.appendChild(c);
+  }
+
+  // ---- PERSON 360 (unified record — members + coaches, one page) ------------
+  async function renderPerson(id) {
+    loading();
+    var pn;
+    try { pn = (await window.AdminAPI.person(id)).person; }
+    catch (e) { set(el("div", {}, [backBar("People", "#/people"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    var cur = pn.currency || "ZAR";
+    var wrap = el("div", {});
+    wrap.appendChild(backBar("People", "#/people"));
+
+    // Header — identity, role/status chips, membership line (+ grant/revoke), total owed.
+    var chips = el("div", { class: "cf-row", style: "gap:6px;flex-wrap:wrap;margin-top:6px" });
+    (pn.roles || []).forEach(function (role) { chips.appendChild(el("span", { class: "cf-chip", text: pRoleLabel({ role: role }) })); });
+    chips.appendChild(el("span", { class: "cf-chip " + (pn.member_status === "active" ? "confirmed" : "held"), text: pn.member_status || "—" }));
+    var head = card([
+      el("div", { class: "cf-detail-h" }, [
+        el("div", { class: "cf-row", style: "gap:10px;align-items:center" }, [
+          el("div", { class: "cf-avatar", text: pInit(pn) }),
+          el("div", {}, [
+            el("h1", { style: "margin:0;font-size:1.25rem", text: pn.name }),
+            el("div", { class: "cf-muted", style: "font-size:.85rem", text: [pn.email, pn.phone].filter(Boolean).join(" · ") || "—" }),
+            chips,
+          ]),
+        ]),
+      ]),
+    ]);
+    head.appendChild(membershipLine(pn, cur, id));
+    wrap.appendChild(head);
+
+    // Coach settlement (if they coach here) — gross / commission / rent / net / balance.
+    if (pn.is_coach && pn.settlement) {
+      var st = pn.settlement;
+      wrap.appendChild(card([
+        window.CRMUI.sectionHead("Coaching settlement"),
+        window.CRMUI.stats([
+          { value: money(st.gross_lesson_minor, cur), label: "Gross lessons" },
+          { value: money(st.commission_earned_minor, cur), label: "Club commission" },
+          { value: money(st.rent_due_minor, cur), label: "Rent due" },
+          { value: money(st.net_to_coach_minor, cur), label: "Net to coach" },
+        ]),
+        el("div", { class: "cf-muted", style: "font-size:.8rem;margin-top:8px", text: "Ledger balance: " + money(st.lifetime_balance_minor, cur) + " · full per-client settlement in Money." }),
+      ], "cf-mt"));
+    }
+
+    // Money — what they owe the club (each order Void / Write-off) + online payments.
+    var moneyCard = card([window.CRMUI.sectionHead("Money")], "cf-mt");
+    moneyCard.appendChild(el("div", { class: "cf-row", style: "margin:2px 0 10px" }, [
+      el("div", {}, [el("div", { style: "font-size:1.25rem;font-weight:800;color:" + (pn.owed_minor > 0 ? "var(--danger,#c0392b)" : "inherit"), text: money(pn.owed_minor, cur) }),
+        el("div", { class: "cf-muted", style: "font-size:.8rem", text: "Owed to the club" })]),
+    ]));
+    var owed = (pn.statement && pn.statement.items) || [];
+    if (!owed.length) moneyCard.appendChild(el("div", { class: "cf-empty", text: "Nothing owed — all settled. 🎉" }));
+    else {
+      var ol = el("div", { class: "cf-list" });
+      owed.forEach(function (it) { ol.appendChild(owedRow(it, cur, id)); });
+      moneyCard.appendChild(ol);
+    }
+    var pays = pn.payments || [];
+    if (pays.length) {
+      moneyCard.appendChild(el("div", { class: "cf-muted", style: "margin:14px 0 4px;font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em", text: "Online payments" }));
+      var pl = el("div", { class: "cf-list" });
+      pays.forEach(function (pay) {
+        pl.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: money(pay.amount_minor, pay.currency_code || cur) }),
+            el("div", { class: "cf-item-s", text: (pay.provider || "card") + " · " + (function () { try { return UI.fmtDate(pay.created_at); } catch (e) { return ""; } })() }),
+          ]),
+          el("span", { class: "cf-chip " + (pay.refunded ? "held" : "confirmed"), text: pay.refunded ? "refunded" : "paid" }),
+        ]));
+      });
+      moneyCard.appendChild(pl);
+    }
+    wrap.appendChild(moneyCard);
+
+    // Bookings — upcoming + history, each lesson/court row → the admin event story (golden rule).
+    wrap.appendChild(bookingsCard("Upcoming", pn.upcoming || [], "Nothing upcoming."));
+    wrap.appendChild(bookingsCard("History", pn.history || [], "No past bookings."));
+    set(wrap);
+  }
+
+  function membershipLine(pn, cur, id) {
+    var box = el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)" });
+    var m = pn.membership;
+    var label = m ? ("Member" + (m.plan_label ? " · " + m.plan_label : "") + (m.current_period_end ? " · until " + m.current_period_end : "")) : "No active membership";
+    box.appendChild(el("div", {}, [el("div", { style: "font-weight:700", text: m ? "Membership active" : "Not a member" }),
+      el("div", { class: "cf-muted", style: "font-size:.82rem", text: label })]));
+    if (m) box.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Revoke", onclick: function () { revokeMembership(id, pn.name); } }));
+    else box.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Grant membership", onclick: function () { grantMembership(id, pn.name); } }));
+    return box;
+  }
+  function owedRow(it, cur, id) {
+    var actions = el("div", { class: "cf-row", style: "gap:6px" }, [
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Void", onclick: function (e) { e.stopPropagation(); voidOrder(id, it, false); } }),
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Write off", onclick: function (e) { e.stopPropagation(); voidOrder(id, it, true); } }),
+    ]);
+    return el("div", { class: "cf-item" }, [
+      el("div", { class: "cf-item-main" }, [
+        el("div", { class: "cf-item-t", text: it.description || it.category || "Owed" }),
+        el("div", { class: "cf-item-s", text: [it.category, it.coach_name, (function () { try { return it.date ? UI.fmtDate(it.date) : ""; } catch (e) { return ""; } })()].filter(Boolean).join(" · ") }),
+      ]),
+      el("span", { style: "font-weight:700", text: money(it.amount_minor, it.currency || cur) }),
+      actions,
+    ]);
+  }
+  function bookingsCard(title, rows, empty) {
+    var c = card([window.CRMUI.sectionHead(title)], "cf-mt");
+    if (!rows.length) { c.appendChild(el("div", { class: "cf-empty", text: empty })); return c; }
+    var l = el("div", { class: "cf-list" });
+    rows.forEach(function (b) {
+      var k = (b.kind || "court").toLowerCase();
+      var tap = !!b.booking_id;
+      var row = el("div", { class: "cf-item" + (tap ? " cf-item-tap" : "") }, [
+        el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(k) >= 0 ? k : "court"), text: k }),
+        el("div", { class: "cf-item-main" }, [
+          el("div", { class: "cf-item-t", text: (function () { try { return UI.fmtDate(b.starts_at) + "  " + UI.fmtTime(b.starts_at); } catch (e) { return b.starts_at || ""; } })() }),
+          el("div", { class: "cf-item-s", text: [b.resource_name, b.coach_name].filter(Boolean).join(" · ") || "" }),
+        ]),
+        el("span", { class: "cf-chip " + (b.status === "confirmed" ? "confirmed" : "held"), text: b.status }),
+        tap ? el("span", { class: "cf-muted", text: "›" }) : null,
+      ].filter(Boolean));
+      if (tap) row.addEventListener("click", function () { go("#/event/" + b.booking_id); });
+      l.appendChild(row);
+    });
+    c.appendChild(l); return c;
+  }
+  // ---- person money/membership actions -------------------------------------
+  async function grantMembership(id, name) {
+    var v = window.prompt("Grant " + (name || "this member") + " a membership for how many months?", "1");
+    if (v === null) return;
+    var months = parseInt(v, 10); if (isNaN(months) || months < 1) { UI.toast("Enter a whole number of months.", "warn"); return; }
+    try { await window.AdminAPI.grantMembership(id, { months: months }); UI.toast("Membership granted.", "info"); renderPerson(id); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+  async function revokeMembership(id, name) {
+    if (!window.confirm("Cancel " + (name || "this member") + "'s membership? Their courts revert to pay-as-you-go.")) return;
+    try { await window.AdminAPI.revokeMembership(id); UI.toast("Membership cancelled.", "info"); renderPerson(id); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
+  async function voidOrder(id, it, writeOff) {
+    var verb = writeOff ? "Write off" : "Void";
+    if (!window.confirm(verb + " " + money(it.amount_minor, it.currency) + " (" + (it.description || it.category || "this charge") + ")? This clears it off their statement.")) return;
+    try { await window.AdminAPI.voidOrder(it.order_id, { write_off: !!writeOff }); UI.toast(verb + " done.", "info"); renderPerson(id); }
+    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+  }
   function renderMoney() { set(soon("Money", "Financial cockpit, per-coach settlement drill, refund/dispute approvals, payments & the club transaction log land next.")); }
   function renderDiary() { set(soon("Diary", "The resource-timeline (click-to-create, walk-in, block, desk-pay) + Classes land next.")); }
   function renderEvent(id) { set(el("div", {}, [backBar("Back"), soon("Booking", "The one admin event story (full god-view actions) lands next.")])); }

@@ -27,6 +27,28 @@
     //   active_members}, people:{new_signups_7d,coach_invites_pending,memberships_expiring_14d},
     //   approvals:{refund_requests_pending}}
     home: function () { return A().apiJSON("/api/admin/home"); },
+
+    // ---- people (roster + unified person 360) ----------------------------
+    // GET /api/admin/people -> {people:[{user_id,email,first_name,surname,phone,role,
+    //   member_status,display_name,invite_status,has_membership}]}
+    people: function () { return A().apiJSON("/api/admin/people"); },
+    // GET /api/admin/people/:user_id -> {person:{...profile,roles,is_coach,member_status,
+    //   membership, statement:{items,total_owed_minor}, owed_minor, payments:[], upcoming:[],
+    //   history:[], bookings_count, settlement?}}  — one record, drill-through to the event story.
+    person: function (id) { return A().apiJSON("/api/admin/people/" + enc(id)); },
+    // POST /api/admin/members/:user_id/membership  body: {months?} -> {ok, status}
+    grantMembership: function (id, body) {
+      return A().apiJSON("/api/admin/members/" + enc(id) + "/membership", { method: "POST", body: body || {} });
+    },
+    // DELETE /api/admin/members/:user_id/membership -> {ok, voided_orders}
+    revokeMembership: function (id) {
+      return A().apiJSON("/api/admin/members/" + enc(id) + "/membership", { method: "DELETE" });
+    },
+    // POST /api/admin/orders/:order_id/void  body: {write_off?} -> {ok} — clear an UNPAID order.
+    voidOrder: function (id, body) {
+      return A().apiJSON("/api/admin/orders/" + enc(id) + "/void", { method: "POST", body: body || {} });
+    },
+
     // ---- onboarding ------------------------------------------------------
     // GET /api/admin/onboarding ->
     //   {completed, steps:{profile,hours,courts,services,coaches},

@@ -784,6 +784,21 @@ def get_people():
     return jsonify(people=rows, count=len(rows)), 200
 
 
+@admin_bp.get("/people/<user_id>")
+def get_person(user_id):
+    """The unified person 360 (profile + all roles + active membership + owed statement + online
+    payments + bookings; if the person is a coach, also a settlement summary). Mirrors the coach
+    client 360 from the club's god-view. Every booking row drills to the admin event story."""
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        person = repo.get_person(s, club_id=p.club_id, user_id=user_id)
+    if person is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(person=person), 200
+
+
 @admin_bp.post("/members/<user_id>/membership")
 def grant_membership(user_id):
     """Grant (or extend) a member's membership → their courts become free until it expires."""

@@ -863,8 +863,46 @@ def sc_payment_preference(s, fx):
     check("online allowed again with no restriction", r3.get("ok"), str(r3))
 
 
+def sc_person_360(s, fx):
+    """admin.get_person — the unified person 360 (ADMIN-REDESIGN Step 2). A member with an owed
+    (monthly) order surfaces with a statement + that booking on the record; a coach surfaces with
+    a settlement block; a non-member of the club resolves to None."""
+    from admin import repositories as AR
+    # Member: a monthly-account (owed) court booking → statement + bookings.
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=iso(at(fx, 8)), ends_at=iso(at(fx, 9)),
+                         settlement_mode="monthly_account")
+    check("person: setup booking created", r.get("ok"), str(r))
+    person = AR.get_person(s, club_id=fx.club_id, user_id=fx.member)
+    check("person: member resolves with role",
+          person is not None and "member" in (person.get("roles") or []),
+          str(person and person.get("roles")))
+    check("person: owed reflects the monthly order", person and person.get("owed_minor", 0) > 0,
+          str(person and person.get("owed_minor")))
+    check("person: statement items present",
+          person and len((person.get("statement") or {}).get("items") or []) >= 1, "")
+    check("person: booking on the record", person and person.get("bookings_count", 0) >= 1,
+          str(person and person.get("bookings_count")))
+    # Coach: give them the coach membership (invite normally does) then resolve → settlement block.
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'coach','active') "
+                   "ON CONFLICT (club_id, user_id, role) DO NOTHING"),
+              {"c": fx.club_id, "u": fx.coach_uid})
+    coach = AR.get_person(s, club_id=fx.club_id, user_id=fx.coach_uid)
+    check("person: coach resolves as coach",
+          coach is not None and coach.get("is_coach") is True, str(coach and coach.get("roles")))
+    check("person: coach has a settlement block",
+          coach is not None and isinstance(coach.get("settlement"), dict), "")
+    # A user with no membership in this club → None (can't probe arbitrary users).
+    stranger = _mk_user(s, "stranger360@bill.test", "Stranger")
+    check("person: non-member → None",
+          AR.get_person(s, club_id=fx.club_id, user_id=stranger) is None, "")
+
+
 SCENARIOS = [
     sc_payment_preference,
+    sc_person_360,
     sc_settlement_at_court,
     sc_settlement_online,
     sc_settlement_monthly,
