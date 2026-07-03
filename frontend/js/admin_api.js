@@ -283,6 +283,11 @@
     },
     cockpitMemberships: function () { return A().apiJSON("/api/admin/financials/memberships"); },
 
+    // ---- insights (Phase 2 P1 read-layer) --------------------------------
+    // GET /api/insights/court-utilisation?days= -> {days, overall_pct, booked_hours,
+    //   available_hours, cells:[{weekday,hour,booked_hours,available_hours,pct}]}
+    courtUtilisation: function (days) { return A().apiJSON("/api/insights/court-utilisation" + (days ? ("?days=" + days) : "")); },
+
     // ---- online payments + client refund requests (Billing tab) ----------
     // GET /api/admin/payments -> {payments:[{order_id,payer_email,amount_minor,currency_code,
     //                                        created_at,refunded}]}

@@ -850,7 +850,7 @@
     });
   }
 
-  // ---- INSIGHTS (embed the Business Overview dashboard) -------------------------------------
+  // ---- INSIGHTS (Phase-2 court-utilisation heatmap + the Business Overview dashboard) -------
   function renderInsights() {
     var wrap = el("div", {});
     wrap.appendChild(backBar("Home", "#/home"));
@@ -858,8 +858,52 @@
       el("h1", { style: "margin:0", text: "Business insights" }),
       el("a", { class: "cf-btn cf-btn-sm cf-btn-ghost", href: "/overview.html", target: "_blank", text: "Open full page ›" }),
     ]));
-    wrap.appendChild(el("iframe", { src: "/overview.html", title: "Business Overview", style: "width:100%;height:calc(100vh - 210px);min-height:560px;border:1px solid var(--border,#e5e7eb);border-radius:14px;background:#fff" }));
+    var utilBox = card([window.CRMUI.sectionHead("Court utilisation"), el("div", { class: "cf-loading", text: "Loading…" })]);
+    wrap.appendChild(utilBox);
+    wrap.appendChild(el("iframe", { src: "/overview.html", title: "Business Overview", style: "width:100%;height:calc(100vh - 260px);min-height:520px;border:1px solid var(--border,#e5e7eb);border-radius:14px;background:#fff" }));
     set(wrap);
+    (async function () {
+      try {
+        var u = await window.AdminAPI.courtUtilisation(30);
+        UI.clear(utilBox);
+        utilBox.appendChild(window.CRMUI.sectionHead("Court utilisation · last 30 days"));
+        utilBox.appendChild(el("div", { class: "cf-muted", style: "font-size:.85rem;margin:-4px 0 10px", text: (u.overall_pct == null ? "Set court playing hours to see utilisation." : ("Overall " + u.overall_pct + "% of open court-hours booked. Cold cells are quiet slots to fill.")) }));
+        utilBox.appendChild(utilHeatmap(u));
+      } catch (e) { UI.clear(utilBox); utilBox.appendChild(window.CRMUI.sectionHead("Court utilisation")); utilBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
+    })();
+  }
+  // A dependency-free CSS-grid heatmap: 7 weekday rows x hour columns, cells shaded by utilisation %
+  // (or booking intensity where hours aren't set). Reuses cf-* tokens; scrolls on narrow screens.
+  function utilHeatmap(u) {
+    var cells = u.cells || [], byKey = {}, minH = 23, maxH = 6, has = false, maxBooked = 0;
+    cells.forEach(function (c) {
+      byKey[c.weekday + ":" + c.hour] = c;
+      if (c.available_hours > 0 || c.booked_hours > 0) { has = true; minH = Math.min(minH, c.hour); maxH = Math.max(maxH, c.hour); }
+      if (c.booked_hours > maxBooked) maxBooked = c.booked_hours;
+    });
+    if (!has) { minH = 6; maxH = 21; }
+    var days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], hours = [];
+    for (var h = minH; h <= maxH; h++) hours.push(h);
+    function color(c) {
+      if (!c) return "var(--canvas,#f1f4ef)";
+      if (c.pct != null) return "rgba(31,122,77," + (0.10 + 0.85 * (c.pct / 100)).toFixed(2) + ")";
+      if (c.booked_hours > 0 && maxBooked > 0) return "rgba(31,122,77," + (0.10 + 0.7 * (c.booked_hours / maxBooked)).toFixed(2) + ")";
+      return "var(--canvas,#f1f4ef)";
+    }
+    var scroller = el("div", { style: "overflow-x:auto" });
+    var grid = el("div", { style: "display:grid;grid-template-columns:auto repeat(" + hours.length + ",1fr);gap:3px;min-width:" + (60 + hours.length * 26) + "px" });
+    grid.appendChild(el("div", {}));
+    hours.forEach(function (hr) { grid.appendChild(el("div", { style: "font-size:10px;color:var(--muted);text-align:center", text: (hr < 10 ? "0" : "") + hr })); });
+    days.forEach(function (dn, wd) {
+      grid.appendChild(el("div", { style: "font-size:11px;color:var(--muted);align-self:center;padding-right:6px", text: dn }));
+      hours.forEach(function (hr) {
+        var c = byKey[wd + ":" + hr];
+        var tip = dn + " " + hr + ":00 — " + (c ? (c.pct != null ? (c.pct + "% · " + c.booked_hours + "/" + c.available_hours + "h") : (c.booked_hours + "h booked")) : "closed");
+        grid.appendChild(el("div", { title: tip, style: "height:22px;border-radius:4px;background:" + color(c) }));
+      });
+    });
+    scroller.appendChild(grid);
+    return scroller;
   }
 
   window.AdminApp = { start: start };

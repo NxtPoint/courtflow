@@ -947,10 +947,30 @@ def sc_admin_event_story(s, fx):
                                 booking_id="00000000-0000-0000-0000-000000000000") is None, "")
 
 
+def sc_court_utilisation(s, fx):
+    """insights.court_utilisation (Phase 2 P1 read-layer): a well-formed heatmap payload; a past
+    court booking lifts booked_hours + adds a cell. Guarded — empty club → zeros, never raises."""
+    from insights import repositories as INS
+    empty = INS.court_utilisation(s, club_id=fx.club_id, days=7)
+    check("util: payload shape",
+          isinstance(empty.get("cells"), list) and "overall_pct" in empty and "booked_hours" in empty,
+          str(empty)[:120])
+    # A past completed court booking (inserted directly — create_booking refuses past slots).
+    s.execute(text("INSERT INTO diary.booking (club_id, booking_type, resource_id, starts_at, ends_at, "
+                   "status, booked_by_user_id, settlement_mode) "
+                   "VALUES (:c,'court',:r, now() - interval '2 days', "
+                   "        now() - interval '2 days' + interval '1 hour', 'completed', :u, 'at_court')"),
+              {"c": fx.club_id, "r": fx.courts[0], "u": fx.member})
+    u = INS.court_utilisation(s, club_id=fx.club_id, days=7)
+    check("util: booked hours reflected", (u.get("booked_hours") or 0) > 0, str(u.get("booked_hours")))
+    check("util: a heatmap cell exists", len(u.get("cells") or []) >= 1, str(len(u.get("cells") or [])))
+
+
 SCENARIOS = [
     sc_payment_preference,
     sc_person_360,
     sc_admin_event_story,
+    sc_court_utilisation,
     sc_settlement_at_court,
     sc_settlement_online,
     sc_settlement_monthly,
