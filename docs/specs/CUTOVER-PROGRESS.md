@@ -26,9 +26,18 @@ Durable record of the Wix→Render cutover work (survives chat compaction). Full
 - **5 Google env values** (all blank in render.yaml now): `GA4_MEASUREMENT_ID`, `GOOGLE_ADS_ID`,
   `GOOGLE_ADS_CONVERSIONS` (JSON of Ads labels), `GSC_VERIFICATION_FILE` or `GSC_META_TOKEN`.
 - **DNS**: pre-lower TTL to 300s (apex+www only — ⚠️ NEVER `api.nextpointtennis.com`); flip at cutover.
-- **AWS locked out (2026-07-02):** Tomo bounced from AWS, reset ticket logged. NON-BLOCKING — SES + S3
-  are optional (email stays in-app until sorted). Park SES; wire it post-reset (15 min, SES-SETUP.md).
+- **AWS locked out (2026-07-02):** Tomo bounced from AWS, reset ticket logged. **SES worked AROUND it**
+  by reusing the ten-fifty5 SES account (see DONE below) — email is LIVE. S3 (coach photos) still parked
+  until reset (optional; coaches paste a URL meanwhile).
 - **Render**: attach custom domain, bump Free→Starter. **GSC/Ads/GA4 consoles**, pre-cutover client email.
+
+## 📌 EMAIL FOLLOW-UPS (post-AWS-reset, non-blocking — email already works)
+- **Deliverability / DKIM:** interim mail sends FROM `ten-fifty5.com`, so first sends may land in
+  junk/Promotions until reputation warms. Cleaner fix: verify **`nextpointtennis.com`** in SES (Easy DKIM
+  → 3 safe CNAMEs, never touches apex/`api.`) and set `SES_SENDER=no-reply@nextpointtennis.com` → DKIM
+  aligns to NextPoint, inboxing improves. (Meanwhile: mark the confirmations "Not junk".)
+- **Long-term:** move to CourtFlow's own `courtflow.app` SES once the AWS account is back — just repoint
+  `SES_SENDER` + drop the `SES_AWS_*` overrides (SES-SETUP.md "proper CourtFlow setup").
 
 ## ⬜ AGENT — STILL TO DO (all BLOCKED on Tomo's weekend crawl/CSV)
 - Curate FINAL `migration/redirects.csv` once url_inventory.csv exists.
@@ -39,6 +48,16 @@ Durable record of the Wix→Render cutover work (survives chat compaction). Full
 ## ✅ DONE (later)
 - **`build_blog.py` rebuilt** + pushed — blog HTML regenerated so slugs carry over. Court count
   corrected to **7 hard + 1 clay = 8 total** (Tomo-confirmed 2026-07-02).
+- **📧 SES TRANSACTIONAL EMAIL — LIVE end-to-end (2026-07-03)** via the interim (reuse the ten-fifty5
+  SES account; CourtFlow's own AWS still locked). Self-test + a real pay-at-court booking confirmation
+  both delivered (branded "NextPoint Tennis", Reply-To `info@nextpointtennis.com`, `.ics` attached →
+  proves `SendRawEmail` works too). Config on **courtflow-api**: `SES_AWS_ACCESS_KEY_ID` /
+  `SES_AWS_SECRET_ACCESS_KEY` = 1050's AWS keys · `SES_REGION=eu-north-1` (must match where the
+  ten-fifty5 identity is verified — the blank-region + missing-keys were the two bugs we hit) ·
+  `SES_SENDER=noreply@ten-fifty5.com`. Code: SES now takes its OWN creds (`SES_AWS_*`) so it rides a
+  different AWS account from S3; `_sender()` also reads `SES_FROM_EMAIL`. Diagnostic:
+  `POST /api/cron/ses-selftest?to=<email>` (OPS-guarded) reports live enabled/sender/region/creds +
+  the raw send error.
 
 ## ✅ FIXED
 - **Seed court resurrection** — `seed_nextpoint.py` now defaults to 7 hard + 1 clay AND seeds courts
