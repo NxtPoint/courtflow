@@ -14,7 +14,10 @@ log = logging.getLogger("marketing_crm.email.ses")
 
 
 def _sender():
-    return os.getenv("SES_SENDER") or os.getenv("SES_FROM") or os.getenv("BOOKINGS_FROM_EMAIL")
+    # SES_FROM_EMAIL is the exact var the ten-fifty5 (1050) service uses (value
+    # noreply@ten-fifty5.com) — accept it so the interim env can be copied verbatim.
+    return (os.getenv("SES_SENDER") or os.getenv("SES_FROM")
+            or os.getenv("SES_FROM_EMAIL") or os.getenv("BOOKINGS_FROM_EMAIL"))
 
 
 def _region():

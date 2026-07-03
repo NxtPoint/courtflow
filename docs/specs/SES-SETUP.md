@@ -20,22 +20,26 @@ CourtFlow's own AWS is locked (reset pending). But **the code can send NextPoint
 the already-verified, out-of-sandbox ten-fifty5 SES account** — branded "NextPoint Tennis" via the
 per-club From-name. SES now takes its OWN creds (`SES_AWS_*`), so it can live in a different AWS
 account from S3; nothing else changes. Set on `courtflow-api`:
-- `SES_AWS_ACCESS_KEY_ID` / `SES_AWS_SECRET_ACCESS_KEY` = an IAM key in the **ten-fifty5 AWS account**
-  with `ses:SendEmail` + `ses:SendRawEmail`.
-- `SES_REGION` = the region ten-fifty5's SES is verified in (1050 default = **`us-east-1`**).
-- `SES_SENDER` = a verified ten-fifty5 identity. Two choices:
-  - **Fastest (zero DNS):** `bookings@ten-fifty5.com` (or `info@ten-fifty5.com`). Members see the display
-    name **"NextPoint Tennis"** and replies go to `info@nextpointtennis.com` (per-club Reply-To); only the
-    raw address is on ten-fifty5.com. Works the moment the keys land.
-  - **Cleaner (adds safe DNS):** in the ten-fifty5 SES console verify `nextpointtennis.com` (Easy DKIM →
-    add the 3 CNAMEs to NextPoint DNS — safe, never touches the apex A record or `api.`), then send from
-    `no-reply@nextpointtennis.com`. Fully NextPoint-aligned.
-- Reply-To is automatic: set NextPoint's contact email in **Settings → Club profile** (`info@nextpointtennis.com`).
+The credentials already exist in the **1050 Render service env** — no AWS console needed (Render is a
+separate login). Copy from the ten-fifty5 service into `courtflow-api` (confirmed against 1050's actual
+`support_bot/email_sender.py` + `coach_invite/email_sender.py`):
+| 1050 Render value | → courtflow-api var |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | `SES_AWS_ACCESS_KEY_ID` |
+| `AWS_SECRET_ACCESS_KEY` | `SES_AWS_SECRET_ACCESS_KEY` |
+| `AWS_REGION` (**the real value — likely `eu-north-1`**, NOT the us-east-1 code default) | `SES_REGION` |
+| `SES_FROM_EMAIL` (= `noreply@ten-fifty5.com`) | `SES_SENDER` (or just copy `SES_FROM_EMAIL` as-is — code reads it) |
 
-**Dependency:** needs access to the **ten-fifty5 AWS account** (the one running 1050) to grab the SES key.
-If that account is the SAME one that's locked, this waits on the reset too — in which case reuse the 1050
-**Klaviyo** account instead (`KLAVIYO_API_KEY`, no AWS at all). Then, post-reset, do the proper CourtFlow
-setup below and just repoint `SES_SENDER` + drop the `SES_AWS_*` overrides.
+- Members see the display name **"NextPoint Tennis"** (per-club From-name); replies route to
+  `info@nextpointtennis.com` (per-club Reply-To — set it in **Settings → Club profile**). Only the raw
+  address stays on ten-fifty5.com. (Cleaner-but-optional later: verify `nextpointtennis.com` in that SES
+  account via Easy DKIM — 3 safe CNAMEs, never touches the apex/`api.` — and send from `no-reply@nextpointtennis.com`.)
+- **Sandbox:** almost certainly NOT an issue — 1050 sends **coach invites to external emails** through this
+  same SES in prod, which a sandboxed account can't do. Confirm anyway with `python -m scripts.test_ses --to <gmail>`.
+
+**Verify before trusting it:** `python -m scripts.test_ses --to you@example.com` (with the env pasted in)
+reports the config and, on a real send, translates any failure (sandbox / missing `ses:SendEmail` / wrong
+region). Post-reset, do the proper CourtFlow setup below and just repoint `SES_SENDER` + drop the `SES_AWS_*`.
 
 ## What Tomo does in AWS (one-time — the PROPER CourtFlow setup, post-reset)
 1. **SES region = `af-south-1`** (Cape Town — matches `AWS_REGION` in `render.yaml`). Do everything below
