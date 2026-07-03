@@ -94,8 +94,18 @@ services:
         sync: false
       - key: AWS_SECRET_ACCESS_KEY
         sync: false
-      - key: SES_SENDER            # verified CourtFlow address, e.g. no-reply@courtflow.app
+      - key: SES_SENDER            # verified sender. INTERIM: a ten-fifty5.com addr; LATER: no-reply@courtflow.app
         sync: false
+      # SES-only creds + region — let email ride a DIFFERENT AWS account from S3. INTERIM go-live:
+      # point these at the already-verified, out-of-sandbox TEN-FIFTY5 SES account so booking
+      # confirmations send now (branded "NextPoint Tennis" via per-club From-name). Swap to
+      # CourtFlow's own account once AWS is reset. Unset => SES uses the default AWS_* chain.
+      - key: SES_AWS_ACCESS_KEY_ID     # ten-fifty5 SES IAM key (interim)
+        sync: false
+      - key: SES_AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: SES_REGION               # ten-fifty5 SES region (1050 default = us-east-1); else = AWS_REGION
+        value: ""
 
   # =========================================
   # 2) courtflow-web — host-switched marketing site + portal SPAs (NO DB)

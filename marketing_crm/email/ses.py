@@ -21,11 +21,26 @@ def _region():
     return os.getenv("SES_REGION") or os.getenv("AWS_REGION") or "eu-west-1"
 
 
+def _ses_creds():
+    """Explicit SES-only credentials (SES_AWS_ACCESS_KEY_ID / SES_AWS_SECRET_ACCESS_KEY), so the
+    transactional sender can live in a DIFFERENT AWS account from S3. This is the go-live interim:
+    NextPoint email rides the already-verified, out-of-sandbox ten-fifty5 SES account now, while
+    CourtFlow's own AWS (S3 photos, future courtflow.app SES) is set up later — the two never
+    entangle. When unset, boto3 falls back to the default chain (AWS_* / profile / role), i.e. the
+    prior behaviour. Returns kwargs for boto3.client (empty dict = default chain)."""
+    kid = os.getenv("SES_AWS_ACCESS_KEY_ID")
+    sec = os.getenv("SES_AWS_SECRET_ACCESS_KEY")
+    if kid and sec:
+        return {"aws_access_key_id": kid, "aws_secret_access_key": sec}
+    return {}
+
+
 def _has_aws_creds():
     # boto3 also resolves an instance/role profile; treat explicit keys OR a configured profile as
     # "credentials present". We still let boto3 be the final arbiter (a send failure is caught).
     return bool(
-        (os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY"))
+        (os.getenv("SES_AWS_ACCESS_KEY_ID") and os.getenv("SES_AWS_SECRET_ACCESS_KEY"))
+        or (os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY"))
         or os.getenv("AWS_PROFILE")
         or os.getenv("AWS_ROLE_ARN")
     )
@@ -78,7 +93,7 @@ def send_email(to_email, subject, body_text, body_html=None, from_name=None, rep
         return False
     try:
         import boto3
-        client = boto3.client("ses", region_name=_region())
+        client = boto3.client("ses", region_name=_region(), **_ses_creds())
         body = {"Text": {"Data": body_text, "Charset": "UTF-8"}}
         if body_html:
             body["Html"] = {"Data": body_html, "Charset": "UTF-8"}
@@ -139,7 +154,7 @@ def send_raw_email(to_email, subject, body_text, body_html=None, attachments=Non
             encoders.encode_base64(part)
             part.add_header("Content-Disposition", 'attachment; filename="%s"' % (a.get("filename") or "attachment"))
             msg.attach(part)
-        client = boto3.client("ses", region_name=_region())
+        client = boto3.client("ses", region_name=_region(), **_ses_creds())
         client.send_raw_email(Source=src, Destinations=[to_email], RawMessage={"Data": msg.as_string()})
         return True
     except Exception:
