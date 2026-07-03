@@ -30,11 +30,11 @@
     // owner/coach to their onboarding first (the same gate portal.html used to run).
     if (principal.role === "coach") {
       try { var cob = await window.TFAuth.apiJSON("/api/coach/onboarding"); if (cob && !cob.completed) { location.href = "/coach-onboarding.html"; return; } } catch (e) {}
-      location.href = "/coach.html"; return;
+      location.href = "/coach"; return;
     }
     if (principal.role === "club_admin" || principal.role === "platform_admin") {
       try { var aob = await window.TFAuth.apiJSON("/api/admin/onboarding"); if (aob && !aob.completed) { location.href = "/onboarding.html"; return; } } catch (e) {}
-      location.href = "/admin.html"; return;
+      location.href = "/admin"; return;
     }
     if (!principal.club_id) { document.body.innerHTML =
       '<div style="padding:40px;font-family:Inter,system-ui">No active club is resolved for your account. Contact the club to be added.</div>'; return; }

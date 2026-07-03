@@ -32,16 +32,16 @@
   //   owner/admin  → Admin · Settings
   var NAV = [
     { href: "/portal.html",   label: "Home",     roles: ["member", "guest"] },
-    { href: "/coach.html",    label: "Coach",    roles: ["coach"] },
-    { href: "/admin.html",    label: "Admin",    roles: ["club_admin", "platform_admin"] },
+    { href: "/coach",         label: "Coach",    roles: ["coach"] },
+    { href: "/admin",         label: "Admin",    roles: ["club_admin", "platform_admin"] },
     { href: "/account.html",  label: "Account",  roles: ["member", "guest", "coach"] },
     { href: "/settings.html", label: "Settings", roles: ["club_admin", "platform_admin"] },
   ];
 
   // Where a role lands on sign-in (the client Home is not a coach/owner's face).
   function landingFor(role) {
-    if (role === "coach") return "/coach.html";
-    if (role === "club_admin" || role === "platform_admin") return "/admin.html";
+    if (role === "coach") return "/coach";
+    if (role === "club_admin" || role === "platform_admin") return "/admin";
     return "/portal.html";
   }
 

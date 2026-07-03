@@ -471,11 +471,13 @@ def coach_console():
 
 
 @app.get("/admin")
+@app.get("/admin.html")
 def admin_console():
     # /admin now serves the redesigned owner/admin SPA (responsive drill-through — Home · People ·
-    # Money · Diary · Setup + the one event story; docs/specs/ADMIN-REDESIGN.md). The classic tab
-    # console stays reachable at /admin-classic (its full drag-timeline is linked from the new Diary)
-    # until the new diary reaches full parity, so nothing is lost.
+    # Money · Diary · Setup + the one event story; docs/specs/ADMIN-REDESIGN.md). We ALSO claim
+    # /admin.html explicitly (like /coach.html) so stray in-app links / old bookmarks land on the new
+    # console instead of falling through to the classic file. The classic tab console stays reachable
+    # at /admin-classic (its full drag-timeline is linked from the new Diary) — nothing is lost.
     return _app_shell("admin_app.html")
 
 

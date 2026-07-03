@@ -83,8 +83,8 @@
   }
   function staffCard() {
     var staff = [
-      { href: "/coach.html", t: "Coach console", s: "My week & rosters", roles: ["coach", "club_admin", "platform_admin"] },
-      { href: "/admin.html", t: "Master diary", s: "Club admin & desk", roles: ["club_admin", "platform_admin"] },
+      { href: "/coach", t: "Coach console", s: "My week & rosters", roles: ["coach", "club_admin", "platform_admin"] },
+      { href: "/admin", t: "Master diary", s: "Club admin & desk", roles: ["club_admin", "platform_admin"] },
       { href: "/settings.html", t: "Settings", s: "Club, hours, courts, pricing", roles: ["club_admin", "platform_admin"] },
     ].filter(function (l) { return l.roles.indexOf(P.role) >= 0; });
     if (!staff.length) return null;
