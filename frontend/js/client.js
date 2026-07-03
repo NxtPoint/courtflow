@@ -350,56 +350,28 @@
   }
 
   // ---- BOOKING STORY (the full drill-through) ------------------------------
-  async function renderBookingStory(id) {
-    loading();
-    var b;
-    try { b = (await window.API.bookingStory(id)).booking; } catch (e) { set(el("div", {}, [backBar("Home", "#/"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
-    var ch = b.charge || {}, cur = ch.currency || "ZAR";
-    var wrap = el("div", {});
-    wrap.appendChild(backBar("Back"));
-
-    // Header
-    var head = card([
-      el("div", { class: "cf-detail-h" }, [
-        el("div", {}, [
-          el("span", { class: "cf-chip " + b.booking_type, text: typeLabel(b.booking_type) + (b.duration_minutes ? " · " + b.duration_minutes + " min" : "") }),
-          el("h1", { style: "margin:8px 0 2px;font-size:1.35rem", text: UI.fmtDate(b.starts_at) }),
-          el("div", { class: "cf-muted", text: timeRange(b) }),
-        ]),
-        statusChip(b.status),
-      ]),
-    ]);
-    // Details
-    var det = el("div", { style: "margin-top:6px" });
-    if (b.venue && (b.venue.club_name || b.venue.address)) {
-      det.appendChild(kv("Where", el("div", {}, [
-        el("div", { text: [b.venue.club_name, b.court_name].filter(Boolean).join(" · ") || b.court_name || "—" }),
-        b.venue.address ? el("div", { class: "cf-muted", style: "font-size:.85rem", text: b.venue.address }) : null,
-      ].filter(Boolean))));
-    } else if (b.court_name) det.appendChild(kv("Where", b.court_name));
-    if (b.coach_name) det.appendChild(kv("Coach", b.coach_name));
-    if (b.players && b.players.length) det.appendChild(kv("Who", b.players.map(function (p) { return p.name; }).join(", ")));
-    // Charge row
-    det.appendChild(kv("Charge", el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [
-      el("span", { style: "font-weight:700", text: ch.status === "covered" ? "Covered" : money(ch.amount_minor, cur) }),
-      statusChip(ch.status),
-    ])));
-    head.appendChild(det);
-    wrap.appendChild(head);
-
-    // Actions
-    var acts = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin-top:14px" });
-    if (b.can.pay) acts.appendChild(el("button", { class: "cf-btn cf-btn-primary", text: "Pay now · " + money(ch.amount_minor, cur), onclick: function () { payOrders([ch.order_id]); } }));
-    if (b.can.accept) acts.appendChild(el("button", { class: "cf-btn cf-btn-primary", text: "Accept time", onclick: function () { act(function () { return window.API.acceptBooking(b.id); }, "Confirmed."); } }));
-    if (b.can.add_to_calendar) acts.appendChild(el("button", { class: "cf-btn cf-btn-ghost", text: "Add to calendar", onclick: function () { addToCalendar(b.ics_url); } }));
-    if (b.can.receipt) acts.appendChild(el("button", { class: "cf-btn cf-btn-ghost", text: "Receipt", onclick: function () { go("#/billing/order/" + ch.order_id); } }));
-    if (b.can.reschedule) acts.appendChild(el("button", { class: "cf-btn cf-btn-ghost", text: "Reschedule", onclick: function () { rescheduleSheet(b); } }));
-    if (b.can.cancel) acts.appendChild(el("button", { class: "cf-btn cf-btn-danger", text: "Cancel", onclick: function () { cancelBooking(b); } }));
-    if (b.can.request_refund) acts.appendChild(el("button", { class: "cf-btn cf-btn-ghost", text: "Request refund", onclick: function () { requestRefund(ch.order_id); } }));
-    if (b.can.withdraw) acts.appendChild(el("button", { class: "cf-btn cf-btn-danger", text: "Withdraw request", onclick: function () { act(function () { return window.API.cancelBooking(b.id, { reason: "withdrawn" }); }, "Withdrawn."); } }));
-    if (b.can.decline && !b.can.accept) acts.appendChild(el("button", { class: "cf-btn cf-btn-danger", text: "Decline", onclick: function () { act(function () { return window.API.declineBooking(b.id, {}); }, "Declined."); } }));
-    if (acts.childNodes.length) wrap.appendChild(acts);
-    set(wrap);
+  // The ONE shared transaction detail (Widgets.TransactionDetail), flat action row for the client's
+  // simpler set. Its action UIs (payOrders/rescheduleSheet/cancelBooking/requestRefund) stay local.
+  function renderBookingStory(id) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.TransactionDetail.mount(host, {
+      role: "client",
+      scope: { id: id },
+      grouped: false,
+      data: { get: function (i) { return window.API.bookingStory(i).then(function (r) { return r.booking; }); } },
+      actions: {
+        pay: { manual: true, run: function (b) { payOrders([b.charge.order_id]); } },
+        accept: { done: "Confirmed.", run: function (b) { return window.API.acceptBooking(b.id); } },
+        add_to_calendar: { manual: true, run: function (b) { addToCalendar(b.ics_url); } },
+        receipt: { manual: true, run: function (b) { go("#/billing/order/" + b.charge.order_id); } },
+        reschedule: { manual: true, run: function (b) { rescheduleSheet(b); } },
+        cancel: { manual: true, run: function (b) { cancelBooking(b); } },
+        request_refund: { manual: true, run: function (b) { requestRefund(b.charge.order_id); } },
+        withdraw: { tone: "danger", back: true, done: "Withdrawn.", run: function (b) { return window.API.cancelBooking(b.id, { reason: "withdrawn" }); } },
+        decline: { tone: "danger", back: true, done: "Declined.", run: function (b) { return window.API.declineBooking(b.id, {}); } },
+      },
+    });
   }
 
   function cancelBooking(b) {

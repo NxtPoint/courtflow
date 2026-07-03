@@ -459,55 +459,33 @@
   }
 
   // ---- EVENT STORY (the drill-through heart) -------------------------------
-  async function renderEvent(id) {
-    loading();
-    var b;
-    try { b = (await window.CoachAPI.bookingStory(id)).booking; } catch (e) { set(el("div", {}, [backBar("Back"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
-    var ch = b.charge || {}, cur = ch.currency || "ZAR", cl = b.client || {};
-    var wrap = el("div", {});
-    wrap.appendChild(backBar("Back"));
-    var head = card([
-      el("div", { class: "cf-detail-h" }, [
-        el("div", {}, [el("span", { class: "cf-chip " + b.booking_type, text: typeLabel(b.booking_type) + (b.duration_minutes ? " · " + b.duration_minutes + " min" : "") }),
-          el("h1", { style: "margin:8px 0 2px;font-size:1.3rem", text: UI.fmtDate(b.starts_at) }), el("div", { class: "cf-muted", text: timeRange(b) })]),
-        statusChip(b.status),
-      ]),
-    ]);
-    var det = el("div", { style: "margin-top:6px" });
-    // Client (tap → their record; call / email)
-    if (cl.name) {
-      var contacts = el("div", { class: "cf-row", style: "gap:8px;margin-top:4px;flex-wrap:wrap" });
-      if (cl.phone) contacts.appendChild(el("a", { class: "cf-btn cf-btn-sm cf-btn-ghost", href: "tel:" + cl.phone, text: "📞 Call" }));
-      if (cl.email) contacts.appendChild(el("a", { class: "cf-btn cf-btn-sm cf-btn-ghost", href: "mailto:" + cl.email, text: "✉ Email" }));
-      if (cl.user_id) contacts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Full record ›", onclick: function () { go("#/client/" + cl.user_id); } }));
-      det.appendChild(kv("Client", el("div", {}, [el("div", { style: "font-weight:600", text: cl.name }), el("div", { class: "cf-muted", style: "font-size:.85rem", text: [cl.email, cl.phone].filter(Boolean).join(" · ") }), contacts])));
-    }
-    if (b.venue && (b.venue.club_name || b.court_name)) det.appendChild(kv("Where", el("div", {}, [el("div", { text: [b.venue.club_name, b.court_name].filter(Boolean).join(" · ") || "—" }), b.venue.address ? el("div", { class: "cf-muted", style: "font-size:.85rem", text: b.venue.address }) : null].filter(Boolean))));
-    if (b.players && b.players.length) det.appendChild(kv("Players", b.players.map(function (p) { return p.name + (p.attended === true ? " ✓" : p.attended === false ? " ✗" : ""); }).join(", ")));
-    det.appendChild(kv("Charge", el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { style: "font-weight:700", text: ch.status === "covered" ? "Covered" : money(ch.amount_minor, cur) }), statusChip(ch.status)])));
-    // Coaching money for this lesson (the coach's line) — status + amount, right where you manage it.
-    if (b.arrears) det.appendChild(kv("Coaching", el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { style: "font-weight:700", text: money(b.arrears.gross_minor, cur) }), statusChip(b.arrears.status)])));
-    head.appendChild(det);
-    wrap.appendChild(head);
-
-    // Coach actions
-    var a = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin-top:14px" });
-    var can = b.can || {};
-    if (can.accept) a.appendChild(btn("Accept", "primary", function () { act(function () { return window.API.acceptBooking(b.id); }, "Confirmed.", function () { renderEvent(id); }); }));
-    if (can.propose) a.appendChild(btn("Propose time", "", function () { proposeModal(b.id, function () { renderEvent(id); }); }));
-    if (can.mark_completed) a.appendChild(btn("Mark completed", "primary", function () { act(function () { return window.API.setBookingStatus(b.id, { status: "completed" }); }, "Marked completed.", function () { renderEvent(id); }); }));
-    if (can.mark_no_show) a.appendChild(btn("No-show", "", function () { act(function () { return window.API.setBookingStatus(b.id, { status: "no_show" }); }, "Marked no-show.", function () { renderEvent(id); }); }));
-    if (can.reschedule) a.appendChild(btn("Reschedule", "", function () { rescheduleModal(b, function () { renderEvent(id); }); }));
-    // Coaching-money actions (the arrears line lives right here in the event story)
-    var arrId = (b.arrears || {}).id, refresh = function () { renderEvent(id); };
-    if (can.collect) a.appendChild(btn("Mark collected", "primary", function () { arr(arrId, "collect", refresh); }));
-    if (can.discount) a.appendChild(btn("Discount", "", function () { arr(arrId, "discount", refresh, b.arrears); }));
-    if (can.write_off) a.appendChild(btn("Write off", "danger", function () { arr(arrId, "writeoff", refresh); }));
-    if (can.add_to_calendar) a.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Add to calendar", onclick: function () { addToCalendar(b.ics_url); } }));
-    if (can.decline) a.appendChild(btn("Decline", "danger", function () { act(function () { return window.API.declineBooking(b.id, {}); }, "Declined.", function () { history.back(); }); }));
-    if (can.cancel && !can.decline) a.appendChild(btn("Cancel", "danger", function () { if (!window.confirm("Cancel this session?")) return; act(function () { return window.API.cancelBooking(b.id, { reason: "coach cancelled" }); }, "Cancelled.", function () { history.back(); }); }));
-    if (a.childNodes.length) wrap.appendChild(a);
-    set(wrap);
+  // The ONE shared transaction detail (Widgets.TransactionDetail). Coach wires its action handlers;
+  // proposeModal/rescheduleModal/arr below are the coach action UIs. (FRONTEND-STANDARDISATION Wave 2.)
+  function renderEvent(id) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.TransactionDetail.mount(host, {
+      role: "coach",
+      scope: { id: id },
+      fields: { showCoach: false },   // the coach IS the coach — no coach row on their own session
+      data: { get: function (i) { return window.CoachAPI.bookingStory(i).then(function (r) { return r.booking; }); } },
+      onNavigate: function (t) { if (t.kind === "person") go("#/client/" + t.id); },
+      actions: {
+        accept: { done: "Confirmed.", run: function (b) { return window.API.acceptBooking(b.id); } },
+        propose: { manual: true, run: function (b) { proposeModal(b.id, function () { renderEvent(id); }); } },
+        decline: { tone: "danger", back: true, done: "Declined.", run: function (b) { return window.API.declineBooking(b.id, {}); } },
+        mark_completed: { done: "Marked completed.", run: function (b) { return window.API.setBookingStatus(b.id, { status: "completed" }); } },
+        mark_no_show: { done: "Marked no-show.", run: function (b) { return window.API.setBookingStatus(b.id, { status: "no_show" }); } },
+        reschedule: { manual: true, run: function (b) { rescheduleModal(b, function () { renderEvent(id); }); } },
+        cancel: { tone: "danger", back: true, confirm: "Cancel this session?", done: "Cancelled.", run: function (b) { return window.API.cancelBooking(b.id, { reason: "coach cancelled" }); } },
+        add_to_calendar: { manual: true, run: function (b) { addToCalendar(b.ics_url); } },
+        // Coaching money (arrears) — coach's write_off is the COACHING write-off, so it belongs in the
+        // Coaching group (override the widget's default "Client charge" placement for this key).
+        collect: { group: "Coaching charge", manual: true, run: function (b) { arr(b.arrears.id, "collect", function () { renderEvent(id); }); } },
+        discount: { group: "Coaching charge", manual: true, run: function (b) { arr(b.arrears.id, "discount", function () { renderEvent(id); }, b.arrears); } },
+        write_off: { group: "Coaching charge", tone: "danger", manual: true, run: function (b) { arr(b.arrears.id, "writeoff", function () { renderEvent(id); }); } },
+      },
+    });
   }
   function btn(text, tone, onclick) { return el("button", { class: "cf-btn cf-btn-sm" + (tone ? " cf-btn-" + tone : ""), text: text, onclick: onclick }); }
   function proposeModal(id, then) {

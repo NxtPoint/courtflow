@@ -98,8 +98,10 @@
       head.appendChild(det);
       wrap.appendChild(head);
 
-      // Actions — a button per `can` flag the payload allows AND the app wired. Grouped canonically.
-      var groups = {};
+      // Actions — a button per `can` flag the payload allows AND the app wired, in canonical order.
+      // cfg.grouped (default true) shows category headers (admin/coach god-view); pass false for a
+      // clean flat row (the client's fewer, simpler actions).
+      var built = [];
       ACTIONS.forEach(function (spec) {
         var key = spec[0];
         if (!b.can || !b.can[key]) return;
@@ -107,13 +109,19 @@
         if (!a) return;
         var tone = a.tone || spec[3], group = a.group || spec[1], label = a.label || spec[2];
         var cls = "cf-btn cf-btn-sm" + (tone === "ghost" ? " cf-btn-ghost" : (tone ? " cf-btn-" + tone : ""));
-        (groups[group] = groups[group] || []).push(el("button", { class: cls, text: label, onclick: function () { run(a, b); } }));
+        built.push({ group: group, node: el("button", { class: cls, text: label, onclick: function () { run(a, b); } }) });
       });
-      GROUP_ORDER.concat(Object.keys(groups).filter(function (g) { return GROUP_ORDER.indexOf(g) < 0; })).forEach(function (g) {
-        var btns = groups[g]; if (!btns || !btns.length) return;
-        wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px" },
-          [el("span", { class: "cf-muted", style: "font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;width:100%", text: g })].concat(btns)));
-      });
+      if (cfg.grouped === false) {
+        if (built.length) wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin-top:14px" }, built.map(function (x) { return x.node; })));
+      } else {
+        var groups = {};
+        built.forEach(function (x) { (groups[x.group] = groups[x.group] || []).push(x.node); });
+        GROUP_ORDER.concat(Object.keys(groups).filter(function (g) { return GROUP_ORDER.indexOf(g) < 0; })).forEach(function (g) {
+          var btns = groups[g]; if (!btns || !btns.length) return;
+          wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px" },
+            [el("span", { class: "cf-muted", style: "font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;width:100%", text: g })].concat(btns)));
+        });
+      }
 
       UI.clear(host); host.appendChild(wrap);
     }
