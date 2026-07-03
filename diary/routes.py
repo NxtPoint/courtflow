@@ -648,3 +648,44 @@ def cron_membership_refill():
         return jsonify(error="forbidden"), 403
     from db import get_engine
     return jsonify(crons_mod.run_membership_refill(get_engine())), 200
+
+
+@cron_bp.post("/ses-selftest")
+def cron_ses_selftest():
+    """OPS-only SES diagnostic. Reports the LIVE service's SES state and, with ?to=<email>, attempts
+    a RAW send (bypassing the app's error-swallowing wrapper) so the exact boto3 error is returned —
+    the fastest way to tell a wrong region / bad key / missing permission / sandbox apart. Sends
+    nothing but a one-line test message; never touches the DB. Guarded by OPS_KEY."""
+    if not _ops_only():
+        return jsonify(error="forbidden"), 403
+    from marketing_crm.email import ses
+    to = (request.args.get("to")
+          or (request.get_json(silent=True) or {}).get("to") or "").strip()
+    out = {
+        "enabled": ses.enabled(),
+        "sender": ses._sender(),
+        "region": ses._region(),
+        "creds": "SES_AWS_* (own account)" if ses._ses_creds() else "default AWS_* chain",
+    }
+    try:
+        import boto3  # noqa: F401
+        out["boto3"] = True
+    except Exception as e:
+        out["boto3"] = False
+        out["boto3_error"] = str(e)
+    if to:
+        # RAW send so the true error surfaces (the app path catches + returns False).
+        try:
+            import boto3
+            client = boto3.client("ses", region_name=ses._region(), **ses._ses_creds())
+            client.send_email(
+                Source=ses._from_source("NextPoint Tennis"),
+                Destination={"ToAddresses": [to]},
+                Message={"Subject": {"Data": "CourtFlow SES self-test", "Charset": "UTF-8"},
+                         "Body": {"Text": {"Data": "SES self-test OK.", "Charset": "UTF-8"}}},
+            )
+            out["send_ok"] = True
+        except Exception as e:
+            out["send_ok"] = False
+            out["send_error"] = "%s: %s" % (type(e).__name__, e)
+    return jsonify(out), 200
