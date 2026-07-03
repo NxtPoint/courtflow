@@ -5,10 +5,8 @@
 // Design spec: docs/specs/ADMIN-REDESIGN.md. Non-admins are bounced to their own app.
 (function () {
   var UI, el, principal = null, view, CLUB = null;
-  var DIARY_VIEW = "day";   // day | week | month | classes (standard calendar views)
-  var DIARY_COURT = "";     // resource_id filter ("" = all courts)
-  var DIARY_COACH = "";     // coach_user_id filter ("" = all coaches)
-  var DIARY_LISTS = null;   // cached {courts, coaches} for the filter dropdowns
+  var DIARY_TAB = "diary";  // diary (the shared Calendar widget) | classes
+  var DIARY_LISTS = null;   // cached {courts, coaches} for the calendar filters
   var money = function (m, c) { return UI.money(m || 0, c || "ZAR"); };
   function go(h) { location.hash = h; }
 
@@ -620,122 +618,29 @@
     DIARY_LISTS = { courts: courts, coaches: coaches };
     return DIARY_LISTS;
   }
-  function ymd(d) { return UI.dateKey(d); }
-  function parseDay(day) { return new Date(day + "T12:00:00"); }
-  function weekStartOf(d) { var x = new Date(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; } // Monday
-  function longDay(d) { try { return d.toLocaleDateString("en-ZA", { weekday: "long", day: "numeric", month: "long" }); } catch (e) { return ymd(d); } }
-  function evDateKey(ev) { try { return UI.dateKey(new Date(ev.starts_at)); } catch (e) { return (ev.starts_at || "").slice(0, 10); } }
-  function diaryRange(view, day) {
-    var d = parseDay(day);
-    if (view === "week") { var s = weekStartOf(d), e = new Date(s); e.setDate(s.getDate() + 6); return { from: ymd(s), to: ymd(e) }; }
-    if (view === "month") { return { from: ymd(new Date(d.getFullYear(), d.getMonth(), 1)), to: ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0)) }; }
-    return { from: day, to: day };
-  }
+  // Diary — the shared Calendar widget (Widgets.Calendar) over the whole club (court + coach
+  // filters), plus a Classes tab. FRONTEND-STANDARDISATION Wave 5. Router passes an optional date.
   async function renderDiary(dateKey) {
-    var day = dateKey || UI.dateKey(new Date());
     loading();
     var lists = await ensureDiaryLists();
     var wrap = el("div", {});
     wrap.appendChild(el("h1", { style: "margin:0 0 8px", text: "Diary" }));
-    function seg(k, label) { return el("button", { class: DIARY_VIEW === k ? "on" : "", text: label, onclick: function () { DIARY_VIEW = k; renderDiary(day); } }); }
-    wrap.appendChild(el("div", { class: "cf-segment cf-seg-lg" }, [seg("day", "Day"), seg("week", "Week"), seg("month", "Month"), seg("classes", "Classes")]));
-
-    if (DIARY_VIEW === "classes") { var cbox = el("div", {}); wrap.appendChild(cbox); set(wrap); renderDiaryClasses(cbox); return; }
-
-    // Filters: court + coach.
-    var courtSel = el("select", { class: "cf-input", style: "max-width:180px" }, [el("option", { value: "", text: "All courts" })].concat(lists.courts.map(function (c) { return el("option", { value: c.id, text: c.name || "Court" }); })));
-    courtSel.value = DIARY_COURT; courtSel.addEventListener("change", function () { DIARY_COURT = courtSel.value; renderDiary(day); });
-    var coachSel = el("select", { class: "cf-input", style: "max-width:180px" }, [el("option", { value: "", text: "All coaches" })].concat(lists.coaches.map(function (c) { return el("option", { value: String(c.user_id), text: c.display_name || [c.first_name, c.surname].filter(Boolean).join(" ") || c.email }); })));
-    coachSel.value = DIARY_COACH; coachSel.addEventListener("change", function () { DIARY_COACH = coachSel.value; renderDiary(day); });
-    wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin:10px 0" }, [courtSel, coachSel]));
-
-    // Date navigation (unit follows the view).
-    var d = parseDay(day);
-    function shift(n) { var x = new Date(d); if (DIARY_VIEW === "month") x.setMonth(x.getMonth() + n); else if (DIARY_VIEW === "week") x.setDate(x.getDate() + 7 * n); else x.setDate(x.getDate() + n); go("#/diary/" + ymd(x)); }
-    var label = DIARY_VIEW === "month" ? monthLabel(ymd(d).slice(0, 7)) : (DIARY_VIEW === "week" ? ("Week of " + dayLabel(ymd(weekStartOf(d)))) : longDay(d));
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:10px" }, [
-      el("div", { style: "font-weight:600", text: label }),
-      el("div", { class: "cf-row", style: "gap:6px" }, [
-        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹", onclick: function () { shift(-1); } }),
-        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Today", onclick: function () { go("#/diary/" + UI.dateKey(new Date())); } }),
-        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { shift(1); } }),
-      ]),
-    ]));
-    var body = el("div", {}, [el("div", { class: "cf-loading", text: "Loading…" })]);
+    function seg(k, label) { return el("button", { class: DIARY_TAB === k ? "on" : "", text: label, onclick: function () { DIARY_TAB = k; renderDiary(dateKey); } }); }
+    wrap.appendChild(el("div", { class: "cf-segment cf-seg-lg" }, [seg("diary", "Calendar"), seg("classes", "Classes")]));
+    var body = el("div", {});
     wrap.appendChild(body);
     set(wrap);
-
-    var range = diaryRange(DIARY_VIEW, day);
-    var events = [];
-    try { events = (await window.API.master({ date_from: range.from, date_to: range.to })).events || []; } catch (e) {}
-    events = events.filter(function (ev) {
-      if (ev.status === "cancelled") return false;
-      if (DIARY_COURT && String(ev.resource_id) !== String(DIARY_COURT)) return false;
-      if (DIARY_COACH && String(ev.coach_user_id) !== String(DIARY_COACH)) return false;
-      return true;
-    }).sort(function (a, b) { return String(a.starts_at).localeCompare(String(b.starts_at)); });
-
-    UI.clear(body);
-    if (DIARY_VIEW === "month") body.appendChild(diaryMonthView(day, events));
-    else if (DIARY_VIEW === "week") body.appendChild(diaryWeekView(day, events));
-    else body.appendChild(diaryDayView(events));
-    body.appendChild(el("p", { class: "cf-muted", style: "font-size:.82rem;margin-top:12px" }, [
-      document.createTextNode("Need the full drag-and-drop timeline (walk-ins · block time · desk-pay)? "),
-      el("a", { href: "/admin-classic#diary", text: "Open the classic diary ›" }),
-    ]));
-  }
-  function diaryEventRow(ev) {
-    var t = (ev.booking_type || "court").toLowerCase();
-    return el("div", { class: "cf-item" + (ev.id ? " cf-item-tap" : ""), onclick: function () { if (ev.id) go("#/event/" + ev.id); } }, [
-      el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(t) >= 0 ? t : "court"), text: (function () { try { return UI.fmtTime(ev.starts_at); } catch (e) { return t; } })() }),
-      el("div", { class: "cf-item-main" }, [
-        el("div", { class: "cf-item-t", text: ev.resource_name || typeLabel(t) }),
-        el("div", { class: "cf-item-s", text: [ev.booked_by_name, ev.coach_name].filter(Boolean).join(" · ") || t }),
-      ]),
-      UI.statusChip(ev.status),
-    ]);
-  }
-  function diaryDayView(events) {
-    if (!events.length) return el("div", { class: "cf-empty", text: "Nothing booked." });
-    var c = card([]), l = el("div", { class: "cf-list" });
-    events.forEach(function (ev) { l.appendChild(diaryEventRow(ev)); });
-    c.appendChild(l); return c;
-  }
-  function diaryWeekView(day, events) {
-    var s = weekStartOf(parseDay(day)), byDate = {};
-    events.forEach(function (ev) { var k = evDateKey(ev); (byDate[k] = byDate[k] || []).push(ev); });
-    var box = el("div", {});
-    for (var i = 0; i < 7; i++) {
-      var dd = new Date(s); dd.setDate(s.getDate() + i); var k = ymd(dd); var evs = byDate[k] || [];
-      box.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:14px 2px 6px" }, [
-        el("div", { style: "font-weight:700", text: dayLabel(k) }),
-        el("div", { class: "cf-muted", style: "font-size:.82rem", text: evs.length ? (evs.length + " booked") : "—" }),
-      ]));
-      if (evs.length) { var c = card([]), l = el("div", { class: "cf-list" }); evs.forEach(function (ev) { l.appendChild(diaryEventRow(ev)); }); c.appendChild(l); box.appendChild(c); }
-    }
-    return box;
-  }
-  function diaryMonthView(day, events) {
-    var d = parseDay(day), y = d.getFullYear(), m = d.getMonth();
-    var counts = {}; events.forEach(function (ev) { var k = evDateKey(ev); counts[k] = (counts[k] || 0) + 1; });
-    var maxC = 0; Object.keys(counts).forEach(function (k) { if (counts[k] > maxC) maxC = counts[k]; });
-    var lead = (new Date(y, m, 1).getDay() + 6) % 7, dim = new Date(y, m + 1, 0).getDate(), todayKey = UI.dateKey(new Date());
-    var grid = el("div", { style: "display:grid;grid-template-columns:repeat(7,1fr);gap:5px" });
-    ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].forEach(function (h) { grid.appendChild(el("div", { style: "font-size:11px;color:var(--muted);text-align:center", text: h })); });
-    for (var i = 0; i < lead; i++) grid.appendChild(el("div", {}));
-    for (var dn = 1; dn <= dim; dn++) {
-      var k = ymd(new Date(y, m, dn)), cnt = counts[k] || 0;
-      var bg = cnt ? "rgba(31,122,77," + (0.12 + 0.7 * (maxC ? cnt / maxC : 0)).toFixed(2) + ")" : "var(--canvas,#f1f4ef)";
-      grid.appendChild(el("div", {
-        class: "cf-item-tap",
-        style: "border-radius:8px;padding:8px 6px;min-height:52px;cursor:pointer;background:" + bg + ";border:" + (k === todayKey ? "2px solid var(--green,#1f7a4d)" : "1px solid transparent"),
-        onclick: (function (kk) { return function () { DIARY_VIEW = "day"; go("#/diary/" + kk); }; })(k),
-      }, [
-        el("div", { style: "font-size:12px;font-weight:600", text: String(dn) }),
-        cnt ? el("div", { style: "font-size:11px;color:var(--muted);margin-top:2px", text: cnt + (cnt === 1 ? " booking" : " bookings") }) : null,
-      ].filter(Boolean)));
-    }
-    return el("div", {}, [el("div", { class: "cf-card" }, [grid])]);
+    if (DIARY_TAB === "classes") { renderDiaryClasses(body); return; }
+    window.Widgets.Calendar.mount(body, {
+      date: dateKey || UI.dateKey(new Date()),
+      classicLink: true,
+      filterBar: {
+        courts: (lists.courts || []).map(function (c) { return { id: c.id, name: c.name || "Court" }; }),
+        coaches: (lists.coaches || []).map(function (c) { return { id: c.user_id, name: c.display_name || [c.first_name, c.surname].filter(Boolean).join(" ") || c.email }; }),
+      },
+      data: { events: function (r) { return window.API.master({ date_from: r.from, date_to: r.to }).then(function (x) { return x.events || []; }); } },
+      onNavigate: function (ev) { if (ev && ev.id) go("#/event/" + ev.id); },
+    });
   }
   async function renderDiaryClasses(box) {
     box.appendChild(el("div", { class: "cf-loading", text: "Loading classes…" }));
