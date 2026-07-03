@@ -118,18 +118,7 @@
   function timeRange(b) {
     try { return UI.fmtTime(b.starts_at) + "–" + UI.fmtTime(b.ends_at); } catch (e) { return ""; }
   }
-  // status → {cls,label}. Booking statuses + charge statuses share the chip vocabulary.
-  function statusChip(status) {
-    var map = {
-      confirmed: ["confirmed", "Confirmed"], held: ["held", "Pending"], completed: ["ok", "Completed"],
-      cancelled: ["cancelled", "Cancelled"], no_show: ["cancelled", "No-show"],
-      requested: ["held", "Requested"], proposed: ["held", "Awaiting you"],
-      paid: ["confirmed", "Paid"], owed: ["held", "Owed"], pending: ["held", "Pending"],
-      refunded: ["cancelled", "Refunded"], covered: ["court", "Covered"], written_off: ["cancelled", "Written off"],
-    };
-    var m = map[status] || ["", status || ""];
-    return el("span", { class: "cf-chip " + m[0], text: m[1] });
-  }
+  var statusChip = window.UI.statusChip;   // shared status vocabulary (Wave 1/3 consolidation)
 
   // ---- HOME (the hub: everything on one page — no bottom nav for the client) --
   var HBMONTH = null;      // billing month
