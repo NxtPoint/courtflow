@@ -139,6 +139,21 @@ def memberships_for_user(session, user_id):
     return [dict(r) for r in rows]
 
 
+def accept_coach_invites(session, user_id):
+    """Mark any OUTSTANDING coach invite for this user as accepted — the coach has now
+    signed in (claimed the account). Idempotent: only touches 'invited' rows, so repeated
+    logins are no-ops. Runs on every authenticated login; a non-coach simply updates nothing.
+    Returns the number of invites flipped."""
+    if not user_id:
+        return 0
+    res = session.execute(
+        text("UPDATE iam.coach_invite SET status = 'accepted', accepted_at = now() "
+             "WHERE user_id = :uid AND status = 'invited'"),
+        {"uid": str(user_id)},
+    )
+    return res.rowcount or 0
+
+
 def resolve_club_by_host(session, host):
     """Host -> club_id via club.branding (domain or marketing_hosts). docs/04 §3 #1.
     Strips a port and a leading 'www.'. Returns club_id (uuid) or None."""

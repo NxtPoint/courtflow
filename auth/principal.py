@@ -125,6 +125,13 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
         resolved_email = (user.get("email") or email or None)
 
         memberships = iam_repo.memberships_for_user(s, user["id"])
+
+        # Signing in IS accepting the invite — once a coach has logged in, flip any
+        # outstanding invite to 'accepted' so the admin roster stops showing "invite pending".
+        # Idempotent (only touches 'invited' rows); gated on holding a coach membership so the
+        # 878 members never issue a needless write.
+        if any(m["role"] == "coach" for m in memberships):
+            iam_repo.accept_coach_invites(s, user["id"])
         host_club_id = iam_repo.resolve_club_by_host(s, host)
         # Auto-enrol: any authenticated user with NO membership becomes an active 'member' of
         # the target club (the host's club, else the single club if this deployment has one).
