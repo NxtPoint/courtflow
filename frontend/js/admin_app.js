@@ -636,6 +636,7 @@
     if (DIARY_TAB === "classes") { renderDiaryClasses(body); return; }
     window.Widgets.Calendar.mount(body, {
       date: dateKey || UI.dateKey(new Date()),
+      grid: true,                 // Day view = the resource-timeline grid (blocks drill to the event story)
       classicLink: true,
       filterBar: {
         courts: (lists.courts || []).map(function (c) { return { id: c.id, name: c.name || "Court" }; }),

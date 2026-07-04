@@ -16,6 +16,10 @@
     var UI = window.UI, el = UI.el;
     var state = { view: cfg.view || "day", date: cfg.date || UI.dateKey(new Date()), courtId: "", coachId: "" };
     var fb = cfg.filterBar || {};
+    // Resource-timeline grid geometry (the classic day view, ported for cfg.grid). Club hours
+    // 06:00–22:00, 30-min rows, ROW_H px each (matches .cf-cal-cell min-height in app.css).
+    var DAY_START = 6, DAY_END = 22, SLOT_MIN = 30, ROW_H = 46, CLASS_COL = "__classes__";
+    function minsFromDayStart(iso) { var d = new Date(iso); return (d.getHours() - DAY_START) * 60 + d.getMinutes(); }
 
     function ymd(d) { return UI.dateKey(d); }
     function parseDay(day) { return new Date(day + "T12:00:00"); }
@@ -54,6 +58,62 @@
       var c = UI.card([]), l = el("div", { class: "cf-list" });
       events.forEach(function (ev) { l.appendChild(eventRow(ev)); });
       c.appendChild(l); return c;
+    }
+    // The resource-timeline grid (one column per court + coach, time down the side; events are
+    // absolutely-positioned blocks) — ported from the classic diary, but every block drills to the
+    // SHARED event story via cfg.onNavigate (not the old minimal popup). Court/coach dropdowns
+    // filter the COLUMNS. Empty cells are non-interactive (walk-ins live in the classic diary).
+    function gridColumns() {
+      var courts = fb.courts || [], coaches = fb.coaches || [];
+      if (state.courtId) courts = courts.filter(function (c) { return String(c.id) === String(state.courtId); });
+      if (state.coachId) coaches = coaches.filter(function (c) { return String(c.id) === String(state.coachId); });
+      var cols = [];
+      courts.forEach(function (c) { cols.push({ key: "court:" + c.id, name: c.name || "Court" }); });
+      coaches.forEach(function (c) { cols.push({ key: "coach:" + c.id, name: (c.name || "Coach") + " (coach)" }); });
+      return cols;
+    }
+    function evColKey(ev) {
+      var t = evKind(ev);
+      if (t === "class") return CLASS_COL;
+      if (t === "lesson") return "coach:" + ev.coach_user_id;   // lessons sit under their coach
+      return "court:" + ev.resource_id;                          // court bookings under the court
+    }
+    function gridDayView(events) {
+      var cols = gridColumns();
+      var hasClasses = !state.courtId && !state.coachId && events.some(function (ev) { return evKind(ev) === "class"; });
+      if (!cols.length && !hasClasses) return el("div", { class: "cf-empty", text: "No courts or coaches configured." });
+      var slots = ((DAY_END - DAY_START) * 60) / SLOT_MIN, totalCols = cols.length + (hasClasses ? 1 : 0);
+      var wrap = el("div", { class: "cf-cal-wrap" }), grid = el("div", { class: "cf-cal" });
+      grid.style.gridTemplateColumns = "62px repeat(" + totalCols + ", minmax(120px, 1fr))";
+      grid.style.gridTemplateRows = "auto repeat(" + slots + ", " + ROW_H + "px)";
+      grid.appendChild(el("div", { class: "cf-cal-head" }));
+      cols.forEach(function (c) { grid.appendChild(el("div", { class: "cf-cal-head", text: c.name })); });
+      if (hasClasses) grid.appendChild(el("div", { class: "cf-cal-head", text: "Classes" }));
+      var cellByCol = {};
+      for (var s = 0; s < slots; s++) {
+        var mins = s * SLOT_MIN, hh = DAY_START + Math.floor(mins / 60), mm = mins % 60;
+        grid.appendChild(el("div", { class: "cf-cal-time", text: mm === 0 ? (("0" + hh).slice(-2) + ":00") : "" }));
+        cols.forEach(function (c) { var cell = el("div", { class: "cf-cal-cell", style: "cursor:default" }); if (s === 0) cellByCol[c.key] = cell; grid.appendChild(cell); });
+        if (hasClasses) { var cc = el("div", { class: "cf-cal-cell", style: "cursor:default" }); if (s === 0) cellByCol[CLASS_COL] = cc; grid.appendChild(cc); }
+      }
+      events.forEach(function (ev) {
+        var anchor = cellByCol[evColKey(ev)];
+        if (!anchor) return;                                     // event for a hidden column
+        var startMin = minsFromDayStart(ev.starts_at), endMin = minsFromDayStart(ev.ends_at);
+        if (endMin <= 0 || startMin >= (DAY_END - DAY_START) * 60) return;
+        var top = Math.max(0, startMin) / SLOT_MIN * ROW_H;
+        var height = Math.max(18, (Math.min(endMin, (DAY_END - DAY_START) * 60) - Math.max(0, startMin)) / SLOT_MIN * ROW_H - 2);
+        var t = evKind(ev), klass = ["court", "lesson", "class"].indexOf(t) >= 0 ? t : "court", tappable = !!(ev.id && cfg.onNavigate);
+        var who = ev.booked_by_name || ev.resource_name || typeLabel(t);
+        var block = el("div", {
+          class: "cf-ev " + klass + (tappable ? " cf-item-tap" : ""),
+          style: "top:" + top + "px;height:" + height + "px" + (tappable ? ";cursor:pointer" : ""),
+          title: who + " · " + (function () { try { return UI.fmtRange(ev.starts_at, ev.ends_at); } catch (e) { return ""; } })() + (ev.status ? " · " + ev.status : ""),
+          onclick: function (e) { e.stopPropagation(); if (tappable) cfg.onNavigate(ev); },
+        }, [el("div", { text: (function () { try { return UI.fmtTime(ev.starts_at); } catch (e) { return ""; } })() + " · " + who })]);
+        anchor.appendChild(block);
+      });
+      wrap.appendChild(grid); return wrap;
     }
     function weekView(events) {
       var s = weekStartOf(parseDay(state.date)), byDate = {};
@@ -135,17 +195,23 @@
       }
       UI.clear(host); host.appendChild(wrap);
 
+      var useGrid = !!cfg.grid && state.view === "day";
       var range = rangeFor();
       Promise.resolve(cfg.data.events(range)).then(function (events) {
         events = (events || []).filter(function (ev) {
           if (ev.status === "cancelled") return false;
-          if (state.courtId && String(ev.resource_id) !== String(state.courtId)) return false;
-          if (state.coachId && String(ev.coach_user_id) !== String(state.coachId)) return false;
+          // In grid mode the COLUMNS carry the court/coach filter, so keep all events (a hidden
+          // column simply has no anchor). In agenda mode filter the events themselves.
+          if (!useGrid) {
+            if (state.courtId && String(ev.resource_id) !== String(state.courtId)) return false;
+            if (state.coachId && String(ev.coach_user_id) !== String(state.coachId)) return false;
+          }
           return true;
         }).sort(function (a, b) { return String(a.starts_at).localeCompare(String(b.starts_at)); });
         UI.clear(body);
         if (state.view === "month") body.appendChild(monthView(events));
         else if (state.view === "week") body.appendChild(weekView(events));
+        else if (useGrid) body.appendChild(gridDayView(events));
         else body.appendChild(dayView(events));
       }, function (e) { UI.clear(body); body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
     }
