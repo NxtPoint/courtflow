@@ -650,6 +650,44 @@ def cron_membership_refill():
     return jsonify(crons_mod.run_membership_refill(get_engine())), 200
 
 
+@cron_bp.post("/ses-account")
+def cron_ses_account():
+    """OPS-only SES ACCOUNT-STATE probe (read-only). Queries SES via the API — works even though the
+    AWS console is locked. Reveals why SES accepts a send (send_ok) yet nothing delivers: an unhealthy
+    EnforcementStatus (under review/paused), sending disabled, sandbox, over-quota, or a bounce/complaint
+    spike. Guarded by OPS_KEY."""
+    if not _ops_only():
+        return jsonify(error="forbidden"), 403
+    from marketing_crm.email import ses
+    out = {"region": ses._region()}
+    try:
+        import boto3
+        v2 = boto3.client("sesv2", region_name=ses._region(), **ses._ses_creds())
+        acct = v2.get_account()
+        out["sending_enabled"] = acct.get("SendingEnabled")
+        out["production_access"] = acct.get("ProductionAccessEnabled")  # False = sandbox
+        out["enforcement_status"] = acct.get("EnforcementStatus")       # want "HEALTHY"
+        q = acct.get("SendQuota") or {}
+        out["quota_max_24h"] = q.get("Max24HourSend")
+        out["sent_last_24h"] = q.get("SentLast24Hours")
+        out["max_send_rate"] = q.get("MaxSendRate")
+        sup = acct.get("SuppressionAttributes") or {}
+        out["suppressed_reasons"] = sup.get("SuppressedReasons")
+    except Exception as e:
+        out["error_get_account"] = "%s: %s" % (type(e).__name__, e)
+    try:
+        import boto3
+        v1 = boto3.client("ses", region_name=ses._region(), **ses._ses_creds())
+        pts = (v1.get_send_statistics().get("SendDataPoints") or [])
+        pts.sort(key=lambda d: d.get("Timestamp") or "")
+        out["recent_stats"] = [{"t": str(d.get("Timestamp")), "attempts": d.get("DeliveryAttempts"),
+                                "bounces": d.get("Bounces"), "complaints": d.get("Complaints"),
+                                "rejects": d.get("Rejects")} for d in pts[-6:]]
+    except Exception as e:
+        out["error_stats"] = "%s: %s" % (type(e).__name__, e)
+    return jsonify(out), 200
+
+
 @cron_bp.post("/ses-selftest")
 def cron_ses_selftest():
     """OPS-only SES diagnostic. Reports the LIVE service's SES state and, with ?to=<email>, attempts
