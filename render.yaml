@@ -52,6 +52,12 @@ services:
       - key: AUTH_AUDIENCE
         value: ""            # blank — Clerk default session tokens set no aud
 
+      # Re-seed club #1 (NextPoint) on boot — idempotent (policy upsert is INSERT-ONLY; courts seeded
+      # only when the club has none). The DB persists, so this just keeps club config present. Matches
+      # the current live setting; carried here so the Frankfurt recreate sets it automatically.
+      - key: SEED_NEXTPOINT
+        value: "1"
+
       # Signup gift: a free week of COURT bookings (a time-boxed trial membership granted on
       # first login). Reuses the membership engine (courts-only, auto-lapses). 0 disables.
       - key: SIGNUP_TRIAL_DAYS
