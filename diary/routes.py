@@ -650,6 +650,41 @@ def cron_membership_refill():
     return jsonify(crons_mod.run_membership_refill(get_engine())), 200
 
 
+@cron_bp.post("/ses-suppress")
+def cron_ses_suppress():
+    """OPS-only: check (and optionally clear) an address on SES's account suppression list — via API,
+    no AWS console needed. ?email=<addr>&action=check|delete. A suppressed address gets sends ACCEPTED
+    but silently dropped (and each send logs a bounce), which is why 'send_ok but nothing arrives'."""
+    if not _ops_only():
+        return jsonify(error="forbidden"), 403
+    from marketing_crm.email import ses
+    body = request.get_json(silent=True) or {}
+    email = (request.args.get("email") or body.get("email") or "").strip()
+    action = (request.args.get("action") or "check").strip().lower()
+    if not email:
+        return jsonify(error="email required"), 400
+    out = {"email": email, "action": action}
+    try:
+        import boto3
+        v2 = boto3.client("sesv2", region_name=ses._region(), **ses._ses_creds())
+        try:
+            rec = v2.get_suppressed_destination(EmailAddress=email).get("SuppressedDestination", {})
+            out["suppressed"] = True
+            out["reason"] = rec.get("Reason")
+            out["last_update"] = str(rec.get("LastUpdateTime"))
+        except Exception as e:
+            if "NotFound" in type(e).__name__ or "NotFound" in str(e):
+                out["suppressed"] = False
+            else:
+                out["error_check"] = "%s: %s" % (type(e).__name__, e)
+        if action == "delete" and out.get("suppressed"):
+            v2.delete_suppressed_destination(EmailAddress=email)
+            out["deleted"] = True
+    except Exception as e:
+        out["error"] = "%s: %s" % (type(e).__name__, e)
+    return jsonify(out), 200
+
+
 @cron_bp.post("/ses-account")
 def cron_ses_account():
     """OPS-only SES ACCOUNT-STATE probe (read-only). Queries SES via the API — works even though the
