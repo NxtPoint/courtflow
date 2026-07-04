@@ -152,6 +152,7 @@ class Report:
         self.counts = {}
         self.skips = []
         self.tier_map_used = {}
+        self.plan_matches = {}   # Wix plan name -> matched club membership plan (or NO MATCH)
 
     def bump(self, key, n=1):
         self.counts[key] = self.counts.get(key, 0) + n
@@ -245,44 +246,38 @@ def import_clients(session, *, club_id, colmap, rows, rep):
 
 # --------------------------------------------------------------------------- members
 
-def _membership_price_for_tier(session, club_id, tier):
-    """Resolve an active membership billing.price for a tier (best-effort — coverage is
-    driven by active status + current_period_end, not the price row). Falls back to any
-    active membership price if the tier column/match is absent."""
-    try:
-        pid = session.execute(
-            text("SELECT p.id FROM billing.product pr "
-                 "JOIN billing.price p ON p.product_id = pr.id AND p.active = true "
-                 "WHERE pr.club_id = :c AND pr.kind = 'membership' "
-                 "  AND p.membership_tier = :t "
-                 "ORDER BY p.term_months NULLS LAST, p.created_at LIMIT 1"),
-            {"c": club_id, "t": tier},
-        ).scalar()
-        if pid:
-            return pid
-    except Exception:
-        session.rollback()
-    return session.execute(
-        text("SELECT p.id FROM billing.product pr "
+def _membership_price_for_plan(session, club_id, plan_name, rep):
+    """Match a Wix plan name to the club's membership billing.price BY NAME — label first, then
+    membership_tier, then the product name — case-insensitive. Returns (price_id, matched_name) or
+    (None, None). Records the Wix-plan -> matched-plan mapping on the report so a name mismatch is
+    obvious in the dry-run BEFORE committing. NEVER falls back to 'any membership' (that would attach
+    the wrong plan); an unmatched name is skipped and surfaced so Tomo fixes the name / creates it."""
+    name = (plan_name or "").strip()
+    key = name.lower()
+    if not key:
+        rep.plan_matches["(blank)"] = "NO MATCH - blank plan name"
+        rep.bump("membership_plan_unmatched")
+        return None, None
+    rows = session.execute(
+        text("SELECT p.id, p.label, p.membership_tier, pr.name AS product_name "
+             "FROM billing.product pr "
              "JOIN billing.price p ON p.product_id = pr.id AND p.active = true "
-             "WHERE pr.club_id = :c AND pr.kind = 'membership' "
-             "ORDER BY p.created_at LIMIT 1"),
+             "WHERE pr.club_id = :c AND pr.kind = 'membership'"),
         {"c": club_id},
-    ).scalar()
+    ).mappings().all()
 
+    def _n(v):
+        return (v or "").strip().lower()
 
-def _tier_for_plan(plan_name, rep):
-    key = (plan_name or "").strip().lower()
-    tier = DEFAULT_TIER
-    matched = False
-    for frag, mapped in PLAN_NAME_TIER_MAP.items():
-        if frag in key:
-            tier, matched = mapped, True
-            break
-    rep.tier_map_used[plan_name or "(blank)"] = tier + ("" if matched else "  [FALLBACK]")
-    if not matched:
-        rep.bump("membership_tier_fallback")
-    return tier
+    for field in ("label", "membership_tier", "product_name"):
+        for r in rows:
+            if _n(r[field]) == key:
+                shown = r["label"] or r["membership_tier"] or r["product_name"]
+                rep.plan_matches[name] = "%s  (matched on %s)" % (shown, field)
+                return r["id"], shown
+    rep.plan_matches[name] = "NO MATCH - create this plan or fix the name"
+    rep.bump("membership_plan_unmatched")
+    return None, None
 
 
 def _grant_membership_with_expiry(session, *, club_id, user_id, price_id, period_end, rep):
@@ -331,10 +326,10 @@ def import_members(session, *, club_id, colmap, rows, rep, plans_colmap=None, pl
         uid = user["id"]
 
         plan_name = _get(row, colmap, "plan")
-        tier = _tier_for_plan(plan_name, rep)
-        price_id = _membership_price_for_tier(session, club_id, tier)
+        price_id, matched = _membership_price_for_plan(session, club_id, plan_name, rep)
         if not price_id:
-            rep.skip(f"members row {i}: no active membership price for tier '{tier}'")
+            rep.skip(f"members row {i}: no membership plan matching '{plan_name}' "
+                     f"({email}) - create it / fix the name")
             continue
 
         expiry = _parse_date(_get(row, colmap, "expiry"))
@@ -487,7 +482,7 @@ def _print_summary(rep, commit):
     order = [
         "clients_created", "clients_updated",
         "memberships_granted", "memberships_extended",
-        "membership_tier_fallback", "membership_expiry_defaulted",
+        "membership_plan_unmatched", "membership_expiry_defaulted",
         "plans_created", "plans_skipped_existing",
         "lesson_wallets_created", "wallets_skipped_existing",
         "skipped",
@@ -499,10 +494,11 @@ def _print_summary(rep, commit):
         if k not in order:
             print(f"  {k:<28} {v:>6}")
 
-    if rep.tier_map_used:
-        print("\n  Wix plan  ->  NextPoint tier   (CONFIRM before --commit):")
-        for plan, tier in sorted(rep.tier_map_used.items()):
-            print(f"    {plan:<28} -> {tier}")
+    if rep.plan_matches:
+        print("\n  Wix plan  ->  matched club membership plan   (CONFIRM before --commit):")
+        for plan, matched in sorted(rep.plan_matches.items()):
+            flag = " <<<" if "NO MATCH" in matched else ""
+            print(f"    {plan:<30} -> {matched}{flag}")
 
     if rep.skips:
         print(f"\n  First {len(rep.skips)} skips:")
