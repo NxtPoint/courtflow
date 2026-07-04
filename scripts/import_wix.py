@@ -76,7 +76,9 @@ _ALIASES = {
     "duration_minutes":   ("duration_minutes", "duration", "minutes", "length"),
     "price":              ("price", "amount", "cost", "price_rand", "rand"),
     "sessions_remaining": ("sessions_remaining", "remaining", "balance", "credits_remaining"),
+    "sessions_total":     ("sessions_total", "sessions total", "pack_size", "total"),
     "lesson_plan":        ("lesson_plan", "lesson plan", "lesson_plan_name"),
+    "coach_email":        ("coach_email", "coach email", "coach"),
 }
 
 _TRUTHY = {"1", "true", "t", "yes", "y", "subscribed", "opt-in", "opted in", "on"}
@@ -153,6 +155,7 @@ class Report:
         self.skips = []
         self.tier_map_used = {}
         self.plan_matches = {}   # Wix plan name -> matched club membership plan (or NO MATCH)
+        self.lesson_summary = []  # one line per lesson wallet (created / skipped)
 
     def bump(self, key, n=1):
         self.counts[key] = self.counts.get(key, 0) + n
@@ -391,6 +394,71 @@ def _import_lesson_wallet(session, *, club_id, user_id, lesson_plan, remaining,
     rep.bump("lesson_wallets_created")
 
 
+# --------------------------------------------------------------------------- lessons (take-on)
+
+def import_lessons(session, *, club_id, colmap, rows, rep):
+    """Create COACH-SPECIFIC lesson token_wallets from lessons.csv (the Wix lesson-pack take-on).
+    Row: email, coach_email, sessions_total, sessions_remaining, duration_minutes, expiry. The wallet
+    is MINUTE-based (base_minutes = the session length; minutes_remaining = remaining * base) with
+    coach_user_id set so the balance only draws against THAT coach's lessons. A member may hold several
+    packs (e.g. a 90-min and a 60-min) — keyed by (user, coach, base_minutes). Idempotent: an existing
+    matching wallet is left untouched (never double-creates, never clobbers real usage)."""
+    if not rows:
+        log.info("no lessons.csv rows")
+        return
+    for i, row in enumerate(rows, start=2):
+        email = norm_email(_get(row, colmap, "email"))
+        if not email or "@" not in email:
+            rep.skip(f"lessons row {i}: blank/invalid email"); continue
+        user = session.execute(
+            text("SELECT id FROM iam.user WHERE lower(email)=:e ORDER BY created_at LIMIT 1"),
+            {"e": email}).mappings().first()
+        if not user:
+            rep.skip(f"lessons row {i}: no imported client for {email}"); continue
+        uid = user["id"]
+
+        coach_email = norm_email(_get(row, colmap, "coach_email"))
+        coach_uid = None
+        if coach_email:
+            coach = session.execute(
+                text("SELECT id FROM iam.user WHERE lower(email)=:e ORDER BY created_at LIMIT 1"),
+                {"e": coach_email}).mappings().first()
+            if not coach:
+                rep.skip(f"lessons row {i}: coach {coach_email} not found (invite them first)"); continue
+            coach_uid = coach["id"]
+
+        base = _parse_int(_get(row, colmap, "duration_minutes")) or 60
+        total = _parse_int(_get(row, colmap, "sessions_total")) or 0
+        remaining = _parse_int(_get(row, colmap, "sessions_remaining"))
+        if remaining is None:
+            remaining = total
+        if total <= 0 or remaining < 0 or remaining > total:
+            rep.skip(f"lessons row {i}: bad counts {remaining}/{total} for {email}"); continue
+        expiry = _parse_date(_get(row, colmap, "expiry"))
+
+        exists = session.execute(text(
+            "SELECT 1 FROM billing.token_wallet WHERE club_id=:c AND user_id=:u "
+            "AND service_kind='lesson' AND coach_user_id IS NOT DISTINCT FROM :co "
+            "AND base_minutes=:b AND status IN ('active','pending') LIMIT 1"),
+            {"c": club_id, "u": uid, "co": coach_uid, "b": base}).first()
+        if exists:
+            rep.bump("lesson_wallets_skipped_existing")
+            rep.lesson_summary.append(f"SKIP(exists)  {email:<34} {total}x{base}min")
+            continue
+
+        session.execute(text(
+            "INSERT INTO billing.token_wallet "
+            "(club_id, user_id, coach_user_id, service_kind, duration_minutes, base_minutes, "
+            " tokens_total, tokens_remaining, minutes_total, minutes_remaining, status, "
+            " purchased_at, expires_at) "
+            "VALUES (:c,:u,:co,'lesson',:dur,:b,:tt,:tr,:mt,:mr,'active',now(),:exp)"),
+            {"c": club_id, "u": uid, "co": coach_uid, "dur": base, "b": base,
+             "tt": total, "tr": remaining, "mt": total * base, "mr": remaining * base, "exp": expiry})
+        rep.bump("lesson_wallets_created")
+        rep.lesson_summary.append(
+            f"{email:<34} {remaining}/{total} x {base}min  coach={coach_email or '(any)'}")
+
+
 # --------------------------------------------------------------------------- plans
 
 def import_plans(session, *, club_id, colmap, rows, rep):
@@ -431,19 +499,22 @@ def import_plans(session, *, club_id, colmap, rows, rep):
 
 # --------------------------------------------------------------------------- driver
 
-def run(*, directory, clients_path, members_path, plans_path, club_slug, commit):
+def run(*, directory, clients_path, members_path, plans_path, club_slug, commit, lessons_path=None):
     clients_path = clients_path or os.path.join(directory, "clients.csv")
     members_path = members_path or os.path.join(directory, "members.csv")
     plans_path = plans_path or os.path.join(directory, "plans.csv")
+    lessons_path = lessons_path or os.path.join(directory, "lessons.csv")
 
     c_map, c_rows = _read_csv(clients_path)
     m_map, m_rows = _read_csv(members_path)
     p_map, p_rows = _read_csv(plans_path)
+    l_map, l_rows = _read_csv(lessons_path)
 
     log.info("inputs: clients=%s (%d) members=%s (%d) plans=%s (%d)",
              clients_path, len(c_rows), members_path, len(m_rows), plans_path, len(p_rows))
-    if c_map is None and m_map is None and p_map is None:
-        raise SystemExit(f"no CSVs found under {directory} (expected clients.csv/members.csv/plans.csv)")
+    if c_map is None and m_map is None and p_map is None and l_map is None:
+        raise SystemExit(f"no CSVs found under {directory} "
+                         "(expected clients.csv/members.csv/plans.csv/lessons.csv)")
 
     rep = Report()
     session = Session(get_engine())
@@ -459,6 +530,8 @@ def run(*, directory, clients_path, members_path, plans_path, club_slug, commit)
         if m_map is not None:
             import_members(session, club_id=club_id, colmap=m_map, rows=m_rows, rep=rep,
                            plans_colmap=p_map, plans_rows=p_rows)
+        if l_map is not None:
+            import_lessons(session, club_id=club_id, colmap=l_map, rows=l_rows, rep=rep)
 
         if commit:
             session.commit()
@@ -484,7 +557,7 @@ def _print_summary(rep, commit):
         "memberships_granted", "memberships_extended",
         "membership_plan_unmatched", "membership_expiry_defaulted",
         "plans_created", "plans_skipped_existing",
-        "lesson_wallets_created", "wallets_skipped_existing",
+        "lesson_wallets_created", "lesson_wallets_skipped_existing", "wallets_skipped_existing",
         "skipped",
     ]
     for k in order:
@@ -499,6 +572,11 @@ def _print_summary(rep, commit):
         for plan, matched in sorted(rep.plan_matches.items()):
             flag = " <<<" if "NO MATCH" in matched else ""
             print(f"    {plan:<30} -> {matched}{flag}")
+
+    if rep.lesson_summary:
+        print("\n  Lesson wallets (member  remaining/total x length  coach):")
+        for line in rep.lesson_summary:
+            print(f"    {line}")
 
     if rep.skips:
         print(f"\n  First {len(rep.skips)} skips:")
@@ -515,6 +593,7 @@ def main():
     ap.add_argument("--clients", help="override path to clients.csv")
     ap.add_argument("--members", help="override path to members.csv")
     ap.add_argument("--plans", help="override path to plans.csv")
+    ap.add_argument("--lessons", help="override path to lessons.csv")
     ap.add_argument("--club-slug", default=DEFAULT_CLUB_SLUG, help="target club slug")
     ap.add_argument("--commit", action="store_true",
                     help="WRITE to the DB (default is dry-run + rollback)")
@@ -525,7 +604,8 @@ def main():
         run_boot_init()
 
     run(directory=args.directory, clients_path=args.clients, members_path=args.members,
-        plans_path=args.plans, club_slug=args.club_slug, commit=args.commit)
+        plans_path=args.plans, lessons_path=args.lessons, club_slug=args.club_slug,
+        commit=args.commit)
 
 
 if __name__ == "__main__":
