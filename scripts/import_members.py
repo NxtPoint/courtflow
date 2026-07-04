@@ -58,6 +58,16 @@ def _mask(url):
         return "(unparseable url)"
 
 
+def _is_local_host(url):
+    """True if the URL points at a LOCAL database — which must NOT be silently used for a
+    production import (this is exactly how the first 878-member import went to a dev DB)."""
+    try:
+        h = (urllib.parse.urlparse(url).hostname or "").lower()
+    except Exception:
+        return True
+    return h in ("localhost", "127.0.0.1", "::1", "")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Import cleaned Wix clients as active members.")
     ap.add_argument("csv", nargs="?", default=DEFAULT_CSV, help="path to clients.csv")
@@ -66,6 +76,11 @@ def main():
     args = ap.parse_args()
 
     url, src = _load_database_url()
+    if url and _is_local_host(url):
+        print("!! DATABASE_URL from %s points at a LOCAL database (%s)." % (src, _mask(url)))
+        print("!! Ignoring it — a PRODUCTION import must not hit your local dev DB.")
+        print("!! You'll be asked to paste the real prod (Render External) URL instead.\n")
+        url, src = None, None
     if not url:
         # Nothing on disk / in the env — ask for it securely. getpass hides what you paste; the
         # string stays ONLY in this process's memory for this run: never written to disk, never

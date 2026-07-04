@@ -46,6 +46,14 @@ def _mask(url):
         return "(unparseable url)"
 
 
+def _is_local_host(url):
+    try:
+        h = (urllib.parse.urlparse(url).hostname or "").lower()
+    except Exception:
+        return True
+    return h in ("localhost", "127.0.0.1", "::1", "")
+
+
 def _list_plans():
     """Dump the club's catalogue so we can see how the membership plans are actually stored
     (product kind/name, and the prices under each membership product) — diagnoses NO MATCH."""
@@ -91,6 +99,11 @@ def main():
     args = ap.parse_args()
 
     url, src = _load_database_url()
+    if url and _is_local_host(url):
+        print("!! DATABASE_URL from %s points at a LOCAL database (%s)." % (src, _mask(url)))
+        print("!! Ignoring it — a PRODUCTION import must not hit your local dev DB.")
+        print("!! You'll be asked to paste the real prod (Render External) URL instead.\n")
+        url, src = None, None
     if not url:
         import getpass
         print("No .env.local or DATABASE_URL set — paste it securely below.")
