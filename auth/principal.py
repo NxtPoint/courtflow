@@ -191,13 +191,15 @@ def _resolve_active_club(memberships, host_club_id, x_club):
     if host_club_id and str(host_club_id) in by_club:
         return (str(host_club_id), role_for(host_club_id))
 
-    # 3) default — exactly one membership: act in that club. Covers a single-club user
-    # (admin/coach/member) on a non-club host (e.g. the onrender URL, where the host does
-    # not map to a club). MUST precede the platform-admin wildcard below so a single-club
-    # platform_admin lands in their own club instead of club_id=None.
-    if len(memberships) == 1:
-        m = memberships[0]
-        return (str(m["club_id"]), role_for(m["club_id"]))
+    # 3) default — the user belongs to exactly ONE club: act in it with their best role.
+    # Keyed on DISTINCT clubs, not membership-row count: a member later ALSO made a coach
+    # (or admin) holds TWO rows in the SAME club — still unambiguous, still this club. Covers
+    # a single-club user (admin/coach/member) on a non-club host (e.g. the onrender URL, where
+    # the host does not map to a club). MUST precede the platform-admin wildcard below so a
+    # single-club platform_admin lands in their own club instead of club_id=None.
+    if len(by_club) == 1:
+        only_club = next(iter(by_club))
+        return (only_club, role_for(only_club))
 
     # A platform_admin with MULTIPLE memberships and no host/X-Club target acts platform-wide
     # (club_id=None until they pick a club via host or the X-Club switcher).
