@@ -1,38 +1,68 @@
 old_path,new_path,status
-# 301 REDIRECT MAP — old Wix path -> new courtflow-web path (docs/07 §3).
-# Generated/curated from url_inventory.csv. EVERY old URL with traffic or backlinks
-# must 301 to its exact new equivalent (docs/07 §5). No redirect chains: each old
-# path points STRAIGHT to the FINAL new path (a live page or app entry), never to
-# another path that itself redirects. Self-canonicals live on the new pages.
+# 301 REDIRECT MAP — old Wix path -> new courtflow-web path.
+# CURATED FROM THE REAL GSC CRAWL (2026-07-04): Search Console Performance -> Pages, 12 months.
+# Every ranking/indexed Wix URL 301s to its closest INDEXABLE new page so Google transfers the
+# ranking (booking/service pages -> /pricing or /programs, NOT the noindex booking app). Query
+# strings are ignored by the engine (matches on path), so the many /solutions?...rwg_token=...
+# "Reserve with Google" variants are all covered by the single /solutions rule.
 #
-# WIRED: registered in web_app.py via migration.redirects.register_redirects(app)
-# (marketing-host only, before routing). Verify each row is a single 301 with:
-#   curl -sI -H "Host: www.nextpointtennis.com" https://<host>/<old-path>
+# WIRED in web_app.py via migration.redirects.register_redirects(app) (marketing-host only,
+# before routing). No chains: every target is a live 200 page (or a #anchor on one).
 #
-# NOTE (starter map): these 17 rows are curated placeholders. The FINAL map is built
-# Thursday from the real Wix crawl (migration/url_inventory.csv: GSC + Ahrefs +
-# full-site crawl). Targets below were flattened to skip the intermediate route-level
-# redirects (/services->/, /free-lesson->/login#/sign-up, /programs/*->/programs#...,
-# /book/*->/portal#/book/*) so no row chains.
+# Verify one:  curl -sI -H "Host: www.nextpointtennis.com" https://<host>/service-page/clay-court-booking
 #
-# ⚠️ SEO REVIEW (Tomo): the old hard-court booking + service pages currently point at
-# the NOINDEX app shell (/portal#/book/court). If those Wix URLs carry real rankings/
-# backlinks, a 301 into a noindex page loses that equity — consider retargeting them
-# to an indexable marketing page (/pricing) instead. Decide with the crawl data.
-/solutions,/,301
-/copy-2-of-offering,/,301
-/copy-of-booking-services,/portal#/book/court,301
-/booking-calendar/hard-court-member-bookings,/portal#/book/court,301
-/booking-calendar/hard-court-visitor-bookings,/portal#/book/court,301
-/service-page/hard-court-visitor-bookings,/portal#/book/court,301
-/service-page/hard-court-member-bookings,/portal#/book/court,301
-/copy-of-high-performance-program-1,/portal#/book/lesson,301
-/copy-of-book-a-lesson,/portal#/book/class,301
-/high-performance-program,/programs#high-performance,301
+# --- top traffic pages (clicks in the trailing comment) ---
+/service-page/clay-court-booking,/pricing,301
+/copy-of-booking-services,/pricing,301
 /coaching-team,/coaches,301
-/booking-calendar/complimentary-lesson-1,/login#/sign-up,301
-/booking-calendar/junior-beginner,/programs#juniors,301
-/booking-calendar/junior-intermediate,/programs#juniors,301
-/service-page/junior-beginner,/programs#juniors,301
-/service-page/junior-intermediate,/programs#juniors,301
+/pricing-plans/list,/pricing,301
+/solutions,/pricing,301
+/copy-of-high-performance-program-1,/programs#high-performance,301
 /jobs,/careers,301
+/high-performance-program,/programs#high-performance,301
+/category/all-products,/pricing,301
+/service-page/hard-court-member-bookings,/pricing,301
+/copy-2-of-offering,/pricing,301
+/copy-of-book-a-lesson,/programs,301
+# --- court / booking pages -> /pricing (indexable; court hire + prices) ---
+/service-page/hard-court-visitor-bookings,/pricing,301
+/service-page/member-guest-booking,/pricing,301
+/category/stringing-services,/pricing,301
+/product-page/head-racquet-bag,/pricing,301
+/booking-calendar/clay-court-booking,/pricing,301
+/booking-calendar/hard-court-member-bookings,/pricing,301
+/booking-calendar/hard-court-visitor-bookings,/pricing,301
+/booking-calendar/racquet-bookings,/pricing,301
+# --- lessons / private coaching -> /programs (indexable) ---
+/service-page/individual-private-lesson,/programs,301
+/service-page/rn-individual-private-lesson,/programs,301
+/service-page/ar-individual-private-lesson-1,/programs,301
+/service-page/dm-individual-private-lesson,/programs,301
+/service-page/cn-individual-private-lesson-1,/programs,301
+/service-page/tn-individual-private-lesson,/programs,301
+/service-page/ar-semi-private-lesson,/programs,301
+/booking-calendar/individual-private-lesson,/programs,301
+/booking-calendar/video-analysis,/programs,301
+/player-assessments,/programs,301
+# --- juniors + cardio -> /programs anchors ---
+/service-page/junior-intermediate-tennis,/programs#juniors,301
+/booking-calendar/junior-beginner-tennis,/programs#juniors,301
+/service-page/cardio-tennis,/programs#cardio,301
+/booking-calendar/cardio-tennis,/programs#cardio,301
+# --- complimentary/free lesson -> sign-up ---
+/service-page/complimentary-lesson-1,/login#/sign-up,301
+/booking-calendar/complimentary-lesson-1,/login#/sign-up,301
+# --- events (past; low value) -> /programs ---
+/event-details-registration/roland-garros-tennis-experience,/programs,301
+/event-details-registration/wednesday-night-social,/programs#social,301
+/event-details-registration/social-tennis-mixer,/programs#social,301
+/event-details-registration/next-point-tennis-program-launch-2024-11-01-17-30,/programs,301
+/event-details-registration/nextpoint-tennis-launch-2024-11-16-08-30,/programs,301
+/event-details-registration/kids-tennis-open-day,/programs#juniors,301
+/event-details-registration/junior-tennis-clinic,/programs#juniors,301
+/event-details-registration/junior-tennis-tournament,/programs#juniors,301
+/event-details-registration/tennis-racquet-exhibition,/programs,301
+/event-details-registration/wimbeldon-tennis-experience,/programs,301
+# --- misc / retired Wix pages -> home ---
+/about-3,/,301
+/blank-3,/,301
