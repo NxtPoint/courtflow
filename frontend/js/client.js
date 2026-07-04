@@ -18,6 +18,9 @@
     UI = window.UI; el = UI.el;
     await window.TFAuth.ready();
     if (!window.TFAuth.isAuthed()) { await window.TFAuth.requireAuth(); return; }
+    // Kick the profile fetch off IN PARALLEL with whoami so first paint isn't gated on a
+    // second South Africa→Frankfurt round trip (Starter killed cold starts; the round-trips remain).
+    var pendingProfile = window.API.getProfile().catch(function () { return null; });
     try { principal = await window.API.whoami(); }
     catch (e) { if (e.status === 401) await window.TFAuth.requireAuth(); return; }
     if (!principal) return;
@@ -35,8 +38,8 @@
       '<div style="padding:40px;font-family:Inter,system-ui">No active club is resolved for your account. Contact the club to be added.</div>'; return; }
     renderShell();
     window.addEventListener("hashchange", route);
-    // Warm the profile name for the greeting + avatar.
-    try { var pr = await window.API.getProfile(); DATA.profile = pr; NAME = fullName(pr); paintAvatar(); } catch (e) {}
+    // Warm the profile name for the greeting + avatar (already in flight — usually resolved by now).
+    try { var pr = await pendingProfile; if (pr) { DATA.profile = pr; NAME = fullName(pr); paintAvatar(); } } catch (e) {}
     route();
   }
 
@@ -106,8 +109,8 @@
   function loading() {
     var n = el("div", { class: "cf-loading", style: "min-height:200px", text: "Loading…" });
     set(n);
-    // Free-tier API can cold-start (~30-60s). Reassure instead of a bare spinner that looks stuck.
-    setTimeout(function () { if (n.isConnected && n.textContent === "Loading…") n.textContent = "Waking the club up — one moment…"; }, 3500);
+    // On a slow first load (Clerk init + cross-region round trips) reassure instead of a bare spinner.
+    setTimeout(function () { if (n.isConnected && n.textContent === "Loading…") n.textContent = "Still loading — one moment…"; }, 7000);
   }
   var card = window.UI.card, backBar = window.UI.backBar, kv = window.UI.kv;   // shared (Wave 1)
   var TYPE_LABEL = { court: "Court", lesson: "Lesson", class: "Class" };

@@ -15,6 +15,9 @@
     UI = window.UI; el = UI.el;
     await window.TFAuth.ready();
     if (!window.TFAuth.isAuthed()) { await window.TFAuth.requireAuth(); return; }
+    // Fetch the club brand IN PARALLEL with whoami so first paint isn't gated on a second
+    // cross-region round trip (Starter removed cold starts; the round-trips remain).
+    var pendingClub = window.AdminAPI.club().catch(function () { return null; });
     try { principal = await window.API.whoami(); }
     catch (e) { if (e.status === 401) await window.TFAuth.requireAuth(); return; }
     if (!principal) return;
@@ -25,7 +28,7 @@
     if (!principal.club_id) { document.body.innerHTML = '<div style="padding:40px;font-family:Inter">No club resolved.</div>'; return; }
     renderShell();
     window.addEventListener("hashchange", route);
-    try { CLUB = (await window.AdminAPI.club()).club || {}; paintBrand(); } catch (e) {}
+    try { var cb = await pendingClub; if (cb) { CLUB = cb.club || {}; paintBrand(); } } catch (e) {}
     route();
   }
 
@@ -88,7 +91,7 @@
   function loading() {
     var n = el("div", { class: "cf-loading", style: "min-height:200px", text: "Loading…" });
     set(n);
-    setTimeout(function () { if (n.isConnected && n.textContent === "Loading…") n.textContent = "Waking the club up — one moment…"; }, 3500);
+    setTimeout(function () { if (n.isConnected && n.textContent === "Loading…") n.textContent = "Still loading — one moment…"; }, 7000);
   }
   var card = window.UI.card, backBar = window.UI.backBar;   // shared (FRONTEND-STANDARDISATION Wave 1)
   function soon(title, note) { return el("div", {}, [el("h1", { style: "margin:0 0 12px", text: title }), card([el("div", { class: "cf-empty", text: note || "Coming next in the redesign." })])]); }

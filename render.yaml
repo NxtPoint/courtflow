@@ -18,7 +18,7 @@ services:
   - type: web
     name: courtflow-api
     env: python
-    plan: free          # pre-launch = $0 (sleeps when idle, ~30s cold start). Bump to "starter" at go-live.
+    plan: starter       # never sleeps (no cold starts). Bumped 2026-07 to match the live dashboard plan.
     buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
     # 120s timeout (no long ML jobs here, unlike 1050's 1800s).
     startCommand: "gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120"
@@ -115,7 +115,7 @@ services:
   - type: web
     name: courtflow-web
     env: python
-    plan: free          # pre-launch = $0 (sleeps when idle, ~30s cold start). Bump to "starter" at go-live.
+    plan: starter       # never sleeps (no cold starts). Bumped 2026-07 to match the live dashboard plan.
     buildCommand: "pip install --upgrade pip && pip install flask gunicorn requests"
     startCommand: "gunicorn web_wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120"
     envVars:

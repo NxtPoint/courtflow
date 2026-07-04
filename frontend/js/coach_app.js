@@ -13,6 +13,9 @@
     UI = window.UI; el = UI.el;
     await window.TFAuth.ready();
     if (!window.TFAuth.isAuthed()) { await window.TFAuth.requireAuth(); return; }
+    // Fetch the coach profile IN PARALLEL with whoami so first paint isn't gated on a second
+    // cross-region round trip (Starter removed cold starts; the round-trips remain).
+    var pendingProfile = window.CoachAPI.profile().catch(function () { return null; });
     try { principal = await window.API.whoami(); }
     catch (e) { if (e.status === 401) await window.TFAuth.requireAuth(); return; }
     if (!principal) return;
@@ -24,7 +27,7 @@
     if (!principal.club_id) { document.body.innerHTML = '<div style="padding:40px;font-family:Inter">No club resolved.</div>'; return; }
     renderShell();
     window.addEventListener("hashchange", route);
-    try { PROFILE = (await window.CoachAPI.profile()).profile || {}; paintAvatar(); } catch (e) {}
+    try { var pf = await pendingProfile; if (pf) { PROFILE = pf.profile || {}; paintAvatar(); } } catch (e) {}
     route();
   }
 
@@ -89,7 +92,7 @@
   function loading() {
     var n = el("div", { class: "cf-loading", style: "min-height:200px", text: "Loading…" });
     set(n);
-    setTimeout(function () { if (n.isConnected && n.textContent === "Loading…") n.textContent = "Waking the club up — one moment…"; }, 3500);
+    setTimeout(function () { if (n.isConnected && n.textContent === "Loading…") n.textContent = "Still loading — one moment…"; }, 7000);
   }
   var card = window.UI.card, backBar = window.UI.backBar, kv = window.UI.kv;   // shared (FRONTEND-STANDARDISATION Wave 1)
   var TYPE_LABEL = { court: "Court", lesson: "Lesson", class: "Class" };
