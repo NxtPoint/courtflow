@@ -105,8 +105,8 @@ services:
         sync: false
       - key: SES_AWS_SECRET_ACCESS_KEY # = 1050's AWS_SECRET_ACCESS_KEY
         sync: false
-      - key: SES_REGION               # = 1050's ACTUAL AWS_REGION (likely eu-north-1 — copy it, don't guess)
-        value: ""
+      - key: SES_REGION               # ten-fifty5 SES identity region (CONFIRMED live). Must NOT be blank —
+        value: "eu-north-1"           # blank falls through to AWS_REGION=af-south-1 (wrong) and email fails.
 
   # =========================================
   # 2) courtflow-web — host-switched marketing site + portal SPAs (NO DB)
