@@ -26,11 +26,16 @@
     function evKind(ev) { return String(ev.kind || ev.booking_type || "court").toLowerCase(); }
     function evDateKey(ev) { try { return UI.dateKey(new Date(ev.starts_at)); } catch (e) { return (ev.starts_at || "").slice(0, 10); } }
     function typeLabel(t) { return ({ court: "Court", lesson: "Lesson", class: "Class" })[t] || "Session"; }
+    // Send FULL-DAY bounds (T00:00:00 → T23:59:59). A bare "YYYY-MM-DD" casts to MIDNIGHT
+    // server-side, so a same-day query became a zero-width window (from==to==00:00) that showed
+    // nothing — the classic diary works because it sends these explicit day bounds.
+    function dayStart(k) { return k + "T00:00:00"; }
+    function dayEnd(k) { return k + "T23:59:59"; }
     function rangeFor() {
       var d = parseDay(state.date);
-      if (state.view === "week") { var s = weekStartOf(d), e = new Date(s); e.setDate(s.getDate() + 6); return { from: ymd(s), to: ymd(e) }; }
-      if (state.view === "month") { return { from: ymd(new Date(d.getFullYear(), d.getMonth(), 1)), to: ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0)) }; }
-      return { from: state.date, to: state.date };
+      if (state.view === "week") { var s = weekStartOf(d), e = new Date(s); e.setDate(s.getDate() + 6); return { from: dayStart(ymd(s)), to: dayEnd(ymd(e)) }; }
+      if (state.view === "month") { return { from: dayStart(ymd(new Date(d.getFullYear(), d.getMonth(), 1))), to: dayEnd(ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0))) }; }
+      return { from: dayStart(state.date), to: dayEnd(state.date) };
     }
 
     function eventRow(ev) {

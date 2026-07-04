@@ -118,7 +118,7 @@
     var hub = {}, today = { events: [] };
     var tk = UI.dateKey(new Date());
     try { hub = await window.AdminAPI.home(); } catch (e) {}
-    try { today = await window.API.master({ date_from: tk, date_to: tk }); } catch (e) {}
+    try { today = await window.API.master({ date_from: tk + "T00:00:00", date_to: tk + "T23:59:59" }); } catch (e) {}
     var mo = hub.money || {}, pe = hub.people || {}, ap = hub.approvals || {}, cur = mo.currency || "ZAR";
     var wrap = el("div", {});
     wrap.appendChild(el("div", { class: "cf-greet" }, [
