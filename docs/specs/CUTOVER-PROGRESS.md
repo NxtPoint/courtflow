@@ -63,7 +63,21 @@ Durable record of the Wix→Render cutover work (survives chat compaction). Full
     calendar" still works. Flip `EMAIL_ICS_ENABLED=1` on **courtflow-api** to re-enable the MIME
     `SendRawEmail` attachment path once you're confident the interim key carries `ses:SendRawEmail`.
 
-## ✅ DONE — DATA MIGRATION (prod)
+## ✅ DONE — DATA MIGRATION (prod, club bc67c6a1) — ALL THREE COMPLETE 2026-07-04
+- **Clients: 878** (866 new + 12 updated) -> 879 active members, 0 trials from import (5 pre-existing
+  test-signup trials, unrelated). **Memberships: 11 granted** + 2 extended (Yehuda's 3 rows -> 1),
+  all 4 plans matched on `membership_tier` (Adult Anytime Play / Adult Off Peak / Family Plan /
+  Junior & Student Membership). **Lessons: 8 coach wallets, 1845 min** (7 Allon + 1 Colbert; Simonne
+  holds 2). Mpilonhle's "Monthly Adult - Squad" deliberately excluded (it's a class Tomo makes himself).
+- **⚠️ EARLIER SNAG (fixed):** the first import runs silently hit a LOCAL dev DB (club 353ce796) because
+  an ambient localhost `DATABASE_URL` overrode the prompt. Scripts now REFUSE a localhost target for a
+  prod import (`_is_local_host`) -> re-ran cleanly against the real Render prod DB.
+- **Follow-ups for Tomo:** Allon's "10x60 R8500" package should be **10x90** (Robert's pack); create the
+  "Monthly Adult - Squad" class; ensure Colbert accepts his coach invite.
+- Tools: `scripts/import_members.py` (clients) · `import_subscriptions.py` (memberships, `--list-plans`
+  diagnostic) · `import_lessons.py` (lesson wallets) — all: secure DB prompt, dry-run, YES, verify, idempotent.
+
+## ✅ DONE — DATA MIGRATION (superseded note)
 - **878 Wix clients imported to PRODUCTION as active members (2026-07-04)** — via `scripts/import_members.py`
   run from the courtflow-api Render shell (DATABASE_URL already in-env, so no connection string handled/
   stored anywhere). Verified: **879 active members, 0 trial subscriptions** (import grants none; the member
