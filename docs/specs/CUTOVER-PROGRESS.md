@@ -31,6 +31,17 @@ Durable record of the Wix→Render cutover work (survives chat compaction). Full
   until reset (optional; coaches paste a URL meanwhile).
 - **Render**: attach custom domain, bump Free→Starter. **GSC/Ads/GA4 consoles**, pre-cutover client email.
 
+## 🩺 SES DIAGNOSIS (2026-07-04) — "send_ok but nothing arrives" was the SUPPRESSION TRAP
+- Account is HEALTHY / out-of-sandbox / 0 complaints / far under quota — **delivery to FRESH addresses
+  works** (verified: dejan.stojakovic1210@gmail.com arrived clean, no bounce). The failures were from
+  re-testing 1-2 addresses that got SUPPRESSED early (a bounce or a spam-mark) — and **sending to a
+  suppressed address logs a BOUNCE and silently drops it**. Real 900 clients = fresh addresses = fine.
+- **Ops levers added** (OPS-guarded, API-only — no AWS console needed):
+  - `POST /api/cron/ses-account` — account state (EnforcementStatus, sending/quota, bounce stats, suppression).
+  - `POST /api/cron/ses-suppress?email=X&action=check|delete` — check / CLEAR a suppressed address.
+  - `POST /api/cron/ses-selftest?to=X` — send a test + report the raw result.
+- **⚠️ ROTATE `OPS_KEY`** on courtflow-api after launch (it was pasted in chat during diagnosis).
+
 ## 📌 EMAIL FOLLOW-UPS (post-AWS-reset, non-blocking — email already works)
 - **Deliverability / DKIM:** interim mail sends FROM `ten-fifty5.com`, so first sends may land in
   junk/Promotions until reputation warms. Cleaner fix: verify **`nextpointtennis.com`** in SES (Easy DKIM
