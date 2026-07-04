@@ -39,11 +39,12 @@ Durable record of the Wix→Render cutover work (survives chat compaction). Full
 - **Long-term:** move to CourtFlow's own `courtflow.app` SES once the AWS account is back — just repoint
   `SES_SENDER` + drop the `SES_AWS_*` overrides (SES-SETUP.md "proper CourtFlow setup").
 
-## ⬜ AGENT — STILL TO DO (all BLOCKED on Tomo's weekend crawl/CSV)
-- Curate FINAL `migration/redirects.csv` once url_inventory.csv exists.
-- Decide (with Tomo) whether old booking/service Wix URLs should 301 to `/pricing` (indexable) instead
-  of the noindex `/portal#/book/*`.
-- Import: once CSVs land in `migration/wix/`, dry-run → confirm tiers → `--commit`.
+## ✅ AGENT — DONE
+- **FINAL `migration/redirects.csv` curated (2026-07-04)** from the real GSC Performance->Pages (12mo).
+  48 rules; caught the high-traffic misses (clay-court-booking 334 clicks, pricing-plans/list 44,
+  category/all-products 7). Ranking/booking pages 301 to INDEXABLE pages (/pricing, /programs, /coaches)
+  so Google transfers authority; verified 48/48 single-301 to a live 200 page, no chains.
+- Data imports DONE (see above).
 
 ## ✅ DONE (later)
 - **`build_blog.py` rebuilt** + pushed — blog HTML regenerated so slugs carry over. Court count
