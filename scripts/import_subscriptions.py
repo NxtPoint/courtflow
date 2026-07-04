@@ -46,11 +46,42 @@ def _mask(url):
         return "(unparseable url)"
 
 
+def _list_plans():
+    """Dump the club's catalogue so we can see how the membership plans are actually stored
+    (product kind/name, and the prices under each membership product) — diagnoses NO MATCH."""
+    from db import session_scope
+    from sqlalchemy import text
+    with session_scope() as s:
+        club = s.execute(text("SELECT id FROM club.club WHERE slug='nextpoint' "
+                              "AND COALESCE(is_template,false)=false")).scalar()
+        print("club id:", club)
+        print("\n== ALL products in the club (kind / active / name) ==")
+        for r in s.execute(text("SELECT kind, active, name FROM billing.product "
+                                "WHERE club_id=:c ORDER BY kind, name"), {"c": club}).mappings():
+            print("  [%-12s] active=%-5s  %r" % (r["kind"], str(r["active"]), r["name"]))
+        print("\n== prices on kind='membership' products (product | label | tier | term | active | amount) ==")
+        rows = s.execute(text(
+            "SELECT pr.name AS product, p.label, p.membership_tier, p.term_months, p.active, "
+            "       p.amount_minor "
+            "FROM billing.product pr JOIN billing.price p ON p.product_id=pr.id "
+            "WHERE pr.club_id=:c AND pr.kind='membership' ORDER BY pr.name, p.created_at"),
+            {"c": club}).mappings().all()
+        if not rows:
+            print("  (none — no prices on any kind='membership' product)")
+        for r in rows:
+            print("  product=%r | label=%r | tier=%r | term=%s | active=%s | amt=%s" % (
+                r["product"], r["label"], r["membership_tier"], r["term_months"],
+                r["active"], r["amount_minor"]))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="Import Wix memberships as active subscriptions.")
     ap.add_argument("csv", nargs="?", default=DEFAULT_CSV, help="path to members.csv")
     ap.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     ap.add_argument("--dry-run", action="store_true", help="show the plan-match map only, never write")
+    ap.add_argument("--list-plans", action="store_true",
+                    help="dump the club's membership catalogue (diagnose NO MATCH) and exit")
     args = ap.parse_args()
 
     url, src = _load_database_url()
@@ -66,10 +97,14 @@ def main():
         src = "entered now (not stored anywhere)"
     if not url:
         print("No URL provided - aborting."); return 2
+    os.environ["DATABASE_URL"] = url
+
+    if args.list_plans:
+        return _list_plans()
+
     if not os.path.isfile(args.csv):
         print("ERROR: members CSV not found: %s" % args.csv); return 2
 
-    os.environ["DATABASE_URL"] = url
     from scripts import import_wix
 
     print("=" * 64)
