@@ -14,9 +14,12 @@
 # Grants NO signup trial: the importer never does, and the pre-created member row also
 # suppresses the first-login trial (auth/principal.py only trials users with no membership).
 #
-# ONE-TIME SETUP — put your Render Postgres URL in C:\dev\nextpoint\.env.local :
-#     DATABASE_URL=postgresql://user:password@host:5432/dbname
-# (.env.local is gitignored — it never gets committed.)
+# THE DATABASE URL — nothing to store on disk. When you run it and no URL is configured, it
+# asks you to PASTE the connection string into a HIDDEN prompt (getpass): held only in memory
+# for this run, never written to disk, never echoed, never in shell history. (Get it from
+# Render -> your Postgres -> 'External Connection String'.)
+#   Optional conveniences if you PREFER them (not required): a gitignored .env.local with a
+#   DATABASE_URL= line, or a DATABASE_URL env var. The secure paste-prompt is the default.
 
 import argparse
 import io
@@ -64,12 +67,20 @@ def main():
 
     url, src = _load_database_url()
     if not url:
-        print("ERROR: no database URL found.\n")
-        print("Create C:\\dev\\nextpoint\\.env.local with one line:")
-        print("    DATABASE_URL=postgresql://user:password@host:5432/dbname")
-        print("(get it from Render -> your Postgres -> 'External Connection String')")
-        print("then re-run:  python scripts/import_members.py")
-        return 2
+        # Nothing on disk / in the env — ask for it securely. getpass hides what you paste; the
+        # string stays ONLY in this process's memory for this run: never written to disk, never
+        # echoed to the screen, never saved in shell history. This is the safest way.
+        import getpass
+        print("No .env.local or DATABASE_URL set — that's fine, paste it securely below.")
+        print("(Hidden as you paste. Used only for this run. NOT saved to disk or shell history.)")
+        print("Get it from Render -> your Postgres -> 'External Connection String'.\n")
+        try:
+            url = getpass.getpass("Paste prod DATABASE_URL, then press Enter: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled."); return 1
+        src = "entered now (not stored anywhere)"
+    if not url:
+        print("No URL provided — aborting."); return 2
     if not os.path.isfile(args.csv):
         print("ERROR: clients CSV not found: %s" % args.csv)
         return 2

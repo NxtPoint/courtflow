@@ -185,7 +185,7 @@ Full spec: [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md).
   **refund requests**. Buy membership + packs on the consolidated **`/plan`** page (each via the one payment
   rule — choose / immediate-owed / Yoco). The client can **self-cancel** a paid membership. **My Bookings** has a *"Needs your attention"* section (accept/decline a coach's proposed
   time, withdraw a pending request) and **"Add to calendar"** (.ics) on upcoming bookings.
-- **Coach (`/coach.html`, on the shared `crm_ui.js`):** 4-step onboarding + edit profile (bio, photo,
+- **Coach (`/coach`, the `coach_app.js` SPA):** 4-step onboarding + edit profile (bio, photo,
   specialties, languages, qualifications, visibility, **review-bookings** toggle); set **per-duration
   lesson rates** + classes; **own lesson packs** (scoped + ownership-guarded); availability + time-off;
   **lesson approval queue** (accept/propose/decline); **book a session for a client** (auto-confirms);
@@ -193,7 +193,7 @@ Full spec: [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md).
   collected + discount/write-off); **Dashboard cockpit** (lessons, hours, gross + **net-of-commission**
   earnings, fill rate, new-vs-returning, top clients, trend, **lessons-left-on-plans**, month-end-after-
   commission).
-- **Owner (`/admin.html`, `/settings.html`, on the shared `crm_ui.js`):** master diary; resources/courts;
+- **Owner (`/admin`, the `admin_app.js` SPA; classic console at `/admin-classic`):** master diary; resources/courts;
   **People** (360 drawer + membership grant); classes; a consolidated **Settings → Pricing** tab (court
   rates · packs · memberships, each with the active/dormant/retired control + membership "Access hours");
   **Coach pay** — a **per-service commission editor** (club / per-coach / per-service, lessons AND classes)
@@ -206,7 +206,9 @@ Full spec: [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md).
   refund requested/decided, class enrolled/waitlisted/spot-open, coach invited, **lesson
   requested/proposed/accepted/declined**.
 - **Calendar:** every booking has a downloadable **`.ics`** (`GET /api/diary/bookings/<id>/calendar.ics`);
-  the confirmation payload carries `ics_url`. The in-app **"Add to calendar"** works now; the email will
-  attach the same file once email is live.
-- **Email** path (SES transactional) lights up when keys are set; until then the inbox works fully and
-  email is `skipped`. Child events notify the **guardian**. (See OUTSTANDING.md for the keys.)
+  the confirmation payload carries `ics_url`. The in-app **"Add to calendar"** works now; the email
+  *attachment* is gated OFF (`EMAIL_ICS_ENABLED=0`) until the interim SES key gains `ses:SendRawEmail`.
+- **Email** (SES transactional) is **LIVE** — interim via the Ten-Fifty5 AWS account (`eu-north-1`,
+  `SES_SENDER=noreply@ten-fifty5.com`): invites + booking/statement confirmations send from each club's
+  From-name + Reply-To, alongside the in-app inbox. Child events notify the **guardian**. **Klaviyo**
+  marketing stays dark until keyed. (See ENV-STATUS.md / OUTSTANDING.md.)

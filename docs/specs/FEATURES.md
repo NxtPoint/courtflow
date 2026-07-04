@@ -131,7 +131,9 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   mirrored **client statement**. 🔭 (UI) — engine exercised via commission ✅
 - **Owner financial cockpit** — revenue by service, commission owed + rent per coach, membership MRR,
   refund-aware. 🔭
-- *(Deferred: refund clawback split, coach-payout objects, scheduled rent accrual — see OUTSTANDING.)*
+- **Proportional commission clawback on refund** — a refund reverses the coach's accrued commission in
+  the same proportion (arrears kept in lockstep). ✅
+- *(Deferred: coach-payout objects, scheduled rent accrual — see OUTSTANDING.)*
 
 - **Role-focused nav** — each role lands on and sees only its own surface: members/guests get
   **Home · Account**, coaches get their **Coach** console, owners get **Admin · Settings** (staff no
@@ -164,29 +166,34 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
     when, court, charge, **coaching line**, players + attendance, and the actions — accept / propose /
     decline / reschedule / cancel / mark-completed / no-show **+ Mark collected / Discount / Write off**
     (the money is managed right here) + add-to-calendar. 🔭
-- **Owner / Admin** (`admin_app.html` + `admin_app.js`, at **`/admin-app`** — **IN PROGRESS**; the
-  classic `/admin` console stays live until sign-off). **Responsive**: bottom-nav on mobile, **left
+- **Owner / Admin** (`admin_app.html` + `admin_app.js`, at **`/admin`** — **COMPLETE + LIVE**; the
+  classic tab console is preserved at `/admin-classic`). **Responsive**: bottom-nav on mobile, **left
   side-rail on desktop**. Nav **Home · People · Money · Diary · Setup** (+ Insights). **Home = a
   command center** surfacing all four owner focuses, each drilling to its section: **Today at the club**
   (live diary), **Money** (owed to the club / net revenue / coach settlements due / active members),
   **People needing attention** (new signups / pending coach invites / expiring memberships), **To
-  approve / decide** (pending refund requests) — via `GET /api/admin/home`. People/Money/Diary/Setup/
-  Insights build out per `docs/specs/ADMIN-REDESIGN.md` (People → unified person 360; Money → per-coach
-  settlement drill; Diary → the resource-timeline + classes; Setup → all club config in-app; Insights →
-  the Overview). The classic Admin console (Operate/Configure + Settings at `/settings.html`) remains
-  the full working surface until the SPA reaches parity. 🔭
+  approve / decide** (pending refund requests) — via `GET /api/admin/home`. **People** → unified
+  **person 360** (`GET /api/admin/people/<id>`: identity + roles + membership grant/revoke + owed +
+  payments + bookings; if coach, settlement) → the admin event story. **Money** = a Setup-style section
+  menu (Sales by day · Revenue · Coach settlement · Approvals · Payments · Activity), each drilling to
+  the event story. **Diary** = the shared **Calendar widget** (Day/Week/Month + court/coach filters,
+  default today) + Classes; the full drag-and-drop resource-timeline stays at `/admin-classic`.
+  **Setup** = all club config in-app (`Widgets.Setup`). **Insights** = the court-utilisation heatmap +
+  the Business Overview. Every list bottoms out at the **ONE admin event story** (`#/event/:id`,
+  `GET /api/admin/bookings/<id>`, god-view actions). 🔭
 
 ## 9. Notifications, calendar & CRM
 - In-app **bell + inbox** for every member, driven off the event feed: booking confirmed, payment
   receipt, membership active, pack activated, refund requested/decided, class enrolled/waitlisted/
   spot-open, coach invited, lesson requested/proposed/accepted/declined. 🔭
 - **Child → guardian** notification routing. 🔭
-- Booking **`.ics` calendar** (in-app now; email attachment when SES is live). 🔭
-- **Transactional email — per-club branded, multi-tenant SES** (built, dark until keyed 🌐): confirmations
-  + invites go out from **one verified CourtFlow domain** but under **each club's own From name and
-  Reply-To**, so a new tenant needs no new sender verification; booking emails **attach the `.ics`**
-  calendar. Self-gates on creds → until AWS keys land, in-app notification only (see `SES-SETUP.md`). Plus
-  **Klaviyo** lifecycle/marketing — same feed, dark until keyed. 🌐
+- Booking **`.ics` calendar** (in-app add-to-calendar works now; the email attachment is gated OFF via
+  `EMAIL_ICS_ENABLED=0` until the interim SES key gains `ses:SendRawEmail`). 🔭
+- **Transactional email — per-club branded, multi-tenant SES — LIVE** ✅ (interim via the Ten-Fifty5 AWS
+  account, `eu-north-1`, `SES_SENDER=noreply@ten-fifty5.com`): confirmations + invites go out from **one
+  verified domain** but under **each club's own From name and Reply-To**, so a new tenant needs no new
+  sender verification. The `.ics` attachment is currently OFF (see above); the long-term CourtFlow-domain
+  setup is `SES-SETUP.md`. Plus **Klaviyo** lifecycle/marketing — same feed, dark until keyed. 🌐
 - **Consent** capture; no minor PII in marketing payloads. 🔭
 
 ## 10. Business Overview analytics
@@ -221,7 +228,7 @@ lesson needs a free court · **coach∩class conflict** (read + write) · 30-min
 class enrol/capacity/waitlist/promote · lesson approval lifecycle (request → accept/decline/propose →
 client accept).
 
-**Commercial engines — `scripts/test_billing_scenarios.py` (118 checks):** settlement per mode
+**Commercial engines — `scripts/test_billing_scenarios.py` (142 checks):** settlement per mode
 (at-court desk, online held→paid, monthly-account ledger) · **idempotent payment replay** · commission
 30%/40% scoping + accrual + idempotency · token pack buy→activate→**unit/minute draw-down**→credit-back
 + NO_TOKEN · membership coverage (R0) + **access window** inside/outside + trial idempotency · refund-
@@ -230,7 +237,9 @@ per-tier/per-service payment-mode resolution · **refund clawback** split · mem
 booking **void the order** · **transaction log** + **dispute routing** (coach vs club) · lockstep
 desk-pay & **void clears arrears** · abandoned-checkout **reclaim on read** · the client + coach
 **event/booking stories** · the **client BY-SERVICE breakdown** (incl. written-off + discounted per-
-session state, billed vs effective, total-billed unchanged by write-off/discount).
+session state, billed vs effective, total-billed unchanged by write-off/discount) · the **admin
+person-360** + **admin event story** (god-view) · the Phase-2 read-layer (**court-utilisation** heatmap
++ **sales-by-day**).
 
 **Unified statement — `scripts/test_statement_reconciliation.py` (35 checks):** no double-count
 (orders only, never ledger + arrears too) · pay-all-once · **partial settle** (selected lines only) ·

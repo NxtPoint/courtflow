@@ -5,8 +5,9 @@ auto-push to Render — you type env into the Render dashboard manually — so t
 full `os.getenv` scan of the code) is the list to work from.
 
 **Live-audit (2026-06-21):** all code is deployed on both services — every API route answers `401`
-(exists, auth-gated), every public page `200`. Nothing is "stuck in yaml". The only things dark are
-optional integrations whose **keys aren't entered yet** (Klaviyo, S3, SES).
+(exists, auth-gated), every public page `200`. Nothing is "stuck in yaml". As of 2026-07,
+**transactional SES email is LIVE** (interim, via the Ten-Fifty5 AWS account); the only things still
+dark are the optional integrations whose **keys aren't entered yet** (Klaviyo, S3).
 
 Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ has a safe default, usually skip.
 
@@ -14,11 +15,13 @@ Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ h
 
 ## TL;DR — what's live vs one key away
 - 🟢 **Live now (env already set):** the whole app — login, booking, classes, the three purchasing
-  models, **Yoco payments + refunds + receipts**, the **Business Overview dashboard + page beacon**.
+  models, **Yoco payments + refunds + receipts**, the **Business Overview dashboard + page beacon**, and
+  **transactional email** (invites + booking/statement confirmations) via the interim Ten-Fifty5 SES.
 - 🟡 **One key away (add when you want them):**
   - **Klaviyo email** → `KLAVIYO_API_KEY` *(future — not started, per you)*
   - **Coach photo uploads** → `S3_BUCKET` + `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`
-  - **Transactional email fallback** → `SES_SENDER` (+ the AWS creds above)
+  - **`.ics` email attachment** → set `EMAIL_ICS_ENABLED=1` once the SES IAM key gains `ses:SendRawEmail`
+    (currently `0` — add-to-calendar still works in-app)
 - 🗑️ **Removed (dead flags, never read by code):** `YOCO_ENABLED`, `TRACKING_ENABLED`,
   `CONSENT_ENABLED`, `CRM_SYNC_ENABLED` — tracking/consent are always-on; CRM self-gates on the
   Klaviyo key; Yoco is gated by `PAYMENTS_ENABLED`. Don't set these.
@@ -47,15 +50,23 @@ Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ h
 | `YOCO_WEBHOOK_SECRET` | 🟢 | Verifies Yoco webhook signatures | `whsec_…` |
 | `APP_BASE_URL` | 🟢 | Origin for Yoco return URLs (the web host) | `https://courtflow-web.onrender.com` |
 
+### Transactional email (SES) — LIVE 🟢 (interim via the Ten-Fifty5 AWS account)
+| Var | Status | What it does | Value |
+|---|---|---|---|
+| `SES_SENDER` | 🟢 | Verified From address (per-club From-name + Reply-To layered on) | `noreply@ten-fifty5.com` |
+| `SES_AWS_ACCESS_KEY_ID` | 🟢 | **Dedicated** SES credential (separate from the S3 `AWS_*` pair) | access key id |
+| `SES_AWS_SECRET_ACCESS_KEY` | 🟢 | Dedicated SES secret | secret key |
+| `SES_REGION` | 🟢 | SES region (falls back to `AWS_REGION`, then `eu-west-1`) | `eu-north-1` |
+| `EMAIL_ICS_ENABLED` | 🟡 | Attach the booking `.ics` to emails — **`0` for now** (interim key lacks `ses:SendRawEmail`); flip to `1` when it does | `0` |
+
 ### Optional integrations — dark until you add the key 🟡
 | Var | Status | Lights up | Format |
 |---|---|---|---|
 | `KLAVIYO_API_KEY` | 🟡 *(future)* | Klaviyo email sync (self-gates: no key = silent no-op) | Klaviyo private key |
 | `S3_BUCKET` | 🟡 | Coach photo uploads (S3 presign) | bucket name |
-| `AWS_ACCESS_KEY_ID` | 🟡 | AWS credential for S3 + SES | access key id |
-| `AWS_SECRET_ACCESS_KEY` | 🟡 | AWS credential for S3 + SES | secret key |
-| `AWS_REGION` | ⚪ | AWS region (defaults to `af-south-1`) | `af-south-1` |
-| `SES_SENDER` | 🟡 | Transactional email fallback sender | `bookings@nextpointtennis.com` |
+| `AWS_ACCESS_KEY_ID` | 🟡 | AWS credential for S3 | access key id |
+| `AWS_SECRET_ACCESS_KEY` | 🟡 | AWS credential for S3 | secret key |
+| `AWS_REGION` | ⚪ | AWS region for S3 (defaults to `af-south-1`) | `af-south-1` |
 
 ### Boot / housekeeping ⚪
 | Var | Status | What it does | Default |
@@ -64,7 +75,7 @@ Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ h
 | `PYTHON_VERSION` | 🟢 | Build-time Python | `3.12.3` |
 | `AUTH_PROVIDER` ⚪ · `AUTH_JWT_LEEWAY` ⚪ | skip | label / clock-skew | `clerk` / `30` |
 | `AWS_PROFILE` · `AWS_ROLE_ARN` · `AWS_WEB_IDENTITY_TOKEN_FILE` · `AWS_DEFAULT_REGION` ⚪ | skip | alt AWS auth (only if not using access keys) | — |
-| `S3_PUBLIC_BASE_URL` · `SES_FROM` · `BOOKINGS_FROM_EMAIL` · `SES_REGION` ⚪ | skip | extra fallbacks | — |
+| `S3_PUBLIC_BASE_URL` · `SES_FROM` · `SES_FROM_EMAIL` · `BOOKINGS_FROM_EMAIL` ⚪ | skip | alt sender fallbacks (use `SES_SENDER`) | — |
 | `PAYPAL_CLIENT_ID` ⚪ | skip | dormant (PayPal not built) | — |
 | `CRON_API_BASE` ⚪ | only if you enable the paid cron services | the API host | `https://courtflow-api.onrender.com` |
 
@@ -101,13 +112,18 @@ YOCO_PUBLIC_KEY=pk_live_...
 YOCO_WEBHOOK_SECRET=whsec_...
 APP_BASE_URL=https://courtflow-web.onrender.com
 SEED_NEXTPOINT=1
+# courtflow-api — TRANSACTIONAL EMAIL (LIVE, interim via Ten-Fifty5 AWS)
+SES_SENDER=noreply@ten-fifty5.com
+SES_AWS_ACCESS_KEY_ID=...      # dedicated SES creds (separate from S3's AWS_*)
+SES_AWS_SECRET_ACCESS_KEY=...
+SES_REGION=eu-north-1
+EMAIL_ICS_ENABLED=0            # flip to 1 when the key gains ses:SendRawEmail
 # courtflow-api — OPTIONAL (add when you want the feature)
 KLAVIYO_API_KEY=               # future: Klaviyo email
 S3_BUCKET=                     # coach photo uploads
-AWS_ACCESS_KEY_ID=             # S3 + SES
+AWS_ACCESS_KEY_ID=             # S3
 AWS_SECRET_ACCESS_KEY=
 AWS_REGION=af-south-1
-SES_SENDER=                    # email fallback
 
 # courtflow-web (already set)
 AUTH_ENABLED=1

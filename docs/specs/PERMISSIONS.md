@@ -5,9 +5,10 @@ the consoles expose the right things to the right roles and (b) decide whether t
 needs finer **staff sub-roles** beyond today's 5. This is a **review artifact** — read it, mark what's
 misplaced, and we build to the corrected version. Nothing here changes behaviour yet.
 
-Grounded in the live code: `iam/permissions.py` (`can()`), `frontend/js/portal.js` (nav + shell gate +
-`landingFor(role)`), `home.js` (staff redirect to their console), `admin.js` / `settings.js` / `coach.js` /
-`account.js` (console tabs).
+Grounded in the live code: `iam/permissions.py` (`can()`), the role SPAs `frontend/js/client.js` /
+`coach_app.js` / `admin_app.js` (post-login routing + surfaces), and — for the sensitivity map below —
+the classic `settings.js` tabs. (The classic `admin.js` survives at `/admin-classic`; `coach.js` was
+deleted.) The `can()` boundary and role model are unchanged by the SPA rebuild.
 
 ---
 
@@ -25,12 +26,15 @@ Grounded in the live code: `iam/permissions.py` (`can()`), `frontend/js/portal.j
    `home.js` redirects staff off `/portal.html` to their console unless `?stay=1` (a testing bypass).
    The client booking pages still exist and are reachable — staff can **book for themselves** (see §4/§5).
 
-   > **AS-BUILT (2026-07-02): redesigned role SPAs.** Landing surfaces are now the drill-through SPAs:
-   > **member/guest → `/`** (client SPA, `frontend/js/client.js`; also `/portal`, `/app`) · **coach → `/coach`**
-   > (coach SPA, `coach_app.js`; non-coaches bounced) · **club_admin/platform_admin → `/admin`** (classic
-   > console, still live) with the new responsive owner SPA in progress at **`/admin-app`** (`admin_app.js` —
-   > see [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)). Old `/account.html`, `/my.html`, `/book.html` **302 → the
-   > client SPA**. The role gate + `can()` boundary below are unchanged — only the surfaces were rebuilt.
+   > **AS-BUILT (2026-07-03/04): redesigned role SPAs — all three COMPLETE + LIVE.** Landing surfaces are
+   > now the drill-through SPAs: **member/guest → `/`** (client SPA, `frontend/js/client.js`; also `/portal`,
+   > `/app`) · **coach → `/coach`** (coach SPA, `coach_app.js`; non-coaches bounced; the classic `coach.js`
+   > was **deleted**) · **club_admin/platform_admin → `/admin`** (the new responsive owner SPA, `admin_app.js`
+   > — see [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md); the classic tab console is preserved at **`/admin-classic`**).
+   > All three now share ONE widget layer (`Widgets.TransactionDetail`/`Calendar`/`Setup` — see
+   > [FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)). Old `/account.html`, `/my.html`, `/book.html`
+   > **302 → the client SPA**. The role gate + `can()` boundary below are unchanged — only the surfaces were
+   > rebuilt, so the sensitivity map in §4/§5 (written against the classic tabs) still holds screen-for-screen.
 
 **Verdict:** no cross-role leakage. A member/coach cannot use the admin console. The gaps below are
 about **granularity** and **surfacing**, not a security hole.
@@ -63,7 +67,9 @@ A ✓ = a **nav link** the role sees; a page a role can still *reach* (e.g. staf
 standalone `/statement.html` is kept as an unlinked fallback (its content now lives in the coach Money tab).
 
 ## 4. Owner/Admin surface — what each tab does + sensitivity
-**Admin console (`/admin`, `admin.js`) — 5 tabs (+ ⚙ Settings link); default = Dashboard:**
+*(Described against the classic tab console — now at `/admin-classic`; the new `/admin` SPA reorganises
+these same capabilities into Home · People · Money · Diary · Setup · Insights, sensitivity unchanged.)*
+**Admin console — 5 tabs (+ ⚙ Settings link); default = Dashboard:**
 | Tab | What it does | Sensitivity |
 |---|---|---|
 | **Dashboard** | Business-health landing: **Today at the club** (today's diary) + this-month money KPIs (net revenue · commission kept · rent due · active members · MRR · lessons paid) + net-revenue trend + last-30-days growth (visits/visitors/new customers/bookings/**NPS**) + **Quick actions** (incl. **Book a court for myself** → `/book/court`) | **financial-ish** |
@@ -91,7 +97,7 @@ Cockpit and Overview tabs are folded into the five above (Diary/Money/Insights).
 > wants staff who can run the desk (Diary/Classes/People) **without** seeing finances, commission, or
 > changing prices/branding. That's the "screens that shouldn't be there for everyone."
 
-## 5. Coach surface (`/coach`, `coach.js`) — own-scope only, **5 tabs; default = Dashboard:**
+## 5. Coach surface (`/coach`, `coach_app.js`) — own-scope only, **5 tabs; default = Home:**
 - **Dashboard** — "Needs your attention" (approval queue) + the cockpit (net-of-commission KPIs · earnings
   trend · month-end position · top clients · upcoming).
 - **Schedule** — a week TIMELINE of the coach's lessons + classes (prev/next-week); tap a lesson →

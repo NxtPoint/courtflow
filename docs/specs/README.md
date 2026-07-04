@@ -23,11 +23,17 @@ operating guide; **this folder is the detail.**
 > calendar, a client record that drills **by service → sessions (real paid/owed/written-off/discounted
 > state) → the event story**, **Total billed**, money actions in the event story, and **classes wired
 > into Setup** (create/schedule/roster — now bookable end-to-end); **.ics add-to-calendar** fixed on both.
-> **Owner/Admin** = a responsive drill-through SPA **IN PROGRESS at `/admin-app`** (bottom-nav ↔ desktop
-> side-rail; command-center Home shipped) — design locked in **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)**,
-> the classic `/admin` stays live until sign-off. Also **multi-tenant transactional SES email is
-> CODE-COMPLETE** (one verified domain, per-club From-name + Reply-To, `.ics` attachment — dark until AWS
-> is keyed; see [SES-SETUP.md](SES-SETUP.md)). Gated green: **booking 43 / billing 118 / statement 35**.
+> **2026-07-03/04:** the **OWNER/ADMIN console redesign is COMPLETE + LIVE** — `/admin` now serves the
+> responsive drill-through SPA (Home command-center · People → unified person-360 · Money as Setup-style
+> sections incl. **Sales by day** · Diary on the shared Calendar widget · Setup · Insights with a
+> court-utilisation heatmap + Business Overview); the classic tab console is preserved at `/admin-classic`
+> ([ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)). A **Phase-2 insights lane** landed its flagship
+> (`insights/`; [ADMIN-PHASE2.md](ADMIN-PHASE2.md)). The whole front end was then **standardised onto ONE
+> widget per capability — the enshrined GOLDEN RULE** ([FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)):
+> `Widgets.TransactionDetail` / `Calendar` / `Setup` + `ServiceList` shared across all three apps, role
+> differences expressed as configuration, ~1,700 lines lighter. And **transactional SES email is now LIVE
+> end-to-end** (interim via the Ten-Fifty5 AWS account; the long-term CourtFlow setup is
+> [SES-SETUP.md](SES-SETUP.md)). Gated green: **booking 43 / billing 142 / statement 35**.
 > Remaining: **OUTSTANDING.md**.
 
 ## Read in this order
@@ -53,12 +59,20 @@ operating guide; **this folder is the detail.**
    reconciliation harness that gates it. *"How the money reconciles."*
 9. **[FRONTEND-REDESIGN.md](FRONTEND-REDESIGN.md)** — the front-end simplification log + the **three
    role SPAs** (client/coach/admin) drill-through redesign. *"How the UI got simpler."*
-10. **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)** — **CURRENT PHASE.** The owner/admin console SPA redesign
-    (responsive, command-center Home, unified person 360, one admin event story). Design LOCKED; building
-    incrementally at `/admin-app` (step 1 shipped). *"The console we're building now."*
-11. **[SES-SETUP.md](SES-SETUP.md)** — the config guide to turn transactional email on: verify `courtflow.app`
-    in SES af-south-1, exit the sandbox, IAM keys, `SES_SENDER`. Multi-tenant (one domain, per-club identity),
-    `.ics`-attaching engine is code-complete; this is the AWS-side setup. *"How to switch email on."*
+10. **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)** — the owner/admin console SPA redesign (responsive,
+    command-center Home, unified person 360, one admin event story). **COMPLETE + LIVE at `/admin`** (all
+    7 steps). *"The owner console (as built)."*
+11. **[FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)** — **the enshrined GOLDEN RULE:** one
+    widget per capability, role differences = configuration. The widget contract, the shared widget set
+    (`TransactionDetail`/`Calendar`/`Setup`/`ServiceList`), guardrails, and what was deliberately not
+    merged. *"How the front end is architected — read before any new UI work."*
+12. **[ADMIN-PHASE2.md](ADMIN-PHASE2.md)** — the "world-class admin portal" backlog: 5 reusable
+    primitives + ~40 features, no table sprawl. **Flagship shipped** (P1 insights lane: court-utilisation
+    + sales-by-day); the rest awaits prioritisation. *"Where the admin portal goes next."*
+13. **[SES-SETUP.md](SES-SETUP.md)** — email is now **LIVE** (interim via the Ten-Fifty5 AWS account,
+    `SES_AWS_*` creds + `eu-north-1` + `SES_SENDER=noreply@ten-fifty5.com`). This doc is the long-term
+    proper CourtFlow setup (verify `courtflow.app` / `nextpointtennis.com` DKIM once the CourtFlow AWS
+    account is back). *"Email: live now, the clean setup later."*
 
 ## The build-era spec docs (design intent, still useful)
 - [00-roadmap.md](00-roadmap.md) — the phased self-service/CRM roadmap (most phases now built).

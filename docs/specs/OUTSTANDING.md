@@ -3,15 +3,16 @@
 The single source of truth for remaining work. Grouped by type. (Everything NOT here is built & live —
 see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 
-> **▶ CURRENT PHASE (2026-07-02): OWNER/ADMIN console redesign — the third & hardest SPA.** Design is
-> LOCKED in **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)**; building incrementally at **`/admin-app`** (the
-> classic `/admin` console stays live until sign-off). **Step 1 SHIPPED** (shell + responsive
-> side-rail/bottom nav + command-center Home + `GET /api/admin/home`). **Remaining steps:** 2) People
-> roster + **unified person 360** (`GET /api/admin/people/<id>`, mirrors coach `get_client`) · 3) the ONE
-> admin **event story** (`GET /api/admin/bookings/<id>`, god-view: any booking, full actions incl.
-> void/refund/reassign/desk-pay) · 4) **Money** cockpit + per-coach settlement drill + refund/dispute
-> approvals + payments + activity · 5) **Diary** resource-timeline + Classes (reuse) · 6) **Setup** —
-> embed the `AdminUI` editors as in-app pages (retire the `/settings.html` jump) · 7) **Insights** embed.
+> **▶ NO CURRENT BUILD PHASE — the platform is feature-complete for launch; what remains is config +
+> the backlog below.** The **OWNER/ADMIN console redesign is COMPLETE + LIVE 2026-07-03/04** (all 7
+> steps): `/admin` now serves the responsive drill-through SPA (`admin_app.html`+`admin_app.js`) — Home
+> command-center + `GET /api/admin/home` · People → unified **person 360** (`GET /api/admin/people/<id>`)
+> · the ONE admin **event story** (`GET /api/admin/bookings/<id>`, god-view) · Money as Setup-style
+> sections (Sales by day · Revenue · Coach settlement · Approvals · Payments · Activity) · Diary on the
+> shared **Calendar widget** (Day/Week/Month + court/coach filters; drag-timeline stays at `/admin-classic`)
+> · Setup (`Widgets.Setup`) · Insights (court-utilisation heatmap + Business Overview). The whole front
+> end was then **standardised onto ONE widget per capability** — the enshrined golden rule in
+> **[FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)**. Design record: **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)**.
 
 > **Recently shipped (2026-07-02 — NOT outstanding): the FRONT-END REDESIGN — three role SPAs.** The
 > old tab-based consoles are replaced by mobile-first (admin: responsive) **drill-through SPAs** on one
@@ -23,7 +24,7 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > living in the event story, and **classes** (create/schedule/roster) wired into Setup — classes now work
 > end-to-end and are bookable. **Add-to-calendar (.ics)** download fixed on both apps (authed fetch).
 > New backend: `GET /api/me/bookings/<id>` + `/api/me/billing/summary`, `GET /api/coach/bookings/<id>`,
-> `commission.client_service_breakdown` + `_coach_billed`. Gated green (**booking 43 / billing 118 /
+> `commission.client_service_breakdown` + `_coach_billed`. Gated green (**booking 43 / billing 142 /
 > statement 35**). `cancel_booking` now voids the linked unpaid order (no more phantom-owed courts).
 
 > **Recently shipped (2026-07-02 — NOT outstanding):** **role-focused nav** (member→Home·Account,
@@ -31,9 +32,9 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > the **business-first coach console** (Dashboard cockpit + "needs your attention" · Schedule **week
 > timeline** · Clients-360 · Money settlement · Setup) and **owner console** (Dashboard **"Today at the
 > club"** + money KPIs + growth/NPS + quick actions · Diary · People · Money · Insights); a **today-glimpse**
-> on both dashboards + **"Book for myself"** (coach & owner → /book/court). Plus **transactional SES email is
-> now CODE-COMPLETE** (multi-tenant: one verified domain, per-club From-name + Reply-To, HTML+text, `.ics`
-> attachment via `SendRawEmail`) — see §A (config-only, waiting on Tomo's AWS setup).
+> on both dashboards + **"Book for myself"** (coach & owner → /book/court). Plus **transactional SES email
+> is now LIVE** (multi-tenant: one verified domain, per-club From-name + Reply-To, HTML+text) — see §A
+> (interim via the Ten-Fifty5 AWS account; the `.ics` attachment stays off until the key gains `ses:SendRawEmail`).
 >
 > **Recently shipped (2026-06-28 — NOT outstanding):** the **unified client statement**
 > (`billing/statement.py` single source of truth = unpaid `billing.order` rows; grouped tick-to-pay
@@ -46,7 +47,7 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > **unified lifecycle** (Active / Deactivated / Terminated across services/memberships/coaches) with
 > **real coach & court deletes**; the **Admin-vs-Settings split** (Operate vs Configure; Resources tab
 > retired; Settings on the nav); the **People category slicer**; and **stopped seeding demo coaches**.
-> Gated green (`python -m scripts.test_all` → booking 43 / billing 118 / statement 35).
+> Gated green (`python -m scripts.test_all` → booking 43 / billing 142 / statement 35).
 >
 > **Recently shipped (2026-06-25/26 — NOT outstanding):** the redesigned client journey (action-first
 > cockpit + full-screen calendar booking + consolidated `/plan`), the **lesson approval lifecycle**
@@ -56,14 +57,13 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > and the booking **`.ics` calendar** (in-app "Add to calendar"). Verified on a scratch DB.
 
 ## A. Config — needs Tomo (not code; flips features from dark → live)
-- [ ] **SES verified sender** → transactional **emails** start sending. **The email engine is now
-      CODE-COMPLETE** (multi-tenant, `.ics` attached via `SendRawEmail`/MIME) — self-gates on creds, so it's
-      dark = in-app only until AWS is configured, never errors. **This is config, not code:** verify
-      `courtflow.app` in SES **af-south-1** (DKIM+SPF), request production access (exit the sandbox), create
-      IAM `ses:SendEmail`+`ses:SendRawEmail` keys → Render, set `SES_SENDER` (e.g. `no-reply@courtflow.app`)
-      + each club's contact email. One verified domain covers every club (per-club From-name + Reply-To);
-      adding a club needs no new SES verification. Enables invite + booking-confirmation + statement emails,
-      with the booking `.ics` attached. Full guide: **[SES-SETUP.md](SES-SETUP.md)**.
+- [x] **SES transactional email — LIVE** (2026-07). Running on an **interim** setup via the Ten-Fifty5 AWS
+      account (`eu-north-1`, `SES_SENDER=noreply@ten-fifty5.com`, `SES_AWS_*` creds) — invite + booking-
+      confirmation + statement emails send now, per-club From-name + Reply-To. **Two follow-ups remain:**
+      (a) the `.ics` attachment is **OFF** (`EMAIL_ICS_ENABLED=0`) because the interim IAM key lacks
+      `ses:SendRawEmail` — flip to `1` once the key gains it; (b) move to the **proper CourtFlow-domain**
+      setup (verify `courtflow.app`/`nextpointtennis.com` DKIM in the CourtFlow AWS account) — full guide:
+      **[SES-SETUP.md](SES-SETUP.md)**.
 - [ ] **`KLAVIYO_API_KEY`** → CRM lifecycle/marketing flows go live (event feed already emits).
 - [ ] **`S3_BUCKET` + AWS keys** → coach **photo uploads** (until then coaches paste a photo URL).
 - [ ] **DNS / SEO cutover** for `nextpointtennis.com` (supervised — never an agent; see `docs/07`,
@@ -74,8 +74,8 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 
 ## B. Build items — remaining functionality
 - [ ] **Commission engine tail (Phase D deferrals):**
-  - [ ] **Refund clawback** — when a paid lesson/class is refunded, write a *negative* `commission_split`
-        so the coach's earned commission reverses. Basis exists; the `refunded` branch isn't wired.
+  - [x] **Refund clawback** — a refund now reverses the coach's accrued commission proportionally
+        (arrears kept in lockstep); gated by `sc_refund_clawback` in the billing harness. **DONE.**
   - [ ] **Coach payout objects** — `coach_payout` records (owner↔coach settlement). Today the cockpit
         *reports* who owes what; settlement is offline.
   - [ ] **Rent auto-accrual** — `accrue_rent_for_club` exists + is idempotent; it runs on-read. A
@@ -92,10 +92,9 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       effect, credit/refund). Backlog — needs a proper spec before building.
 - [ ] **Platform / super-admin cockpit** — cross-club view (all clubs' revenue/health) for
       `platform_admin`. Low priority while there's one club; the `scope_clause` design supports it.
-- [ ] **Owner per-person 360 endpoint** — `GET /api/admin/people/<id>` (a unified member+coach 360 like
-      the coach's `clients/<id>`). **Now scheduled as step 2 of the admin-console redesign** (see the
-      CURRENT PHASE banner + [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)); the classic People drawer still
-      composes from people+payments until then.
+- [x] **Owner per-person 360 endpoint** — `GET /api/admin/people/<id>` (unified member+coach 360:
+      identity + roles + membership grant/revoke + owed + payments + bookings; if coach, settlement).
+      **BUILT + LIVE** in the admin SPA (`admin/repositories.get_person`); gated by `sc_person_360`.
 - [ ] **Reminders** — booking reminders (the `/api/cron/reminders` handler exists but cron services are
       off). Needs a scheduler: re-enable a Render cron, or an external pinger, or a lazy "due reminders"
       sweep. Same blocker for scheduled rent accrual + the reconcile/membership-refill sweeps.
@@ -114,8 +113,8 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       original exists. Coach photos come from the owner's `marketing material/coaches/` folder only.
 - [ ] **Homepage "cockpit" showcase uses a faux CSS device mock** (the real portal is behind auth). Swap a
       real `/portal` screenshot (`/img/portal-cockpit.webp`) at go-live.
-- [ ] **Contact form delivery** needs the **SES sender** (see §A) — until then enquiries are logged to the
-      web-service Render logs (never lost), not emailed.
+- [ ] **Contact form delivery** — SES is now live (§A), so enquiries can email; confirm the web-service
+      form is wired to the live sender (it also logs to Render logs as a never-lost fallback).
 - [ ] Two homepage feature images are polished **Unsplash stock** with `onerror` fallbacks to real club
       photos — swap for real shots when available.
 

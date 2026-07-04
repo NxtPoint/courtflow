@@ -1,8 +1,16 @@
 # Owner / Admin console redesign — design spec
 
-Status: **DESIGN LOCKED 2026-07-02, build starting.** This is the third and hardest console
-redesign, applying the DNA proven on the client (`frontend/js/client.js`) and coach
-(`frontend/js/coach_app.js`) apps to the owner/admin surface.
+Status: **COMPLETE + LIVE 2026-07-03.** All 7 build steps shipped; `/admin` now serves this SPA
+(`frontend/app/admin_app.html` + `frontend/js/admin_app.js`), the classic tab console is preserved at
+`/admin-classic`. The third and hardest console redesign, applying the DNA proven on the client
+(`frontend/js/client.js`) and coach (`frontend/js/coach_app.js`) apps to the owner/admin surface.
+Since the redesign, the whole front end was further standardised onto ONE widget per capability —
+see **[FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)** (the enshrined golden rule); the
+admin event story, calendar and Setup below are now the shared `Widgets.TransactionDetail` / `Calendar`
+/ `Setup`. **As-built delta vs the plan below:** Money is a Setup-style section menu (Sales by day ·
+Revenue · Coach settlement · Approvals · Payments · Activity); Diary uses the shared Calendar widget
+(Day/Week/Month + court/coach filters) with the full drag-timeline still at `/admin-classic`; Insights
+embeds the court-utilisation heatmap + the Business Overview.
 
 Owner brief: "take the learnings from client and coach and apply to admin — admin is the hardest,
 needs a lot of thought." Owner answers to framing questions:
@@ -97,7 +105,7 @@ ECharts + `/js/overview.js` → `Overview.start()`).
 - `overview.js` — the Insights embed.
 - Existing endpoints: full inventory in the admin surface map (see git history / the Explore digest).
 
-## Build order (incremental, commit per step, gates 43/118/35 + py_compile each time)
+## Build order (incremental, commit per step, gates 43/142/35 + py_compile each time)
 1. **Shell + responsive nav + Home hub** (compose existing reads or `/api/admin/home`). ← START
 2. **People** roster + **unified person 360** (+ `GET /api/admin/people/<id>`).
 3. **Admin event story** (`GET /api/admin/bookings/<id>` + `#/event/:id`) — the shared drill target.

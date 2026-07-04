@@ -13,38 +13,43 @@ Two Render web services + one Postgres:
   `/portal`, `/book`, `/admin`, `/settings`, …; a club host would serve that club's branded site. Serves
   static `cf-*` pages + JS, proxies nothing — the SPAs call `courtflow-api` directly. **Nav is
   role-focused** (`Portal.landingFor`): members/guests land on the client **Home · Account**, coaches on
-  their **Coach** console, owners on **Admin · Settings**. The coach and owner consoles are
-  **business-health-first cockpits**: the **Coach console** (`coach.html`, business tabs Dashboard ·
-  Schedule · Clients · Money · Setup — cockpit KPIs, a week-timeline schedule, and the settlement statement
-  folded into Money) and the **Admin console** (`admin.html`, Dashboard · Diary · People · Money · Insights
-  — a money-KPI + Today-at-the-club dashboard, the master diary, the financial cockpit, and the analytics
-  Overview), with **Settings** (`settings.html`) holding configuration (Club profile · Courts & hours ·
-  Services · Memberships · Coaches).
+  their **Coach** console, owners on **Admin**. The role apps are the three drill-through SPAs described
+  in the next section; the classic tab consoles have been retired (the owner's is preserved at
+  `/admin-classic` as a fallback).
 - **Postgres** (separate Render DB). **One DB, five schemas** (below).
 
 The browser holds a **Clerk** session; the SPA attaches the JWT to every `/api/*` call; the API verifies
 it (JWKS) and resolves a club-scoped `Principal`.
 
-## Front-end — three role SPAs (the 2026-07-02 redesign)
-The tab-based consoles above are superseded by **three mobile-first, drill-through single-page apps**, one
-per role, all built on the **one shared design system** (`frontend/app/app.css`, every page in `cf-*`
-classes — the single source; no inline component styles). **GOLDEN RULE:** each app has exactly **one**
-booking capability — the "**event story**" — and every list row (a session, a billing line, a client's
-service) drills into that same story; there is never a second booking sheet.
-- **Client** — `frontend/app/app.html` + `frontend/js/client.js`. ONE page, no bottom nav: Home (book tiles
-  + Your sessions + Billing-by-category) drilling into the booking story (`GET /api/me/bookings/<id>`) and
-  the ORDER-based billing view (`GET /api/me/billing/summary`). Served at `/`, `/portal`, `/app`.
-- **Coach** — `frontend/app/coach_app.html` + `frontend/js/coach_app.js`. Bottom nav Home · Schedule ·
-  Clients · Money · Setup; Schedule is a weekly calendar; the **one coach event story**
-  (`GET /api/coach/bookings/<id>`) carries the arrears actions (mark-collected / discount / write-off).
-  Served at `/coach` (non-coaches bounced).
-- **Admin (in progress)** — `frontend/app/admin_app.html` + `frontend/js/admin_app.js`, served at
-  **`/admin-app`** (the classic `/admin` console stays live until sign-off). It is **responsive** —
-  bottom-nav on mobile, a **left side-rail on desktop** (`.cf-admin`). Step 1 shipped: shell + nav +
-  command-center Home (`GET /api/admin/home`); steps 2–7 follow the build order in
-  [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md). Full blueprint: [FRONTEND-REDESIGN.md](FRONTEND-REDESIGN.md).
+## Front-end — three role SPAs + the shared widget architecture (2026-07 redesign, COMPLETE)
+Three mobile-first, drill-through single-page apps, one per role, on the **one shared design system**
+(`frontend/app/app.css`, every page in `cf-*` classes — no inline component styles).
+- **Client** — `app.html` + `client.js`. ONE page, no bottom nav: Home (book tiles + Your sessions +
+  Billing-by-category) drilling into the event story (`GET /api/me/bookings/<id>`) + the ORDER-based
+  billing view (`GET /api/me/billing/summary`). Served at `/`, `/portal`, `/app`.
+- **Coach** — `coach_app.html` + `coach_app.js`. Bottom nav Home · Schedule · Clients · Money · Setup;
+  Schedule is an hour-by-hour week time-grid (+ time-off + book-a-client); the event story
+  (`GET /api/coach/bookings/<id>`) carries the arrears actions. Served at `/coach` (+ `/coach.html`).
+- **Admin / Owner — COMPLETE + LIVE** — `admin_app.html` + `admin_app.js`, served at **`/admin`** (also
+  `/admin.html` and `/admin-app`). Responsive: bottom-nav on mobile, a **left side-rail on desktop**
+  (`.cf-admin`). Home (command-center, `GET /api/admin/home`) · People (roster → unified person 360,
+  `GET /api/admin/people/<id>`) · Money (Setup-style sections incl. **Sales by day**) · Diary (the shared
+  Calendar widget + Classes) · Setup · Insights (court-utilisation heatmap + Business Overview). The
+  **classic tab console** is preserved at **`/admin-classic`** (its full drag-timeline is linked from the
+  new Diary until it ports). `admin.html`/`admin.js` remain on disk; the dead classic **coach** console
+  (`coach.js`/`coach.html`) was deleted.
 
-Old standalone pages 302-redirect into the client SPA; `admin.html`/`coach.html` are kept as fallbacks.
+**GOLDEN RULE — one widget per capability** (the enshrined frontend architecture; full detail in
+[FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)). Every capability is rendered by exactly ONE
+widget shared across the three apps; role differences are **configuration** — a `data` adapter, an
+`actions` capability-map, `fields`, `onNavigate` — never forked render code. A second render of "a
+transaction" / "the calendar" is a bug: extend the widget's config. Shared widgets (`window.Widgets`,
+`frontend/js/widgets/`): **TransactionDetail** (the one event story — every session/billing-line/service
+row across all three apps drills into it), **Calendar** (the admin diary agenda; the coach time-grid +
+client Home agenda are kept as legitimately distinct views), and **Setup** + **ServiceList** (owner +
+coach share the gold-standard Setup). Common DOM helpers
+(`card/backBar/kv/modal/toLocal/addToCalendar/statusChip`) live once on `window.UI`; composed presenters
+(`stats/lineItems/activityFeed/…`) on `window.CRMUI`.
 
 ## Auth & multi-tenancy (the spine)
 `auth/principal.py`: verify the Clerk JWT → upsert `iam.user` (link-by-email) → load memberships →
@@ -133,20 +138,21 @@ events). `emit()` also drives **notifications** (`marketing_crm/notifications.py
 transactional kinds → a `core.notification` (in-app inbox, always) + a transactional email (SES).
 Child bookings route notifications to the **guardian**. Every booking has a downloadable **`.ics`**
 (`diary/calendar.py` → `GET /api/diary/bookings/<id>/calendar.ics`; `ics_url` on the confirmation
-payload) — in-app "Add to calendar" now, the email attaches the same file once email is live.
+payload) — in-app "Add to calendar" works now; the email *attachment* is gated OFF (`EMAIL_ICS_ENABLED=0`).
 
-**Transactional email — multi-tenant SES (code-complete, config-gated).** Improving on 1050's
-single-tenant bare-From sender: ONE verified CourtFlow domain (`SES_SENDER`, e.g. `no-reply@courtflow.app`)
-carries **every** club, so adding a tenant needs no new SES verification. Each club rides it with its OWN
-identity — a **From display name** (`club.name`) + **Reply-To** (its first `club.location` email) —
-resolved by `marketing_crm/notifications.py::_club_identity`. `marketing_crm/email/ses.py` self-gates on
-creds (no `SES_SENDER` → email is dark, in-app notifications only, never errors); `send_raw_email` (MIME
-`SendRawEmail`) attaches the booking **.ics** to confirmations (the piece 1050 lacked), `send_email` takes
-`from_name`/`reply_to`, and `send_booking_confirmation` is club-branded. `notifications.deliver` threads
-the club identity into every mapped event. No new endpoints, no schema change. Klaviyo lifecycle flows hang
-off the same event feed (dark without `KLAVIYO_API_KEY`). Config to go live (AWS only): verify the domain
-in SES `af-south-1`, exit the sandbox, set `SES_SENDER` + the club contact email — full guide in
-[SES-SETUP.md](SES-SETUP.md).
+**Transactional email — multi-tenant SES — LIVE.** Improving on 1050's single-tenant bare-From sender:
+ONE verified domain (`SES_SENDER`) carries **every** club, so adding a tenant needs no new SES
+verification. Each club rides it with its OWN identity — a **From display name** (`club.name`) + **Reply-To**
+(its first `club.location` email) — resolved by `marketing_crm/notifications.py::_club_identity`.
+`marketing_crm/email/ses.py` self-gates on creds and takes its OWN AWS keys (`SES_AWS_ACCESS_KEY_ID` /
+`SES_AWS_SECRET_ACCESS_KEY` / `SES_REGION`) so it can ride a different AWS account from S3; `send_email`
+takes `from_name`/`reply_to` and `send_booking_confirmation` is club-branded; `send_raw_email` (MIME
+`SendRawEmail`) attaches the booking **.ics** — **gated by `EMAIL_ICS_ENABLED` (default `0`)** until the
+sending key carries `ses:SendRawEmail`. `notifications.deliver` threads the club identity into every mapped
+event. No new endpoints, no schema change. **Running now** via the **interim** Ten-Fifty5 AWS account
+(`eu-north-1`, `SES_SENDER=noreply@ten-fifty5.com`) — the long-term proper CourtFlow-domain setup is in
+[SES-SETUP.md](SES-SETUP.md). Klaviyo lifecycle flows hang off the same event feed (dark without
+`KLAVIYO_API_KEY`). Diagnostic: `POST /api/cron/ses-selftest?to=<email>` (OPS-guarded).
 
 ## Request flow (a booking, end to end)
 1. SPA `booking.js` (full-screen): pick service → schedule on a month calendar with **inline per-duration

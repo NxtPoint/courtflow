@@ -37,13 +37,23 @@ NextPoint Tennis is club #1, migrating off Wix.
   written-off/discounted state) → the event story** (`GET /api/coach/bookings/<id>`), **Total billed**
   on cockpit + record, money actions (collect/discount/write-off) inside the event story, and **classes
   create/schedule/roster in Setup** (now bookable end-to-end). **.ics add-to-calendar** fixed on both
-  (authed `apiFetch` → blob). **Owner/Admin** = a responsive SPA **IN PROGRESS at `/admin-app`**
-  (`admin_app.html` + `admin_app.js`; bottom-nav ↔ desktop side-rail; command-center Home shipped via
-  `GET /api/admin/home`) — **design LOCKED in `docs/specs/ADMIN-REDESIGN.md`**, classic `/admin` stays
-  live until sign-off. New readers: `commission.client_service_breakdown` + `_coach_billed`,
-  `billing_me.billing_summary`, `diary.bookings.booking_story`/`coach_booking_story`,
-  `admin.repositories.admin_home`. `cancel_booking` now voids the linked unpaid order (no phantom debt).
-  **Gates: `python -m scripts.test_all` → booking 43 / billing 118 / statement 35.**
+  (authed `apiFetch` → blob). `cancel_booking` voids the linked unpaid order (no phantom debt).
+- **2026-07-03/04 — ADMIN CONSOLE COMPLETE + LIVE, then FRONT-END STANDARDISED (the widget GOLDEN RULE):**
+  **Owner/Admin** = the responsive drill-through SPA (`admin_app.html` + `admin_app.js`), now served at
+  **`/admin`** (bottom-nav ↔ desktop side-rail): Home (`GET /api/admin/home`) · People → unified person
+  360 (`GET /api/admin/people/<id>`) · Money as Setup-style sections incl. **Sales by day** · Diary (the
+  shared Calendar widget + Classes) · Setup · Insights (court-utilisation heatmap + Business Overview).
+  The **classic tab console is preserved at `/admin-classic`**. New backend: `admin.repositories.get_person`,
+  `diary.bookings.admin_booking_story`/`admin_reassign_coach`, and the **`insights/` lane**
+  (`court_utilisation`, `sales_by_day` → `/api/insights/*`, registered in `app.py`). Then the whole front
+  end was **standardised onto ONE WIDGET PER CAPABILITY — the enshrined GOLDEN RULE**
+  (`docs/specs/FRONTEND-STANDARDISATION.md`): a shared `frontend/js/widgets/` layer
+  (`Widgets.TransactionDetail` = the one event story across all three apps · `Widgets.Calendar` = the
+  admin diary · `Widgets.Setup` + `Widgets.ServiceList` = owner+coach setup); role differences are
+  **config, never forked render code**; common helpers (`card/backBar/kv/modal/statusChip/…`) promoted to
+  `window.UI`; the dead classic coach console (`coach.js`/`coach.html`) deleted. **A second render of a
+  capability is a bug — extend the widget's config.**
+  **Gates: `python -m scripts.test_all` → booking 43 / billing 142 / statement 35.**
 - **2026-06-28 additions (all live + harness-gated):** the **unified client statement** (`billing/statement.py`
   — one debt = one `billing.order`, settled once; account page shows ONE reconciled "Your statement",
   grouped by category with tick-to-part-settle; admin void/write-off; coach `coach_arrears` kept in
@@ -82,15 +92,16 @@ NextPoint Tennis is club #1, migrating off Wix.
   - **CRM + notifications:** `marketing_crm/` — `emit()`→`core.usage_event` (and drives notifications
     non-fatally), `notifications.py` (in-app `core.notification` inbox + transactional email; child→guardian
     routing), Klaviyo sync (dark w/o `KLAVIYO_API_KEY`), consent, cockpit, `email/ses.py` fallback (dark
-    w/o `SES_SENDER`); `contracts/events.md`. **Confirmation EMAIL is dark until SES/Klaviyo is keyed —
-    today bookings notify IN-APP only.** A booking **`.ics` calendar** is built (`diary/calendar.py` +
-    `GET /api/diary/bookings/<id>/calendar.ics`; `ics_url` on the confirmation payload) — the in-app
-    "Add to calendar" download works now; the email attaches the same file once SES/Klaviyo is wired.
+    w/o `SES_SENDER`); `contracts/events.md`. **Confirmation EMAIL is LIVE (2026-07-03, interim via the
+    Ten-Fifty5 SES account) — bookings/invites email + notify in-app.** A booking **`.ics` calendar** is built
+    (`diary/calendar.py` + `GET /api/diary/bookings/<id>/calendar.ics`; `ics_url` on the confirmation payload) —
+    the in-app "Add to calendar" download works; the EMAIL attachment is currently OFF (`EMAIL_ICS_ENABLED=0`,
+    interim key lacks `ses:SendRawEmail`).
   - **Admin (owner self-service):** `admin/` — `/api/admin/*` write APIs + onboarding; powers the owner
     onboarding wizard, Settings, the People tab (360 drawer), the **per-service commission editor**
     (club/coach/per-service incl. classes → `commission_rule`), the **financial cockpit** (per-coach
     settlement, refund-aware), and **statement arrears adjust** (`PATCH /api/admin/coach-statement/arrears/<id>`).
-    Console = `admin.js` on `crm_ui.js`. Added `club.onboarding_completed`, `iam.coach_invite`.
+    Console (as-built) = the `/admin` SPA (`admin_app.js`; classic `admin.js` at `/admin-classic`). Added `club.onboarding_completed`, `iam.coach_invite`.
   - **Service editing (owner + coach):** `services/` — `/api/services/*` is the ONE API a service is
     edited through by BOTH roles; the route enforces who may change what (owner = everything incl.
     commission; coach = their OWN lesson/class name/variations/payment/packages, NEVER commission).
@@ -102,7 +113,7 @@ NextPoint Tennis is club #1, migrating off Wix.
     **book-for-a-client** (auto-confirms); **My Clients** 360 (derived, private; history + upcoming);
     **statement** (per-client paid/owed/net, mark-collected + **discount/write-off**); **Dashboard cockpit**
     (`/cockpit`: lessons/hours/net-of-commission earnings/fill-rate/trend + **lessons-left-on-plans** +
-    month-end-after-commission). Console = `coach.js` on `crm_ui.js`.
+    month-end-after-commission). Console (as-built) = the `/coach` SPA (`coach_app.js`; the classic `coach.js` was deleted).
   - **Client (self-service):** `me/` — `/api/me/*`; profile/demographics (email read-only), **dependents**
     (`iam.dependent`, login-less child users → booking party), financials, **statement** (`GET /api/me/statement`,
     the client mirror of the coach statement), refund-requests, notifications. **My Bookings** has a
@@ -114,13 +125,18 @@ NextPoint Tennis is club #1, migrating off Wix.
     "Overview" tab + standalone `/overview.html`. Per-business (the Ten-Fifty5 bridge was deprecated).
   - **Frontend:** `frontend/app/` (shells) + `frontend/js/` — **ONE design system in `frontend/app/app.css`**
     (bright/modern; every page uses its `cf-*` classes — keep it the single source, do NOT inline component
-    styles). **THREE role SPAs (2026-07-02 redesign, drill-through, one event story each — the golden
-    rule):** **client** (`app.html`+`client.js`, one page), **coach** (`coach_app.html`+`coach_app.js`,
-    bottom nav + weekly calendar + by-service client record + classes), **admin** (`admin_app.html`+
-    `admin_app.js`, responsive, IN PROGRESS at `/admin-app` — see `docs/specs/ADMIN-REDESIGN.md`). They
-    reuse `booking.js` (full-screen booking), `crm_ui.js` (`CRMUI.*`), `service_editor.js`, `class_ui.js`,
-    `admin_api.js`/`coach_api.js`, and the master-diary timeline. Old pages (`portal.js`, `my.js`,
-    `plan.js`, `coach.js`, `admin.js`) are kept as fallbacks; standalone `/account`,`/my`,`/book` 302→ SPA.
+    styles). **THREE role SPAs, all built on ONE WIDGET PER CAPABILITY — the enshrined GOLDEN RULE**
+    (`docs/specs/FRONTEND-STANDARDISATION.md`; role differences = config via a data adapter + actions map +
+    fields, never forked render code): **client** (`app.html`+`client.js`, one page), **coach**
+    (`coach_app.html`+`coach_app.js`, bottom nav + hour-grid schedule + by-service client record + classes),
+    **admin** (`admin_app.html`+`admin_app.js`, responsive, **COMPLETE + LIVE at `/admin`**; classic at
+    `/admin-classic`). The shared render layer is **`frontend/js/widgets/`** (`Widgets.TransactionDetail` =
+    the ONE event story across all three apps · `Widgets.Calendar` = the admin diary · `Widgets.Setup` +
+    `Widgets.ServiceList` = owner+coach setup) + promoted `window.UI` helpers
+    (`card/backBar/kv/modal/statusChip/…`) + `crm_ui.js` (`CRMUI.*`). They also reuse `booking.js`
+    (full-screen booking), `service_editor.js`, `class_ui.js`, `admin_api.js`/`coach_api.js`. The dead
+    classic `coach.js`/`coach.html` were **deleted**; `admin.js`/`admin.html` remain for `/admin-classic`;
+    `portal.js`/`my.js`/`plan.js` still serve legacy shells (onboarding, `/book`, `/admin-classic`).
     **Asset/nav links are ABSOLUTE** (`/app.css`, `/js/…`) so pages work at sub-paths.
   - **Web/SEO:** `web_app.py` (+ `web_wsgi.py`), `frontend/marketing/`, `frontend/_shared/` (`theme.css` +
     **`marketing.css`** + `chrome.py` + `branding.py` host→club resolver), `build_blog.py`,
@@ -153,8 +169,9 @@ NextPoint Tennis is club #1, migrating off Wix.
   on-behalf auto-confirms) · **redesigned self-service for all three roles** (client action-first cockpit +
   ~2-tap booking + family/financials/**statement** · coach console: onboarding/services/**approval queue**/
   clients-360/**statement-edits**/cockpit · owner console: per-service commission/financial cockpit/People-360
-  — both on the shared `crm_ui.js`) · **in-app notifications** + booking **`.ics` calendar** (confirmation
-  email pending SES/Klaviyo) · unified master diary · bright/modern UI + public site ·
+  — now all on the shared `frontend/js/widgets/` layer + `window.UI`/`crm_ui.js`) · **in-app
+  notifications** + booking **`.ics` calendar** (confirmation email **LIVE via SES**; `.ics` in-app only) ·
+  unified master diary · bright/modern UI + public site ·
   **UNIFIED CLIENT STATEMENT** (one reconciled "what you owe" from unpaid orders, grouped + tick-to-part-
   settle, settle online anytime, admin void/write-off) · **service-specific & per-membership-tier payment
   options + one payment rule** · **memberships & packs buy offline** · **off-peak coverage priced per slot** ·
@@ -274,7 +291,7 @@ request→accept→settle chain green on a scratch DB.
 - **Scratch-DB scenario harnesses — the primary gate:** `python -m scripts.test_all` runs THREE
   rollback-only harnesses against the local sandbox DB (each its own scratch club, always rolled back):
   **booking** (`test_booking_scenarios`, 43 checks — double-book, lesson coach∩court, off-peak per-slot
-  pricing, lifecycle), **billing/commercial** (`test_billing_scenarios`, 118 — settlement modes, commission,
+  pricing, lifecycle), **billing/commercial** (`test_billing_scenarios`, 142 — settlement modes, commission,
   tokens, membership incl. offline + per-tier modes, refunds, refund clawback, dispute routing, void/
   lockstep, the client/coach event stories + the by-service breakdown), and **statement reconciliation**
   (`test_statement_reconciliation`, 35 — no double-count, pay-all-once, part-settle, reclaim,
@@ -296,11 +313,15 @@ request→accept→settle chain green on a scratch DB.
 
 ## Still needs Tomo (config, not code) — infra is otherwise live
 - **S3** (`S3_BUCKET` + AWS keys) for coach **photo uploads** — until set, coaches paste a photo URL.
-- **SES** — the transactional email is **CODE-COMPLETE** (multi-tenant: one verified CourtFlow domain,
-  per-club From-name + Reply-To; HTML+text; **`.ics` attached** via `SendRawEmail`/MIME). It's DARK until
-  Tomo verifies `courtflow.app` in SES (af-south-1), exits the SES sandbox, and sets `SES_SENDER` + AWS
-  keys — until then confirmations/invites notify **in-app only**. Full guide: **`docs/specs/SES-SETUP.md`**.
-  Klaviyo marketing also dark until `KLAVIYO_API_KEY`.
+- **SES** — transactional email is **LIVE (2026-07-03)** end-to-end (booking confirmations, coach
+  invites). **Interim setup:** it rides the **Ten-Fifty5 (1050) AWS account** (CourtFlow's own AWS was
+  locked out) — `SES_AWS_ACCESS_KEY_ID`/`SES_AWS_SECRET_ACCESS_KEY` = 1050's keys, `SES_REGION=eu-north-1`
+  (must match the verified identity), `SES_SENDER=noreply@ten-fifty5.com` (branded "NextPoint Tennis",
+  Reply-To `info@nextpointtennis.com`). Multi-tenant HTML+text. **NB: the `.ics` email attachment is
+  currently OFF** (`EMAIL_ICS_ENABLED=0`) because the interim IAM key lacks `ses:SendRawEmail` — plain
+  `SendEmail` is used; the in-app "Add to calendar" download still works. Long-term (verify
+  `nextpointtennis.com`/`courtflow.app` DKIM once CourtFlow's AWS is back): **`docs/specs/SES-SETUP.md`**.
+  Klaviyo marketing still dark until `KLAVIYO_API_KEY`.
 - **Yoco keys** (`YOCO_*`) — DONE (set in Render; payments live). Each club still opts in via the
   Settings → Payments toggle.
 - **DNS / SEO cutover** for `nextpointtennis.com` (supervised — never an agent). See `docs/11 §5`, `docs/07`.

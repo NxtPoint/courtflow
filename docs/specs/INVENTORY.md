@@ -31,7 +31,8 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `admin/` | routes, repositories, schema | `/api/admin/*` owner self-service + config |
 | `coach/` | routes, repositories, schema | `/api/coach/*` coach self-service + cockpit |
 | `me/` | routes | `/api/me/*` client self-service (profile, dependents, financials, refund-requests, notifications) |
-| `analytics/` | repositories, routes | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`); `/api/analytics/*`; embedded as the admin "Overview" tab |
+| `analytics/` | repositories, routes | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`); `/api/analytics/*`; embedded as the admin "Insights" tab |
+| `insights/` | repositories, routes | **Phase-2 P1 read-layer** (guarded aggregations, no new tables): court-utilisation heatmap + sales-by-day; `/api/insights/*`; feeds the admin Insights + Money "Sales by day" |
 | `crons/` | trigger | thin dispatcher → `/api/cron/*` |
 | `scripts/` | seed_nextpoint, provision_club | seed/provision tenants |
 | `web_app.py`, `frontend/` | host-switch + SPA shells + marketing | The web service |
@@ -73,7 +74,18 @@ history, else archive) · `GET people` · `GET payments` · `POST|DELETE members
 (+`DELETE /<id>`, `GET /preview`) · `GET financials/{summary,revenue,coach-earnings,memberships}` ·
 `GET coach-statement` · `POST coach-statement/arrears/<id>/collected` ·
 **`PATCH coach-statement/arrears/<id>`** (discount/write-off) · `GET refund-requests` ·
-`POST refund-requests/<id>/{approve,decline}`.
+`POST refund-requests/<id>/{approve,decline}` · **`GET people/<id>`** (the unified **person 360** —
+profile + all roles + active membership + owed statement + online payments + bookings; if the person is a
+coach, a settlement summary; `admin/repositories.py::get_person`) · **`GET bookings/<id>`** (the **admin
+event story** / god-view — client + coach + charge + coaching-arrears + full action eligibility;
+`diary/bookings.py::admin_booking_story`) · **`POST bookings/<id>/reassign-coach`** (move a future/unpaid
+lesson to another bookable coach; `admin_reassign_coach`).
+
+**Insights `/api/insights/*` (Phase-2 P1 read-layer, lane `insights/`):** **`GET court-utilisation`**
+(`?days=` — booked-vs-available court-hours by weekday×hour + overall % → the Insights heatmap) ·
+**`GET sales-by-day`** (`?month=` — daily takings grouped by day, each sale = client + service type +
+amount → Money → Sales by day). Admin-gated, guarded (missing/empty → empty payload, never 500).
+`insights/repositories.py`; registered in `app.py`.
 
 **Coach `/api/coach/*`:** `GET/PATCH profile` · `GET onboarding` · `POST/PATCH services`
 (+`POST services/<pid>/rate`, `PATCH/DELETE services/<id>`) · `GET/POST bundle-plans`
@@ -103,19 +115,24 @@ for the month before write-off/discount/collection, distinct from collected `gro
 here — emails the club via SES, self-gating; logs the lead if SES unset).
 
 **Crons `/api/cron/*`** (handlers exist; cron services off): `POST capacity-sweep` · `POST reminders` ·
-`POST monthly-invoice` · `POST membership-refill` · `POST reconcile-payments`.
+`POST monthly-invoice` · `POST membership-refill` · `POST reconcile-payments` · **`POST ses-selftest`**
+(OPS-guarded — sends a live SES test + surfaces the real SES error; `diary/routes.py`).
 
 **Analytics `/api/analytics/*`:** `GET overview` (`?days`, `?club_id`) · `GET clubs`. **Tracking:**
 `POST /api/track/page` (first-party page-view beacon;
 geolocation via Cloudflare `CF-IPCountry`). **Core:** `GET /healthz` · `GET /api/whoami`.
 
 **Transactional email (`marketing_crm/email/ses.py`)** — no HTTP surface; called from `notifications.deliver`.
-Self-gates on creds (dark = in-app only, never errors). Functions: `_from_source` ("Name <addr>"),
-`html_wrap` (brand shell), `send_email(…, from_name, reply_to)`, `send_raw_email(…, attachments=)` (MIME
-`SendRawEmail` for the booking **.ics** invite), `send_booking_confirmation` (club-branded + .ics).
-**Multi-tenant identity:** ONE verified CourtFlow domain (`SES_SENDER`); each club rides it with its own From
-display name (`club.club.name`) + Reply-To (its first `club.location.email`), resolved in
-`notifications.py::_club_identity`. Go-live config guide: **`docs/specs/SES-SETUP.md`** (NEW). No schema change.
+**LIVE since 2026-07-03**, riding the **Ten-Fifty5 (1050) AWS account** interim (CourtFlow's own AWS was
+locked out): the module takes its OWN creds `SES_AWS_ACCESS_KEY_ID`/`SES_AWS_SECRET_ACCESS_KEY` +
+`SES_REGION=eu-north-1` + `SES_SENDER=noreply@ten-fifty5.com` (`SES_FROM_EMAIL` also read). Still self-gates
+(no creds → in-app only, never errors). Functions: `_from_source`, `html_wrap`, `send_email(…, from_name,
+reply_to)`, `send_raw_email(…, attachments=)`, `send_booking_confirmation`. **NB: the `.ics` email attachment
+is currently OFF** (`EMAIL_ICS_ENABLED=0` — the interim IAM key lacks `ses:SendRawEmail`; plain `SendEmail`
+is used) — the in-app `.ics` download still works. **Multi-tenant identity:** each club rides the one sender
+with its own From display name (`club.club.name`) + Reply-To (its first `club.location.email`), resolved in
+`notifications.py::_club_identity`. Long-term (verify `nextpointtennis.com`/`courtflow.app` DKIM once the
+CourtFlow AWS account is back): **`docs/specs/SES-SETUP.md`**. No schema change.
 
 ## 4. Database — 5 schemas (idempotent boot DDL)
 - **`club`**: `club`, `branding`, `location`, `policy`
@@ -148,6 +165,13 @@ Settlement modes on `billing.order`: `at_court`, `monthly_account`, `online`, `m
 The old tab-based consoles are superseded by three single-page drill-through apps where every list row opens
 its full **event story** (GOLDEN RULE: exactly ONE booking capability per app, reused everywhere). Blueprints:
 [FRONTEND-REDESIGN.md](FRONTEND-REDESIGN.md) + [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md).
+
+**GOLDEN RULE — one widget per capability** ([FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)):
+the shared **`frontend/js/widgets/`** layer — **`Widgets.TransactionDetail`** (the one event story across
+all three apps), **`Widgets.Calendar`** (the admin diary), **`Widgets.Setup`** + **`Widgets.ServiceList`**
+(owner + coach setup) — plus promoted `window.UI` helpers (`card/backBar/kv/modal/statusChip/…`) and
+`crm_ui.js` (`CRMUI.*`). Role differences = configuration (a data adapter + an actions capability-map +
+`fields`), never forked render code.
 - **Client** — `frontend/app/app.html` + `frontend/js/client.js`. ONE page, **no bottom nav** (Book from
   Home tiles; avatar top-right → profile). Home = greeting + book tiles + **Your sessions** (all,
   upcoming+past) + **Billing by category** (month nav → category → items → booking story / receipt) + Plan &
@@ -159,16 +183,22 @@ its full **event story** (GOLDEN RULE: exactly ONE booking capability per app, r
   Edit-profile/Weekly-hours pages. **THE ONE COACH EVENT STORY** (`#/event/:id` → `GET /api/coach/bookings/<id>`)
   carries the arrears actions (mark-collected / discount / write-off). Served at `/coach`, `/coach.html`
   (non-coaches bounced).
-- **Admin (IN PROGRESS)** — `frontend/app/admin_app.html` + `frontend/js/admin_app.js`, served at
-  **`/admin-app`** (the classic `/admin` console stays live until sign-off). **Responsive:** bottom-nav on
-  mobile, **left side-rail on desktop** (`.cf-admin`). Nav Home · People · Money · Diary · Setup (+Insights).
-  Step 1 shipped: shell + nav + **command-center Home** (4 focus cards) via `GET /api/admin/home`
-  (`AdminAPI.home()`); steps 2–7 are placeholders (see ADMIN-REDESIGN.md).
+- **Admin / Owner — COMPLETE + LIVE** — `frontend/app/admin_app.html` + `frontend/js/admin_app.js`, served
+  at **`/admin`** (also `/admin.html`, `/admin-app`). **Responsive:** bottom-nav on mobile, **left
+  side-rail on desktop** (`.cf-admin`). Nav Home · People · Money · Diary · Setup (Insights off a Home
+  tile). **Home** = command-center (4 focus cards, `GET /api/admin/home`) · **People** = roster → the
+  **unified person 360** (`#/person/:id`, `GET /api/admin/people/<id>`) · **Money** = Setup-style section
+  menu (Sales by day · Revenue by service · Coach settlement · Approvals · Online payments · Activity) ·
+  **Diary** = the shared **`Widgets.Calendar`** (Day/Week/Month + court/coach filters) + Classes · **Setup**
+  = the shared **`Widgets.Setup`** (Club profile+payments · Courts · Services · Memberships · Packs ·
+  Coaches) · **Insights** = court-utilisation heatmap + the Business Overview. The **classic tab console is
+  preserved at `/admin-classic`** (its full drag-timeline is linked from the new Diary).
 - **Web routes / redirects (`web_app.py`):** `/`,`/portal`,`/app` → `app.html` · `/coach`,`/coach.html` →
-  `coach_app.html` · `/admin` → `admin.html` (classic) · **`/admin-app`** → `admin_app.html` (new). Old
-  standalone pages **302 → the client SPA**: `/book.html`→`/portal#/book/court`, `/book/<kind>`→`/portal#/book/<kind>`,
-  `/my`,`/my.html`→`/portal#/bookings`, `/account.html`→`/portal#/billing`. The old `admin.html`/`admin.js` +
-  `coach.html`/`coach.js` are kept as fallbacks.
+  `coach_app.html` · **`/admin`,`/admin.html`,`/admin-app` → `admin_app.html` (the NEW SPA)** ·
+  **`/admin-classic` → `admin.html` (the classic console)**. Old standalone pages **302 → the client SPA**
+  (`/book.html`→`/portal#/book/court`, `/my`→`/portal#/bookings`, `/account.html`→`/portal#/billing`). The
+  classic **coach** console (`coach.html`/`coach.js`) was **deleted**; `admin.html`/`admin.js` remain for
+  `/admin-classic`. Post-login role routing (`client.js`) lands admins on `/admin`, coaches on `/coach`.
 
 **Portal SPA shells** (`frontend/app/*.html`, each `cf-*` design system, absolute asset links):
 `portal` (dashboard) · `book` (full-screen booking) · `my` (my bookings) · `plans` (consolidated
@@ -184,23 +214,14 @@ Account no longer show to staff:
 - coach → **Coach** (landing) · Account
 - club_admin/platform_admin → **Admin** (landing) · Settings
 
-`Portal.landingFor(role)` redirects staff to their own console on sign-in; `home.js` redirects off
-`/portal.html` unless `?stay=1` (a testing bypass so staff can still view the client Home). "Statement" is
-gone from the nav (folded into the coach Money tab).
+Post-login role routing (`client.js`, the SPA entry) lands members on the client Home, coaches on `/coach`,
+admins on `/admin`; `Portal.landingFor` is the legacy equivalent for the old `*.html` shells.
 
-**Coach console (`coach.js`) — 5 tabs:** **Dashboard** ("Needs your attention" approval queue + cockpit:
-net-of-commission KPIs/earnings trend/month-end position/top clients/upcoming) · **Schedule** (a week
-**timeline** reusing the master-diary `cf-cal*` grid — lessons + classes, prev/next-week nav; tap a lesson →
-completed/no-show, tap a class → roster; + Book for a client / Book for myself / block time off) ·
-**Clients** (the 360) · **Money** (month-end settlement statement — supersedes `/statement.html`) ·
-**Setup** (sub-tabbed **Services & pricing** incl. the club-commission card + classes, and **My profile**).
-
-**Owner console (`admin.js`) — 5 tabs (+ ⚙ Settings link):** **Dashboard** (Today at the club + this-month
-money KPIs + net-revenue trend + last-30-days growth/NPS from analytics + a Quick actions row) · **Diary**
-(sub-tabbed **Timeline** master diary + **Classes** management — the old separate Classes tab folded in) ·
-**People** (directory + 360 + outstanding/void) · **Money** (**Billing** config/refund queue/recent payments
-+ the full **financial cockpit** — the old Cockpit tab folded in) · **Insights** (the analytics Business
-Overview, was "Overview").
+**Classic tab consoles — RETIRED.** The coach console (`coach.js`/`coach.html`) was **deleted**. The owner
+console (`admin.js`) is preserved at **`/admin-classic`** as a fallback (5 tabs: Dashboard · Diary
+[Timeline + Classes] · People · Money [Billing + financial cockpit] · Insights) — chiefly for its full
+drag-and-drop master-diary timeline until that ports into the new Diary. The live consoles are the three
+SPAs above, all on the shared widget layer.
 
 **JS modules** (`frontend/js/*.js`): **`client`** (client SPA — Home/sessions/billing-by-category/event
 story) · **`coach_app`** (coach SPA — bottom-nav Home·Schedule·Clients·Money·Setup + the one coach event
@@ -222,8 +243,12 @@ side-rail). Marketing site: `frontend/marketing/`, `frontend/_shared/`.
 **Full reference: `docs/specs/ENV-STATUS.md`** — every var, live/dark status, copy-paste checklist.
 Live now: `DATABASE_URL`, `OPS_KEY`, Clerk `AUTH_*`, Yoco (`PAYMENTS_ENABLED=1`, `PAYMENTS_PROVIDER=yoco`,
 `YOCO_SECRET_KEY`/`YOCO_PUBLIC_KEY`/`YOCO_WEBHOOK_SECRET`), `APP_BASE_URL`, `SEED_NEXTPOINT=1`,
-`MARKETING_HOSTS`. Dark until keyed: `KLAVIYO_API_KEY` (CRM/email — self-gates), `S3_BUCKET`+AWS keys
-(photo uploads), `SES_SENDER` (email fallback).
+`MARKETING_HOSTS`, and **transactional email** — LIVE via the interim Ten-Fifty5 AWS account
+(`SES_SENDER=noreply@ten-fifty5.com`, `SES_AWS_ACCESS_KEY_ID`/`SES_AWS_SECRET_ACCESS_KEY`,
+`SES_REGION=eu-north-1`; **`EMAIL_ICS_ENABLED=0`** — the .ics attachment is OFF until the key gains
+`ses:SendRawEmail`, so confirmations attach nothing yet). Dark until keyed: `KLAVIYO_API_KEY`
+(CRM/marketing — self-gates), `S3_BUCKET`+AWS keys (photo uploads), Google-tag/GSC vars
+(`GA4_MEASUREMENT_ID`/`GOOGLE_ADS_*`/`GSC_*` — set at go-live cutover).
 **Note:** the old `*_ENABLED` toggles (`YOCO_/TRACKING_/CONSENT_/CRM_SYNC_`) were dead config (never read)
 — removed; those features are always-on or self-gate on their keys. `render.yaml` is documentation only —
 env is entered in the Render dashboard.

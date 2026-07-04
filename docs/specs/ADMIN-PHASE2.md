@@ -1,10 +1,15 @@
 # Admin Portal — Phase 2: architecture + backlog
 
-Status: **PLAN — proposed 2026-07-03, awaiting owner sign-off on priorities.** Nothing built yet.
-This is the "make the owner/admin portal world-class" phase that follows the Phase-1 admin SPA
-redesign (Home · People · Money · Diary · Setup + the event story — steps 1–3 shipped; see
-`ADMIN-REDESIGN.md`). It was scoped from three research passes: a competitive benchmark of
-world-class club platforms, a codebase reuse audit, and an architecture design — all reconciled here.
+Status: **PLAN + first flagship SHIPPED.** The backlog below awaits owner sign-off on priorities, but
+the **P1 insight read-layer landed its flagship (`insights/` lane, ZERO new tables): the
+court-utilisation heatmap (#19) + sales-by-day** — `GET /api/insights/court-utilisation` and
+`/sales-by-day` (guarded aggregations; a missing/empty table → empty panel, never a 500), surfaced in the
+admin **Insights** tab + the Money **"Sales by day"** section. This is the "make the owner/admin portal
+world-class" phase that follows the now-**COMPLETE** Phase-1 admin SPA redesign (Home · People · Money ·
+Diary · Setup + the event story — all 7 steps shipped; see `ADMIN-REDESIGN.md`). It was scoped from three
+research passes: a competitive benchmark of world-class club platforms, a codebase reuse audit, and an
+architecture design — all reconciled here. **The generic P1 registry** (metric/cohort/funnel endpoints
+below) **is still the plan** — the two concrete endpoints proved the pattern.
 
 Owner's mandate (the design constraint, verbatim):
 > "MAKE SURE WE HAVE A SOLID ARCHITECTURE AND THAT EVERYTHING IS COMPONENTISED WITH MAXIMUM REUSE,
@@ -44,10 +49,13 @@ one config table. A new feature becomes "a new metric key + a dropped-in card" o
 
 Mnemonic: **Read · React · Alert · Capture · Render.**
 
-### P1 — Insight read-layer (`insights/`) — ZERO new tables
+### P1 — Insight read-layer (`insights/`) — ZERO new tables · **flagship SHIPPED**
 The single guarded aggregation layer over `core.usage_event` + `billing.*` + `diary.*`. **Every number
 in Phase 2 resolves through here** — nothing re-queries raw tables ad hoc, so "revenue" can never be
-computed three inconsistent ways.
+computed three inconsistent ways. **Built so far:** `insights/repositories.py` +
+`insights/routes.py` (registered in `app.py`) with `court_utilisation(club_id, days)` (weekday×hour
+heatmap) and `sales_by_day(club_id, month)`, both guarded (empty table → empty panel). The generic
+metric/cohort/funnel/breakdown registry below is the remaining P1 scope.
 
 - **Internal abstraction: a metric registry** — a Python dict `{key → (source, grain, agg builder)}`,
   e.g. `active_members`, `court_utilisation`, `lesson_fill_rate`, `revenue_by_lob`, `nps_rolling`,
@@ -171,7 +179,7 @@ Deps. Ranked within each theme.
 ### Analytics & BI
 | # | Feature | One-liner | Reuses | Tbl | Val | Eff | Deps |
 |---|---|---|---|---|---|---|---|
-| 19 | **Court-utilisation heatmap** | Occupancy by hour × day × court; find dead slots | P1+P5 | 0 | Must | M | — |
+| 19 | **Court-utilisation heatmap** ✅ SHIPPED | Occupancy by hour × day × court; find dead slots | P1+P5 | 0 | Must | M | — |
 | 20 | Executive KPI board | Revenue, active, utilisation, NPS tiles, compare-period | P1+P5 | 0 | Must | M | — |
 | 21 | Customer LTV & spend distribution | Value segments to target campaigns | P1 | 0 | High | M | — |
 | 22 | Benchmark ribbons | Metric vs world-class band (utilisation >70%, NPS >50) | P1 (static registry) | 0 | High | S | — |

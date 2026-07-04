@@ -58,6 +58,10 @@ Durable record of the Wix→Render cutover work (survives chat compaction). Full
   different AWS account from S3; `_sender()` also reads `SES_FROM_EMAIL`. Diagnostic:
   `POST /api/cron/ses-selftest?to=<email>` (OPS-guarded) reports live enabled/sender/region/creds +
   the raw send error.
+  - **⚠️ `.ics` attachment is gated by `EMAIL_ICS_ENABLED` (default `0` = OFF).** Booking-confirmation
+    emails currently send **without** the calendar attachment (plain HTML+text); the in-app "Add to
+    calendar" still works. Flip `EMAIL_ICS_ENABLED=1` on **courtflow-api** to re-enable the MIME
+    `SendRawEmail` attachment path once you're confident the interim key carries `ses:SendRawEmail`.
 
 ## ✅ FIXED
 - **Seed court resurrection** — `seed_nextpoint.py` now defaults to 7 hard + 1 clay AND seeds courts
