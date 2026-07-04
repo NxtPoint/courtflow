@@ -96,7 +96,7 @@
     if (top === "booking") return renderBookingStory(parts[1]);
     if (top === "billing") {                        // drill-through screens under Home's billing
       if (parts[1] === "order") return renderOrder(parts[2]);
-      if (parts[1] === "cat") return renderBillingCategory(parts[2]);
+      if (parts[1] === "cat") return renderBillingCategory(parts[2], parts[3]);
       return renderHome();
     }
     if (top === "plan") return renderPlan();
@@ -278,6 +278,9 @@
 
   // billing category → its items → each drills into the booking story
   async function renderBillingCategory(key, month) {
+    // Never render without a month — a missing one made mLabel() throw and hang the spinner.
+    month = month || HBMONTH || curMonth();
+    HBMONTH = month;   // keep Home's month nav in sync with the month drilled into
     loading();
     var d;
     try { d = await window.API.billingSummary(month); } catch (e) { set(el("div", {}, [backBar("Home", "#/"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
