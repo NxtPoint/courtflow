@@ -63,6 +63,18 @@ Durable record of the Wix→Render cutover work (survives chat compaction). Full
     calendar" still works. Flip `EMAIL_ICS_ENABLED=1` on **courtflow-api** to re-enable the MIME
     `SendRawEmail` attachment path once you're confident the interim key carries `ses:SendRawEmail`.
 
+## ✅ DONE — DATA MIGRATION (prod)
+- **878 Wix clients imported to PRODUCTION as active members (2026-07-04)** — via `scripts/import_members.py`
+  run from the courtflow-api Render shell (DATABASE_URL already in-env, so no connection string handled/
+  stored anywhere). Verified: **879 active members, 0 trial subscriptions** (import grants none; the member
+  row also suppresses the first-login trial). Source = cleaned `clients.csv` (878 unique, deduped from 919
+  Wix contacts; typo `gnail.com`→`gmail.com` fixed). Idempotent — re-run safe when memberships/lessons land.
+  Tools: `scripts/import_members.py` (friendly wrapper: secure getpass prompt for the DB URL / dry-run →
+  YES → commit → verify), on top of `scripts/import_wix.py`.
+  - **STILL TO COME from Tomo (email-keyed files):** (1) **memberships** — the ~23 paid members from
+    `wix_subscriptions.csv`; Tomo is creating the plans in the frontend with EXACT matching names so import↔
+    service line up. (2) **lessons/packs** — remaining-lesson balances → `token_wallet`. Both import by email.
+
 ## ✅ FIXED
 - **Seed court resurrection** — `seed_nextpoint.py` now defaults to 7 hard + 1 clay AND seeds courts
   only when the club has none (re-seed can never re-add a court the owner deleted). Verified no-op.
