@@ -161,8 +161,12 @@ def send_raw_email(to_email, subject, body_text, body_html=None, attachments=Non
         client.send_raw_email(Source=src, Destinations=[to_email], RawMessage={"Data": msg.as_string()})
         return True
     except Exception:
-        log.exception("ses: send_raw_email failed for %s", to_email)
-        return False
+        # A raw-send failure (classically: the IAM key has ses:SendEmail but NOT ses:SendRawEmail)
+        # must NEVER silently drop the email. Fall back to the plain SendEmail path (loses only the
+        # attachment). This is why a booking confirmation still lands even without SendRawEmail.
+        log.exception("ses: send_raw_email failed for %s — falling back to plain send", to_email)
+        return send_email(to_email, subject, body_text, body_html=body_html,
+                          from_name=from_name, reply_to=reply_to)
 
 
 def send_booking_confirmation(payload):

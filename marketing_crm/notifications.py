@@ -18,6 +18,7 @@
 # NOTHING here raises. With no email keys the inbox still works fully (email_status='skipped').
 
 import logging
+import os
 
 log = logging.getLogger("marketing_crm.notifications")
 
@@ -303,8 +304,12 @@ def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, 
         text_body = "%s%s\n\n%s" % (greeting, body or title, sig)
         html_greeting = ("Hi %s,<br><br>" % ses._esc(name)) if name else ""
         html_body = ses.html_wrap(title, "<p>%s%s</p>" % (html_greeting, ses._esc(body or title)), footer=sig)
+        # Calendar (.ics) attachment is OFF by default: it forces SES SendRawEmail, a SEPARATE IAM
+        # permission the interim ten-fifty5 key lacks — which silently dropped confirmations. Plain
+        # sends (SendEmail) work. Flip EMAIL_ICS_ENABLED=1 once ses:SendRawEmail is granted (post AWS
+        # reset / CourtFlow SES). Even then, send_raw_email falls back to plain send if raw fails.
         attachments = None
-        if kind in _ICS_KINDS and ctx:
+        if kind in _ICS_KINDS and ctx and os.getenv("EMAIL_ICS_ENABLED", "0").strip() == "1":
             attachments = ses._ics_attachment(ctx) or None
         ok = ses.send_raw_email(to_email, title, text_body, body_html=html_body,
                                 attachments=attachments, from_name=from_name, reply_to=reply_to)
