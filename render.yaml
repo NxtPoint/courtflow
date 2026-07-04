@@ -18,6 +18,7 @@ services:
   - type: web
     name: courtflow-api
     env: python
+    region: frankfurt   # MUST co-locate with courtflow-db (Frankfurt) — cross-region DB = ~150ms/query.
     plan: starter       # never sleeps (no cold starts). Bumped 2026-07 to match the live dashboard plan.
     buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
     # 120s timeout (no long ML jobs here, unlike 1050's 1800s).
@@ -115,6 +116,7 @@ services:
   - type: web
     name: courtflow-web
     env: python
+    region: frankfurt   # co-locate with the API + DB (Frankfurt) and nearest region to ZA users.
     plan: starter       # never sleeps (no cold starts). Bumped 2026-07 to match the live dashboard plan.
     buildCommand: "pip install --upgrade pip && pip install flask gunicorn requests"
     startCommand: "gunicorn web_wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120"
