@@ -81,7 +81,7 @@
           el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap" }, [
             el("div", {}, [el("h2", { style: "margin:0", text: "Services & pricing" }),
               el("p", { class: "cf-muted", style: "margin:4px 0 0;font-size:.85rem", text: "Prices, payment, packages & commission live behind each — tap to edit; use the buttons to deactivate or terminate." })]),
-            cfg.allowCreate ? el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ New", onclick: function () { if (cfg.onCreate) cfg.onCreate(); } }) : null,
+            cfg.allowCreate ? el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ New", onclick: function () { if (cfg.onCreate) cfg.onCreate(state.kind); } }) : null,
           ].filter(Boolean)),
         ]));
         if (kinds.length > 1) host.appendChild(UI.subtabs(state.kind, kinds.map(function (k) { return [k, KIND_LABEL[k] || k]; }), function (k) { state.kind = k; draw(); }));

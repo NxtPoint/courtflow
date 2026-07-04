@@ -58,6 +58,9 @@
     reassignCoach: function (id, body) {
       return A().apiJSON("/api/admin/bookings/" + enc(id) + "/reassign-coach", { method: "POST", body: body || {} });
     },
+    // POST /api/services  body:{service_kind:'lesson', coach_user_id, name, duration_minutes, amount_minor}
+    // Owner creates a lesson FOR a chosen coach (the product is owned by that coach). -> {service}
+    createService: function (body) { return A().apiJSON("/api/services", { method: "POST", body: body || {} }); },
     // POST /api/admin/coach-statement/arrears/:id/collected -> accrue commission (off-platform pay).
     arrearsCollected: function (id) {
       return A().apiJSON("/api/admin/coach-statement/arrears/" + enc(id) + "/collected", { method: "POST", body: {} });

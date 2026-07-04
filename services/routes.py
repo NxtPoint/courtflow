@@ -1,9 +1,10 @@
-# services/routes.py — /api/services/* : the ONE API a service is edited through (owner + coach).
+# services/routes.py — /api/services/* : the ONE API a service is created + edited through (owner + coach).
 #
 # The same endpoints serve both roles; the route enforces who may change what:
-#   owner (club_admin/platform_admin) — everything, incl. commission.
-#   coach                              — their OWN lesson/class service: name, variations, payment,
-#                                        packages. NEVER commission (owner-only).
+#   owner (club_admin/platform_admin) — everything, incl. commission; may CREATE a lesson FOR any
+#                                        coach (POST "" with coach_user_id — 'create per coach').
+#   coach                              — their OWN lesson/class service: create (for self), name,
+#                                        variations, payment, packages. NEVER commission (owner-only).
 # Writes delegate to the existing billing/admin repos so there's no duplicated logic — this lane just
 # unifies the surface. Reads come from services.repositories.get_service (one composed payload).
 
@@ -52,6 +53,47 @@ def list_services():
     with session_scope() as s:
         rows = repo.list_services(s, club_id=p.club_id, role=p.role, user_id=p.user_id)
     return jsonify(services=rows, count=len(rows)), 200
+
+
+@services_bp.post("")
+def create_service():
+    """Create a NEW lesson service. The OWNER may create it FOR A CHOSEN COACH (body.coach_user_id,
+    required — 'create per coach'); a COACH creates it for themselves. Delegates to
+    coach.repositories.create_service so the product is owned by the target coach (coach_user_id) —
+    ONE create path, no duplicated logic. Classes/courts have their own flows (class scheduler /
+    court resources), so only 'lesson' is accepted here."""
+    p = _principal()
+    if not p:
+        return jsonify(error="unauthorized"), 401
+    b = _body()
+    kind = (b.get("service_kind") or "lesson").strip()
+    if kind != "lesson":
+        return jsonify(error="ONLY_LESSON"), 400   # classes → scheduler, courts → resources
+    name = (b.get("name") or "").strip()
+    if not name:
+        return jsonify(error="name required"), 400
+
+    # Resolve the target coach: owner picks one; a coach is always themselves.
+    if _is_owner(p):
+        target = (str(b.get("coach_user_id") or "").strip()) or None
+        if not target:
+            return jsonify(error="coach_user_id required"), 400
+    elif p.role == "coach":
+        target = str(p.user_id)
+    else:
+        return jsonify(error="forbidden"), 403
+
+    from coach import repositories as coach_repo
+    with session_scope() as s:
+        # Defence in depth: the target MUST be a coach in this club before we provision under them.
+        if _is_owner(p) and not admin_repo.is_club_coach(s, club_id=p.club_id, user_id=target):
+            return jsonify(error="NOT_A_COACH"), 400
+        svc = coach_repo.create_service(
+            s, club_id=p.club_id, user_id=target,
+            name=name, duration_minutes=b.get("duration_minutes"),
+            amount_minor=int(b.get("amount_minor") or 0),
+        )
+    return jsonify(service=svc), 201
 
 
 @services_bp.get("/<product_id>")

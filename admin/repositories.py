@@ -720,6 +720,19 @@ def list_coaches(session, *, club_id):
     return _rows(rows)
 
 
+def is_club_coach(session, *, club_id, user_id):
+    """True if `user_id` holds a coach membership in this club. Used to validate an owner's
+    'create a lesson FOR this coach' request before provisioning anything under that user."""
+    if not user_id:
+        return False
+    row = session.execute(
+        text("SELECT 1 FROM iam.membership "
+             "WHERE club_id = :c AND user_id = :u AND role = 'coach' LIMIT 1"),
+        {"c": club_id, "u": str(user_id)},
+    ).first()
+    return row is not None
+
+
 def get_user_by_email(session, *, email):
     return _row(session.execute(
         text("SELECT id, clerk_user_id, email, first_name, surname, phone "

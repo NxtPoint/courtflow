@@ -759,7 +759,7 @@
     { key: "courts", label: "Courts & hours", desc: "Courts, surfaces and weekly playing hours",
       mount: function (h) { UI.clear(h); window.AdminUI.courtsManage(h); } },
     { key: "services", label: "Services & pricing", desc: "Lessons, classes, court hire — prices, packages, commission",
-      mount: function (h) { window.Widgets.ServiceList.mount(h, { role: "admin", kinds: ["lesson", "class", "court"] }); } },
+      mount: function (h) { window.Widgets.ServiceList.mount(h, { role: "admin", kinds: ["lesson", "class", "court"], allowCreate: true, onCreate: adminNewService }); } },
     { key: "memberships", label: "Memberships", desc: "Membership tiers and term plans",
       mount: function (h) { UI.clear(h); window.AdminUI.membershipServices(h); } },
     { key: "packs", label: "Session packs", desc: "Prepaid bundles",
@@ -767,6 +767,37 @@
     { key: "coaches", label: "Coaches & commission", desc: "Invite, hide or remove coaches · rent + commission",
       mount: function (h) { UI.clear(h); window.AdminUI.coachManage(h); } },
   ];
+  // Owner creates a service. Lessons are created PER COACH (pick the coach); classes & courts
+  // have their own homes. Delegates to POST /api/services (owner may name any coach).
+  async function adminNewService(kind) {
+    if (kind === "class") { UI.toast("Create classes under Diary → Classes.", "info"); return; }
+    if (kind === "court") { UI.toast("Add courts under Setup → Courts & hours.", "info"); return; }
+    var m = modal("New lesson");
+    var sel = el("select", { class: "cf-input" }, [el("option", { value: "", text: "Loading coaches…" })]);
+    var name = el("input", { class: "cf-input", placeholder: "e.g. Private lesson" });
+    var dur = el("select", { class: "cf-input" }, [30, 45, 60, 90, 120].map(function (d) { return el("option", { value: String(d), text: d + " min" }); })); dur.value = "60";
+    var price = el("input", { class: "cf-input", type: "number", placeholder: "Price e.g. 400" });
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Coach" }), sel]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Name" }), name]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), dur]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Price (per session)" }), price]));
+    var footer = el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [el("button", { class: "cf-btn", text: "Close", onclick: m.close })]);
+    m.body.appendChild(footer);
+    try {
+      var coaches = (await window.AdminAPI.coaches()).coaches || [];
+      UI.clear(sel);
+      if (!coaches.length) { sel.appendChild(el("option", { value: "", text: "No coaches — invite one first" })); return; }
+      sel.appendChild(el("option", { value: "", text: "Choose a coach…" }));
+      coaches.forEach(function (c) { sel.appendChild(el("option", { value: c.user_id || c.id, text: c.display_name || [c.first_name, c.surname].filter(Boolean).join(" ") || c.email })); });
+      footer.appendChild(el("button", { class: "cf-btn cf-btn-primary", text: "Create", onclick: function () {
+        var pr = parseFloat(price.value);
+        if (!sel.value) { UI.toast("Pick a coach.", "warn"); return; }
+        if (!name.value.trim() || isNaN(pr) || pr < 0) { UI.toast("Add a name and price.", "warn"); return; }
+        window.AdminAPI.createService({ service_kind: "lesson", coach_user_id: sel.value, name: name.value.trim(), duration_minutes: parseInt(dur.value, 10), amount_minor: Math.round(pr * 100) })
+          .then(function () { UI.toast("Lesson created — tap it to add durations, packages or commission.", "info"); m.close(); renderSetup("services"); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+      } }));
+    } catch (e) { UI.clear(sel); sel.appendChild(el("option", { value: "", text: UI.errMsg(e) })); }
+  }
   function renderSetup(section) {
     var host = el("div", {});
     set(host);
