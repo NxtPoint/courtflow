@@ -31,6 +31,7 @@
 import os
 import glob
 import json
+import base64
 import logging
 from flask import Flask, send_file, jsonify, request, Response, abort, redirect
 
@@ -91,6 +92,37 @@ API_BASE = os.environ.get("AUTH_API_BASE", "").strip().rstrip("/")
 CLERK_PUBLISHABLE_KEY = os.environ.get("CLERK_PUBLISHABLE_KEY", "").strip()
 AUTH_ENABLED = os.environ.get("AUTH_ENABLED", "0").strip()
 AFTER_LOGIN_URL = os.environ.get("AUTH_AFTER_LOGIN_URL", "/portal").strip()
+
+
+def _clerk_host():
+    """The Clerk Frontend API host encoded inside the publishable key (…the same decode
+    auth_client.js does: base64 of the host + a trailing '$'). Used only to preconnect."""
+    k = CLERK_PUBLISHABLE_KEY
+    if not k or not k.startswith("pk_"):
+        return None
+    try:
+        enc = "_".join(k.split("_")[2:])
+        host = base64.b64decode(enc + "=" * (-len(enc) % 4)).decode("utf-8", "ignore").rstrip("$")
+        return host or None
+    except Exception:
+        return None
+
+
+CLERK_HOST = _clerk_host()
+
+
+def _preconnect_links():
+    """`<link rel=preconnect>` for the origins the SPA hits first (the API + Clerk). Opening
+    the DNS/TCP/TLS connection during HTML parse hides ~1 round trip off the FIRST API call —
+    the priciest moment on a cross-region (SA→Frankfurt) link. Auto-follows API_BASE, so it
+    stays correct through the go-live domain cutover."""
+    out = []
+    if API_BASE:
+        out.append(f'<link rel="preconnect" href="{API_BASE}" crossorigin>')
+        out.append(f'<link rel="dns-prefetch" href="{API_BASE}">')
+    if CLERK_HOST:
+        out.append(f'<link rel="preconnect" href="https://{CLERK_HOST}" crossorigin>')
+    return "".join(out) + ("\n" if out else "")
 
 # --- Google marketing tags (go-live cutover §5). ALL env-gated + DARK by default:
 # nothing renders until Tomo sets the IDs in Render. The platform's own first-party
@@ -190,8 +222,11 @@ def _inject_head(html: str, b: Branding) -> str:
         "__SITE_BASE": site_base,
     }
     head = (
+        # Preconnect the API + Clerk origins FIRST so their DNS/TCP/TLS warms during parse
+        # (hides ~1 round trip off the first API call — biggest win on the SA→Frankfurt link).
+        _preconnect_links()
         # GSC verification meta (dark unless GSC_META_TOKEN set) — early in <head> as Google prefers.
-        _gsc_meta()
+        + _gsc_meta()
         + f"<style id=\"cf-theme\">{theme_css_vars(b)}</style>\n"
         + f"<script>window.__CF=Object.assign(window.__CF||{{}},{json.dumps(cfg)});"
         f"window.__API_BASE={json.dumps(API_BASE)};"
