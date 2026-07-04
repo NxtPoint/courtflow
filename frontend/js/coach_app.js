@@ -77,7 +77,7 @@
     if (top === "client") return renderClient(parts[1]);
     if (top === "event") return renderEvent(parts[1]);
     if (top === "money") return renderMoney();
-    if (top === "setup") return renderSetup();
+    if (top === "setup") return renderSetup(parts[1]);
     if (top === "service") return renderService(parts[1]);
     if (top === "profile") return renderProfilePage();
     if (top === "hours") return renderHoursPage();
@@ -557,55 +557,46 @@
     catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
-  // ---- SETUP (services + classes + commission + profile/hours links) ------
-  async function renderSetup() {
-    loading();
-    var services = [], commission = {};
-    try { services = (await window.TFAuth.apiJSON("/api/services")).services || []; } catch (e) {}
-    try { commission = await window.CoachAPI.commission(); } catch (e) {}
-    var wrap = el("div", {});
-    wrap.appendChild(el("h1", { style: "margin:0 0 12px", text: "Setup" }));
-
-    // You
-    var you = card([el("h2", { style: "margin:0 0 8px", text: "You" })]);
-    [["Edit profile", "#/profile"], ["Weekly hours", "#/hours"]].forEach(function (x) {
-      you.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go(x[1]); } }, [el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: x[0] })]), el("span", { class: "cf-muted", text: "›" })]));
+  // ---- SETUP — the shared Widgets.Setup shell (same gold standard as the owner). The coach sees ONLY
+  // their own things; they cannot touch club profile / courts / memberships. FRONTEND-STD Wave 6. ----
+  var COACH_SETUP = [
+    { key: "myprofile", label: "Your profile", desc: "Photo, bio, languages, visibility", href: "#/profile" },
+    { key: "myhours", label: "Weekly hours", desc: "When you're available to coach", href: "#/hours" },
+    { key: "services", label: "Services & pricing", desc: "Your lessons & classes — prices, payment, packages",
+      mount: function (h) { window.Widgets.ServiceList.mount(h, { role: "coach", userId: principal.user_id, kinds: ["lesson", "class"], allowCreate: true, onCreate: newServiceModal }); } },
+    { key: "classes", label: "Classes", desc: "Create, schedule & manage rosters", mount: mountCoachClasses },
+    { key: "commission", label: "Club commission", desc: "What the club keeps on your coaching", mount: mountCoachCommission },
+  ];
+  function renderSetup(section) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.Setup.mount(host, {
+      active: section, sections: COACH_SETUP, backHash: "#/setup",
+      onOpen: function (k) { go("#/setup/" + k); },
+      title: "Setup", intro: "Your profile, services, classes and commission.",
     });
-    wrap.appendChild(you);
-
-    // Services & packages — with lifecycle (activate / hide / terminate) per service & class.
-    var sc = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [el("h2", { style: "margin:0", text: "Services & packages" }), el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ New", onclick: newServiceModal })])]);
-    sc.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 8px;font-size:.85rem", text: "Prices, payment options & packages per service. Tap a service to edit; use the buttons to deactivate/hide or terminate." }));
-    var mine = services.filter(function (s) { return s.coach_user_id && String(s.coach_user_id) === String(principal.user_id); });
-    var all = mine.length ? mine : services;
-    sc.appendChild(UI.lifecycleBar(svcFilter, function (f) { svcFilter = f; renderSetup(); }));
-    var list = all.filter(function (s) { return svcFilter === "all" || (s.status || "active") === svcFilter; });
-    if (!list.length) sc.appendChild(el("div", { class: "cf-empty", text: "No " + (svcFilter === "all" ? "" : svcFilter + " ") + "services." }));
-    else { var sl = el("div", { class: "cf-list" }); list.forEach(function (s) { sl.appendChild(serviceRow(s)); }); sc.appendChild(sl); }
-    wrap.appendChild(sc);
-
-    // Classes — create a class type, schedule its sessions, manage rosters (reuses ClassUI + CoachAPI).
-    var clsCard = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
+  }
+  function mountCoachClasses(host) {
+    UI.clear(host);
+    var c = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
       el("h2", { style: "margin:0", text: "Classes" }),
       el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ New class", onclick: openNewClass }),
     ])]);
-    clsCard.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 8px;font-size:.85rem", text: "Create a class, schedule its sessions, and manage rosters & attendance. Scheduled sessions appear on your calendar and become bookable by clients." }));
-    var clsList = el("div", { id: "coach-cls-list" }, [el("div", { class: "cf-loading", text: "Loading classes…" })]);
-    var clsSessions = el("div", { id: "coach-cls-sessions" });
-    clsCard.appendChild(clsList); clsCard.appendChild(clsSessions);
-    wrap.appendChild(clsCard);
+    c.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 8px;font-size:.85rem", text: "Create a class, schedule its sessions, and manage rosters & attendance. Scheduled sessions appear on your calendar and become bookable by clients." }));
+    c.appendChild(el("div", { id: "coach-cls-list" }, [el("div", { class: "cf-loading", text: "Loading classes…" })]));
+    c.appendChild(el("div", { id: "coach-cls-sessions" }));
+    host.appendChild(c);
     loadClasses();
-
-    // Commission (read-only)
-    if (commission && commission.effective_pct != null) {
-      wrap.appendChild(card([
-        el("h2", { style: "margin:0 0 6px", text: "Club commission" }),
-        el("p", { class: "cf-muted", style: "margin:0;font-size:.88rem", text: "The club keeps " + commission.effective_pct + "% of your coaching. You keep " + (100 - commission.effective_pct) + "%. (Set by the club.)" }),
-      ]));
-    }
-    set(wrap);
   }
-  var svcFilter = "active";
+  function mountCoachCommission(host) {
+    UI.clear(host);
+    host.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+    window.CoachAPI.commission().then(function (cm) {
+      UI.clear(host);
+      if (cm && cm.effective_pct != null) host.appendChild(card([el("h2", { style: "margin:0 0 6px", text: "Club commission" }), el("p", { class: "cf-muted", style: "margin:0;font-size:.88rem", text: "The club keeps " + cm.effective_pct + "% of your coaching. You keep " + (100 - cm.effective_pct) + "%. (Set by the club.)" })]));
+      else host.appendChild(el("div", { class: "cf-empty", text: "No commission set by the club." }));
+    }, function (e) { UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+  }
   // ---- Classes (management) — ClassUI + CoachAPI, blueprint ported from the old console ----------
   async function loadClasses() {
     var box = document.getElementById("coach-cls-list"); if (!box) return;
@@ -638,20 +629,6 @@
     UI.clear(host);
     host.appendChild(el("div", { style: "margin-top:14px" }, [el("h3", { style: "margin:0 0 6px", text: "Sessions · " + (c.name || "Class") }), el("div", { id: "coach-cls-sessions-body" })]));
     window.ClassUI.renderSessions({ api: window.CoachAPI, cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity }, host: document.getElementById("coach-cls-sessions-body") });
-  }
-  function serviceRow(s) {
-    function setStatus(ns) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { status: ns } }).then(function () { UI.toast("Updated.", "info"); renderSetup(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
-    var main = el("div", { class: "cf-item-main", style: "cursor:pointer" }, [
-      el("div", { class: "cf-row", style: "gap:8px;align-items:center;flex-wrap:wrap" }, [
-        el("span", { class: "cf-chip " + (s.service_kind || s.kind || ""), text: (s.service_kind || s.kind || "service") }),
-        el("strong", { text: s.name || "Service" }),
-        (s.status && s.status !== "active") ? UI.statusChip(s.status) : null,
-      ].filter(Boolean)),
-      el("div", { class: "cf-item-s", text: (s.variation_count || (s.variations || []).length || 0) + " option(s) · from " + money(s.from_amount_minor) }),
-    ]);
-    main.addEventListener("click", function () { go("#/service/" + s.id); });
-    var acts = el("div", { class: "cf-row", style: "gap:6px;flex-wrap:wrap" }, UI.lifeActions(s.status || "active", setStatus, { terminateConfirm: "Terminate this service? Kept for history, removed from use." }));
-    return el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:8px" + ((s.status && s.status !== "active") ? ";opacity:.6" : "") }, [main, acts]);
   }
   function newServiceModal() {
     var m = modal("New service");

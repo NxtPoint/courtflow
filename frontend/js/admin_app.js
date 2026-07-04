@@ -751,52 +751,34 @@
     } catch (e) { UI.clear(sel); sel.appendChild(el("option", { value: "", text: UI.errMsg(e) })); }
   }
   // ---- SETUP (config brought into the SPA — reuses the AdminUI editor library) --------------
-  var SETUP_SECTIONS = [
-    ["profile", "Club profile & payments", "Name, contact, branding, accepted payment methods"],
-    ["courts", "Courts & hours", "Courts, surfaces and weekly playing hours"],
-    ["services", "Services & pricing", "Lessons, classes, court hire — prices, packages, commission"],
-    ["memberships", "Memberships", "Membership tiers and term plans"],
-    ["packs", "Session packs", "Prepaid bundles"],
-    ["coaches", "Coaches & commission", "Invite, hide or remove coaches · rent + commission"],
+  // Setup — the shared Widgets.Setup shell (gold standard) over the owner's sections. Services use the
+  // shared Widgets.ServiceList (all services + edit + lifecycle). FRONTEND-STANDARDISATION Wave 6.
+  var ADMIN_SETUP = [
+    { key: "profile", label: "Club profile & payments", desc: "Name, contact, branding, accepted payment methods",
+      mount: function (h) { window.AdminAPI.onboarding().then(function (d) { UI.clear(h); window.AdminUI.clubProfile(h, d || {}, { saveLabel: "Save changes" }); setupPayments(h, (d && d.policy) || {}); }, function (e) { UI.clear(h); h.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }); } },
+    { key: "courts", label: "Courts & hours", desc: "Courts, surfaces and weekly playing hours",
+      mount: function (h) { UI.clear(h); window.AdminUI.courtsManage(h); } },
+    { key: "services", label: "Services & pricing", desc: "Lessons, classes, court hire — prices, packages, commission",
+      mount: function (h) { window.Widgets.ServiceList.mount(h, { role: "admin", kinds: ["lesson", "class", "court"] }); } },
+    { key: "memberships", label: "Memberships", desc: "Membership tiers and term plans",
+      mount: function (h) { UI.clear(h); window.AdminUI.membershipServices(h); } },
+    { key: "packs", label: "Session packs", desc: "Prepaid bundles",
+      mount: function (h) { UI.clear(h); window.AdminUI.bundlePlans(h); } },
+    { key: "coaches", label: "Coaches & commission", desc: "Invite, hide or remove coaches · rent + commission",
+      mount: function (h) { UI.clear(h); window.AdminUI.coachManage(h); } },
   ];
   function renderSetup(section) {
-    if (!section) return setupMenu();
     var host = el("div", {});
-    set(el("div", {}, [backBar("Setup", "#/setup"), host]));
-    host.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
-    (async function () {
-      try {
-        if (section === "profile") {
-          var d = await window.AdminAPI.onboarding().catch(function () { return {}; });
-          UI.clear(host);
-          window.AdminUI.clubProfile(host, d || {}, { saveLabel: "Save changes" });
-          setupPayments(host, (d && d.policy) || {});
-        } else if (section === "courts") { UI.clear(host); window.AdminUI.courtsManage(host); }
-        else if (section === "memberships") { UI.clear(host); window.AdminUI.membershipServices(host); }
-        else if (section === "packs") { UI.clear(host); window.AdminUI.bundlePlans(host); }
-        else if (section === "coaches") { UI.clear(host); window.AdminUI.coachManage(host); }
-        else if (section === "services") setupServices(host);
-        else { UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: "Unknown section." })); }
-      } catch (e) { UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
-    })();
-  }
-  function setupMenu() {
-    var wrap = el("div", {});
-    wrap.appendChild(el("h1", { style: "margin:0 0 4px", text: "Setup" }));
-    wrap.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 14px", text: "Configure your club. Changes save per section." }));
-    var c = card([]), l = el("div", { class: "cf-list" });
-    SETUP_SECTIONS.forEach(function (s) {
-      l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/setup/" + s[0]); } }, [
-        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: s[1] }), el("div", { class: "cf-item-s", text: s[2] })]),
-        el("span", { class: "cf-muted", text: "›" }),
-      ]));
+    set(host);
+    window.Widgets.Setup.mount(host, {
+      active: section, sections: ADMIN_SETUP, backHash: "#/setup",
+      onOpen: function (k) { go("#/setup/" + k); },
+      title: "Setup", intro: "Configure your club. Changes save per section.",
+      footer: el("p", { class: "cf-muted", style: "font-size:.82rem;margin-top:14px" }, [
+        document.createTextNode("Classes are scheduled under Diary → Classes. Prefer the classic console? "),
+        el("a", { href: "/admin-classic", text: "Open classic ›" }),
+      ]),
     });
-    c.appendChild(l); wrap.appendChild(c);
-    wrap.appendChild(el("p", { class: "cf-muted", style: "font-size:.82rem;margin-top:14px" }, [
-      document.createTextNode("Classes are scheduled under Diary → Classes. Prefer the classic console? "),
-      el("a", { href: "/admin-classic", text: "Open classic ›" }),
-    ]));
-    set(wrap);
   }
   function setupPayments(host, policy) {
     var c = el("div", { class: "cf-card" }, [
@@ -820,43 +802,6 @@
     c.appendChild(flag("allow_pay_at_court", "Pay at the club", "Settle at the front desk."));
     c.appendChild(flag("allow_monthly_account", "Monthly account", "Charges accrue on a tab, invoiced monthly."));
     host.appendChild(c);
-  }
-  var SVC_KIND = "lesson", SVC_LIFE = "active";
-  function setupServices(host) {
-    UI.clear(host);
-    host.appendChild(el("div", { class: "cf-loading", text: "Loading services…" }));
-    window.TFAuth.apiJSON("/api/services").then(function (res) {
-      drawSetupServices(host, (res && res.services) || []);
-    }, function (e) { UI.clear(host); host.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
-  }
-  function drawSetupServices(host, svcs) {
-    UI.clear(host);
-    host.appendChild(el("div", { class: "cf-card" }, [
-      el("h2", { text: "Services" }),
-      el("p", { class: "cf-muted", text: "Lessons, classes and court hire. Prices, payment, packages and commission live behind each block — tap to edit." }),
-    ]));
-    host.appendChild(UI.subtabs(SVC_KIND, [["lesson", "Lessons"], ["class", "Classes"], ["court", "Courts"]], function (k) { SVC_KIND = k; drawSetupServices(host, svcs); }));
-    host.appendChild(UI.lifecycleBar(SVC_LIFE, function (f) { SVC_LIFE = f; drawSetupServices(host, svcs); }));
-    var shown = svcs.filter(function (s) { return s.service_kind === SVC_KIND && (SVC_LIFE === "all" || s.status === SVC_LIFE); });
-    if (!shown.length) { host.appendChild(el("div", { class: "cf-card cf-empty", text: "No " + (SVC_LIFE === "all" ? "" : SVC_LIFE + " ") + SVC_KIND + " services." })); return; }
-    shown.forEach(function (s) {
-      // Owner can edit AND change the lifecycle (deactivate / reactivate / terminate) of ANY service —
-      // including a coach's lessons & classes — via the same /api/services/<id> {status} the coach uses
-      // for their own (the route enforces owner=any, coach=own).
-      function setStatus(ns) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { status: ns } }).then(function () { UI.toast("Updated.", "info"); setupServices(host); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
-      var sub = [];
-      if ((s.service_kind === "lesson" || s.service_kind === "class") && s.coach_name) sub.push("Coach: " + s.coach_name);
-      var v = s.variations || [];
-      sub.push(v.length ? v.slice(0, 4).map(function (x) { return x.duration_minutes ? (x.duration_minutes + " min " + money(x.amount_minor)) : money(x.amount_minor); }).join("  ·  ") : "No prices set yet");
-      var main = el("div", { style: "cursor:pointer;flex:1" }, [
-        el("div", { class: "cf-row", style: "gap:8px;align-items:center;flex-wrap:wrap" }, [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" }), s.status !== "active" ? UI.statusChip(s.status) : null].filter(Boolean)),
-        el("div", { class: "cf-muted", style: "font-size:.82rem;margin-top:5px", text: sub.join("  ·  ") + "  ·  Edit ›" }),
-      ]);
-      main.addEventListener("click", function () { window.ServiceEditor.open(s.id, { host: host, onClose: function () { setupServices(host); } }); });
-      var acts = el("div", { class: "cf-row", style: "gap:6px;flex-wrap:wrap" }, UI.lifeActions(s.status || "active", setStatus, { terminateConfirm: "Terminate “" + (s.name || "this service") + "”? Kept for history, removed from use." }));
-      var cardEl = el("div", { class: "cf-card", style: "display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap" + (s.status !== "active" ? ";opacity:.6" : "") }, [main, acts]);
-      host.appendChild(cardEl);
-    });
   }
 
   // ---- INSIGHTS (Phase-2 court-utilisation heatmap + the Business Overview dashboard) -------
