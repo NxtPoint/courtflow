@@ -55,6 +55,12 @@ def _list_plans():
         club = s.execute(text("SELECT id FROM club.club WHERE slug='nextpoint' "
                               "AND COALESCE(is_template,false)=false")).scalar()
         print("club id:", club)
+        # Counts so we can tell WHICH database this is (does it have our imported 879?).
+        users = s.execute(text("SELECT count(*) FROM iam.user")).scalar()
+        members = s.execute(text("SELECT count(*) FROM iam.membership WHERE role='member'")).scalar()
+        subs = s.execute(text("SELECT count(*) FROM billing.membership_subscription "
+                              "WHERE status='active'")).scalar()
+        print("DB fingerprint -> users=%s  member_rows=%s  active_subs=%s" % (users, members, subs))
         print("\n== ALL products in the club (kind / active / name) ==")
         for r in s.execute(text("SELECT kind, active, name FROM billing.product "
                                 "WHERE club_id=:c ORDER BY kind, name"), {"c": club}).mappings():
