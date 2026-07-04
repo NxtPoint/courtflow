@@ -840,21 +840,21 @@
     var shown = svcs.filter(function (s) { return s.service_kind === SVC_KIND && (SVC_LIFE === "all" || s.status === SVC_LIFE); });
     if (!shown.length) { host.appendChild(el("div", { class: "cf-card cf-empty", text: "No " + (SVC_LIFE === "all" ? "" : SVC_LIFE + " ") + SVC_KIND + " services." })); return; }
     shown.forEach(function (s) {
+      // Owner can edit AND change the lifecycle (deactivate / reactivate / terminate) of ANY service —
+      // including a coach's lessons & classes — via the same /api/services/<id> {status} the coach uses
+      // for their own (the route enforces owner=any, coach=own).
+      function setStatus(ns) { window.TFAuth.apiJSON("/api/services/" + s.id, { method: "PATCH", body: { status: ns } }).then(function () { UI.toast("Updated.", "info"); setupServices(host); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
       var sub = [];
       if ((s.service_kind === "lesson" || s.service_kind === "class") && s.coach_name) sub.push("Coach: " + s.coach_name);
       var v = s.variations || [];
       sub.push(v.length ? v.slice(0, 4).map(function (x) { return x.duration_minutes ? (x.duration_minutes + " min " + money(x.amount_minor)) : money(x.amount_minor); }).join("  ·  ") : "No prices set yet");
-      var cardEl = el("div", { class: "cf-card cf-pickable" }, [
-        el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap" }, [
-          el("div", {}, [
-            el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" }), s.status !== "active" ? UI.statusChip(s.status) : null].filter(Boolean)),
-            el("div", { class: "cf-muted", style: "font-size:.82rem;margin-top:5px", text: sub.join("  ·  ") }),
-          ]),
-          el("span", { class: "cf-muted", text: "Edit ›" }),
-        ]),
+      var main = el("div", { style: "cursor:pointer;flex:1" }, [
+        el("div", { class: "cf-row", style: "gap:8px;align-items:center;flex-wrap:wrap" }, [el("span", { class: "cf-chip " + s.service_kind, text: s.service_kind }), el("strong", { text: s.name || "Service" }), s.status !== "active" ? UI.statusChip(s.status) : null].filter(Boolean)),
+        el("div", { class: "cf-muted", style: "font-size:.82rem;margin-top:5px", text: sub.join("  ·  ") + "  ·  Edit ›" }),
       ]);
-      if (s.status !== "active") cardEl.style.opacity = "0.6";
-      cardEl.addEventListener("click", function () { window.ServiceEditor.open(s.id, { host: host, onClose: function () { setupServices(host); } }); });
+      main.addEventListener("click", function () { window.ServiceEditor.open(s.id, { host: host, onClose: function () { setupServices(host); } }); });
+      var acts = el("div", { class: "cf-row", style: "gap:6px;flex-wrap:wrap" }, UI.lifeActions(s.status || "active", setStatus, { terminateConfirm: "Terminate “" + (s.name || "this service") + "”? Kept for history, removed from use." }));
+      var cardEl = el("div", { class: "cf-card", style: "display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap" + (s.status !== "active" ? ";opacity:.6" : "") }, [main, acts]);
       host.appendChild(cardEl);
     });
   }
