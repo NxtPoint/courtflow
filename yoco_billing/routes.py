@@ -140,8 +140,12 @@ def yoco_checkout():
         try:
             intent = gw.create_checkout(order=order, success_url=success, cancel_url=cancel)
         except Exception as e:
-            log.warning("yoco create_checkout failed: %s", e)
-            return jsonify(error="checkout_failed", detail=str(e)), 502
+            # Surface Yoco's FULL error body (which field it rejected) into the logs + response —
+            # a bare "yoco 400: For input string" hides which field is at fault.
+            yb = getattr(e, "body", None)
+            log.warning("yoco create_checkout failed for order=%s amount=%s: %s | yoco_body=%s",
+                        order_id, order.get("amount_minor"), e, yb)
+            return jsonify(error="checkout_failed", detail=str(e), yoco=yb), 502
 
         # Persist the Yoco checkout id (event_hash NULL) so /refund can reference it later.
         if intent.intent_id:
