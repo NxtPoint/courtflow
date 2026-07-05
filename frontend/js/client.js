@@ -234,10 +234,11 @@
   function paintSessions() {
     var box = document.getElementById("home-sessions"); if (!box) return;
     UI.clear(box);
-    var now = new Date(), bks = DATA.bookings || [], up = [], past = [];
+    var today0 = new Date(); today0.setHours(0, 0, 0, 0);        // "Current" = today onward (incl. earlier today), not just future
+    var bks = DATA.bookings || [], up = [], past = [];
     bks.forEach(function (b) {
       if (b.status === "cancelled") return;                       // cancelled sessions drop off
-      if (new Date(b.ends_at || b.starts_at) >= now && b.status !== "no_show") up.push(b); else past.push(b);
+      if (new Date(b.starts_at) >= today0 && b.status !== "no_show") up.push(b); else past.push(b);
     });
     up.sort(function (a, b) { return new Date(a.starts_at) - new Date(b.starts_at); });
     past.sort(function (a, b) { return new Date(b.starts_at) - new Date(a.starts_at); });
