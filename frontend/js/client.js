@@ -356,7 +356,7 @@
             el("div", { class: "cf-item-t", text: UI.fmtDate(it.starts_at) + (it.coach_name ? " · " + it.coach_name : "") }),
             el("div", { class: "cf-item-s", text: [it.court_name, (function () { try { return UI.fmtTime(it.starts_at); } catch (e) { return ""; } })()].filter(Boolean).join(" · ") }),
           ]),
-          el("span", { style: "font-weight:600", text: money(it.amount_minor, cur) }),
+          el("span", { style: "font-weight:600" + (it.status === "written_off" ? ";text-decoration:line-through;opacity:.55" : ""), text: money(it.amount_minor, cur) }),
           statusChip(it.status),
         ]));
       });

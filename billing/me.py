@@ -66,7 +66,7 @@ def billing_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]:
                 LEFT JOIN iam."user" cu ON cu.id = b.coach_user_id
                 LEFT JOIN iam.coach_profile cp ON cp.user_id = b.coach_user_id AND cp.club_id = o.club_id
                 WHERE o.club_id = :c AND o.user_id = :u
-                  AND o.status IN ('paid','open','refunded')
+                  AND o.status IN ('paid','open','refunded','written_off')
                   AND o.settled_by_order_id IS NULL
                   AND to_char(COALESCE(b.starts_at, o.created_at),'YYYY-MM') = :ym
                 ORDER BY COALESCE(b.starts_at, o.created_at) DESC
@@ -100,8 +100,9 @@ def billing_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]:
         court = r["held_court"] if r["b_kind"] == "lesson" else r["resource_name"]
         c = cats.setdefault(k, {"key": k, "label": LABEL.get(k, k), "count": 0, "total_minor": 0, "items": []})
         c["count"] += 1
-        c["total_minor"] += amt
-        total += amt
+        if r["ostatus"] != "written_off":   # a forgiven debt is shown struck but NOT counted in the total
+            c["total_minor"] += amt
+            total += amt
         c["items"].append({
             "order_id": str(r["order_id"]),
             "booking_id": str(r["booking_id"]) if r["booking_id"] else None,
