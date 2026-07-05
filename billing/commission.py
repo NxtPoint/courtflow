@@ -740,6 +740,22 @@ def adjust_arrears(session, *, club_id, arrears_id, coach_user_id=None,
     session.execute(
         text("UPDATE billing.coach_arrears SET " + ", ".join(sets) + " WHERE club_id = :c AND id = :id"),
         params)
+    # LOCKSTEP: writing off the coaching ALSO forgives the CLIENT's order for that lesson — one lesson
+    # is one debt viewed two ways (mirror void_order, which writes off the arrears when the order is
+    # written off). Otherwise the client is still billed for a lesson the coach waived. void_order
+    # no-ops on a PAID order (a paid lesson stays paid — you'd refund, not write off).
+    if status == "written_off":
+        oid = session.execute(
+            text("SELECT ol.order_id FROM billing.coach_arrears a "
+                 "JOIN billing.order_line ol ON ol.id = a.order_line_id WHERE a.id = :id"),
+            {"id": str(arrears_id)}).scalar()
+        if oid:
+            try:
+                from billing.statement import void_order
+                void_order(session, club_id=club_id, order_id=oid, write_off=True,
+                           reason=(reason or "coaching written off"))
+            except Exception:
+                log.debug("write-off order-void skipped", exc_info=False)
     out = session.execute(
         text("SELECT id, status, gross_minor FROM billing.coach_arrears WHERE club_id = :c AND id = :id"),
         {"c": club_id, "id": str(arrears_id)},
