@@ -662,8 +662,8 @@ def cron_reconcile():
         if not u:
             return jsonify(error="user not found", email=email), 404
         uid = str(u["id"])
-        club = s.execute(_t("SELECT club_id FROM iam.membership WHERE user_id=:u ORDER BY created_at LIMIT 1"),
-                         {"u": uid}).scalar()
+        club = (s.execute(_t('SELECT club_id FROM billing."order" WHERE user_id=:u LIMIT 1'), {"u": uid}).scalar()
+                or s.execute(_t("SELECT club_id FROM iam.membership WHERE user_id=:u LIMIT 1"), {"u": uid}).scalar())
         club = str(club) if club else None
         rows = s.execute(_t("""
             SELECT o.id, o.status, o.amount_minor, o.settlement_mode, o.settled_by_order_id, o.created_at,
