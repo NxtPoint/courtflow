@@ -331,23 +331,31 @@ def _confirm_held_bookings(session, order_id, club_id) -> int:
     what lets billing self-verify in isolation."""
     try:
         with session.begin_nested():
+            # Confirm the still-'held' booking(s) — the normal online path. ALSO re-instate a booking
+            # whose hold JUST expired (lazy-expiry cancelled it with reason 'hold_expired') so a
+            # slightly-late payment still gets its slot instead of "money taken, no booking". Flipping a
+            # 'cancelled' row back to 'confirmed' re-occupies the slot, so the GiST exclusion has the
+            # final say: if someone else took it meanwhile, the UPDATE raises → savepoint rolls back →
+            # the paid order simply has no booking (a detectable refund case), never a double-book.
             res = session.execute(
                 text("""
                     UPDATE diary.booking b
-                    SET status = 'confirmed', updated_at = now()
+                    SET status = 'confirmed', held_until = NULL,
+                        cancellation_reason = NULL, cancelled_at = NULL, updated_at = now()
                     FROM billing.order_line ol
                     WHERE ol.order_id = :order_id
                       AND ol.booking_id = b.id
                       AND b.club_id = :club_id
-                      AND b.status = 'held'
+                      AND (b.status = 'held'
+                           OR (b.status = 'cancelled' AND b.cancellation_reason = 'hold_expired'))
                 """),
                 {"order_id": str(order_id), "club_id": str(club_id) if club_id else None},
             )
             return res.rowcount or 0
     except Exception:
-        # diary.* not present yet (B not landed) — savepoint rolled back; payment still
-        # records on the outer txn. Log + continue.
-        log.info("confirm_held_bookings skipped (diary.booking unavailable) order=%s", order_id)
+        # Either diary.* isn't present yet (B not landed) OR the re-instate hit a taken slot (GiST) —
+        # in both cases the savepoint rolled back and the payment still records on the outer txn.
+        log.info("confirm_held_bookings skipped (diary.booking unavailable or slot taken) order=%s", order_id)
         return 0
 
 

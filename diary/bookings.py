@@ -31,7 +31,11 @@ from diary.schema import EXCLUSION_CONSTRAINT
 
 log = logging.getLogger("diary.bookings")
 
-HOLD_MINUTES_DEFAULT = 5  # short-lived hold for online checkout (docs/03 §4)
+HOLD_MINUTES_DEFAULT = 30  # online-checkout hold — long enough that a real Yoco payment (incl. a
+                           # cold-webhook delay) completes while the booking is still 'held', so the
+                           # slot isn't freed out from under a paying customer (docs/03 §4). The
+                           # payment-confirm path also re-instates a JUST-expired hold if the slot is
+                           # still free (billing.events._confirm_held_bookings), as a backstop.
 
 # Settlement modes that confirm immediately (no gateway round-trip).
 _IMMEDIATE_CONFIRM = ("at_court", "monthly_account", "membership_covered", "free")
