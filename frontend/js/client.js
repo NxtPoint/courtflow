@@ -313,11 +313,23 @@
       : plan.active ? (plan.name || "Membership") + (plan.current_period_end ? " · renews " + plan.current_period_end : "")
       : "Pay as you go — no membership";
     c.appendChild(el("div", { class: "cf-item" }, [
-      el("span", { class: "cf-chip " + (plan.active ? "confirmed" : ""), text: plan.active ? "Active" : "PAYG" }),
-      el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: line })]),
+      el("span", { class: "cf-chip " + (plan.active ? "confirmed" : ""), text: plan.active ? "Active" : (plan.owed_membership ? "Owed" : "PAYG") }),
+      el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: plan.owed_membership && !plan.active ? "Membership — awaiting payment" : line })]),
     ]));
+    // Cancel is available for a paid/active membership OR an owed-but-unpaid one (else it's stuck owed).
+    if ((plan.active && !plan.is_trial) || plan.owed_membership) {
+      c.appendChild(el("div", { class: "cf-row", style: "margin-top:8px" }, [
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost cf-btn-danger", text: "Cancel membership", onclick: cancelMembership }),
+      ]));
+    }
     c.appendChild(el("div", { id: "home-wallets" }));
     return c;
+  }
+  function cancelMembership() {
+    if (!window.confirm("Cancel your membership? An unpaid membership charge is cleared; a paid term isn't refunded here (request a refund separately).")) return;
+    window.TFAuth.apiJSON("/api/me/membership/cancel", { method: "POST" })
+      .then(function () { UI.toast("Membership cancelled.", "info"); renderHome(); },
+            function (e) { UI.toast(UI.errMsg(e), "error"); });
   }
   async function loadWallets(cur) {
     var box = document.getElementById("home-wallets"); if (!box) return;

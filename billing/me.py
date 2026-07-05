@@ -136,9 +136,23 @@ def _plan(session, *, club_id, user_id) -> Dict[str, Any]:
               "currency": None, "sold": False}
     active = bool(st.get("active"))
     is_trial = bool(st.get("is_trial"))
+    # An OWED-but-inactive membership (offline plan bought, not yet paid) — so the UI can show a
+    # "Cancel membership" affordance even when the sub isn't 'active' (else it's uncancellable).
+    owed_membership = False
+    try:
+        owed_membership = bool(session.execute(
+            text('SELECT 1 FROM billing."order" o '
+                 "WHERE o.club_id = :c AND o.user_id = :u AND o.status IN ('open','awaiting_payment') "
+                 "  AND o.settled_by_order_id IS NULL "
+                 "  AND EXISTS (SELECT 1 FROM billing.membership_subscription ms WHERE ms.order_id = o.id) "
+                 "LIMIT 1"),
+            {"c": str(club_id), "u": str(user_id)}).scalar())
+    except Exception:
+        pass
     return {
         "type": "membership" if active else "payg",
         "active": active,
+        "owed_membership": owed_membership,
         # The member's ACTUAL plan name (tier, e.g. "Adult Off-Peak"), not a generic label.
         "name": st.get("plan_name") if active else "Pay as you go",
         "subscription_id": st.get("subscription_id"),
