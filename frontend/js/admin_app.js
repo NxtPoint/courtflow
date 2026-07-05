@@ -51,6 +51,7 @@
     { k: "people", ic: "👥", label: "People" },
     { k: "money", ic: "💰", label: "Money" },
     { k: "diary", ic: "📅", label: "Diary" },
+    { k: "overview", ic: "📊", label: "Overview" },
     { k: "setup", ic: "⚙", label: "Setup" },
   ];
   function renderShell() {
@@ -75,8 +76,9 @@
   async function ensureClassDeps() { if (!window.ClassUI) await loadScript("/js/class_ui.js"); }
 
   // ---- router --------------------------------------------------------------
-  var TOP = ["home", "people", "money", "diary", "setup", "insights"];
+  var TOP = ["home", "people", "money", "diary", "overview", "setup", "insights"];
   function route() {
+    disposeCharts();   // tear down any Overview ECharts instances + resize listeners before leaving
     var parts = (location.hash || "").replace(/^#\/?/, "").split("/").filter(Boolean);
     var top = parts[0] || "home";
     setActive(TOP.indexOf(top) >= 0 ? top :
@@ -87,7 +89,7 @@
     if (top === "money") return renderMoney(parts[1]);
     if (top === "diary") return renderDiary(parts[1]);
     if (top === "setup") return renderSetup(parts[1]);
-    if (top === "insights") return renderInsights();
+    if (top === "overview" || top === "insights") return renderOverview(parts[1]);
     if (top === "person") return renderPerson(parts[1]);
     if (top === "event") return renderEvent(parts[1]);
     if (top === "class") return renderClassEvent(parts[1]);
@@ -227,10 +229,10 @@
       ]) : el("div", { class: "cf-empty", text: "Nothing waiting for a decision. 🎉" }),
     ] }));
 
-    // Reports shortcut (Insights lives off the nav)
-    wrap.appendChild(card([el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/insights"); } }, [
+    // Reports shortcut → the Overview tab
+    wrap.appendChild(card([el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/overview"); } }, [
       el("span", { class: "cf-chip", text: "📊" }),
-      el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: "Business insights" }), el("div", { class: "cf-item-s", text: "Traffic, customers, revenue, NPS" })]),
+      el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: "Business overview" }), el("div", { class: "cf-item-s", text: "Traffic, bookings, revenue, members, NPS — daily" })]),
       el("span", { class: "cf-muted", text: "›" }),
     ])]));
     set(wrap);
@@ -1096,26 +1098,184 @@
   }
 
   // ---- INSIGHTS (Phase-2 court-utilisation heatmap + the Business Overview dashboard) -------
-  function renderInsights() {
-    var wrap = el("div", {});
-    wrap.appendChild(backBar("Home", "#/home"));
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:10px" }, [
-      el("h1", { style: "margin:0", text: "Business insights" }),
-      el("a", { class: "cf-btn cf-btn-sm cf-btn-ghost", href: "/overview.html", target: "_blank", text: "Open full page ›" }),
-    ]));
-    var utilBox = card([window.CRMUI.sectionHead("Court utilisation"), el("div", { class: "cf-loading", text: "Loading…" })]);
-    wrap.appendChild(utilBox);
-    wrap.appendChild(el("iframe", { src: "/overview.html", title: "Business Overview", style: "width:100%;height:calc(100vh - 260px);min-height:520px;border:1px solid var(--border,#e5e7eb);border-radius:14px;background:#fff" }));
-    set(wrap);
-    (async function () {
+  // ---- OVERVIEW (business insights as a first-class tab) ------------------------------------------
+  // Month pager + sub-tabs + daily graphs, all bound to ONE endpoint (GET /api/insights/overview)
+  // that RECONCILES with Money → Sales/Bookings by day. Charts go through ONE shared ECharts seam
+  // (ovBase/mountChart) — every panel is config, never a forked chart. ECharts is lazy-loaded (the
+  // one sanctioned charting dep, already used by /overview.html); the old iframe is retired.
+  var OV_MONTH = null, OV_TAB = "traffic", OV_DATA = null, OV_CHARTS = [];
+  var OV_TABS = [["traffic", "Traffic"], ["bookings", "Bookings"], ["revenue", "Revenue"], ["members", "Members"], ["experience", "NPS"], ["courts", "Courts"]];
+  function ensureECharts() { return window.echarts ? Promise.resolve() : loadScript("https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"); }
+  function disposeCharts() { (OV_CHARTS || []).forEach(function (c) { try { window.removeEventListener("resize", c.ro); c.chart.dispose(); } catch (e) {} }); OV_CHARTS = []; }
+  function mjr(v) { return (v || 0) / 100; }
+  function ovDayLabels(days) { return (days || []).map(function (d) { return parseInt(d.slice(8), 10); }); }
+  function ovMoneyShort(v) { return v >= 1000 ? ((v / 1000).toFixed(v % 1000 ? 1 : 0) + "k") : String(Math.round(v)); }
+  // The ONE chart-option builder: a day-of-month x-axis + N bar/line series. `opts.money` (a currency)
+  // formats the y-axis + tooltip in money (series data is already major units).
+  function ovBase(days, series, opts) {
+    opts = opts || {}; var fmt = opts.money;
+    return {
+      color: series.map(function (s) { return s.color; }),
+      grid: { left: fmt ? 52 : 38, right: 14, top: 30, bottom: 24 },
+      tooltip: { trigger: "axis", valueFormatter: fmt ? function (v) { return money(Math.round(v * 100), fmt); } : undefined },
+      legend: { top: 0, itemWidth: 11, itemHeight: 11, textStyle: { fontSize: 11 } },
+      xAxis: { type: "category", data: ovDayLabels(days), axisTick: { show: false }, axisLabel: { fontSize: 10, color: "#6b7280" }, axisLine: { lineStyle: { color: "#e5e7eb" } } },
+      yAxis: { type: "value", minInterval: fmt ? undefined : 1, splitLine: { lineStyle: { color: "#f0f2ef" } }, axisLabel: { fontSize: 10, color: "#6b7280", formatter: fmt ? ovMoneyShort : undefined } },
+      series: series.map(function (s) {
+        return {
+          name: s.name, type: s.type || "bar", data: s.data, stack: s.stack, smooth: true, symbol: "none",
+          barMaxWidth: 20, itemStyle: { borderRadius: s.type === "line" ? 0 : 3 },
+          lineStyle: s.type === "line" ? { width: 2 } : undefined, areaStyle: s.area ? { opacity: 0.12 } : undefined,
+        };
+      }),
+    };
+  }
+  function mountChart(container, buildOption) {
+    container.style.minHeight = "260px";
+    ensureECharts().then(function () {
       try {
-        var u = await window.AdminAPI.courtUtilisation(30);
-        UI.clear(utilBox);
-        utilBox.appendChild(window.CRMUI.sectionHead("Court utilisation · last 30 days"));
-        utilBox.appendChild(el("div", { class: "cf-muted", style: "font-size:.85rem;margin:-4px 0 10px", text: (u.overall_pct == null ? "Set court playing hours to see utilisation." : ("Overall " + u.overall_pct + "% of open court-hours booked. Cold cells are quiet slots to fill.")) }));
-        utilBox.appendChild(utilHeatmap(u));
-      } catch (e) { UI.clear(utilBox); utilBox.appendChild(window.CRMUI.sectionHead("Court utilisation")); utilBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
-    })();
+        var chart = window.echarts.init(container);
+        chart.setOption(buildOption());
+        var ro = function () { try { chart.resize(); } catch (e) {} };
+        window.addEventListener("resize", ro);
+        OV_CHARTS.push({ chart: chart, ro: ro });
+      } catch (e) { container.appendChild(el("div", { class: "cf-empty", text: "Chart unavailable." })); }
+    }, function () { UI.clear(container); container.appendChild(el("div", { class: "cf-empty", text: "Charts couldn't load — check your connection." })); });
+  }
+  function ovChartCard(body, title, height) {
+    var c = card([window.CRMUI.sectionHead(title)]);
+    var cc = el("div", { style: "height:" + (height || 300) + "px" });
+    c.appendChild(cc); body.appendChild(c); return cc;
+  }
+  function ovBreakdown(title, rows) {
+    var c = card([window.CRMUI.sectionHead(title)]);
+    if (!rows || !rows.length) { c.appendChild(el("div", { class: "cf-empty", text: "No data yet." })); return c; }
+    var l = el("div", { class: "cf-list" });
+    rows.forEach(function (r) {
+      l.appendChild(el("div", { class: "cf-item" }, [
+        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: r.label })]),
+        el("span", { style: "font-weight:700", text: r.visits }),
+      ]));
+    });
+    c.appendChild(l); return c;
+  }
+
+  async function renderOverview() {
+    loading();
+    try { OV_DATA = await window.AdminAPI.overview(OV_MONTH); }
+    catch (e) { set(el("div", {}, [el("h1", { text: "Overview" }), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    OV_MONTH = OV_DATA.month;
+    paintOverview();
+  }
+  function paintOverview() {
+    disposeCharts();
+    var data = OV_DATA, cur = data.currency || clubCur();
+    var wrap = el("div", {});
+    function shift(n) { OV_MONTH = addMonth(data.month, n); renderOverview(); }
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [
+      el("h1", { style: "margin:0", text: "Overview" }),
+      el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹", onclick: function () { shift(-1); } }),
+        el("span", { style: "font-weight:600;min-width:104px;text-align:center", text: monthLabel(data.month) }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { shift(1); } }),
+      ]),
+    ]));
+    wrap.appendChild(UI.subtabs(OV_TAB, OV_TABS, function (k) { OV_TAB = k; paintOverview(); }));
+    var body = el("div", { style: "margin-top:12px" });
+    wrap.appendChild(body);
+    set(wrap);
+    renderOvTab(body, data, cur);
+  }
+  function renderOvTab(body, data, cur) {
+    if (OV_TAB === "bookings") return ovBookings(body, data, cur);
+    if (OV_TAB === "revenue") return ovRevenue(body, data, cur);
+    if (OV_TAB === "members") return ovMembers(body, data, cur);
+    if (OV_TAB === "experience") return ovExperience(body, data, cur);
+    if (OV_TAB === "courts") return ovCourts(body);
+    return ovTraffic(body, data, cur);
+  }
+  function ovTraffic(body, data, cur) {
+    var s = data.series, k = data.kpis;
+    body.appendChild(card([window.CRMUI.stats([
+      { value: k.visits, label: "Visits" },
+      { value: k.unique_visitors, label: "Unique visitors" },
+    ])]));
+    mountChart(ovChartCard(body, "Visitors per day"), function () {
+      return ovBase(data.days, [
+        { name: "Visits", data: s.visits, color: "#9cc4b0" },
+        { name: "Unique", data: s.unique_visitors, color: "#1f7a4d" },
+      ]);
+    });
+    if (!k.visits) body.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin:8px 2px", text: "No club-attributed website traffic yet — per-club traffic tagging goes live with the domain cutover." }));
+    body.appendChild(ovBreakdown("Top sources", data.breakdowns.sources));
+    body.appendChild(ovBreakdown("Top pages", data.breakdowns.top_pages));
+    body.appendChild(ovBreakdown("Devices", data.breakdowns.by_device));
+  }
+  function ovBookings(body, data, cur) {
+    var s = data.series, k = data.kpis;
+    body.appendChild(card([window.CRMUI.stats([
+      { value: k.bookings, label: "Bookings" },
+      { value: k.member_bookings, label: "Member-covered" },
+    ])]));
+    mountChart(ovChartCard(body, "Bookings per day · by type"), function () {
+      return ovBase(data.days, [
+        { name: "Court", data: s.bookings_court, color: "#1f7a4d", stack: "b" },
+        { name: "Lesson", data: s.bookings_lesson, color: "#e0a63c", stack: "b" },
+        { name: "Class", data: s.bookings_class, color: "#4a7fb5", stack: "b" },
+      ]);
+    });
+    body.appendChild(el("div", { class: "cf-muted", style: "font-size:.8rem;margin-top:8px", text: "Reconciles with Money → Bookings by day (confirmed / completed / no-show)." }));
+  }
+  function ovRevenue(body, data, cur) {
+    var s = data.series, k = data.kpis;
+    body.appendChild(card([window.CRMUI.stats([
+      { value: money(k.revenue_gross_minor, cur), label: "Gross" },
+      { value: money(k.revenue_net_minor, cur), label: "Net" },
+      { value: money(k.refunded_minor, cur), label: "Refunded" },
+    ])]));
+    mountChart(ovChartCard(body, "Revenue per day"), function () {
+      return ovBase(data.days, [
+        { name: "Net", type: "bar", data: s.revenue_net_minor.map(mjr), color: "#1f7a4d" },
+        { name: "Gross", type: "line", data: s.revenue_gross_minor.map(mjr), color: "#c79a3e" },
+      ], { money: cur });
+    });
+    body.appendChild(el("div", { class: "cf-muted", style: "font-size:.8rem;margin-top:8px", text: "Gross ties out to Money → Sales by day. Net = gross − refunds." }));
+  }
+  function ovMembers(body, data, cur) {
+    var s = data.series, k = data.kpis;
+    body.appendChild(card([window.CRMUI.stats([
+      { value: k.active_members, label: "Active members" },
+      { value: k.new_clients, label: "New clients" },
+      { value: k.total_clients, label: "Total clients" },
+    ])]));
+    mountChart(ovChartCard(body, "Active members per day", 260), function () {
+      return ovBase(data.days, [{ name: "Active members", type: "line", data: s.active_members, color: "#4a7fb5", area: true }]);
+    });
+    mountChart(ovChartCard(body, "New clients per day", 240), function () {
+      return ovBase(data.days, [{ name: "New clients", data: s.new_clients, color: "#1f7a4d" }]);
+    });
+  }
+  function ovExperience(body, data, cur) {
+    var s = data.series, k = data.kpis;
+    body.appendChild(card([window.CRMUI.stats([
+      { value: (k.nps_score == null ? "—" : k.nps_score), label: "NPS score" },
+      { value: k.nps_responses, label: "Responses" },
+    ])]));
+    if (!k.nps_responses) { body.appendChild(el("div", { class: "cf-empty", text: "No NPS responses this month." })); return; }
+    mountChart(ovChartCard(body, "NPS responses per day", 260), function () {
+      return ovBase(data.days, [{ name: "Responses", data: s.nps_responses, color: "#1f7a4d" }]);
+    });
+  }
+  async function ovCourts(body) {
+    var box = card([window.CRMUI.sectionHead("Court utilisation"), el("div", { class: "cf-loading", text: "Loading…" })]);
+    body.appendChild(box);
+    try {
+      var u = await window.AdminAPI.courtUtilisation(30);
+      UI.clear(box);
+      box.appendChild(window.CRMUI.sectionHead("Court utilisation · last 30 days"));
+      box.appendChild(el("div", { class: "cf-muted", style: "font-size:.85rem;margin:-4px 0 10px", text: (u.overall_pct == null ? "Set court playing hours to see utilisation." : ("Overall " + u.overall_pct + "% of open court-hours booked. Cold cells are quiet slots to fill.")) }));
+      box.appendChild(utilHeatmap(u));
+    } catch (e) { UI.clear(box); box.appendChild(window.CRMUI.sectionHead("Court utilisation")); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
   }
   // A dependency-free CSS-grid heatmap: 7 weekday rows x hour columns, cells shaded by utilisation %
   // (or booking intensity where hours aren't set). Reuses cf-* tokens; scrolls on narrow screens.

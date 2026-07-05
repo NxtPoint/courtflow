@@ -272,7 +272,7 @@ def nps(session, *, club_id, days) -> Dict[str, Any]:
                    count(*) FILTER (WHERE score <= 6) AS detractors,
                    count(*) AS total
             FROM core.nps_response
-            WHERE created_at >= now() - interval '{int(days)} days'{_club_clause('club_id', club_id)}
+            WHERE submitted_at >= now() - interval '{int(days)} days'{_club_clause('club_id', club_id)}
         """), _p(club_id)).mappings().first()
         total = int(row["total"] or 0)
         promoters = int(row["promoters"] or 0)

@@ -296,6 +296,11 @@
     // GET /api/insights/court-utilisation?days= -> {days, overall_pct, booked_hours,
     //   available_hours, cells:[{weekday,hour,booked_hours,available_hours,pct}]}
     courtUtilisation: function (days) { return A().apiJSON("/api/insights/court-utilisation" + (days ? ("?days=" + days) : "")); },
+    // GET /api/insights/overview?month=YYYY-MM -> {month, currency, days:[iso], series:{visits,
+    //   unique_visitors,bookings,bookings_court,bookings_lesson,bookings_class,member_bookings,
+    //   revenue_gross_minor,revenue_net_minor,refunded_minor,new_clients,active_members,nps_responses},
+    //   kpis:{...}, breakdowns:{sources,top_pages,by_device}}
+    overview: function (month) { return A().apiJSON("/api/insights/overview" + (month ? ("?month=" + month) : "")); },
     // GET /api/insights/sales-by-day?month=YYYY-MM -> {month, currency, total_minor, count,
     //   days:[{date, total_minor, sales:[{payment_id,order_id,booking_id,client_name,service_type,
     //   description,amount_minor,at}]}]}

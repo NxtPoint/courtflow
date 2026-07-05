@@ -432,7 +432,8 @@ def _apply_term_grant(session, *, link, months, provider) -> Dict[str, Any]:
     # SUPERSEDE the signup free-week: a real paid plan REPLACES the trial (else the trial lingers active
     # and membership_status can mislabel the paid plan as "Free week").
     session.execute(
-        text("UPDATE billing.membership_subscription SET status = 'cancelled', updated_at = now() "
+        text("UPDATE billing.membership_subscription "
+             "SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, now()), updated_at = now() "
              "WHERE club_id = CAST(:c AS uuid) AND user_id = CAST(:u AS uuid) "
              "  AND provider = 'trial' AND status = 'active' AND id <> CAST(:self AS uuid)"),
         {"c": str(club_id), "u": str(user_id) if user_id else None, "self": str(link["id"])})
@@ -522,7 +523,8 @@ def cancel_membership(session, *, club_id, user_id) -> Dict[str, Any]:
     # sits in a non-'active' placeholder while its order is still open). Without the second branch an
     # unpaid offline membership was uncancellable and its owed order stuck forever.
     rows = session.execute(
-        text("UPDATE billing.membership_subscription SET status = 'cancelled', updated_at = now() "
+        text("UPDATE billing.membership_subscription "
+             "SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, now()), updated_at = now() "
              "WHERE club_id = :c AND user_id = :u AND status <> 'cancelled' "
              "  AND ( (status = 'active' AND (current_period_end IS NULL OR current_period_end >= CURRENT_DATE)) "
              "        OR EXISTS (SELECT 1 FROM billing.\"order\" o "

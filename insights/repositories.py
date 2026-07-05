@@ -8,6 +8,8 @@
 # First metric: court_utilisation (the "find dead slots" heatmap — a Phase-2 Must-have and the top
 # benchmark gap vs world-class club software). More metrics slot in beside it as guarded functions.
 
+from datetime import timedelta
+
 from sqlalchemy import text
 
 
@@ -257,4 +259,203 @@ def court_utilisation(session, *, club_id, days=30):
         "booked_hours": round(total_booked, 1),
         "available_hours": round(total_avail, 1),
         "cells": cells,
+    }
+
+
+def _month_bounds(session, month):
+    """Resolve 'YYYY-MM' (default current) -> (ym, start_date, end_date) with the month computed
+    server-side, exactly like sales_by_day/bookings_by_day so all three agree on the window."""
+    b = session.execute(
+        text("""
+            SELECT to_char(COALESCE(to_date(:m, 'YYYY-MM'), date_trunc('month', now())), 'YYYY-MM') AS ym,
+                   date_trunc('month', COALESCE(to_date(:m, 'YYYY-MM'), now()))::date AS start_d,
+                   (date_trunc('month', COALESCE(to_date(:m, 'YYYY-MM'), now()))
+                    + interval '1 month')::date AS end_d
+        """),
+        {"m": month},
+    ).mappings().first()
+    return b["ym"], b["start_d"], b["end_d"]
+
+
+def overview(session, *, club_id, month=None):
+    """Month-scoped, day-bucketed business overview for the admin 'Overview' tab. ONE guarded read
+    powering every panel, so the numbers RECONCILE with the Money lists by construction:
+      • revenue_gross uses the SAME basis as sales_by_day (charge/succeeded) -> monthly total ties out;
+      • bookings use the SAME basis as bookings_by_day (confirmed/completed/no_show) -> ties out.
+    Every sub-query is _guard-wrapped (partial DB -> zeros, never a 500) and club_id-scoped. Returns a
+    DENSE per-day series (every calendar day of the month, zero-filled) + KPI totals + a few month-scoped
+    traffic breakdowns. `month`='YYYY-MM' (default current).
+
+    NB the NPS read here uses core.nps_response.submitted_at — the analytics lane's nps() erroneously
+    filtered on a non-existent created_at (silently returning zeros); this is the corrected source."""
+    ym, start_d, end_d = _month_bounds(session, month)
+    c = str(club_id)
+
+    # Dense calendar-day skeleton for the month (so a quiet day shows a real 0, not a gap).
+    days = []
+    d = start_d
+    while d < end_d:
+        days.append(d.isoformat())
+        d = d + timedelta(days=1)
+    pos = {day: i for i, day in enumerate(days)}
+
+    def _fill(rows, *value_keys):
+        """rows -> {key: [per-day values]} aligned to `days`, zero-filled. Each row must expose a
+        'day' (date) plus the named value columns."""
+        out = {k: [0 for _ in days] for k in value_keys}
+        for r in rows:
+            dk = r["day"].isoformat() if hasattr(r["day"], "isoformat") else str(r["day"])
+            i = pos.get(dk)
+            if i is None:
+                continue
+            for k in value_keys:
+                out[k][i] = int(r[k] or 0)
+        return out
+
+    p = {"c": c, "s": start_d, "e": end_d}
+
+    # --- Traffic (core.usage_event page_view) — visits + unique visitors per day ------------------
+    traffic = _guard(lambda: _fill(session.execute(text("""
+        SELECT occurred_at::date AS day, count(*) AS visits,
+               count(DISTINCT metadata->>'anon_id') AS uniques
+        FROM core.usage_event
+        WHERE event_type = 'page_view' AND club_id = :c
+          AND occurred_at >= :s AND occurred_at < :e
+        GROUP BY 1
+    """), p).mappings().all(), "visits", "uniques"), {"visits": [0]*len(days), "uniques": [0]*len(days)})
+
+    # --- Bookings per day (SAME basis as bookings_by_day) — total + by type + member-covered -------
+    bookings = _guard(lambda: _fill(session.execute(text("""
+        SELECT starts_at::date AS day, count(*) AS total,
+               count(*) FILTER (WHERE booking_type = 'court')  AS court,
+               count(*) FILTER (WHERE booking_type = 'lesson') AS lesson,
+               count(*) FILTER (WHERE booking_type = 'class')  AS class,
+               count(*) FILTER (WHERE settlement_mode = 'membership_covered') AS member
+        FROM diary.booking
+        WHERE club_id = :c AND status IN ('confirmed','completed','no_show')
+          AND starts_at >= :s AND starts_at < :e
+        GROUP BY 1
+    """), p).mappings().all(), "total", "court", "lesson", "class", "member"),
+        {k: [0]*len(days) for k in ("total", "court", "lesson", "class", "member")})
+
+    # --- Revenue per day: gross (SAME basis as sales_by_day) + refunds -> net ----------------------
+    # Refund rows carry status='refunded' (CLAUDE.md gotcha) so they're caught explicitly.
+    revenue = _guard(lambda: _fill(session.execute(text("""
+        SELECT created_at::date AS day,
+               COALESCE(sum(amount_minor) FILTER (WHERE direction='charge' AND status='succeeded'),0) AS gross,
+               COALESCE(sum(amount_minor) FILTER (WHERE direction='refund'
+                        AND status IN ('succeeded','refunded')),0) AS refunded
+        FROM billing.payment
+        WHERE club_id = :c AND created_at >= :s AND created_at < :e
+        GROUP BY 1
+    """), p).mappings().all(), "gross", "refunded"),
+        {"gross": [0]*len(days), "refunded": [0]*len(days)})
+    net = [revenue["gross"][i] - revenue["refunded"][i] for i in range(len(days))]
+
+    # --- New clients per day (core.account) -------------------------------------------------------
+    clients = _guard(lambda: _fill(session.execute(text("""
+        SELECT created_at::date AS day, count(*) AS signups
+        FROM core.account
+        WHERE club_id = :c AND deleted_at IS NULL AND created_at >= :s AND created_at < :e
+        GROUP BY 1
+    """), p).mappings().all(), "signups"), {"signups": [0]*len(days)})
+
+    # --- Active members per day (uses the new period_start / cancelled_at columns) -----------------
+    members = _guard(lambda: _fill(session.execute(text("""
+        SELECT g::date AS day,
+               (SELECT count(*) FROM billing.membership_subscription ms
+                 WHERE ms.club_id = :c
+                   AND ms.period_start <= g::date
+                   AND (ms.cancelled_at IS NULL OR ms.cancelled_at::date > g::date)
+                   AND (ms.current_period_end IS NULL OR ms.current_period_end >= g::date)) AS active
+        FROM generate_series(:s, :e - interval '1 day', interval '1 day') g
+    """), p).mappings().all(), "active"), {"active": [0]*len(days)})
+
+    # --- NPS per day (core.nps_response.submitted_at — the CORRECTED source) -----------------------
+    nps_daily = _guard(lambda: _fill(session.execute(text("""
+        SELECT submitted_at::date AS day, count(*) AS responses,
+               count(*) FILTER (WHERE score >= 9) AS promoters,
+               count(*) FILTER (WHERE score <= 6) AS detractors
+        FROM core.nps_response
+        WHERE club_id = :c AND submitted_at >= :s AND submitted_at < :e
+        GROUP BY 1
+    """), p).mappings().all(), "responses", "promoters", "detractors"),
+        {"responses": [0]*len(days), "promoters": [0]*len(days), "detractors": [0]*len(days)})
+
+    # ---- KPI totals (month) ----------------------------------------------------------------------
+    visits_t = sum(traffic["visits"])
+    uniques_t = _guard(lambda: int(session.execute(text("""
+        SELECT count(DISTINCT metadata->>'anon_id') FROM core.usage_event
+        WHERE event_type='page_view' AND club_id=:c AND occurred_at>=:s AND occurred_at<:e
+          AND metadata->>'anon_id' IS NOT NULL
+    """), p).scalar() or 0), 0)
+    nps_total = sum(nps_daily["responses"])
+    nps_prom = sum(nps_daily["promoters"])
+    nps_detr = sum(nps_daily["detractors"])
+    nps_score = round(((nps_prom - nps_detr) / nps_total) * 100) if nps_total else None
+    total_clients = _guard(lambda: int(session.execute(text("""
+        SELECT count(*) FROM core.account WHERE club_id=:c AND deleted_at IS NULL
+          AND created_at < :e
+    """), p).scalar() or 0), 0)
+    currency = _club_currency(session, club_id)
+
+    # ---- Month-scoped traffic breakdowns (top lists) ---------------------------------------------
+    def _breakdown(sql, label):
+        return _guard(lambda: [
+            {"label": r["label"] or "—", "visits": int(r["visits"] or 0)}
+            for r in session.execute(text(sql), p).mappings().all()], [])
+
+    sources = _breakdown("""
+        SELECT CASE WHEN COALESCE(metadata->>'utm_source','')<>'' THEN metadata->>'utm_source'
+                    WHEN COALESCE(metadata->>'referrer','')<>''
+                      THEN split_part(split_part(metadata->>'referrer','//',2),'/',1)
+                    ELSE 'direct' END AS label, count(*) AS visits
+        FROM core.usage_event
+        WHERE event_type='page_view' AND club_id=:c AND occurred_at>=:s AND occurred_at<:e
+        GROUP BY 1 ORDER BY 2 DESC LIMIT 8""", "source")
+    top_pages = _breakdown("""
+        SELECT metadata->>'path' AS label, count(*) AS visits FROM core.usage_event
+        WHERE event_type='page_view' AND club_id=:c AND occurred_at>=:s AND occurred_at<:e
+          AND metadata->>'path' IS NOT NULL
+        GROUP BY 1 ORDER BY 2 DESC LIMIT 8""", "path")
+    by_device = _breakdown("""
+        SELECT COALESCE(NULLIF(metadata->>'device',''),'unknown') AS label, count(*) AS visits
+        FROM core.usage_event
+        WHERE event_type='page_view' AND club_id=:c AND occurred_at>=:s AND occurred_at<:e
+        GROUP BY 1 ORDER BY 2 DESC""", "device")
+
+    return {
+        "month": ym,
+        "currency": currency,
+        "days": days,
+        "series": {
+            "visits": traffic["visits"],
+            "unique_visitors": traffic["uniques"],
+            "bookings": bookings["total"],
+            "bookings_court": bookings["court"],
+            "bookings_lesson": bookings["lesson"],
+            "bookings_class": bookings["class"],
+            "member_bookings": bookings["member"],
+            "revenue_gross_minor": revenue["gross"],
+            "revenue_net_minor": net,
+            "refunded_minor": revenue["refunded"],
+            "new_clients": clients["signups"],
+            "active_members": members["active"],
+            "nps_responses": nps_daily["responses"],
+        },
+        "kpis": {
+            "visits": visits_t,
+            "unique_visitors": uniques_t,
+            "bookings": sum(bookings["total"]),
+            "member_bookings": sum(bookings["member"]),
+            "revenue_gross_minor": sum(revenue["gross"]),
+            "revenue_net_minor": sum(net),
+            "refunded_minor": sum(revenue["refunded"]),
+            "new_clients": sum(clients["signups"]),
+            "total_clients": total_clients,
+            "active_members": members["active"][-1] if members["active"] else 0,
+            "nps_score": nps_score,
+            "nps_responses": nps_total,
+        },
+        "breakdowns": {"sources": sources, "top_pages": top_pages, "by_device": by_device},
     }

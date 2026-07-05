@@ -26,6 +26,20 @@ def _admin():
     return p, None
 
 
+@insights_bp.get("/overview")
+def overview():
+    """Month-scoped daily business overview for the admin 'Overview' tab — dense per-day series
+    (traffic, bookings, revenue, clients, members, NPS) + KPI totals + traffic breakdowns, all
+    reconciling with Money → Sales/Bookings by day. ?month=YYYY-MM (default current)."""
+    p, err = _admin()
+    if err:
+        return err
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = repo.overview(s, club_id=p.club_id, month=month)
+    return jsonify(data), 200
+
+
 @insights_bp.get("/bookings-by-day")
 def bookings_by_day():
     """Daily bookings for one ?month=YYYY-MM (default current) — grouped by the day played, each

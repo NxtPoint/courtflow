@@ -259,6 +259,21 @@ _DDL = [
     f"CREATE INDEX IF NOT EXISTS ix_membership_sub_order "
     f"ON {SCHEMA}.membership_subscription (order_id) WHERE order_id IS NOT NULL;",
 
+    # --- dated lifecycle: when a membership STARTED and when it was CANCELLED --------------------
+    # `current_period_end` alone can't reconstruct "who was active on day X" across a month (a
+    # cancellation lost its date). period_start + cancelled_at give an accurate active-members-per-day
+    # curve going forward, powering the Overview 'Members' series. period_start carries a CURRENT_DATE
+    # default so EVERY insert path auto-populates it (no need to touch each INSERT); existing rows are
+    # backfilled from created_at. cancelled_at is event-driven — stamped by the cancel paths (COALESCE
+    # so a re-cancel never moves the date) + a best-effort historical backfill from updated_at.
+    # All idempotent: second `python -m db` = no-op (columns exist, defaults set, backfills match 0 rows).
+    f"ALTER TABLE {SCHEMA}.membership_subscription ADD COLUMN IF NOT EXISTS period_start date;",
+    f"ALTER TABLE {SCHEMA}.membership_subscription ADD COLUMN IF NOT EXISTS cancelled_at timestamptz;",
+    f"ALTER TABLE {SCHEMA}.membership_subscription ALTER COLUMN period_start SET DEFAULT CURRENT_DATE;",
+    f"UPDATE {SCHEMA}.membership_subscription SET period_start = created_at::date WHERE period_start IS NULL;",
+    f"UPDATE {SCHEMA}.membership_subscription SET cancelled_at = updated_at "
+    f"WHERE status = 'cancelled' AND cancelled_at IS NULL;",
+
     # --- configurable membership TERM PLANS (nothing-hardcoded) -----------------
     # A membership term plan = one billing.price row on the club's kind='membership' product:
     #   {price_id, label, amount_minor, term_months, active}. `term_months` is the membership

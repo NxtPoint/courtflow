@@ -1270,7 +1270,8 @@ def revoke_membership(session, *, club_id, user_id):
     # Cancel an ACTIVE membership OR an OWED-but-inactive one (unpaid offline plan) — same widened logic
     # as billing.membership.cancel_membership, so an admin can clear a stuck owed membership too.
     rows = session.execute(
-        text("UPDATE billing.membership_subscription SET status = 'cancelled', updated_at = now() "
+        text("UPDATE billing.membership_subscription "
+             "SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, now()), updated_at = now() "
              "WHERE club_id = :c AND user_id = :u AND status <> 'cancelled' "
              "  AND ( status = 'active' "
              "        OR EXISTS (SELECT 1 FROM billing.\"order\" o "
