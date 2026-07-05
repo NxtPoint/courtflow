@@ -261,7 +261,7 @@
   }
   function isForChild(e) { return !!(principal && e.player_user_id && String(e.player_user_id) !== String(principal.user_id)); }
   function classRow(e) {
-    return el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/class/" + e.class_session_id); } }, [
+    return el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/class/" + e.enrolment_id); } }, [
       el("span", { class: "cf-chip class", text: "Class" }),
       el("div", { class: "cf-item-main" }, [
         el("div", { class: "cf-item-t", text: (e.class_name || "Class") + (isForChild(e) && e.player_name ? " · " + e.player_name : "") }),
@@ -522,36 +522,23 @@
     set(wrap);
   }
 
-  // ---- CLASS enrolment detail (a class isn't a diary.booking — its own small story + cancel) -----
-  async function renderClassStory(id) {
-    loading();
-    var list = [];
-    try { list = (await window.API.myEnrolments()).enrolments || []; } catch (e) {}
-    DATA.enrolments = list;
-    var e = list.filter(function (x) { return String(x.class_session_id) === String(id); })[0];
-    var wrap = el("div", {});
-    wrap.appendChild(pageHeader("Class", "Home", "#/"));
-    if (!e) { wrap.appendChild(el("div", { class: "cf-empty", text: "This class isn't in your bookings." })); set(wrap); return; }
-    var c = card([
-      el("div", { class: "cf-detail-h" }, [
-        el("div", {}, [el("div", { class: "cf-muted", style: "font-size:.78rem;font-weight:700", text: "CLASS" }),
-          el("h1", { style: "margin:4px 0 2px;font-size:1.3rem", text: e.class_name || "Class" })]),
-        statusChip(e.status),
-      ]),
-    ]);
-    c.appendChild(kv("When", UI.fmtDate(e.starts_at) + " · " + timeRange(e)));
-    if (e.coach_name) c.appendChild(kv("Coach", e.coach_name));
-    if (isForChild(e) && e.player_name) c.appendChild(kv("Player", e.player_name));
-    wrap.appendChild(c);
-    if (e.can_cancel !== false) wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;margin-top:14px" }, [
-      el("button", { class: "cf-btn cf-btn-danger", text: e.status === "waitlisted" ? "Leave waitlist" : "Cancel enrolment", onclick: function () { cancelEnrol(e); } }),
-    ]));
-    set(wrap);
-  }
-  function cancelEnrol(e) {
-    if (!window.confirm("Cancel your place in " + (e.class_name || "this class") + "?")) return;
-    var body = isForChild(e) ? { user_id: e.player_user_id } : {};
-    window.API.cancelEnrolment(e.class_session_id, body).then(function () { UI.toast("Cancelled.", "info"); go("#/"); }, function (err) { UI.toast(UI.errMsg(err), "error"); });
+  // ---- CLASS record — the SAME transaction-record widget as bookings (via /api/me/classes/:id) -----
+  function renderClassStory(id) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.TransactionDetail.mount(host, {
+      role: "client",
+      scope: { id: id },
+      grouped: false,
+      data: { get: function (i) { return window.TFAuth.apiJSON("/api/me/classes/" + encodeURIComponent(i)).then(function (r) { return r.booking; }); } },
+      actions: {
+        pay: { manual: true, run: function (b) { payOrders([b.charge.order_id]); } },
+        settle: { manual: true, run: function (b) { payOrders([b.charge.order_id]); } },
+        receipt: { manual: true, run: function (b) { go("#/billing/order/" + b.charge.order_id); } },
+        request_refund: { manual: true, run: function (b) { requestRefund(b.charge.order_id); } },
+        cancel: { tone: "danger", back: true, done: "Cancelled.", run: function (b) { return window.API.cancelEnrolment(b.class_session_id, isForChild(b) ? { user_id: b.player_user_id } : {}); } },
+      },
+    });
   }
 
   // ---- PLAN (reuse the existing 3-purchasing-models wizard as an overlay) --
