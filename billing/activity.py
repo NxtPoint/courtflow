@@ -46,24 +46,33 @@ def _iso(dt):
     return dt.isoformat() if hasattr(dt, "isoformat") else (dt if dt else None)
 
 
-def transaction_log(session, *, club_id, scope, user_id=None, limit=120) -> List[Dict[str, Any]]:
+def transaction_log(session, *, club_id, scope, user_id=None, limit=120, event=None) -> List[Dict[str, Any]]:
     """Compose the chronological transaction log for one role. `scope` in {'client','coach','owner'};
-    `user_id` is required for client/coach (their own id). Returns newest-first, capped at `limit`."""
+    `user_id` is required for client/coach (their own id). Returns newest-first, capped at `limit`.
+
+    `event` (optional) narrows the log to ONE transaction — a dict {order_id?, booking_id?}. This is how
+    the unified transaction record gets its per-event history: same entry builders, filtered to the event's
+    order (payments / order lifecycle / arrears / membership) and booking (commission)."""
     scope = (scope or "").lower()
     entries: List[Dict[str, Any]] = []
     uid = str(user_id) if user_id else None
     if scope in ("client", "coach") and not uid:
         return []
+    ev_oid = str(event["order_id"]) if (event and event.get("order_id")) else None
+    ev_bid = str(event["booking_id"]) if (event and event.get("booking_id")) else None
 
     # ---- 1. payments (money in / out) — client + owner ---------------------
     # A charge is money IN from the client; a refund is money OUT back to them.
-    if scope in ("client", "owner"):
+    if scope in ("client", "owner") and (event is None or ev_oid):
         try:
             where = "p.club_id = :c"
             params: Dict[str, Any] = {"c": str(club_id)}
             if scope == "client":
                 where += " AND o.user_id = :u"
                 params["u"] = uid
+            if ev_oid:
+                where += " AND p.order_id = :ev_oid"
+                params["ev_oid"] = ev_oid
             rows = session.execute(
                 text(f"""
                     SELECT p.created_at, p.direction, p.status, p.amount_minor, p.currency_code,
@@ -95,13 +104,16 @@ def transaction_log(session, *, club_id, scope, user_id=None, limit=120) -> List
     # ---- 2. order lifecycle (owed / voided / written off) — client + owner --
     # Paid/refunded orders are already covered by the payment rows above; here we surface the debt
     # being CREATED (owed) and being CLEARED without payment (void = mistake, written_off = forgiven).
-    if scope in ("client", "owner"):
+    if scope in ("client", "owner") and (event is None or ev_oid):
         try:
             where = "o.club_id = :c"
             params = {"c": str(club_id)}
             if scope == "client":
                 where += " AND o.user_id = :u"
                 params["u"] = uid
+            if ev_oid:
+                where += " AND o.id = :ev_oid"
+                params["ev_oid"] = ev_oid
             rows = session.execute(
                 text(f"""
                     SELECT o.id, o.user_id, o.status, o.amount_minor, o.currency_code,
@@ -138,7 +150,7 @@ def transaction_log(session, *, club_id, scope, user_id=None, limit=120) -> List
 
     # ---- 3. coaching arrears (accrued / collected / written off) -----------
     # client sees it as "coaching with <coach>"; coach sees it as "<client>"; owner sees both.
-    if scope in ("client", "coach", "owner"):
+    if scope in ("client", "coach", "owner") and (event is None or ev_oid):
         try:
             where = "a.club_id = :c"
             params = {"c": str(club_id)}
@@ -146,6 +158,9 @@ def transaction_log(session, *, club_id, scope, user_id=None, limit=120) -> List
                 where += " AND a.client_user_id = :u"; params["u"] = uid
             elif scope == "coach":
                 where += " AND a.coach_user_id = :u"; params["u"] = uid
+            if ev_oid:
+                where += " AND a.order_line_id IN (SELECT id FROM billing.order_line WHERE order_id = :ev_oid)"
+                params["ev_oid"] = ev_oid
             rows = session.execute(
                 text(f"""
                     SELECT a.id, a.coach_user_id, a.client_user_id, a.gross_minor, a.currency,
@@ -192,12 +207,14 @@ def transaction_log(session, *, club_id, scope, user_id=None, limit=120) -> List
             log.info("activity: arrears source skipped club=%s", club_id)
 
     # ---- 4. commission (earned / clawed back) — coach + owner --------------
-    if scope in ("coach", "owner"):
+    if scope in ("coach", "owner") and (event is None or ev_bid):
         try:
             where = "cs.club_id = :c AND cs.party_type = 'coach'"
             params = {"c": str(club_id)}
             if scope == "coach":
                 where += " AND cs.coach_user_id = :u"; params["u"] = uid
+            if ev_bid:
+                where += " AND cs.booking_id = :ev_bid"; params["ev_bid"] = ev_bid
             rows = session.execute(
                 text(f"""
                     SELECT cs.id, cs.coach_user_id, cs.basis, cs.amount_minor, cs.currency,
@@ -229,12 +246,14 @@ def transaction_log(session, *, club_id, scope, user_id=None, limit=120) -> List
             log.info("activity: commission source skipped club=%s", club_id)
 
     # ---- 5. memberships (started / cancelled) — client + owner -------------
-    if scope in ("client", "owner"):
+    if scope in ("client", "owner") and (event is None or ev_oid):
         try:
             where = "m.club_id = :c"
             params = {"c": str(club_id)}
             if scope == "client":
                 where += " AND m.user_id = :u"; params["u"] = uid
+            if ev_oid:
+                where += " AND m.order_id = :ev_oid"; params["ev_oid"] = ev_oid
             rows = session.execute(
                 text(f"""
                     SELECT m.id, m.user_id, m.status, m.provider, m.created_at, m.updated_at

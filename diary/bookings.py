@@ -1157,7 +1157,10 @@ def _booking_charge(session, club_id, order_id, settlement_mode):
     base = {"amount_minor": 0, "currency": "ZAR",
             "status": "covered" if covered else "none",
             "settlement_mode": settlement_mode, "order_id": str(order_id) if order_id else None,
-            "refundable": False, "has_open_refund": False}
+            "refundable": False, "has_open_refund": False,
+            # corrected reconciliation block (derived from payment ROWS, not order.status alone)
+            "gross_minor": 0, "paid_minor": 0, "refunded_minor": 0, "net_paid_minor": 0,
+            "owed_minor": 0, "written_off_minor": 0, "state": "covered" if covered else "none"}
     if not order_id:
         return base
     try:
@@ -1176,13 +1179,58 @@ def _booking_charge(session, club_id, order_id, settlement_mode):
             text("SELECT 1 FROM billing.refund_request WHERE order_id = :o AND status = 'pending' LIMIT 1"),
             {"o": str(order_id)},
         ).first()
+        # Money actually moved — from the payment rows, so a PARTIAL refund reports the real net kept
+        # (order.status flips fully to 'refunded' on any refund, which is lossy).
+        ps = session.execute(
+            text("SELECT "
+                 "COALESCE(SUM(CASE WHEN direction='charge' AND status='succeeded' THEN amount_minor END),0) AS paid, "
+                 "COALESCE(SUM(CASE WHEN direction='refund' AND status IN ('refunded','succeeded') THEN amount_minor END),0) AS refunded "
+                 "FROM billing.payment WHERE order_id = :o"),
+            {"o": str(order_id)},
+        ).mappings().first()
+        paid = int(ps["paid"] or 0); refunded = int(ps["refunded"] or 0)
+        owed = amt if o["status"] == "open" else 0
+        written_off = amt if o["status"] == "written_off" else 0
+        if covered and amt == 0:
+            state = "covered"
+        elif o["status"] == "open":
+            state = "owed"
+        elif o["status"] == "awaiting_payment":
+            state = "pending"
+        elif o["status"] == "written_off":
+            state = "written_off"
+        elif o["status"] == "void":
+            state = "void"
+        elif refunded > 0 and refunded < paid:
+            state = "part_refunded"
+        elif refunded > 0:
+            state = "refunded"
+        else:
+            state = "paid"
         return {"amount_minor": amt, "currency": o["currency_code"] or "ZAR", "status": status,
                 "settlement_mode": settlement_mode, "order_id": str(order_id),
                 "refundable": (o["status"] == "paid" and not openref),
-                "has_open_refund": bool(openref)}
+                "has_open_refund": bool(openref),
+                "gross_minor": amt, "paid_minor": paid, "refunded_minor": refunded,
+                "net_paid_minor": paid - refunded, "owed_minor": owed,
+                "written_off_minor": written_off, "state": state}
     except Exception:
-        base["status"] = "unknown"
+        base["status"] = "unknown"; base["state"] = "unknown"
         return base
+
+
+def _event_log(session, club_id, *, scope, user_id, order_id, booking_id):
+    """The per-event chronological history (oldest→newest) for the transaction record — the SHARED
+    transaction_log filtered to this one event, role-scoped (client hides commission; coach/owner see
+    it). Guarded → [] so it never breaks a story."""
+    try:
+        from billing.activity import transaction_log
+        rows = transaction_log(session, club_id=club_id, scope=scope, user_id=user_id, limit=100,
+                               event={"order_id": order_id, "booking_id": booking_id})
+        rows.reverse()   # story reads oldest → newest
+        return rows
+    except Exception:
+        return []
 
 
 def booking_story(session, *, club_id, user_id, booking_id):
@@ -1288,6 +1336,8 @@ def booking_story(session, *, club_id, user_id, booking_id):
         "players": players,
         "charge": charge,
         "cancel_fee_minor": cancel_fee_minor,   # late-cancellation fee if cancelled NOW (0 = none)
+        "log": _event_log(session, club_id, scope="client", user_id=user_id,
+                          order_id=b["order_id"], booking_id=b["id"]),
         "ics_url": "/api/diary/bookings/" + str(b["id"]) + "/calendar.ics",
         "can": can,
     }
@@ -1397,6 +1447,8 @@ def coach_booking_story(session, *, club_id, coach_user_id, booking_id):
         "players": players,
         "charge": charge,
         "arrears": arrears,
+        "log": _event_log(session, club_id, scope="coach", user_id=coach_user_id,
+                          order_id=b["order_id"], booking_id=b["id"]),
         "ics_url": "/api/diary/bookings/" + str(b["id"]) + "/calendar.ics",
         "can": can,
     }
@@ -1528,6 +1580,8 @@ def admin_booking_story(session, *, club_id, booking_id):
         "charge": charge,
         "arrears": arrears,
         "notes": b["notes"],
+        "log": _event_log(session, club_id, scope="owner", user_id=None,
+                          order_id=b["order_id"], booking_id=b["id"]),
         "ics_url": "/api/diary/bookings/" + str(b["id"]) + "/calendar.ics",
         "can": can,
     }
