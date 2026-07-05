@@ -650,6 +650,47 @@ def cron_membership_refill():
     return jsonify(crons_mod.run_membership_refill(get_engine())), 200
 
 
+@cron_bp.post("/db-fingerprint")
+def cron_db_fingerprint():
+    """OPS-only read-only census of the DB the app is ACTUALLY using — confirms the migrated data
+    survived a region/DB recreate. Reports the club + the counts the migration created + a probe of
+    a few known imported emails."""
+    if not _ops_only():
+        return jsonify(error="forbidden"), 403
+    from db import session_scope
+    from sqlalchemy import text
+    out = {}
+    with session_scope() as s:
+        def q(sql, **p):
+            try:
+                return int(s.execute(text(sql), p).scalar() or 0)
+            except Exception:
+                return None
+        club = s.execute(text("SELECT id, slug FROM club.club "
+                              "WHERE COALESCE(is_template,false)=false ORDER BY created_at LIMIT 1")
+                         ).mappings().first()
+        out["club"] = {"id": str(club["id"]), "slug": club["slug"]} if club else None
+        out["users_total"] = q("SELECT count(*) FROM iam.user")
+        out["users_with_email"] = q("SELECT count(*) FROM iam.user WHERE email IS NOT NULL")
+        out["members_active"] = q("SELECT count(*) FROM iam.membership "
+                                  "WHERE role='member' AND member_status='active'")
+        out["membership_subs_active"] = q("SELECT count(*) FROM billing.membership_subscription "
+                                          "WHERE status='active'")
+        out["membership_subs_manual"] = q("SELECT count(*) FROM billing.membership_subscription "
+                                          "WHERE status='active' AND provider='manual'")
+        out["lesson_wallets_active"] = q("SELECT count(*) FROM billing.token_wallet "
+                                         "WHERE service_kind='lesson' AND status='active'")
+        out["trial_subs"] = q("SELECT count(*) FROM billing.membership_subscription "
+                              "WHERE provider='trial'")
+        found = []
+        for e in ("aseedat6763@gmail.com", "gila.tobias@gmail.com", "ejoylee1979@gmail.com",
+                  "simonnebugai@gmail.com", "rmjacq@gmail.com"):
+            if s.execute(text("SELECT 1 FROM iam.user WHERE lower(email)=:e LIMIT 1"), {"e": e}).first():
+                found.append(e)
+        out["sample_imported_emails_found"] = found
+    return jsonify(out), 200
+
+
 @cron_bp.post("/ses-suppress")
 def cron_ses_suppress():
     """OPS-only: check (and optionally clear) an address on SES's account suppression list — via API,
