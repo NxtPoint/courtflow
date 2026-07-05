@@ -1173,9 +1173,15 @@ def revoke_membership(session, *, club_id, user_id):
     """Admin cancels a member's active membership (their courts revert to PAYG). An UNPAID plan's
     order is voided so it drops off the member's statement; a PAID term is left intact (refund is a
     separate flow). Mirrors billing.membership.cancel_membership."""
+    # Cancel an ACTIVE membership OR an OWED-but-inactive one (unpaid offline plan) — same widened logic
+    # as billing.membership.cancel_membership, so an admin can clear a stuck owed membership too.
     rows = session.execute(
         text("UPDATE billing.membership_subscription SET status = 'cancelled', updated_at = now() "
-             "WHERE club_id = :c AND user_id = :u AND status = 'active' "
+             "WHERE club_id = :c AND user_id = :u AND status <> 'cancelled' "
+             "  AND ( status = 'active' "
+             "        OR EXISTS (SELECT 1 FROM billing.\"order\" o "
+             "                    WHERE o.id = membership_subscription.order_id "
+             "                      AND o.status IN ('open','awaiting_payment')) ) "
              "RETURNING order_id"),
         {"c": club_id, "u": user_id},
     ).mappings().all()

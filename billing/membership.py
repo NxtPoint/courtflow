@@ -508,10 +508,16 @@ def cancel_membership(session, *, club_id, user_id) -> Dict[str, Any]:
     An UNPAID offline plan (order still open/awaiting_payment) is voided so it drops off the client's
     statement — a cancelled plan you never paid for is not a debt. A PAID plan's order is left intact
     (void_order refuses anything already paid); refunding a paid term is a separate refund request."""
+    # Cancel an ACTIVE membership OR an OWED-but-inactive one (offline plan bought, never paid — the sub
+    # sits in a non-'active' placeholder while its order is still open). Without the second branch an
+    # unpaid offline membership was uncancellable and its owed order stuck forever.
     rows = session.execute(
         text("UPDATE billing.membership_subscription SET status = 'cancelled', updated_at = now() "
-             "WHERE club_id = :c AND user_id = :u AND status = 'active' "
-             "  AND (current_period_end IS NULL OR current_period_end >= CURRENT_DATE) "
+             "WHERE club_id = :c AND user_id = :u AND status <> 'cancelled' "
+             "  AND ( (status = 'active' AND (current_period_end IS NULL OR current_period_end >= CURRENT_DATE)) "
+             "        OR EXISTS (SELECT 1 FROM billing.\"order\" o "
+             "                    WHERE o.id = membership_subscription.order_id "
+             "                      AND o.status IN ('open','awaiting_payment')) ) "
              "RETURNING order_id"),
         {"c": str(club_id), "u": str(user_id) if user_id else None},
     ).mappings().all()
