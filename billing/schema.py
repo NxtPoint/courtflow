@@ -178,6 +178,9 @@ _DDL = [
         created_at   timestamptz NOT NULL DEFAULT now()
     );
     """,
+    # The ORIGINAL charge before a coaching discount (so the by-service view can show "was → now"
+    # while amount_minor holds the CURRENT/discounted figure the client actually owes). NULL = never discounted.
+    f"ALTER TABLE {SCHEMA}.order_line ADD COLUMN IF NOT EXISTS original_amount_minor int;",
     f"CREATE INDEX IF NOT EXISTS ix_order_line_order ON {SCHEMA}.order_line (order_id);",
     f"CREATE INDEX IF NOT EXISTS ix_order_line_club ON {SCHEMA}.order_line (club_id);",
     f"CREATE INDEX IF NOT EXISTS ix_order_line_booking "

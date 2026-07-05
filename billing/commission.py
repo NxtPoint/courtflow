@@ -536,7 +536,7 @@ def client_service_breakdown(session, *, club_id, coach_user_id, client_user_id,
         rows = session.execute(
             text("""
                 SELECT b.id AS booking_id, b.starts_at, b.ends_at, b.status AS bstatus,
-                       ol.amount_minor, o.status AS ostatus, o.settlement_mode,
+                       ol.amount_minor, ol.original_amount_minor, o.status AS ostatus, o.settlement_mode,
                        pr.duration_minutes AS price_dur, prod.id AS product_id, prod.name AS product_name,
                        ca.status AS arr_status, ca.gross_minor AS arr_gross
                 FROM diary.booking b
@@ -569,7 +569,9 @@ def client_service_breakdown(session, *, club_id, coach_user_id, client_user_id,
         name = r["product_name"] or "Lesson"
         key = (str(r["product_id"]) if r["product_id"] else "x") + "-" + str(dur)
         label = name + ((" · " + str(dur) + " min") if dur else "")
-        billed = int(r["amount_minor"] or 0)          # original charge (pre discount/write-off)
+        # "billed" = the ORIGINAL charge (order_line.original_amount_minor is set on a discount; else the
+        # current amount_minor IS the original). "eff"/arr_gross is the current (discounted) figure owed.
+        billed = int(r["original_amount_minor"]) if r["original_amount_minor"] is not None else int(r["amount_minor"] or 0)
         covered = r["settlement_mode"] in ("membership_covered", "free", "token")
         arr_status = r["arr_status"]
         arr_gross = int(r["arr_gross"]) if r["arr_gross"] is not None else None
@@ -740,11 +742,22 @@ def adjust_arrears(session, *, club_id, arrears_id, coach_user_id=None,
     session.execute(
         text("UPDATE billing.coach_arrears SET " + ", ".join(sets) + " WHERE club_id = :c AND id = :id"),
         params)
-    # NOTE (discount lockstep — DEFERRED, needs a design decision): a discount sets arrears.gross to the
-    # NEW amount but the CLIENT's order/order_line keeps the ORIGINAL (that's how the by-service view
-    # shows "was R700 → now R650"). So the unified statement currently bills the ORIGINAL for a
-    # discounted-but-owed lesson. Reducing the order in lockstep needs a place to keep the original for
-    # that display (a schema field) — see docs/specs/OUTSTANDING.md.
+    # DISCOUNT lockstep: the client's OWED order drops to the NEW amount too, so they owe the discounted
+    # figure. Keep the ORIGINAL on the order_line (first discount only) so the by-service view still
+    # shows "was → now". Only an OPEN/awaiting order is re-priced (a paid lesson needs a refund, not this).
+    if gross_minor is not None and status != "written_off":
+        session.execute(
+            text("UPDATE billing.order_line SET "
+                 "  original_amount_minor = COALESCE(original_amount_minor, amount_minor), amount_minor = :g "
+                 "WHERE id = (SELECT order_line_id FROM billing.coach_arrears WHERE id = :aid) "
+                 "  AND order_id IN (SELECT id FROM billing.\"order\" WHERE status IN ('open','awaiting_payment'))"),
+            {"g": g, "aid": str(arrears_id)})
+        session.execute(
+            text('UPDATE billing."order" o SET amount_minor = '
+                 "(SELECT COALESCE(SUM(amount_minor),0) FROM billing.order_line WHERE order_id = o.id), updated_at = now() "
+                 "WHERE o.status IN ('open','awaiting_payment') AND o.id IN "
+                 "(SELECT ol.order_id FROM billing.order_line ol JOIN billing.coach_arrears a ON a.order_line_id = ol.id WHERE a.id = :aid)"),
+            {"aid": str(arrears_id)})
     # LOCKSTEP: writing off the coaching ALSO forgives the CLIENT's order for that lesson — one lesson
     # is one debt viewed two ways (mirror void_order, which writes off the arrears when the order is
     # written off). Otherwise the client is still billed for a lesson the coach waived. void_order
