@@ -643,6 +643,73 @@ def _ops_only():
     return p is not None and p.method == "ops"
 
 
+@cron_bp.get("/reconcile")
+def cron_reconcile():
+    """OPS-only DIAGNOSTIC (remove after go-live): reconcile one user by email — every order with
+    gross/paid/refunded/net/owed (from the payment rows) + the unified statement (the source of truth)
+    + their bookings/enrolments, so paid-vs-owed can be checked row-by-row. Reads only, EXCEPT it runs
+    the standard statement self-heal (voids any stuck cancelled-event order), which is the intended fix."""
+    if not _ops_only():
+        return jsonify(error="forbidden"), 403
+    email = (request.args.get("email") or "").strip().lower()
+    if not email:
+        return jsonify(error="email required"), 400
+    from db import session_scope
+    from sqlalchemy import text as _t
+    with session_scope() as s:
+        u = s.execute(_t('SELECT id, email, first_name, surname FROM iam."user" WHERE lower(email)=:e LIMIT 1'),
+                      {"e": email}).mappings().first()
+        if not u:
+            return jsonify(error="user not found", email=email), 404
+        uid = str(u["id"])
+        club = s.execute(_t("SELECT club_id FROM iam.membership WHERE user_id=:u ORDER BY created_at LIMIT 1"),
+                         {"u": uid}).scalar()
+        club = str(club) if club else None
+        rows = s.execute(_t("""
+            SELECT o.id, o.status, o.amount_minor, o.settlement_mode, o.settled_by_order_id, o.created_at,
+                   (SELECT description FROM billing.order_line WHERE order_id=o.id ORDER BY created_at LIMIT 1) AS descr,
+                   COALESCE((SELECT SUM(amount_minor) FROM billing.payment
+                              WHERE order_id=o.id AND direction='charge' AND status='succeeded'),0) AS paid,
+                   COALESCE((SELECT SUM(amount_minor) FROM billing.payment
+                              WHERE order_id=o.id AND direction='refund' AND status IN ('refunded','succeeded')),0) AS refunded
+            FROM billing."order" o WHERE o.user_id=:u ORDER BY o.created_at
+        """), {"u": uid}).mappings().all()
+        orders, owed_sum = [], 0
+        for o in rows:
+            amt = int(o["amount_minor"] or 0); paid = int(o["paid"] or 0); refunded = int(o["refunded"] or 0)
+            owed = amt if (o["status"] == "open" and o["settled_by_order_id"] is None) else 0
+            owed_sum += owed
+            orders.append({"id": str(o["id"]), "status": o["status"], "descr": o["descr"], "gross": amt,
+                           "paid": paid, "refunded": refunded, "net": paid - refunded, "owed": owed,
+                           "mode": o["settlement_mode"],
+                           "settled_by": str(o["settled_by_order_id"]) if o["settled_by_order_id"] else None,
+                           "at": o["created_at"].isoformat() if o["created_at"] else None})
+        stmt = None
+        if club:
+            from billing.statement import statement as _stmt
+            st = _stmt(s, club_id=club, user_id=uid)   # source of truth (+ runs the self-heal)
+            stmt = {"total_owed_minor": st["total_owed_minor"], "count": st["count"],
+                    "items": [{"category": i["category"], "amount_minor": i["amount_minor"],
+                               "order_id": i["order_id"], "description": i["description"]} for i in st["items"]]}
+        bk = s.execute(_t("SELECT id, booking_type, status, starts_at, order_id FROM diary.booking "
+                          "WHERE booked_by_user_id=:u ORDER BY starts_at DESC LIMIT 60"), {"u": uid}).mappings().all()
+        en = s.execute(_t("SELECT e.id, e.status, e.order_id, cs.starts_at, res.name AS class_name "
+                          "FROM diary.enrolment e JOIN diary.class_session cs ON cs.id=e.class_session_id "
+                          "LEFT JOIN diary.resource res ON res.id=cs.resource_id "
+                          "WHERE e.user_id=:u ORDER BY cs.starts_at DESC LIMIT 60"), {"u": uid}).mappings().all()
+    return jsonify(
+        user={"id": uid, "email": u["email"],
+              "name": " ".join(x for x in [u["first_name"], u["surname"]] if x).strip()},
+        club_id=club, statement=stmt, owed_sum_from_orders=owed_sum, orders=orders,
+        bookings=[{"id": str(b["id"]), "type": b["booking_type"], "status": b["status"],
+                   "starts_at": b["starts_at"].isoformat() if b["starts_at"] else None,
+                   "order_id": str(b["order_id"]) if b["order_id"] else None} for b in bk],
+        enrolments=[{"id": str(e["id"]), "status": e["status"], "class": e["class_name"],
+                     "starts_at": e["starts_at"].isoformat() if e["starts_at"] else None,
+                     "order_id": str(e["order_id"]) if e["order_id"] else None} for e in en],
+    ), 200
+
+
 @cron_bp.post("/reminders")
 def cron_reminders():
     if not _ops_only():
