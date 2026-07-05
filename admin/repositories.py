@@ -1074,7 +1074,7 @@ def get_person(session, *, club_id, user_id):
     try:
         rows = session.execute(
             text("""
-                SELECT bk.id AS booking_id, bk.booking_type AS kind, bk.starts_at, bk.ends_at,
+                SELECT bk.id AS booking_id, NULL::uuid AS enrolment_id, bk.booking_type AS kind, bk.starts_at, bk.ends_at,
                        bk.status, (bk.starts_at >= now()) AS is_upcoming, r.name AS resource_name,
                        COALESCE(cp.display_name,
                                 NULLIF(TRIM(CONCAT_WS(' ', cu.first_name, cu.surname)), ''),
@@ -1086,7 +1086,7 @@ def get_person(session, *, club_id, user_id):
                 WHERE bk.club_id = :c AND bk.booked_by_user_id = :u
                   AND bk.status <> 'cancelled'
                 UNION ALL
-                SELECT NULL::uuid AS booking_id, 'class' AS kind, cs.starts_at, cs.ends_at,
+                SELECT NULL::uuid AS booking_id, e.id AS enrolment_id, 'class' AS kind, cs.starts_at, cs.ends_at,
                        e.status, (cs.starts_at >= now()) AS is_upcoming, r.name AS resource_name,
                        COALESCE(cp.display_name,
                                 NULLIF(TRIM(CONCAT_WS(' ', cu.first_name, cu.surname)), ''),

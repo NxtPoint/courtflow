@@ -90,6 +90,7 @@
     if (top === "insights") return renderInsights();
     if (top === "person") return renderPerson(parts[1]);
     if (top === "event") return renderEvent(parts[1]);
+    if (top === "class") return renderClassEvent(parts[1]);
     if (top === "profile") return renderProfile();
     return renderHome();
   }
@@ -411,7 +412,7 @@
     var l = el("div", { class: "cf-list" });
     rows.forEach(function (b) {
       var k = (b.kind || "court").toLowerCase();
-      var tap = !!b.booking_id;
+      var tap = !!(b.booking_id || b.enrolment_id);
       var row = el("div", { class: "cf-item" + (tap ? " cf-item-tap" : "") }, [
         el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(k) >= 0 ? k : "court"), text: k }),
         el("div", { class: "cf-item-main" }, [
@@ -421,7 +422,7 @@
         el("span", { class: "cf-chip " + (b.status === "confirmed" ? "confirmed" : "held"), text: b.status }),
         tap ? el("span", { class: "cf-muted", text: "›" }) : null,
       ].filter(Boolean));
-      if (tap) row.addEventListener("click", function () { go("#/event/" + b.booking_id); });
+      if (tap) row.addEventListener("click", function () { go(b.booking_id ? ("#/event/" + b.booking_id) : ("#/class/" + b.enrolment_id)); });
       l.appendChild(row);
     });
     c.appendChild(l); return c;
@@ -747,6 +748,27 @@
         collect: { done: "Marked collected.", run: function (b) { return window.AdminAPI.arrearsCollected(b.arrears.id); } },
         discount: { manual: true, run: function (b) { var v = window.prompt("New coaching amount (e.g. 250.00):", ((b.arrears.gross_minor || 0) / 100).toFixed(2)); if (v === null) return; var f = parseFloat(v); if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; } window.AdminAPI.arrearsAdjust(b.arrears.id, { gross_minor: Math.round(f * 100) }).then(function () { UI.toast("Discounted.", "info"); renderEvent(id); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } },
         write_off_coaching: { tone: "danger", manual: true, run: function (b) { var r = window.prompt("Write off this coaching charge? Reason (shown to coach & client):", ""); if (r === null) return; window.AdminAPI.arrearsAdjust(b.arrears.id, { status: "written_off", reason: r }).then(function () { UI.toast("Written off.", "info"); renderEvent(id); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } },
+      },
+    });
+  }
+
+  // The admin CLASS record — the SAME widget as a booking event, fed by enrolment_story.
+  function renderClassEvent(id) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.TransactionDetail.mount(host, {
+      role: "admin",
+      scope: { id: id },
+      fields: { showCoach: true, showNotes: true },
+      data: { get: function (i) { return window.TFAuth.apiJSON("/api/admin/classes/" + encodeURIComponent(i)).then(function (r) { return r.booking; }); } },
+      onNavigate: function (t) { if (t.kind === "person") go("#/person/" + t.id); },
+      actions: {
+        cancel: { tone: "danger", back: true, confirm: "Cancel this enrolment and free the seat?", done: "Cancelled.", run: function (b) { return window.API.cancelEnrolment(b.class_session_id, b.player_user_id ? { user_id: b.player_user_id } : {}); } },
+        desk_pay: { manual: true, run: function (b) { deskPayModal(b.charge.order_id, b.charge, function () { renderClassEvent(id); }); } },
+        refund: { manual: true, run: function (b) { refundModal(b.charge.order_id, b.charge, function () { renderClassEvent(id); }); } },
+        void: { confirm: "Void this charge (a mistake)? It drops off the client's statement.", done: "Voided.", run: function (b) { return window.AdminAPI.voidOrder(b.charge.order_id, { write_off: false }); } },
+        write_off: { tone: "danger", confirm: "Write off (forgive) this charge?", done: "Written off.", run: function (b) { return window.AdminAPI.voidOrder(b.charge.order_id, { write_off: true }); } },
+        receipt: { manual: true, run: function (b) { window.open("/receipt.html?order=" + encodeURIComponent(b.charge.order_id), "_blank"); } },
       },
     });
   }

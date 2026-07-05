@@ -641,6 +641,7 @@ def enrolment_story(session, *, club_id, enrolment_id, scope, user_id=None):
         "receipt": state in ("paid", "refunded", "part_refunded"),
         "request_refund": scope == "client" and bool(charge.get("refundable")),
         "refund": scope == "owner" and bool(charge.get("refundable")),
+        "desk_pay": scope == "owner" and state == "owed",
         "void": scope == "owner" and state == "owed",
         "write_off": scope == "owner" and state == "owed",
     }
