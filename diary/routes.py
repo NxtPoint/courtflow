@@ -759,8 +759,7 @@ def cron_yoco_diag():
                 if r["checkout_id"]:
                     try:
                         ck = yc.get_checkout(checkout_id=r["checkout_id"])
-                        pr["yoco_status"] = ck.get("status")
-                        pr["yoco_fields"] = [k for k in ck.keys()][:14]
+                        pr["yoco"] = {k: ck.get(k) for k in ("status", "processingMode", "amount", "currency", "paymentId")}
                     except Exception as e:
                         pr["yoco_error"] = str(e)[:200]
                 out["probes"].append(pr)
