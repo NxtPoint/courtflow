@@ -54,6 +54,19 @@
   }
   function paintAvatar() { var a = document.getElementById("cf-avatar"); if (a) a.textContent = initials(); }
 
+  // The top-right avatar opens ONE account menu (shared UI.menu) — Edit profile / Switch profile /
+  // Sign out. Switch profile returns to Clerk to sign in as a different user; Sign out logs out.
+  function openAccountMenu(anchor) {
+    UI.menu(anchor, [
+      { label: "Edit profile", onClick: function () { go("#/profile"); } },
+      { label: "Switch profile", onClick: switchProfile },
+      "-",
+      { label: "Sign out", tone: "danger", onClick: signOut },
+    ]);
+  }
+  function switchProfile() { window.TFAuth.signOut().then(function () { location.href = "/login"; }); }
+  function signOut() { window.TFAuth.signOut().then(function () { location.reload(); }); }
+
   // ---- shell (appbar + view + bottom nav) ----------------------------------
   var NAV = [
     { k: "home", ic: "⌂", label: "Home" },
@@ -68,7 +81,7 @@
         el("div", { class: "cf-brand", style: "cursor:pointer", title: "Home", onclick: function () { go("#/"); } }, [el("span", { class: "cf-logo", text: "NP" }), el("span", { text: "NextPoint" })]),
         el("span", { class: "cf-spacer" }),
         el("div", { class: "cf-bell-host", id: "cf-bell" }),
-        el("div", { class: "cf-avatar", id: "cf-avatar", text: initials(), onclick: function () { go("#/profile"); } }),
+        el("div", { class: "cf-avatar", id: "cf-avatar", text: initials(), title: "Account", onclick: function (ev) { openAccountMenu(ev.currentTarget); } }),
       ]);
       document.body.insertBefore(bar, document.body.firstChild);
       mountBell(document.getElementById("cf-bell"));
@@ -499,10 +512,7 @@
       ]));
     }); fc.appendChild(dl); }
     wrap.appendChild(fc);
-    // Sign out
-    wrap.appendChild(el("div", { style: "margin-top:14px;text-align:center" }, [
-      el("button", { class: "cf-btn cf-btn-ghost", text: "Sign out", onclick: function () { window.TFAuth.signOut().then(function () { location.reload(); }); } }),
-    ]));
+    // Sign out lives in the top-right account menu now (not a button at the bottom of the profile).
     set(wrap);
   }
 

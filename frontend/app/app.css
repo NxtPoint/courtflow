@@ -143,6 +143,14 @@ p{margin:0 0 10px}
 .cf-avatar{width:38px;height:38px;border-radius:50%;background:var(--green-050);color:var(--green-700);
   display:flex;align-items:center;justify-content:center;font-weight:800;cursor:pointer;
   border:1px solid var(--border);flex:none}
+/* account dropdown (UI.menu) — the avatar's Edit profile / Switch profile / Sign out */
+.cf-menu{position:fixed;z-index:60;min-width:190px;background:var(--surface,#fff);border:1px solid var(--border);
+  border-radius:12px;box-shadow:var(--shadow-md);padding:6px;display:flex;flex-direction:column;gap:2px}
+.cf-menu-item{border:0;background:none;text-align:left;padding:10px 12px;border-radius:8px;
+  font:600 .92rem Inter;color:var(--ink,#12211b);cursor:pointer;transition:background .12s}
+.cf-menu-item:hover{background:var(--green-050)}
+.cf-menu-danger{color:var(--danger)}
+.cf-menu-sep{height:1px;background:var(--border);margin:4px 4px}
 .cf-bottomnav{position:fixed;left:0;right:0;bottom:0;z-index:30;background:#fff;
   border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom,0)}
 .cf-bottomnav-in{max-width:560px;margin:0 auto;display:flex}

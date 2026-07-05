@@ -189,6 +189,40 @@
       .catch(function (e) { toast(errMsg(e), "error"); });
   }
 
+  // ---- anchored dropdown menu (the avatar "account" menu — ONE implementation, all apps) ----
+  // items: array of {label, onClick, tone?} | "-" (a separator). Positions under/right of anchor;
+  // closes on outside click, Escape, scroll or resize. Returns its close() fn.
+  var _openMenu = null;
+  function menu(anchorEl, items) {
+    if (_openMenu) _openMenu();
+    var m = el("div", { class: "cf-menu", role: "menu" });
+    (items || []).forEach(function (it) {
+      if (it === "-" || (it && it.divider)) { m.appendChild(el("div", { class: "cf-menu-sep" })); return; }
+      m.appendChild(el("button", { class: "cf-menu-item" + (it.tone ? " cf-menu-" + it.tone : ""), type: "button",
+        text: it.label, onclick: function (ev) { ev.stopPropagation(); close(); if (it.onClick) it.onClick(); } }));
+    });
+    document.body.appendChild(m);
+    var r = anchorEl.getBoundingClientRect();
+    m.style.top = Math.round(r.bottom + 6) + "px";
+    m.style.right = Math.round(Math.max(8, window.innerWidth - r.right)) + "px";
+    function close() {
+      if (m.parentNode) m.parentNode.removeChild(m);
+      document.removeEventListener("mousedown", onDoc, true);
+      document.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("resize", close); window.removeEventListener("scroll", close, true);
+      if (_openMenu === close) _openMenu = null;
+    }
+    function onKey(e) { if (e.key === "Escape") close(); }
+    function onDoc(e) { if (!m.contains(e.target) && !anchorEl.contains(e.target)) close(); }
+    setTimeout(function () {
+      document.addEventListener("mousedown", onDoc, true);
+      document.addEventListener("keydown", onKey, true);
+      window.addEventListener("resize", close); window.addEventListener("scroll", close, true);
+    }, 0);
+    _openMenu = close;
+    return close;
+  }
+
   window.UI = {
     CLUB_TZ: CLUB_TZ,
     fmtTime: fmtTime, fmtDate: fmtDate, fmtDateTime: fmtDateTime, fmtRange: fmtRange,
@@ -197,5 +231,6 @@
     el: el, esc: esc, clear: clear, toast: toast, errMsg: errMsg, groupByDay: groupByDay,
     lifecycleBar: lifecycleBar, subtabs: subtabs, lifeActions: lifeActions, statusChip: statusChip,
     card: card, backBar: backBar, kv: kv, modal: modal, toLocal: toLocal, addToCalendar: addToCalendar,
+    menu: menu,
   };
 })();

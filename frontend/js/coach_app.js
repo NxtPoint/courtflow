@@ -35,6 +35,16 @@
   function initials() { var n = coachName().trim().split(/\s+/); return ((n[0] || "C")[0] + (n.length > 1 ? n[n.length - 1][0] : "")).toUpperCase(); }
   function paintAvatar() { var a = document.getElementById("cf-avatar"); if (a) a.textContent = initials(); }
 
+  // ONE shared account menu (UI.menu) on the top-right avatar — Edit profile / Switch profile / Sign out.
+  function openAccountMenu(anchor) {
+    UI.menu(anchor, [
+      { label: "Edit profile", onClick: function () { go("#/profile"); } },
+      { label: "Switch profile", onClick: function () { window.TFAuth.signOut().then(function () { location.href = "/login"; }); } },
+      "-",
+      { label: "Sign out", tone: "danger", onClick: function () { window.TFAuth.signOut().then(function () { location.reload(); }); } },
+    ]);
+  }
+
   // ---- shell ---------------------------------------------------------------
   var NAV = [
     { k: "home", ic: "⌂", label: "Home" },
@@ -47,10 +57,10 @@
     document.body.classList.add("cf-app");
     if (!document.getElementById("cf-appbar")) {
       document.body.insertBefore(el("div", { class: "cf-appbar", id: "cf-appbar" }, [
-        el("div", { class: "cf-brand" }, [el("span", { class: "cf-logo", text: "NP" }), el("span", { text: "Coach" })]),
+        el("div", { class: "cf-brand", style: "cursor:pointer", title: "Home", onclick: function () { go("#/"); } }, [el("span", { class: "cf-logo", text: "NP" }), el("span", { text: "Coach" })]),
         el("span", { class: "cf-spacer" }),
         el("div", { class: "cf-bell-host", id: "cf-bell" }),
-        el("div", { class: "cf-avatar", id: "cf-avatar", text: initials(), onclick: function () { go("#/profile"); } }),
+        el("div", { class: "cf-avatar", id: "cf-avatar", text: initials(), title: "Account", onclick: function (ev) { openAccountMenu(ev.currentTarget); } }),
       ]), document.body.firstChild);
       mountBell(document.getElementById("cf-bell"));
     }
@@ -666,8 +676,7 @@
     wrap.appendChild(backBar("Setup", "#/setup"));
     wrap.appendChild(el("h1", { style: "margin:0 0 12px", text: "Edit profile" }));
     var host = el("div", {}); wrap.appendChild(host);
-    // sign out
-    wrap.appendChild(el("div", { style: "margin-top:14px;text-align:center" }, [el("button", { class: "cf-btn cf-btn-ghost", text: "Sign out", onclick: function () { window.TFAuth.signOut().then(function () { location.reload(); }); } })]));
+    // Sign out lives in the top-right account menu now (not a button at the bottom of the profile).
     set(wrap);
     if (window.CoachUI) window.CoachUI.profile(host, data, { saveLabel: "Save & close", onSaved: function () { UI.toast("Saved.", "info"); reloadProfile(); go("#/setup"); } });
     else host.appendChild(el("div", { class: "cf-empty", text: "Profile editor unavailable." }));
