@@ -196,7 +196,10 @@ def list_sessions(session, *, club_id, date_from=None, date_to=None, resource_id
     if date_from:
         where.append("cs.starts_at >= :df"); params["df"] = date_from
     if date_to:
-        where.append("cs.starts_at <= :dt"); params["dt"] = date_to
+        # date_to is usually a bare day (YYYY-MM-DD); a naked "<=" coerces it to 00:00 and drops every
+        # intraday session (a single-day query then matches ONLY 00:00 sessions → classes never show).
+        # Inclusive day: everything before the START of the day AFTER date_to.
+        where.append("cs.starts_at < CAST(:dt AS date) + INTERVAL '1 day'"); params["dt"] = date_to
     if resource_id:
         where.append("cs.resource_id = :rid"); params["rid"] = resource_id
     rows = session.execute(
@@ -545,7 +548,8 @@ def list_type_sessions(session, *, club_id, resource_id, date_from=None, date_to
     if date_from:
         where.append("cs.starts_at >= CAST(:df AS timestamptz)"); params["df"] = date_from
     if date_to:
-        where.append("cs.starts_at <= CAST(:dt AS timestamptz)"); params["dt"] = date_to
+        # inclusive day (see list_sessions): a bare-date date_to must not truncate to midnight.
+        where.append("cs.starts_at < CAST(:dt AS date) + INTERVAL '1 day'"); params["dt"] = date_to
     rows = session.execute(
         text("""
             SELECT cs.id AS session_id, cs.starts_at, cs.ends_at, cs.capacity, cs.status,

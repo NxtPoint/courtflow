@@ -141,11 +141,20 @@ def _booking_dict(session, booking_id):
     return d
 
 
-def _parse_dt(value):
+def _parse_dt(value, end_of_day=False):
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    s = str(value)
+    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    # A BARE date (YYYY-MM-DD) used as an inclusive upper bound must cover the whole day — else a
+    # same-day query (date_from==date_to) collapses to a zero-width midnight window and returns
+    # nothing (this silently emptied the coach "Today" cockpit). A caller that already sends an
+    # explicit time (…T23:59:59) is left untouched.
+    if end_of_day and "T" not in s and " " not in s and len(s) <= 10:
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return dt
 
 
 def _settlement_allowed(mode, policy, role):
@@ -1070,7 +1079,7 @@ def list_bookings(session, *, club_id, role, user_id, date_from=None, date_to=No
     if date_from:
         where.append("b.starts_at >= :df"); params["df"] = _parse_dt(date_from)
     if date_to:
-        where.append("b.starts_at <= :dt"); params["dt"] = _parse_dt(date_to)
+        where.append("b.starts_at <= :dt"); params["dt"] = _parse_dt(date_to, end_of_day=True)
     if status:
         where.append("b.status = :st"); params["st"] = status
     if resource_id:
@@ -1236,7 +1245,9 @@ def booking_story(session, *, club_id, user_id, booking_id):
         "receipt": charge["status"] in ("paid", "refunded"),
         "request_refund": charge["refundable"],
         "accept": status == "proposed",
-        "decline": status in ("proposed", "requested"),
+        # A client can only DECLINE a coach's proposed time; on a `requested` lesson the awaited party
+        # is the coach, so the client's action is WITHDRAW (below) — showing Decline 403'd.
+        "decline": status == "proposed",
         "withdraw": status == "requested",
     }
     return {
