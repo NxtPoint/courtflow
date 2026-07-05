@@ -95,6 +95,12 @@ def execute_order_refund(session, *, order_id, amount_minor=None):
                 status="refunded", direction="refund",
                 club_id=(str(o["club_id"]) if o else None), raw={"source": "sync_refund"}),
             session=session)
+        # A direct refund FULFILS any pending client refund-request for this order — resolve it so it
+        # doesn't linger under Approvals (approving again would 400 "already refunded").
+        session.execute(
+            text("UPDATE billing.refund_request SET status = 'refunded', updated_at = now() "
+                 "WHERE order_id = :o AND status = 'pending'"),
+            {"o": str(order_id)})
     except Exception:
         log.warning("refund taken at Yoco but the sync ledger write failed order=%s "
                     "(a refund webhook, if any, will reconcile)", order_id, exc_info=False)

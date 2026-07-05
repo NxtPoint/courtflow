@@ -337,6 +337,10 @@ def list_refund_requests_admin(session, *, club_id, status=None) -> List[Dict[st
     if status:
         where += " AND rr.status = :st"
         params["st"] = status
+        # A PENDING request on an already-resolved order (refunded/voided/written-off) is moot — the
+        # money is done. Hide it so it can't be "approved" into a 400 "already refunded".
+        if status == "pending":
+            where += " AND o.status NOT IN ('refunded','void','written_off')"
     return _list_requests_enriched(session, where=where, params=params)
 
 
@@ -348,4 +352,6 @@ def list_refund_requests_coach(session, *, club_id, coach_user_id, status=None) 
     if status:
         where += " AND rr.status = :st"
         params["st"] = status
+        if status == "pending":   # hide moot requests on already-resolved orders (see admin queue)
+            where += " AND o.status NOT IN ('refunded','void','written_off')"
     return _list_requests_enriched(session, where=where, params=params)
