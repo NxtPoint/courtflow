@@ -297,6 +297,16 @@ request→accept→settle chain green on a scratch DB.
 - **Fire a cron job by hand:** `python -m crons.trigger <reminders|capacity-sweep|monthly-invoice|membership-refill>`
   (needs `CRON_API_BASE` + `OPS_KEY`; the trigger only POSTs to `/api/cron/*` — see cron note below).
 - **Rebuild the blog/SEO output:** `python build_blog.py`
+- **Wix→Render go-live cutover (SUPERVISED — runbook `migration/CUTOVER_RUNBOOK.md` + `docs/specs/GO-LIVE-CUTOVER.md`/`GO-LIVE-STEPS.md`, progress in `CUTOVER-PROGRESS.md`):** the data take-on scripts
+  all **default to `--dry-run` (print counts, then ROLLBACK)** and are **idempotent + re-runnable**; only an explicit
+  `--commit`/typed `YES` writes, and every row is `club_id`-scoped. Low-level: `python -m scripts.import_wix [--dir <folder>] [--commit]`
+  (dedup humans by `lower(email)` so a client's fresh Clerk login links onto their imported record).
+  Friendly wrappers Tomo runs straight from PowerShell (each: load target `DATABASE_URL` → dry-run → type YES → commit → verify):
+  `python scripts/import_members.py` (Wix clients → **active members, NO 7-day trial**),
+  `python scripts/import_subscriptions.py` (paid memberships, **matched to club plans BY LABEL** — verify the map),
+  `python scripts/import_lessons.py` (lesson packs → **coach-specific** minute-based token wallets).
+  The **301 redirect engine** (`migration/redirects.py` + `redirects.csv`) is scaffolding, **NOT wired into `web_app` yet** —
+  a marketing-host-only Flask blueprint Tomo activates at supervised cutover. **Never let an agent change DNS or flip the SEO cutover.**
 
 ## Verifying (no live infra needed)
 - **Compile:** `python -m py_compile` over the tree (CI-style gate; there is no pytest suite — match 1050).
