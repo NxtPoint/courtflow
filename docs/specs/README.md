@@ -34,6 +34,14 @@ operating guide; **this folder is the detail.**
 > differences expressed as configuration, ~1,700 lines lighter. And **transactional SES email is now LIVE
 > end-to-end** (interim via the Ten-Fifty5 AWS account; the long-term CourtFlow setup is
 > [SES-SETUP.md](SES-SETUP.md)). Gated green: **booking 43 / billing 142 / statement 35**.
+> **2026-07-05 — CUTOVER DAY:** both web services were **recreated in Render's Frankfurt region**, now
+> **co-located with the Postgres DB** (they had mistakenly been in Oregon — every query crossed the Atlantic;
+> plan bumped Free → **Starter**, `DATABASE_URL` on the internal same-region URL). The admin **Diary Day view
+> is now the resource-timeline grid** (courts + coaches as columns, drilling to the shared event story;
+> Week/Month stay agenda; drag-timeline editing still at `/admin-classic`), the **owner can create a lesson
+> for a chosen coach** (`POST /api/services`), and a batch of cutover-day E2E fixes landed (single-club
+> principal resolution, coach-invite status flip, calendar full-day bounds, billing-category drill, parallel
+> startup + preconnect). Payments confirmed working end-to-end on the Frankfurt stack. Gates unchanged.
 > Remaining: **OUTSTANDING.md**.
 
 ## Read in this order

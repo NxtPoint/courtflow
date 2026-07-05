@@ -16,7 +16,12 @@ Two Render web services + one Postgres:
   their **Coach** console, owners on **Admin**. The role apps are the three drill-through SPAs described
   in the next section; the classic tab consoles have been retired (the owner's is preserved at
   `/admin-classic` as a fallback).
-- **Postgres** (separate Render DB). **One DB, five schemas** (below).
+- **Postgres** (`courtflow-db`, a separate Render DB). **One DB, five schemas** (below).
+
+All three run in Render's **Frankfurt** region — both web services are **co-located with the DB** (the API
+uses the DB's internal same-region URL). *(Until 2026-07-05 the web services were mistakenly in Oregon while
+the DB was in Frankfurt, so every query crossed the Atlantic; Render's region is immutable per service, so
+the fix was to delete + recreate both from the blueprint in-region.)*
 
 The browser holds a **Clerk** session; the SPA attaches the JWT to every `/api/*` call; the API verifies
 it (JWKS) and resolves a club-scoped `Principal`.
@@ -34,9 +39,10 @@ Three mobile-first, drill-through single-page apps, one per role, on the **one s
   `/admin.html` and `/admin-app`). Responsive: bottom-nav on mobile, a **left side-rail on desktop**
   (`.cf-admin`). Home (command-center, `GET /api/admin/home`) · People (roster → unified person 360,
   `GET /api/admin/people/<id>`) · Money (Setup-style sections incl. **Sales by day**) · Diary (the shared
-  Calendar widget + Classes) · Setup · Insights (court-utilisation heatmap + Business Overview). The
-  **classic tab console** is preserved at **`/admin-classic`** (its full drag-timeline is linked from the
-  new Diary until it ports). `admin.html`/`admin.js` remain on disk; the dead classic **coach** console
+  Calendar widget + Classes — **Day view = resource-timeline grid**, Week/Month agenda, blocks drill to the
+  event story) · Setup · Insights (court-utilisation heatmap + Business Overview). The **classic tab console**
+  is preserved at **`/admin-classic`** (its full drag-timeline **editing** — walk-in/block-time/desk-pay —
+  is not yet ported). `admin.html`/`admin.js` remain on disk; the dead classic **coach** console
   (`coach.js`/`coach.html`) was deleted.
 
 **GOLDEN RULE — one widget per capability** (the enshrined frontend architecture; full detail in
@@ -169,10 +175,10 @@ event. No new endpoints, no schema change. **Running now** via the **interim** T
    token back / records a refund as configured.
 
 ## Deploy
-Render auto-deploys `master` (push → both services rebuild). Go-live flags are committed in
-`render.yaml` so a blueprint sync can't wipe them; secrets are `sync:false`. Free plan = cold starts +
-no Shell (hence `SEED_NEXTPOINT=1` boot seed) + no paid crons (hence lazy expiry + on-read accrual +
-the reconcile sweep for missed webhooks).
+Render auto-deploys `master` (push → both services rebuild). Both web services + the DB are pinned to the
+**Frankfurt** region and the **Starter** plan in `render.yaml`. Go-live flags are committed in `render.yaml`
+so a blueprint sync can't wipe them (`SEED_NEXTPOINT=1` boot seed, `SES_REGION=eu-north-1`); secrets are
+`sync:false`. No paid crons (hence lazy expiry + on-read accrual + the reconcile sweep for missed webhooks).
 
 ## Key conventions
 - **Nothing hardcoded** — prices/durations/plans/commission/bundles are owner-configured data

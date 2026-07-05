@@ -99,12 +99,25 @@ client uses a flat row (`grouped:false`).
 
 ## 3. The calendar — `Widgets.Calendar` (owner ask #2)
 
-ONE Day/Week/Month agenda calendar; only the filters differ (admin: court + coach; coach/client:
-self-scoped by their adapter). The **admin Diary** runs on it (data = `API.master`), and its Classes
-subtab reuses `ClassUI`. The **coach Schedule keeps its richer hour time-grid** (plus time-off + book-a-
-client) and the **client keeps its Home agenda** — these are legitimately *different views*, not
-duplicate renders, and were deliberately kept (see §7). Every calendar still drills to the ONE event
-story via `onNavigate`.
+ONE Day/Week/Month calendar; only the filters + layout mode differ, all config. The **admin Diary**
+runs on it (data = `API.master`), and its Classes subtab reuses `ClassUI`.
+
+**As of 2026-07-05 the admin Day view is the resource-timeline GRID** (the classic drag-timeline layout
+brought into the new console, owner-preferred) — courts + coaches as columns, 06:00–22:00 rows, bookings
+as absolutely-positioned `cf-ev` blocks. It's a **config-driven view mode**, NOT a fork: `cfg.grid:true`
+turns the Day view into the grid; without it the Day view is the agenda list (still used as a fallback and
+by any self-scoped adapter). **Week/Month stay agenda** (a 7-day × all-resources grid is unreadable).
+Grid columns come from `cfg.filterBar` (courts by `resource_id`, coaches by `user_id`); the court/coach
+dropdowns filter the columns; **coach columns with no lessons that day are hidden** (courts always shown);
+classes get their own column. Every block still drills to the ONE event story via `cfg.onNavigate`
+(→ `Widgets.TransactionDetail`) — never the old minimal popup. **Walk-in / block-time / desk-pay editing
+were deliberately NOT ported** — they remain in the classic diary (`/admin-classic`, via the widget's
+`classicLink`); folding them into the grid is a possible post-launch follow-up.
+
+The **coach Schedule keeps its richer hour time-grid** (plus time-off + book-a-client) and the **client
+keeps its Home agenda** — legitimately *different views*, not duplicate renders (see §7). The **critical
+diary gotcha:** the widget must send FULL-DAY range bounds (`T00:00:00`→`T23:59:59`); a bare `YYYY-MM-DD`
+casts to midnight server-side and collapses a same-day query to a zero-width window that shows nothing.
 
 ## 4. Setup — `Widgets.Setup` + `Widgets.ServiceList` (owner ask #3)
 

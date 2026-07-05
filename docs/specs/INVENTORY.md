@@ -2,19 +2,23 @@
 
 Exhaustive as-built inventory (generated from the live code, 2026-06-21; refreshed 2026-06-26). Paths relative to repo root.
 
-## 1. Services (Render, Frankfurt, Free plan)
+## 1. Services (Render, **Frankfurt**, **Starter** plan)
 - **`courtflow-api`** (`wsgi:app`) — the Flask API, has the DB. `https://courtflow-api.onrender.com`.
   Boots all schemas (`python -m db`), `SEED_NEXTPOINT=1` re-seeds club #1 on boot. `AUTH_ENABLED=1`.
 - **`courtflow-web`** (`web_wsgi:app`) — DB-less; host-switched marketing site + portal SPA shells +
   `/login`. `https://courtflow-web.onrender.com` (an entry in `MARKETING_HOSTS`, so `/` = public site,
   app lives at `/portal`, `/book`, `/admin`, …).
-- **Postgres** — a separate Render DB (Frankfurt). **Clerk DEV app** for auth (`pk_test_…`).
-- **Crons** — declared in `render.yaml` but **commented out** (Free plan, no paid crons). Their HTTP
+- **Postgres** — `courtflow-db`, a separate Render DB (Frankfurt). **Clerk DEV app** for auth (`pk_test_…`).
+- **Region — all three in Frankfurt, co-located** (`region: frankfurt` + `plan: starter` pinned on both web
+  services in `render.yaml`; the api uses the DB's internal same-region URL). Until 2026-07-05 the web
+  services ran in Oregon while the DB was in Frankfurt (cross-Atlantic ~150ms/query); recreated in-region.
+- **Crons** — declared in `render.yaml` but **commented out** (no paid crons). Their HTTP
   handlers exist (see §3 crons) and can be triggered manually; hold-release + waitlist run lazily instead.
 - **Keep-warm** — `.github/workflows/keep-warm.yml` (GitHub Action) pings both services every 10 min
   07:00–21:59 SAST so the Free tier doesn't cold-start mid-use; sleeps overnight. Free. (Frontend also has
   a 70s `apiFetch` timeout so a cold/hung call errors instead of spinning forever — `frontend/js/auth_client.js`.)
-  At go-live, bump services to **Starter** and remove the keep-warm.
+  Now that both services are on **Starter** (2026-07-05) they no longer sleep, so the keep-warm is redundant
+  and can be removed.
 
 ## 2. Code lanes (Python)
 | Lane | Owns | Purpose |
@@ -30,6 +34,7 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `marketing_crm/` | tracking (`emit`), notifications (+`_club_identity`), email/ses, klaviyo, consent, cockpit | Event feed + **notifications** + CRM + **club-branded transactional email** |
 | `admin/` | routes, repositories, schema | `/api/admin/*` owner self-service + config |
 | `coach/` | routes, repositories, schema | `/api/coach/*` coach self-service + cockpit |
+| `services/` | routes, repositories | `/api/services/*` — the ONE unified service-edit surface for owner + coach (owner can create a lesson per coach via `POST /api/services`); delegates to `coach/`/`billing/` repos |
 | `me/` | routes | `/api/me/*` client self-service (profile, dependents, financials, refund-requests, notifications) |
 | `analytics/` | repositories, routes | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`); `/api/analytics/*`; embedded as the admin "Insights" tab |
 | `insights/` | repositories, routes | **Phase-2 P1 read-layer** (guarded aggregations, no new tables): court-utilisation heatmap + sales-by-day; `/api/insights/*`; feeds the admin Insights + Money "Sales by day" |
@@ -101,6 +106,13 @@ for the month before write-off/discount/collection, distinct from collected `gro
 `coach/repositories.py::_coach_billed`) · `POST photo-presign` ·
 `GET classes*` (shared) · `POST coach-statement/...` (shared admin route, coach-gated for own).
 
+**Services `/api/services/*`** (`services/routes.py` — the ONE surface a service is edited through by BOTH
+owner + coach; the route enforces who may change what): read via `services.repositories.get_service` ·
+**`POST /api/services`** — create a lesson: a coach creates one for themselves; the **OWNER creates one FOR
+A CHOSEN COACH** (body `coach_user_id`, validated by `admin/repositories.is_club_coach`) → delegates to
+`coach.repositories.create_service`. Frontend: `Widgets.ServiceList` `onCreate(kind)` → admin Setup → Services
+"+ New" coach-picker modal (`AdminAPI.createService`).
+
 **Client `/api/me/*`:** `GET/PATCH profile` · `GET/POST dependents` (+`PATCH/DELETE /<id>`) ·
 `GET plan` (current plan + `is_trial`/`trial_days_left` + `membership_window`) ·
 **`POST membership/cancel`** (self-cancel a paid membership) · `GET financials` ·
@@ -168,7 +180,8 @@ its full **event story** (GOLDEN RULE: exactly ONE booking capability per app, r
 
 **GOLDEN RULE — one widget per capability** ([FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)):
 the shared **`frontend/js/widgets/`** layer — **`Widgets.TransactionDetail`** (the one event story across
-all three apps), **`Widgets.Calendar`** (the admin diary), **`Widgets.Setup`** + **`Widgets.ServiceList`**
+all three apps), **`Widgets.Calendar`** (the admin diary — Day view = resource-timeline grid, Week/Month
+agenda; see below), **`Widgets.Setup`** + **`Widgets.ServiceList`**
 (owner + coach setup) — plus promoted `window.UI` helpers (`card/backBar/kv/modal/statusChip/…`) and
 `crm_ui.js` (`CRMUI.*`). Role differences = configuration (a data adapter + an actions capability-map +
 `fields`), never forked render code.
@@ -189,7 +202,11 @@ all three apps), **`Widgets.Calendar`** (the admin diary), **`Widgets.Setup`** +
   tile). **Home** = command-center (4 focus cards, `GET /api/admin/home`) · **People** = roster → the
   **unified person 360** (`#/person/:id`, `GET /api/admin/people/<id>`) · **Money** = Setup-style section
   menu (Sales by day · Revenue by service · Coach settlement · Approvals · Online payments · Activity) ·
-  **Diary** = the shared **`Widgets.Calendar`** (Day/Week/Month + court/coach filters) + Classes · **Setup**
+  **Diary** = the shared **`Widgets.Calendar`** (court/coach filters) + Classes — the **Day view is the
+  resource-timeline GRID** (courts + coaches as columns, 06:00–22:00 rows, `cf-ev` blocks; config-driven via
+  `cfg.grid`, empty coach columns hidden, courts always shown), **Week/Month stay agenda**; any block drills
+  to the shared `Widgets.TransactionDetail` event story. Walk-in / block-time / desk-pay editing were NOT
+  ported — they stay in the classic diary at `/admin-classic` · **Setup**
   = the shared **`Widgets.Setup`** (Club profile+payments · Courts · Services · Memberships · Packs ·
   Coaches) · **Insights** = court-utilisation heatmap + the Business Overview. The **classic tab console is
   preserved at `/admin-classic`** (its full drag-timeline is linked from the new Diary).
@@ -249,9 +266,12 @@ Live now: `DATABASE_URL`, `OPS_KEY`, Clerk `AUTH_*`, Yoco (`PAYMENTS_ENABLED=1`,
 `ses:SendRawEmail`, so confirmations attach nothing yet). Dark until keyed: `KLAVIYO_API_KEY`
 (CRM/marketing — self-gates), `S3_BUCKET`+AWS keys (photo uploads), Google-tag/GSC vars
 (`GA4_MEASUREMENT_ID`/`GOOGLE_ADS_*`/`GSC_*` — set at go-live cutover).
-**Note:** the old `*_ENABLED` toggles (`YOCO_/TRACKING_/CONSENT_/CRM_SYNC_`) were dead config (never read)
-— removed; those features are always-on or self-gate on their keys. `render.yaml` is documentation only —
-env is entered in the Render dashboard.
+**Note:** the old `*_ENABLED` toggles (`YOCO_/TRACKING_/CONSENT_/CRM_SYNC_`) plus the dead
+`BRIDGE_TENFIFTY5_*` trio (`_ADMIN_EMAIL`/`_CLIENT_KEY`/`_URL`) were dead config (never read) — dropped from
+the live services on the Frankfurt recreate and **must not be re-added**; those features are always-on or
+self-gate on their keys. `render.yaml` now also pins `region: frankfurt` + `plan: starter` on both web
+services and declares `SES_REGION=eu-north-1` + `SEED_NEXTPOINT=1`; secrets are still entered in the Render
+dashboard (`sync:false`).
 
 ## 7. Verify gates (no live infra)
 - Compile: `python -m py_compile $(git ls-files '*.py')`.

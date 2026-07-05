@@ -8,9 +8,11 @@ Since the redesign, the whole front end was further standardised onto ONE widget
 see **[FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)** (the enshrined golden rule); the
 admin event story, calendar and Setup below are now the shared `Widgets.TransactionDetail` / `Calendar`
 / `Setup`. **As-built delta vs the plan below:** Money is a Setup-style section menu (Sales by day ·
-Revenue · Coach settlement · Approvals · Payments · Activity); Diary uses the shared Calendar widget
-(Day/Week/Month + court/coach filters) with the full drag-timeline still at `/admin-classic`; Insights
-embeds the court-utilisation heatmap + the Business Overview.
+Revenue · Coach settlement · Approvals · Payments · Activity); Diary uses the shared Calendar widget —
+its **Day view is now the resource-timeline grid** (courts + coaches as columns, 06:00–22:00 rows;
+config-driven via `cfg.grid`, empty coach columns hidden), **Week/Month stay agenda**, and any block drills
+into the shared event story; the full drag-timeline **editing** (walk-in/block-time/desk-pay) still lives at
+`/admin-classic`. Insights embeds the court-utilisation heatmap + the Business Overview.
 
 Owner brief: "take the learnings from client and coach and apply to admin — admin is the hardest,
 needs a lot of thought." Owner answers to framing questions:

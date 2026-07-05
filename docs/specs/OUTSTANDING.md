@@ -9,7 +9,8 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > command-center + `GET /api/admin/home` · People → unified **person 360** (`GET /api/admin/people/<id>`)
 > · the ONE admin **event story** (`GET /api/admin/bookings/<id>`, god-view) · Money as Setup-style
 > sections (Sales by day · Revenue · Coach settlement · Approvals · Payments · Activity) · Diary on the
-> shared **Calendar widget** (Day/Week/Month + court/coach filters; drag-timeline stays at `/admin-classic`)
+> shared **Calendar widget** (Day view = resource-timeline grid, Week/Month agenda; the drag-timeline
+> **editing** — walk-in/block-time/desk-pay — stays at `/admin-classic`; see §B "Diary timeline port")
 > · Setup (`Widgets.Setup`) · Insights (court-utilisation heatmap + Business Overview). The whole front
 > end was then **standardised onto ONE widget per capability** — the enshrined golden rule in
 > **[FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)**. Design record: **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)**.
@@ -98,6 +99,14 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 - [ ] **Reminders** — booking reminders (the `/api/cron/reminders` handler exists but cron services are
       off). Needs a scheduler: re-enable a Render cron, or an external pinger, or a lazy "due reminders"
       sweep. Same blocker for scheduled rent accrual + the reconcile/membership-refill sweeps.
+- [~] **Diary timeline port (PARTIALLY DONE)** — the resource-timeline **grid VIEW** now ships in the new
+      admin Diary **Day view** (courts + coaches as columns, config-driven via `cfg.grid`; blocks drill to
+      the shared event story). Still to port: the drag-timeline **editing actions** — click-to-create /
+      **walk-in** / **block time** / **desk-pay** — which remain only in the classic diary at `/admin-classic`.
+- [ ] **Orphaned `awaiting_payment` order cleanup (safeguard)** — when an online booking's `held` slot is
+      released by lazy-expiry, its linked `awaiting_payment` order is **not** auto-voided, leaving an
+      orphaned owed order. Candidate: void the linked unpaid order on hold-expiry (mirror `cancel_booking`),
+      or a periodic sweep.
 - [ ] **Reschedule UX polish** — `PATCH /api/diary/bookings/<id>` exists; ensure member/admin
       reschedule flows are smooth + policy-guarded.
 - [ ] **My Bookings** — confirm the client SPA (`client.js`) cancel path surfaces token credit-back /

@@ -23,8 +23,29 @@ Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ h
   - **`.ics` email attachment** → set `EMAIL_ICS_ENABLED=1` once the SES IAM key gains `ses:SendRawEmail`
     (currently `0` — add-to-calendar still works in-app)
 - 🗑️ **Removed (dead flags, never read by code):** `YOCO_ENABLED`, `TRACKING_ENABLED`,
-  `CONSENT_ENABLED`, `CRM_SYNC_ENABLED` — tracking/consent are always-on; CRM self-gates on the
-  Klaviyo key; Yoco is gated by `PAYMENTS_ENABLED`. Don't set these.
+  `CONSENT_ENABLED`, `CRM_SYNC_ENABLED`, plus the `BRIDGE_TENFIFTY5_*` trio (`_ADMIN_EMAIL` /
+  `_CLIENT_KEY` / `_URL`, left over from the deprecated Ten-Fifty5 bridge) — tracking/consent are
+  always-on; CRM self-gates on the Klaviyo key; Yoco is gated by `PAYMENTS_ENABLED`. All were dropped
+  from the live services on the 2026-07-05 Frankfurt recreate; **don't re-add them.**
+- 🌍 **Region:** both web services (`courtflow-api`, `courtflow-web`) and the Postgres DB (`courtflow-db`)
+  now run in Render's **Frankfurt** region, co-located (fixed 2026-07-05 — the web services had been in
+  Oregon), on the **Starter** plan; `render.yaml` pins `region`/`plan` + declares `SES_REGION=eu-north-1`
+  and `SEED_NEXTPOINT=1`.
+
+---
+
+## 🚀 GO-LIVE env changes (make these AT the DNS cutover — see GO-LIVE-STEPS.md)
+Everything above is already set on the **dev/onrender** config. At cutover, change **exactly these**:
+- **`courtflow-web`**
+  - `CLERK_PUBLISHABLE_KEY` → the **prod** `pk_live_…` (prod Clerk instance for `nextpointtennis.com`)
+  - `GA4_MEASUREMENT_ID` → `G-…` · `GOOGLE_ADS_ID` → `AW-17077631191` (already done tonight; live on onrender)
+- **`courtflow-api`**
+  - `AUTH_JWKS_URL` → `https://clerk.nextpointtennis.com/.well-known/jwks.json`
+  - `AUTH_ISSUER` → `https://clerk.nextpointtennis.com`
+  - `APP_BASE_URL` → `https://nextpointtennis.com`
+- ⚠️ The prod Clerk token **must emit the `email` claim** (it links imported members) — configured 2026-07-05.
+- **`SES_*` stays as-is** (interim via Ten-Fifty5). Post-AWS-unlock: verify `nextpointtennis.com` in SES for
+  DKIM-aligned deliverability, then repoint `SES_SENDER` → `no-reply@nextpointtennis.com`.
 
 ---
 
@@ -33,7 +54,7 @@ Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ h
 ### Critical — the app needs these (already set 🟢)
 | Var | Status | What it does | Format / example |
 |---|---|---|---|
-| `DATABASE_URL` | 🟢 | Postgres connection (the whole app) | `postgresql://user:pass@host/db` |
+| `DATABASE_URL` | 🟢 | Postgres connection (the whole app) — now the DB's **internal** Frankfurt URL (same-region private network, co-located with the api) | `postgresql://user:pass@host/db` |
 | `AUTH_ENABLED` | 🟢 | Turns on Clerk JWT verification | `1` |
 | `AUTH_JWKS_URL` | 🟢 | Clerk JWKS for verifying tokens | `https://settling-alien-23.clerk.accounts.dev/.well-known/jwks.json` |
 | `AUTH_ISSUER` | 🟢 | Expected token issuer | `https://settling-alien-23.clerk.accounts.dev` |
@@ -56,7 +77,7 @@ Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ h
 | `SES_SENDER` | 🟢 | Verified From address (per-club From-name + Reply-To layered on) | `noreply@ten-fifty5.com` |
 | `SES_AWS_ACCESS_KEY_ID` | 🟢 | **Dedicated** SES credential (separate from the S3 `AWS_*` pair) | access key id |
 | `SES_AWS_SECRET_ACCESS_KEY` | 🟢 | Dedicated SES secret | secret key |
-| `SES_REGION` | 🟢 | SES region (falls back to `AWS_REGION`, then `eu-west-1`) | `eu-north-1` |
+| `SES_REGION` | 🟢 | SES region — **pinned `eu-north-1` in `render.yaml`** (was blank; blank fell through to `AWS_REGION=af-south-1` and would break email). Must match the verified SES identity | `eu-north-1` |
 | `EMAIL_ICS_ENABLED` | 🟡 | Attach the booking `.ics` to emails — **`0` for now** (interim key lacks `ses:SendRawEmail`); flip to `1` when it does | `0` |
 
 ### Optional integrations — dark until you add the key 🟡
@@ -71,7 +92,7 @@ Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ h
 ### Boot / housekeeping ⚪
 | Var | Status | What it does | Default |
 |---|---|---|---|
-| `SEED_NEXTPOINT` | 🟢 | Re-seed NextPoint (club #1) on boot — idempotent | `1` |
+| `SEED_NEXTPOINT` | 🟢 | Re-seed NextPoint (club #1) on boot — idempotent. **Now declared in `render.yaml`** (was dashboard-only) | `1` |
 | `PYTHON_VERSION` | 🟢 | Build-time Python | `3.12.3` |
 | `AUTH_PROVIDER` ⚪ · `AUTH_JWT_LEEWAY` ⚪ | skip | label / clock-skew | `clerk` / `30` |
 | `AWS_PROFILE` · `AWS_ROLE_ARN` · `AWS_WEB_IDENTITY_TOKEN_FILE` · `AWS_DEFAULT_REGION` ⚪ | skip | alt AWS auth (only if not using access keys) | — |
@@ -90,6 +111,15 @@ Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ h
 | `AUTH_AFTER_LOGIN_URL` | 🟢 | Redirect after sign-in | `/portal` |
 | `MARKETING_HOSTS` | 🟢 | Hosts that serve the public site at `/` | `courtflow-web.onrender.com,nextpointtennis.com,www.nextpointtennis.com` |
 | `PYTHON_VERSION` | 🟢 | Build-time Python | `3.12.3` |
+
+### Google marketing tags (injected by `web_app._inject_head`; all env-gated, dark until set)
+| Var | Status | What it does | Value |
+|---|---|---|---|
+| `GA4_MEASUREMENT_ID` | 🟢 | GA4 pageview/analytics tag | `G-…` (set 2026-07-05) |
+| `GOOGLE_ADS_ID` | 🟢 | Google Ads global tag (remarketing/pageviews) | `AW-17077631191` |
+| `GOOGLE_ADS_CONVERSIONS` | 🟡 | JSON event→Ads send_to; `pay_return.js` fires `purchase`. Add labels from the Ads console | `{"purchase":"AW-…/label"}` |
+| `GSC_VERIFICATION_FILE` | ⚪ | Search Console HTML-file verify (served at `/<file>`) — GSC already verified via existing property | `google….html` |
+| `GSC_META_TOKEN` | ⚪ | Alt Search Console meta-tag verify | token |
 
 ---
 
@@ -125,13 +155,20 @@ AWS_ACCESS_KEY_ID=             # S3
 AWS_SECRET_ACCESS_KEY=
 AWS_REGION=af-south-1
 
-# courtflow-web (already set)
+# courtflow-web (already set) — swap CLERK key to pk_live at cutover
 AUTH_ENABLED=1
-CLERK_PUBLISHABLE_KEY=pk_test_c2V0dGxpbmctYWxpZW4tMjMuY2xlcmsuYWNjb3VudHMuZGV2JA
+CLERK_PUBLISHABLE_KEY=pk_test_c2V0dGxpbmctYWxpZW4tMjMuY2xlcmsuYWNjb3VudHMuZGV2JA   # -> pk_live_… at cutover
 AUTH_API_BASE=https://courtflow-api.onrender.com
 AUTH_AFTER_LOGIN_URL=/portal
 MARKETING_HOSTS=courtflow-web.onrender.com,nextpointtennis.com,www.nextpointtennis.com
+# courtflow-web — GOOGLE TAGS (GA4+Ads live; conversions/GSC optional)
+GA4_MEASUREMENT_ID=G-...
+GOOGLE_ADS_ID=AW-17077631191
+GOOGLE_ADS_CONVERSIONS=            # {"purchase":"AW-.../label","sign_up":"AW-.../label"}
+GSC_VERIFICATION_FILE=             # optional (GSC already verified)
+GSC_META_TOKEN=
 ```
 
-**Do NOT set** (dead — removed from render.yaml): `YOCO_ENABLED`, `TRACKING_ENABLED`,
-`CONSENT_ENABLED`, `CRM_SYNC_ENABLED`.
+**Do NOT set** (dead — removed from render.yaml and dropped from the live services on the Frankfurt
+recreate): `YOCO_ENABLED`, `TRACKING_ENABLED`, `CONSENT_ENABLED`, `CRM_SYNC_ENABLED`,
+`BRIDGE_TENFIFTY5_ADMIN_EMAIL`, `BRIDGE_TENFIFTY5_CLIENT_KEY`, `BRIDGE_TENFIFTY5_URL`.

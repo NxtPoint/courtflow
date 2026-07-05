@@ -14,9 +14,13 @@ NextPoint Tennis is club #1, migrating off Wix.
 
 ## Current state (read this first) — LIVE on Render
 - **Deployed and operational end-to-end.** Repo `NxtPoint/courtflow` (Render auto-deploys `master`).
-  Two web services (Render, Frankfurt, **Free** plan pre-launch): **`courtflow-api`** (`wsgi:app`, has DB)
+  Two web services (Render, **Frankfurt**, **Starter** plan): **`courtflow-api`** (`wsgi:app`, has DB)
   `https://courtflow-api.onrender.com`, and **`courtflow-web`** (`web_wsgi:app`, no DB; marketing + portal
-  shells + `/login`) `https://courtflow-web.onrender.com`. Postgres = a separate Render DB (Frankfurt).
+  shells + `/login`) `https://courtflow-web.onrender.com`. **BOTH web services now run in Frankfurt
+  co-located with the Postgres DB (`courtflow-db`, Frankfurt)** — until 2026-07-05 the web services were
+  mistakenly in Oregon while the DB was in Frankfurt (every query crossed the Atlantic ~150ms); recreated
+  in-region (Render region is immutable, so delete+recreate from the blueprint) and `DATABASE_URL` now uses
+  the DB's **internal** Frankfurt URL (same-region private network).
   Auth = a dedicated **CourtFlow Clerk DEV app** (`settling-alien-23.clerk.accounts.dev`, `pk_test_…`,
   values inline in `render.yaml`); `AUTH_ENABLED=1`. `SEED_NEXTPOINT=1` on the api re-seeds club #1 on
   boot (idempotent). Platform admin = `info@nextpointtennis.com`.
@@ -54,6 +58,14 @@ NextPoint Tennis is club #1, migrating off Wix.
   `window.UI`; the dead classic coach console (`coach.js`/`coach.html`) deleted. **A second render of a
   capability is a bug — extend the widget's config.**
   **Gates: `python -m scripts.test_all` → booking 43 / billing 142 / statement 35.**
+- **2026-07-05 — CUTOVER DAY (Frankfurt co-location + E2E fixes):** the admin **Diary Day view is now the
+  resource-timeline GRID** (courts + coaches as columns, drilling to the shared `Widgets.TransactionDetail`
+  event story; config-driven via `cfg.grid`, NOT a fork); Week/Month stay agenda and the full drag-timeline
+  editing (walk-in/block-time/desk-pay) stays at `/admin-classic`. The **owner can now create a lesson for a
+  chosen coach** via **`POST /api/services`** (`coach_user_id`, validated by `admin.repositories.is_club_coach`
+  → `coach.repositories.create_service`; Setup → Services "+ New" coach-picker). Plus cutover E2E fixes
+  (principal single-club resolution off DISTINCT clubs, coach-invite status flip, calendar full-day bounds,
+  client billing-category drill month arg, preconnect/parallel startup). Gates unchanged (43/142/35).
 - **2026-06-28 additions (all live + harness-gated):** the **unified client statement** (`billing/statement.py`
   — one debt = one `billing.order`, settled once; account page shows ONE reconciled "Your statement",
   grouped by category with tick-to-part-settle; admin void/write-off; coach `coach_arrears` kept in
