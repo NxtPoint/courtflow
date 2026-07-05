@@ -113,7 +113,7 @@
       return renderHome();
     }
     if (top === "plan") return renderPlan();
-    if (top === "profile") return parts[1] === "edit" ? renderProfileEdit() : (parts[1] === "child" ? renderChildEdit(parts[2]) : renderProfile());
+    if (top === "profile") return parts[1] === "child" ? renderChildEdit(parts[2]) : renderProfile();  // /profile/edit → the same one screen
     return renderHome();                            // home / bookings / anything else
   }
 
@@ -164,7 +164,7 @@
         email ? el("p", { style: "opacity:.92;margin-top:2px", text: email }) : null,
         el("p", { style: "margin-top:8px;font-weight:600", text: mLine }),
         el("div", { class: "cf-row", style: "gap:8px;margin-top:12px;flex-wrap:wrap" }, [
-          el("button", { class: "cf-btn cf-btn-sm", text: "Edit profile", onclick: function () { go("#/profile/edit"); } }),
+          el("button", { class: "cf-btn cf-btn-sm", text: "Edit profile", onclick: function () { go("#/profile"); } }),
           el("button", { class: "cf-btn cf-btn-sm", text: "Manage membership", onclick: openPlan }),
         ]),
       ].filter(Boolean)),
@@ -474,31 +474,48 @@
   }
   function renderPlan() { renderHome(); openPlan(); }
 
-  // ---- PROFILE + edit + family --------------------------------------------
+  // ---- PROFILE (ONE screen: your details + family, editable inline) --------
+  var FIELDS = [
+    ["first_name", "First name", "text"], ["surname", "Surname", "text"], ["phone", "Phone", "tel"],
+    ["dob", "Date of birth", "date"], ["address_line1", "Address line 1", "text"], ["address_line2", "Address line 2", "text"],
+    ["city", "City", "text"], ["postal_code", "Postal code", "text"],
+    ["emergency_contact_name", "Emergency contact", "text"], ["emergency_contact_phone", "Emergency phone", "tel"],
+  ];
   async function renderProfile() {
     loading();
     var pr = DATA.profile, deps = [];
-    try { if (!pr) { pr = await window.API.getProfile(); DATA.profile = pr; } } catch (e) { pr = {}; }
+    try { pr = await window.API.getProfile(); DATA.profile = pr; } catch (e) { pr = pr || {}; }
     try { deps = (await window.API.dependents()).dependents || []; } catch (e) {}
     NAME = fullName(pr); paintAvatar();
     var wrap = el("div", {});
+    // Identity band — this IS the profile's own header (name · email · avatar), not a repeated greeting.
     wrap.appendChild(el("div", { class: "cf-greet" }, [
-      el("div", {}, [el("h1", { text: NAME }), el("p", { text: pr.email || "" })]),
+      el("div", {}, [el("h1", { text: NAME || "Your profile" }), el("p", { text: pr.email || "" })]),
       el("span", { class: "cf-avatar", style: "background:rgba(255,255,255,.2);color:#fff;border-color:transparent", text: initials() }),
     ]));
-    // Details
-    var c = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
-      el("h2", { style: "margin:0", text: "Your details" }),
-      el("button", { class: "cf-btn cf-btn-sm", text: "Edit", onclick: function () { go("#/profile/edit"); } }),
-    ])]);
-    var det = el("div", {});
-    det.appendChild(kv("Phone", pr.phone || "—"));
-    det.appendChild(kv("DOB", pr.dob || "—"));
-    var addr = [pr.address_line1, pr.address_line2, pr.city, pr.postal_code].filter(Boolean).join(", ");
-    det.appendChild(kv("Address", addr || "—"));
-    if (pr.emergency_contact_name) det.appendChild(kv("Emergency", pr.emergency_contact_name + (pr.emergency_contact_phone ? " · " + pr.emergency_contact_phone : "")));
-    c.appendChild(det); wrap.appendChild(c);
-    // Family
+    // Your details — the account holder (parent), editable inline.
+    var inputs = {};
+    var dc = card([el("h2", { style: "margin:0 0 10px", text: "Your details" })]);
+    dc.appendChild(kv("Email", el("span", { class: "cf-muted", text: (pr.email || "") + "  (sign-in — can't change)" })));
+    FIELDS.forEach(function (f) {
+      var inp = el("input", { class: "cf-input", type: f[2], value: pr[f[0]] || "" });
+      inputs[f[0]] = inp;
+      dc.appendChild(el("div", { class: "cf-field" }, [el("label", { text: f[1] }), inp]));
+    });
+    dc.appendChild(el("label", { class: "cf-toggle" }, [
+      (function () { var cb = el("input", { type: "checkbox" }); if (pr.marketing_opt_in) cb.checked = true; inputs._mk = cb; return cb; })(),
+      el("span", { text: "Email me club news & offers" }),
+    ]));
+    dc.appendChild(el("div", { class: "cf-row", style: "margin-top:12px" }, [
+      el("button", { class: "cf-btn cf-btn-primary cf-btn-block", text: "Save", onclick: function () {
+        var body = {}; FIELDS.forEach(function (f) { body[f[0]] = inputs[f[0]].value.trim() || null; });
+        body.marketing_opt_in = !!inputs._mk.checked;
+        window.API.patchProfile(body).then(function (res) { DATA.profile = res; NAME = fullName(res); paintAvatar(); UI.toast("Saved.", "info"); },
+          function (e) { UI.toast((e && e.body && e.body.error === "VALIDATION") ? "Please check the fields." : UI.errMsg(e), "error"); });
+      } }),
+    ]));
+    wrap.appendChild(dc);
+    // Family — the children you book for (their details), below yours. Add/edit drills to the child editor.
     var fc = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
       el("h2", { style: "margin:0", text: "Family" }),
       el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ Add child", onclick: function () { go("#/profile/child"); } }),
@@ -512,44 +529,6 @@
       ]));
     }); fc.appendChild(dl); }
     wrap.appendChild(fc);
-    // Sign out lives in the top-right account menu now (not a button at the bottom of the profile).
-    set(wrap);
-  }
-
-  var FIELDS = [
-    ["first_name", "First name", "text"], ["surname", "Surname", "text"], ["phone", "Phone", "tel"],
-    ["dob", "Date of birth", "date"], ["address_line1", "Address line 1", "text"], ["address_line2", "Address line 2", "text"],
-    ["city", "City", "text"], ["postal_code", "Postal code", "text"],
-    ["emergency_contact_name", "Emergency contact", "text"], ["emergency_contact_phone", "Emergency phone", "tel"],
-  ];
-  async function renderProfileEdit() {
-    var pr = DATA.profile || {};
-    try { pr = await window.API.getProfile(); DATA.profile = pr; } catch (e) {}
-    var wrap = el("div", {});
-    wrap.appendChild(backBar("Profile", "#/profile"));
-    wrap.appendChild(el("h1", { style: "margin:0 0 12px", text: "Edit profile" }));
-    var c = card([]);
-    var inputs = {};
-    c.appendChild(kv("Email", el("span", { class: "cf-muted", text: (pr.email || "") + "  (sign-in — can't change)" })));
-    FIELDS.forEach(function (f) {
-      var inp = el("input", { class: "cf-input", type: f[2], value: pr[f[0]] || "" });
-      inputs[f[0]] = inp;
-      c.appendChild(el("div", { class: "cf-field" }, [el("label", { text: f[1] }), inp]));
-    });
-    var mk = el("label", { class: "cf-row", style: "gap:8px;align-items:center;margin-top:6px;cursor:pointer" }, [
-      (function () { var cb = el("input", { type: "checkbox" }); if (pr.marketing_opt_in) cb.checked = true; inputs._mk = cb; return cb; })(),
-      el("span", { text: "Email me club news & offers" }),
-    ]);
-    c.appendChild(mk);
-    wrap.appendChild(c);
-    wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;margin-top:14px" }, [
-      el("button", { class: "cf-btn cf-btn-primary cf-btn-block", text: "Save & close", onclick: function () {
-        var body = {}; FIELDS.forEach(function (f) { body[f[0]] = inputs[f[0]].value.trim() || null; });
-        body.marketing_opt_in = !!inputs._mk.checked;
-        window.API.patchProfile(body).then(function (res) { DATA.profile = res; NAME = fullName(res); UI.toast("Saved.", "info"); go("#/profile"); },
-          function (e) { UI.toast((e && e.body && e.body.error === "VALIDATION") ? "Please check the fields." : UI.errMsg(e), "error"); });
-      } }),
-    ]));
     set(wrap);
   }
 
