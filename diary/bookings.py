@@ -74,6 +74,9 @@ def _first_free_court(session, club_id, starts, ends):
              "      WHERE b.club_id = :c AND b.resource_id = r.id "
              "        AND b.status IN ('held','confirmed') "
              "        AND b.ends_at > :s AND b.starts_at < :e) "
+             "  AND NOT EXISTS (SELECT 1 FROM diary.time_off t "
+             "      WHERE t.club_id = :c AND t.resource_id = r.id "
+             "        AND t.ends_at > :s AND t.starts_at < :e) "
              "ORDER BY r.rank, r.name LIMIT 1"),
         {"c": club_id, "s": starts, "e": ends},
     ).scalar()
@@ -660,6 +663,11 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
         if _parse_dt(bk["starts_at"]) - now < timedelta(hours=cutoff_h):
             return _err("PAST_CUTOFF", 422,
                         message=f"reschedule not allowed within {cutoff_h}h of start")
+
+    # A lesson must not be moved onto a time the coach runs a scheduled class — a class_session is
+    # not a diary.booking, so the GiST exclusion can't catch it (mirror the create/accept guard).
+    if _coach_class_conflict(session, club_id, bk.get("coach_user_id"), new_s, new_e):
+        return _err("COACH_BUSY", 409, message="the coach runs a class at the new time")
 
     # series / this_future reschedule shifts each affected occurrence by the same delta.
     targets = _reschedule_targets(session, bk, scope)
