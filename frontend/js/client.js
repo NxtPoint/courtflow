@@ -65,7 +65,7 @@
     document.body.style.paddingBottom = "20px";
     if (!document.getElementById("cf-appbar")) {
       var bar = el("div", { class: "cf-appbar", id: "cf-appbar" }, [
-        el("div", { class: "cf-brand" }, [el("span", { class: "cf-logo", text: "NP" }), el("span", { text: "NextPoint" })]),
+        el("div", { class: "cf-brand", style: "cursor:pointer", title: "Home", onclick: function () { go("#/"); } }, [el("span", { class: "cf-logo", text: "NP" }), el("span", { text: "NextPoint" })]),
         el("span", { class: "cf-spacer" }),
         el("div", { class: "cf-bell-host", id: "cf-bell" }),
         el("div", { class: "cf-avatar", id: "cf-avatar", text: initials(), onclick: function () { go("#/profile"); } }),
@@ -196,7 +196,9 @@
   }
   function greet() { var h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
 
-  // sessions: ALL of them — Upcoming then Past, organised, each drilling into its detail. Nothing hidden.
+  // sessions: a Current / Past toggle (default Current) on the shared cf-segment filter look — Home
+  // leads with what's coming up, past is one tap away. Each row drills into its full detail.
+  var SESSVIEW = "current";
   function paintSessions() {
     var box = document.getElementById("home-sessions"); if (!box) return;
     UI.clear(box);
@@ -208,10 +210,16 @@
     up.sort(function (a, b) { return new Date(a.starts_at) - new Date(b.starts_at); });
     past.sort(function (a, b) { return new Date(b.starts_at) - new Date(a.starts_at); });
     if (!up.length && !past.length) { box.appendChild(el("div", { class: "cf-empty", text: "No sessions yet — book one above." })); return; }
-    if (up.length) { box.appendChild(subHead("Upcoming")); var l1 = el("div", { class: "cf-list" }); up.forEach(function (b) { l1.appendChild(bookingRow(b)); }); box.appendChild(l1); }
-    if (past.length) { box.appendChild(subHead("Past")); var l2 = el("div", { class: "cf-list" }); past.slice(0, 40).forEach(function (b) { l2.appendChild(bookingRow(b)); }); box.appendChild(l2); }
+    var seg = el("div", { class: "cf-segment", style: "margin-bottom:12px" });
+    [["current", "Current", up.length], ["past", "Past", past.length]].forEach(function (t) {
+      seg.appendChild(el("button", { class: (SESSVIEW === t[0] ? "on" : ""), type: "button",
+        text: t[1] + " (" + t[2] + ")", onclick: function () { SESSVIEW = t[0]; paintSessions(); } }));
+    });
+    box.appendChild(seg);
+    var rows = SESSVIEW === "past" ? past.slice(0, 40) : up;
+    if (!rows.length) { box.appendChild(el("div", { class: "cf-empty", text: SESSVIEW === "past" ? "No past sessions." : "Nothing upcoming — book one above." })); return; }
+    var l = el("div", { class: "cf-list" }); rows.forEach(function (b) { l.appendChild(bookingRow(b)); }); box.appendChild(l);
   }
-  function subHead(t) { return el("div", { class: "cf-muted", style: "font-weight:700;font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;margin:12px 2px 4px", text: t }); }
 
   // billing: monthly breakdown by category (month nav + tap-through)
   function billMonthNav(cur) {
