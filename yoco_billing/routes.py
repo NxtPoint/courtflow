@@ -554,6 +554,20 @@ def yoco_refund():
                                          actor_user_id=p.user_id, role="club_admin",
                                          reason="admin refund")
                     cancelled = bool(cres and cres.get("ok"))
+                else:
+                    # A CLASS order has no booking line — cancel the enrolment instead so the seat frees.
+                    erow = s2.execute(
+                        _text("SELECT e.class_session_id, e.user_id FROM billing.order_line ol "
+                              "JOIN diary.enrolment e ON e.id = ol.enrolment_id "
+                              "WHERE ol.order_id = :oid AND ol.enrolment_id IS NOT NULL LIMIT 1"),
+                        {"oid": order_id},
+                    ).mappings().first()
+                    if erow:
+                        from diary.classes import cancel_enrolment as _cancel_enrol
+                        cres = _cancel_enrol(s2, club_id=order_club_id,
+                                             class_session_id=str(erow["class_session_id"]),
+                                             user_id=str(erow["user_id"]), actor_user_id=p.user_id)
+                        cancelled = bool(cres and cres.get("ok"))
         except Exception:
             log.warning("refund+cancel: booking cancel failed for order=%s (refund stands)", order_id)
 

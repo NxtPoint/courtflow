@@ -73,22 +73,30 @@ def _reclaim_abandoned_settlements(session, *, club_id, user_id, grace_minutes=3
 
 
 def _void_phantom_cancelled_orders(session, *, club_id, user_id) -> None:
-    """Self-heal PHANTOM owed orders: an 'open' order whose booking(s) were ALL cancelled but the
-    order was never voided (a cancel BEFORE cancel_booking learned to void — you shouldn't owe for a
-    cancelled booking). Voids each via void_order (which also clears any coach_arrears). SAFE + narrow:
-    only touches an order that (a) has ≥1 booking line and (b) has NO active (non-cancelled) booking —
-    so membership/pack orders (no booking) and any order with a live booking are never touched.
-    Guarded — a failure never blanks the read."""
+    """Self-heal PHANTOM owed orders: an 'open' order whose EVENT(s) — bookings AND/OR class
+    enrolments — were ALL cancelled but the order was never voided (a cancel BEFORE the cancel path
+    learned to void — you shouldn't owe for a cancelled booking/class). Voids each via void_order
+    (which also clears any coach_arrears). SAFE + narrow: only touches an order that (a) has ≥1 event
+    line (booking or enrolment) and (b) has NO active (non-cancelled) event — so membership/pack orders
+    (no event line) and any order with a live event are never touched. Guarded — never blanks the read."""
     try:
         ids = session.execute(
             text("""
                 SELECT o.id FROM billing."order" o
                 WHERE o.club_id = :c AND o.user_id = :u AND o.status = 'open'
                   AND o.settled_by_order_id IS NULL
-                  AND EXISTS (SELECT 1 FROM billing.order_line ol JOIN diary.booking b ON b.id = ol.booking_id
-                               WHERE ol.order_id = o.id)
-                  AND NOT EXISTS (SELECT 1 FROM billing.order_line ol JOIN diary.booking b ON b.id = ol.booking_id
-                                   WHERE ol.order_id = o.id AND b.status <> 'cancelled')
+                  -- has at least one EVENT line (a booking OR a class enrolment)
+                  AND EXISTS (SELECT 1 FROM billing.order_line ol
+                               WHERE ol.order_id = o.id
+                                 AND (ol.booking_id IS NOT NULL OR ol.enrolment_id IS NOT NULL))
+                  -- and NO event line is still active (a non-cancelled booking OR non-cancelled enrolment)
+                  AND NOT EXISTS (
+                        SELECT 1 FROM billing.order_line ol
+                        LEFT JOIN diary.booking   b ON b.id = ol.booking_id
+                        LEFT JOIN diary.enrolment e ON e.id = ol.enrolment_id
+                        WHERE ol.order_id = o.id
+                          AND ((ol.booking_id   IS NOT NULL AND b.status <> 'cancelled')
+                            OR (ol.enrolment_id IS NOT NULL AND e.status <> 'cancelled')))
             """),
             {"c": str(club_id), "u": str(user_id) if user_id else None},
         ).scalars().all()

@@ -248,8 +248,55 @@ def sc_pack_offline(s, fx):
           str([i["description"] for i in st["items"]]))
 
 
+def sc_cancelled_class_not_owed(s, fx):
+    print("\n# A cancelled CLASS must not stay owed (void on cancel + self-heal a stuck order) + the invariant")
+    from diary import classes as C
+    class_res = s.execute(text("INSERT INTO diary.resource (club_id, kind, name) VALUES (:c,'class','Cardio') RETURNING id"),
+                          {"c": fx.club_id}).scalar_one()
+    class_prod = s.execute(text("INSERT INTO billing.product (club_id, kind, name) VALUES (:c,'class','Cardio') RETURNING id"),
+                           {"c": fx.club_id}).scalar_one()
+    class_price = s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, currency_code, "
+                                 "unit, active) VALUES (:c,:p,'any',12000,'ZAR','per_session',true) RETURNING id"),
+                            {"c": fx.club_id, "p": class_prod}).scalar_one()
+
+    def mk_session(hour):
+        return s.execute(text("INSERT INTO diary.class_session (club_id, resource_id, coach_user_id, starts_at, "
+                              "ends_at, capacity, price_id, status) VALUES (:c,:r,:u,:sa,:ea,10,:pr,'scheduled') RETURNING id"),
+                         {"c": fx.club_id, "r": class_res, "u": fx.coach_uid,
+                          "sa": iso(at(fx, hour)), "ea": iso(at(fx, hour + 1)), "pr": class_price}).scalar_one()
+
+    # Part A — cancel_enrolment VOIDS the order (the headline bug).
+    cs1 = mk_session(14)
+    before = owed(s, fx)["total_owed_minor"]
+    C.enrol(s, club_id=fx.club_id, class_session_id=str(cs1), user_id=fx.member, settlement_mode="at_court")
+    st = owed(s, fx)
+    check("class enrol adds R120 owed under Classes",
+          st["total_owed_minor"] == before + 12000 and any(i["category"] == "Classes" for i in st["items"]),
+          str(st["total_owed_minor"]))
+    C.cancel_enrolment(s, club_id=fx.club_id, class_session_id=str(cs1), user_id=fx.member)
+    st2 = owed(s, fx)
+    check("cancelled class is NOT owed (order voided on cancel)",
+          st2["total_owed_minor"] == before and not any(i["category"] == "Classes" for i in st2["items"]),
+          str(st2["total_owed_minor"]))
+
+    # Part B — SELF-HEAL a stuck order (enrolment cancelled but order left 'open' — pre-fix rows).
+    cs2 = mk_session(15)
+    C.enrol(s, club_id=fx.club_id, class_session_id=str(cs2), user_id=fx.member, settlement_mode="at_court")
+    s.execute(text("UPDATE diary.enrolment SET status='cancelled' WHERE class_session_id=:cs AND user_id=:u"),
+              {"cs": str(cs2), "u": fx.member})
+    check("self-heal voids a stuck cancelled-class order on statement read",
+          owed(s, fx)["total_owed_minor"] == before, str(owed(s, fx)["total_owed_minor"]))
+
+    # THE INVARIANT: the statement total == Σ open-order amounts (no drift, nothing uncounted).
+    sigma = s.execute(text('SELECT COALESCE(SUM(amount_minor),0) FROM billing."order" '
+                           "WHERE club_id=:c AND user_id=:u AND status='open' AND settled_by_order_id IS NULL"),
+                      {"c": fx.club_id, "u": fx.member}).scalar()
+    check("INVARIANT: statement total == Σ open-order amounts",
+          owed(s, fx)["total_owed_minor"] == int(sigma), f"stmt={owed(s, fx)['total_owed_minor']} sigma={sigma}")
+
+
 SCENARIOS = [sc_no_double_count, sc_membership_r0, sc_pay_all, sc_partial_and_reclaim, sc_void,
-             sc_arrears_lockstep, sc_pack_offline]
+             sc_arrears_lockstep, sc_pack_offline, sc_cancelled_class_not_owed]
 
 
 def main():

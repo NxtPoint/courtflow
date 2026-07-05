@@ -140,7 +140,7 @@ def cancel_enrolment(session, *, club_id, class_session_id, user_id, actor_user_
     if not cs:
         return _err("SESSION_NOT_FOUND", 404)
     row = session.execute(
-        text("SELECT id, status FROM diary.enrolment "
+        text("SELECT id, status, order_id FROM diary.enrolment "
              "WHERE class_session_id=:cs AND user_id=:u"),
         {"cs": class_session_id, "u": user_id},
     ).mappings().first()
@@ -152,6 +152,15 @@ def cancel_enrolment(session, *, club_id, class_session_id, user_id, actor_user_
         text("UPDATE diary.enrolment SET status='cancelled', updated_at=now() WHERE id=:id"),
         {"id": row["id"]},
     )
+
+    # Drop the debt for a cancelled class: void the UNPAID order so it doesn't linger as 'owed'
+    # (mirrors cancel_booking; void_order no-ops on a PAID order — that stays for the refund path).
+    if row.get("order_id"):
+        try:
+            from billing.statement import void_order
+            void_order(session, club_id=club_id, order_id=row["order_id"], reason="class cancelled")
+        except Exception:
+            log.debug("class order void skipped", exc_info=False)
 
     # Token credit-back (docs/specs/02): if this enrolment was settled by a prepaid CLASS token,
     # return it to the wallet. Idempotent per (wallet, enrolment) — a re-cancel credits nothing.
