@@ -4,7 +4,7 @@
 // Reuses AdminAPI / AdminUI / CRMUI / ClassUI / window.API — this lane is an IA re-skin, not a rebuild.
 // Design spec: docs/specs/ADMIN-REDESIGN.md. Non-admins are bounced to their own app.
 (function () {
-  var UI, el, principal = null, view, CLUB = null;
+  var UI, el, principal = null, view, CLUB = null, PROFILE = null;
   var DIARY_TAB = "diary";  // diary (the shared Calendar widget) | classes
   var DIARY_LISTS = null;   // cached {courts, coaches} for the calendar filters
   var money = function (m, c) { return UI.money(m || 0, c || "ZAR"); };
@@ -18,6 +18,7 @@
     // Fetch the club brand IN PARALLEL with whoami so first paint isn't gated on a second
     // cross-region round trip (Starter removed cold starts; the round-trips remain).
     var pendingClub = window.AdminAPI.club().catch(function () { return null; });
+    var pendingProfile = window.API.getProfile().catch(function () { return null; });
     try { principal = await window.API.whoami(); }
     catch (e) { if (e.status === 401) await window.TFAuth.requireAuth(); return; }
     if (!principal) return;
@@ -29,12 +30,18 @@
     renderShell();
     window.addEventListener("hashchange", route);
     try { var cb = await pendingClub; if (cb) { CLUB = cb.club || {}; paintBrand(); } } catch (e) {}
+    try { var pf = await pendingProfile; if (pf) { PROFILE = pf; paintBrand(); } } catch (e) {}
     route();
   }
 
   function clubName() { return (CLUB && CLUB.name) || "Your club"; }
-  function ownerName() { return (principal && principal.email ? principal.email.split("@")[0] : "there"); }
-  function initials() { var n = clubName().trim().split(/\s+/); return ((n[0] || "C")[0] + (n.length > 1 ? n[n.length - 1][0] : "")).toUpperCase(); }
+  function ownerName() {
+    var n = PROFILE && (PROFILE.first_name || [PROFILE.first_name, PROFILE.surname].filter(Boolean).join(" ").trim());
+    return n || (principal && principal.email ? principal.email.split("@")[0] : "there");
+  }
+  function ownerFull() { return (PROFILE && [PROFILE.first_name, PROFILE.surname].filter(Boolean).join(" ").trim()) || ownerName(); }
+  // The top-right avatar is the PERSON (owner initials); the top-left brand stays the club name.
+  function initials() { var n = ownerFull().trim().split(/\s+/); return ((n[0] || "?")[0] + (n.length > 1 ? n[n.length - 1][0] : "")).toUpperCase(); }
   function paintBrand() { var a = document.getElementById("cf-avatar"); if (a) a.textContent = initials(); var b = document.getElementById("cf-brandname"); if (b) b.textContent = clubName(); }
   function greet() { var h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
 
@@ -125,7 +132,7 @@
     c.appendChild(el("div", { class: "cf-row", style: "margin-top:12px" }, [
       el("button", { class: "cf-btn cf-btn-primary cf-btn-block", text: "Save", onclick: function () {
         var body = {}; PROFILE_FIELDS.forEach(function (f) { body[f[0]] = inputs[f[0]].value.trim() || null; });
-        window.API.patchProfile(body).then(function () { UI.toast("Saved.", "info"); },
+        window.API.patchProfile(body).then(function (res) { PROFILE = res || PROFILE; paintBrand(); UI.toast("Saved.", "info"); },
           function (e) { UI.toast((e && e.body && e.body.error === "VALIDATION") ? "Please check the fields." : UI.errMsg(e), "error"); });
       } }),
     ]));

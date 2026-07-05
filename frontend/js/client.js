@@ -165,7 +165,6 @@
         el("p", { style: "margin-top:8px;font-weight:600", text: mLine }),
         el("div", { class: "cf-row", style: "gap:8px;margin-top:12px;flex-wrap:wrap" }, [
           el("button", { class: "cf-btn cf-btn-sm", text: "Edit profile", onclick: function () { go("#/profile"); } }),
-          el("button", { class: "cf-btn cf-btn-sm", text: "Manage membership", onclick: openPlan }),
         ]),
       ].filter(Boolean)),
     ]));
@@ -421,8 +420,22 @@
   function rescheduleSheet(b) {
     var m = modal("Reschedule");
     var start = el("input", { class: "cf-input", type: "datetime-local", value: toLocal(b.starts_at) });
-    var dur = el("select", { class: "cf-input" }, [30, 45, 60, 90, 120].map(function (d) { return el("option", { value: String(d), text: d + " min" }); }));
-    dur.value = String(b.duration_minutes || 60);
+    var cur = b.duration_minutes || 60;
+    var dur = el("select", { class: "cf-input" });
+    function setDurations(mins) {
+      UI.clear(dur);
+      mins.forEach(function (d) { dur.appendChild(el("option", { value: String(d), text: d + " min" })); });
+      dur.value = String(cur);
+    }
+    setDurations([cur]);   // sensible default while the configured list loads
+    // Offer the service's CONFIGURED, priced durations for this booking type (not a hardcoded list);
+    // always keep the booking's own duration selectable. Falls back to the current one on any error.
+    window.TFAuth.apiJSON("/api/diary/durations?kind=" + encodeURIComponent(b.booking_type)).then(function (r) {
+      var mins = (r.durations || []).map(function (x) { return x.duration_minutes; }).filter(Boolean);
+      if (mins.indexOf(cur) === -1) mins.push(cur);
+      mins.sort(function (a, c) { return a - c; });
+      if (mins.length) setDurations(mins);
+    }, function () {});
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "New time" }), start]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), dur]));
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
