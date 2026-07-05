@@ -63,10 +63,18 @@
     // absolutely-positioned blocks) — ported from the classic diary, but every block drills to the
     // SHARED event story via cfg.onNavigate (not the old minimal popup). Court/coach dropdowns
     // filter the COLUMNS. Empty cells are non-interactive (walk-ins live in the classic diary).
-    function gridColumns() {
+    function gridColumns(events) {
       var courts = fb.courts || [], coaches = fb.coaches || [];
       if (state.courtId) courts = courts.filter(function (c) { return String(c.id) === String(state.courtId); });
-      if (state.coachId) coaches = coaches.filter(function (c) { return String(c.id) === String(state.coachId); });
+      if (state.coachId) {
+        coaches = coaches.filter(function (c) { return String(c.id) === String(state.coachId); });
+      } else {
+        // Hide coaches with NO lessons this day — keeps the grid court-focused on quiet days.
+        // (A coach explicitly picked in the dropdown above is always shown, even if empty.)
+        var active = {};
+        (events || []).forEach(function (ev) { if (evKind(ev) === "lesson" && ev.coach_user_id != null) active["coach:" + ev.coach_user_id] = true; });
+        coaches = coaches.filter(function (c) { return active["coach:" + c.id]; });
+      }
       var cols = [];
       courts.forEach(function (c) { cols.push({ key: "court:" + c.id, name: c.name || "Court" }); });
       coaches.forEach(function (c) { cols.push({ key: "coach:" + c.id, name: (c.name || "Coach") + " (coach)" }); });
@@ -79,7 +87,7 @@
       return "court:" + ev.resource_id;                          // court bookings under the court
     }
     function gridDayView(events) {
-      var cols = gridColumns();
+      var cols = gridColumns(events);
       var hasClasses = !state.courtId && !state.coachId && events.some(function (ev) { return evKind(ev) === "class"; });
       if (!cols.length && !hasClasses) return el("div", { class: "cf-empty", text: "No courts or coaches configured." });
       var slots = ((DAY_END - DAY_START) * 60) / SLOT_MIN, totalCols = cols.length + (hasClasses ? 1 : 0);
