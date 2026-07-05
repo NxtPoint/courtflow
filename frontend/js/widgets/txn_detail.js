@@ -27,7 +27,7 @@
     ["add_to_calendar", "Session", "Add to calendar", "ghost"],
     ["cancel", "Session", "Cancel", "danger"],
     ["withdraw", "Session", "Withdraw", "danger"],
-    ["desk_pay", "Client charge", "Settle at desk", "primary"],
+    ["desk_pay", "Client charge", "Mark as paid", "primary"],
     ["receipt", "Client charge", "Receipt", "ghost"],
     ["refund", "Client charge", "Refund", ""],
     ["request_refund", "Client charge", "Request refund", ""],

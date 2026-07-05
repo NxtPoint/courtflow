@@ -789,7 +789,7 @@
     ]));
   }
   function deskPayModal(orderId, ch, then) {
-    var m = modal("Settle at desk");
+    var m = modal("Mark as paid");
     var amt = el("input", { class: "cf-input", type: "number", step: "0.01", value: ((ch.amount_minor || 0) / 100).toFixed(2) });
     var prov = el("select", { class: "cf-input" }, [["cash", "Cash"], ["card_at_desk", "Card at desk"], ["eft", "EFT"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); }));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Amount" }), amt]));
