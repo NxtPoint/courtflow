@@ -678,13 +678,13 @@ def coach_approve_refund(request_id):
     b = _body()
     from billing import refunds
     with session_scope() as s:
-        req, ecode = refunds.approve_refund_request(
+        req, ecode, emsg = refunds.approve_refund_request(
             s, club_id=p.club_id, request_id=request_id, decided_by=p.user_id,
             amount_minor=b.get("amount_minor"), note=b.get("note"),
             require_coach_user_id=p.user_id)
     if ecode:
-        code, msg = _REFUND_ERR.get(ecode, (400, "Could not approve the request."))
-        return jsonify(error=ecode, message=msg), code
+        code, msg = _REFUND_ERR.get(ecode, (502, "The refund could not be completed."))
+        return jsonify(error=ecode, message=(emsg or msg)), code
     return jsonify(refund_request=req), 200
 
 

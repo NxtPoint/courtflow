@@ -236,7 +236,7 @@ def approve_refund_request(session, *, club_id, request_id, decided_by,
     req, err = _load_pending_admin(session, club_id=club_id, request_id=request_id,
                                    require_coach_user_id=require_coach_user_id)
     if err:
-        return None, err
+        return None, err, None
 
     # The money FIRST — reuse the existing admin Yoco-refund path. On failure this RAISES; we
     # return the error and DO NOT mark the request refunded (it stays 'pending' — no UPDATE ran).
@@ -246,7 +246,7 @@ def approve_refund_request(session, *, club_id, request_id, decided_by,
         execute_order_refund(session, order_id=req["order_id"], amount_minor=amt)
     except RefundError as e:
         log.warning("approve_refund_request: gateway refund failed req=%s: %s", request_id, e.message)
-        return None, e.code
+        return None, e.code, e.message   # surface Yoco's ACTUAL reason to the admin, not a canned line
 
     note = (note or "").strip() or None
     upd = session.execute(
@@ -259,8 +259,8 @@ def approve_refund_request(session, *, club_id, request_id, decided_by,
     if not upd:
         # Lost a race (another admin decided it between our load and update) — treat as already
         # actioned. The money refund above is idempotent on Yoco's side (keyed on checkout+amount).
-        return None, "NOT_PENDING"
-    return _row_to_dict(upd), None
+        return None, "NOT_PENDING", None
+    return _row_to_dict(upd), None, None
 
 
 def decline_refund_request(session, *, club_id, request_id, decided_by, note=None,

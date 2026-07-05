@@ -717,12 +717,12 @@ def approve_refund_request(request_id):
     cancel_flag = bool(b.get("cancel_booking"))
     from billing import refunds
     with session_scope() as s:
-        req, ecode = refunds.approve_refund_request(
+        req, ecode, emsg = refunds.approve_refund_request(
             s, club_id=p.club_id, request_id=request_id, decided_by=p.user_id,
             amount_minor=amount_minor, note=note)
     if ecode:
-        status, msg = _REFUND_DECIDE_ERR.get(ecode, (400, "Could not approve the request."))
-        return jsonify(error=ecode, message=msg), status
+        status, msg = _REFUND_DECIDE_ERR.get(ecode, (502, "The refund could not be completed."))
+        return jsonify(error=ecode, message=(emsg or msg)), status
 
     # Optional: also cancel the order's booking(s) + free the slot — the same "Refund & cancel"
     # choice as the Recent-online-payments path (record-only refund otherwise, docs/05 §8). Reuse
