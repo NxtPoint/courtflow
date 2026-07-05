@@ -540,6 +540,56 @@ def schedule_sessions(session, *, club_id, resource_id, weekdays=None, start_tim
     return {"ok": True, "created": created, "skipped": skipped}
 
 
+def is_guardian_of(session, guardian_user_id, dependent_user_id):
+    """True if guardian_user_id is the registered guardian of dependent_user_id (iam.dependent) —
+    lets a parent manage (e.g. cancel) a class booked for their child."""
+    return bool(session.execute(
+        text("SELECT 1 FROM iam.dependent WHERE guardian_user_id = :g AND dependent_user_id = :d LIMIT 1"),
+        {"g": guardian_user_id, "d": dependent_user_id},
+    ).first())
+
+
+def list_my_enrolments(session, *, club_id, user_id):
+    """A member's OWN class enrolments — classes they're a PLAYER in AND classes they booked for a
+    DEPENDENT (junior classes are often a parent enrolling a child; the enrolment.user_id is the child
+    but the guardian manages it). Enrolled + waitlisted only, with the session time / class name /
+    coach so the client sees them in 'Your sessions' and can cancel. club-scoped."""
+    rows = session.execute(
+        text("SELECT e.id AS enrolment_id, e.status, e.class_session_id, e.user_id AS player_user_id, "
+             "       cs.starts_at, cs.ends_at, r.name AS class_name, cs.coach_user_id, "
+             "       cu.first_name AS coach_first, cu.surname AS coach_surname, cp.display_name AS coach_display, "
+             "       pu.first_name AS player_first, pu.surname AS player_surname "
+             "FROM diary.enrolment e "
+             "JOIN diary.class_session cs ON cs.id = e.class_session_id "
+             "LEFT JOIN diary.resource r ON r.id = cs.resource_id "
+             "LEFT JOIN iam.user cu ON cu.id = cs.coach_user_id "
+             "LEFT JOIN iam.coach_profile cp ON cp.user_id = cs.coach_user_id AND cp.club_id = cs.club_id "
+             "LEFT JOIN iam.user pu ON pu.id = e.user_id "
+             "WHERE e.club_id = :c AND e.status IN ('enrolled','waitlisted') "
+             "  AND (e.user_id = :u "
+             "       OR e.user_id IN (SELECT d.dependent_user_id FROM iam.dependent d "
+             "                        WHERE d.guardian_user_id = :u)) "
+             "ORDER BY cs.starts_at DESC"),
+        {"c": club_id, "u": user_id},
+    ).mappings().all()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["coach_name"] = (d.pop("coach_display", None)
+                           or " ".join(x for x in (d.pop("coach_first", None), d.pop("coach_surname", None)) if x).strip()
+                           or None)
+        d["player_name"] = " ".join(x for x in (d.pop("player_first", None), d.pop("player_surname", None)) if x).strip() or None
+        for k in ("enrolment_id", "class_session_id", "coach_user_id", "player_user_id"):
+            if d.get(k) is not None:
+                d[k] = str(d[k])
+        for k in ("starts_at", "ends_at"):
+            if d.get(k) is not None:
+                d[k] = d[k].isoformat()
+        d["can_cancel"] = True
+        out.append(d)
+    return out
+
+
 def list_type_sessions(session, *, club_id, resource_id, date_from=None, date_to=None):
     """Sessions for one class type (any status), with enrolled/waitlisted/spots_left. Used by
     the admin/coach 'manage this class' view (GET .../sessions)."""

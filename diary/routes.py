@@ -448,6 +448,18 @@ def list_classes():
     return jsonify(classes=rows, count=len(rows)), 200
 
 
+@diary_bp.get("/classes/mine")
+def my_enrolments():
+    """The caller's OWN class enrolments (self + dependents) — so the client can see & cancel the
+    classes they booked (a class enrolment isn't a diary.booking, so it's not in /diary/bookings)."""
+    p = _principal()
+    if not p or not _need_club(p):
+        return jsonify(error="unauthorized"), 401
+    with session_scope() as s:
+        rows = classes_mod.list_my_enrolments(s, club_id=p.club_id, user_id=p.user_id)
+    return jsonify(enrolments=rows, count=len(rows)), 200
+
+
 @diary_bp.post("/classes/<class_session_id>/enrol")
 def enrol(class_session_id):
     p = _principal()
@@ -522,9 +534,14 @@ def cancel_enrolment(class_session_id):
     if not p or not _need_club(p):
         return jsonify(error="unauthorized"), 401
     b = _body()
-    target_user = b.get("user_id") if p.role in ("club_admin", "platform_admin", "coach") else p.user_id
-    target_user = target_user or p.user_id
+    req_user = b.get("user_id")
     with session_scope() as s:
+        if p.role in ("club_admin", "platform_admin", "coach"):
+            target_user = req_user or p.user_id
+        elif req_user and req_user != p.user_id and classes_mod.is_guardian_of(s, p.user_id, req_user):
+            target_user = req_user          # a parent cancelling their child's place in a class
+        else:
+            target_user = p.user_id
         res = classes_mod.cancel_enrolment(
             s, club_id=p.club_id, class_session_id=class_session_id, user_id=target_user,
             actor_user_id=p.user_id)

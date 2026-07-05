@@ -142,6 +142,7 @@
       confirmed: ["confirmed", "Confirmed"], held: ["held", "Pending"], completed: ["ok", "Completed"],
       cancelled: ["cancelled", "Cancelled"], no_show: ["cancelled", "No-show"],
       requested: ["held", "Requested"], proposed: ["held", "Proposed"],
+      enrolled: ["confirmed", "Enrolled"], waitlisted: ["held", "Waitlisted"],
       paid: ["confirmed", "Paid"], owed: ["held", "Owed"], pending: ["held", "Pending"],
       refunded: ["cancelled", "Refunded"], covered: ["court", "Covered"], written_off: ["cancelled", "Written off"],
       discounted: ["confirmed", "Discounted"],

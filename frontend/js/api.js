@@ -38,6 +38,10 @@
     // GET /api/diary/classes -> {classes:[{id,class_name,coach_user_id,starts_at,ends_at,
     //                            capacity,price_id,enrolled,waitlisted,spots_left}], count}
     classes: function (opts) { return A().apiJSON("/api/diary/classes" + qs(opts)); },
+    // GET /api/diary/classes/mine -> {enrolments:[{enrolment_id, class_session_id, status, class_name,
+    //   starts_at, ends_at, coach_name, player_user_id, player_name, can_cancel}]} — the caller's own
+    //   class enrolments (self + dependents), so the client can see & cancel booked classes.
+    myEnrolments: function () { return A().apiJSON("/api/diary/classes/mine"); },
 
     // ---- diary: bookings -------------------------------------------------
     // GET /api/diary/bookings -> {bookings:[{id,booking_type,resource_id,resource_name,
