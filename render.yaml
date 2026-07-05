@@ -113,6 +113,11 @@ services:
         sync: false
       - key: SES_REGION               # ten-fifty5 SES identity region (CONFIRMED live). Must NOT be blank —
         value: "eu-north-1"           # blank falls through to AWS_REGION=af-south-1 (wrong) and email fails.
+      # Blind-copy the club on EVERY transactional email (bookings/edits/cancellations/refunds +
+      # the direct coach-invite / contact-form sends). Not a secret, so committed as a value. The
+      # notification engine also BCCs the club's own contact email; this floor catches the rest.
+      - key: TRANSACTIONAL_BCC
+        value: "info@nextpointtennis.com"
 
   # =========================================
   # 2) courtflow-web — host-switched marketing site + portal SPAs (NO DB)
