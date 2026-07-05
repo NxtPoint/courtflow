@@ -327,13 +327,54 @@
   // Book a client in (lesson with me, or a court) — the on-behalf flow.
   async function bookForClient() {
     var m = modal("Book a client in");
-    var email = el("input", { class: "cf-input", type: "email", placeholder: "Client email (or leave blank for a guest)" });
-    var guest = el("input", { class: "cf-input", placeholder: "Guest name (if no account)" });
+    var selected = null;
+    var searchInp = el("input", { class: "cf-input", placeholder: "Search client by name or email…" });
+    var resultsBox = el("div", { class: "cf-list", style: "max-height:180px;overflow:auto" });
+    var chosenBox = el("div", {});
+    var guest = el("input", { class: "cf-input", placeholder: "Guest name (walk-in, no account)" });
     var start = el("input", { class: "cf-input", type: "datetime-local" });
     var dur = el("select", { class: "cf-input" }, [30, 45, 60, 90, 120].map(function (d) { return el("option", { value: String(d), text: d + " min" }); })); dur.value = "60";
+
+    function renderChosen() {
+      UI.clear(chosenBox);
+      if (selected) {
+        searchInp.style.display = "none"; resultsBox.style.display = "none"; guest.disabled = true;
+        chosenBox.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: selected.name }),
+            el("div", { class: "cf-item-s", text: [selected.email, selected.phone].filter(Boolean).join(" · ") || "—" }),
+          ]),
+          el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Change", onclick: function () { selected = null; searchInp.value = ""; UI.clear(resultsBox); renderChosen(); searchInp.focus(); } }),
+        ]));
+      } else {
+        searchInp.style.display = ""; resultsBox.style.display = ""; guest.disabled = false;
+      }
+    }
+    var tmr;
+    searchInp.addEventListener("input", function () {
+      clearTimeout(tmr);
+      var q = searchInp.value.trim();
+      if (q.length < 2) { UI.clear(resultsBox); return; }
+      tmr = setTimeout(function () {
+        window.CoachAPI.searchMembers(q).then(function (r) {
+          UI.clear(resultsBox);
+          var ms = (r && r.members) || [];
+          if (!ms.length) { resultsBox.appendChild(el("div", { class: "cf-empty", style: "padding:8px", text: "No match — or use a guest name below." })); return; }
+          ms.forEach(function (mem) {
+            resultsBox.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { selected = mem; renderChosen(); } }, [
+              el("div", { class: "cf-item-main" }, [
+                el("div", { class: "cf-item-t", text: mem.name }),
+                el("div", { class: "cf-item-s", text: [mem.email, mem.phone].filter(Boolean).join(" · ") }),
+              ]),
+            ]));
+          });
+        }, function () {});
+      }, 250);
+    });
+
     m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem", text: "Books a lesson with you (auto-confirmed). A court is assigned automatically." }));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Client email" }), email]));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "…or guest name" }), guest]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Client" }), searchInp, resultsBox, chosenBox]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "…or guest name (walk-in, no account)" }), guest]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "When" }), start]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), dur]));
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
@@ -345,12 +386,13 @@
         var st = new Date(start.value), en = new Date(st.getTime() + parseInt(dur.value, 10) * 60000);
         var body = { booking_type: "lesson", resource_id: res, coach_user_id: principal.user_id,
           starts_at: st.toISOString(), ends_at: en.toISOString(), settlement_mode: "at_court" };
-        if (email.value.trim()) body.for_email = email.value.trim();
+        if (selected && selected.email) body.for_email = selected.email;
         else if (guest.value.trim()) body.for_guest_name = guest.value.trim();
-        else { UI.toast("Add a client email or guest name.", "warn"); return; }
+        else { UI.toast("Search & pick a client, or enter a guest name.", "warn"); return; }
         window.API.createBooking(body).then(function () { UI.toast("Booked.", "info"); m.close(); route(); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
       } }),
     ]));
+    renderChosen();
   }
 
   // ---- CLIENTS (list → full record) ---------------------------------------

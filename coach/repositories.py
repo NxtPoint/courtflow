@@ -286,6 +286,27 @@ def _club_currency(session, *, club_id):
     return cur or "ZAR"
 
 
+def search_members(session, *, club_id, q, limit=10):
+    """Search the club's members by NAME or email for the coach's 'book a client' lookup — returns
+    contact details (email + phone) so a coach picks a real member instead of free-typing an email.
+    Club-scoped. Matches on the full name or the email."""
+    like = "%" + (q or "").strip() + "%"
+    rows = session.execute(
+        text("SELECT DISTINCT u.id AS user_id, u.email, u.phone, u.first_name, u.surname "
+             "FROM iam.membership m JOIN iam.\"user\" u ON u.id = m.user_id "
+             "WHERE m.club_id = :c AND m.role IN ('member','guest') "
+             "  AND ( u.email ILIKE :q "
+             "        OR COALESCE(u.first_name,'') || ' ' || COALESCE(u.surname,'') ILIKE :q ) "
+             "ORDER BY u.surname NULLS LAST, u.first_name NULLS LAST LIMIT :lim"),
+        {"c": club_id, "q": like, "lim": int(limit)},
+    ).mappings().all()
+    out = []
+    for r in rows:
+        name = " ".join(x for x in [r["first_name"], r["surname"]] if x).strip() or r["email"]
+        out.append({"user_id": str(r["user_id"]), "name": name, "email": r["email"], "phone": r["phone"]})
+    return out
+
+
 def list_services(session, *, club_id, user_id):
     """The coach's OWN lesson products + their active prices, flattened to one row per price
     (the booking-relevant shape). Scoped to (club_id, coach_user_id)."""

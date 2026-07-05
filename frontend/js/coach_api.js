@@ -32,6 +32,8 @@
     //    hours:{week:[{weekday,open,start_time,end_time,slot_minutes}]},
     //    services:[{price_id,product_id,name,amount_minor,unit,duration_minutes}]}
     onboarding: function () { return A().apiJSON("/api/coach/onboarding"); },
+    // GET /api/coach/members/search?q= -> {members:[{user_id,name,email,phone}]} — 'book a client' lookup.
+    searchMembers: function (q) { return A().apiJSON("/api/coach/members/search?q=" + encodeURIComponent(q || "")); },
     // POST /api/coach/onboarding/complete -> {ok:true}
     completeOnboarding: function () {
       return A().apiJSON("/api/coach/onboarding/complete", { method: "POST", body: {} });

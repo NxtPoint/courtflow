@@ -514,6 +514,21 @@ def get_clients():
     return jsonify(clients=rows, count=len(rows)), 200
 
 
+@coach_bp.get("/members/search")
+def coach_member_search():
+    """Type-ahead lookup of club members (name/email) for 'book a client' — returns email + phone so
+    the coach picks a real member, never free-types. Min 2 chars."""
+    p, err = _coach()
+    if err:
+        return err
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 2:
+        return jsonify(members=[]), 200
+    with session_scope() as s:
+        rows = repo.search_members(s, club_id=p.club_id, q=q)
+    return jsonify(members=rows), 200
+
+
 @coach_bp.get("/clients/<client_user_id>")
 def get_client(client_user_id):
     p, err = _coach()
