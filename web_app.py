@@ -529,12 +529,6 @@ def admin_console_classic():
     return _app_shell("admin.html")
 
 
-@app.get("/dashboard")
-def dashboard():
-    # Non host-switched dashboard shell (portal nav loads this, not '/').
-    return _app_shell("dashboard.html")
-
-
 @app.get("/<page>.html")
 def app_shell_html(page: str):
     """Serve portal SPA shells referenced with a `.html` suffix. Agent E's nav + dashboard

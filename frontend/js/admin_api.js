@@ -42,10 +42,8 @@
     //   membership, statement:{items,total_owed_minor}, owed_minor, payments:[], upcoming:[],
     //   history:[], bookings_count, settlement?}}  — one record, drill-through to the event story.
     person: function (id) { return A().apiJSON("/api/admin/people/" + enc(id)); },
-    // POST /api/admin/members/:user_id/membership  body:{price_id?,months?,start_date?} -> {ok,status}
-    grantMembership: function (id, body) {
-      return A().apiJSON("/api/admin/members/" + enc(id) + "/membership", { method: "POST", body: body || {} });
-    },
+    // (grantMembership wrapper removed 2026-07-05 — the SPA uses issuePackage; the classic console
+    //  hits POST /api/admin/members/<id>/membership directly.)
     // DELETE /api/admin/members/:user_id/membership -> {ok, voided_orders}
     revokeMembership: function (id) {
       return A().apiJSON("/api/admin/members/" + enc(id) + "/membership", { method: "DELETE" });

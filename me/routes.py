@@ -627,17 +627,7 @@ def my_class_story(enrolment_id):
     return jsonify(booking=story), 200
 
 
-@me_bp.get("/activity")
-def my_activity():
-    p, err = _principal()
-    if err:
-        return err
-    try:
-        limit = max(1, min(200, int(request.args.get("limit") or 120)))
-    except (TypeError, ValueError):
-        limit = 120
-    from billing import activity as act
-    with session_scope() as s:
-        rows = act.transaction_log(s, club_id=p.club_id, scope="client",
-                                   user_id=p.user_id, limit=limit)
-    return jsonify(activity=rows, count=len(rows)), 200
+# NOTE: the client transaction-log ('my_activity', scope='client') route was removed 2026-07-05 — it
+# collided with GET /api/me/activity (the monthly Activity view, get_activity above) and its only
+# consumer (the retired account.html shell) is gone. billing.activity.transaction_log stays for the
+# coach/admin scopes.

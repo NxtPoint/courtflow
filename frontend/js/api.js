@@ -182,9 +182,6 @@
     //   status,booking_id|enrolment_id}], spend:{total_paid_minor,by_category:[...],currency},
     //   outstanding:{total_owed_minor,count,currency}} — the monthly Activity view (3 questions).
     activity: function (month) { return A().apiJSON("/api/me/activity" + (month ? ("?month=" + encodeURIComponent(month)) : "")); },
-    // GET /api/me/activity -> {activity:[{at,kind,title,detail,amount_minor,currency,direction}]}
-    //   the client's transaction log (payments, refunds, charges, coaching, memberships).
-    activity: function (limit) { return A().apiJSON("/api/me/activity" + (limit ? ("?limit=" + limit) : "")); },
     // GET /api/me/refund-requests -> {requests:[{id,order_id,amount_minor,reason,status,...}], count}
     refundRequests: function () { return A().apiJSON("/api/me/refund-requests"); },
     // POST /api/me/refund-requests  body: {order_id(req), amount_minor?, reason?} -> {refund_request}
