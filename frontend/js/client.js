@@ -183,6 +183,9 @@
       wrap.appendChild(ac);
     }
 
+    // Plan & credits FIRST (above Book) — the member's standing before they act.
+    wrap.appendChild(planCard(plan, cur));
+
     // Book quick tiles
     var qb = card([el("h2", { style: "margin:0 0 10px", text: "Book" })]);
     var tiles = el("div", { class: "cf-qb" });
@@ -203,9 +206,6 @@
     ]));
     bc.appendChild(el("div", { id: "home-billing", class: "cf-loading", text: "…" }));
     wrap.appendChild(bc);
-
-    // Plan & credits — moved to Home (the look you liked, with Manage).
-    wrap.appendChild(planCard(plan, cur));
 
     set(wrap);
     paintSessions();
