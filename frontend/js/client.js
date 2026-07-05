@@ -125,7 +125,7 @@
     // On a slow first load (Clerk init + cross-region round trips) reassure instead of a bare spinner.
     setTimeout(function () { if (n.isConnected && n.textContent === "Loading…") n.textContent = "Still loading — one moment…"; }, 7000);
   }
-  var card = window.UI.card, backBar = window.UI.backBar, kv = window.UI.kv;   // shared (Wave 1)
+  var card = window.UI.card, kv = window.UI.kv, pageHeader = window.UI.pageHeader;   // shared (Wave 1)
   var TYPE_LABEL = { court: "Court", lesson: "Lesson", class: "Class" };
   function typeLabel(t) { return TYPE_LABEL[t] || "Booking"; }
   var DESC = { court: "Court booking", lesson: "Private lesson", class: "Class", membership: "Membership" };
@@ -304,12 +304,11 @@
     HBMONTH = month;   // keep Home's month nav in sync with the month drilled into
     loading();
     var d;
-    try { d = await window.API.billingSummary(month); } catch (e) { set(el("div", {}, [backBar("Home", "#/"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    try { d = await window.API.billingSummary(month); } catch (e) { set(el("div", {}, [pageHeader("Billing", "Home", "#/"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
     var cat = (d.categories || []).filter(function (c) { return c.key === key; })[0];
     var cur = d.currency || "ZAR";
     var wrap = el("div", {});
-    wrap.appendChild(backBar("Home", "#/"));
-    wrap.appendChild(el("h1", { style: "margin:0 0 2px", text: (cat ? cat.label : key) }));
+    wrap.appendChild(pageHeader(cat ? cat.label : key, "Home", "#/"));
     wrap.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 12px", text: mLabel(month) + " · " + (cat ? cat.count : 0) + " · " + money(cat ? cat.total_minor : 0, cur) }));
     if (!cat || !cat.items.length) wrap.appendChild(el("div", { class: "cf-empty", text: "Nothing here." }));
     else {
@@ -434,12 +433,12 @@
     loading();
     var r;
     try { var raw = await window.TFAuth.apiJSON("/api/billing/receipt/" + encodeURIComponent(orderId)); r = raw.receipt || raw; }
-    catch (e) { set(el("div", {}, [backBar("Back"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    catch (e) { set(el("div", {}, [pageHeader("Receipt", "Back"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
     var cur = r.currency || "ZAR";
     var refunded = (r.refunded_minor || 0) > 0;
     var paid = r.status === "paid" || refunded;
     var wrap = el("div", {});
-    wrap.appendChild(backBar("Back"));
+    wrap.appendChild(pageHeader(paid ? "Receipt" : "Charge", "Back"));
     var c = card([
       el("div", { class: "cf-detail-h" }, [
         el("div", {}, [el("div", { class: "cf-muted", style: "font-size:.78rem;font-weight:700", text: (paid ? "RECEIPT " : "CHARGE ") + (r.receipt_no || "") }),
@@ -536,8 +535,7 @@
     var dep = null;
     if (id) { try { dep = ((await window.API.dependents()).dependents || []).filter(function (d) { return String(d.id) === String(id); })[0]; } catch (e) {} }
     var wrap = el("div", {});
-    wrap.appendChild(backBar("Profile", "#/profile"));
-    wrap.appendChild(el("h1", { style: "margin:0 0 12px", text: id ? "Edit child" : "Add child" }));
+    wrap.appendChild(pageHeader(id ? "Edit child" : "Add child", "Profile", "#/profile"));
     var c = card([]); var inputs = {};
     [["first_name", "First name", "text"], ["surname", "Surname", "text"], ["dob", "Date of birth", "date"]].forEach(function (f) {
       var inp = el("input", { class: "cf-input", type: f[2], value: dep ? (dep[f[0]] || "") : "" }); inputs[f[0]] = inp;

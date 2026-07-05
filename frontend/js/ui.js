@@ -164,6 +164,15 @@
     return el("div", { class: "cf-kv" }, [el("div", { class: "cf-kv-k", text: k }),
       el("div", { class: "cf-kv-v" }, typeof v === "string" ? [document.createTextNode(v)] : [v])]);
   }
+  // Slim on-brand page header for drill-through screens (back chip + title) so no page looks barren.
+  // backHash omitted → history.back(). One consistent header everywhere instead of a bare back bar.
+  function pageHeader(title, backLabel, backHash) {
+    return el("div", { class: "cf-pagehead" }, [
+      el("button", { class: "cf-ph-back", type: "button", text: "‹ " + (backLabel || "Back"),
+        onclick: function () { if (backHash) location.hash = backHash; else history.back(); } }),
+      el("h1", { class: "cf-ph-title", text: title || "" }),
+    ]);
+  }
   function modal(title, opts) {
     opts = opts || {};
     var bg = el("div", { class: "cf-modal-bg" }), body = el("div", {});
@@ -230,7 +239,7 @@
     SETTLEMENT: SETTLEMENT, settlementLabel: settlementLabel,
     el: el, esc: esc, clear: clear, toast: toast, errMsg: errMsg, groupByDay: groupByDay,
     lifecycleBar: lifecycleBar, subtabs: subtabs, lifeActions: lifeActions, statusChip: statusChip,
-    card: card, backBar: backBar, kv: kv, modal: modal, toLocal: toLocal, addToCalendar: addToCalendar,
+    card: card, backBar: backBar, kv: kv, pageHeader: pageHeader, modal: modal, toLocal: toLocal, addToCalendar: addToCalendar,
     menu: menu,
   };
 })();
