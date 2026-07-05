@@ -65,6 +65,40 @@ def _parse_ua(ua):
     return device, browser, os_
 
 
+# Server-side club attribution for the beacon. The DB-less web service can't emit the club UUID,
+# so when the payload carries no club_id we resolve it here (API has the DB) from the browsing host
+# (Origin/Referer), falling back to the sole club for a single-club deployment. Cached per host so a
+# page view is at most one DB lookup per distinct host per process (hosts are stable). This is what
+# makes the Overview 'Traffic' panel club-scoped without a frontend change.
+_CLUB_BY_HOST = {}
+
+
+def _origin_host():
+    o = (request.headers.get("Origin") or request.headers.get("Referer") or "")
+    if not o:
+        return ""
+    o = o.split("://", 1)[-1]        # drop scheme
+    return o.split("/", 1)[0]         # -> host[:port]  (resolve_club_by_host strips port + www)
+
+
+def _resolve_beacon_club():
+    host = _origin_host()
+    if host in _CLUB_BY_HOST:
+        return _CLUB_BY_HOST[host]
+    cid = None
+    try:
+        from db import session_scope
+        from iam import repositories as iam_repo
+        with session_scope() as s:
+            cid = (iam_repo.resolve_club_by_host(s, host) if host else None) or iam_repo.sole_club_id(s)
+    except Exception:
+        log.info("beacon club resolve skipped")
+        cid = None
+    cid = str(cid) if cid is not None else None
+    _CLUB_BY_HOST[host] = cid
+    return cid
+
+
 @page_bp.route("/api/track/page", methods=["POST", "OPTIONS"])
 def page():
     if request.method == "OPTIONS":
@@ -77,6 +111,8 @@ def page():
     if not path:
         return jsonify({"ok": False, "error": "path required"}), 400
     club_id = (body.get("club_id") or "").strip() or None
+    if not club_id:                       # DB-less web can't send it — resolve from the browsing host
+        club_id = _resolve_beacon_club()
     email = (body.get("email") or "").strip().lower() or None
     referrer = (body.get("referrer") or "")[:300]
     # First-party anonymous visitor id (client-generated, localStorage) — lets us count UNIQUE
