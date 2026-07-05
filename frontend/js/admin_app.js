@@ -1206,7 +1206,7 @@
         { name: "Unique", data: s.unique_visitors, color: "#1f7a4d" },
       ]);
     });
-    if (!k.visits) body.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin:8px 2px", text: "No club-attributed website traffic yet — per-club traffic tagging goes live with the domain cutover." }));
+    if (!k.visits) body.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin:8px 2px", text: "No website visits recorded for this month yet." }));
     body.appendChild(ovBreakdown("Top sources", data.breakdowns.sources));
     body.appendChild(ovBreakdown("Top pages", data.breakdowns.top_pages));
     body.appendChild(ovBreakdown("Devices", data.breakdowns.by_device));
