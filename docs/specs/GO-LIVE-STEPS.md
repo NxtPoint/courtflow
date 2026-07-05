@@ -71,8 +71,18 @@ link). Your bookings, membership and lessons are already there." ~900 recipients
    - (`MARKETING_HOSTS` already includes the real domains. Save → services redeploy.)
 4. **Confirm email still sends** on the real domain (a quick `--list-plans`-style booking test) — SES is
    host-independent so it should be unaffected.
-5. **Flip DNS** (⚠️ apex + `www` ONLY): point them at Render per step 2's target (usually `www` CNAME →
-   `courtflow-web.onrender.com`, apex via Render ALIAS/A). **Do NOT touch `api.nextpointtennis.com`.**
+5. **Flip DNS** (⚠️ apex + `www` ONLY). **Do NOT touch `api.nextpointtennis.com`.**
+   DNS is hosted **at Wix** (nameservers `ns8/ns9.wixdns.net`) and the domain is **connected to the Wix
+   site**, so the apex A records (`185.230.63.x`) + `www` CNAME (`cdn1.wixdns.net`) are **Wix-managed and
+   likely LOCKED**. To repoint them:
+   - In **Wix → Domains**, you'll probably need to **disconnect the domain from the Wix site** (or use
+     "point to an external site" / edit-DNS mode) so the apex/www records become editable.
+   - Then set them to Render's targets from step 2: **`www` CNAME → `courtflow-web.onrender.com`**, and the
+     **apex** via Render's provided **A record / ALIAS** (Render doesn't do apex CNAME — it gives an A/ALIAS,
+     or you redirect apex→www; follow Render's custom-domain screen).
+   - ⚠️ **Wix gotcha (from the 1050 cutover): do NOT click "Try Again" in Wix Domains** — it can reset things.
+   - Leave every OTHER record alone: `api.` (1050 API), the Clerk CNAMEs (`clerk/accounts/clkmail/clk*`),
+     the email records (`_dmarc`, `_domainkey`, MX, SPF), and the Clerk/GSC TXT.
 6. **Move the Wix site to its free `*.wixsite.com` URL** — do NOT delete it (rollback path).
 7. **GSC:** submit `https://nextpointtennis.com/sitemap.xml`; **Request Indexing** on the top 20-30 pages.
 8. **Send the client email** (step 8 above).
