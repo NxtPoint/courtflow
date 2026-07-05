@@ -137,7 +137,10 @@
     var k = ck.kpis || {}, cur = "ZAR";
     var wrap = el("div", {});
     wrap.appendChild(el("div", { class: "cf-greet" }, [
-      el("div", {}, [el("h1", { text: greet() + ", " + coachName().split(" ")[0] }), el("p", { text: "Here's your business." })]),
+      el("div", {}, [el("h1", { text: greet() + ", " + coachName().split(" ")[0] }), el("p", { text: "Here's your business." }),
+        el("div", { class: "cf-row", style: "gap:8px;margin-top:10px;flex-wrap:wrap" }, [
+          el("button", { class: "cf-btn cf-btn-sm", text: "Edit profile", onclick: function () { go("#/profile"); } }),
+        ])]),
       el("span", { class: "cf-greet-plan", text: monthLabel(MONTH) }),
     ]));
 

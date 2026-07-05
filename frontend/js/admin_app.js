@@ -50,9 +50,9 @@
     document.body.classList.add("cf-app", "cf-admin");
     if (!document.getElementById("cf-appbar")) {
       document.body.insertBefore(el("div", { class: "cf-appbar", id: "cf-appbar" }, [
-        el("div", { class: "cf-brand" }, [el("span", { class: "cf-logo", text: "NP" }), el("span", { id: "cf-brandname", text: clubName() })]),
+        el("div", { class: "cf-brand", style: "cursor:pointer", title: "Home", onclick: function () { go("#/"); } }, [el("span", { class: "cf-logo", text: "NP" }), el("span", { id: "cf-brandname", text: clubName() })]),
         el("span", { class: "cf-spacer" }),
-        el("div", { class: "cf-avatar", id: "cf-avatar", text: initials(), onclick: function () { go("#/setup"); } }),
+        el("div", { class: "cf-avatar", id: "cf-avatar", text: initials(), title: "Account", onclick: function (ev) { openAccountMenu(ev.currentTarget); } }),
       ]), document.body.firstChild);
     }
     view = document.getElementById("cf-main");
@@ -83,6 +83,7 @@
     if (top === "insights") return renderInsights();
     if (top === "person") return renderPerson(parts[1]);
     if (top === "event") return renderEvent(parts[1]);
+    if (top === "profile") return renderProfile();
     return renderHome();
   }
 
@@ -94,6 +95,43 @@
     setTimeout(function () { if (n.isConnected && n.textContent === "Loading…") n.textContent = "Still loading — one moment…"; }, 7000);
   }
   var card = window.UI.card, backBar = window.UI.backBar;   // shared (FRONTEND-STANDARDISATION Wave 1)
+
+  // ---- account menu (top-right avatar) + owner personal profile -----------
+  function openAccountMenu(anchor) {
+    UI.menu(anchor, [
+      { label: "Edit profile", onClick: function () { go("#/profile"); } },
+      { label: "Switch profile", onClick: function () { window.TFAuth.signOut().then(function () { location.href = "/login"; }); } },
+      "-",
+      { label: "Sign out", tone: "danger", onClick: function () { window.TFAuth.signOut().then(function () { location.reload(); }); } },
+    ]);
+  }
+  // The owner has a personal account profile (name + phone), separate from the club config in Setup.
+  // Reuses the same /api/me/profile endpoint every role uses (manage_own_profile covers club_admin).
+  var PROFILE_FIELDS = [["first_name", "First name", "text"], ["surname", "Surname", "text"], ["phone", "Phone", "tel"]];
+  async function renderProfile() {
+    loading();
+    var pr = {};
+    try { pr = await window.API.getProfile(); } catch (e) {}
+    var wrap = el("div", {});
+    wrap.appendChild(UI.pageHeader("Your profile", "Home", "#/"));
+    var inputs = {};
+    var c = card([el("h2", { style: "margin:0 0 10px", text: "Your details" })]);
+    c.appendChild(UI.kv("Email", el("span", { class: "cf-muted", text: (pr.email || "") + "  (sign-in — can't change)" })));
+    PROFILE_FIELDS.forEach(function (f) {
+      var inp = el("input", { class: "cf-input", type: f[2], value: pr[f[0]] || "" });
+      inputs[f[0]] = inp;
+      c.appendChild(el("div", { class: "cf-field" }, [el("label", { text: f[1] }), inp]));
+    });
+    c.appendChild(el("div", { class: "cf-row", style: "margin-top:12px" }, [
+      el("button", { class: "cf-btn cf-btn-primary cf-btn-block", text: "Save", onclick: function () {
+        var body = {}; PROFILE_FIELDS.forEach(function (f) { body[f[0]] = inputs[f[0]].value.trim() || null; });
+        window.API.patchProfile(body).then(function () { UI.toast("Saved.", "info"); },
+          function (e) { UI.toast((e && e.body && e.body.error === "VALIDATION") ? "Please check the fields." : UI.errMsg(e), "error"); });
+      } }),
+    ]));
+    wrap.appendChild(c);
+    set(wrap);
+  }
   function soon(title, note) { return el("div", {}, [el("h1", { style: "margin:0 0 12px", text: title }), card([el("div", { class: "cf-empty", text: note || "Coming next in the redesign." })])]); }
   // A tappable focus card for the Home command-center.
   function focusCard(opts) {
@@ -122,7 +160,10 @@
     var mo = hub.money || {}, pe = hub.people || {}, ap = hub.approvals || {}, cur = mo.currency || "ZAR";
     var wrap = el("div", {});
     wrap.appendChild(el("div", { class: "cf-greet" }, [
-      el("div", {}, [el("h1", { text: greet() + ", " + ownerName() }), el("p", { text: clubName() + " — here's what needs you." })]),
+      el("div", {}, [el("h1", { text: greet() + ", " + ownerName() }), el("p", { text: clubName() + " — here's what needs you." }),
+        el("div", { class: "cf-row", style: "gap:8px;margin-top:10px;flex-wrap:wrap" }, [
+          el("button", { class: "cf-btn cf-btn-sm", text: "Edit profile", onclick: function () { go("#/profile"); } }),
+        ])]),
     ]));
 
     // 1) Today at the club
