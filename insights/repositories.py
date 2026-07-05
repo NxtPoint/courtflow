@@ -101,6 +101,79 @@ def sales_by_day(session, *, club_id, month=None):
     }
 
 
+def bookings_by_day(session, *, club_id, month=None):
+    """Bookings MADE (not money received) for ONE month, grouped by the day they're played
+    (starts_at) — the owner's daily diary at a glance. The sibling of sales_by_day, but over
+    diary.booking rather than billing.payment, so it also carries the COACH (which a payment
+    doesn't) and surfaces bookings that carry no charge (membership-covered / R0). Each row
+    links to the standard event-story widget via booking_id (-> #/event/<id> = admin
+    booking_story). `month` = 'YYYY-MM' (default = current month). Guarded -> empty. club_id-scoped.
+
+    Counts real bookings only: status IN ('confirmed','completed','no_show') — 'held'/'requested'/
+    'proposed'/'cancelled' hold no confirmed slot and are excluded (keeps this reconciling with the
+    Overview 'bookings per day' series, which reads the same function)."""
+    b = session.execute(
+        text("""
+            SELECT to_char(COALESCE(to_date(:m, 'YYYY-MM'), date_trunc('month', now())), 'YYYY-MM') AS ym,
+                   date_trunc('month', COALESCE(to_date(:m, 'YYYY-MM'), now()))::timestamptz AS start_d,
+                   (date_trunc('month', COALESCE(to_date(:m, 'YYYY-MM'), now()))
+                    + interval '1 month')::timestamptz AS end_d
+        """),
+        {"m": month},
+    ).mappings().first()
+    ym, start_d, end_d = b["ym"], b["start_d"], b["end_d"]
+
+    def _rows():
+        return session.execute(
+            text("""
+                SELECT bk.id AS booking_id, bk.booking_type, bk.status, bk.starts_at, bk.ends_at,
+                       COALESCE(NULLIF(TRIM(COALESCE(cl.first_name,'') || ' ' || COALESCE(cl.surname,'')), ''),
+                                cl.email, 'Walk-in') AS client_name,
+                       NULLIF(TRIM(COALESCE(co.first_name,'') || ' ' || COALESCE(co.surname,'')), '') AS coach_name,
+                       res.name AS court_name,
+                       (SELECT ol.description FROM billing.order_line ol
+                         WHERE ol.order_id = bk.order_id ORDER BY ol.created_at LIMIT 1) AS description
+                FROM diary.booking bk
+                LEFT JOIN iam."user" cl ON cl.id = bk.booked_by_user_id
+                LEFT JOIN iam."user" co ON co.id = bk.coach_user_id
+                LEFT JOIN diary.resource res ON res.id = bk.resource_id
+                WHERE bk.club_id = :c
+                  AND bk.status IN ('confirmed', 'completed', 'no_show')
+                  AND bk.starts_at >= :s AND bk.starts_at < :e
+                ORDER BY bk.starts_at DESC
+            """),
+            {"c": str(club_id), "s": start_d, "e": end_d},
+        ).mappings().all()
+
+    rows = _guard(_rows, [])
+    days = {}
+    counts = {"court": 0, "lesson": 0, "class": 0}
+    for r in rows:
+        bt = r["booking_type"] or "court"
+        if bt in counts:
+            counts[bt] += 1
+        dkey = r["starts_at"].date().isoformat()
+        d = days.setdefault(dkey, {"date": dkey, "count": 0, "bookings": []})
+        d["count"] += 1
+        d["bookings"].append({
+            "booking_id": str(r["booking_id"]),
+            "booking_type": bt,
+            "status": r["status"],
+            "client_name": r["client_name"],
+            "coach_name": r["coach_name"],
+            "court_name": r["court_name"],
+            "description": r["description"],
+            "starts_at": r["starts_at"].isoformat(),
+        })
+    day_list = sorted(days.values(), key=lambda x: x["date"], reverse=True)
+    return {
+        "month": ym,
+        "count": len(rows),
+        "by_type": counts,
+        "days": day_list,
+    }
+
+
 def court_utilisation(session, *, club_id, days=30):
     """Court occupancy over the trailing `days`, bucketed by weekday (0=Mon..6=Sun) x hour-of-day:
     booked court-hours vs available (open) court-hours, plus an overall utilisation %. Reads

@@ -578,6 +578,7 @@
   var MONEY_MONTH = null; // 'YYYY-MM' for Sales by day (null = current month)
   var MONEY_SECTIONS = [
     ["sales", "Sales by day", "Daily takings — client, service and amount"],
+    ["bookings", "Bookings by day", "Every booking — client, service and coach"],
     ["revenue", "Revenue by service", "Net revenue split by service line"],
     ["settlement", "Coach settlement", "What each coach is owed · the club's cut"],
     ["approvals", "Approvals", "Refund requests awaiting your decision"],
@@ -587,6 +588,7 @@
   function clubCur() { return (CLUB && CLUB.currency_code) || "ZAR"; }
   function renderMoney(section) {
     if (section === "sales") return moneySales();
+    if (section === "bookings") return moneyBookings();
     if (section === "revenue") return moneyRevenue();
     if (section === "settlement") return moneySettlement();
     if (section === "approvals") return moneyApprovals();
@@ -667,6 +669,55 @@
     if (x.booking_id) go("#/event/" + x.booking_id);
     else if (x.order_id) window.open("/receipt.html?order=" + encodeURIComponent(x.order_id), "_blank");
     else UI.toast("No detail available for this sale.", "warn");
+  }
+
+  // Bookings by day — the diary as a daily list (client · service · coach), one month at a time.
+  // Sibling of Sales by day, but over the bookings themselves; each row drills to the SAME event
+  // story widget (#/event/<id> → Widgets.TransactionDetail) — never a second booking sheet.
+  async function moneyBookings() {
+    loading();
+    var data;
+    try { data = await window.AdminAPI.bookingsByDay(MONEY_MONTH); }
+    catch (e) { set(el("div", {}, [backBar("Money", "#/money"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    MONEY_MONTH = data.month;
+    var wrap = el("div", {});
+    wrap.appendChild(backBar("Money", "#/money"));
+    function shiftMonth(n) { MONEY_MONTH = addMonth(data.month, n); moneyBookings(); }
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:4px" }, [
+      el("h1", { style: "margin:0", text: "Bookings by day" }),
+      el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹", onclick: function () { shiftMonth(-1); } }),
+        el("span", { style: "font-weight:600;min-width:104px;text-align:center", text: monthLabel(data.month) }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { shiftMonth(1); } }),
+      ]),
+    ]));
+    var bt = data.by_type || {};
+    wrap.appendChild(el("div", { class: "cf-muted", style: "margin:-2px 0 12px;font-size:.9rem", text: (data.count || 0) + " booking" + (data.count === 1 ? "" : "s") + " · " + (bt.court || 0) + " court · " + (bt.lesson || 0) + " lesson · " + (bt.class || 0) + " class" }));
+    var days = data.days || [];
+    if (!days.length) wrap.appendChild(el("div", { class: "cf-empty", text: "No bookings this month." }));
+    else days.forEach(function (d) {
+      wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:14px 2px 6px" }, [
+        el("div", { style: "font-weight:700", text: dayLabel(d.date) }),
+        el("div", { class: "cf-muted", style: "font-weight:600", text: d.count + " booking" + (d.count === 1 ? "" : "s") }),
+      ]));
+      var c = card([]), l = el("div", { class: "cf-list" });
+      (d.bookings || []).forEach(function (x) {
+        var t = (["court", "lesson", "class"].indexOf(x.booking_type) >= 0) ? x.booking_type : "court";
+        var when = ""; try { when = UI.fmtTime(x.starts_at); } catch (e) {}
+        // Subtitle mirrors the event-story convention: coach for a lesson, name for a class, court otherwise.
+        var subj = x.booking_type === "lesson" ? (x.coach_name ? "with " + x.coach_name : "")
+                 : x.booking_type === "class" ? (x.description || "")
+                 : (x.court_name || "");
+        var meta = [when, subj].filter(Boolean).join(" · ");
+        l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/event/" + x.booking_id); } }, [
+          el("span", { class: "cf-chip " + t, text: x.booking_type }),
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: x.client_name }), el("div", { class: "cf-item-s", text: meta })]),
+          UI.statusChip(x.status),
+        ]));
+      });
+      c.appendChild(l); wrap.appendChild(c);
+    });
+    set(wrap);
   }
   function addMonth(ym, n) { try { var p = (ym || "").split("-"), d = new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1 + n, 1); return d.getFullYear() + "-" + (d.getMonth() + 1 < 10 ? "0" : "") + (d.getMonth() + 1); } catch (e) { return ym; } }
   function monthLabel(ym) { try { var p = ym.split("-"); return new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, 1).toLocaleDateString("en-ZA", { month: "long", year: "numeric" }); } catch (e) { return ym; } }

@@ -26,6 +26,20 @@ def _admin():
     return p, None
 
 
+@insights_bp.get("/bookings-by-day")
+def bookings_by_day():
+    """Daily bookings for one ?month=YYYY-MM (default current) — grouped by the day played, each
+    booking with client + service type + coach + status + a detail link (booking_id -> event
+    story). Powers the Money -> 'Bookings by day' section (sibling of Sales by day)."""
+    p, err = _admin()
+    if err:
+        return err
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = repo.bookings_by_day(s, club_id=p.club_id, month=month)
+    return jsonify(data), 200
+
+
 @insights_bp.get("/court-utilisation")
 def court_utilisation():
     """Court occupancy heatmap (weekday x hour) + overall utilisation % over the last ?days (default

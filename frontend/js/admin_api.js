@@ -300,6 +300,10 @@
     //   days:[{date, total_minor, sales:[{payment_id,order_id,booking_id,client_name,service_type,
     //   description,amount_minor,at}]}]}
     salesByDay: function (month) { return A().apiJSON("/api/insights/sales-by-day" + (month ? ("?month=" + month) : "")); },
+    // GET /api/insights/bookings-by-day?month=YYYY-MM -> {month, count, by_type:{court,lesson,class},
+    //   days:[{date, count, bookings:[{booking_id,booking_type,status,client_name,coach_name,
+    //   court_name,description,starts_at}]}]}
+    bookingsByDay: function (month) { return A().apiJSON("/api/insights/bookings-by-day" + (month ? ("?month=" + month) : "")); },
 
     // ---- online payments + client refund requests (Billing tab) ----------
     // GET /api/admin/payments -> {payments:[{order_id,payer_email,amount_minor,currency_code,
