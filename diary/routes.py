@@ -710,6 +710,63 @@ def cron_reconcile():
     ), 200
 
 
+@cron_bp.get("/yoco-diag")
+def cron_yoco_diag():
+    """OPS-only DIAGNOSTIC (remove after go-live): why are refunds failing? Reports the Yoco KEY MODE
+    (test vs live — Yoco REJECTS test-mode refunds) and, for ?email=, probes each paid online order's
+    stored checkout id against Yoco (get_checkout) to see if the CURRENT key even recognises it (a
+    checkout created under a different key environment can't be refunded). Read-only (no writes)."""
+    if not _ops_only():
+        return jsonify(error="forbidden"), 403
+    import os
+
+    def _mode(v):
+        v = (v or "").strip()
+        if not v:
+            return "MISSING"
+        if v.startswith(("sk_live_", "pk_live_")):
+            return "LIVE"
+        if v.startswith(("sk_test_", "pk_test_")):
+            return "TEST"
+        if v.startswith("whsec_"):
+            return "set(whsec_)"
+        return "unknown(" + v[:6] + "…)"
+
+    out = {"keys": {
+        "YOCO_SECRET_KEY": _mode(os.getenv("YOCO_SECRET_KEY")),
+        "YOCO_PUBLIC_KEY": _mode(os.getenv("YOCO_PUBLIC_KEY")),
+        "YOCO_WEBHOOK_SECRET": _mode(os.getenv("YOCO_WEBHOOK_SECRET")),
+        "PAYMENTS_ENABLED": (os.getenv("PAYMENTS_ENABLED") or "").strip() in ("1", "true", "True"),
+    }, "probes": []}
+    email = (request.args.get("email") or "").strip().lower()
+    if email:
+        from db import session_scope
+        from sqlalchemy import text as _t
+        with session_scope() as s:
+            uid = s.execute(_t('SELECT id FROM iam."user" WHERE lower(email)=:e LIMIT 1'), {"e": email}).scalar()
+            rows = s.execute(_t("""
+                SELECT o.id AS order_id, o.status,
+                       (SELECT intent_id FROM billing.payment_attempt
+                          WHERE order_id=o.id AND provider='yoco' AND intent_id IS NOT NULL
+                            AND (status='created' OR intent_id LIKE 'ch_%') ORDER BY created_at LIMIT 1) AS checkout_id
+                FROM billing."order" o
+                WHERE o.user_id=:u AND o.settlement_mode='online' AND o.status IN ('paid','refunded')
+                ORDER BY o.created_at DESC LIMIT 6
+            """), {"u": str(uid) if uid else None}).mappings().all()
+            from yoco_billing import client as yc
+            for r in rows:
+                pr = {"order_id": str(r["order_id"]), "order_status": r["status"], "checkout_id": r["checkout_id"]}
+                if r["checkout_id"]:
+                    try:
+                        ck = yc.get_checkout(checkout_id=r["checkout_id"])
+                        pr["yoco_status"] = ck.get("status")
+                        pr["yoco_fields"] = [k for k in ck.keys()][:14]
+                    except Exception as e:
+                        pr["yoco_error"] = str(e)[:200]
+                out["probes"].append(pr)
+    return jsonify(out), 200
+
+
 @cron_bp.post("/reminders")
 def cron_reminders():
     if not _ops_only():
