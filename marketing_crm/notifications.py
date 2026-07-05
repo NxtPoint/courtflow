@@ -173,6 +173,53 @@ def _t_lesson_declined(ctx):
             "coach.", "/book/lesson")
 
 
+# Booking/money lifecycle — cancellations, edits, refunds, reminders (client-facing, launch-critical).
+def _t_booking_cancelled(ctx):
+    res = _g(ctx, "resource_name", default="your booking")
+    when = _when(ctx)
+    body = f"Your booking for {res}" + (f" on {when}" if when else "") + " has been cancelled."
+    fee = _money(_g(ctx, "fee_minor"), _g(ctx, "currency_code", "currency"))
+    if fee and _g(ctx, "fee_applied"):
+        body += f" A cancellation fee of {fee} applies."
+    return ("Booking cancelled", body, "/app.html")
+
+
+def _t_booking_rescheduled(ctx):
+    res = _g(ctx, "resource_name", default="your booking")
+    when = _when(ctx)
+    body = f"Your booking for {res} has been moved" + (f" to {when}" if when else "") + \
+           ". If this doesn't suit you, you can reschedule or cancel from My Bookings."
+    return ("Booking updated", body, "/app.html")
+
+
+def _t_payment_refunded(ctx):
+    amt = _money(_g(ctx, "amount_minor"), _g(ctx, "currency_code", "currency"))
+    body = ("We've refunded" + (f" {amt}" if amt else " your payment") +
+            " to your card. It can take a few business days to appear on your statement.")
+    order_id = _g(ctx, "ref_id", "order_id")
+    link = f"/receipt.html?order={order_id}" if order_id else "/account.html"
+    return ("Refund issued", body, link)
+
+
+def _t_class_cancelled(ctx):
+    cls = _g(ctx, "class_name", "resource_name", default="your class")
+    when = _when(ctx)
+    body = f"{cls}" + (f" on {when}" if when else "") + \
+           " has been cancelled. Any payment for it will be refunded or credited."
+    return ("Class cancelled", body, "/app.html")
+
+
+def _t_booking_reminder(ctx):
+    res = _g(ctx, "resource_name", "class_name", default="your booking")
+    when = _when(ctx)
+    body = f"Reminder: {res}" + (f" is coming up on {when}" if when else " is coming up") + \
+           ". See you on court!"
+    coach = ctx.get("coach_name")
+    if coach:
+        body += f" Coach: {coach}."
+    return ("Booking reminder", body, "/app.html")
+
+
 # ---------------------------------------------------------------------------
 # KIND_MAP — which usage_event kinds become notifications + their template.
 #
@@ -203,6 +250,12 @@ KIND_MAP = {
     "lesson_proposed":       _t_lesson_proposed,         # (→ client)
     "lesson_accepted":       _t_lesson_accepted,         # (→ requester)
     "lesson_declined":       _t_lesson_declined,         # (→ requester)
+    # Booking/money lifecycle — these WERE emitted but silent (no map entry = no email/inbox).
+    "booking_cancelled":     _t_booking_cancelled,       # court/lesson cancel (→ booker)
+    "booking_rescheduled":   _t_booking_rescheduled,     # court/lesson moved (→ booker)
+    "payment_refunded":      _t_payment_refunded,         # money-back-to-card (→ payer)
+    "class_cancelled":       _t_class_cancelled,          # session cancelled (→ each enrolled, fanned out)
+    "booking_reminder":      _t_booking_reminder,         # T-24h / T-2h (→ booker)
 }
 
 
@@ -257,7 +310,7 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
     ident = _club_identity(session, club_id)
     status = _try_email(recipient.get("email"), title, body, recipient.get("name"),
                         from_name=ident.get("from_name"), reply_to=ident.get("reply_to"),
-                        kind=kind, ctx=ctx)
+                        bcc=ident.get("bcc"), kind=kind, ctx=ctx)
     if status and status != "skipped" and notif_id:
         try:
             notif_repo.set_email_status(session, notification_id=notif_id, email_status=status)
@@ -272,8 +325,11 @@ _ICS_KINDS = {"booking_confirmed", "lesson_accepted", "lesson_proposed", "class_
 
 
 def _club_identity(session, club_id):
-    """The club's email identity: {from_name, reply_to} = the club's name + a contact email (its first
-    location email). Drives the per-club From display name + Reply-To. Guarded → {} on any failure."""
+    """The club's email identity: {from_name, reply_to, bcc} = the club's name + a contact email (its
+    first location email). Drives the per-club From display name + Reply-To. The club is BCC'd on every
+    transactional email (`bcc` = its contact email) so it keeps an oversight copy of all bookings/edits/
+    cancellations/refunds; the global TRANSACTIONAL_BCC env floor (in ses.py) catches the rest.
+    Guarded → {} on any failure."""
     try:
         from sqlalchemy import text
         row = session.execute(text(
@@ -281,13 +337,16 @@ def _club_identity(session, club_id):
             "(SELECT email FROM club.location WHERE club_id = c.id AND email IS NOT NULL "
             " ORDER BY created_at LIMIT 1) AS reply_to "
             "FROM club.club c WHERE c.id = :c"), {"c": club_id}).mappings().first()
-        return {"from_name": row["club_name"], "reply_to": row["reply_to"]} if row else {}
+        if not row:
+            return {}
+        return {"from_name": row["club_name"], "reply_to": row["reply_to"], "bcc": row["reply_to"]}
     except Exception:
         log.debug("club identity lookup failed for %s", club_id, exc_info=False)
         return {}
 
 
-def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, kind=None, ctx=None):
+def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, bcc=None,
+               kind=None, ctx=None):
     """Send a transactional email via SES: HTML + plain-text, the club's From-name + Reply-To, and a
     calendar (.ics) attachment for booking-type events. Returns 'sent'|'failed'|'skipped'. With no
     AWS/SES creds → 'skipped' (a clean no-op), so the engine is fully usable with NO keys. NEVER raises.
@@ -312,7 +371,8 @@ def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, 
         if kind in _ICS_KINDS and ctx and os.getenv("EMAIL_ICS_ENABLED", "0").strip() == "1":
             attachments = ses._ics_attachment(ctx) or None
         ok = ses.send_raw_email(to_email, title, text_body, body_html=html_body,
-                                attachments=attachments, from_name=from_name, reply_to=reply_to)
+                                attachments=attachments, from_name=from_name, reply_to=reply_to,
+                                bcc=bcc)
         return "sent" if ok else "failed"
     except Exception:
         log.exception("notification email send failed -> %s", to_email)

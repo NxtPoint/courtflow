@@ -56,6 +56,10 @@ LOCATION = dict(
     name="Killarney Country Club",
     city="Johannesburg",
     country="South Africa",
+    # The club contact email — becomes the Reply-To on every transactional email AND the address the
+    # club is BCC'd on (oversight copy of all bookings/edits/cancellations/refunds). Idempotent:
+    # upsert_location updates it on every re-seed.
+    email="info@nextpointtennis.com",
 )
 
 # --- iam coach profiles (docs/02 §3, §7) ----------------------------------

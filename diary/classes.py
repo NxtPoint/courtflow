@@ -753,24 +753,58 @@ def list_type_sessions(session, *, club_id, resource_id, date_from=None, date_to
 
 
 def cancel_session(session, *, club_id, session_id):
-    """Cancel a class_session: status='cancelled'; best-effort emit('class_cancelled')."""
+    """Cancel a class_session: status='cancelled'; drop each enrolled/waitlisted player's debt (void
+    the unpaid order + credit back a token) and emit('class_cancelled') PER PLAYER so each is emailed +
+    notified (the raw session carries no recipient — a bare emit would notify nobody)."""
     cs = _session_row(session, club_id, session_id, lock=True)
     if not cs:
         return _err("SESSION_NOT_FOUND", 404)
+    class_name = session.execute(
+        text("SELECT r.name FROM diary.resource r WHERE r.id = :rid"),
+        {"rid": cs["resource_id"]},
+    ).scalar()
     session.execute(
         text("UPDATE diary.class_session SET status='cancelled', updated_at=now() "
              "WHERE club_id=:c AND id=:id"),
         {"c": club_id, "id": session_id},
     )
-    try:
-        events.emit("class_cancelled", {
-            "club_id": str(club_id), "class_session_id": str(session_id),
-            "resource_id": str(cs["resource_id"]),
-            "starts_at": cs["starts_at"].isoformat() if hasattr(cs["starts_at"], "isoformat") else cs["starts_at"],
-        })
-    except Exception:
-        log.debug("class_cancelled emit skipped")
-    return {"ok": True, "session_id": str(session_id), "status_value": "cancelled"}
+    starts = cs["starts_at"].isoformat() if hasattr(cs["starts_at"], "isoformat") else cs["starts_at"]
+
+    # Every still-active enrolment: cancel it, void its unpaid order (so it stops showing as 'owed'),
+    # credit back a prepaid token, and notify the player. Waitlisted players are told too.
+    players = session.execute(
+        text("SELECT id, user_id, order_id, status FROM diary.enrolment "
+             "WHERE class_session_id=:cs AND status IN ('enrolled','waitlisted')"),
+        {"cs": session_id},
+    ).mappings().all()
+    for p in players:
+        session.execute(
+            text("UPDATE diary.enrolment SET status='cancelled', updated_at=now() WHERE id=:id"),
+            {"id": p["id"]},
+        )
+        if p.get("order_id"):
+            try:
+                from billing.statement import void_order
+                void_order(session, club_id=club_id, order_id=p["order_id"], reason="class cancelled")
+            except Exception:
+                log.debug("class order void skipped", exc_info=False)
+        try:
+            from diary.bookings import _credit_token_guarded
+            _credit_token_guarded(session, club_id=club_id, booking_id=str(p["id"]),
+                                  reason="class cancelled")
+        except Exception:
+            pass
+        try:
+            events.emit("class_cancelled", {
+                "club_id": str(club_id), "class_session_id": str(session_id),
+                "resource_id": str(cs["resource_id"]), "class_name": class_name,
+                "user_id": str(p["user_id"]) if p.get("user_id") else None,
+                "starts_at": starts,
+            })
+        except Exception:
+            log.debug("class_cancelled emit skipped")
+    return {"ok": True, "session_id": str(session_id), "status_value": "cancelled",
+            "notified": len(players)}
 
 
 def session_owner_coach(session, *, club_id, session_id):
