@@ -178,6 +178,10 @@
     // GET /api/me/billing/summary?month= -> {month,currency,total_minor,categories:[{key,label,count,
     //   total_minor,items:[{booking_id,starts_at,amount_minor,status,coach_name,court_name}]}]}
     billingSummary: function (month) { return A().apiJSON("/api/me/billing/summary" + (month ? ("?month=" + encodeURIComponent(month)) : "")); },
+    // GET /api/me/activity?month=YYYY-MM -> {month, bookings:[{kind,when,resource_name,coach_name,
+    //   status,booking_id|enrolment_id}], spend:{total_paid_minor,by_category:[...],currency},
+    //   outstanding:{total_owed_minor,count,currency}} — the monthly Activity view (3 questions).
+    activity: function (month) { return A().apiJSON("/api/me/activity" + (month ? ("?month=" + encodeURIComponent(month)) : "")); },
     // GET /api/me/activity -> {activity:[{at,kind,title,detail,amount_minor,currency,direction}]}
     //   the client's transaction log (payments, refunds, charges, coaching, memberships).
     activity: function (limit) { return A().apiJSON("/api/me/activity" + (limit ? ("?limit=" + limit) : "")); },

@@ -241,6 +241,70 @@ def _spend(session, *, club_id, user_id, months=6) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# monthly activity — spend BY CATEGORY for one calendar month
+# ---------------------------------------------------------------------------
+
+def _month_bounds(month=None):
+    """(start, next_start) ISO date strings for a 'YYYY-MM' month (default the current month)."""
+    import re
+    from datetime import date
+    if month and re.match(r"^\d{4}-\d{2}$", month):
+        y, mo = int(month[:4]), int(month[5:7])
+    else:
+        t = date.today(); y, mo = t.year, t.month
+    start = date(y, mo, 1)
+    ny, nmo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+    return start.isoformat(), date(ny, nmo, 1).isoformat()
+
+
+def spend_by_category(session, *, club_id, user_id, month=None) -> Dict[str, Any]:
+    """PAID spend in one calendar month, grouped by category — 'how much did I spend on what'. category
+    from the order's first line (pack/membership flags, else booking_type/product kind). Guarded → 0/[]."""
+    start, nxt = _month_bounds(month)
+    try:
+        rows = session.execute(
+            text("""
+                SELECT o.amount_minor,
+                       (SELECT COALESCE(b.booking_type, pr.kind)
+                          FROM billing.order_line ol
+                          LEFT JOIN diary.booking b  ON b.id = ol.booking_id
+                          LEFT JOIN billing.price   p  ON p.id = ol.price_id
+                          LEFT JOIN billing.product pr ON pr.id = p.product_id
+                         WHERE ol.order_id = o.id ORDER BY ol.created_at LIMIT 1) AS kind,
+                       EXISTS (SELECT 1 FROM billing.token_wallet w WHERE w.order_id = o.id) AS is_pack,
+                       EXISTS (SELECT 1 FROM billing.membership_subscription ms WHERE ms.order_id = o.id) AS is_membership
+                FROM billing."order" o
+                WHERE o.club_id = :c AND o.user_id = :u AND o.status = 'paid'
+                  AND o.created_at >= CAST(:s AS date) AND o.created_at < CAST(:n AS date)
+            """),
+            {"c": str(club_id), "u": str(user_id), "s": start, "n": nxt},
+        ).mappings().all()
+    except Exception:
+        log.debug("spend_by_category suppressed", exc_info=False)
+        rows = []
+    LABEL = {"court": "Court hire", "court_booking": "Court hire", "lesson": "Lessons",
+             "class": "Classes", "membership": "Membership"}
+    buckets: Dict[str, Dict[str, Any]] = {}
+    total = 0
+    for r in rows:
+        amt = int(r["amount_minor"] or 0)
+        if r["is_pack"]:
+            cat = "Session packs"
+        elif r["is_membership"]:
+            cat = "Membership"
+        else:
+            cat = LABEL.get((r["kind"] or "").lower(), "Other")
+        b = buckets.setdefault(cat, {"category": cat, "paid_minor": 0, "count": 0})
+        b["paid_minor"] += amt
+        b["count"] += 1
+        total += amt
+    by_cat = sorted(buckets.values(), key=lambda x: -x["paid_minor"])
+    currency = session.execute(
+        text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": str(club_id)}).scalar() or "ZAR"
+    return {"month": start[:7], "total_paid_minor": total, "by_category": by_cat, "currency": currency}
+
+
+# ---------------------------------------------------------------------------
 # account balance (running tab, if monthly_account used)
 # ---------------------------------------------------------------------------
 

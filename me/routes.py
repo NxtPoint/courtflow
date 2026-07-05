@@ -372,6 +372,48 @@ def get_statement():
     return jsonify(data), 200
 
 
+@me_bp.get("/activity")
+def get_activity():
+    """The client's monthly ACTIVITY — answers 'what did I book', 'what did I spend on what', and
+    'what's outstanding'. ?month=YYYY-MM (default this month). Bookings are the sessions dated in the
+    month; spend is money PAID that month by category; outstanding is the current (running) balance."""
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "view_own_ledger", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    month = (request.args.get("month") or "").strip() or None
+    from billing import me as billing_me
+    from billing import statement as statement_repo
+    from diary import bookings as bookings_mod, classes as classes_mod
+    from datetime import date, timedelta
+    start, nxt = billing_me._month_bounds(month)
+    last = (date.fromisoformat(nxt) - timedelta(days=1)).isoformat()
+    with session_scope() as s:
+        spend = billing_me.spend_by_category(s, club_id=p.club_id, user_id=p.user_id, month=month)
+        st = statement_repo.statement(s, club_id=p.club_id, user_id=p.user_id)
+        bk = bookings_mod.list_bookings(s, club_id=p.club_id, role="member", user_id=p.user_id,
+                                        date_from=start, date_to=last, limit=200)
+        enr = classes_mod.list_my_enrolments(s, club_id=p.club_id, user_id=p.user_id)
+    items = []
+    for b in bk:
+        items.append({"kind": (b.get("booking_type") or "court"), "when": b.get("starts_at"),
+                      "resource_name": b.get("resource_name"), "coach_name": b.get("coach_name"),
+                      "status": b.get("status"),
+                      "booking_id": str(b["id"]) if b.get("id") else None})
+    for e in enr:
+        when = e.get("starts_at") or ""
+        if not (start <= when[:10] <= last):
+            continue
+        items.append({"kind": "class", "when": when, "resource_name": e.get("class_name"),
+                      "coach_name": e.get("coach_display"), "status": e.get("status"),
+                      "enrolment_id": str(e["enrolment_id"]) if e.get("enrolment_id") else None})
+    items.sort(key=lambda x: x.get("when") or "", reverse=True)
+    return jsonify(month=start[:7], bookings=items, spend=spend,
+                   outstanding={"total_owed_minor": st.get("total_owed_minor", 0),
+                                "count": st.get("count", 0), "currency": st.get("currency")}), 200
+
+
 @me_bp.post("/statement/pay")
 def pay_statement():
     """Settle the caller's statement ONLINE. Body {order_ids?} settles a SUBSET (default = everything
