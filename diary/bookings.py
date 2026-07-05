@@ -1253,10 +1253,18 @@ def booking_story(session, *, club_id, user_id, booking_id):
     court = b["held_court"] if b["booking_type"] == "lesson" else b["resource_name"]
     addr = ", ".join(x for x in [venue.get("address_line"), venue.get("city")] if x) or None
 
+    # Member reschedule is refused inside the cancellation cutoff (reschedule_booking → PAST_CUTOFF),
+    # so don't offer a button that will 422. Cancel still SUCCEEDS inside the cutoff but incurs the
+    # late fee — surface it so the client can be told BEFORE they confirm.
+    policy = _policy(session, club_id)
+    cutoff_h = policy.get("cancellation_cutoff_hours") or 0
+    within_cutoff = bool(starts and (starts - datetime.now(timezone.utc)) < timedelta(hours=cutoff_h))
+    cancel_fee_minor = int(policy.get("no_show_fee_minor") or 0) if (within_cutoff and status in ("held", "confirmed")) else 0
+
     can = {
         "add_to_calendar": status in ("confirmed", "held", "completed"),
         "cancel": status in ("confirmed", "held", "requested", "proposed") and is_future,
-        "reschedule": status in ("confirmed", "held") and is_future,
+        "reschedule": status in ("confirmed", "held") and is_future and not within_cutoff,
         "pay": charge["status"] in ("owed", "pending"),
         "receipt": charge["status"] in ("paid", "refunded"),
         "request_refund": charge["refundable"],
@@ -1279,6 +1287,7 @@ def booking_story(session, *, club_id, user_id, booking_id):
         "venue": {"club_name": venue.get("club_name"), "address": addr},
         "players": players,
         "charge": charge,
+        "cancel_fee_minor": cancel_fee_minor,   # late-cancellation fee if cancelled NOW (0 = none)
         "ics_url": "/api/diary/bookings/" + str(b["id"]) + "/calendar.ics",
         "can": can,
     }
