@@ -32,11 +32,14 @@
     // GET /api/admin/people -> {people:[{user_id,email,first_name,surname,phone,role,
     //   member_status,display_name,invite_status,has_membership}]}
     people: function () { return A().apiJSON("/api/admin/people"); },
+    // POST /api/admin/clients  body:{name,email,phone} -> {user_id,email,name,created} — add a
+    // walk-up / off-system client to the system (they link to their login by email on first sign-in).
+    createClient: function (body) { return A().apiJSON("/api/admin/clients", { method: "POST", body: body || {} }); },
     // GET /api/admin/people/:user_id -> {person:{...profile,roles,is_coach,member_status,
     //   membership, statement:{items,total_owed_minor}, owed_minor, payments:[], upcoming:[],
     //   history:[], bookings_count, settlement?}}  — one record, drill-through to the event story.
     person: function (id) { return A().apiJSON("/api/admin/people/" + enc(id)); },
-    // POST /api/admin/members/:user_id/membership  body: {months?} -> {ok, status}
+    // POST /api/admin/members/:user_id/membership  body:{price_id?,months?,start_date?} -> {ok,status}
     grantMembership: function (id, body) {
       return A().apiJSON("/api/admin/members/" + enc(id) + "/membership", { method: "POST", body: body || {} });
     },

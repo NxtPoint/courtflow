@@ -800,6 +800,23 @@ def get_person(user_id):
     return jsonify(person=person), 200
 
 
+@admin_bp.post("/clients")
+def create_client():
+    """Create a client on the system now (a walk-up / off-system customer). Returns their user_id so
+    the caller can then issue a membership/pack. Idempotent on email (links to their login later)."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    email = (b.get("email") or "").strip()
+    if not email:
+        return jsonify(error="email required"), 400
+    with session_scope() as s:
+        res = repo.create_client(s, club_id=p.club_id, name=b.get("name"),
+                                 email=email, phone=b.get("phone"))
+    return jsonify(res), 201
+
+
 @admin_bp.post("/members/<user_id>/membership")
 def grant_membership(user_id):
     """Grant (or extend) a member's membership → their courts become free until it expires."""
@@ -809,7 +826,8 @@ def grant_membership(user_id):
     b = _body()
     with session_scope() as s:
         res = repo.grant_membership(s, club_id=p.club_id, user_id=user_id,
-                                    months=b.get("months") or 1)
+                                    months=b.get("months"), price_id=b.get("price_id"),
+                                    start_date=(b.get("start_date") or None))
     # NEW emit: a manual membership grant → "Membership active" notification to the member
     # (child→guardian resolved by the notifications engine). Best-effort + guarded — the admin
     # action already committed; a CRM/notification hiccup must not surface as an error.

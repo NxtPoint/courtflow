@@ -766,6 +766,34 @@ def upsert_user_by_email(session, *, email, first_name=None, surname=None, phone
     return row["id"]
 
 
+def create_client(session, *, club_id, name, email, phone=None):
+    """Create (or link) a plain client from the admin 'New client' tool — a walk-up / off-system
+    customer the club needs on the system NOW (e.g. someone who paid on Wix during cutover). Reuses
+    upsert_user_by_email (iam.user keyed by email → they link to their Clerk login by email on first
+    sign-in) + ensures an active 'member' iam.membership. Idempotent on email. Returns
+    {user_id, email, name, created}."""
+    email = (email or "").strip().lower()
+    if not email:
+        raise ValueError("email required")
+    nm = (name or "").strip()
+    first, _sep, surname = nm.partition(" ")
+    existed = session.execute(
+        text("SELECT 1 FROM iam.user WHERE lower(email) = lower(:e)"), {"e": email},
+    ).first() is not None
+    user_id = upsert_user_by_email(session, email=email,
+                                   first_name=(first or nm) or None,
+                                   surname=surname or None,
+                                   phone=(phone or "").strip() or None)
+    session.execute(
+        text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+             "VALUES (:c, :u, 'member', 'active') "
+             "ON CONFLICT (club_id, user_id, role) "
+             "DO UPDATE SET member_status = 'active', updated_at = now()"),
+        {"c": club_id, "u": user_id},
+    )
+    return {"user_id": str(user_id), "email": email, "name": nm, "created": not existed}
+
+
 def upsert_coach_membership(session, *, club_id, user_id):
     session.execute(
         text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
@@ -1134,37 +1162,61 @@ def get_person(session, *, club_id, user_id):
     return out
 
 
-def grant_membership(session, *, club_id, user_id, months=1):
-    """Admin grants a member an active membership (the club's 'membership' product). Makes
-    their COURT bookings free (membership_covered) until current_period_end. Idempotent: an
-    existing active subscription is extended rather than duplicated. provider='manual'."""
-    price_id = session.execute(
-        text("SELECT p.id FROM billing.product pr "
-             "JOIN billing.price p ON p.product_id = pr.id AND p.active = true "
-             "WHERE pr.club_id = :c AND pr.kind = 'membership' "
-             "ORDER BY p.created_at LIMIT 1"),
-        {"c": club_id},
-    ).scalar()
+def grant_membership(session, *, club_id, user_id, months=None, price_id=None, start_date=None):
+    """Admin grants a member an active membership (the club's 'membership' product). Makes their COURT
+    bookings free (membership_covered) until current_period_end. provider='manual' → NO order/debt (for
+    a client who has already paid, e.g. off-system at cutover). Idempotent: an existing active
+    subscription is extended rather than duplicated.
+      price_id   — a specific term plan / TIER (e.g. 'Adult Anytime Play'); else the club's first plan.
+      start_date — 'YYYY-MM-DD' the cover begins (default today); current_period_end = start + months.
+      months     — term length; when omitted, taken from the chosen plan's term_months (else 1)."""
+    plan_term = None
+    if price_id:
+        chosen = session.execute(
+            text("SELECT p.id AS id, p.term_months FROM billing.product pr "
+                 "JOIN billing.price p ON p.product_id = pr.id "
+                 "WHERE pr.club_id = :c AND pr.kind = 'membership' AND p.id = :pid"),
+            {"c": club_id, "pid": price_id},
+        ).mappings().first()
+        if not chosen:
+            price_id = None
+        else:
+            price_id = chosen["id"]
+            plan_term = int(chosen["term_months"]) if chosen["term_months"] is not None else None
+    if price_id is None:
+        price_id = session.execute(
+            text("SELECT p.id FROM billing.product pr "
+                 "JOIN billing.price p ON p.product_id = pr.id AND p.active = true "
+                 "WHERE pr.club_id = :c AND pr.kind = 'membership' "
+                 "ORDER BY p.created_at LIMIT 1"),
+            {"c": club_id},
+        ).scalar()
+    months = int(months) if months else (plan_term or 1)
+    months = max(1, months)
     existing = session.execute(
         text("SELECT id FROM billing.membership_subscription "
              "WHERE club_id = :c AND user_id = :u AND status = 'active' LIMIT 1"),
         {"c": club_id, "u": user_id},
     ).scalar()
-    months = max(1, int(months or 1))
+    params = {"c": club_id, "u": user_id, "m": months, "pid": price_id, "sd": start_date}
+    # COALESCE(CAST(:sd AS date), CURRENT_DATE): the CAST is required so psycopg can type the NULL
+    # placeholder (bare ":sd IS NULL"/COALESCE on an untyped param → AmbiguousParameter).
     if existing:
+        params["id"] = existing
         session.execute(
             text("UPDATE billing.membership_subscription "
-                 "SET current_period_end = (CURRENT_DATE + make_interval(months => :m))::date, "
-                 "    price_id = COALESCE(price_id, :pid), updated_at = now() WHERE id = :id"),
-            {"m": months, "pid": price_id, "id": existing},
+                 "SET current_period_end = (COALESCE(CAST(:sd AS date), CURRENT_DATE) "
+                 "        + make_interval(months => :m))::date, "
+                 "    price_id = COALESCE(:pid, price_id), updated_at = now() WHERE id = :id"),
+            params,
         )
         return {"ok": True, "status": "extended"}
     session.execute(
         text("INSERT INTO billing.membership_subscription "
              "(club_id, user_id, price_id, status, provider, current_period_end) "
              "VALUES (:c, :u, :pid, 'active', 'manual', "
-             "        (CURRENT_DATE + make_interval(months => :m))::date)"),
-        {"c": club_id, "u": user_id, "pid": price_id, "m": months},
+             "        (COALESCE(CAST(:sd AS date), CURRENT_DATE) + make_interval(months => :m))::date)"),
+        params,
     )
     return {"ok": True, "status": "granted"}
 

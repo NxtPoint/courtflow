@@ -270,7 +270,10 @@
   }
   function paintPeople() {
     var wrap = el("div", {});
-    wrap.appendChild(el("h1", { style: "margin:0 0 10px", text: "People" }));
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:0 0 10px" }, [
+      el("h1", { style: "margin:0", text: "People" }),
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ New client", onclick: function () { newClient(); } }),
+    ]));
     // Search (list-only re-render so focus is kept while typing).
     var listBox = el("div", {});
     wrap.appendChild(el("input", {
@@ -429,11 +432,72 @@
   }
   // ---- person money/membership actions -------------------------------------
   async function grantMembership(id, name) {
-    var v = window.prompt("Grant " + (name || "this member") + " a membership for how many months?", "1");
-    if (v === null) return;
-    var months = parseInt(v, 10); if (isNaN(months) || months < 1) { UI.toast("Enter a whole number of months.", "warn"); return; }
-    try { await window.AdminAPI.grantMembership(id, { months: months }); UI.toast("Membership granted.", "info"); renderPerson(id); }
-    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+    var m = UI.modal("Grant membership" + (name ? " · " + name : ""), { lg: true });
+    var plans = [];
+    try { plans = (await window.AdminAPI.membershipPlans()).plans || []; } catch (e) {}
+    var plist = plans.filter(function (p) { return p.active !== false; });
+    if (!plist.length) plist = plans;
+    var tier = el("select", { class: "cf-input" }, plist.map(function (p) {
+      return el("option", { value: p.price_id, text: (p.tier ? p.tier + " · " : "") + p.label });
+    }));
+    var months = el("input", { class: "cf-input", type: "number", min: "1", placeholder: "Plan default" });
+    var start = el("input", { class: "cf-input", type: "date", value: UI.dateKey(new Date()) });
+    function syncTerm() {
+      var p = plist[tier.selectedIndex];
+      months.placeholder = (p && p.term_months) ? (p.term_months + " (plan default)") : "1";
+    }
+    tier.addEventListener("change", syncTerm);
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
+      text: "For a client who has ALREADY PAID (e.g. off-system at cutover). No charge is raised — this just activates their membership so their courts are covered." }));
+    if (plist.length) {
+      m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Membership tier" }), tier]));
+    } else {
+      m.body.appendChild(el("div", { class: "cf-muted", style: "margin-bottom:10px", text: "No membership tiers configured — the default membership will be granted." }));
+    }
+    m.body.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [
+      el("div", { class: "cf-field" }, [el("label", { text: "Start date" }), start]),
+      el("div", { class: "cf-field" }, [el("label", { text: "Term (months)" }), months]),
+    ]));
+    var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Grant membership" });
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
+      el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), btn,
+    ]));
+    syncTerm();
+    btn.addEventListener("click", async function () {
+      var body = {};
+      if (plist.length && tier.value) body.price_id = tier.value;
+      if (months.value) body.months = parseInt(months.value, 10);
+      if (start.value) body.start_date = start.value;
+      btn.disabled = true;
+      try { await window.AdminAPI.grantMembership(id, body); UI.toast("Membership granted.", "info"); m.close(); renderPerson(id); }
+      catch (e) { btn.disabled = false; UI.toast(UI.errMsg(e), "error"); }
+    });
+  }
+  async function newClient() {
+    var m = UI.modal("New client", { lg: true });
+    var nm = el("input", { class: "cf-input", placeholder: "Full name" });
+    var em = el("input", { class: "cf-input", type: "email", placeholder: "Email" });
+    var ph = el("input", { class: "cf-input", placeholder: "Contact number (optional)" });
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
+      text: "Adds a client to the system now. They link to their login automatically when they first sign in with this email. You can issue their membership on the next screen." }));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Name" }), nm]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Email" }), em]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Contact number" }), ph]));
+    var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Create client" });
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
+      el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), btn,
+    ]));
+    btn.addEventListener("click", async function () {
+      var email = em.value.trim();
+      if (!email) { UI.toast("Email is required.", "warn"); return; }
+      btn.disabled = true;
+      try {
+        var res = await window.AdminAPI.createClient({ name: nm.value.trim(), email: email, phone: ph.value.trim() });
+        UI.toast(res.created === false ? "Client already existed — opening their record." : "Client created.", "info");
+        m.close();
+        go("#/person/" + res.user_id);   // straight to their record so you can issue the membership
+      } catch (e) { btn.disabled = false; UI.toast(UI.errMsg(e), "error"); }
+    });
   }
   async function revokeMembership(id, name) {
     if (!window.confirm("Cancel " + (name || "this member") + "'s membership? Their courts revert to pay-as-you-go.")) return;
