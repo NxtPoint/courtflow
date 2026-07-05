@@ -817,6 +817,35 @@ def create_client():
     return jsonify(res), 201
 
 
+@admin_bp.post("/members/<user_id>/issue")
+def issue_package(user_id):
+    """Issue a membership OR a token pack to a client (walk-up / off-system). Reuses the offline-
+    purchase engine: owed order + activated now; mark_paid settles it immediately. Body:
+    {kind:'membership'|'pack', price_id?|bundle_plan_id?, start_date?, mark_paid?, pay_provider?}."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    kind = (b.get("kind") or "").strip().lower()
+    with session_scope() as s:
+        try:
+            res = repo.issue_package(
+                s, club_id=p.club_id, user_id=user_id, kind=kind,
+                price_id=b.get("price_id"), bundle_plan_id=b.get("bundle_plan_id"),
+                start_date=(b.get("start_date") or None),
+                mark_paid=bool(b.get("mark_paid")), pay_provider=(b.get("pay_provider") or "cash"))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+    try:
+        from marketing_crm.tracking import emit
+        emit("membership_activated" if kind == "membership" else "bundle_activated",
+             {"club_id": str(p.club_id), "user_id": str(user_id), "ref_type": "order",
+              "ref_id": str(res.get("order_id"))})
+    except Exception:
+        log.debug("issue_package activation emit skipped")
+    return jsonify(res), 201
+
+
 @admin_bp.post("/members/<user_id>/membership")
 def grant_membership(user_id):
     """Grant (or extend) a member's membership → their courts become free until it expires."""

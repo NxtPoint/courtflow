@@ -1221,6 +1221,48 @@ def grant_membership(session, *, club_id, user_id, months=None, price_id=None, s
     return {"ok": True, "status": "granted"}
 
 
+def issue_package(session, *, club_id, user_id, kind, price_id=None, bundle_plan_id=None,
+                  start_date=None, mark_paid=False, pay_provider="cash"):
+    """Issue a membership OR a token pack to a client, reusing the offline-purchase engine (the SAME
+    path a member's own offline buy takes — no parallel money logic). Creates an 'open' (owed) order
+    and ACTIVATES the package now (usable immediately); it's then collected from the statement (the
+    client pays via Yoco, or an admin marks it paid) — the exact 'PAYG until paid' model. mark_paid=True
+    settles it right now (paid offline: cash/eft/card_at_desk). Membership start_date (default today)
+    sets current_period_end = start + term. Returns the purchase dict (+ kind, paid)."""
+    from billing.membership import create_membership_order
+    from billing.bundles import create_bundle_order
+    from billing.orders import record_desk_payment
+    kind = (kind or "").strip().lower()
+    if kind == "membership":
+        res = create_membership_order(session, club_id=club_id, user_id=user_id,
+                                      price_id=price_id, settlement_mode="at_court")
+    elif kind in ("pack", "bundle"):
+        res = create_bundle_order(session, club_id=club_id, user_id=user_id,
+                                  bundle_plan_id=bundle_plan_id, settlement_mode="at_court")
+    else:
+        raise ValueError("kind must be 'membership' or 'pack'")
+    if res is None:
+        raise ValueError("that plan isn't available to sell")
+    order_id = res["order_id"]
+    # Membership start date → shift the just-activated cover period (CAST so psycopg can type :sd).
+    if kind == "membership" and start_date:
+        term = max(1, int(res.get("term_months") or 1))
+        session.execute(
+            text("UPDATE billing.membership_subscription "
+                 "SET current_period_end = (CAST(:sd AS date) + make_interval(months => :m))::date, "
+                 "    updated_at = now() WHERE order_id = :oid"),
+            {"sd": start_date, "m": term, "oid": order_id},
+        )
+    # Paid offline right now → settle the owed order through the desk-payment core (order → 'paid').
+    if mark_paid:
+        record_desk_payment(session, club_id=club_id, order_id=order_id,
+                            amount_minor=int(res.get("amount_minor") or 0),
+                            provider=(pay_provider or "cash"), user_id=user_id)
+        res["paid"] = True
+    res["kind"] = kind
+    return res
+
+
 def revoke_membership(session, *, club_id, user_id):
     """Admin cancels a member's active membership (their courts revert to PAYG). An UNPAID plan's
     order is voided so it drops off the member's statement; a PAID term is left intact (refund is a

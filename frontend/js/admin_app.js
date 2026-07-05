@@ -405,8 +405,10 @@
     var label = m ? ("Member" + (m.plan_label ? " · " + m.plan_label : "") + (m.current_period_end ? " · until " + m.current_period_end : "")) : "No active membership";
     box.appendChild(el("div", {}, [el("div", { style: "font-weight:700", text: m ? "Membership active" : "Not a member" }),
       el("div", { class: "cf-muted", style: "font-size:.82rem", text: label })]));
-    if (m) box.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Revoke", onclick: function () { revokeMembership(id, pn.name); } }));
-    else box.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Grant membership", onclick: function () { grantMembership(id, pn.name); } }));
+    var actions = el("div", { class: "cf-row", style: "gap:6px" });
+    if (m) actions.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Revoke", onclick: function () { revokeMembership(id, pn.name); } }));
+    actions.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Issue package", onclick: function () { issuePackage(id, pn.name); } }));
+    box.appendChild(actions);
     return box;
   }
   function bookingsCard(title, rows, empty) {
@@ -431,45 +433,89 @@
     c.appendChild(l); return c;
   }
   // ---- person money/membership actions -------------------------------------
-  async function grantMembership(id, name) {
-    var m = UI.modal("Grant membership" + (name ? " · " + name : ""), { lg: true });
-    var plans = [];
-    try { plans = (await window.AdminAPI.membershipPlans()).plans || []; } catch (e) {}
-    var plist = plans.filter(function (p) { return p.active !== false; });
-    if (!plist.length) plist = plans;
-    var tier = el("select", { class: "cf-input" }, plist.map(function (p) {
-      return el("option", { value: p.price_id, text: (p.tier ? p.tier + " · " : "") + p.label });
-    }));
-    var months = el("input", { class: "cf-input", type: "number", min: "1", placeholder: "Plan default" });
+  async function issuePackage(id, name) {
+    var m = UI.modal("Issue a package" + (name ? " · " + name : ""), { lg: true });
+    var mplans = [], bplans = [];
+    try { mplans = (await window.AdminAPI.membershipPlans()).plans || []; } catch (e) {}
+    try { bplans = (await window.AdminAPI.bundlePlans()).plans || []; } catch (e) {}
+    mplans = mplans.filter(function (p) { return p.active !== false; });
+    bplans = bplans.filter(function (p) { return p.active !== false; });
+
+    var kind = "membership";
+    var kmem = el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Membership" });
+    var kpack = el("button", { class: "cf-btn cf-btn-sm", text: "Session pack" });
+
+    var planSel = el("select", { class: "cf-input" });
+    var amountLine = el("div", { style: "margin:8px 0 10px;font-weight:800" });
     var start = el("input", { class: "cf-input", type: "date", value: UI.dateKey(new Date()) });
-    function syncTerm() {
-      var p = plist[tier.selectedIndex];
-      months.placeholder = (p && p.term_months) ? (p.term_months + " (plan default)") : "1";
+    var membershipFields = el("div", {}, [el("div", { class: "cf-field" }, [el("label", { text: "Start date (when cover begins)" }), start])]);
+
+    function curList() { return kind === "membership" ? mplans : bplans; }
+    function selectedPlan() { return curList()[planSel.selectedIndex] || null; }
+    function syncPlan() {
+      var p = selectedPlan();
+      amountLine.textContent = p ? ("Amount: " + money(p.amount_minor, p.currency)) : "—";
+      membershipFields.style.display = kind === "membership" ? "" : "none";
     }
-    tier.addEventListener("change", syncTerm);
-    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
-      text: "For a client who has ALREADY PAID (e.g. off-system at cutover). No charge is raised — this just activates their membership so their courts are covered." }));
-    if (plist.length) {
-      m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Membership tier" }), tier]));
-    } else {
-      m.body.appendChild(el("div", { class: "cf-muted", style: "margin-bottom:10px", text: "No membership tiers configured — the default membership will be granted." }));
+    function fillPlans() {
+      UI.clear(planSel);
+      var list = curList();
+      if (!list.length) { planSel.appendChild(el("option", { value: "", text: "None configured — add one in Setup" })); }
+      list.forEach(function (p) {
+        var label = kind === "membership"
+          ? ((p.tier ? p.tier + " · " : "") + p.label)
+          : (p.label + (p.sessions_count ? " · " + p.sessions_count + " sessions" : ""));
+        planSel.appendChild(el("option", { text: label }));
+      });
+      syncPlan();
     }
-    m.body.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [
-      el("div", { class: "cf-field" }, [el("label", { text: "Start date" }), start]),
-      el("div", { class: "cf-field" }, [el("label", { text: "Term (months)" }), months]),
-    ]));
-    var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Grant membership" });
+    planSel.addEventListener("change", syncPlan);
+    function setKind(k) {
+      kind = k;
+      kmem.className = "cf-btn cf-btn-sm" + (k === "membership" ? " cf-btn-primary" : "");
+      kpack.className = "cf-btn cf-btn-sm" + (k === "pack" ? " cf-btn-primary" : "");
+      fillPlans();
+    }
+    kmem.addEventListener("click", function () { setKind("membership"); });
+    kpack.addEventListener("click", function () { setKind("pack"); });
+
+    // Payment: owe (PAYG) or mark paid now (offline).
+    var payOwe = el("input", { type: "radio", name: "pkgpay", checked: true });
+    var payPaid = el("input", { type: "radio", name: "pkgpay" });
+    var provSel = el("select", { class: "cf-input", style: "max-width:190px;display:none;margin-top:6px" }, [
+      el("option", { value: "cash", text: "Cash" }),
+      el("option", { value: "eft", text: "EFT / transfer" }),
+      el("option", { value: "card_at_desk", text: "Card at desk" }),
+    ]);
+    function syncPay() { provSel.style.display = payPaid.checked ? "" : "none"; }
+    payOwe.addEventListener("change", syncPay); payPaid.addEventListener("change", syncPay);
+
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem",
+      text: "Issue a membership or a prepaid session pack. It activates immediately; choose whether it's already paid or owed (they can then pay online, or you mark it paid)." }));
+    m.body.appendChild(el("div", { class: "cf-row", style: "gap:8px;margin-bottom:12px" }, [kmem, kpack]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Package" }), planSel]));
+    m.body.appendChild(amountLine);
+    m.body.appendChild(membershipFields);
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Payment" }),
+      el("div", {}, [
+        el("label", { class: "cf-row", style: "gap:8px;margin-bottom:6px" }, [payOwe, el("span", { text: "Owe — collect later (PAYG)" })]),
+        el("label", { class: "cf-row", style: "gap:8px;align-items:center" }, [payPaid, el("span", { text: "Mark as paid now (offline)" }), provSel]),
+      ])]));
+    var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Issue package" });
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
       el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), btn,
     ]));
-    syncTerm();
+    setKind("membership");
+
     btn.addEventListener("click", async function () {
-      var body = {};
-      if (plist.length && tier.value) body.price_id = tier.value;
-      if (months.value) body.months = parseInt(months.value, 10);
-      if (start.value) body.start_date = start.value;
+      var p = selectedPlan();
+      if (!p) { UI.toast("No package to issue — add one in Setup first.", "warn"); return; }
+      var body = { kind: kind, mark_paid: payPaid.checked };
+      if (kind === "membership") { body.price_id = p.price_id; if (start.value) body.start_date = start.value; }
+      else { body.bundle_plan_id = p.id; }
+      if (payPaid.checked) body.pay_provider = provSel.value;
       btn.disabled = true;
-      try { await window.AdminAPI.grantMembership(id, body); UI.toast("Membership granted.", "info"); m.close(); renderPerson(id); }
+      try { await window.AdminAPI.issuePackage(id, body); UI.toast(payPaid.checked ? "Issued + marked paid." : "Issued — owed on their statement.", "info"); m.close(); renderPerson(id); }
       catch (e) { btn.disabled = false; UI.toast(UI.errMsg(e), "error"); }
     });
   }
