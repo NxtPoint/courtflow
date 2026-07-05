@@ -91,6 +91,11 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       B" in `docs/specs/UNIFIED-STATEMENT.md`) is a pure internal cleanup — **not blocking**.
 - [ ] **Membership upgrades / downgrades** — a member changing tier mid-term (proration, when it takes
       effect, credit/refund). Backlog — needs a proper spec before building.
+- [ ] **Guest fee (Phase 2)** — charge a court guest a **fixed fee (e.g. R80) collected FROM THE GUEST**,
+      not added to the member's account. Guests are currently **non-billable** (a guest party rides on the
+      booking but generates no billing line — `_create_order_guarded` skips guest parties). Needs: a guest
+      fee price/config + a guest-facing collection path (at-court or a guest payment link), kept off the
+      member's statement.
 - [ ] **Platform / super-admin cockpit** — cross-club view (all clubs' revenue/health) for
       `platform_admin`. Low priority while there's one club; the `scope_clause` design supports it.
 - [x] **Owner per-person 360 endpoint** — `GET /api/admin/people/<id>` (unified member+coach 360:

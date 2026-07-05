@@ -313,12 +313,16 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
     # One billing line per party, else a single line for the booking — priced per DURATION.
     # The linked lesson court shares the order but isn't billed twice.
     lines = []
-    if parties:
-        for p in parties:
-            aud = "guest" if (p.get("party_role") == "guest" or p.get("guest_name")) else "member"
-            pr = price_for(session, club_id=club_id, audience=aud, kind=kind,
+    # Guests are NON-BILLABLE for now — never charged to the member's account. Bill only the
+    # member/host parties; a guest still rides on the booking as a party, there's just no line for
+    # them. (Phase 2: charge a guest a fixed fee collected FROM THE GUEST, not the member's tab.)
+    member_parties = [p for p in parties
+                      if not (p.get("party_role") == "guest" or p.get("guest_name"))]
+    if member_parties:
+        for p in member_parties:
+            pr = price_for(session, club_id=club_id, audience="member", kind=kind,
                            duration_minutes=duration_minutes) or {}
-            lines.append({"description": f"{booking_type} ({aud})", "price_id": pr.get("price_id"),
+            lines.append({"description": booking_type, "price_id": pr.get("price_id"),
                           "qty": 1, "amount_minor": _amount(pr), **ref})
     else:
         pr = price_for(session, club_id=club_id, audience=audience, kind=kind,
