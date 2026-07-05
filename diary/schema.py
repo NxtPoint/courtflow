@@ -219,6 +219,11 @@ _DDL = [
     f"ON {SCHEMA}.enrolment (class_session_id);",
     f"CREATE INDEX IF NOT EXISTS ix_enrolment_user "
     f"ON {SCHEMA}.enrolment (club_id, user_id);",
+    # Billing intent captured at enrol time so a WAITLIST promotion can settle the seat exactly as an
+    # enrol would (payer = guardian for a child; the chosen settlement mode; member/guest audience).
+    f"ALTER TABLE {SCHEMA}.enrolment ADD COLUMN IF NOT EXISTS payer_user_id uuid;",
+    f"ALTER TABLE {SCHEMA}.enrolment ADD COLUMN IF NOT EXISTS settlement_mode text;",
+    f"ALTER TABLE {SCHEMA}.enrolment ADD COLUMN IF NOT EXISTS audience text;",
 
     # --- diary.waitlist : generic waitlist (court slot freeing up) -------
     f"""

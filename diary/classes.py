@@ -76,17 +76,22 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
         return {"ok": True, "enrolment": _enrolment_dict(session, existing["id"]),
                 "status_value": existing["status"]}
 
-    if existing:  # reactivate a previously cancelled enrolment
+    # Capture the billing intent on the enrolment (payer / mode / audience) so a WAITLIST promotion
+    # can settle the seat exactly as an enrol would — even for a parent-paid child.
+    intent = {"payer": payer_user_id, "mode": settlement_mode, "aud": audience}
+    if existing:  # reactivate a previously cancelled enrolment (refresh the billing intent)
         session.execute(
-            text("UPDATE diary.enrolment SET status=:st, updated_at=now() WHERE id=:id"),
-            {"st": target, "id": existing["id"]},
+            text("UPDATE diary.enrolment SET status=:st, payer_user_id=:payer, "
+                 "settlement_mode=:mode, audience=:aud, updated_at=now() WHERE id=:id"),
+            dict(intent, st=target, id=existing["id"]),
         )
         enrol_id = existing["id"]
     else:
         row = session.execute(
-            text("INSERT INTO diary.enrolment (club_id, class_session_id, user_id, status) "
-                 "VALUES (:c, :cs, :u, :st) RETURNING id"),
-            {"c": club_id, "cs": class_session_id, "u": user_id, "st": target},
+            text("INSERT INTO diary.enrolment (club_id, class_session_id, user_id, status, "
+                 "payer_user_id, settlement_mode, audience) "
+                 "VALUES (:c, :cs, :u, :st, :payer, :mode, :aud) RETURNING id"),
+            dict(intent, c=club_id, cs=class_session_id, u=user_id, st=target),
         ).mappings().first()
         enrol_id = row["id"]
 
@@ -163,17 +168,55 @@ def cancel_enrolment(session, *, club_id, class_session_id, user_id, actor_user_
     return {"ok": True, "promoted": promoted}
 
 
+def _bill_promoted_enrolment(session, *, club_id, cs, enrol):
+    """Bill a seat just promoted off the waitlist — the waitlist itself never billed. Async promotion
+    can't drive an online checkout, so an 'online' intent becomes an OWED at-court order; a 'token'
+    intent draws a still-matching prepaid class wallet (else falls back to at-court rather than
+    rejecting a promotion). Guarded — a billing hiccup never blocks the promotion."""
+    if enrol.get("order_id"):
+        return                                   # already billed (defensive) — leave it
+    mode = enrol.get("settlement_mode") or "at_court"
+    if mode == "online":
+        mode = "at_court"                        # collect at the club; can't check out asynchronously
+    payer = enrol.get("payer_user_id") or enrol.get("user_id")
+    audience = enrol.get("audience") or "member"
+    enrol_id = str(enrol["id"])
+    token_wallet = None
+    if mode == "token":
+        try:
+            from diary.bookings import _match_token_wallet_guarded
+            token_wallet = _match_token_wallet_guarded(
+                session, club_id=club_id, user_id=payer, booking_type="class",
+                duration_minutes=None, coach_user_id=None)
+        except Exception:
+            token_wallet = None
+        if token_wallet is None:
+            mode = "at_court"                    # intended a token but none left → owe it, don't reject
+    try:
+        order = _create_order_guarded(
+            session, club_id=club_id, user_id=payer, booking_id=None, booking_type="class",
+            settlement_mode=mode, parties=[], resource_id=cs["resource_id"],
+            starts_at=cs["starts_at"], ends_at=cs["ends_at"], enrolment_id=enrol_id,
+            audience=audience, token_wallet=token_wallet, token_ref=enrol_id)
+        if order.get("order_id"):
+            session.execute(
+                text("UPDATE diary.enrolment SET order_id=:o WHERE id=:id"),
+                {"o": order["order_id"], "id": enrol_id})
+    except Exception:
+        log.debug("promoted-enrolment billing skipped", exc_info=False)
+
+
 def _promote_waitlist(session, *, club_id, cs):
-    """Promote the earliest waitlisted enrolment to enrolled IFF a seat is free. Runs under
-    the session lock the caller holds."""
+    """Promote the earliest waitlisted enrolment to enrolled IFF a seat is free, and bill the seat
+    (the waitlist itself didn't). Runs under the session lock the caller holds."""
     capacity = cs["capacity"] or 0
     if capacity:
         enrolled = _enrolled_count(session, cs["id"])
         if enrolled >= capacity:
             return None
     nxt = session.execute(
-        text("SELECT id, user_id FROM diary.enrolment "
-             "WHERE class_session_id=:cs AND status='waitlisted' "
+        text("SELECT id, user_id, order_id, payer_user_id, settlement_mode, audience "
+             "FROM diary.enrolment WHERE class_session_id=:cs AND status='waitlisted' "
              "ORDER BY waitlist_seq LIMIT 1"),
         {"cs": cs["id"]},
     ).mappings().first()
@@ -183,6 +226,7 @@ def _promote_waitlist(session, *, club_id, cs):
         text("UPDATE diary.enrolment SET status='enrolled', updated_at=now() WHERE id=:id"),
         {"id": nxt["id"]},
     )
+    _bill_promoted_enrolment(session, club_id=club_id, cs=cs, enrol=nxt)
     enrolment = _enrolment_dict(session, nxt["id"])
     events.emit("waitlist_slot_open", _payload(cs, enrolment))
     events.emit("class_enrolled", _payload(cs, enrolment))
