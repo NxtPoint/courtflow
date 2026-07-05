@@ -333,7 +333,24 @@
     var chosenBox = el("div", {});
     var guest = el("input", { class: "cf-input", placeholder: "Guest name (walk-in, no account)" });
     var start = el("input", { class: "cf-input", type: "datetime-local" });
-    var dur = el("select", { class: "cf-input" }, [30, 45, 60, 90, 120].map(function (d) { return el("option", { value: String(d), text: d + " min" }); })); dur.value = "60";
+    // Service = one of the coach's OWN priced services (name · duration · price) — this sets the
+    // lesson length and the fee, so we never book an unpriced/unknown lesson.
+    var svc = el("select", { class: "cf-input" }, [el("option", { text: "Loading your services…" })]);
+    var services = [];
+    (window.CoachAPI.services ? window.CoachAPI.services() : Promise.resolve({})).then(function (r) {
+      services = (r && r.services) || [];
+      UI.clear(svc);
+      if (!services.length) { svc.appendChild(el("option", { value: "", text: "No services yet — add one in Setup" })); return; }
+      services.forEach(function (s) {
+        var price = (s.amount_minor != null) ? (" · R" + (s.amount_minor / 100).toFixed(0)) : "";
+        svc.appendChild(el("option", { text: s.name + " · " + (s.duration_minutes || 60) + " min" + price }));
+      });
+    }, function () { UI.clear(svc); svc.appendChild(el("option", { value: "", text: "Couldn't load services" })); });
+    // Payment: owe & collect later (they pay at court / online from their statement) OR draw their pack.
+    var pay = el("select", { class: "cf-input" }, [
+      el("option", { value: "at_court", text: "Collect at court / later (owed)" }),
+      el("option", { value: "token", text: "Use their lesson pack (if they have one)" }),
+    ]);
 
     function renderChosen() {
       UI.clear(chosenBox);
@@ -375,21 +392,29 @@
     m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem", text: "Books a lesson with you (auto-confirmed). A court is assigned automatically." }));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Client" }), searchInp, resultsBox, chosenBox]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "…or guest name (walk-in, no account)" }), guest]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Service" }), svc]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "When" }), start]));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), dur]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Payment" }), pay]));
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
       el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
       el("button", { class: "cf-btn cf-btn-primary", text: "Book", onclick: async function () {
+        var s = services[svc.selectedIndex];
+        if (!s) { UI.toast("Pick a service (add one in Setup if you have none).", "warn"); return; }
         if (!start.value) { UI.toast("Pick a time.", "warn"); return; }
         var res = await ensureCoachResource();
         if (!res) { UI.toast("Set your weekly hours first (Setup).", "warn"); return; }
-        var st = new Date(start.value), en = new Date(st.getTime() + parseInt(dur.value, 10) * 60000);
+        var durMin = parseInt(s.duration_minutes, 10) || 60;
+        var st = new Date(start.value), en = new Date(st.getTime() + durMin * 60000);
         var body = { booking_type: "lesson", resource_id: res, coach_user_id: principal.user_id,
-          starts_at: st.toISOString(), ends_at: en.toISOString(), settlement_mode: "at_court" };
+          starts_at: st.toISOString(), ends_at: en.toISOString(), settlement_mode: pay.value || "at_court" };
         if (selected && selected.email) body.for_email = selected.email;
         else if (guest.value.trim()) body.for_guest_name = guest.value.trim();
         else { UI.toast("Search & pick a client, or enter a guest name.", "warn"); return; }
-        window.API.createBooking(body).then(function () { UI.toast("Booked.", "info"); m.close(); route(); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+        window.API.createBooking(body).then(function () { UI.toast("Booked.", "info"); m.close(); route(); }, function (e) {
+          var msg = UI.errMsg(e) || "";
+          if (/NO_TOKEN/i.test(msg) || /NO_TOKEN/i.test((e && (e.error || e.code)) || "")) msg = "This client has no matching lesson pack — choose “Collect at court” instead.";
+          UI.toast(msg, "error");
+        });
       } }),
     ]));
     renderChosen();
