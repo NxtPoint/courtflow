@@ -621,14 +621,21 @@
     else {
       var c = card([]), l = el("div", { class: "cf-list" });
       pays.slice(0, 50).forEach(function (pay) {
-        l.appendChild(el("div", { class: "cf-item" }, [
+        // A booking/class payment drills to its transaction RECORD (the ONE place refunds happen);
+        // a pure sale (membership/pack — no event record yet) keeps an inline Refund.
+        var recHash = pay.booking_id ? ("#/event/" + pay.booking_id) : (pay.enrolment_id ? ("#/class/" + pay.enrolment_id) : null);
+        var trailing = pay.refunded ? el("span", { class: "cf-chip held", text: "refunded" })
+          : recHash ? el("span", { class: "cf-muted", text: "›" })
+            : el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Refund", onclick: function () { refundPayment(pay, cur); } });
+        var row = el("div", { class: "cf-item" + (recHash ? " cf-item-tap" : "") }, [
           el("div", { class: "cf-item-main" }, [
             el("div", { class: "cf-item-t", text: money(pay.amount_minor, pay.currency_code || cur) + (pay.payer_email ? " · " + pay.payer_email : "") }),
             el("div", { class: "cf-item-s", text: (function () { try { return UI.fmtDate(pay.created_at); } catch (e) { return ""; } })() }),
           ]),
-          pay.refunded ? el("span", { class: "cf-chip held", text: "refunded" })
-            : el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Refund", onclick: function () { refundPayment(pay, cur); } }),
-        ]));
+          trailing,
+        ]);
+        if (recHash) row.addEventListener("click", function () { go(recHash); });
+        l.appendChild(row);
       });
       c.appendChild(l); wrap.appendChild(c);
     }

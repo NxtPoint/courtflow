@@ -925,6 +925,10 @@ def list_payments(session, *, club_id):
         text("""
             SELECT p.id, p.order_id, p.provider, p.amount_minor, p.currency_code, p.status,
                    p.created_at, o.settlement_mode, u.email AS payer_email,
+                   (SELECT ol.booking_id FROM billing.order_line ol
+                     WHERE ol.order_id = p.order_id AND ol.booking_id IS NOT NULL LIMIT 1) AS booking_id,
+                   (SELECT ol.enrolment_id FROM billing.order_line ol
+                     WHERE ol.order_id = p.order_id AND ol.enrolment_id IS NOT NULL LIMIT 1) AS enrolment_id,
                    EXISTS(SELECT 1 FROM billing.payment r
                           WHERE r.order_id = p.order_id AND r.direction = 'refund') AS refunded
             FROM billing.payment p
