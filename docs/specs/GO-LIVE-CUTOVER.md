@@ -1,5 +1,15 @@
 # GO-LIVE — NextPoint Wix → Render production cutover + data migration (target: Sunday)
 
+> **STATUS (2026-07-05): this is the PLAN/reference. Execution is largely DONE — see
+> [`CUTOVER-PROGRESS.md`](CUTOVER-PROGRESS.md) for actual state and
+> [`GO-LIVE-STEPS.md`](GO-LIVE-STEPS.md) for the click-by-click cutover sequence.**
+> Done: `scripts/import_wix.py` + `import_members/subscriptions/lessons.py` (data migrated to prod —
+> 878 members / 11 memberships / 8 lesson wallets), the 48-rule 301 map (curated from the real GSC crawl),
+> transactional email (interim via Ten-Fifty5 SES — working), prod Clerk instance (SSL live, `email`
+> claim set), GA4 + Ads tags live. **Remaining = the supervised cutover itself** (attach Render domain,
+> swap Clerk env, flip DNS apex+www, move Wix to its free URL, GSC sitemap). The "agent builds …"
+> sections below are the original plan and are now COMPLETE.
+
 **This is a REAL production cutover** — NextPoint is LIVE on Wix with **~900 clients** and **~60 visitors/day**.
 (Contrast: the Ten-Fifty5 / 1050 cutover was pre-launch with ~0 customers, so it never needed a Wix data
 importer or a real 301 map — we do. The proven-reusable parts of 1050 are reused; the two live-data parts

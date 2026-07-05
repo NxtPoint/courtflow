@@ -81,3 +81,22 @@ That's it — `ses.enabled()` flips true and every mapped event starts emailing.
 `SES_SENDER=no-reply@courtflow.app AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=y python -c "…"` proves
 `enabled()`, the `From` display-name format, the `.ics` builder, and `_club_identity` (done 2026-07-02).
 With real keys, send yourself a test booking confirmation from a verified address while still in the sandbox.
+
+## Ops levers + diagnosing deliverability (added 2026-07-05) — OPS_KEY-guarded, API-only
+No AWS console needed (the CourtFlow AWS account is locked). Three probes on `courtflow-api`:
+- `POST /api/cron/ses-selftest?to=<email>` — sends a test + reports the raw result (`enabled`, `send_ok`, `sender`, `region`, any error).
+- `POST /api/cron/ses-account` — account health: `enforcement_status` (want `HEALTHY`), `sending_enabled`,
+  `production_access` (sandbox?), send quota, and `recent_stats` (bounce/complaint/reject counts).
+- `POST /api/cron/ses-suppress?email=<addr>&action=check|delete` — check / **clear** an address on the
+  account suppression list.
+Call with header `X-Ops-Key: <OPS_KEY>` (rotate OPS_KEY after launch).
+
+### ⚠️ The suppression trap (what bit us on 2026-07-04)
+SES **accepts** a send (`send_ok:true`) but delivers nothing when the recipient is on the **account
+suppression list** — and this account auto-suppresses on `BOUNCE`/`COMPLAINT`. Worse: **sending to a
+suppressed address logs another bounce**, so re-testing the same dead address looks like a total failure.
+- Real fresh addresses deliver fine (verified: 4/4 real inboxes, 0 bounces). It only trips on
+  addresses that bounced once (a bad/corporate/mistyped address, or one you marked spam).
+- **Fix a stuck client:** `.../ses-suppress?email=CLIENT&action=delete`.
+- **Note:** this SES account is **shared with Ten-Fifty5** — only clear addresses you know are yours;
+  don't wipe the whole list (it holds legit 1050 bounces).
