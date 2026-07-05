@@ -170,6 +170,10 @@
       ].filter(Boolean)),
     ]));
 
+    // First-login nudge: gently prompt to complete a sparse profile (imported members land with just
+    // name + email). Skippable, remembered per user, and gone the moment they add a phone.
+    if (DATA.profile && !DATA.profile.phone && !nudgeDismissed()) wrap.appendChild(profileNudge());
+
     // Needs attention
     var attn = bookings.filter(function (b) { return b.status === "proposed" || b.status === "requested"; });
     if (attn.length) {
@@ -208,6 +212,22 @@
     loadWallets(cur);
   }
   function greet() { var h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
+
+  // "Complete your profile" nudge — dismissible, remembered per user in localStorage.
+  function nudgeKey() { return "cf_profile_nudge:" + ((principal && (principal.user_id || principal.email)) || ""); }
+  function nudgeDismissed() { try { return localStorage.getItem(nudgeKey()) === "1"; } catch (e) { return false; } }
+  function dismissNudge() { try { localStorage.setItem(nudgeKey(), "1"); } catch (e) {} }
+  function profileNudge() {
+    var c = card([
+      el("h2", { style: "margin:0 0 4px", text: "Complete your profile" }),
+      el("p", { class: "cf-muted", style: "margin:0", text: "Add your phone and details so the club can reach you about your bookings — it only takes a minute." }),
+      el("div", { class: "cf-row", style: "gap:8px;margin-top:12px" }, [
+        el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Fill in", onclick: function () { go("#/profile"); } }),
+        el("button", { class: "cf-btn cf-btn-ghost cf-btn-sm", text: "Skip", onclick: function () { dismissNudge(); route(); } }),
+      ]),
+    ]);
+    return c;
+  }
 
   // sessions: a Current / Past toggle (default Current) on the shared cf-segment filter look — Home
   // leads with what's coming up, past is one tap away. Each row drills into its full detail.
