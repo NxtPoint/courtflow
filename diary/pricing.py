@@ -239,8 +239,18 @@ def membership_covers(session, *, club_id, user_id, starts_at):
     try:
         if not user_id or starts_at is None or not _membership_sub_exists(session):
             return False
-        iso_dow = starts_at.isoweekday()                 # 1=Mon..7=Sun
-        min_of_day = starts_at.hour * 60 + starts_at.minute
+        # Access windows (access_days / start_min / end_min) are CLUB-LOCAL — the same hours the owner
+        # captures on the service. starts_at is tz-aware UTC internally, so convert to the club tz
+        # before deriving weekday + minute-of-day; otherwise an off-peak tier is evaluated in UTC and
+        # the covered/PAYG decision diverges from the calendar's local price (shown ≠ charged).
+        local = starts_at
+        try:
+            from diary.availability import _club_tz
+            local = starts_at.astimezone(_club_tz(session, club_id))
+        except Exception:
+            pass
+        iso_dow = local.isoweekday()                     # 1=Mon..7=Sun (club-local)
+        min_of_day = local.hour * 60 + local.minute
         row = session.execute(
             text("""
                 SELECT 1
