@@ -199,6 +199,34 @@
       .catch(function (e) { toast(errMsg(e), "error"); });
   }
 
+  // ---- ONE transaction-log row (a chronological "what happened" entry) --------
+  // Used by the transaction RECORD (Widgets.TransactionDetail) AND the account activity feed, so a
+  // log line reads identically everywhere. entry = {at, kind, title|label, detail, amount_minor,
+  // direction('in'|'out'|'neutral'), currency}. amount is SIGNED for display via `direction`.
+  var _LOG_ICON = {
+    payment: "💳", refund: "↩️", order_created: "🧾", order_voided: "✖️", order_written_off: "🚫",
+    commission_earned: "＋", refund_clawback: "↩️", arrears_accrued: "🎾", arrears_collected: "✅",
+    arrears_written_off: "🚫", membership_started: "⭐", membership_cancelled: "✖️",
+  };
+  function logRow(e, currency) {
+    var dir = e.direction || "neutral", amt = e.amount_minor || 0;
+    var kids = [el("div", { class: "cf-item-main" }, [
+      el("div", { class: "cf-item-t" }, [
+        el("span", { class: "cf-act-ic", text: (_LOG_ICON[e.kind] || "•") + " " }),
+        document.createTextNode(e.title || e.label || e.kind || "Activity"),
+      ]),
+      el("div", { class: "cf-item-s", text: [e.detail, e.at ? fmtDate(e.at) : ""].filter(Boolean).join(" · ") }),
+    ])];
+    if (amt) {
+      var sign = dir === "out" ? "−" : (dir === "in" ? "+" : "");
+      kids.push(el("span", {
+        class: "cf-chip" + (dir === "in" ? " cf-chip-good" : (dir === "out" ? " cf-chip-bad" : " cf-chip-muted")),
+        text: sign + money(Math.abs(amt), e.currency || currency),
+      }));
+    }
+    return el("div", { class: "cf-item" }, kids);
+  }
+
   // ---- anchored dropdown menu (the avatar "account" menu — ONE implementation, all apps) ----
   // items: array of {label, onClick, tone?} | "-" (a separator). Positions under/right of anchor;
   // closes on outside click, Escape, scroll or resize. Returns its close() fn.
@@ -241,6 +269,6 @@
     el: el, esc: esc, clear: clear, toast: toast, errMsg: errMsg, groupByDay: groupByDay,
     lifecycleBar: lifecycleBar, subtabs: subtabs, lifeActions: lifeActions, statusChip: statusChip,
     card: card, backBar: backBar, kv: kv, pageHeader: pageHeader, modal: modal, toLocal: toLocal, addToCalendar: addToCalendar,
-    menu: menu,
+    menu: menu, logRow: logRow,
   };
 })();

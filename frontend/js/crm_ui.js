@@ -219,38 +219,14 @@
   // ---- transaction log / activity feed ---------------------------------------
   // entries: [{at, kind, title, detail, amount_minor, currency, direction('in'|'out'|'neutral')}]
   // One chronological, transparent "what happened" list shared by client / coach / owner.
-  var ACT_ICON = {
-    payment: "💳", refund: "↩️", order_created: "🧾", order_voided: "✖️",
-    order_written_off: "🚫", commission_earned: "＋", refund_clawback: "↩️",
-    arrears_accrued: "🎾", arrears_collected: "✅", arrears_written_off: "🚫",
-    membership_started: "⭐", membership_cancelled: "✖️",
-  };
+  // One chronological "what happened" list shared by client / coach / owner. Each row is the SAME
+  // window.UI.logRow the transaction RECORD uses — one implementation (FRONTEND-STANDARDISATION #7).
   function activityFeed(entries, opts) {
     opts = opts || {};
     entries = entries || [];
     if (!entries.length) return el("div", { class: "cf-empty", text: opts.empty || "No activity yet." });
     var list = el("div", { class: "cf-list cf-act" });
-    entries.forEach(function (e) {
-      var dir = e.direction || "neutral";
-      var amt = e.amount_minor || 0;
-      var kids = [
-        el("div", { class: "cf-item-main" }, [
-          el("div", { class: "cf-item-t" }, [
-            el("span", { class: "cf-act-ic", text: (ACT_ICON[e.kind] || "•") + " " }),
-            document.createTextNode(e.title || e.kind || "Activity"),
-          ]),
-          el("div", { class: "cf-item-s", text: [e.detail, e.at ? UI.fmtDate(e.at) : ""].filter(Boolean).join(" · ") }),
-        ]),
-      ];
-      if (amt) {
-        var sign = dir === "out" ? "−" : (dir === "in" ? "+" : "");
-        kids.push(el("span", {
-          class: "cf-chip" + (dir === "in" ? " cf-chip-good" : (dir === "out" ? " cf-chip-bad" : " cf-chip-muted")),
-          text: sign + money(Math.abs(amt), e.currency),
-        }));
-      }
-      list.appendChild(el("div", { class: "cf-item" }, kids));
-    });
+    entries.forEach(function (e) { list.appendChild(window.UI.logRow(e)); });
     return list;
   }
 

@@ -75,6 +75,34 @@
           UI.statusChip(b.status),
         ]),
       ]);
+      // event subtitle (plain English: coach for a lesson, class name for a class)
+      var sub = b.booking_type === "lesson" ? (coachName ? "with " + coachName : "")
+              : (b.booking_type === "class" ? (b.class_name || "") : "");
+      if (sub) head.appendChild(el("div", { class: "cf-muted", style: "margin-top:2px", text: sub }));
+
+      // money line — the reconciliation headline (paid / owed / covered / refunded) + Settle CTA when owed
+      var ch = b.charge || {}, state = ch.state || ch.status;
+      var owedAmt = (ch.owed_minor != null ? ch.owed_minor : ch.amount_minor);
+      var moneyLine =
+        state === "covered" ? "Covered by your membership" :
+        state === "owed" ? "You owe " + money(owedAmt, cur) :
+        state === "pending" ? "Payment pending · " + money(ch.amount_minor, cur) :
+        state === "part_refunded" ? ("Paid " + money(ch.paid_minor, cur) + " · " + money(ch.refunded_minor, cur) + " refunded") :
+        state === "refunded" ? "Refunded " + money(ch.refunded_minor || ch.amount_minor, cur) :
+        state === "written_off" ? "Written off — nothing to pay" :
+        state === "paid" ? "Paid " + money(ch.paid_minor || ch.amount_minor, cur) : null;
+      if (moneyLine) {
+        var settleAct = cfg.actions && (cfg.actions.settle || cfg.actions.pay);
+        head.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)" }, [
+          el("span", { style: "font-weight:700;font-size:1.02rem", text: moneyLine }),
+          (state === "owed" && settleAct) ? el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Settle " + money(owedAmt, cur) + " ›", onclick: function () { run(settleAct, b); } }) : null,
+        ].filter(Boolean)));
+      }
+
+      // last action — the current status in words, from the newest log entry
+      var lastE = (b.log && b.log.length) ? b.log[b.log.length - 1] : null;
+      if (lastE) head.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin-top:8px", text: "Latest: " + (lastE.title || lastE.label || "") + (lastE.at ? " · " + (function () { try { return UI.fmtDate(lastE.at); } catch (e) { return ""; } })() : "") }));
+
       var det = el("div", { style: "margin-top:6px" });
       // Client (present on coach/admin stories; the client's own story omits it — they ARE the client)
       if (b.client && b.client.name) {
@@ -92,7 +120,7 @@
       }
       if (b.venue && (b.venue.club_name || b.court_name)) det.appendChild(UI.kv("Where", el("div", {}, [el("div", { text: [b.venue.club_name, b.court_name].filter(Boolean).join(" · ") || "—" }), b.venue.address ? el("div", { class: "cf-muted", style: "font-size:.85rem", text: b.venue.address }) : null].filter(Boolean))));
       if (b.players && b.players.length) det.appendChild(UI.kv("Players", b.players.map(function (p) { return p.name + (p.attended === true ? " ✓" : p.attended === false ? " ✗" : ""); }).join(", ")));
-      det.appendChild(UI.kv("Charge", el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { style: "font-weight:700", text: (b.charge && b.charge.status === "covered") ? "Covered" : money(b.charge && b.charge.amount_minor, cur) }), UI.statusChip(b.charge && b.charge.status)])));
+      // (the headline money line lives in the summary above; here we keep only the coaching split detail)
       if (b.arrears) det.appendChild(UI.kv("Coaching", el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { style: "font-weight:700", text: money(b.arrears.gross_minor, cur) }), UI.statusChip(b.arrears.status)])));
       if (b.notes && fields.showNotes !== false) det.appendChild(UI.kv("Notes", b.notes));
       head.appendChild(det);
@@ -121,6 +149,23 @@
           wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px" },
             [el("span", { class: "cf-muted", style: "font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;width:100%", text: g })].concat(btns)));
         });
+      }
+
+      // History — the chronological "what happened" log (summary → drill; collapse when long).
+      var log = b.log || [];
+      if (log.length) {
+        var expanded = false, histBox = el("div", {});
+        var toggleBtn = el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost" });
+        var paintHist = function () {
+          UI.clear(histBox);
+          ((expanded || log.length <= 4) ? log : log.slice(-3)).forEach(function (e) { histBox.appendChild(UI.logRow(e, cur)); });
+          toggleBtn.textContent = expanded ? "Show less ⌃" : "Full history ⌄";
+          toggleBtn.style.display = (log.length <= 4) ? "none" : "";
+        };
+        toggleBtn.addEventListener("click", function () { expanded = !expanded; paintHist(); });
+        var histCard = UI.card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [el("h2", { style: "margin:0;font-size:1.05rem", text: "History" }), toggleBtn]), histBox]);
+        paintHist();
+        wrap.appendChild(histCard);
       }
 
       UI.clear(host); host.appendChild(wrap);
