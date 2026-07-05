@@ -544,6 +544,21 @@ def get_booking_story(booking_id):
     return jsonify(booking=story), 200
 
 
+@coach_bp.get("/classes/<enrolment_id>")
+def get_class_story(enrolment_id):
+    """The coach's record of one CLASS enrolment in a class they run — same shape as the booking story."""
+    p, err = _coach()
+    if err:
+        return err
+    from diary import classes as diary_classes
+    with session_scope() as s:
+        story = diary_classes.enrolment_story(
+            s, club_id=p.club_id, enrolment_id=enrolment_id, scope="coach", user_id=p.user_id)
+    if story is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(booking=story), 200
+
+
 @coach_bp.get("/clients/<client_user_id>/invoice")
 def get_client_invoice(client_user_id):
     """The printable coaching invoice for one client + month (paid/owed/written-off lines + totals).

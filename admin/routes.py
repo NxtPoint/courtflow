@@ -1225,6 +1225,21 @@ def get_admin_booking(booking_id):
     return jsonify(booking=story), 200
 
 
+@admin_bp.get("/classes/<enrolment_id>")
+def get_admin_class(enrolment_id):
+    """The admin god-view record of one CLASS enrolment — same shape as the booking story so the one
+    widget renders it (every People/Diary class row drills here)."""
+    p, err = _admin()
+    if err:
+        return err
+    from diary import classes as classes_mod
+    with session_scope() as s:
+        story = classes_mod.enrolment_story(s, club_id=p.club_id, enrolment_id=enrolment_id, scope="owner")
+    if story is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(booking=story), 200
+
+
 @admin_bp.post("/bookings/<booking_id>/reassign-coach")
 def reassign_coach(booking_id):
     """Move a future, not-yet-paid lesson to a different bookable coach. Body {coach_user_id}.

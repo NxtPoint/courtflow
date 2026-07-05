@@ -12,7 +12,7 @@
 # Emits (guarded, via diary.events): class_enrolled, class_waitlisted, waitlist_slot_open.
 
 import logging
-from datetime import datetime, timedelta, time as _time
+from datetime import datetime, timedelta, time as _time, timezone
 
 from sqlalchemy import text
 
@@ -591,6 +591,80 @@ def schedule_sessions(session, *, club_id, resource_id, weekdays=None, start_tim
         )
         created += 1
     return {"ok": True, "created": created, "skipped": skipped}
+
+
+def enrolment_story(session, *, club_id, enrolment_id, scope, user_id=None):
+    """The unified transaction record for a CLASS enrolment — the class sibling of booking_story, in the
+    SAME shape (summary + charge + chronological log + action eligibility) so the one widget renders it.
+    scope in client|coach|owner: client = the player OR their guardian; coach = a class they run; owner =
+    any enrolment in the club. Returns None if not found / not visible to this viewer."""
+    r = session.execute(
+        text('SELECT e.id, e.status, e.class_session_id, e.user_id AS player_user_id, e.order_id, '
+             '       e.settlement_mode, cs.starts_at, cs.ends_at, cs.coach_user_id, '
+             '       res.name AS class_name, '
+             "       COALESCE(cp.display_name, NULLIF(TRIM(COALESCE(cu.first_name,'')||' '||COALESCE(cu.surname,'')),'')) AS coach_name, "
+             "       NULLIF(TRIM(COALESCE(pu.first_name,'')||' '||COALESCE(pu.surname,'')),'') AS player_name "
+             'FROM diary.enrolment e '
+             'JOIN diary.class_session cs ON cs.id = e.class_session_id '
+             'LEFT JOIN diary.resource res ON res.id = cs.resource_id '
+             'LEFT JOIN iam."user" cu ON cu.id = cs.coach_user_id '
+             'LEFT JOIN iam.coach_profile cp ON cp.user_id = cs.coach_user_id AND cp.club_id = cs.club_id '
+             'LEFT JOIN iam."user" pu ON pu.id = e.user_id '
+             'WHERE e.id = :e AND e.club_id = :c'),
+        {"e": str(enrolment_id), "c": str(club_id)},
+    ).mappings().first()
+    if not r:
+        return None
+    if scope == "client":
+        if str(r["player_user_id"]) != str(user_id) and not is_guardian_of(session, user_id, r["player_user_id"]):
+            return None
+    elif scope == "coach":
+        if str(r["coach_user_id"]) != str(user_id):
+            return None
+    # owner sees any enrolment in the club.
+    from diary.bookings import _booking_charge, _event_log
+    charge = _booking_charge(session, club_id, r["order_id"], r["settlement_mode"] or "at_court")
+    log = _event_log(session, club_id, scope=scope,
+                     user_id=(user_id if scope in ("client", "coach") else None),
+                     order_id=r["order_id"], booking_id=None)
+    status = r["status"]
+    starts, ends = r["starts_at"], r["ends_at"]
+    dur = int((ends - starts).total_seconds() // 60) if (starts and ends) else None
+    is_future = bool(starts and starts > datetime.now(timezone.utc))
+    is_you = (scope == "client" and str(r["player_user_id"]) == str(user_id))
+    state = charge.get("state")
+    can = {
+        "add_to_calendar": False,   # class .ics not built yet
+        "cancel": status in ("enrolled", "waitlisted"),
+        "pay": scope == "client" and state in ("owed", "pending"),
+        "settle": scope == "client" and state == "owed",
+        "receipt": state in ("paid", "refunded", "part_refunded"),
+        "request_refund": scope == "client" and bool(charge.get("refundable")),
+        "refund": scope == "owner" and bool(charge.get("refundable")),
+        "void": scope == "owner" and state == "owed",
+        "write_off": scope == "owner" and state == "owed",
+    }
+    return {
+        "record_id": "enrolment:" + str(r["id"]),
+        "id": str(r["id"]),
+        "kind": "class",
+        "booking_type": "class",
+        "class_session_id": str(r["class_session_id"]),
+        "status": status,
+        "starts_at": starts.isoformat() if starts else None,
+        "ends_at": ends.isoformat() if ends else None,
+        "duration_minutes": dur,
+        "is_future": is_future,
+        "class_name": r["class_name"],
+        "coach_name": r["coach_name"],
+        "players": [{"name": "You" if is_you else (r["player_name"] or "Player"),
+                     "kind": "you" if is_you else "player"}],
+        "player_name": r["player_name"],
+        "player_user_id": str(r["player_user_id"]) if r["player_user_id"] else None,
+        "charge": charge,
+        "log": log,
+        "can": can,
+    }
 
 
 def is_guardian_of(session, guardian_user_id, dependent_user_id):

@@ -273,6 +273,13 @@ def sc_cancelled_class_not_owed(s, fx):
     check("class enrol adds R120 owed under Classes",
           st["total_owed_minor"] == before + 12000 and any(i["category"] == "Classes" for i in st["items"]),
           str(st["total_owed_minor"]))
+    # the class is a first-class transaction RECORD (enrolment_story): summary + charge + history log
+    eid = s.execute(text("SELECT id FROM diary.enrolment WHERE class_session_id=:cs AND user_id=:u"),
+                    {"cs": str(cs1), "u": fx.member}).scalar()
+    rec = C.enrolment_story(s, club_id=fx.club_id, enrolment_id=str(eid), scope="client", user_id=fx.member)
+    check("class RECORD resolves: owed charge + a history log",
+          bool(rec) and rec["kind"] == "class" and rec["charge"]["owed_minor"] == 12000 and len(rec["log"]) >= 1,
+          str({"owed": rec["charge"]["owed_minor"], "log": len(rec["log"])} if rec else None))
     C.cancel_enrolment(s, club_id=fx.club_id, class_session_id=str(cs1), user_id=fx.member)
     st2 = owed(s, fx)
     check("cancelled class is NOT owed (order voided on cancel)",
