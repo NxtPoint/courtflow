@@ -72,6 +72,10 @@ hard-delete a court with no bookings/sessions, else soft-archive) · `GET/PUT ho
 `GET coaches` · `POST coaches/invite` · `POST coaches/<id>/resend-invite` ·
 **`PATCH coaches/<id>`** (lifecycle status) · **`DELETE coaches/<id>`** (real: hard-delete if no
 history, else archive) · `GET people` · `GET payments` · `POST|DELETE members/<id>/membership` ·
+**`POST clients`** (create a walk-up/off-system client now — returns `user_id`, idempotent on email) ·
+**`POST members/<id>/issue`** (issue a **membership OR token pack** offline — `{kind, price_id?|bundle_plan_id?,
+start_date?, mark_paid?, pay_provider?}`; reuses the offline-purchase engine → owed order activated now,
+`mark_paid` settles immediately) ·
 **`GET members/<id>/statement`** · **`POST orders/<id>/void`** (`{write_off}` — void/write-off an owed order) ·
 `GET/POST membership-plans` (+`PATCH/DELETE /<id>`) ·
 **`GET/PATCH membership-config`** (per-tier payment options) · `GET/POST bundle-plans` (+`PATCH/DELETE /<id>`) ·
@@ -95,7 +99,8 @@ amount → Money → Sales by day). Admin-gated, guarded (missing/empty → empt
 **Coach `/api/coach/*`:** `GET/PATCH profile` · `GET onboarding` · `POST/PATCH services`
 (+`POST services/<pid>/rate`, `PATCH/DELETE services/<id>`) · `GET/POST bundle-plans`
 (+`PATCH bundle-plans/<id>` — own lesson packs, scoped + ownership-guarded) · `PUT hours` ·
-`GET/POST/DELETE time-off` · `GET clients` · **`GET clients/<id>`** (`?month=` — the client 360;
+`GET/POST/DELETE time-off` · `GET clients` · **`GET members/search`** (`?q=` type-ahead client lookup for
+"book a client", min 2 chars; `coach/repositories.search_members`) · **`GET clients/<id>`** (`?month=` — the client 360;
 now returns a **by-service breakdown** `services[]` + `services_billed_minor` with the REAL per-session
 state paid/owed/written_off/discounted/covered, via `billing/commission.py::client_service_breakdown`) ·
 **`GET bookings/<id>`** (the coach **event story** — client/contact, court, charge, coaching-arrears line,
@@ -117,8 +122,10 @@ A CHOSEN COACH** (body `coach_user_id`, validated by `admin/repositories.is_club
 `GET plan` (current plan + `is_trial`/`trial_days_left` + `membership_window`) ·
 **`POST membership/cancel`** (self-cancel a paid membership) · `GET financials` ·
 **`GET billing/summary`** (`?month=` — the client SPA's ORDER-based monthly by-category billing view;
-`billing/me.py::billing_summary`) · **`GET bookings/<id>`** (the client **event story** for a booking —
-`diary/bookings.py::booking_story`) ·
+`billing/me.py::billing_summary`) ·
+**`GET activity`** (`?month=YYYY-MM` — the monthly **Activity** view: that month's bookings + **spend by
+category** (money paid that month) + current outstanding; `billing/me.py::spend_by_category` + `statement`) ·
+**`GET bookings/<id>`** (the client **event story** for a booking — `diary/bookings.py::booking_story`) ·
 **`GET statement`** (unified statement — unpaid `billing.order` rows, grouped by category) ·
 **`POST statement/pay`** (`{order_ids?}` → `create_settlement_order` → Yoco; pay all or a subset) · `GET orders` ·
 `GET/POST refund-requests` (+`POST /<id>/cancel`) · `GET notifications` · `POST notifications/read`.
@@ -165,7 +172,9 @@ CourtFlow AWS account is back): **`docs/specs/SES-SETUP.md`**. No schema change.
     `token_wallet.base_minutes`/`minutes_total`/`minutes_remaining` (the unit
     engine's authoritative minute balance — `tokens_*` are display only); **`booking.status` now allows
     `requested`/`proposed`** (lesson approval lifecycle — NOT in the GiST exclusion, so they hold no
-    slot; gated by `iam.coach_profile.review_bookings`).
+    slot; gated by `iam.coach_profile.review_bookings`); **`class_session.court_resource_id`/`court_booking_id`**
+    (a scheduled class can optionally **reserve a court** — `court_booking_id` is a court-blocking
+    `diary.booking` reusing the GiST exclusion, freed on cancel).
 - **`core`**: account/user/person, `usage_event`, consent, nps, `notification`
   *(the Business Overview analytics are read-only views over `core.usage_event` — no separate schema)*
 

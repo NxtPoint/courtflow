@@ -1,6 +1,11 @@
-# GO-LIVE — NextPoint Wix → Render production cutover + data migration (target: Sunday)
+# GO-LIVE — NextPoint Wix → Render production cutover + data migration (✅ COMPLETE 2026-07-05)
 
-> **STATUS (2026-07-05): this is the PLAN/reference. Execution is largely DONE — see
+> **STATUS (2026-07-05): COMPLETE.** Live at `https://nextpointtennis.com` — Render custom domain attached,
+> prod-Clerk env swapped (+ Google login), DNS flipped (apex A→`216.24.57.1` / www CNAME→
+> `courtflow-web.onrender.com`; `api.` untouched), Wix parked, GA4/Ads/GSC live, canonical repointed
+> **www→apex**. This doc is now the reference/record; §ROLLBACK stays live during the ~2-week watch window.
+>
+> **STATUS (2026-07-05): this was the PLAN/reference. Execution is DONE — see
 > [`CUTOVER-PROGRESS.md`](CUTOVER-PROGRESS.md) for actual state and
 > [`GO-LIVE-STEPS.md`](GO-LIVE-STEPS.md) for the click-by-click cutover sequence.**
 > Done: `scripts/import_wix.py` + `import_members/subscriptions/lessons.py` (data migrated to prod —

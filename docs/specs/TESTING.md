@@ -38,8 +38,9 @@ the coach sets up services, then the client books against them. Expected results
 
 ## 0. Setup & environment
 
-**Where:** the live web service (Render, Frankfurt, Free plan):
-- App (after login): **`https://courtflow-web.onrender.com/portal`** (Home/cockpit). Other routes:
+**Where:** LIVE in production (Render, Frankfurt, **Starter** plan — no cold starts):
+- App (after login): **`https://nextpointtennis.com/portal`** (Home/cockpit; `courtflow-web.onrender.com`
+  remains as a fallback host). Other routes:
   `/book` · `/my` · `/plan` · `/account.html` (client) · `/coach` · `/admin` · `/settings.html` ·
   `/overview.html` · `/login`. (At go-live these move to `nextpointtennis.com`.)
 - API: `https://courtflow-api.onrender.com` (the SPA calls it directly).

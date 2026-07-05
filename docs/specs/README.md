@@ -42,7 +42,17 @@ operating guide; **this folder is the detail.**
 > for a chosen coach** (`POST /api/services`), and a batch of cutover-day E2E fixes landed (single-club
 > principal resolution, coach-invite status flip, calendar full-day bounds, billing-category drill, parallel
 > startup + preconnect). Payments confirmed working end-to-end on the Frankfurt stack. Gates unchanged.
-> Remaining: **OUTSTANDING.md**.
+>
+> **2026-07-05 — 🚀 GO-LIVE (production):** the platform is **live on `https://nextpointtennis.com`** (apex
+> canonical, `www`→apex 301, HTTPS; DNS flipped at Wix, `api.` untouched). Prod Clerk + **Google login** (Clerk
+> custom Google OAuth); **GA4** `G-EKQP47P8M9` + **Google Ads** `AW-17077631191` (purchase) on courtflow-web;
+> `TRANSACTIONAL_BCC` copies the club on transactional email; 48-rule 301 map + GSC live; canonical repointed
+> www→apex. Shipped alongside: admin **walk-up client** create + **issue membership/pack offline**
+> (`POST /api/admin/clients`, `POST /api/admin/members/<id>/issue`), client **monthly Activity** view
+> (`GET /api/me/activity`), **classes can reserve a court**, coach **book-a-client** picks service+duration+
+> payment (`GET /api/coach/members/search`), and **5 new email templates** (cancel/reschedule/refund/class-
+> cancel/reminder) + club BCC. Post-launch cleanup: retired the unreachable `my.js`/`account.js`/`book.html`
+> shells + a duplicate `/api/me/activity` route. Remaining: **OUTSTANDING.md**.
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,

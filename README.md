@@ -13,14 +13,14 @@ appears in marketing copy + repo, never in schema (schema is `club_id`‑scoped)
 
 ---
 
-## 📍 Project status (last updated 2026‑06‑26)
+## 📍 Project status (last updated 2026‑07‑05 — **LIVE IN PRODUCTION**)
 
 | Track | State |
 |---|---|
 | **Spec** | ✅ Complete — `docs/00`→`11` + `BUILD_PROMPT.md`. **Current as‑built state: `docs/specs/`** (START at `docs/specs/README.md`). |
-| **Platform build** | ✅ **LIVE on Render, end‑to‑end.** All three purchasing models, Yoco online pay + refunds, the commission/settlement engine, the **lesson approval lifecycle**, **redesigned client + coach + owner consoles**, and a booking **`.ics` calendar** are built & deployed. Authoritative current state: **`docs/specs/`** + **`CLAUDE.md`**. Remaining: **`docs/specs/OUTSTANDING.md`**. **Still needs Tomo (config):** S3 (coach photos), SES/Klaviyo (email), supervised DNS/SEO cutover. |
-| **NextPoint Google Ads** | ✅ Optimised & live (2026‑06‑20) — see `marketing/`. |
-| **SEO migration (Wix→Render)** | ⏳ Planned, not executed — `docs/07` + `migration/` (supervised cutover; never auto‑run). |
+| **Platform build** | ✅ **LIVE IN PRODUCTION at https://nextpointtennis.com (cutover 2026‑07‑05).** All three purchasing models, Yoco online pay + refunds, the commission/settlement engine, the **lesson approval lifecycle**, **redesigned client + coach + owner consoles**, unified statement, booking **`.ics` calendar**, plus post‑launch **admin add‑client + issue‑package**, **coach book‑a‑client (service/duration/payment)** and the **client monthly Activity view**. Authoritative current state: **`docs/specs/`** + **`CLAUDE.md`**. Remaining: **`docs/specs/OUTSTANDING.md`**. **Still needs Tomo (config):** S3 (coach photos), Klaviyo (marketing email). SES transactional email is **LIVE** (interim via ten‑fifty5 AWS). |
+| **NextPoint Google Ads** | ✅ Optimised & live (2026‑06‑20). GA4 `G-EKQP47P8M9` + Ads conversion `AW-17077631191` (purchase) wired on courtflow‑web — see `marketing/`. |
+| **SEO migration (Wix→Render)** | ✅ **Executed 2026‑07‑05** — Wix→Render live; 48‑rule 301 map, prod Clerk + Google login, GA4/Ads/GSC live, canonical→apex. `docs/07` + `migration/`. |
 
 ---
 

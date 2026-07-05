@@ -1,5 +1,9 @@
-# Wix → Render SEO Cutover Runbook (NextPoint Tennis)
+# Wix → Render SEO Cutover Runbook (NextPoint Tennis) — ✅ EXECUTED 2026-07-05
 
+> **DONE 2026-07-05:** DNS flipped (apex A→`216.24.57.1`, www CNAME→`courtflow-web.onrender.com`; `api.`
+> untouched), 48-rule 301 map live, GSC sitemap submitted, Wix parked. The only still-active part is the
+> post-cutover **watch window** (§ monitor 2–4 weeks + hold the Wix rollback), after which this is archivable.
+>
 > Reversible at every step. NextPoint has **real Google rankings to protect** — this
 > is a careful cutover, not a flip. Adapted from 1050's proven Wix→Render playbook
 > (docs/07). **An agent must NEVER change DNS** — every DNS step below is done by Tomo.

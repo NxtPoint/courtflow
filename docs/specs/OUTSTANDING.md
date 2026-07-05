@@ -67,9 +67,11 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       **[SES-SETUP.md](SES-SETUP.md)**.
 - [ ] **`KLAVIYO_API_KEY`** → CRM lifecycle/marketing flows go live (event feed already emits).
 - [ ] **`S3_BUCKET` + AWS keys** → coach **photo uploads** (until then coaches paste a photo URL).
-- [ ] **DNS / SEO cutover** for `nextpointtennis.com` (supervised — never an agent; see `docs/07`,
-      `docs/11 §5`). Give the platform its own API host (`api.courtflow.app`) — `api.nextpointtennis.com`
-      is the live 1050 service, do not break it.
+- [x] **DNS / SEO cutover — DONE 2026-07-05.** Live at `https://nextpointtennis.com` (apex canonical,
+      `www`→apex 301, HTTPS). DNS at Wix: apex A→`216.24.57.1`, www CNAME→`courtflow-web.onrender.com`;
+      `api.nextpointtennis.com` (1050) untouched. Prod Clerk + Google login live; 48-rule 301 map; GA4
+      (`G-EKQP47P8M9`) + Ads (`AW-17077631191`) + GSC live; canonical/OG/JSON-LD repointed www→apex.
+      Wix kept warm on its `*.wixsite.com` URL as the rollback (~2-week watch). See `GO-LIVE-CUTOVER.md`.
 - [ ] Confirm **Yoco fee accounting** assumption in practice (fees = owner's account, recovered via
       commission — currently not deducted from coach splits).
 

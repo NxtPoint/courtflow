@@ -1,4 +1,11 @@
-# GO-LIVE — exact click-by-click steps (cutover: tomorrow night)
+# GO-LIVE — cutover steps (✅ EXECUTED 2026-07-05 — historical as-run record + rollback reference)
+
+> **ALL STEPS BELOW WERE COMPLETED 2026-07-05.** Live at `https://nextpointtennis.com` (apex A→216.24.57.1,
+> www CNAME→courtflow-web.onrender.com; `api.` untouched). Prod Clerk + Google login, GA4/Ads/GSC live,
+> `TRANSACTIONAL_BCC` set. Retained as the as-run log + the rollback recipe (§ROLLBACK) until the Wix
+> rollback window closes (~2 weeks), then archivable.
+
+## (original click-by-click, now executed)
 
 Split into **TONIGHT** (safe prep, no user impact) and **TOMORROW** (the cutover, DNS-sensitive, in order).
 ⚠️ **NEVER touch the `api.nextpointtennis.com` DNS record** at any point — it's the live 1050 API.

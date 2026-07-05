@@ -1,5 +1,17 @@
 # ENV-STATUS — every environment variable, what it lights up, and what's set
 
+> **⚡ POST-CUTOVER LIVE VALUES (2026-07-05) — these SUPERSEDE any dev/pending values in the tables below:**
+> - **courtflow-api:** `AUTH_ISSUER=https://clerk.nextpointtennis.com` · `AUTH_JWKS_URL=https://clerk.nextpointtennis.com/.well-known/jwks.json`
+>   (prod Clerk, NOT the old `settling-alien-23.clerk.accounts.dev`) · `APP_BASE_URL=https://nextpointtennis.com`
+>   · **`TRANSACTIONAL_BCC=info@nextpointtennis.com`** (NEW — blind-copies the club on transactional email;
+>   committed in `render.yaml`) · `SEED_NEXTPOINT=1` · SES_* interim (ten-fifty5) live.
+> - **courtflow-web:** `CLERK_PUBLISHABLE_KEY=pk_live_…` (prod) · **`GA4_MEASUREMENT_ID=G-EKQP47P8M9`** ·
+>   **`GOOGLE_ADS_ID=AW-17077631191`** · **`GOOGLE_ADS_CONVERSIONS={"purchase":"AW-17077631191/84PdCKHjrMscENfxn88_"}`**
+>   (all LIVE). Both services on **Starter** (no cold starts).
+> - **Clerk (console, not env):** a **custom Google OAuth** Web client is wired (redirect
+>   `https://clerk.nextpointtennis.com/v1/oauth_callback`) so "Continue with Google" works in production.
+> - Still dark (keys not entered): **Klaviyo** (marketing email), **S3** (coach photo uploads).
+
 **What this is:** the single source of truth for environment variables. `render.yaml` does **not**
 auto-push to Render — you type env into the Render dashboard manually — so this sheet (derived from a
 full `os.getenv` scan of the code) is the list to work from.

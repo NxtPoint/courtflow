@@ -43,7 +43,13 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 - **Lessons reserve a court** — availability = where a coach **and** a court are both free
   (coach ∩ court); a lesson auto-holds a court (two rows, one order). ✅
 - **A coach's class blocks their lessons** — a class the coach runs makes them unavailable for a
-  lesson at that time (read + write guarded; a class reserves no court). ✅
+  lesson at that time (read + write guarded). A class can **optionally reserve a court** too
+  (`class_session.court_resource_id` → a court-blocking booking, freed on cancel). ✅
+- **Admin can create a walk-up client + issue a membership/pack offline** — People → New client +
+  Issue package (membership OR pack, owed/PAYG or mark-paid, start date); reuses the offline-purchase
+  engine (no parallel money logic). ✅
+- **Client monthly Activity view** — one screen: the month's bookings, spend by category, and the
+  outstanding balance to settle (`GET /api/me/activity`). ✅
 - **30-minute start cadence** — bookings can start on the hour or half-hour (configurable finer per
   club); duration sets the length. ✅
 - **Reschedule** — atomic move, conflict-checked; a failed move preserves the original slot; a

@@ -1,7 +1,16 @@
 # Go-live cutover — running progress log
 
 Durable record of the Wix→Render cutover work (survives chat compaction). Full runbook:
-`docs/specs/GO-LIVE-CUTOVER.md`. Target go-live: **Sunday**. Newest entries at top.
+`docs/specs/GO-LIVE-CUTOVER.md`. **Go-live: 2026-07-05 — ✅ DONE.** Newest entries at top.
+
+## ✅ CUTOVER COMPLETE (2026-07-05)
+Live at `https://nextpointtennis.com` (apex canonical, www→apex 301, HTTPS). DNS flipped at Wix (apex A→
+`216.24.57.1`, www CNAME→`courtflow-web.onrender.com`; `api.` untouched). Prod Clerk live + **Google login**
+via a custom Google OAuth client. **GA4** `G-EKQP47P8M9` + **Google Ads** `AW-17077631191` (purchase label
+`84PdCKHjrMscENfxn88_`) on courtflow-web; `TRANSACTIONAL_BCC=info@nextpointtennis.com` on courtflow-api.
+Data migrated (878/11/8). SES live. **OPS_KEY rotated (DONE).** The OPS diagnostics `/api/cron/reconcile` +
+`/api/cron/yoco-diag` were **deleted** (the SES ops levers + `reconcile-payments` remain). Everything under
+"⏳ TOMO TO SUPPLY" below is now complete — kept for history.
 
 ## ✅ DONE (agent, committed + pushed to master)
 - **`a50fc90` — Wix importer** (`scripts/import_wix.py`): dry-run by default (rolls back);

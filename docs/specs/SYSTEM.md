@@ -86,7 +86,9 @@ a free court and refuses without a free coach AND court. **Lesson approval lifec
 that reserves NOTHING until the coach **accepts** (auto-assign court + settle → `confirmed`), **proposes**
 a new time (→ **`proposed`**, awaiting the client), or **declines** (→ `cancelled`); on-behalf bookings
 always auto-confirm. `requested`/`proposed` are outside the GiST exclusion (they hold no slot). Classes
-have capacity + waitlist (auto-promote on cancel). **Lazy expiry replaces the capacity-sweep cron:**
+have capacity + waitlist (auto-promote on cancel) and can **optionally reserve a court**
+(`class_session.court_resource_id`/`court_booking_id` — a GiST-blocking booking, freed on cancel).
+**Lazy expiry replaces the capacity-sweep cron:**
 `release_expired_holds` runs at the top of availability + booking, cancelling `held` rows past
 `held_until` — no paid cron needed.
 

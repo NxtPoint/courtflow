@@ -24,9 +24,18 @@ NextPoint Tennis is club #1, migrating off Wix.
   Auth = a dedicated **CourtFlow Clerk DEV app** (`settling-alien-23.clerk.accounts.dev`, `pk_test_…`,
   values inline in `render.yaml`); `AUTH_ENABLED=1`. `SEED_NEXTPOINT=1` on the api re-seeds club #1 on
   boot (idempotent). Platform admin = `info@nextpointtennis.com`.
-- **The onrender host is a marketing host** (`MARKETING_HOSTS`), so `courtflow-web.onrender.com/` serves
-  the **public site** and the app is at `/portal`, `/book`, `/admin`, … (host-switch in `web_app.py`).
-  Real domains (`nextpointtennis.com`) cut over at go-live.
+- **LIVE IN PRODUCTION at `https://nextpointtennis.com` (cutover 2026-07-05).** Apex is canonical, `www`
+  301→apex, both HTTPS. DNS at Wix (apex A→`216.24.57.1`, www CNAME→`courtflow-web.onrender.com`;
+  `api.nextpointtennis.com` untouched = 1050). Prod Clerk (`issuer https://clerk.nextpointtennis.com`, email
+  claim in the session token) + **Google login** via a Clerk custom Google OAuth Web client. **GA4**
+  `G-EKQP47P8M9` + **Google Ads** `AW-17077631191` (purchase conversion) on courtflow-web;
+  `TRANSACTIONAL_BCC=info@nextpointtennis.com` blind-copies the club on transactional email. The onrender
+  hosts remain as fallback. (Host-switch in `web_app.py`; the marketing site is at `/`, app at `/portal`,
+  `/admin`, …). Post-launch adds: admin **walk-up client + issue membership/pack offline**
+  (`POST /api/admin/clients`, `POST /api/admin/members/<id>/issue`), client **monthly Activity** view
+  (`GET /api/me/activity`), **classes can reserve a court** (`class_session.court_resource_id`), coach
+  **book-a-client** picks service+duration+payment (`GET /api/coach/members/search`), and **5 new email
+  templates** (booking cancelled/rescheduled, payment refunded, class cancelled, booking reminder) + club BCC.
 - **Source of truth:** **`docs/specs/README.md` is the authoritative current-state index — START THERE**
   (`SYSTEM.md` architecture · `BUSINESS-RULES.md` capabilities · `INVENTORY.md` every endpoint/table/page ·
   `OUTSTANDING.md` what's left · `UNIFIED-STATEMENT.md` the money-reconciliation design). The original
@@ -148,7 +157,9 @@ NextPoint Tennis is club #1, migrating off Wix.
     (`card/backBar/kv/modal/statusChip/…`) + `crm_ui.js` (`CRMUI.*`). They also reuse `booking.js`
     (full-screen booking), `service_editor.js`, `class_ui.js`, `admin_api.js`/`coach_api.js`. The dead
     classic `coach.js`/`coach.html` were **deleted**; `admin.js`/`admin.html` remain for `/admin-classic`;
-    `portal.js`/`my.js`/`plan.js` still serve legacy shells (onboarding, `/book`, `/admin-classic`).
+    `portal.js`/`plan.js` still serve legacy shells (onboarding, `/admin-classic`). (The unreachable
+    `my.js`/`account.js` + `book.html`/`my.html`/`account.html` shells were **deleted 2026-07-05** — `/book`
+    `/my` `/account.html` are redirect-only routes into the SPA; the client app is `app.html`+`client.js`.)
     **Asset/nav links are ABSOLUTE** (`/app.css`, `/js/…`) so pages work at sub-paths.
   - **Web/SEO:** `web_app.py` (+ `web_wsgi.py`), `frontend/marketing/`, `frontend/_shared/` (`theme.css` +
     **`marketing.css`** + `chrome.py` + `branding.py` host→club resolver), `build_blog.py`,
