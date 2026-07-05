@@ -395,9 +395,11 @@ def _apply_term_grant(session, *, link, months, provider) -> Dict[str, Any]:
     # If the member already holds a DIFFERENT active membership (e.g. an admin grant), extend
     # that one by `months` (stacking the paid term) and mark this purchase's row active too so
     # the order_id link stays idempotent.
+    # A real paid plan SUPERSEDES a free-week trial (below), never stacks onto it — so exclude trial subs.
     existing = session.execute(
         text("SELECT id, current_period_end FROM billing.membership_subscription "
              "WHERE club_id = :c AND user_id = :u AND status = 'active' "
+             "  AND COALESCE(provider,'') <> 'trial' "
              "  AND id <> :self LIMIT 1"),
         {"c": str(club_id), "u": str(user_id) if user_id else None, "self": str(link["id"])},
     ).mappings().first()
@@ -426,6 +428,14 @@ def _apply_term_grant(session, *, link, months, provider) -> Dict[str, Any]:
                 "membership_subscription_id": str(existing["id"]),
                 "term_months": months,
                 "current_period_end": _iso(new_row["current_period_end"])}
+
+    # SUPERSEDE the signup free-week: a real paid plan REPLACES the trial (else the trial lingers active
+    # and membership_status can mislabel the paid plan as "Free week").
+    session.execute(
+        text("UPDATE billing.membership_subscription SET status = 'cancelled', updated_at = now() "
+             "WHERE club_id = CAST(:c AS uuid) AND user_id = CAST(:u AS uuid) "
+             "  AND provider = 'trial' AND status = 'active' AND id <> CAST(:self AS uuid)"),
+        {"c": str(club_id), "u": str(user_id) if user_id else None, "self": str(link["id"])})
 
     # No other active membership — activate THIS linked row for one term from today.
     row = session.execute(
