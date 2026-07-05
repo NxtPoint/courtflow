@@ -15,6 +15,7 @@ import logging
 from datetime import datetime, timedelta, time as _time, timezone
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from diary import events
 from diary.bookings import _create_order_guarded
@@ -30,7 +31,7 @@ def _err(error, status, **extra):
 
 def _session_row(session, club_id, class_session_id, lock=False):
     sql = ("SELECT id, club_id, resource_id, coach_user_id, starts_at, ends_at, capacity, "
-           "       price_id, status "
+           "       price_id, status, court_resource_id, court_booking_id "
            "FROM diary.class_session WHERE club_id=:c AND id=:id")
     if lock:
         sql += " FOR UPDATE"
@@ -515,18 +516,50 @@ def _class_price_id(session, *, club_id, resource_id, name, coach_user_id):
             (row["duration_minutes"] if row else None))
 
 
+def _reserve_court_for_class(session, *, club_id, court_resource_id, coach_user_id, name,
+                             starts_at, ends_at):
+    """Hold a physical court for a class occurrence by inserting a court-blocking diary.booking
+    (booking_type='class'), so the court is reserved EXACTLY like a member court booking — same GiST
+    exclusion, so it shows on the court grid and can't be double-booked. Returns the booking id, or
+    None if the court is already busy at that time (savepoint-guarded so a clash never poisons the txn)."""
+    try:
+        with session.begin_nested():
+            row = session.execute(
+                text("INSERT INTO diary.booking (club_id, booking_type, resource_id, coach_user_id, "
+                     "starts_at, ends_at, status, notes) "
+                     "VALUES (:c, 'class', :r, :coach, :sa, :ea, 'confirmed', :notes) RETURNING id"),
+                {"c": club_id, "r": court_resource_id, "coach": coach_user_id,
+                 "sa": starts_at, "ea": ends_at, "notes": "Class: " + (name or "")},
+            ).mappings().first()
+            return str(row["id"])
+    except IntegrityError:
+        return None
+
+
 def schedule_sessions(session, *, club_id, resource_id, weekdays=None, start_time=None,
                       date_from=None, date_until=None, dates=None, duration_minutes=None,
-                      capacity=None, price_id=None):
+                      capacity=None, price_id=None, court_resource_id=None):
     """Generate diary.class_session rows for a class resource. Two modes:
       recurring: {weekdays:[0-6], start_time:'HH:MM', date_from, date_until}
       one-off:   {dates:['YYYY-MM-DD'], start_time:'HH:MM'}
     Idempotent on (resource_id, starts_at) — an existing session at that start is skipped.
-    coach_user_id + (default) capacity + price come from the class type. Returns
-    {created, skipped}."""
+    coach_user_id + (default) capacity + price come from the class type. When court_resource_id is
+    given, EACH occurrence also reserves that court (a court-blocking booking); an occurrence whose
+    court is already busy is skipped (court_busy) so the class never overlaps another booking.
+    Returns {created, skipped, court_busy}."""
     res = _resource_for_schedule(session, club_id=club_id, resource_id=resource_id)
     if not res:
         return _err("CLASS_NOT_FOUND", 404)
+
+    # Validate an optional linked court belongs to this club and is a real, active court.
+    if court_resource_id:
+        court_ok = session.execute(
+            text("SELECT 1 FROM diary.resource WHERE club_id=:c AND id=:r "
+                 "AND kind='court' AND is_active=true"),
+            {"c": club_id, "r": court_resource_id},
+        ).first()
+        if not court_ok:
+            return _err("COURT_NOT_FOUND", 404)
 
     default_price_id, price_dur = _class_price_id(
         session, club_id=club_id, resource_id=resource_id,
@@ -571,6 +604,7 @@ def schedule_sessions(session, *, club_id, resource_id, weekdays=None, start_tim
 
     created = 0
     skipped = 0
+    court_busy = 0
     for d in occ_dates:
         starts_at = datetime(d.year, d.month, d.day, st.hour, st.minute, st.second, tzinfo=tz)
         ends_at = starts_at + timedelta(minutes=eff_dur)
@@ -582,15 +616,27 @@ def schedule_sessions(session, *, club_id, resource_id, weekdays=None, start_tim
         if exists:
             skipped += 1
             continue
+        # Reserve the linked court FIRST — if it's busy, skip the whole occurrence so a class never
+        # overlaps another booking on that court (the same integrity a member court booking gets).
+        court_booking_id = None
+        if court_resource_id:
+            court_booking_id = _reserve_court_for_class(
+                session, club_id=club_id, court_resource_id=court_resource_id,
+                coach_user_id=res["coach_user_id"], name=res["name"],
+                starts_at=starts_at, ends_at=ends_at)
+            if court_booking_id is None:
+                court_busy += 1
+                continue
         session.execute(
             text("INSERT INTO diary.class_session (club_id, resource_id, coach_user_id, "
-                 "starts_at, ends_at, capacity, price_id, status) "
-                 "VALUES (:c, :r, :coach, :sa, :ea, :cap, :pid, 'scheduled')"),
+                 "starts_at, ends_at, capacity, price_id, status, court_resource_id, court_booking_id) "
+                 "VALUES (:c, :r, :coach, :sa, :ea, :cap, :pid, 'scheduled', :court, :cbid)"),
             {"c": club_id, "r": resource_id, "coach": res["coach_user_id"],
-             "sa": starts_at, "ea": ends_at, "cap": eff_capacity, "pid": eff_price_id},
+             "sa": starts_at, "ea": ends_at, "cap": eff_capacity, "pid": eff_price_id,
+             "court": court_resource_id, "cbid": court_booking_id},
         )
         created += 1
-    return {"ok": True, "created": created, "skipped": skipped}
+    return {"ok": True, "created": created, "skipped": skipped, "court_busy": court_busy}
 
 
 def enrolment_story(session, *, club_id, enrolment_id, scope, user_id=None):
@@ -768,6 +814,14 @@ def cancel_session(session, *, club_id, session_id):
              "WHERE club_id=:c AND id=:id"),
         {"c": club_id, "id": session_id},
     )
+    # Free the reserved court (cancel its blocking booking → the slot reopens on the grid).
+    if cs.get("court_booking_id"):
+        session.execute(
+            text("UPDATE diary.booking SET status='cancelled', cancelled_at=now(), "
+                 "cancellation_reason='class cancelled', updated_at=now() "
+                 "WHERE club_id=:c AND id=:id"),
+            {"c": club_id, "id": cs["court_booking_id"]},
+        )
     starts = cs["starts_at"].isoformat() if hasattr(cs["starts_at"], "isoformat") else cs["starts_at"]
 
     # Every still-active enrolment: cancel it, void its unpaid order (so it stops showing as 'owed'),

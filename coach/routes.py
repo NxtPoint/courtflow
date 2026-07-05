@@ -369,7 +369,8 @@ def post_class_schedule(resource_id):
             weekdays=b.get("weekdays"), start_time=b.get("start_time"),
             date_from=b.get("date_from"), date_until=b.get("date_until"),
             dates=b.get("dates"), duration_minutes=b.get("duration_minutes"),
-            capacity=b.get("capacity"), price_id=b.get("price_id"))
+            capacity=b.get("capacity"), price_id=b.get("price_id"),
+            court_resource_id=b.get("court_resource_id"))
     return _class_result(res)
 
 

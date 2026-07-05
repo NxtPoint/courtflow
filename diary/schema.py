@@ -198,6 +198,10 @@ _DDL = [
     f"ON {SCHEMA}.class_session (club_id, resource_id, starts_at);",
     f"CREATE INDEX IF NOT EXISTS ix_class_session_starts "
     f"ON {SCHEMA}.class_session (club_id, starts_at);",
+    # A class can RESERVE A PHYSICAL COURT so it's booked out exactly like a member court booking:
+    # court_booking_id -> the court-blocking diary.booking (reuses the GiST exclusion). Freed on cancel.
+    f"ALTER TABLE {SCHEMA}.class_session ADD COLUMN IF NOT EXISTS court_resource_id uuid;",
+    f"ALTER TABLE {SCHEMA}.class_session ADD COLUMN IF NOT EXISTS court_booking_id uuid;",
 
     # --- diary.enrolment : a player joining a class_session --------------
     f"""

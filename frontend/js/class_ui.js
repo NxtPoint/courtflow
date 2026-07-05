@@ -142,6 +142,18 @@
       var cap = input({ type: "number", min: "1", value: cls.capacity != null ? String(cls.capacity) : "",
         placeholder: "Default (class capacity)", style: "max-width:160px" });
 
+      // Reserve a physical court so the class books it out exactly like a member court booking
+      // (both the coach AND the court are held). "No court" keeps the class virtual (old behaviour).
+      var courtSel = select("", [{ value: "", label: "No court — don't reserve a court" }]);
+      if (window.API && typeof window.API.resources === "function") {
+        window.API.resources().then(function (r) {
+          (r && r.resources || []).filter(function (x) { return x.kind === "court"; })
+            .forEach(function (c) {
+              courtSel.appendChild(el("option", { value: String(c.id), text: c.name }));
+            });
+        }, function () {});
+      }
+
       // recurring fields
       var dayToggles = WEEKDAYS.map(function (d) {
         var cb = input({ type: "checkbox" });
@@ -182,7 +194,10 @@
       m.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [
         field("Start time", startTime), field("Duration", dur),
       ]));
-      m.appendChild(field("Capacity per session (optional)", cap));
+      m.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [
+        field("Capacity per session (optional)", cap),
+        field("Reserve a court (optional)", courtSel),
+      ]));
 
       var mode = "recurring";
       function setMode(next) {
@@ -205,6 +220,7 @@
         if (!startTime.value) { UI.toast("Pick a start time.", "warn"); return; }
         var body = { start_time: startTime.value, duration_minutes: num(dur.value) || undefined };
         if (cap.value) body.capacity = num(cap.value);
+        if (courtSel.value) body.court_resource_id = courtSel.value;
         if (mode === "recurring") {
           var days = dayToggles.filter(function (d) { return d.cb.checked; }).map(function (d) { return d.wd; });
           if (!days.length) { UI.toast("Pick at least one weekday.", "warn"); return; }
@@ -223,8 +239,11 @@
           var res = await api.scheduleClass(cls.resource_id, body);
           var created = (res && res.created != null) ? res.created : 0;
           var skipped = (res && res.skipped != null) ? res.skipped : 0;
+          var busy = (res && res.court_busy != null) ? res.court_busy : 0;
           UI.toast("Scheduled " + created + " session" + (created === 1 ? "" : "s") +
-            (skipped ? " (" + skipped + " skipped)" : "") + ".", "info");
+            (skipped ? " (" + skipped + " already there)" : "") +
+            (busy ? " — " + busy + " skipped (court already booked)" : "") + ".",
+            busy ? "warn" : "info");
           close();
           if (typeof opts.onSaved === "function") opts.onSaved(res || {});
         } catch (e) {
