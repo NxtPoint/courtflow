@@ -445,36 +445,54 @@
     var kmem = el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Membership" });
     var kpack = el("button", { class: "cf-btn cf-btn-sm", text: "Session pack" });
 
-    var planSel = el("select", { class: "cf-input" });
-    var amountLine = el("div", { style: "margin:8px 0 10px;font-weight:800" });
+    // Membership: package (tier) → term, TWO steps. Pack: single select.
+    var memGroups = [], byTier = {};
+    mplans.forEach(function (p) {
+      var key = p.tier || "Membership";
+      if (!byTier[key]) { byTier[key] = { name: key, rows: [] }; memGroups.push(byTier[key]); }
+      byTier[key].rows.push(p);
+    });
+    var memPkg = el("select", { class: "cf-input" });
+    var memTerm = el("select", { class: "cf-input" });
     var start = el("input", { class: "cf-input", type: "date", value: UI.dateKey(new Date()) });
-    var membershipFields = el("div", {}, [el("div", { class: "cf-field" }, [el("label", { text: "Start date (when cover begins)" }), start])]);
+    var memBox = el("div", {}, [
+      el("div", { class: "cf-grid cf-grid-2" }, [
+        el("div", { class: "cf-field" }, [el("label", { text: "Package" }), memPkg]),
+        el("div", { class: "cf-field" }, [el("label", { text: "Term" }), memTerm]),
+      ]),
+      el("div", { class: "cf-field" }, [el("label", { text: "Start date (when cover begins)" }), start]),
+    ]);
+    var packSel = el("select", { class: "cf-input" });
+    var packBox = el("div", {}, [el("div", { class: "cf-field" }, [el("label", { text: "Pack" }), packSel])]);
+    var amountLine = el("div", { style: "margin:8px 0 10px;font-weight:800" });
 
-    function curList() { return kind === "membership" ? mplans : bplans; }
-    function selectedPlan() { return curList()[planSel.selectedIndex] || null; }
-    function syncPlan() {
-      var p = selectedPlan();
-      amountLine.textContent = p ? ("Amount: " + money(p.amount_minor, p.currency)) : "—";
-      membershipFields.style.display = kind === "membership" ? "" : "none";
+    function termLabel(p) { return p.term_months ? (p.term_months + (p.term_months === 1 ? " month" : " months")) : (p.label || "term"); }
+    function selectedPlan() {
+      if (kind === "membership") { var g = memGroups[memPkg.selectedIndex]; return g ? g.rows[memTerm.selectedIndex] : null; }
+      return bplans[packSel.selectedIndex] || null;
     }
-    function fillPlans() {
-      UI.clear(planSel);
-      var list = curList();
-      if (!list.length) { planSel.appendChild(el("option", { value: "", text: "None configured — add one in Setup" })); }
-      list.forEach(function (p) {
-        var label = kind === "membership"
-          ? ((p.tier ? p.tier + " · " : "") + p.label)
-          : (p.label + (p.sessions_count ? " · " + p.sessions_count + " sessions" : ""));
-        planSel.appendChild(el("option", { text: label }));
-      });
-      syncPlan();
+    function syncAmount() { var p = selectedPlan(); amountLine.textContent = p ? ("Amount: " + money(p.amount_minor, p.currency)) : "—"; }
+    function fillTerms() {
+      UI.clear(memTerm);
+      var g = memGroups[memPkg.selectedIndex];
+      if (g) g.rows.forEach(function (p) { memTerm.appendChild(el("option", { text: termLabel(p) + " · " + money(p.amount_minor, p.currency) })); });
+      syncAmount();
     }
-    planSel.addEventListener("change", syncPlan);
+    memPkg.addEventListener("change", fillTerms);
+    memTerm.addEventListener("change", syncAmount);
+    packSel.addEventListener("change", syncAmount);
+    if (memGroups.length) { memGroups.forEach(function (g) { memPkg.appendChild(el("option", { text: g.name })); }); fillTerms(); }
+    else { memPkg.appendChild(el("option", { value: "", text: "None configured — add in Setup" })); }
+    if (bplans.length) { bplans.forEach(function (p) { packSel.appendChild(el("option", { text: p.label + (p.sessions_count ? " · " + p.sessions_count + " sessions" : "") + " · " + money(p.amount_minor, p.currency) })); }); }
+    else { packSel.appendChild(el("option", { value: "", text: "None configured — add in Setup" })); }
+
     function setKind(k) {
       kind = k;
       kmem.className = "cf-btn cf-btn-sm" + (k === "membership" ? " cf-btn-primary" : "");
       kpack.className = "cf-btn cf-btn-sm" + (k === "pack" ? " cf-btn-primary" : "");
-      fillPlans();
+      memBox.style.display = k === "membership" ? "" : "none";
+      packBox.style.display = k === "pack" ? "" : "none";
+      syncAmount();
     }
     kmem.addEventListener("click", function () { setKind("membership"); });
     kpack.addEventListener("click", function () { setKind("pack"); });
@@ -493,9 +511,9 @@
     m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem",
       text: "Issue a membership or a prepaid session pack. It activates immediately; choose whether it's already paid or owed (they can then pay online, or you mark it paid)." }));
     m.body.appendChild(el("div", { class: "cf-row", style: "gap:8px;margin-bottom:12px" }, [kmem, kpack]));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Package" }), planSel]));
+    m.body.appendChild(memBox);
+    m.body.appendChild(packBox);
     m.body.appendChild(amountLine);
-    m.body.appendChild(membershipFields);
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Payment" }),
       el("div", {}, [
         el("label", { class: "cf-row", style: "gap:8px;margin-bottom:6px" }, [payOwe, el("span", { text: "Owe — collect later (PAYG)" })]),
