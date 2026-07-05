@@ -106,12 +106,36 @@ def _void_phantom_cancelled_orders(session, *, club_id, user_id) -> None:
         log.debug("phantom-void skipped (billing not ready)", exc_info=False)
 
 
+def _void_written_off_arrears_orders(session, *, club_id, user_id) -> None:
+    """Self-heal: an 'open' order whose COACHING arrears was WRITTEN OFF (by the coach/admin) should
+    itself be written off — lockstep. Heals lessons written off BEFORE adjust_arrears learned to void
+    the client order (you shouldn't owe for a lesson the coach waived). Narrow: only an open order with
+    a written_off arrears line. Guarded — never blanks the read."""
+    try:
+        ids = session.execute(
+            text("""
+                SELECT DISTINCT o.id FROM billing."order" o
+                JOIN billing.order_line ol ON ol.order_id = o.id
+                JOIN billing.coach_arrears a ON a.order_line_id = ol.id
+                WHERE o.club_id = :c AND o.user_id = :u AND o.status = 'open'
+                  AND o.settled_by_order_id IS NULL AND a.status = 'written_off'
+            """),
+            {"c": str(club_id), "u": str(user_id) if user_id else None},
+        ).scalars().all()
+        for oid in ids:
+            void_order(session, club_id=club_id, order_id=oid, write_off=True,
+                       reason="coaching written off (cleanup)")
+    except Exception:
+        log.debug("written-off-arrears self-heal skipped", exc_info=False)
+
+
 def unpaid_orders(session, *, club_id, user_id) -> List[Dict[str, Any]]:
     """The client's OWED orders (status='open', not already being settled by an in-flight settlement
     order), one line each, oldest-first. kind is derived from the order's first line (its booking
     type, else the product kind, else 'other'). Guarded -> []."""
     _reclaim_abandoned_settlements(session, club_id=club_id, user_id=user_id)  # stale-only (grace)
     _void_phantom_cancelled_orders(session, club_id=club_id, user_id=user_id)  # clear cancelled-booking debt
+    _void_written_off_arrears_orders(session, club_id=club_id, user_id=user_id)  # clear written-off coaching debt
     try:
         rows = session.execute(
             text("""

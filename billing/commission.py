@@ -740,6 +740,11 @@ def adjust_arrears(session, *, club_id, arrears_id, coach_user_id=None,
     session.execute(
         text("UPDATE billing.coach_arrears SET " + ", ".join(sets) + " WHERE club_id = :c AND id = :id"),
         params)
+    # NOTE (discount lockstep — DEFERRED, needs a design decision): a discount sets arrears.gross to the
+    # NEW amount but the CLIENT's order/order_line keeps the ORIGINAL (that's how the by-service view
+    # shows "was R700 → now R650"). So the unified statement currently bills the ORIGINAL for a
+    # discounted-but-owed lesson. Reducing the order in lockstep needs a place to keep the original for
+    # that display (a schema field) — see docs/specs/OUTSTANDING.md.
     # LOCKSTEP: writing off the coaching ALSO forgives the CLIENT's order for that lesson — one lesson
     # is one debt viewed two ways (mirror void_order, which writes off the arrears when the order is
     # written off). Otherwise the client is still billed for a lesson the coach waived. void_order
