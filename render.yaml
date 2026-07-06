@@ -35,20 +35,22 @@ services:
       - key: OPS_KEY
         sync: false
 
-      # --- Auth: per-user IdP — NEW CourtFlow Clerk DEV app (settling-alien-23), created
-      # 2026-06-20. (The reused 1050 production Clerk was domain-locked to ten-fifty5 hosts
-      # and rejected the onrender origin; a dev instance's pk_test key works on any origin.)
-      # Session token carries an `email` claim; default tokens set `iss` not `aud` (AUTH_AUDIENCE
-      # blank). Public values, committed inline. LIVE. Swap to a production instance + custom
-      # domain when nextpointtennis.com cuts over.
+      # --- Auth: per-user IdP — PRODUCTION CourtFlow Clerk (clerk.nextpointtennis.com), LIVE since the
+      # 2026-07-05 cutover (Google login + email). The session token carries an `email` claim (required —
+      # imported members link by email on first login); default tokens set `iss` not `aud` (AUTH_AUDIENCE
+      # blank). Public values (issuer/JWKS), committed inline so a blueprint SYNC keeps prod auth (a sync
+      # reverting these to the old dev app = "Sign-in unavailable"). The prior dev app was
+      # settling-alien-23.clerk.accounts.dev (pre-cutover; no longer used).
       - key: AUTH_ENABLED
         value: "1"
       - key: AUTH_PROVIDER
         value: "clerk"
+      # PRODUCTION Clerk (nextpointtennis.com) — committed so a blueprint sync can't revert auth to the
+      # old dev instance (that reset breaks the /login page). Not secrets (issuer/JWKS are public).
       - key: AUTH_JWKS_URL
-        value: "https://settling-alien-23.clerk.accounts.dev/.well-known/jwks.json"
+        value: "https://clerk.nextpointtennis.com/.well-known/jwks.json"
       - key: AUTH_ISSUER
-        value: "https://settling-alien-23.clerk.accounts.dev"
+        value: "https://clerk.nextpointtennis.com"
       - key: AUTH_AUDIENCE
         value: ""            # blank — Clerk default session tokens set no aud
 
@@ -77,10 +79,9 @@ services:
         sync: false
       - key: YOCO_WEBHOOK_SECRET   # whsec_… (Standard-Webhooks signing secret)
         sync: false
-      # Origin of the courtflow-web portal that serves /pay-return.html (Yoco return URLs).
-      # Update to the real domain at DNS cutover.
+      # Origin of the portal that serves /pay-return.html (Yoco return URLs). Live production domain.
       - key: APP_BASE_URL
-        value: "https://courtflow-web.onrender.com"
+        value: "https://nextpointtennis.com"
 
       # --- CRM / Klaviyo (one Klaviyo, NextPoint brand — decision D3). Tracking + consent are
       # always-on in code; CRM sync SELF-GATES on KLAVIYO_API_KEY (no key = silent no-op), so there
@@ -134,11 +135,13 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.3"
-      # The /login page (Clerk widget). DARK until AUTH_ENABLED=1 + key set.
+      # The /login page (Clerk widget).
       - key: AUTH_ENABLED
         value: "1"
+      # PRODUCTION Clerk publishable key (decodes to clerk.nextpointtennis.com). Committed so a blueprint
+      # sync can't revert /login to the dev instance (that reset = "Sign-in unavailable"). pk_ is public.
       - key: CLERK_PUBLISHABLE_KEY
-        value: "pk_test_c2V0dGxpbmctYWxpZW4tMjMuY2xlcmsuYWNjb3VudHMuZGV2JA"  # CourtFlow Clerk dev app; public
+        value: "pk_live_Y2xlcmsubmV4dHBvaW50dGVubmlzLmNvbSQ"
       - key: AUTH_AFTER_LOGIN_URL
         value: "/portal"
       # Backend that verifies the Clerk token from /login (the whoami check).
