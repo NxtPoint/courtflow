@@ -11,10 +11,15 @@
 //   cfg.onNavigate(ev)   — the app routes it (a booking -> its event story; a class -> its roster).
 //   cfg.classicLink      — show the "open the classic drag-timeline" link (admin only).
 //   cfg.view / cfg.date  — optional initial view ("day"|"week"|"month") + date (YYYY-MM-DD).
+//   cfg.courtId / cfg.coachId — optional INITIAL filter selection (the coach app defaults coachId
+//        to the signed-in coach = "just me"; the user clears it to "All" to see the whole club).
 (function () {
   function mount(host, cfg) {
     var UI = window.UI, el = UI.el;
-    var state = { view: cfg.view || "day", date: cfg.date || UI.dateKey(new Date()), courtId: "", coachId: "" };
+    // cfg.courtId / cfg.coachId — optional INITIAL filter selection (e.g. the coach app defaults the
+    // coach filter to the signed-in coach = "just me"; clear the dropdown to "All" to see everyone).
+    var state = { view: cfg.view || "day", date: cfg.date || UI.dateKey(new Date()),
+                  courtId: cfg.courtId ? String(cfg.courtId) : "", coachId: cfg.coachId ? String(cfg.coachId) : "" };
     var fb = cfg.filterBar || {};
     // Resource-timeline grid geometry (the classic day view, ported for cfg.grid). Club hours
     // 06:00–22:00, 30-min rows, ROW_H px each (matches .cf-cal-cell min-height in app.css).

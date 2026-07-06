@@ -246,6 +246,7 @@
     window.Widgets.Calendar.mount(calHost, {
       grid: true,                 // Day view = the resource-timeline grid (courts + coaches as columns)
       date: UI.dateKey(new Date()),
+      coachId: principal.user_id, // default to "just me"; clear the Coach dropdown to "All" for the whole club
       filterBar: { courts: lists.courts, coaches: lists.coaches },
       data: { events: function (r) { return window.API.master({ date_from: r.from, date_to: r.to }).then(function (x) { return x.events || []; }); } },
       onNavigate: function (ev) {
