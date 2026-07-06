@@ -12,6 +12,13 @@ from datetime import timedelta
 
 from sqlalchemy import text
 
+# A page_view is "member area" (an authenticated / logged-in-only surface) when its path's first
+# segment is one of the portal SPA shells — vs the public marketing site. Path-based because the
+# beacon captures no per-account identity (analytics.js sends no email), so this is the reliable
+# "did someone reach the member section" signal. Static literal (no user input) — safe to inline.
+_MEMBER_AREA = ("lower(split_part(coalesce(metadata->>'path','/'),'/',2)) IN "
+                "('portal','app','admin','coach','plan','dashboard','book','my','account','login')")
+
 
 def _guard(fn, default):
     try:
@@ -324,6 +331,25 @@ def overview(session, *, club_id, month=None):
         GROUP BY 1
     """), p).mappings().all(), "visits", "uniques"), {"visits": [0]*len(days), "uniques": [0]*len(days)})
 
+    # --- Access split: public-site vs member-area (logged-in-only pages) visits per day -----------
+    access = _guard(lambda: _fill(session.execute(text(f"""
+        SELECT occurred_at::date AS day,
+               count(*) FILTER (WHERE {_MEMBER_AREA})      AS member,
+               count(*) FILTER (WHERE NOT ({_MEMBER_AREA})) AS public
+        FROM core.usage_event
+        WHERE event_type = 'page_view' AND club_id = :c
+          AND occurred_at >= :s AND occurred_at < :e
+        GROUP BY 1
+    """), p).mappings().all(), "member", "public"), {"member": [0]*len(days), "public": [0]*len(days)})
+    # Distinct visitors (anon_id) reaching each surface this month — "how many people".
+    vsplit = _guard(lambda: session.execute(text(f"""
+        SELECT count(DISTINCT metadata->>'anon_id') FILTER (WHERE {_MEMBER_AREA})       AS member_visitors,
+               count(DISTINCT metadata->>'anon_id') FILTER (WHERE NOT ({_MEMBER_AREA})) AS public_visitors
+        FROM core.usage_event
+        WHERE event_type = 'page_view' AND club_id = :c
+          AND occurred_at >= :s AND occurred_at < :e
+    """), p).mappings().first(), {"member_visitors": 0, "public_visitors": 0})
+
     # --- Bookings per day (SAME basis as bookings_by_day) — total + by type + member-covered -------
     bookings = _guard(lambda: _fill(session.execute(text("""
         SELECT starts_at::date AS day, count(*) AS total,
@@ -431,6 +457,8 @@ def overview(session, *, club_id, month=None):
         "series": {
             "visits": traffic["visits"],
             "unique_visitors": traffic["uniques"],
+            "public_visits": access["public"],
+            "member_visits": access["member"],
             "bookings": bookings["total"],
             "bookings_court": bookings["court"],
             "bookings_lesson": bookings["lesson"],
@@ -446,6 +474,10 @@ def overview(session, *, club_id, month=None):
         "kpis": {
             "visits": visits_t,
             "unique_visitors": uniques_t,
+            "public_visitors": int((vsplit or {}).get("public_visitors") or 0),
+            "member_visitors": int((vsplit or {}).get("member_visitors") or 0),
+            "public_visits": sum(access["public"]),
+            "member_visits": sum(access["member"]),
             "bookings": sum(bookings["total"]),
             "member_bookings": sum(bookings["member"]),
             "revenue_gross_minor": sum(revenue["gross"]),

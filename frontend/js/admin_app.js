@@ -1196,8 +1196,21 @@
   }
   function ovTraffic(body, data, cur) {
     var s = data.series, k = data.kpis;
+    // Headline: who's browsing the public site vs who reached the member area (logged-in-only pages).
     body.appendChild(card([window.CRMUI.stats([
-      { value: k.visits, label: "Visits" },
+      { value: k.public_visitors, label: "Public visitors" },
+      { value: k.member_visitors, label: "Member-area visitors" },
+      { value: k.member_visits, label: "Member-area visits" },
+    ])]));
+    mountChart(ovChartCard(body, "Public site vs member area · visits per day"), function () {
+      return ovBase(data.days, [
+        { name: "Public site", data: s.public_visits, color: "#9cc4b0", stack: "a" },
+        { name: "Member area", data: s.member_visits, color: "#1f7a4d", stack: "a" },
+      ]);
+    });
+    body.appendChild(el("div", { class: "cf-muted", style: "font-size:.78rem;margin:8px 2px 14px", text: "Member area = visits to logged-in-only pages (portal · book · plan · account · admin · coach). A strong proxy for logged-in access, measured by page, not per-account." }));
+    body.appendChild(card([window.CRMUI.stats([
+      { value: k.visits, label: "All visits" },
       { value: k.unique_visitors, label: "Unique visitors" },
     ])]));
     mountChart(ovChartCard(body, "Visitors per day"), function () {

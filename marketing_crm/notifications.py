@@ -20,6 +20,8 @@
 import logging
 import os
 
+from marketing_crm.email import booking_detail
+
 log = logging.getLogger("marketing_crm.notifications")
 
 
@@ -54,13 +56,17 @@ def _g(ctx, *keys, default=None):
 # (reserved keys + non-PII metadata). Templates must be defensive: any field can be absent.
 # ---------------------------------------------------------------------------
 
+def _booking_noun(ctx, default="your booking"):
+    """A booking-type-aware noun for the intro sentence (a lesson isn't 'your court')."""
+    res = _g(ctx, "resource_name")
+    if res:
+        return res
+    return {"lesson": "your lesson", "class": "your class",
+            "court": "your court"}.get(ctx.get("booking_type"), default)
+
+
 def _t_booking_confirmed(ctx):
-    res = _g(ctx, "resource_name", default="your court")
-    when = _when(ctx)
-    body = f"Your booking for {res}" + (f" on {when}" if when else "") + " is confirmed."
-    coach = ctx.get("coach_name")
-    if coach:
-        body += f" Coach: {coach}."
+    body = f"Your booking for {_booking_noun(ctx)} is confirmed."
     bid = _g(ctx, "ref_id", "booking_id")
     return ("Booking confirmed", body, "/my.html" if bid else None)
 
@@ -308,9 +314,22 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
     #    MULTI-TENANT: the club's name becomes the email's From display name + signature, and the
     #    club's contact email its Reply-To — all riding one verified CourtFlow SES identity.
     ident = _club_identity(session, club_id)
+
+    # Rich booking/class detail (client · service · date+time in club TZ · court · coach · price +
+    # payment status) — looked up by booking_id/class_session_id at SEND time so the lean, non-PII
+    # emit payload is untouched. Guarded → None → the plain body is used. For a lesson/class this
+    # also yields the coach's email, which we BCC so the coach gets a copy of the booking.
+    detail = None
+    if kind in booking_detail.DETAIL_KINDS:
+        try:
+            detail = booking_detail.load(session, club_id, ctx or {})
+        except Exception:
+            detail = None
+    bcc = list(filter(None, [ident.get("bcc"), booking_detail.coach_email(detail)]))
+
     status = _try_email(recipient.get("email"), title, body, recipient.get("name"),
                         from_name=ident.get("from_name"), reply_to=ident.get("reply_to"),
-                        bcc=ident.get("bcc"), kind=kind, ctx=ctx)
+                        bcc=bcc, kind=kind, ctx=ctx, detail=detail)
     if status and status != "skipped" and notif_id:
         try:
             notif_repo.set_email_status(session, notification_id=notif_id, email_status=status)
@@ -346,11 +365,14 @@ def _club_identity(session, club_id):
 
 
 def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, bcc=None,
-               kind=None, ctx=None):
+               kind=None, ctx=None, detail=None):
     """Send a transactional email via SES: HTML + plain-text, the club's From-name + Reply-To, and a
     calendar (.ics) attachment for booking-type events. Returns 'sent'|'failed'|'skipped'. With no
     AWS/SES creds → 'skipped' (a clean no-op), so the engine is fully usable with NO keys. NEVER raises.
-    Klaviyo flows own the RICH confirmation sends downstream of emit(); this is the guaranteed fallback."""
+    Klaviyo flows own the RICH confirmation sends downstream of emit(); this is the guaranteed fallback.
+
+    `detail` (when present) is the rich booking/class block — client · service · date+time (club TZ) ·
+    court · coach · price + payment status — rendered under the intro sentence inside the same shell."""
     if not to_email:
         return "skipped"
     try:
@@ -360,9 +382,16 @@ def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, 
             return "skipped"
         sig = from_name or "Your club"
         greeting = ("Hi %s,\n\n" % name) if name else ""
-        text_body = "%s%s\n\n%s" % (greeting, body or title, sig)
         html_greeting = ("Hi %s,<br><br>" % ses._esc(name)) if name else ""
-        html_body = ses.html_wrap(title, "<p>%s%s</p>" % (html_greeting, ses._esc(body or title)), footer=sig)
+        intro = body or title
+        if detail:
+            text_body = "%s%s\n\n%s\n\n%s" % (greeting, intro, booking_detail.text_block(detail), sig)
+            inner = ("<p style=\"margin:0 0 4px\">%s%s</p>%s"
+                     % (html_greeting, ses._esc(intro), booking_detail.html_block(detail)))
+            html_body = ses.html_wrap(title, inner, footer=sig)
+        else:
+            text_body = "%s%s\n\n%s" % (greeting, intro, sig)
+            html_body = ses.html_wrap(title, "<p>%s%s</p>" % (html_greeting, ses._esc(intro)), footer=sig)
         # Calendar (.ics) attachment is OFF by default: it forces SES SendRawEmail, a SEPARATE IAM
         # permission the interim ten-fifty5 key lacks — which silently dropped confirmations. Plain
         # sends (SendEmail) work. Flip EMAIL_ICS_ENABLED=1 once ses:SendRawEmail is granted (post AWS
