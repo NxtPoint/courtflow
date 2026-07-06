@@ -204,24 +204,35 @@
   }
 
   // ---- SCHEDULE (agenda + time-off + book-for-client) ----------------------
-  // ---- SCHEDULE (the weekly calendar — tap any booking → the ONE event story) --------------
-  var WK_H0 = 7, WK_H1 = 21, WK_ROW = 46, WK = null;   // 07:00–21:00, 46px/hour (matches .cf-cal-cell)
-  function mondayOf(d) { var x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
+  // ---- SCHEDULE — the shared Widgets.Calendar over the WHOLE CLUB (courts · lessons · classes),
+  // so a coach sees court usage + open gaps to book, not just their own diary. Court/Coach filters
+  // (pick yourself to narrow to your own lessons). A lesson YOU run drills into the ONE event story;
+  // every other block is view-only occupancy. GOLDEN RULE: the SAME calendar the admin uses — only
+  // the data adapter (master feed) + filter lists differ. (Was a self-only hand-rolled week grid.)
+  var DIARY_LISTS = null;
+  async function ensureDiaryLists() {
+    if (DIARY_LISTS) return DIARY_LISTS;
+    var courts = [], coaches = [];
+    try {
+      var rs = (await window.API.resources()).resources || [];
+      courts = rs.filter(function (r) { return r.kind === "court" && r.is_active !== false; })
+                 .map(function (r) { return { id: r.id, name: r.name || "Court" }; });
+      coaches = rs.filter(function (r) { return r.kind === "coach" && r.coach_user_id; })
+                  .map(function (r) { return { id: r.coach_user_id, name: r.name || "Coach" }; });
+    } catch (e) {}
+    DIARY_LISTS = { courts: courts, coaches: coaches };
+    return DIARY_LISTS;
+  }
   async function renderSchedule() {
-    if (!WK) WK = mondayOf(new Date());
-    var range = UI.fmtDate(WK.toISOString()) + " – " + UI.fmtDate(UI.addDays(WK, 6).toISOString());
     var wrap = el("div", {});
-    wrap.appendChild(el("div", { class: "cf-row", style: "align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap" }, [
+    wrap.appendChild(el("div", { class: "cf-row", style: "align-items:center;gap:8px;margin-bottom:2px;flex-wrap:wrap" }, [
       el("h1", { style: "margin:0", text: "Schedule" }),
-      el("span", { class: "cf-chip", text: range }),
       el("span", { class: "cf-spacer" }),
-      el("button", { class: "cf-btn cf-btn-sm", text: "‹", title: "Previous week", onclick: function () { WK = UI.addDays(WK, -7); renderSchedule(); } }),
-      el("button", { class: "cf-btn cf-btn-sm", text: "This week", onclick: function () { WK = mondayOf(new Date()); renderSchedule(); } }),
-      el("button", { class: "cf-btn cf-btn-sm", text: "›", title: "Next week", onclick: function () { WK = UI.addDays(WK, 7); renderSchedule(); } }),
       el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ Book a client", onclick: bookForClient }),
     ]));
-    var gridHost = el("div", {}); gridHost.appendChild(el("div", { class: "cf-loading", text: "Loading your week…" }));
-    wrap.appendChild(gridHost);
+    wrap.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 6px;font-size:.85rem", text: "The whole club’s diary — courts, lessons & classes. Filter by court or coach (pick yourself) to spot open gaps to book." }));
+    var calHost = el("div", {});
+    wrap.appendChild(calHost);
     var toCard = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
       el("h2", { style: "margin:0", text: "Time off" }),
       el("button", { class: "cf-btn cf-btn-sm", text: "+ Block time", onclick: timeOffModal }),
@@ -231,58 +242,23 @@
     wrap.appendChild(toCard);
     set(wrap);
     loadTimeOff();
-    var from = UI.dateKey(WK), to = UI.dateKey(UI.addDays(WK, 7)), lessons = [], classes = [];
-    try { lessons = (await window.API.bookings({ date_from: from, date_to: to, as_coach: 1 })).bookings || []; } catch (e) {}
-    try { classes = ((await window.API.classes({ date_from: from, date_to: to })).classes || []).filter(function (c) { return String(c.coach_user_id) === String(principal.user_id); }); } catch (e) {}
-    drawWeek(gridHost, lessons, classes);
-  }
-  function drawWeek(box, lessons, classes) {
-    UI.clear(box);
-    var days = []; for (var i = 0; i < 7; i++) days.push(UI.addDays(WK, i));
-    var dayKey = {}; days.forEach(function (d, i) { dayKey[UI.dateKey(d)] = i; });
-    var slots = WK_H1 - WK_H0, todayKey = UI.dateKey(new Date());
-    var wrapEl = el("div", { class: "cf-cal-wrap" });
-    var grid = el("div", { class: "cf-cal" });
-    grid.style.gridTemplateColumns = "52px repeat(7, minmax(84px,1fr))";
-    grid.style.gridTemplateRows = "auto repeat(" + slots + ", " + WK_ROW + "px)";
-    grid.appendChild(el("div", { class: "cf-cal-head" }));
-    days.forEach(function (d) {
-      grid.appendChild(el("div", { class: "cf-cal-head",
-        text: d.toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", timeZone: UI.CLUB_TZ }),
-        style: UI.dateKey(d) === todayKey ? "color:var(--green-600);font-weight:800" : "" }));
+    var lists = await ensureDiaryLists();
+    window.Widgets.Calendar.mount(calHost, {
+      grid: true,                 // Day view = the resource-timeline grid (courts + coaches as columns)
+      date: UI.dateKey(new Date()),
+      filterBar: { courts: lists.courts, coaches: lists.coaches },
+      data: { events: function (r) { return window.API.master({ date_from: r.from, date_to: r.to }).then(function (x) { return x.events || []; }); } },
+      onNavigate: function (ev) {
+        var t = String(ev.booking_type || ev.kind || "").toLowerCase();
+        // A coach can only open the event story for a lesson THEY run (the story API is self-scoped);
+        // for everyone else's bookings we show read-only occupancy so they can still see the slot.
+        if (t === "lesson" && ev.id && String(ev.coach_user_id) === String(principal.user_id)) { go("#/event/" + ev.id); return; }
+        var info = ev.resource_name || (t === "class" ? "Class" : (t === "lesson" ? "Lesson" : "Court booking"));
+        try { info += " · " + UI.fmtRange(ev.starts_at, ev.ends_at); } catch (e) {}
+        if (ev.status) info += " · " + ev.status;
+        UI.toast(info, "info");
+      },
     });
-    var cellByDay = {};
-    for (var s = 0; s < slots; s++) {
-      grid.appendChild(el("div", { class: "cf-cal-time", text: ("0" + (WK_H0 + s)).slice(-2) + ":00" }));
-      days.forEach(function (d, di) { var cell = el("div", { class: "cf-cal-cell", style: "cursor:default" }); if (s === 0) cellByDay[di] = cell; grid.appendChild(cell); });
-    }
-    function place(startIso, endIso, kind, text, title, onclick, cancelled) {
-      var start = new Date(startIso), end = new Date(endIso);
-      var di = dayKey[UI.dateKey(start)]; if (di === undefined || !cellByDay[di]) return;
-      var mins = (start.getHours() - WK_H0) * 60 + start.getMinutes();
-      var dur = Math.max(30, (end - start) / 60000), winMins = (WK_H1 - WK_H0) * 60;
-      if (mins >= winMins || mins + dur <= 0) return;
-      var top = Math.max(0, mins) / 60 * WK_ROW;
-      var height = Math.max(16, (Math.min(mins + dur, winMins) - Math.max(0, mins)) / 60 * WK_ROW - 2);
-      cellByDay[di].appendChild(el("div", { class: "cf-ev " + kind + (cancelled ? " cancelled" : ""),
-        style: "top:" + top + "px;height:" + height + "px", title: title,
-        onclick: function (e) { e.stopPropagation(); if (onclick) onclick(); } }, [el("div", { text: text })]));
-    }
-    lessons.forEach(function (b) {
-      var who = b.booked_by_name || "Lesson";
-      // GOLDEN RULE: a booking always opens the ONE event story (accept/reschedule/cancel/mark live there).
-      place(b.starts_at, b.ends_at, "lesson", UI.fmtTime(b.starts_at) + " " + who,
-        who + " · " + UI.fmtRange(b.starts_at, b.ends_at) + (b.court_name ? " · " + b.court_name : "") + " · " + (b.status || ""),
-        function () { go("#/event/" + b.id); }, b.status === "cancelled" || b.status === "no_show");
-    });
-    classes.forEach(function (c) {
-      place(c.starts_at, c.ends_at, "class", UI.fmtTime(c.starts_at) + " " + (c.class_name || "Class"),
-        (c.class_name || "Class") + " · " + (c.enrolled || 0) + "/" + (c.capacity || 0) + " enrolled",
-        function () { openClassRoster(c); }, c.status === "cancelled");
-    });
-    if (!lessons.length && !classes.length) box.appendChild(el("div", { class: "cf-empty", style: "margin-bottom:8px", text: "Nothing scheduled this week." }));
-    wrapEl.appendChild(grid); box.appendChild(wrapEl);
-    box.appendChild(el("p", { class: "cf-muted", style: "margin-top:8px;font-size:.8rem", text: "Tap a lesson to open it — accept, reschedule, cancel or mark it done." }));
   }
   async function loadTimeOff() {
     var box = document.getElementById("coach-timeoff"); if (!box) return;

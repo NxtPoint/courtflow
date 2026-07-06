@@ -590,7 +590,8 @@ def master_diary():
     p = _principal()
     if not p or not _need_club(p):
         return jsonify(error="unauthorized"), 401
-    if not can(p, "view_master_diary", {"club_id": p.club_id}):
+    # Whole-club diary READ (occupancy/gaps). Admins + coaches; the feed carries no client PII.
+    if not can(p, "view_club_diary", {"club_id": p.club_id}):
         return jsonify(error="forbidden"), 403
     q = request.args
     from sqlalchemy import text

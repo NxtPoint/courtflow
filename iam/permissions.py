@@ -76,6 +76,10 @@ _MIN_ROLE = {
     "take_pay_at_court":  "club_admin",
     "view_club_analytics": "club_admin",
     "view_master_diary":  "club_admin",
+    # Read-only whole-club diary (occupancy/gaps). Coaches may VIEW every court/lesson/class in
+    # their club to see usage and find open slots to book — the master feed carries NO client PII
+    # (resource · coach · times · status only). Editing stays admin-gated (create/cancel/etc.).
+    "view_club_diary":    "coach",
     # provisioning (platform-only)
     "provision_club":     "platform_admin",
     "impersonate":        "platform_admin",
