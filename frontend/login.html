@@ -127,15 +127,24 @@ async function initClerk(){
     const Clerk = window.Clerk;
     await Clerk.load();
     if (Clerk.user){ verifyWithBackend(Clerk); return; }
-    mount.innerHTML = "";
-    Clerk.mountSignIn(mount, {
-      signUpUrl: "/login#/sign-up",
-      forceRedirectUrl: "/login",
-      signUpForceRedirectUrl: "/login",
-    });
+    renderAuth(Clerk);
+    // "Start free" links to /login#/sign-up, "Sign in" to /login — swap the widget on hash change.
+    window.addEventListener("hashchange", function(){ if (!Clerk.user) renderAuth(Clerk); });
     Clerk.addListener(function(e){ if (e && e.user) verifyWithBackend(Clerk); });
   } catch (err) {
     showNotice("Sign-in unavailable","Something went wrong loading sign-in. Please retry shortly.");
+  }
+}
+
+// Mount the RIGHT Clerk widget: #/sign-up (from "Start free") -> create-account; else sign-in. Both
+// forward to /login after, where verifyWithBackend links the Clerk account to the member's record by email.
+function renderAuth(Clerk){
+  mount.innerHTML = "";
+  const opts = { forceRedirectUrl: "/login", signUpForceRedirectUrl: "/login", signInForceRedirectUrl: "/login" };
+  if ((location.hash || "").indexOf("sign-up") !== -1){
+    Clerk.mountSignUp(mount, Object.assign({ signInUrl: "/login" }, opts));
+  } else {
+    Clerk.mountSignIn(mount, Object.assign({ signUpUrl: "/login#/sign-up" }, opts));
   }
 }
 
