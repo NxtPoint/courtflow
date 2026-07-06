@@ -144,7 +144,10 @@ def page():
     device, browser, os_ = _parse_ua(request.headers.get("User-Agent", ""))
     ctx = {"anon_id": anon_id, "utm": utm, "props": props, "country": country,
            "device": device, "browser": browser, "os": os_, "tz": tz, "lang": lang,
-           "screen_w": screen_w, "pvid": pvid, "is_leave": is_leave, "duration_ms": duration_ms}
+           "screen_w": screen_w, "pvid": pvid, "is_leave": is_leave, "duration_ms": duration_ms,
+           # True when the SPA had a signed-in Clerk user at fire time — the precise "logged in"
+           # signal (non-PII), set client-side via window.cfAuthed(). Absent = not signed in.
+           "authed": bool(body.get("authed"))}
     try:
         threading.Thread(target=_record, args=(path, club_id, email, referrer, ctx),
                          daemon=True).start()
@@ -182,6 +185,8 @@ def _record(path, club_id, email, referrer, ctx):
                     meta[k] = ctx[k]
             if ctx.get("screen_w"):
                 meta["screen_w"] = ctx["screen_w"]
+            if ctx.get("authed"):          # stored only when signed-in; missing = anonymous
+                meta["authed"] = True
             for k in ("source", "medium", "campaign", "term", "content"):
                 v = (ctx.get("utm") or {}).get(k)
                 if v:

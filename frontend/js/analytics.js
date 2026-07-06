@@ -52,6 +52,7 @@
   }
 
   var lastPath = null, pvid = null, startedAt = 0, leaveSent = false;
+  var authed = false, authPvSent = false;   // signed-in state (set by the app via window.cfAuthed)
 
   function sendLeave() {
     if (leaveSent || !pvid || !startedAt) return;
@@ -81,8 +82,19 @@
     try { payload.tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) {}
     var u = utm(); if (u) payload.utm = u;
     if (window.__CLUB_ID__) payload.club_id = window.__CLUB_ID__;
+    if (authed || window.__CF_AUTHED) { payload.authed = true; authPvSent = true; }   // precise logged-in signal
     post(payload);
   }
+
+  // The app (auth_client.js) calls this once Clerk resolves so pageviews carry a logged-in flag.
+  // If we only learn we're signed in AFTER the first (anonymous) pageview already fired and the
+  // user never navigates, record one authed pageview now so single-page logged-in visits count.
+  window.cfAuthed = function (v) {
+    v = !!v;
+    if (v === authed) return;
+    authed = v;
+    if (authed && !authPvSent && lastPath) { lastPath = null; send(); }
+  };
 
   // SPA route changes: wrap history pushState/replaceState + listen to pop/hash.
   function hook(name) {

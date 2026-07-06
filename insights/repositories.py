@@ -332,23 +332,28 @@ def overview(session, *, club_id, month=None):
     """), p).mappings().all(), "visits", "uniques"), {"visits": [0]*len(days), "uniques": [0]*len(days)})
 
     # --- Access split: public-site vs member-area (logged-in-only pages) visits per day -----------
+    # `member` = path-based proxy (reached a logged-in-only page); `logged_in` = the PRECISE signal
+    # (metadata.authed=true, set client-side via window.cfAuthed once Clerk resolves).
     access = _guard(lambda: _fill(session.execute(text(f"""
         SELECT occurred_at::date AS day,
-               count(*) FILTER (WHERE {_MEMBER_AREA})      AS member,
-               count(*) FILTER (WHERE NOT ({_MEMBER_AREA})) AS public
+               count(*) FILTER (WHERE {_MEMBER_AREA})       AS member,
+               count(*) FILTER (WHERE NOT ({_MEMBER_AREA}))  AS public,
+               count(*) FILTER (WHERE metadata->>'authed' = 'true') AS logged_in
         FROM core.usage_event
         WHERE event_type = 'page_view' AND club_id = :c
           AND occurred_at >= :s AND occurred_at < :e
         GROUP BY 1
-    """), p).mappings().all(), "member", "public"), {"member": [0]*len(days), "public": [0]*len(days)})
+    """), p).mappings().all(), "member", "public", "logged_in"),
+        {"member": [0]*len(days), "public": [0]*len(days), "logged_in": [0]*len(days)})
     # Distinct visitors (anon_id) reaching each surface this month — "how many people".
     vsplit = _guard(lambda: session.execute(text(f"""
         SELECT count(DISTINCT metadata->>'anon_id') FILTER (WHERE {_MEMBER_AREA})       AS member_visitors,
-               count(DISTINCT metadata->>'anon_id') FILTER (WHERE NOT ({_MEMBER_AREA})) AS public_visitors
+               count(DISTINCT metadata->>'anon_id') FILTER (WHERE NOT ({_MEMBER_AREA})) AS public_visitors,
+               count(DISTINCT metadata->>'anon_id') FILTER (WHERE metadata->>'authed' = 'true') AS logged_in_visitors
         FROM core.usage_event
         WHERE event_type = 'page_view' AND club_id = :c
           AND occurred_at >= :s AND occurred_at < :e
-    """), p).mappings().first(), {"member_visitors": 0, "public_visitors": 0})
+    """), p).mappings().first(), {"member_visitors": 0, "public_visitors": 0, "logged_in_visitors": 0})
 
     # --- Bookings per day (SAME basis as bookings_by_day) — total + by type + member-covered -------
     bookings = _guard(lambda: _fill(session.execute(text("""
@@ -459,6 +464,7 @@ def overview(session, *, club_id, month=None):
             "unique_visitors": traffic["uniques"],
             "public_visits": access["public"],
             "member_visits": access["member"],
+            "logged_in_visits": access["logged_in"],
             "bookings": bookings["total"],
             "bookings_court": bookings["court"],
             "bookings_lesson": bookings["lesson"],
@@ -476,8 +482,10 @@ def overview(session, *, club_id, month=None):
             "unique_visitors": uniques_t,
             "public_visitors": int((vsplit or {}).get("public_visitors") or 0),
             "member_visitors": int((vsplit or {}).get("member_visitors") or 0),
+            "logged_in_visitors": int((vsplit or {}).get("logged_in_visitors") or 0),
             "public_visits": sum(access["public"]),
             "member_visits": sum(access["member"]),
+            "logged_in_visits": sum(access["logged_in"]),
             "bookings": sum(bookings["total"]),
             "member_bookings": sum(bookings["member"]),
             "revenue_gross_minor": sum(revenue["gross"]),

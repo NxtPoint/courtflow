@@ -1196,19 +1196,20 @@
   }
   function ovTraffic(body, data, cur) {
     var s = data.series, k = data.kpis;
-    // Headline: who's browsing the public site vs who reached the member area (logged-in-only pages).
+    // Headline: public browsers vs signed-in people (precise) vs member-area reach (path proxy).
     body.appendChild(card([window.CRMUI.stats([
       { value: k.public_visitors, label: "Public visitors" },
+      { value: k.logged_in_visitors, label: "Logged-in visitors" },
       { value: k.member_visitors, label: "Member-area visitors" },
-      { value: k.member_visits, label: "Member-area visits" },
     ])]));
     mountChart(ovChartCard(body, "Public site vs member area · visits per day"), function () {
       return ovBase(data.days, [
         { name: "Public site", data: s.public_visits, color: "#9cc4b0", stack: "a" },
         { name: "Member area", data: s.member_visits, color: "#1f7a4d", stack: "a" },
+        { name: "Logged in", data: s.logged_in_visits, type: "line", color: "#c79a3e" },
       ]);
     });
-    body.appendChild(el("div", { class: "cf-muted", style: "font-size:.78rem;margin:8px 2px 14px", text: "Member area = visits to logged-in-only pages (portal · book · plan · account · admin · coach). A strong proxy for logged-in access, measured by page, not per-account." }));
+    body.appendChild(el("div", { class: "cf-muted", style: "font-size:.78rem;margin:8px 2px 14px", text: "Logged in = pages where a signed-in user was confirmed (precise; accrues from now). Member area = visits to logged-in-only pages by path (portal · book · plan · account · admin · coach) — a broader proxy that also counts shells loaded before sign-in." }));
     body.appendChild(card([window.CRMUI.stats([
       { value: k.visits, label: "All visits" },
       { value: k.unique_visitors, label: "Unique visitors" },

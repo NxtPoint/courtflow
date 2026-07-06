@@ -124,6 +124,10 @@
         authed = !!(clerk && clerk.user);
       } catch (e) { authed = false; }
     })();
+    // Tell the analytics beacon the resolved login state (for the logged-in-visitors metric).
+    // Set a durable global AND call the setter — covers either script load order (analytics.js is
+    // async, so window.cfAuthed may not exist yet; send() also reads window.__CF_AUTHED).
+    readyP.then(function () { try { window.__CF_AUTHED = authed; if (window.cfAuthed) window.cfAuthed(authed); } catch (e) {} });
     return readyP;
   }
 
