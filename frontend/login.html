@@ -78,7 +78,7 @@
 // ============================================================
 // Clerk-backed login/signup for CourtFlow (the public "login door"). Config is
 // injected SERVER-SIDE by the /login route from env (all public values):
-//   __CLERK_PUBLISHABLE_KEY__  -> CLERK_PUBLISHABLE_KEY (pk_test_… / pk_live_…)
+//   __CLERK_PUBLISHABLE_KEY__  -> CLERK_PUBLISHABLE_KEY (prod: pk_live_… for clerk.nextpointtennis.com)
 //   __AUTH_AFTER_LOGIN__       -> where to go after sign-in (default /portal)
 //   __AUTH_ENABLED__           -> "1" to actually run Clerk; else a "being set up" notice
 //   __AUTH_API_BASE__          -> courtflow-api base for the whoami check
