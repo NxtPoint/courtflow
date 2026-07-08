@@ -1225,6 +1225,36 @@ def sc_cancel_fee_and_paid_resize(s, fx):
     check("M7: a PAID booking can't be extended to a longer slot", (not rr.get("ok")) and rr.get("error") == "PAID_CANNOT_EXTEND", str(rr))
 
 
+def sc_class_scoped_pricing(s, fx):
+    """Classes are coach/product-scoped like lessons: enrolling in coach A's class charges THAT
+    class's own rate (via the session's price_id), never the cheapest class across coaches (Allon's
+    client must not get Tshepo's lower rate)."""
+    from diary import classes as CL
+    print("\n# Class rate card: enrol charges THIS class's own rate (not the cheapest class)")
+
+    def mk_class(coach, amt, name):
+        prod = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                              "VALUES (:c,'class',:n,:u) RETURNING id"),
+                         {"c": fx.club_id, "n": name, "u": coach}).scalar_one()
+        pid = _price(s, fx.club_id, prod, amt, unit="per_session")
+        res = s.execute(text("INSERT INTO diary.resource (club_id, kind, name, coach_user_id, capacity) "
+                             "VALUES (:c,'class',:n,:u,10) RETURNING id"),
+                        {"c": fx.club_id, "n": name, "u": coach}).scalar_one()
+        return s.execute(text("INSERT INTO diary.class_session (club_id, resource_id, coach_user_id, "
+                              "starts_at, ends_at, capacity, price_id, status) "
+                              "VALUES (:c,:r,:u,:sa,:ea,10,:p,'scheduled') RETURNING id"),
+                         {"c": fx.club_id, "r": res, "u": coach, "sa": at(fx, 8), "ea": at(fx, 9), "p": pid}).scalar_one()
+
+    coachB = _mk_user(s, "classcoachb@bill.test", "TshepoB")
+    csA = mk_class(fx.coach_uid, 12000, "Cardio A")   # coach A @ R120
+    mk_class(coachB, 8000, "Cardio B")                # a cheaper class @ R80 (the OLD merge would pick this)
+    r = CL.enrol(s, club_id=fx.club_id, class_session_id=str(csA), user_id=fx.member, settlement_mode="at_court")
+    check("enrol in coach A's class booked", r.get("ok"), str(r))
+    oid = r["enrolment"]["order_id"]
+    check("class charges THIS class's own R120 (not the cheaper R80)",
+          _order(s, oid)["amount_minor"] == 12000, str(_order(s, oid)["amount_minor"]))
+
+
 def sc_covered_reschedule_guard(s, fx):
     """M5: a membership-COVERED court can't be rescheduled into a time the membership doesn't cover
     (off-peak → peak) — refused, so it can't silently stay free."""
@@ -1273,6 +1303,7 @@ SCENARIOS = [
     sc_coach_scoped_pricing,
     sc_service_selection,
     sc_pack_credits_coach,
+    sc_class_scoped_pricing,
     sc_cancel_fee_and_paid_resize,
     sc_covered_reschedule_guard,
     sc_settlement_guards,

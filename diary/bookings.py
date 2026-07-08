@@ -279,7 +279,8 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
                           settlement_mode="at_court", parties=None, resource_id=None,
                           starts_at=None, ends_at=None, linked_booking_id=None,
                           audience="member", enrolment_id=None, duration_minutes=None,
-                          token_wallet=None, token_ref=None, coach_user_id=None, product_id=None):
+                          token_wallet=None, token_ref=None, coach_user_id=None, product_id=None,
+                          price_id=None):
     """Adapter between the diary and Agent C's billing.orders.create_order_for_booking.
 
     The diary speaks bookings; billing speaks order *lines*. We translate here: price each
@@ -329,6 +330,14 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
     # products (Private / Semi-private) charges the one that was booked, not the cheapest. Falls back
     # to coach-scoped kind pricing when no product was specified (older callers / court bookings).
     def _price(aud):
+        # EXACT price row (a class session's own price_id) — never re-resolved/merged, so a class
+        # enrolment charges THAT class's rate, not the cheapest class across coaches.
+        if price_id:
+            row = session.execute(
+                text("SELECT id AS price_id, amount_minor, currency_code, unit, duration_minutes "
+                     "FROM billing.price WHERE id = :p AND active = true"), {"p": str(price_id)},
+            ).mappings().first()
+            return dict(row) if row else {}
         if product_id:
             return price_for(session, club_id=club_id, audience=aud, product_id=product_id,
                              duration_minutes=duration_minutes) or {}

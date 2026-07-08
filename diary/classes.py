@@ -118,6 +118,7 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
             resource_id=cs["resource_id"], starts_at=cs["starts_at"], ends_at=cs["ends_at"],
             enrolment_id=str(enrol_id), audience=audience, token_wallet=token_wallet,
             token_ref=str(enrol_id),
+            price_id=cs.get("price_id"),   # charge THIS class's own rate (not the cheapest class)
         )
         if order.get("order_id"):
             session.execute(
@@ -207,7 +208,8 @@ def _bill_promoted_enrolment(session, *, club_id, cs, enrol):
             session, club_id=club_id, user_id=payer, booking_id=None, booking_type="class",
             settlement_mode=mode, parties=[], resource_id=cs["resource_id"],
             starts_at=cs["starts_at"], ends_at=cs["ends_at"], enrolment_id=enrol_id,
-            audience=audience, token_wallet=token_wallet, token_ref=enrol_id)
+            audience=audience, token_wallet=token_wallet, token_ref=enrol_id,
+            price_id=cs.get("price_id"))   # charge THIS class's own rate (not the cheapest class)
         if order.get("order_id"):
             session.execute(
                 text("UPDATE diary.enrolment SET order_id=:o WHERE id=:id"),
