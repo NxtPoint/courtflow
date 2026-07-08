@@ -1225,9 +1225,31 @@ def sc_cancel_fee_and_paid_resize(s, fx):
     check("M7: a PAID booking can't be extended to a longer slot", (not rr.get("ok")) and rr.get("error") == "PAID_CANNOT_EXTEND", str(rr))
 
 
+def sc_pack_credits_coach(s, fx):
+    """Owner decision: a coach lesson PACK credits the coach at PURCHASE (upfront). create_bundle_order
+    hangs the pack order line on the coach's own lesson product, so the charge_succeeded commission
+    fan-out attributes the collected purchase to the coach."""
+    print("\n# Pack credits the coach at purchase (upfront)")
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, effective_from, active) "
+                   "VALUES (:c,'club',30,:ef,true)"), {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+    prod = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                          "VALUES (:c,'lesson','Private',:u) RETURNING id"), {"c": fx.club_id, "u": fx.coach_uid}).scalar_one()
+    _price(s, fx.club_id, prod, 40000, dur=60)
+    plan = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=10,
+                          price_minor=300000, duration_minutes=60, coach_user_id=fx.coach_uid, label="10 lessons")
+    order = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member, bundle_plan_id=plan["id"])
+    bal0 = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    apply_payment_event(NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=order["order_id"],
+        provider_payment_id="p_packcredit", amount_minor=300000, currency="ZAR", status="succeeded",
+        direction="charge", club_id=str(fx.club_id), user_id=str(fx.member), raw={"t": 12}), session=s)
+    bal1 = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    check("token→coach: coach credited at pack purchase (70% of R3000 = R2100)", (bal1 - bal0) == 210000, f"{bal0}->{bal1}")
+
+
 SCENARIOS = [
     sc_coach_scoped_pricing,
     sc_service_selection,
+    sc_pack_credits_coach,
     sc_cancel_fee_and_paid_resize,
     sc_settlement_guards,
     sc_online_only,
