@@ -51,6 +51,7 @@ def price_for(session, *, club_id, kind=None, duration_minutes=None, product_id=
         if not _billing_price_exists(session):
             return None
         params = {"c": club_id, "aud": audience}
+        coach_scoped = False
         sql = ("SELECT p.id AS price_id, p.amount_minor, p.currency_code, p.unit, "
                "       p.audience, p.duration_minutes "
                "FROM billing.price p ")
@@ -63,20 +64,26 @@ def price_for(session, *, club_id, kind=None, duration_minutes=None, product_id=
             where.append("pr.kind = :kind")
             params["kind"] = kind
             if coach_user_id is not None and _product_has_coach_col(session):
-                where.append("pr.coach_user_id = :coach")
+                # Prefer THIS coach's OWN product; fall back to a club-shared (coach-agnostic) row so a
+                # lesson prices on the coach's rate card when they have one, else the shared rate — NEVER
+                # another coach's (mirrors durations_for so the picker price == the charged price).
+                where.append("(pr.coach_user_id = :coach OR pr.coach_user_id IS NULL)")
                 params["coach"] = coach_user_id
+                coach_scoped = True
         sql += "WHERE " + " AND ".join(where)
-        # Ranking: exact duration first, then the nearest priced duration <= requested, then
-        # any; tie-break to the exact audience, then cheapest. When no duration is requested we
-        # fall back to the cheapest matching row (legacy callers).
+        # Ranking: exact duration first, then the coach's OWN product, then the nearest priced
+        # duration <= requested, then any; tie-break to the exact audience, then cheapest.
+        # NULL-safe: the coach's OWN product ranks first, a shared (NULL-coach) product second.
+        # A bare `= :coach` yields NULL for a shared row and DESC sorts NULLs FIRST (wrong).
+        coach_rank = "(pr.coach_user_id IS NOT DISTINCT FROM :coach) DESC, " if coach_scoped else ""
         if duration_minutes is not None:
             params["dur"] = int(duration_minutes)
-            sql += (" ORDER BY (p.duration_minutes = :dur) DESC, "
+            sql += (" ORDER BY (p.duration_minutes = :dur) DESC, " + coach_rank +
                     "(p.duration_minutes IS NOT NULL AND p.duration_minutes <= :dur) DESC, "
                     "p.duration_minutes DESC NULLS LAST, "
                     "(p.audience = :aud) DESC, p.amount_minor ASC LIMIT 1")
         else:
-            sql += " ORDER BY (p.audience = :aud) DESC, p.amount_minor ASC LIMIT 1"
+            sql += " ORDER BY " + coach_rank + "(p.audience = :aud) DESC, p.amount_minor ASC LIMIT 1"
         row = session.execute(text(sql), params).mappings().first()
         if not row:
             return None
@@ -104,16 +111,20 @@ def durations_for(session, *, club_id, kind, coach_user_id=None, audience="any")
         where = ["p.club_id = :c", "p.active = true", "pr.active = true",
                  "pr.kind = :kind", "p.duration_minutes IS NOT NULL",
                  "p.audience IN (:aud, 'any')"]
+        coach_rank = ""
         if coach_user_id is not None and _product_has_coach_col(session):
-            where.append("pr.coach_user_id = :coach")
+            # Prefer THIS coach's OWN product; fall back to a club-shared (coach-agnostic) row (mirrors
+            # price_for so the durations/prices the picker shows == what the booking is charged).
+            where.append("(pr.coach_user_id = :coach OR pr.coach_user_id IS NULL)")
             params["coach"] = coach_user_id
+            coach_rank = "(pr.coach_user_id IS NOT DISTINCT FROM :coach) DESC, "
         sql = ("SELECT DISTINCT ON (p.duration_minutes) p.duration_minutes, p.amount_minor, "
                "       p.id AS price_id, p.currency_code "
                "FROM billing.price p "
                "JOIN billing.product pr ON pr.id = p.product_id "
                "WHERE " + " AND ".join(where) +
-               # DISTINCT ON keeps one row per duration: prefer exact audience, then cheapest.
-               " ORDER BY p.duration_minutes ASC, (p.audience = :aud) DESC, p.amount_minor ASC")
+               # DISTINCT ON keeps one row per duration: prefer the coach's OWN, then exact audience, then cheapest.
+               " ORDER BY p.duration_minutes ASC, " + coach_rank + "(p.audience = :aud) DESC, p.amount_minor ASC")
         rows = session.execute(text(sql), params).mappings().all()
         return [{
             "duration_minutes": r["duration_minutes"],

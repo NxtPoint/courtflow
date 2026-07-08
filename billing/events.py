@@ -342,12 +342,17 @@ def _confirm_held_bookings(session, order_id, club_id) -> int:
                     UPDATE diary.booking b
                     SET status = 'confirmed', held_until = NULL,
                         cancellation_reason = NULL, cancelled_at = NULL, updated_at = now()
-                    FROM billing.order_line ol
-                    WHERE ol.order_id = :order_id
-                      AND ol.booking_id = b.id
-                      AND b.club_id = :club_id
+                    WHERE b.club_id = :club_id
                       AND (b.status = 'held'
                            OR (b.status = 'cancelled' AND b.cancellation_reason = 'hold_expired'))
+                      -- Confirm EVERY booking on this order, not just the one with an order_line. A
+                      -- lesson auto-holds a court in a 2nd booking row that shares the order_id but
+                      -- carries NO order_line; matching only ol.booking_id left that court 'held', so
+                      -- lazy-expiry later cancelled it — a PAID lesson with no court. b.order_id catches
+                      -- both; the EXISTS keeps the original order_line match as a defensive fallback.
+                      AND (b.order_id = :order_id
+                           OR EXISTS (SELECT 1 FROM billing.order_line ol
+                                       WHERE ol.order_id = :order_id AND ol.booking_id = b.id))
                 """),
                 {"order_id": str(order_id), "club_id": str(club_id) if club_id else None},
             )

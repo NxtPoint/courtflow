@@ -228,6 +228,15 @@ def sc_commission(s, fx):
                                 currency="ZAR", status="succeeded", direction="charge",
                                 club_id=str(fx.club_id), user_id=str(fx.member), raw={"t": 2})
     apply_payment_event(ev, session=s)
+    # H2 regression: the auto-held court MUST confirm together with its online-paid lesson (it shares
+    # the order but has NO order_line; the old confirm joined only order_line -> court left 'held' ->
+    # lazy-expiry later cancelled it = a paid lesson with no court).
+    court_status = s.execute(text(
+        "SELECT status FROM diary.booking WHERE club_id=:c AND order_id=:o "
+        "AND booking_type='court' AND notes='(court held for lesson)'"),
+        {"c": fx.club_id, "o": oid}).scalar()
+    check("H2: auto-held court confirms with the online-paid lesson", court_status == "confirmed",
+          f"court_status={court_status}")
     bal = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
     check("coach earns R240 (60% of R400 @ 40% club cut)", bal == 24000, f"coach_balance={bal}")
     # Replay → no second split.
@@ -990,7 +999,44 @@ def sc_sales_by_day(s, fx):
           sale is not None and sale.get("booking_id"), str(sale and sale.get("booking_id")))
 
 
+def sc_coach_scoped_pricing(s, fx):
+    """H1 regression: a lesson is priced on the SELECTED coach's OWN rate card, never the cheapest
+    coach's. Two coaches at different rates; booking with each must charge that coach's own price."""
+    print("\n# Coach rate cards: a lesson is priced on the SELECTED coach's own rate (not the cheapest)")
+    # Coach A (fx.coach_uid) gets an OWN lesson product at R400/60; a 2nd coach B at a CHEAPER R300/60.
+    prodA = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                           "VALUES (:c,'lesson','A Lesson',:u) RETURNING id"),
+                      {"c": fx.club_id, "u": fx.coach_uid}).scalar_one()
+    _price(s, fx.club_id, prodA, 40000, dur=60)
+    coachB = _mk_user(s, "coachb@bill.test", "CoachB")
+    s.execute(text("INSERT INTO iam.coach_profile (club_id, user_id, display_name, is_bookable) "
+                   "VALUES (:c,:u,'CoachB',true)"), {"c": fx.club_id, "u": coachB})
+    resB = s.execute(text("INSERT INTO diary.resource (club_id, kind, name, coach_user_id) "
+                          "VALUES (:c,'coach','CoachB',:u) RETURNING id"),
+                     {"c": fx.club_id, "u": coachB}).scalar_one()
+    s.execute(text("INSERT INTO diary.availability_rule (club_id, resource_id, weekday, "
+                   "start_time, end_time, slot_minutes) VALUES (:c,:r,:wd,'08:00','18:00',30)"),
+              {"c": fx.club_id, "r": resB, "wd": fx.target.weekday()})
+    prodB = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                           "VALUES (:c,'lesson','B Lesson',:u) RETURNING id"),
+                      {"c": fx.club_id, "u": coachB}).scalar_one()
+    _price(s, fx.club_id, prodB, 30000, dur=60)   # cheaper — the OLD unscoped code picked this for ANY coach
+    rA = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=iso(at(fx, 8)), ends_at=iso(at(fx, 9)), settlement_mode="at_court")
+    check("coach A lesson priced at A's R400 (NOT the cheaper coach's R300)",
+          _order(s, rA["booking"]["order_id"])["amount_minor"] == 40000,
+          str(_order(s, rA["booking"]["order_id"])["amount_minor"]))
+    rB = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=resB, coach_user_id=coachB,
+                          starts_at=iso(at(fx, 10)), ends_at=iso(at(fx, 11)), settlement_mode="at_court")
+    check("coach B lesson priced at B's own R300",
+          _order(s, rB["booking"]["order_id"])["amount_minor"] == 30000,
+          str(_order(s, rB["booking"]["order_id"])["amount_minor"]))
+
+
 SCENARIOS = [
+    sc_coach_scoped_pricing,
     sc_payment_preference,
     sc_person_360,
     sc_admin_event_story,
