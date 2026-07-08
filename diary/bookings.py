@@ -419,12 +419,21 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                 _coach_reviews(session, club_id, _gate_coach):
             _gate_status = "requested"
         if _gate_status and _gate_coach:
-            # A gated (requested) lesson holds NO money yet. Whitelist the modes valid to store on it
-            # and coerce everything else to at_court so the coach's later accept settles it normally:
-            # online (prepay happens on/after accept), membership_covered (COURT-only — never trust a
-            # client's crafted claim on a lesson), and free (admin-only) all collapse to at_court.
-            _gate_sm = settlement_mode if settlement_mode in ("at_court", "monthly_account", "token") \
+            # A gated (requested) lesson holds NO money yet, but we PRESERVE the client's real intent:
+            # online stays online (the coach's accept will keep it HELD + return a Yoco checkout so the
+            # client prepays — an online-only coach is never left owed); at_court/monthly/token pass
+            # through; membership_covered (COURT-only) / free (admin-only) collapse to at_court.
+            _gate_sm = settlement_mode if settlement_mode in ("at_court", "monthly_account", "token", "online") \
                 else "at_court"
+            # The gate returns BEFORE the main _settlement_allowed / per-service payment_modes checks,
+            # so enforce the coach's payment preference HERE for a client self-booking — an online-only
+            # coach can't be booked owed (M1). Staff booking on-behalf (booked_for_user_id set) is not
+            # gated (handled above) so their at-court override is unaffected.
+            if role in ("member", "guest") and _gate_sm in ("online", "at_court", "monthly_account"):
+                _pm = _service_payment_modes_guarded(session, club_id, "lesson", _gate_coach)
+                if _pm is not None and _gate_sm not in _pm:
+                    return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=_gate_sm,
+                                message="this coach doesn't offer that payment method")
             _gid = _insert_booking(
                 session, club_id=club_id, booking_type="lesson", resource_id=resource_id,
                 coach_user_id=_gate_coach, starts_at=starts, ends_at=ends, status=_gate_status,

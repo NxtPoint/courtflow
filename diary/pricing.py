@@ -149,12 +149,16 @@ def payment_modes_for(session, *, club_id, kind, coach_user_id=None):
             return None
         where = ["club_id = :c", "kind = :kind", "active = true"]
         params = {"c": club_id, "kind": kind}
+        coach_rank = ""
         if coach_user_id is not None and _product_has_coach_col(session):
-            where.append("coach_user_id = :coach")
+            # Prefer THIS coach's own product's preference; fall back to a club-shared (NULL) product —
+            # the SAME resolution as price_for/durations_for so the enforced modes match the priced ones.
+            where.append("(coach_user_id = :coach OR coach_user_id IS NULL)")
             params["coach"] = coach_user_id
+            coach_rank = "(coach_user_id IS NOT DISTINCT FROM :coach) DESC, "
         csv = session.execute(
             text("SELECT payment_modes FROM billing.product WHERE " + " AND ".join(where)
-                 + " ORDER BY created_at LIMIT 1"),
+                 + " ORDER BY " + coach_rank + "created_at LIMIT 1"),
             params,
         ).scalar()
         if not csv:

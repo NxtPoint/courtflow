@@ -1068,9 +1068,41 @@ def sc_settlement_guards(s, fx):
           str(_order(s, oid) and _order(s, oid)["amount_minor"]))
 
 
+def sc_online_only(s, fx):
+    """M1: an ONLINE-ONLY coach can't be booked owed by a client. A crafted at_court is refused; an
+    online request to a gated (review) coach stays 'online', and the coach's accept keeps it HELD
+    (order awaiting_payment — client prepays), never confirmed+owed."""
+    print("\n# Online-only coach: client must prepay; gated accept stays held; at_court refused")
+    s.execute(text("UPDATE billing.product SET payment_modes='online' WHERE id=:p"),
+              {"p": fx.lesson_product})
+    s.execute(text("UPDATE iam.coach_profile SET review_bookings=true WHERE club_id=:c AND user_id=:u"),
+              {"c": fx.club_id, "u": fx.coach_uid})
+    rbad = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                            booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                            starts_at=iso(at(fx, 8)), ends_at=iso(at(fx, 9)), settlement_mode="at_court")
+    check("M1: at_court refused for an online-only coach (gated path)",
+          (not rbad.get("ok")) and rbad.get("error") == "SETTLEMENT_NOT_ALLOWED", str(rbad))
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="online")
+    stored = r.get("ok") and s.execute(text("SELECT settlement_mode FROM diary.booking WHERE id=:b"),
+                                       {"b": r["booking"]["id"]}).scalar()
+    check("M1: online request preserved (not coerced to at_court)", stored == "online", str(stored))
+    bid = r["booking"]["id"]
+    acc = B.accept_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=fx.coach_uid, role="coach")
+    check("M1: accept keeps the online lesson HELD (awaiting prepayment), not confirmed",
+          acc.get("ok") and acc["booking"]["status"] == "held",
+          str(acc.get("booking", {}).get("status")))
+    oid = B._booking_dict(s, bid)["order_id"]
+    check("M1: order is awaiting_payment (client must pay), not open/owed",
+          _order(s, oid) and _order(s, oid)["status"] == "awaiting_payment",
+          str(_order(s, oid) and _order(s, oid)["status"]))
+
+
 SCENARIOS = [
     sc_coach_scoped_pricing,
     sc_settlement_guards,
+    sc_online_only,
     sc_payment_preference,
     sc_person_360,
     sc_admin_event_story,
