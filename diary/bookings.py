@@ -741,6 +741,14 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
     if _coach_class_conflict(session, club_id, bk.get("coach_user_id"), new_s, new_e):
         return _err("COACH_BUSY", 409, message="the coach runs a class at the new time")
 
+    # A lesson's auto-held court was auto-assigned, so on a move we reassign it to a FREE court at the
+    # new time rather than failing if the original court is busy there. Pre-check one is free. (L2.)
+    reassign_court_to = None
+    if bk.get("order_id") and bk.get("booking_type") == "lesson" and scope == "this":
+        reassign_court_to = _first_free_court(session, club_id, new_s, new_e)
+        if reassign_court_to is None:
+            return _err("NO_COURT_AVAILABLE", 422, message="no court is free at the new time")
+
     # series / this_future reschedule shifts each affected occurrence by the same delta.
     targets = _reschedule_targets(session, bk, scope)
     delta = new_s - _parse_dt(bk["starts_at"])
@@ -755,8 +763,17 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
                          "WHERE id=:id"),
                     {"sa": ts[0], "ea": ts[1], "id": t_id},
                 )
-                # Move a linked court (same order_id, different resource) too.
-                if bk.get("order_id"):
+                # Move the linked court (lesson's auto-held court, same order_id). Reassign it to a
+                # free court at the new time when we resolved one (L2); else move it as-is (by delta).
+                if bk.get("order_id") and reassign_court_to and t_id == booking_id:
+                    session.execute(
+                        text("UPDATE diary.booking SET resource_id=:r, starts_at=:sa, ends_at=:ea, "
+                             "updated_at=now() WHERE club_id=:c AND order_id=:o AND id<>:id "
+                             "  AND booking_type='court' AND status IN ('held','confirmed')"),
+                        {"r": reassign_court_to, "sa": ts[0], "ea": ts[1], "c": club_id,
+                         "o": bk["order_id"], "id": t_id},
+                    )
+                elif bk.get("order_id"):
                     session.execute(
                         text("UPDATE diary.booking SET starts_at=:sa, ends_at=:ea, updated_at=now() "
                              "WHERE club_id=:c AND order_id=:o AND id<>:id "
@@ -884,9 +901,12 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
     promoted = _promote_court_waitlist(session, club_id=club_id,
                                        resource_id=booking["resource_id"],
                                        desired_start=_parse_dt(booking["starts_at"]))
+    # Flag a PAID cancellation so the UI can prompt a refund (the paid order is left intact — a refund
+    # is a separate, explicit flow, so without this the client got no indication). (L1.)
     return {"ok": True, "booking": booking, "fee_applied": fee_applies,
             "fee_minor": fee_minor, "waitlist_notified": promoted,
-            "token_credited": credited}
+            "token_credited": credited,
+            "was_paid": _order_has_succeeded_charge(session, bk.get("order_id"))}
 
 
 def _credit_linked_tokens(session, *, club_id, order_id, except_booking_id, reason):

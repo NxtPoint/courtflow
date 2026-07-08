@@ -1255,6 +1255,32 @@ def sc_class_scoped_pricing(s, fx):
           _order(s, oid)["amount_minor"] == 12000, str(_order(s, oid)["amount_minor"]))
 
 
+def sc_lesson_reschedule_court_reassign(s, fx):
+    """L2: rescheduling a lesson onto a time where ITS court is busy reassigns a FREE court instead
+    of failing with SLOT_TAKEN (the lesson's court was auto-assigned)."""
+    print("\n# Lesson reschedule auto-reassigns a court when the original is busy (L2)")
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 8)), ends_at=iso(at(fx, 9)), settlement_mode="at_court")
+    oid = r["booking"]["order_id"]
+    court_taken = s.execute(text("SELECT resource_id FROM diary.booking WHERE order_id=:o AND booking_type='court'"),
+                            {"o": oid}).scalar()
+    other = [c for c in fx.courts if str(c) != str(court_taken)][0]
+    # Occupy the lesson's court at 10–11 so moving the lesson there would clash on the SAME court.
+    s.execute(text("INSERT INTO diary.booking (club_id, booking_type, resource_id, starts_at, ends_at, "
+                   "status, booked_by_user_id, settlement_mode) "
+                   "VALUES (:c,'court',:r,:sa,:ea,'confirmed',:u,'at_court')"),
+              {"c": fx.club_id, "r": court_taken, "sa": at(fx, 10), "ea": at(fx, 11), "u": fx.member})
+    rr = B.reschedule_booking(s, club_id=fx.club_id, booking_id=r["booking"]["id"],
+                              new_starts_at=iso(at(fx, 10)), new_ends_at=iso(at(fx, 11)),
+                              actor_user_id=fx.member, role="club_admin")
+    check("L2: lesson reschedule onto a busy-court time SUCCEEDS (reassigns)", rr.get("ok"), str(rr))
+    new_court = s.execute(text("SELECT resource_id FROM diary.booking WHERE order_id=:o AND booking_type='court'"),
+                          {"o": oid}).scalar()
+    check("L2: the lesson's court was reassigned to the free court (not the busy one)",
+          str(new_court) == str(other), f"{court_taken}->{new_court}")
+
+
 def sc_covered_reschedule_guard(s, fx):
     """M5: a membership-COVERED court can't be rescheduled into a time the membership doesn't cover
     (off-peak → peak) — refused, so it can't silently stay free."""
@@ -1305,6 +1331,7 @@ SCENARIOS = [
     sc_pack_credits_coach,
     sc_class_scoped_pricing,
     sc_cancel_fee_and_paid_resize,
+    sc_lesson_reschedule_court_reassign,
     sc_covered_reschedule_guard,
     sc_settlement_guards,
     sc_online_only,

@@ -526,8 +526,13 @@
     var msg = "Cancel this " + typeLabel(b.booking_type).toLowerCase() + " on " + UI.fmtDate(b.starts_at) + "?";
     if (fee > 0) msg += "\n\nThis is a late cancellation — a fee of " + money(fee) + " applies.";
     if (!window.confirm(msg)) return;
-    window.API.cancelBooking(b.id, { reason: "client cancelled" }).then(function () {
-      UI.toast(fee > 0 ? ("Cancelled — a " + money(fee) + " late fee applies.") : "Cancelled.", "info"); go("#/");
+    var orderId = b.charge && b.charge.order_id;
+    window.API.cancelBooking(b.id, { reason: "client cancelled" }).then(function (res) {
+      UI.toast(fee > 0 ? ("Cancelled — a " + money(fee) + " late fee applies.") : "Cancelled.", "info");
+      // L1: a PAID booking isn't auto-refunded on cancel — offer to request one right away.
+      if (res && res.was_paid && orderId &&
+          window.confirm("You paid for this booking. Request a refund now?")) { requestRefund(orderId); return; }
+      go("#/");
     }, function (e) { UI.toast(UI.errMsg(e), "error"); });
   }
   function requestRefund(orderId) {
