@@ -1196,9 +1196,39 @@ def sc_service_selection(s, fx):
           str(_order(s, r2["booking"]["order_id"])["amount_minor"]))
 
 
+def sc_cancel_fee_and_paid_resize(s, fx):
+    """M6: a late cancel raises a REAL fee order (not just an email). M7: a PAID booking can't be
+    stretched into a longer/pricier slot (cancel & rebook)."""
+    print("\n# Late-cancel fee billed (M6) + paid booking can't be extended (M7)")
+    s.execute(text("UPDATE club.policy SET no_show_fee_minor=5000, cancellation_cutoff_hours=100 WHERE club_id=:c"),
+              {"c": fx.club_id})
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    cres = B.cancel_booking(s, club_id=fx.club_id, booking_id=r["booking"]["id"], actor_user_id=fx.member, role="member")
+    check("cancel inside cutoff flags a R50 fee", cres.get("fee_applied") and cres.get("fee_minor") == 5000, str(cres))
+    fee = s.execute(text("SELECT o.amount_minor FROM billing.\"order\" o JOIN billing.order_line ol ON ol.order_id=o.id "
+                         "WHERE o.club_id=:c AND o.user_id=:u AND ol.description='Late cancellation fee'"),
+                    {"c": fx.club_id, "u": fx.member}).scalar()
+    check("M6: a R50 late-cancel fee ORDER is raised (billed, not just emailed)", fee == 5000, str(fee))
+    # M7: pay a 60-min court online, then (as admin, bypassing cutoff) try to extend to 90 min → refused.
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="court", resource_id=fx.courts[1],
+                          starts_at=iso(at(fx, 12)), ends_at=iso(at(fx, 13)), settlement_mode="online")
+    oid = r2["booking"]["order_id"]
+    apply_payment_event(NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
+        provider_payment_id="p_m7", amount_minor=15000, currency="ZAR", status="succeeded", direction="charge",
+        club_id=str(fx.club_id), user_id=str(fx.member), raw={"t": 11}), session=s)
+    rr = B.reschedule_booking(s, club_id=fx.club_id, booking_id=r2["booking"]["id"],
+                              new_starts_at=iso(at(fx, 14)), new_ends_at=iso(at(fx, 15, 30)),
+                              actor_user_id=fx.member, role="club_admin")
+    check("M7: a PAID booking can't be extended to a longer slot", (not rr.get("ok")) and rr.get("error") == "PAID_CANNOT_EXTEND", str(rr))
+
+
 SCENARIOS = [
     sc_coach_scoped_pricing,
     sc_service_selection,
+    sc_cancel_fee_and_paid_resize,
     sc_settlement_guards,
     sc_online_only,
     sc_offplatform_reconcile,

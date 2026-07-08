@@ -672,6 +672,18 @@ def confirm_held_booking(session, *, club_id, booking_id):
 # RESCHEDULE (atomic move, conflict-checked)
 # ---------------------------------------------------------------------------
 
+def _order_has_succeeded_charge(session, order_id):
+    """True if this order has taken real money (a succeeded charge payment). Guarded → False."""
+    if not order_id:
+        return False
+    try:
+        return session.execute(
+            text("SELECT 1 FROM billing.payment WHERE order_id = :o AND direction = 'charge' "
+                 "AND status = 'succeeded' LIMIT 1"), {"o": str(order_id)}).first() is not None
+    except Exception:
+        return False
+
+
 def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_at,
                        actor_user_id, role, scope="this", now=None):
     """Atomically move a booking to a new time. The exclusion constraint validates the new
@@ -697,6 +709,14 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
         if _parse_dt(bk["starts_at"]) - now < timedelta(hours=cutoff_h):
             return _err("PAST_CUTOFF", 422,
                         message=f"reschedule not allowed within {cutoff_h}h of start")
+
+    # Can't stretch a PAID booking into a LONGER (pricier) slot — that would under-bill (the order is
+    # already settled and we don't silently re-charge). Cancel & rebook to change a paid booking's
+    # length. A same-length move (or a shorter one) is fine. (Owner decision M7.)
+    old_dur = _parse_dt(bk["ends_at"]) - _parse_dt(bk["starts_at"])
+    if (new_e - new_s) > old_dur and _order_has_succeeded_charge(session, bk.get("order_id")):
+        return _err("PAID_CANNOT_EXTEND", 422,
+                    message="this booking is already paid — cancel and rebook to make it longer")
 
     # A lesson must not be moved onto a time the coach runs a scheduled class — a class_session is
     # not a diary.booking, so the GiST exclusion can't catch it (mirror the create/accept guard).
@@ -822,6 +842,19 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
             void_order(session, club_id=club_id, order_id=bk["order_id"], reason="booking cancelled")
         except Exception:
             log.info("cancel_booking: order void skipped (billing unavailable) order=%s", bk.get("order_id"))
+
+    # Actually BILL the late-cancel / no-show fee (owner decision M6): raise a small owed order on
+    # the client so it lands on their statement to collect. Guarded + best-effort — never blocks the
+    # cancel. (Idempotent by construction: a re-cancel returns ALREADY_CLOSED before reaching here.)
+    if fee_applies and fee_minor > 0 and bk.get("booked_by_user_id"):
+        try:
+            from billing.orders import create_order_for_booking
+            create_order_for_booking(
+                session, club_id=club_id, user_id=bk["booked_by_user_id"],
+                lines=[{"description": "Late cancellation fee", "amount_minor": fee_minor, "qty": 1}],
+                settlement_mode="at_court")
+        except Exception:
+            log.info("cancel_booking: fee order skipped (billing unavailable)")
 
     booking = _booking_dict(session, booking_id)
     res = _resource(session, club_id, booking["resource_id"])
