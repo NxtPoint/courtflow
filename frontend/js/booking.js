@@ -33,18 +33,26 @@
   }
   function fetchDurations(q) { return window.TFAuth.apiJSON("/api/diary/durations" + qs(q)); }
 
-  async function ensureCtx(principal) {
+  async function ensureCtx(principal, onBehalf) {
     ctx.principal = principal;
-    if (ctx.loaded) return;
+    // Reload when the mode changes (a coach app is always on-behalf; the client app never is — but
+    // guard anyway so the same module is safe if ever reused within one page).
+    if (ctx.loaded && ctx._onBehalf === !!onBehalf) return;
+    ctx._onBehalf = !!onBehalf;
+    ctx.dependents = []; ctx.walletsByKind = {}; ctx.plan = null;
     try { ctx.billing = await window.API.billingConfig(principal.club_id); } catch (e) {}
-    try { ctx.dependents = (await window.API.dependents()).dependents || []; } catch (e) {}
-    try {
-      var wr = await window.TFAuth.apiJSON("/api/billing/bundles/wallets");
-      (wr.wallets || []).forEach(function (w) {
-        (ctx.walletsByKind[w.service_kind] = ctx.walletsByKind[w.service_kind] || []).push(w);
-      });
-    } catch (e) {}
-    try { ctx.plan = await window.TFAuth.apiJSON("/api/me/plan"); } catch (e) { ctx.plan = null; }
+    // Dependents / prepaid wallets / membership are the SUBJECT's (self). On-behalf we don't have the
+    // client's — token is matched server-side (NO_TOKEN if none) and membership coverage isn't offered.
+    if (!onBehalf) {
+      try { ctx.dependents = (await window.API.dependents()).dependents || []; } catch (e) {}
+      try {
+        var wr = await window.TFAuth.apiJSON("/api/billing/bundles/wallets");
+        (wr.wallets || []).forEach(function (w) {
+          (ctx.walletsByKind[w.service_kind] = ctx.walletsByKind[w.service_kind] || []).push(w);
+        });
+      } catch (e) {}
+      try { ctx.plan = await window.TFAuth.apiJSON("/api/me/plan"); } catch (e) { ctx.plan = null; }
+    }
     try {
       var rs = (await window.API.resources()).resources || [];
       // Only offer coaches who can actually be booked: active, with weekly hours set
@@ -116,7 +124,14 @@
     var modes = [];
     if (ctx.billing.allow_at_court !== false) modes.push("at_court");
     if (ctx.billing.allow_monthly !== false) modes.push("monthly_account");
-    if (ctx.billing.online_enabled && modes.indexOf("online") < 0) modes.push("online");
+    if (!st.skipOnline && ctx.billing.online_enabled && modes.indexOf("online") < 0) modes.push("online");
+    if (st.onBehalf) {
+      // Staff override: collect at court / account / the client's pack — no Yoco. An online-only
+      // service preference does NOT restrict staff (the owner's decision), so we don't apply the
+      // per-service filter; the client's pack is drawn server-side (NO_TOKEN if they have none).
+      if (modes.indexOf("token") < 0) modes.unshift("token");
+      return modes.filter(function (m) { return m === "token" || UI.SETTLEMENT[m]; });
+    }
     // Per-service payment preference: keep only the methods THIS service offers (token = the
     // member's own prepaid pack, always allowed; null = no per-service restriction).
     if (st.paymentModes) modes = modes.filter(function (m) { return st.paymentModes.indexOf(m) >= 0; });
@@ -218,14 +233,31 @@
     if (type === st.type) return;
     st.type = type; st.slot = null; st.selClass = null; st.selCoach = "ANY"; st.selCourt = "ANY";
     st.selDuration = null; st.selDurationPrice = null; st.durations = []; st.slotsCache = {};
-    try { history.replaceState(null, "", "/book/" + type); } catch (e) {}
+    if (st.coachLock && type === "lesson") {
+      st.selCoach = ctx.coaches.filter(function (c) { return String(c.coach_user_id) === String(st.coachLock); })[0] || "ANY";
+    }
+    if (!st.onBehalf) { try { history.replaceState(null, "", "/book/" + type); } catch (e) {} }
     if (type !== "class") await loadDurations();
     render();
   }
+  // The staff "booking on behalf of …" banner (+ back to the coach/admin app). Client flow: null.
+  function onBehalfBanner() {
+    if (!st.onBehalf) return null;
+    return el("div", { class: "cf-card", style: "padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;background:var(--green-050,#eef7f1);border:1px solid #cfe4d8" }, [
+      el("span", { style: "font-size:1.1rem", text: "👤" }),
+      el("div", { style: "flex:1" }, [
+        el("div", { style: "font-weight:700;font-size:.9rem", text: "Booking for " + (st.onBehalf.name || st.onBehalf.email || "a client") }),
+        el("div", { class: "cf-muted cf-tiny", text: "They'll be notified; collect payment at court, from their pack, or on their account." }),
+      ]),
+      st.backTo ? el("a", { class: "cf-btn cf-btn-sm cf-btn-ghost", href: st.backTo, text: "Cancel" }) : null,
+    ].filter(Boolean));
+  }
 
   function renderSchedule() {
+    var banner = onBehalfBanner();
+    if (banner) container.appendChild(banner);
     container.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:14px" }, [
-      el("h1", { text: "Book", style: "margin:0" }),
+      el("h1", { text: st.onBehalf ? "Book a client in" : "Book", style: "margin:0" }),
       serviceSwitch(),
     ]));
 
@@ -257,6 +289,14 @@
 
   function pickerControl() {
     if (st.type === "lesson") {
+      // Coach booking their OWN client → the coach is fixed; show it, don't offer a picker.
+      if (st.coachLock) {
+        var lockedName = (st.selCoach !== "ANY" && st.selCoach.name) || "You";
+        return el("div", { class: "cf-field" }, [
+          el("div", { class: "cf-select", style: "display:flex;align-items:center;background:var(--canvas,#f1f4ef)", text: lockedName }),
+          el("div", { class: "cf-pref-note", text: "We'll reserve a court for the lesson." }),
+        ]);
+      }
       var coachSel = el("select", { class: "cf-select", onchange: async function (ev) {
         var v = ev.target.value;
         st.selCoach = v === "ANY" ? "ANY" : ctx.coaches.filter(function (c) { return c.id === v; })[0] || "ANY";
@@ -432,7 +472,8 @@
 
     if (ctx.dependents && ctx.dependents.length) card.appendChild(playerSection());
 
-    if (st.type !== "class") {
+    // On-behalf: the client IS the booked party (posted via for_email) — no self player/guest step.
+    if (st.type !== "class" && !st.onBehalf) {
       var gName = el("input", { class: "cf-input", placeholder: "Guest name", value: (st.guest && st.guest.name) || "" });
       var gEmail = el("input", { class: "cf-input", type: "email", placeholder: "Guest email (optional)", value: (st.guest && st.guest.email) || "" });
       st._gName = gName; st._gEmail = gEmail;
@@ -477,6 +518,7 @@
     card.appendChild(btn);
 
     UI.clear(container);
+    var cb = onBehalfBanner(); if (cb) container.appendChild(cb);
     container.appendChild(card);
   }
 
@@ -549,8 +591,12 @@
         starts_at: st.slot.start, ends_at: st.slot.end,
         settlement_mode: st.settlement, parties: parties, audience: "member",
       };
+      // On-behalf: the server resolves for_email → booked_for_user_id (a member) or a walk-in guest;
+      // the booking auto-confirms and no self parties are sent.
+      if (st.onBehalf) { body.parties = []; body.for_email = st.onBehalf.email || undefined;
+        if (!body.for_email && st.onBehalf.name) body.for_guest_name = st.onBehalf.name; }
       if (st.type === "lesson") {
-        body.coach_user_id = (st.selCoach !== "ANY" && st.selCoach.coach_user_id) || null;
+        body.coach_user_id = (st.selCoach !== "ANY" && st.selCoach.coach_user_id) || st.coachLock || null;
         body.resource_id = st.slot.resource_id;
         body.court_resource_id = (st.selCourt !== "ANY" && st.selCourt.id) || st.slot.court_resource_id || null;
       } else {
@@ -558,7 +604,8 @@
       }
       res = await window.API.createBooking(body);
       var orderId = res.order_id || (res.booking && res.booking.order_id);
-      if (st.settlement === "online" && orderId) {
+      // Staff on-behalf never goes to Yoco (they collect at court / pack / account).
+      if (!st.skipOnline && st.settlement === "online" && orderId) {
         if (window.Pay) { await window.Pay.startYocoCheckout(orderId); return; }
         UI.toast("Couldn't open the payment page — please refresh and try again.", "error"); return;
       }
@@ -590,6 +637,10 @@
       else { title = "You're enrolled!"; msg = "A confirmation email is on its way."; }
     } else if (stt === "held") { title = "Booking held"; msg = "We're holding your slot until payment completes."; }
     else { title = "You're booked!"; msg = "A confirmation email is on its way."; }
+    if (st.onBehalf) {
+      title = "Booked for " + (st.onBehalf.name || st.onBehalf.email || "your client");
+      msg = "They've been notified. Collect payment at court, from their pack, or on their account.";
+    }
 
     var detail = el("div", { class: "cf-summary cf-success-detail" });
     summaryRows().forEach(function (r) {
@@ -602,8 +653,10 @@
       el("p", { class: "cf-muted", text: msg }),
       detail,
       el("div", { class: "cf-row cf-success-actions", style: "margin-top:16px" }, [
-        el("a", { class: "cf-btn cf-btn-primary cf-btn-lg", href: window.Client ? "#/bookings" : "/my.html", text: "View my bookings" }),
-        el("button", { class: "cf-btn cf-btn-ghost cf-btn-lg", type: "button", text: "Book another", onclick: function () {
+        st.onBehalf
+          ? el("button", { class: "cf-btn cf-btn-primary cf-btn-lg", type: "button", text: "Done", onclick: function () { if (st.onDone) st.onDone(); else if (st.backTo) location.hash = st.backTo; } })
+          : el("a", { class: "cf-btn cf-btn-primary cf-btn-lg", href: window.Client ? "#/bookings" : "/my.html", text: "View my bookings" }),
+        el("button", { class: "cf-btn cf-btn-ghost cf-btn-lg", type: "button", text: st.onBehalf ? "Book another" : "Book another", onclick: function () {
           st.slot = null; st.selClass = null; st.view = "schedule"; st.showPayOptions = false; render();
         } }),
       ]),
@@ -612,11 +665,18 @@
 
   // ---- public API ------------------------------------------------------------
   var ALLOWED = { court: 1, lesson: 1, class: 1 };
-  async function start(principal, service) {
+  // start(principal, service[, opts]). opts (ONLY for staff on-behalf; omit for the client flow — the
+  // client path is unchanged): { onBehalf: {name, email}, coachLock: coach_user_id, backTo: '#/route' }.
+  //   onBehalf  → book FOR this client (posts for_email); no Yoco (staff collect at court/token/later),
+  //               no self dependents/wallets/membership, an "on behalf of …" banner.
+  //   coachLock → lock the lesson to this coach (their own client) and hide the coach picker.
+  //   backTo    → hash route to return to when done (the coach/admin app).
+  async function start(principal, service, opts) {
+    opts = opts || {};
     UI = window.UI; el = UI.el;
     container = document.getElementById("cf-main");
     if (!container) return;
-    await ensureCtx(principal);
+    await ensureCtx(principal, opts.onBehalf);
     var type = ALLOWED[service] ? service : "court";
     st = {
       type: type, calMonth: startOfMonth(new Date()), day: new Date(),
@@ -624,7 +684,15 @@
       selCoach: "ANY", selCourt: "ANY", slot: null, selClass: null, player: null, guest: null,
       settlement: "at_court", tokenWallet: null, showPayOptions: false, slotsCache: {},
       view: "schedule", _gName: null, _gEmail: null,
+      onBehalf: opts.onBehalf || null, coachLock: opts.coachLock || null,
+      backTo: opts.backTo || null, onDone: opts.onDone || null, skipOnline: !!opts.onBehalf,
     };
+    // Coach booking their OWN client: preselect + lock the coach.
+    if (st.coachLock && type === "lesson") {
+      st.selCoach = ctx.coaches.filter(function (c) {
+        return String(c.coach_user_id) === String(st.coachLock);
+      })[0] || "ANY";
+    }
     if (type !== "class") await loadDurations();
     render();
   }

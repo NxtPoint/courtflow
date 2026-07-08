@@ -302,47 +302,17 @@
   }
 
   // Book a client in (lesson with me, or a court) — the on-behalf flow.
+  // Book a client in = pick the client, then hand off to the ONE booking widget (window.BookFlow) in
+  // on-behalf mode — the SAME flow clients use (service · duration · time · payment), coach locked to
+  // self, no Yoco (staff collect at court / pack / account). GOLDEN RULE: one booking widget per role.
   async function bookForClient() {
+    if (!window.BookFlow) { UI.toast("Booking module still loading — try again in a moment.", "warn"); return; }
     var m = modal("Book a client in");
     var selected = null;
     var searchInp = el("input", { class: "cf-input", placeholder: "Search client by name or email…" });
     var resultsBox = el("div", { class: "cf-list", style: "max-height:180px;overflow:auto" });
     var chosenBox = el("div", {});
     var guest = el("input", { class: "cf-input", placeholder: "Guest name (walk-in, no account)" });
-    var start = el("input", { class: "cf-input", type: "datetime-local" });
-    // Service + Duration as TWO steps: pick the service, then the duration (its price shows on the
-    // duration). Sets the lesson length and fee, so we never book an unpriced/unknown lesson.
-    var svc = el("select", { class: "cf-input" }, [el("option", { text: "Loading your services…" })]);
-    var durSel = el("select", { class: "cf-input" });
-    var groups = [];   // [{name, rows:[service rows for that service]}]
-    function fillDurations() {
-      UI.clear(durSel);
-      var g = groups[svc.selectedIndex];
-      if (!g) return;
-      g.rows.forEach(function (s) {
-        var price = (s.amount_minor != null) ? (" · R" + (s.amount_minor / 100).toFixed(0)) : "";
-        durSel.appendChild(el("option", { text: (s.duration_minutes || 60) + " min" + price }));
-      });
-    }
-    svc.addEventListener("change", fillDurations);
-    (window.CoachAPI.services ? window.CoachAPI.services() : Promise.resolve({})).then(function (r) {
-      var rows = (r && r.services) || [];
-      UI.clear(svc); UI.clear(durSel);
-      if (!rows.length) { svc.appendChild(el("option", { value: "", text: "No services yet — add one in Setup" })); return; }
-      var byKey = {};
-      rows.forEach(function (s) {
-        var key = String(s.product_id || s.name);
-        if (!byKey[key]) { byKey[key] = { name: s.name, rows: [] }; groups.push(byKey[key]); }
-        byKey[key].rows.push(s);
-      });
-      groups.forEach(function (g) { svc.appendChild(el("option", { text: g.name })); });
-      fillDurations();
-    }, function () { UI.clear(svc); svc.appendChild(el("option", { value: "", text: "Couldn't load services" })); });
-    // Payment: owe & collect later (they pay at court / online from their statement) OR draw their pack.
-    var pay = el("select", { class: "cf-input" }, [
-      el("option", { value: "at_court", text: "Collect at court / later (owed)" }),
-      el("option", { value: "token", text: "Use their lesson pack (if they have one)" }),
-    ]);
 
     function renderChosen() {
       UI.clear(chosenBox);
@@ -381,35 +351,22 @@
       }, 250);
     });
 
-    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem", text: "Books a lesson with you (auto-confirmed). A court is assigned automatically." }));
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem", text: "Pick the client, then choose the service, time and payment on the next screen — the same booking flow clients use." }));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Client" }), searchInp, resultsBox, chosenBox]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "…or guest name (walk-in, no account)" }), guest]));
-    m.body.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [
-      el("div", { class: "cf-field" }, [el("label", { text: "Service" }), svc]),
-      el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), durSel]),
-    ]));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "When" }), start]));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Payment" }), pay]));
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
       el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
-      el("button", { class: "cf-btn cf-btn-primary", text: "Book", onclick: async function () {
-        var g = groups[svc.selectedIndex];
-        var s = g && g.rows[durSel.selectedIndex];
-        if (!s) { UI.toast("Pick a service and duration (add one in Setup if you have none).", "warn"); return; }
-        if (!start.value) { UI.toast("Pick a time.", "warn"); return; }
-        var res = await ensureCoachResource();
-        if (!res) { UI.toast("Set your weekly hours first (Setup).", "warn"); return; }
-        var durMin = parseInt(s.duration_minutes, 10) || 60;
-        var st = new Date(start.value), en = new Date(st.getTime() + durMin * 60000);
-        var body = { booking_type: "lesson", resource_id: res, coach_user_id: principal.user_id,
-          starts_at: st.toISOString(), ends_at: en.toISOString(), settlement_mode: pay.value || "at_court" };
-        if (selected && selected.email) body.for_email = selected.email;
-        else if (guest.value.trim()) body.for_guest_name = guest.value.trim();
+      el("button", { class: "cf-btn cf-btn-primary", text: "Continue →", onclick: function () {
+        var onBehalf = null;
+        if (selected && selected.email) onBehalf = { name: selected.name, email: selected.email };
+        else if (guest.value.trim()) onBehalf = { name: guest.value.trim() };
         else { UI.toast("Search & pick a client, or enter a guest name.", "warn"); return; }
-        window.API.createBooking(body).then(function () { UI.toast("Booked.", "info"); m.close(); route(); }, function (e) {
-          var msg = UI.errMsg(e) || "";
-          if (/NO_TOKEN/i.test(msg) || /NO_TOKEN/i.test((e && (e.error || e.code)) || "")) msg = "This client has no matching lesson pack — choose “Collect at court” instead.";
-          UI.toast(msg, "error");
+        m.close();
+        window.BookFlow.start(principal, "lesson", {
+          onBehalf: onBehalf,
+          coachLock: principal.user_id,            // the coach books their OWN lessons
+          backTo: "#/schedule",
+          onDone: function () { location.hash = "#/schedule"; route(); },
         });
       } }),
     ]));
