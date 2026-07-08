@@ -76,6 +76,45 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       commission — currently not deducted from coach splits).
 
 ## B. Build items — remaining functionality
+- [x] **BOOKING-FLOW AUDIT SPRINT (2026-07-08) — DONE.** A multi-agent audit of the whole booking flow
+      shipped: coach-scoped + per-SERVICE pricing (lessons AND classes — a coach's rate card is used
+      exactly, never merged with other coaches'), online-lesson court-orphan fix, crafted-mode R0 bypasses
+      closed (`free` / `membership_covered`), online-only enforcement (client self-book), reporting
+      reconciliation (coach/owner/client agree), the **ONE booking widget** for client + coach + admin
+      on-behalf (per-service picker, lesson **and** class pack auto-draw, skip Yoco), the coach **"clients
+      with packages"** view, no-show fee now billed, a paid booking can't be extended (M7), a covered court
+      can't move to peak for free (M5), token→coach credited at purchase, refund prompt on a paid cancel
+      (L1), court auto-reassign on lesson reschedule (L2), and the diary/schedule **coach filter** now shows
+      only that coach's day. Gates: **booking 43 / billing 176 / statement 40** (+34 harness assertions).
+      **Edge backlog** — unreachable from today's UI or self-healing (low priority):
+  - [ ] **L5** — a lesson's auto-held court is orphaned only if billing FAILED at create (order_id NULL) —
+        the cancel/void by-order path can't reach a null-order court. Add a fallback link.
+  - [ ] **L7** — a *multi-player gated* lesson under-bills on accept (`accept_booking` passes `parties=[]`).
+        Not reachable (UI sends ≤ 1 billable player); pass the stored parties to match the create path.
+  - [ ] **L8** — a client WITHDRAWING a pending lesson request doesn't push-notify the coach (their queue
+        self-updates; decline DOES notify). Add a `lesson_withdrawn` notification template + emit.
+  - [ ] **M8** — `_create_order_guarded` bills one line PER member party; a COURT with 2+ member parties
+        would charge N×. Not reachable (UI sends ≤ host+guest). Add a court collapse-to-one-line guard.
+  - [ ] **M3 tail** — a gated (review) lesson request skips `_settlement_allowed` + booking-window
+        (payment_modes IS now enforced in the gate). Move the gate AFTER those checks, or re-run on accept.
+  - [ ] **On-behalf class-pack draw** — shipped in the widget; add a backend harness assertion for the
+        on-behalf class token draw to lock it in.
+- [ ] **SUBSCRIPTIONS / PLANS — one place to review who HOLDS what (PLANNED — design below).** The
+      *catalogue* of plans already lives in **Setup** (owner: membership tiers · court prices · lesson/class
+      packs; coach: their own packs). What's missing is a single place to review HOLDINGS. Proposed (lean, no
+      new tab — the owner's own idea: People filter → client 360):
+  - **Person 360 = the client's full holdings.** Extend `admin.get_person` (+ `renderPerson`) to ALSO return
+    the client's **active packages/wallets** (sessions left · expiry · coach) next to the membership line it
+    already shows — so one client record = membership + packs + owed statement in one view. (`get_person`
+    returns membership + statement + bookings today but NOT wallets — that's the gap.)
+  - **People slicer = subscription filters.** Add slices beyond role (`pSlice`/`SLICES`): **membership tier**
+    (Student/Full/…), **on trial**, **has an active pack**, **no membership** — backed by a small tier/holdings
+    field on `GET /api/admin/people`. The owner slices clients by plan, then drills into the 360.
+  - **Coach** already has **Clients → "Prepaid packages"** (SHIPPED) = which of my clients hold a pack with me;
+    their pack *catalogue* stays in Setup. No new coach surface.
+  - **Admin plan catalogue** stays in **Setup** (don't duplicate it in People). *Optional later:* an Insights
+    "Subscriptions" panel (active memberships by tier + active packs + recurring value) — only if the
+    People-filter + 360 isn't enough.
 - [ ] **Commission engine tail (Phase D deferrals):**
   - [x] **Refund clawback** — a refund now reverses the coach's accrued commission proportionally
         (arrears kept in lockstep); gated by `sc_refund_clawback` in the billing harness. **DONE.**
