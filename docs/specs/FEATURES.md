@@ -174,18 +174,20 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
     (the money is managed right here) + add-to-calendar. 🔭
 - **Owner / Admin** (`admin_app.html` + `admin_app.js`, at **`/admin`** — **COMPLETE + LIVE**; the
   classic tab console is preserved at `/admin-classic`). **Responsive**: bottom-nav on mobile, **left
-  side-rail on desktop**. Nav **Home · People · Money · Diary · Setup** (+ Insights). **Home = a
+  side-rail on desktop**. Nav **Home · People · Money · Diary · Overview · Setup**. **Home = a
   command center** surfacing all four owner focuses, each drilling to its section: **Today at the club**
   (live diary), **Money** (owed to the club / net revenue / coach settlements due / active members),
   **People needing attention** (new signups / pending coach invites / expiring memberships), **To
   approve / decide** (pending refund requests) — via `GET /api/admin/home`. **People** → unified
   **person 360** (`GET /api/admin/people/<id>`: identity + roles + membership grant/revoke + owed +
   payments + bookings; if coach, settlement) → the admin event story. **Money** = a Setup-style section
-  menu (Sales by day · Revenue · Coach settlement · Approvals · Payments · Activity), each drilling to
-  the event story. **Diary** = the shared **Calendar widget** (Day/Week/Month + court/coach filters,
-  default today) + Classes; the full drag-and-drop resource-timeline stays at `/admin-classic`.
-  **Setup** = all club config in-app (`Widgets.Setup`). **Insights** = the court-utilisation heatmap +
-  the Business Overview. Every list bottoms out at the **ONE admin event story** (`#/event/:id`,
+  menu (Sales by day · **Bookings by day** · Revenue · Coach settlement · Approvals · Payments · Activity),
+  each drilling to the event story. **Diary** = the shared **Calendar widget** (Day/Week/Month + court/coach
+  filters, default today) + Classes; the full drag-and-drop resource-timeline stays at `/admin-classic`.
+  **Overview** (first-class nav tab since 2026-07-05) = month pager + ECharts sub-tabs
+  Traffic/Bookings/Revenue/Members/NPS/Courts (`GET /api/insights/overview`); Traffic splits public-site vs
+  member-area + a precise logged-in-visitors metric; Courts = the court-utilisation heatmap.
+  **Setup** = all club config in-app (`Widgets.Setup`). Every list bottoms out at the **ONE admin event story** (`#/event/:id`,
   `GET /api/admin/bookings/<id>`, god-view actions). 🔭
 
 ## 9. Notifications, calendar & CRM

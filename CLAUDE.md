@@ -75,6 +75,31 @@ NextPoint Tennis is club #1, migrating off Wix.
   → `coach.repositories.create_service`; Setup → Services "+ New" coach-picker). Plus cutover E2E fixes
   (principal single-club resolution off DISTINCT clubs, coach-invite status flip, calendar full-day bounds,
   client billing-category drill month arg, preconnect/parallel startup). Gates unchanged (43/142/35).
+- **2026-07-05/06 — ADMIN OVERVIEW TAB + BOOKINGS-BY-DAY + real-traffic analytics (all live):**
+  **(1) Money → "Bookings by day"** — a sibling of Sales-by-day but over `diary.booking`
+  (`insights.repositories.bookings_by_day` → `GET /api/insights/bookings-by-day?month=`): bookings grouped
+  by the day played, each row = client · service · **coach** · status, drilling to `#/event/<id>` = the
+  shared `Widgets.TransactionDetail` (golden rule — no second sheet); surfaces membership-covered/R0
+  bookings a payment view misses. **(2) Native admin "Overview" tab** — Business Insights promoted to a
+  first-class `#/overview` nav tab (6 nav slots now; the old `/overview.html` iframe retired): month pager +
+  sub-tabs (Traffic/Bookings/Revenue/Members/NPS/Courts), all **daily** graphs via ONE shared **ECharts**
+  seam (lazy-loaded like overview.html; `ovBase`/`mountChart` in `admin_app.js` — panels are config, not
+  forked charts), bound to one month-scoped composer `insights.repositories.overview` →
+  `GET /api/insights/overview?month=`. **It reconciles with the Money lists by construction** (revenue
+  reuses the sales-by-day basis, bookings the bookings-by-day basis). **(3) Data-correctness fixes:** the
+  **NPS panel was silently zero** — `analytics.repositories.nps()` filtered a non-existent `created_at`;
+  fixed to **`submitted_at`** (both lanes). Added **`billing.membership_subscription.period_start`**
+  (DEFAULT CURRENT_DATE, backfilled from created_at) **+ `cancelled_at`** (stamped on every cancel path via
+  `COALESCE(cancelled_at, now())`) for an accurate **active-members-per-day** curve — additive DDL,
+  idempotent. **(4) Real per-club web traffic:** the DB-less web can't emit the club UUID, so **`beacon.py`
+  now resolves `club_id` server-side** from the browsing host (Origin/Referer → `iam.resolve_club_by_host`),
+  falling back to `sole_club_id` (single-club deploy), cached per host. **(5) Precise logged-in signal:**
+  `analytics.js` sends a **non-PII `authed` flag** (`window.cfAuthed`/`window.__CF_AUTHED`, set by
+  `auth_client.js` `ready()` once Clerk resolves; re-fires one pageview if auth resolves after an anon
+  first hit); `beacon.py` stores `metadata.authed=true` only when signed in. Overview → Traffic shows
+  **public-site vs member-area** (path proxy) **+ logged-in visitors** (precise, accrues from 2026-07-06).
+  Gates: `py_compile` + `python -m db` twice + `python -m scripts.test_all` → **43 / 142 / 40** (statement
+  grew from 35). (`docs/specs/INVENTORY.md` + `OUTSTANDING.md` §C + `ADMIN-PHASE2.md` #20/#23/#29 updated.)
 - **2026-06-28 additions (all live + harness-gated):** the **unified client statement** (`billing/statement.py`
   — one debt = one `billing.order`, settled once; account page shows ONE reconciled "Your statement",
   grouped by category with tick-to-part-settle; admin void/write-off; coach `coach_arrears` kept in
@@ -140,10 +165,16 @@ NextPoint Tennis is club #1, migrating off Wix.
     the client mirror of the coach statement), refund-requests, notifications. **My Bookings** has a
     **"Needs your attention"** section (accept/decline a coach's proposed time, withdraw a pending request)
     + **"Add to calendar"** (.ics) on upcoming bookings.
-  - **Analytics:** `analytics/` + `/api/analytics/*` + `overview.html` — **Business Overview dashboard**
-    (built & live): visits/visitors/sources/geo + customers/bookings/revenue/NPS; first-party page-view
-    beacon (`analytics.js` → `/api/track/page`, geo via `CF-IPCountry`). **Embedded** as the admin console's
-    "Overview" tab + standalone `/overview.html`. Per-business (the Ten-Fifty5 bridge was deprecated).
+  - **Analytics + Insights (the admin Overview tab):** `analytics/` + `/api/analytics/*` = the standalone
+    **`/overview.html`** Business Overview (rolling `?days=` window; visits/visitors/sources/geo + customers/
+    bookings/revenue/NPS). The **admin console's native "Overview" tab** (`#/overview`) is now driven by the
+    **`insights/` lane** instead (`GET /api/insights/overview?month=` — month-scoped **daily** composer;
+    the `/overview.html` iframe was retired 2026-07-05). First-party page-view beacon (`analytics.js` →
+    `/api/track/page`): **club_id resolved server-side** in `beacon.py` (host → `iam.resolve_club_by_host`,
+    else `sole_club_id`), geo via `CF-IPCountry`, and a **non-PII `authed` flag** for a precise
+    logged-in-visitors metric (set via `window.cfAuthed` in `auth_client.js`). Per-business (the Ten-Fifty5
+    bridge was deprecated). **NB `analytics.repositories.nps()` NPS reads `submitted_at`, NOT `created_at`
+    (which doesn't exist on `core.nps_response` — the old bug silently returned zeros).**
   - **Frontend:** `frontend/app/` (shells) + `frontend/js/` — **ONE design system in `frontend/app/app.css`**
     (bright/modern; every page uses its `cf-*` classes — keep it the single source, do NOT inline component
     styles). **THREE role SPAs, all built on ONE WIDGET PER CAPABILITY — the enshrined GOLDEN RULE**
@@ -244,9 +275,16 @@ revenue), traffic + sign-up lines, traffic-source / top-page / by-country / **by
   via the `web_app.py` head-injection** (single point). `beacon.py` captures **country from Cloudflare's
   `CF-IPCountry`** header (falling back to the `Accept-Language` region when no CDN geo header), plus
   device + time-on-site. No cookies, no third parties. **Website-traffic panels accrue data from go-live**
-  (historical events lack page-views/geo).
-- **Embedded in the admin console:** the dashboard is the **"Overview" tab** in `admin.html`/`admin.js`
-  (an iframe of `/overview.html`, auth via the parent's `auth_client` relay) + the standalone `/overview.html`.
+  (historical events lack page-views/geo). **`club_id` is resolved server-side** in `beacon.py` (the
+  DB-less web can't emit the UUID): browsing host from Origin/Referer → `iam.resolve_club_by_host`, else
+  `sole_club_id` (single-club deploy), cached per host. A **non-PII `authed` flag** (set client-side via
+  `window.cfAuthed`/`window.__CF_AUTHED` in `auth_client.js` once Clerk resolves) is stored as
+  `metadata.authed=true` → the precise **logged-in-visitors** metric (path-based member-area is the broader
+  proxy). Logged-in data accrues from 2026-07-06.
+- **The admin console's Overview tab is now NATIVE** (`#/overview` in `admin_app.js`, driven by
+  `GET /api/insights/overview` — month pager + ECharts sub-tabs); the earlier `/overview.html` **iframe was
+  retired 2026-07-05**. The standalone `/overview.html` (this `analytics/` dashboard, rolling `?days=`)
+  remains for platform-admin cross-club use.
 - **Per-business by design:** shows THIS platform only. The cross-business "Ten-Fifty5 bridge" was
   **DEPRECATED 2026-06-21** (removed `analytics/bridge.py`, the `?property=` switcher, `BRIDGE_TENFIFTY5_*`
   env) — each app shows its own overview; Ten-Fifty5 has its own `/backoffice` cockpit. `docs/12` is retired.
@@ -327,7 +365,7 @@ request→accept→settle chain green on a scratch DB.
   pricing, lifecycle), **billing/commercial** (`test_billing_scenarios`, 142 — settlement modes, commission,
   tokens, membership incl. offline + per-tier modes, refunds, refund clawback, dispute routing, void/
   lockstep, the client/coach event stories + the by-service breakdown), and **statement reconciliation**
-  (`test_statement_reconciliation`, 35 — no double-count, pay-all-once, part-settle, reclaim,
+  (`test_statement_reconciliation`, 40 — no double-count, pay-all-once, part-settle, reclaim,
   membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, pack offline). Run alongside
   `python -m db` twice + `py_compile`.
 - **Backend integration:** boot all schemas + a booking→order→event chain against a throwaway Postgres
@@ -469,3 +507,11 @@ the scratch-DB integration scripts under "Verifying" above. Each phase had a con
 - **Cockpit revenue must let refunds through** — refund `billing.payment` rows have `status='refunded'`, so a
   `WHERE status='succeeded'` filter silently drops them (refunds showed R0, Net overstated). Filter as
   `(direction='charge' AND status='succeeded') OR (direction='refund' AND status IN ('succeeded','refunded'))`.
+- **Guarded analytics reads hide column typos as ZEROS, not errors** — every `analytics/`+`insights/` query is
+  wrapped in `_guard(fn, default)`, so a wrong column name (e.g. NPS filtered on a non-existent `created_at`
+  when the column is `submitted_at`) returns the empty default and the panel silently shows 0 — no 500, no log
+  that stands out. When an analytics panel reads zero, first check the SQL columns against the actual schema.
+- **`core.usage_event` page_view `club_id` is set server-side in `beacon.py`, not by the client** (the DB-less
+  web can't emit the UUID). A club-scoped traffic query only works because of that resolution; the beacon also
+  stores a `metadata.authed` boolean (logged-in signal) and the client sends NO email/identity (so
+  `account_id` is effectively always NULL — don't rely on it for "logged in"; use `metadata->>'authed'`).

@@ -85,6 +85,12 @@ Courts & hours · Services & prices · Membership plans (+access windows) · Ses
 (invite / remove / hide / **commission & agreements**) · Classes. All WRITE endpoints already exist.
 
 ### Insights (`#/insights`) — reachable from Home
+> **SUPERSEDED 2026-07-05:** this is now the first-class **Overview** nav tab (`#/overview`; `#/insights`
+> still routes to it). It is **native**, not an iframe of `/overview.html` (that embed was retired):
+> a month pager + ECharts sub-tabs **Traffic/Bookings/Revenue/Members/NPS/Courts** driven by
+> `GET /api/insights/overview`, all reconciling with the Money lists. Traffic adds a public-vs-member-area
+> split + a precise logged-in-visitors metric; Courts is the court-utilisation heatmap.
+
 Embed the Business Overview inline (the existing `renderOverview` pattern: build DOM → lazy-load
 ECharts + `/js/overview.js` → `Overview.start()`).
 

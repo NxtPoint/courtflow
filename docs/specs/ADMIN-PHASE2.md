@@ -180,10 +180,10 @@ Deps. Ranked within each theme.
 | # | Feature | One-liner | Reuses | Tbl | Val | Eff | Deps |
 |---|---|---|---|---|---|---|---|
 | 19 | **Court-utilisation heatmap** ✅ SHIPPED | Occupancy by hour × day × court; find dead slots | P1+P5 | 0 | Must | M | — |
-| 20 | Executive KPI board | Revenue, active, utilisation, NPS tiles, compare-period | P1+P5 | 0 | Must | M | — |
+| 20 | Executive KPI board | Revenue, active, utilisation, NPS tiles, compare-period | P1+P5 | 0 | Must | M | **SHIPPED 2026-07-06** — native Overview tab, month-scoped daily graphs (`GET /api/insights/overview`); compare-period still pending |
 | 21 | Customer LTV & spend distribution | Value segments to target campaigns | P1 | 0 | High | M | — |
 | 22 | Benchmark ribbons | Metric vs world-class band (utilisation >70%, NPS >50) | P1 (static registry) | 0 | High | S | — |
-| 23 | Date-range + compare-period everywhere | One control, all panels | P1+P5 | 0 | High | S | — |
+| 23 | Date-range + compare-period everywhere | One control, all panels | P1+P5 | 0 | High | S | **PARTIAL 2026-07-06** — a month pager drives every Overview panel; cross-panel date-range + compare-period still pending |
 | 24 | CSV / print export of any panel | | P1+P5 | 0 | Nice | S | — |
 
 ### Surveys & reputation
@@ -193,7 +193,7 @@ Deps. Ranked within each theme.
 | 26 | NPS-gated review routing | Promoters → Google CTA; detractors → private manager alert | P2+P4+nps | 0 | High | M | SES* |
 | 27 | Cancellation-reason capture | Why they cancelled → drop-off insight | P4 | 0 | High | S | — |
 | 28 | Membership-exit survey | Triggered on cancel | P4+P2 | 0 | High | S | — |
-| 29 | NPS trend + verbatim wall | Score over time + comments | P1+P5 | 0 | High | S | — |
+| 29 | NPS trend + verbatim wall | Score over time + comments | P1+P5 | 0 | High | S | **PARTIAL 2026-07-06** — Overview → NPS shows score + responses/day (analytics `created_at`→`submitted_at` bug fixed); verbatim comment wall still pending |
 
 ### Website / funnel performance
 | # | Feature | One-liner | Reuses | Tbl | Val | Eff | Deps |

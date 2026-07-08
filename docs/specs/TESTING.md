@@ -94,7 +94,9 @@ checklist below maps 1:1.)*
       coach) + Classes. Any booking → the admin event story. (Full drag-timeline: `/admin-classic`.)
 - [ ] **Setup** — all club config in-app (`Widgets.Setup`): profile & payments · courts & hours · services &
       pricing · memberships · packs · coaches & commission.
-- [ ] **Insights** — court-utilisation heatmap + the analytics **Business Overview**.
+- [ ] **Overview** (first-class nav tab; `#/insights` also routes here) — month pager + sub-tabs
+      Traffic/Bookings/Revenue/Members/NPS/Courts (daily graphs); Traffic shows public-vs-member-area +
+      logged-in visitors; Courts = the court-utilisation heatmap. Also **Money → Bookings by day**.
 
 **Onboarding & club config** (`/admin`, `/settings.html`)
 - [ ] First login as owner → **onboarding wizard** (if `onboarding_completed` is false): club profile,

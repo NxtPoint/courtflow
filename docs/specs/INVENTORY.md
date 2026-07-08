@@ -36,8 +36,8 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `coach/` | routes, repositories, schema | `/api/coach/*` coach self-service + cockpit |
 | `services/` | routes, repositories | `/api/services/*` — the ONE unified service-edit surface for owner + coach (owner can create a lesson per coach via `POST /api/services`); delegates to `coach/`/`billing/` repos |
 | `me/` | routes | `/api/me/*` client self-service (profile, dependents, financials, refund-requests, notifications) |
-| `analytics/` | repositories, routes | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`); `/api/analytics/*`; embedded as the admin "Insights" tab |
-| `insights/` | repositories, routes | **Phase-2 P1 read-layer** (guarded aggregations, no new tables): court-utilisation heatmap + sales-by-day; `/api/insights/*`; feeds the admin Insights + Money "Sales by day" |
+| `analytics/` | repositories, routes | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`); `/api/analytics/*`; the standalone `/overview.html` (rolling `?days=` window). The admin **native Overview tab** now uses the `insights/` lane instead (the old iframe embed was retired 2026-07-05). |
+| `insights/` | repositories, routes | **Phase-2 P1 read-layer** (guarded aggregations, no new tables): court-utilisation heatmap · **sales-by-day** · **bookings-by-day** · **overview** (month-scoped daily composer powering the native admin Overview tab — traffic incl. public-vs-member + logged-in split, bookings, revenue, members, NPS; reconciles with the Money lists by construction); `/api/insights/*` |
 | `crons/` | trigger | thin dispatcher → `/api/cron/*` |
 | `scripts/` | seed_nextpoint, provision_club | seed/provision tenants |
 | `web_app.py`, `frontend/` | host-switch + SPA shells + marketing | The web service |
@@ -91,9 +91,17 @@ event story** / god-view — client + coach + charge + coaching-arrears + full a
 lesson to another bookable coach; `admin_reassign_coach`).
 
 **Insights `/api/insights/*` (Phase-2 P1 read-layer, lane `insights/`):** **`GET court-utilisation`**
-(`?days=` — booked-vs-available court-hours by weekday×hour + overall % → the Insights heatmap) ·
+(`?days=` — booked-vs-available court-hours by weekday×hour + overall % → the Overview → Courts heatmap) ·
 **`GET sales-by-day`** (`?month=` — daily takings grouped by day, each sale = client + service type +
-amount → Money → Sales by day). Admin-gated, guarded (missing/empty → empty payload, never 500).
+amount → Money → Sales by day) · **`GET bookings-by-day`** (`?month=` — bookings grouped by the day
+played, each = client + service + **coach** + status + `booking_id` drill → Money → Bookings by day;
+sibling of sales-by-day but over `diary.booking`, so it also shows membership-covered/R0 bookings) ·
+**`GET overview`** (`?month=` — the month-scoped **daily** business composer: dense per-day series for
+traffic [visits/unique + **public-vs-member-area** + **logged-in**], bookings by type + member-covered,
+revenue gross/net, new clients, **active members** [uses the new `period_start`/`cancelled_at`], NPS
+[corrected to `submitted_at`] + KPI totals + traffic breakdowns → the native admin **Overview** tab;
+revenue reuses the sales-by-day basis and bookings the bookings-by-day basis, so it **reconciles** with
+the Money lists by construction). Admin-gated, guarded (missing/empty → empty payload, never 500).
 `insights/repositories.py`; registered in `app.py`.
 
 **Coach `/api/coach/*`:** `GET/PATCH profile` · `GET onboarding` · `POST/PATCH services`
@@ -207,17 +215,21 @@ agenda; see below), **`Widgets.Setup`** + **`Widgets.ServiceList`**
   (non-coaches bounced).
 - **Admin / Owner — COMPLETE + LIVE** — `frontend/app/admin_app.html` + `frontend/js/admin_app.js`, served
   at **`/admin`** (also `/admin.html`, `/admin-app`). **Responsive:** bottom-nav on mobile, **left
-  side-rail on desktop** (`.cf-admin`). Nav Home · People · Money · Diary · Setup (Insights off a Home
-  tile). **Home** = command-center (4 focus cards, `GET /api/admin/home`) · **People** = roster → the
+  side-rail on desktop** (`.cf-admin`). Nav Home · People · Money · Diary · **Overview** · Setup. **Home**
+  = command-center (4 focus cards, `GET /api/admin/home`) · **People** = roster → the
   **unified person 360** (`#/person/:id`, `GET /api/admin/people/<id>`) · **Money** = Setup-style section
-  menu (Sales by day · Revenue by service · Coach settlement · Approvals · Online payments · Activity) ·
+  menu (Sales by day · **Bookings by day** · Revenue by service · Coach settlement · Approvals · Online payments · Activity) ·
   **Diary** = the shared **`Widgets.Calendar`** (court/coach filters) + Classes — the **Day view is the
   resource-timeline GRID** (courts + coaches as columns, 06:00–22:00 rows, `cf-ev` blocks; config-driven via
   `cfg.grid`, empty coach columns hidden, courts always shown), **Week/Month stay agenda**; any block drills
   to the shared `Widgets.TransactionDetail` event story. Walk-in / block-time / desk-pay editing were NOT
   ported — they stay in the classic diary at `/admin-classic` · **Setup**
   = the shared **`Widgets.Setup`** (Club profile+payments · Courts · Services · Memberships · Packs ·
-  Coaches) · **Insights** = court-utilisation heatmap + the Business Overview. The **classic tab console is
+  Coaches) · **Overview** (`#/overview`, a first-class nav tab as of 2026-07-05; the old `/overview.html`
+  iframe retired) = month pager + sub-tabs **Traffic · Bookings · Revenue · Members · NPS · Courts**, all
+  **daily** graphs for the month via one shared ECharts seam (`GET /api/insights/overview`); Traffic leads
+  with a **public-site vs member-area** split + a **logged-in-visitors** line/tile; Courts = the
+  court-utilisation heatmap. The **classic tab console is
   preserved at `/admin-classic`** (its full drag-timeline is linked from the new Diary).
 - **Web routes / redirects (`web_app.py`):** `/`,`/portal`,`/app` → `app.html` · `/coach`,`/coach.html` →
   `coach_app.html` · **`/admin`,`/admin.html`,`/admin-app` → `admin_app.html` (the NEW SPA)** ·

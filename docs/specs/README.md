@@ -25,8 +25,9 @@ operating guide; **this folder is the detail.**
 > into Setup** (create/schedule/roster — now bookable end-to-end); **.ics add-to-calendar** fixed on both.
 > **2026-07-03/04:** the **OWNER/ADMIN console redesign is COMPLETE + LIVE** — `/admin` now serves the
 > responsive drill-through SPA (Home command-center · People → unified person-360 · Money as Setup-style
-> sections incl. **Sales by day** · Diary on the shared Calendar widget · Setup · Insights with a
-> court-utilisation heatmap + Business Overview); the classic tab console is preserved at `/admin-classic`
+> sections incl. **Sales by day** + **Bookings by day** · Diary on the shared Calendar widget · **Overview**
+> [a first-class nav tab as of 2026-07-05: month pager + ECharts sub-tabs Traffic/Bookings/Revenue/Members/
+> NPS/Courts, incl. public-vs-member + logged-in traffic split] · Setup); the classic tab console is preserved at `/admin-classic`
 > ([ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)). A **Phase-2 insights lane** landed its flagship
 > (`insights/`; [ADMIN-PHASE2.md](ADMIN-PHASE2.md)). The whole front end was then **standardised onto ONE
 > widget per capability — the enshrined GOLDEN RULE** ([FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)):

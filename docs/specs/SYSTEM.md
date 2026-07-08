@@ -40,7 +40,9 @@ Three mobile-first, drill-through single-page apps, one per role, on the **one s
   (`.cf-admin`). Home (command-center, `GET /api/admin/home`) · People (roster → unified person 360,
   `GET /api/admin/people/<id>`) · Money (Setup-style sections incl. **Sales by day**) · Diary (the shared
   Calendar widget + Classes — **Day view = resource-timeline grid**, Week/Month agenda, blocks drill to the
-  event story) · Setup · Insights (court-utilisation heatmap + Business Overview). The **classic tab console**
+  event story) · **Overview** (first-class nav tab since 2026-07-05: month pager + ECharts sub-tabs
+  Traffic/Bookings/Revenue/Members/NPS/Courts on `GET /api/insights/overview`; Courts = the court-utilisation
+  heatmap) · Setup. Money also carries **Bookings by day** next to Sales by day. The **classic tab console**
   is preserved at **`/admin-classic`** (its full drag-timeline **editing** — walk-in/block-time/desk-pay —
   is not yet ported). `admin.html`/`admin.js` remain on disk; the dead classic **coach** console
   (`coach.js`/`coach.html`) was deleted.

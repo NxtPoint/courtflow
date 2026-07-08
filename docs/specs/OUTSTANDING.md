@@ -142,7 +142,17 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 - [x] **Embedded in the admin console** as the "Overview" tab (+ standalone `/overview.html`).
 - [x] **Per-business by design** — the cross-business "Ten-Fifty5 bridge" was **deprecated 2026-06-21**
       (removed); each app shows its own overview. Ten-Fifty5 uses its own `/backoffice` cockpit.
-- [ ] Follow-up: per-club web-traffic attribution (set `window.__CLUB_ID__` in the beacon).
+- [x] Follow-up **DONE (2026-07-05)**: per-club web-traffic attribution — the DB-less web can't emit the
+      club UUID, so `beacon.py` resolves `club_id` server-side from the browsing host (Origin/Referer →
+      `iam.resolve_club_by_host`), falling back to `sole_club_id` for a single-club deploy (cached per host).
+- [x] **NATIVE ADMIN OVERVIEW TAB (2026-07-05/06)** — Business Insights promoted to a first-class `#/overview`
+      nav tab (the `/overview.html` iframe retired): month pager + sub-tabs (Traffic/Bookings/Revenue/Members/
+      NPS/Courts), all **daily** graphs via one shared ECharts seam, on the `insights/` lane (`GET /api/insights/
+      overview`). Fixed the **NPS bug** (analytics filtered a non-existent `created_at` → silent zeros; now
+      `submitted_at`). Added **public-site vs member-area** traffic split (path-based) + a **precise logged-in
+      signal** (`analytics.js` sends a non-PII `authed` flag once Clerk resolves; `beacon.py` stores
+      `metadata.authed`; logged-in data accrues from 2026-07-06). Added `billing.membership_subscription.
+      period_start`/`cancelled_at` for an accurate active-members-per-day curve.
 
 ## D. Hardening / pre-launch (later phases, from the original docs)
 - [ ] **RLS** (row-level security) on domain tables — Phase 8; today multi-tenant is a query discipline.
