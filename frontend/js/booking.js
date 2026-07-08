@@ -144,14 +144,17 @@
   // On-behalf: match a pack the CLIENT holds with THIS coach (loaded via opts.loadPackages). When
   // one exists we default to it and DRAW it down (no new charge) instead of raising a fresh order.
   function onBehalfMatchWallet() {
-    // Only lessons: the packs we load on-behalf are LESSON packs — don't offer one for a class.
-    if (!st.onBehalf || st.type !== "lesson") return null;
-    var list = st.clientWallets || [];
-    var coach = chosenCoachUserId();
-    var hit = list.filter(function (w) {
+    if (!st.onBehalf) return null;
+    // Match a pack of the RIGHT kind: a lesson pack for a lesson (coach-scoped), a class pack for a
+    // class (coach-agnostic). Never offer a lesson pack to pay for a class (would NO_TOKEN).
+    var kind = st.type === "lesson" ? "lesson" : (st.type === "class" ? "class" : null);
+    if (!kind) return null;
+    var coach = st.type === "lesson" ? chosenCoachUserId() : null;
+    var hit = (st.clientWallets || []).filter(function (w) {
+      if (w.service_kind && w.service_kind !== kind) return false;
       if (w.status !== "active") return false;
       if ((w.minutes_remaining || 0) <= 0 && (w.sessions_remaining || 0) <= 0) return false;
-      if (w.coach_user_id != null && coach != null && String(w.coach_user_id) !== String(coach)) return false;
+      if (coach != null && w.coach_user_id != null && String(w.coach_user_id) !== String(coach)) return false;
       return true;
     })[0] || null;
     st.tokenWallet = hit;
@@ -283,6 +286,8 @@
     }
     if (!st.onBehalf) { try { history.replaceState(null, "", "/book/" + type); } catch (e) {} }
     if (type !== "class") await loadDurations();
+    // On-behalf class: load the client's CLASS packs (coach-agnostic) so we can auto-draw one.
+    else if (st.onBehalf) await loadOnBehalfPackages(null);
     render();
   }
   // The staff "booking on behalf of …" banner (+ back to the coach/admin app). Client flow: null.

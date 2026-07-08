@@ -828,10 +828,11 @@ def admin_client_packages(client_user_id):
     try:
         from billing import bundles
         with session_scope() as s:
-            ws = bundles.wallets_for(s, club_id=p.club_id, user_id=client_user_id,
-                                     service_kind="lesson", active_only=True)
-        if coach_id:
-            ws = [w for w in ws if w.get("coach_user_id") in (None, coach_id)]
+            ws = bundles.wallets_for(s, club_id=p.club_id, user_id=client_user_id, active_only=True)
+        # Lesson packs: only the chosen coach's (or coach-agnostic). Class/court packs are coach-
+        # agnostic → always included (so a class booking can auto-draw the client's class pack).
+        ws = [w for w in ws if w.get("service_kind") != "lesson"
+              or w.get("coach_user_id") in (None, coach_id)]
     except Exception:
         ws = []
     return jsonify(packages=ws), 200

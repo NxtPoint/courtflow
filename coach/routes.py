@@ -553,9 +553,11 @@ def coach_client_packages(client_user_id):
     try:
         from billing import bundles
         with session_scope() as s:
-            ws = bundles.wallets_for(s, club_id=p.club_id, user_id=client_user_id,
-                                     service_kind="lesson", active_only=True)
-        mine = [w for w in ws if w.get("coach_user_id") in (None, str(p.user_id))]
+            ws = bundles.wallets_for(s, club_id=p.club_id, user_id=client_user_id, active_only=True)
+        # Lesson packs are coach-specific — only THIS coach's (or coach-agnostic) ones are drawable by
+        # them; class/court packs are coach-agnostic, so they always come through.
+        mine = [w for w in ws if w.get("service_kind") != "lesson"
+                or w.get("coach_user_id") in (None, str(p.user_id))]
     except Exception:
         mine = []
     return jsonify(packages=mine), 200
