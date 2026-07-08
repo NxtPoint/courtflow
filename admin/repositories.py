@@ -1117,6 +1117,10 @@ def get_person(session, *, club_id, user_id):
                 LEFT JOIN iam.coach_profile cp ON cp.user_id = bk.coach_user_id AND cp.club_id = bk.club_id
                 WHERE bk.club_id = :c AND bk.booked_by_user_id = :u
                   AND bk.status <> 'cancelled'
+                  -- A lesson auto-holds a court in a SECOND booking row sharing the lesson's ONE order.
+                  -- It is NOT a separate charge — hide it here (as list_bookings does) so a lesson never
+                  -- shows a phantom 'court' booking whose event story repeats the lesson's "You owe …".
+                  AND NOT (bk.booking_type = 'court' AND bk.notes = '(court held for lesson)')
                 UNION ALL
                 SELECT NULL::uuid AS booking_id, e.id AS enrolment_id, 'class' AS kind, cs.starts_at, cs.ends_at,
                        e.status, (cs.starts_at >= now()) AS is_upcoming, r.name AS resource_name,
