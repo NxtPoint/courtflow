@@ -144,7 +144,8 @@
   // On-behalf: match a pack the CLIENT holds with THIS coach (loaded via opts.loadPackages). When
   // one exists we default to it and DRAW it down (no new charge) instead of raising a fresh order.
   function onBehalfMatchWallet() {
-    if (!st.onBehalf) return null;
+    // Only lessons: the packs we load on-behalf are LESSON packs — don't offer one for a class.
+    if (!st.onBehalf || st.type !== "lesson") return null;
     var list = st.clientWallets || [];
     var coach = chosenCoachUserId();
     var hit = list.filter(function (w) {
@@ -643,6 +644,13 @@
       if (st.type === "class") {
         var enrolBody = { settlement_mode: st.settlement, audience: "member" };
         if (playerDepId) enrolBody.dependent_user_id = playerDepId;
+        if (st.onBehalf) {
+          // Staff on-behalf: enrol the CLIENT (the enrol route honours user_id for coach/admin). A
+          // class needs a member account, so a walk-in guest (no user_id) can't be enrolled here.
+          if (!st.onBehalf.user_id) { btn.disabled = false; btn.textContent = confirmLabel();
+            UI.toast("A class booking needs a member account — pick a member, not a guest.", "warn"); return; }
+          enrolBody.user_id = st.onBehalf.user_id;
+        }
         res = await window.API.enrol(st.selClass.id, enrolBody);
         success("class", res); return;
       }
