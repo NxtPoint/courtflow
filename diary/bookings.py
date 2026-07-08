@@ -704,6 +704,19 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
             return _err("SLOT_TAKEN", 409, message="the new slot conflicts")
         return _err("INTEGRITY_ERROR", 409)
 
+    # If the reschedule changed the DURATION (not just the start time), re-price the order + owed
+    # coaching to the new length so the charge always matches the booked time — a 30-min lesson costs
+    # the 30-min price even if it was first booked (and priced) as 45 min. Guarded, unpaid-only; only
+    # the primary target can change length (series occurrences just shift by the same delta).
+    old_dur = _parse_dt(bk["ends_at"]) - _parse_dt(bk["starts_at"])
+    if abs((new_e - new_s).total_seconds() - old_dur.total_seconds()) >= 60:
+        try:
+            from billing.orders import reprice_booking_order
+            reprice_booking_order(session, club_id=club_id, booking_id=booking_id,
+                                  duration_minutes=int((new_e - new_s).total_seconds() // 60))
+        except Exception:
+            log.debug("reprice after reschedule skipped (non-fatal)", exc_info=False)
+
     booking = _booking_dict(session, booking_id)
     res = _resource(session, club_id, booking["resource_id"])
     events.emit("booking_rescheduled", _payload(booking, res))
@@ -1105,7 +1118,10 @@ def list_bookings(session, *, club_id, role, user_id, date_from=None, date_to=No
     # this exact note) and surface its court name on the lesson row as `court_name`. Standalone
     # court bookings are untouched. (The admin master diary deliberately still shows the court row
     # — it's a resource timeline.)
-    where.append("NOT (b.booking_type = 'court' AND b.notes = '(court held for lesson)')")
+    # NULL-safe: a standalone court hire has notes NULL — a bare `b.notes = '…'` makes the whole
+    # NOT(...) evaluate to NULL and the row is dropped, hiding real court bookings. IS DISTINCT FROM
+    # keeps NULL-notes courts and still hides the auto-held-for-lesson court row.
+    where.append("(b.booking_type <> 'court' OR b.notes IS DISTINCT FROM '(court held for lesson)')")
     rows = session.execute(
         text("SELECT b.id, b.booking_type, b.resource_id, r.name AS resource_name, "
              "       b.coach_user_id, b.starts_at, b.ends_at, b.status, b.order_id, "

@@ -23,12 +23,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 
 from billing.gateway import NormalizedPaymentEvent, MANUAL_PROVIDERS
 from billing.events import apply_payment_event
+
+log = logging.getLogger("billing.orders")
 
 # settlement_mode -> the diary.booking status B should set when the order is created.
 # 'online' is the only HELD path (await payment); everything else confirms immediately.
@@ -164,6 +167,93 @@ def record_desk_payment(session, *, club_id, order_id, amount_minor, provider="c
     )
     # Join the caller's transaction (do not open a second one).
     return apply_payment_event(event, session=session)
+
+
+def reprice_booking_order(session, *, club_id, booking_id, duration_minutes) -> Dict[str, Any]:
+    """Re-price a booking's UNPAID order (+ its owed coaching arrears) to a NEW duration's price —
+    e.g. after a reschedule changed the lesson/court LENGTH, so the charge always matches the booked
+    time (a 30-min lesson costs the 30-min price, not the 45-min price it was first booked at). The
+    new price is resolved from the SAME product as the current line, so it is the coach's own service
+    price for that duration — never another coach's rate.
+
+    Safe no-op (nothing to re-price) when: there is no order, the order is already settled
+    (paid/void/written_off) or a real charge has succeeded (money moved — re-pricing would need a
+    refund, out of scope here), the order is a R0 mode (membership/token/free), or the new duration
+    has NO configured price on that product (we never guess a price). Guarded — never raises; on any
+    failure the order is left unchanged. Returns a summary dict."""
+    try:
+        head = session.execute(
+            text('SELECT o.id AS order_id, o.status, o.settlement_mode '
+                 'FROM billing.order_line ol JOIN billing."order" o ON o.id = ol.order_id '
+                 'WHERE ol.booking_id = :b AND ol.club_id = :c LIMIT 1'),
+            {"b": str(booking_id), "c": str(club_id)},
+        ).mappings().first()
+        if not head:
+            return {"repriced": False, "reason": "no_order"}
+        order_id = str(head["order_id"])
+        if head["status"] not in ("open", "awaiting_payment"):
+            return {"repriced": False, "reason": "settled", "order_id": order_id}
+        if (head["settlement_mode"] or "").lower() in ("membership_covered", "free", "token"):
+            return {"repriced": False, "reason": "zero_mode", "order_id": order_id}
+        if session.execute(
+                text("SELECT 1 FROM billing.payment WHERE order_id = :o AND direction='charge' "
+                     "AND status='succeeded' LIMIT 1"), {"o": order_id}).first():
+            return {"repriced": False, "reason": "charged", "order_id": order_id}
+
+        # Re-price each line of THIS booking to the new duration's price on the SAME product.
+        lines = session.execute(
+            text("SELECT id, price_id, qty FROM billing.order_line "
+                 "WHERE order_id = :o AND booking_id = :b"),
+            {"o": order_id, "b": str(booking_id)},
+        ).mappings().all()
+        changed = 0
+        for ln in lines:
+            if not ln["price_id"]:
+                continue
+            newp = session.execute(
+                text("SELECT p2.id AS price_id, p2.amount_minor "
+                     "FROM billing.price p1 "
+                     "JOIN billing.price p2 ON p2.product_id = p1.product_id AND p2.active = true "
+                     "WHERE p1.id = :pid AND p2.duration_minutes = :dur "
+                     "ORDER BY (p2.audience = 'any') DESC, p2.amount_minor ASC LIMIT 1"),
+                {"pid": str(ln["price_id"]), "dur": int(duration_minutes)},
+            ).mappings().first()
+            if not newp:
+                continue  # the new duration is not priced on this product — never guess a price
+            qty = int(ln["qty"] or 1)
+            session.execute(
+                text("UPDATE billing.order_line SET price_id = :np, amount_minor = :amt "
+                     "WHERE id = :id"),
+                {"np": str(newp["price_id"]), "amt": int(newp["amount_minor"] or 0) * qty,
+                 "id": str(ln["id"])},
+            )
+            changed += 1
+        if not changed:
+            return {"repriced": False, "reason": "no_new_price", "order_id": order_id}
+
+        # Order total = sum of its line totals (order_line.amount_minor is already qty-weighted).
+        session.execute(
+            text('UPDATE billing."order" SET amount_minor = '
+                 "COALESCE((SELECT SUM(amount_minor) FROM billing.order_line WHERE order_id = :o), 0) "
+                 "WHERE id = :o"),
+            {"o": order_id},
+        )
+        # Keep the owed coaching charge (arrears) in lockstep with the new line amount.
+        session.execute(
+            text("UPDATE billing.coach_arrears ca SET gross_minor = ol.amount_minor, updated_at = now() "
+                 "FROM billing.order_line ol "
+                 "WHERE ca.order_line_id = ol.id AND ca.club_id = :c AND ca.booking_id = :b "
+                 "  AND ca.status = 'owed'"),
+            {"c": str(club_id), "b": str(booking_id)},
+        )
+        total = session.execute(
+            text('SELECT amount_minor FROM billing."order" WHERE id = :o'), {"o": order_id}).scalar()
+        return {"repriced": True, "order_id": order_id, "lines": changed,
+                "amount_minor": int(total or 0)}
+    except Exception:
+        log.warning("reprice_booking_order failed (order left unchanged) booking=%s", booking_id,
+                    exc_info=False)
+        return {"repriced": False, "reason": "error"}
 
 
 def get_order(session, *, order_id) -> Optional[Dict[str, Any]]:
