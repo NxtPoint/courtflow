@@ -148,6 +148,9 @@ def bookings_by_day(session, *, club_id, month=None):
                 LEFT JOIN diary.resource res ON res.id = bk.resource_id
                 WHERE bk.club_id = :c
                   AND bk.status IN ('confirmed', 'completed', 'no_show')
+                  -- Exclude the auto-held court row of a lesson (it shares the lesson's order and is
+                  -- not a separate booking) so one lesson counts ONCE, not as lesson + a phantom court.
+                  AND (bk.booking_type <> 'court' OR bk.notes IS DISTINCT FROM '(court held for lesson)')
                   AND bk.starts_at >= :s AND bk.starts_at < :e
                 ORDER BY bk.starts_at DESC
             """),
@@ -364,6 +367,8 @@ def overview(session, *, club_id, month=None):
                count(*) FILTER (WHERE settlement_mode = 'membership_covered') AS member
         FROM diary.booking
         WHERE club_id = :c AND status IN ('confirmed','completed','no_show')
+          -- one lesson = one booking: drop the auto-held court row (shares the lesson's order).
+          AND (booking_type <> 'court' OR notes IS DISTINCT FROM '(court held for lesson)')
           AND starts_at >= :s AND starts_at < :e
         GROUP BY 1
     """), p).mappings().all(), "total", "court", "lesson", "class", "member"),

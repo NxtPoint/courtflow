@@ -901,7 +901,10 @@ def _coach_billed(session, *, club_id, user_id, start_d, end_d):
     try:
         v = session.execute(
             text("""
-                SELECT COALESCE(SUM(ol.amount_minor), 0)
+                -- 'Total billed' = the ORIGINAL charge before any discount (original_amount_minor is
+                -- set when a line is discounted; else the current amount_minor IS the original) — so
+                -- the coach cockpit matches the client record's "before discount" figure.
+                SELECT COALESCE(SUM(COALESCE(ol.original_amount_minor, ol.amount_minor)), 0)
                 FROM diary.booking b
                 JOIN billing.order_line ol ON ol.booking_id = b.id AND ol.club_id = b.club_id
                 WHERE b.club_id = :c AND b.coach_user_id = :u AND b.booking_type = 'lesson'
@@ -965,7 +968,7 @@ def _coach_earnings(session, *, club_id, user_id, start_d, end_d):
                     COUNT(*) AS n
                 FROM billing.commission_split
                 WHERE club_id = :c AND coach_user_id = :u
-                  AND basis IN ('lesson_commission','class_commission')
+                  AND basis IN ('lesson_commission','class_commission','arrears_commission')
                   AND occurred_at >= :s AND occurred_at < :e
             """),
             {"c": club_id, "u": user_id, "s": start_d, "e": end_d},
@@ -1152,7 +1155,7 @@ def _coach_trend(session, *, club_id, user_id, months=6):
                            COUNT(*) AS n
                     FROM billing.commission_split
                     WHERE club_id = :c AND coach_user_id = :u
-                      AND basis IN ('lesson_commission','class_commission')
+                      AND basis IN ('lesson_commission','class_commission','arrears_commission')
                       AND occurred_at >= :s AND occurred_at < :e
                 """),
                 {"c": club_id, "u": user_id, "s": s, "e": e},

@@ -1099,10 +1099,34 @@ def sc_online_only(s, fx):
           str(_order(s, oid) and _order(s, oid)["status"]))
 
 
+def sc_offplatform_reconcile(s, fx):
+    """H5: a lesson the coach collects OFF-platform (arrears_commission) must show in the coach's OWN
+    statement 'paid' — not vanish while the owner/client still see it. Book at-court (owed), accrue,
+    mark collected off-platform, and assert the coach statement flips owed -> paid."""
+    print("\n# Off-platform collection reconciles: coach statement includes arrears_commission (H5)")
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 8)), ends_at=iso(at(fx, 9)), settlement_mode="at_court")
+    bid = r["booking"]["id"]
+    CM.accrue_arrears_for_club(s, club_id=fx.club_id)
+    st0 = CM.coach_statement(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    check("off-platform: owed R400 before collection",
+          st0["totals"]["owed_minor"] == 40000 and st0["totals"]["paid_minor"] == 0, str(st0["totals"]))
+    arr = s.execute(text("SELECT id FROM billing.coach_arrears WHERE booking_id=:b AND status='owed'"),
+                    {"b": bid}).scalar()
+    CM.mark_arrears_collected(s, club_id=fx.club_id, arrears_id=arr, coach_user_id=fx.coach_uid)
+    st1 = CM.coach_statement(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    check("H5: off-platform-collected lesson shows in the coach's PAID (didn't vanish)",
+          st1["totals"]["paid_minor"] > 0, str(st1["totals"]))
+    check("H5: no longer owed after off-platform collection",
+          st1["totals"]["owed_minor"] == 0, str(st1["totals"]))
+
+
 SCENARIOS = [
     sc_coach_scoped_pricing,
     sc_settlement_guards,
     sc_online_only,
+    sc_offplatform_reconcile,
     sc_payment_preference,
     sc_person_360,
     sc_admin_event_story,

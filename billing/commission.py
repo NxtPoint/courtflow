@@ -797,12 +797,15 @@ def client_statement(session, *, club_id, user_id, month=None) -> Dict[str, Any]
 
     paid = session.execute(
         text("""
-            SELECT cs.coach_user_id, count(*) AS lesson_count,
+            SELECT cs.coach_user_id,
+                   count(*) FILTER (WHERE cs.basis <> 'refund_clawback') AS lesson_count,
                    COALESCE(SUM(cs.gross_minor),0) AS paid_minor
             FROM billing.commission_split cs
             JOIN diary.booking b ON b.id = cs.booking_id
             WHERE cs.club_id = :club AND cs.party_type = 'coach'
-              AND cs.basis IN ('lesson_commission','class_commission','arrears_commission')
+              -- refund_clawback (negative gross) nets a refunded lesson out of the client's paid-this-
+              -- month, mirroring coach_statement so the two sides agree; count excludes it (not a lesson).
+              AND cs.basis IN ('lesson_commission','class_commission','arrears_commission','refund_clawback')
               AND b.booked_by_user_id = :u
               AND to_char(cs.occurred_at,'YYYY-MM') = :ym
             GROUP BY 1
@@ -954,7 +957,11 @@ def coach_statement(session, *, club_id, coach_user_id, month=None) -> Dict[str,
             LEFT JOIN diary.booking b ON b.id = cs.booking_id
             WHERE cs.club_id = :club AND cs.coach_user_id = :coach
               AND cs.party_type = 'coach'
-              AND cs.basis IN ('lesson_commission','class_commission','refund_clawback')
+              -- arrears_commission = a lesson the coach collected OFF-platform (at court). It counts as
+              -- earned just like an online-paid lesson_commission — omitting it hid those from the
+              -- coach's OWN cockpit/statement while the owner + client still saw them (four surfaces
+              -- disagreed). refund_clawback stays (nets a refunded lesson out of the coach's net).
+              AND cs.basis IN ('lesson_commission','class_commission','arrears_commission','refund_clawback')
               AND to_char(cs.occurred_at,'YYYY-MM') = :ym
             GROUP BY 1
         """),
