@@ -1225,6 +1225,29 @@ def sc_cancel_fee_and_paid_resize(s, fx):
     check("M7: a PAID booking can't be extended to a longer slot", (not rr.get("ok")) and rr.get("error") == "PAID_CANNOT_EXTEND", str(rr))
 
 
+def sc_covered_reschedule_guard(s, fx):
+    """M5: a membership-COVERED court can't be rescheduled into a time the membership doesn't cover
+    (off-peak → peak) — refused, so it can't silently stay free."""
+    print("\n# Covered court can't be moved to an uncovered (peak) time (M5)")
+    mem_product = s.execute(text("SELECT id FROM billing.product WHERE club_id=:c AND kind='membership' LIMIT 1"),
+                            {"c": fx.club_id}).scalar()
+    # Covers EVERY day 06:00–17:00 (hours-only), so the test is day-independent: 10:00 covered, 18:00 not.
+    win_price = _price(s, fx.club_id, mem_product, 18000, unit="per_month", term=1, label="Student",
+                       access_days="1,2,3,4,5,6,7", start_min=360, end_min=1020)
+    s.execute(text("INSERT INTO billing.membership_subscription (club_id, user_id, price_id, status, "
+                   "provider, current_period_end) VALUES (:c,:u,:p,'active','manual', CURRENT_DATE + 30)"),
+              {"c": fx.club_id, "u": fx.member, "p": win_price})
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=iso(at(fx, 10)), ends_at=iso(at(fx, 11)), settlement_mode="membership_covered")
+    check("covered court booked R0 (in-window)", _order(s, r["booking"]["order_id"])["amount_minor"] == 0, str(r))
+    rr = B.reschedule_booking(s, club_id=fx.club_id, booking_id=r["booking"]["id"],
+                              new_starts_at=iso(at(fx, 18)), new_ends_at=iso(at(fx, 19)),
+                              actor_user_id=fx.member, role="club_admin")
+    check("M5: covered court refused a move to a peak (uncovered) time",
+          (not rr.get("ok")) and rr.get("error") == "NOT_COVERED_AT_NEW_TIME", str(rr))
+
+
 def sc_pack_credits_coach(s, fx):
     """Owner decision: a coach lesson PACK credits the coach at PURCHASE (upfront). create_bundle_order
     hangs the pack order line on the coach's own lesson product, so the charge_succeeded commission
@@ -1251,6 +1274,7 @@ SCENARIOS = [
     sc_service_selection,
     sc_pack_credits_coach,
     sc_cancel_fee_and_paid_resize,
+    sc_covered_reschedule_guard,
     sc_settlement_guards,
     sc_online_only,
     sc_offplatform_reconcile,

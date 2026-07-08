@@ -718,6 +718,15 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
         return _err("PAID_CANNOT_EXTEND", 422,
                     message="this booking is already paid — cancel and rebook to make it longer")
 
+    # A membership-COVERED court can't be moved into a time the membership doesn't cover (off-peak →
+    # peak) without a charge — refuse rather than silently keep it free. Book a paid court instead.
+    # (Owner decision M5.)
+    if bk.get("settlement_mode") == "membership_covered" and bk.get("booked_by_user_id") and \
+            not _membership_covers_guarded(session, club_id=club_id,
+                                           user_id=bk["booked_by_user_id"], starts_at=new_s):
+        return _err("NOT_COVERED_AT_NEW_TIME", 422,
+                    message="your membership doesn't cover that time — pick a covered slot, or book a paid court")
+
     # A lesson must not be moved onto a time the coach runs a scheduled class — a class_session is
     # not a diary.booking, so the GiST exclusion can't catch it (mirror the create/accept guard).
     if _coach_class_conflict(session, club_id, bk.get("coach_user_id"), new_s, new_e):
