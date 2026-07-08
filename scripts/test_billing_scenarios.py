@@ -1166,8 +1166,39 @@ def sc_onbehalf_token(s, fx):
           any(str(h.get("client_user_id")) == str(fx.member) for h in holders), str(holders))
 
 
+def sc_service_selection(s, fx):
+    """A coach with MULTIPLE lesson services (Private / Semi-private) prices the CHOSEN one — not a
+    merge of both. services_for lists each product separately; booking with product_id charges it."""
+    print("\n# Service selection: a coach's multiple lesson services price independently (product_id)")
+    priv = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                          "VALUES (:c,'lesson','Private',:u) RETURNING id"),
+                     {"c": fx.club_id, "u": fx.coach_uid}).scalar_one()
+    _price(s, fx.club_id, priv, 40000, dur=60)
+    semi = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                          "VALUES (:c,'lesson','Semi-private',:u) RETURNING id"),
+                     {"c": fx.club_id, "u": fx.coach_uid}).scalar_one()
+    _price(s, fx.club_id, semi, 25000, dur=60)
+    names = sorted([sv["name"] for sv in PR.services_for(s, club_id=fx.club_id, kind="lesson", coach_user_id=fx.coach_uid)])
+    check("services_for lists BOTH of the coach's services", names == ["Private", "Semi-private"], str(names))
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 8)), ends_at=iso(at(fx, 9)),
+                         settlement_mode="at_court", product_id=semi)
+    check("booking the Semi-private service charges ITS R250 (not the merge/other service)",
+          _order(s, r["booking"]["order_id"])["amount_minor"] == 25000,
+          str(_order(s, r["booking"]["order_id"])["amount_minor"]))
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=iso(at(fx, 10)), ends_at=iso(at(fx, 11)),
+                          settlement_mode="at_court", product_id=priv)
+    check("booking the Private service charges ITS R400",
+          _order(s, r2["booking"]["order_id"])["amount_minor"] == 40000,
+          str(_order(s, r2["booking"]["order_id"])["amount_minor"]))
+
+
 SCENARIOS = [
     sc_coach_scoped_pricing,
+    sc_service_selection,
     sc_settlement_guards,
     sc_online_only,
     sc_offplatform_reconcile,

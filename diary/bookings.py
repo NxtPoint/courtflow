@@ -279,7 +279,7 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
                           settlement_mode="at_court", parties=None, resource_id=None,
                           starts_at=None, ends_at=None, linked_booking_id=None,
                           audience="member", enrolment_id=None, duration_minutes=None,
-                          token_wallet=None, token_ref=None, coach_user_id=None):
+                          token_wallet=None, token_ref=None, coach_user_id=None, product_id=None):
     """Adapter between the diary and Agent C's billing.orders.create_order_for_booking.
 
     The diary speaks bookings; billing speaks order *lines*. We translate here: price each
@@ -325,15 +325,22 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
     # them. (Phase 2: charge a guest a fixed fee collected FROM THE GUEST, not the member's tab.)
     member_parties = [p for p in parties
                       if not (p.get("party_role") == "guest" or p.get("guest_name"))]
+    # Price the CHOSEN service (product_id) exactly when given — so a coach with several lesson
+    # products (Private / Semi-private) charges the one that was booked, not the cheapest. Falls back
+    # to coach-scoped kind pricing when no product was specified (older callers / court bookings).
+    def _price(aud):
+        if product_id:
+            return price_for(session, club_id=club_id, audience=aud, product_id=product_id,
+                             duration_minutes=duration_minutes) or {}
+        return price_for(session, club_id=club_id, audience=aud, kind=kind,
+                         duration_minutes=duration_minutes, coach_user_id=coach_user_id) or {}
     if member_parties:
         for p in member_parties:
-            pr = price_for(session, club_id=club_id, audience="member", kind=kind,
-                           duration_minutes=duration_minutes, coach_user_id=coach_user_id) or {}
+            pr = _price("member")
             lines.append({"description": booking_type, "price_id": pr.get("price_id"),
                           "qty": 1, "amount_minor": _amount(pr), **ref})
     else:
-        pr = price_for(session, club_id=club_id, audience=audience, kind=kind,
-                       duration_minutes=duration_minutes, coach_user_id=coach_user_id) or {}
+        pr = _price(audience)
         lines.append({"description": booking_type, "price_id": pr.get("price_id"),
                       "qty": 1, "amount_minor": _amount(pr), **ref})
 
@@ -372,7 +379,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                    starts_at, ends_at, settlement_mode="at_court", parties=None,
                    coach_user_id=None, court_resource_id=None, audience="member",
                    notes=None, recurrence_id=None, hold_minutes=HOLD_MINUTES_DEFAULT,
-                   booked_for_user_id=None, propose=False, now=None):
+                   booked_for_user_id=None, propose=False, product_id=None, now=None):
     """Create a court/lesson/class booking, concurrency-safe (docs/03 §4).
 
     For a lesson, pass court_resource_id to auto-hold a court in the SAME transaction (two
@@ -585,6 +592,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         linked_booking_id=linked_court_id, audience=audience,
         duration_minutes=duration_minutes, token_wallet=token_wallet,
         coach_user_id=coach_uid,   # price a lesson on THIS coach's own rate card (not the cheapest coach's)
+        product_id=product_id,     # …and on the CHOSEN service (Private vs Semi-private) when given
     )
     order_id = order.get("order_id")
     if order_id:

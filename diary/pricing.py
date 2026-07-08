@@ -155,6 +155,53 @@ def durations_for(session, *, club_id, kind, coach_user_id=None, audience="any")
 _PAY_MODES = ("online", "at_court", "monthly_account")
 
 
+def services_for(session, *, club_id, kind, coach_user_id=None, audience="any"):
+    """Bookable SERVICES (products) of a kind for a coach — each with its OWN durations + payment
+    modes + name — so the picker can offer e.g. 'Private lesson' vs 'Semi-private' separately (a coach
+    can have several). Two-tier coach scope (own products, else shared), like price_for/durations_for.
+    Returns [{product_id, name, payment_modes, currency_code, durations:[{duration_minutes,
+    amount_minor, price_id}]}] ordered by name. Guarded → []."""
+    try:
+        if not _billing_price_exists(session):
+            return []
+        params = {"c": club_id, "kind": kind, "aud": audience}
+        where = ["p.club_id = :c", "p.active = true", "pr.active = true", "pr.kind = :kind",
+                 "p.duration_minutes IS NOT NULL", "p.audience IN (:aud, 'any')"]
+        if coach_user_id is not None and _product_has_coach_col(session):
+            where.append("pr.coach_user_id = :coach"
+                         if _coach_has_own_product(session, club_id, kind, coach_user_id)
+                         else "pr.coach_user_id IS NULL")
+            params["coach"] = coach_user_id
+        rows = session.execute(
+            text("SELECT pr.id AS product_id, pr.name, pr.payment_modes, p.duration_minutes, "
+                 "       p.amount_minor, p.id AS price_id, p.currency_code "
+                 "FROM billing.price p JOIN billing.product pr ON pr.id = p.product_id "
+                 "WHERE " + " AND ".join(where) +
+                 " ORDER BY pr.name NULLS LAST, p.duration_minutes ASC, p.amount_minor ASC"),
+            params,
+        ).mappings().all()
+        out, by_id = [], {}
+        for r in rows:
+            pid = str(r["product_id"])
+            svc = by_id.get(pid)
+            if svc is None:
+                modes = [m.strip() for m in str(r["payment_modes"] or "").split(",")
+                         if m.strip() in _PAY_MODES]
+                svc = {"product_id": pid, "name": r["name"] or "Lesson",
+                       "payment_modes": (modes or None), "currency_code": r["currency_code"],
+                       "durations": []}
+                by_id[pid] = svc
+                out.append(svc)
+            # one row per duration per product (ORDER BY amount ASC → keep the cheapest).
+            if not any(d["duration_minutes"] == r["duration_minutes"] for d in svc["durations"]):
+                svc["durations"].append({"duration_minutes": r["duration_minutes"],
+                                         "amount_minor": r["amount_minor"], "price_id": str(r["price_id"])})
+        return out
+    except Exception:
+        log.debug("services_for() suppressed (billing not ready)", exc_info=False)
+        return []
+
+
 def payment_modes_for(session, *, club_id, kind, coach_user_id=None):
     """The per-service payment preference (allowed settlement modes) for this service's product —
     a subset of the club-enabled methods, or None (= no per-service restriction, all club-enabled).

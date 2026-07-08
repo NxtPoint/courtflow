@@ -161,6 +161,27 @@ def durations():
                    payment_modes=pay_modes), 200
 
 
+@diary_bp.get("/services")
+def services():
+    """Bookable SERVICES for a coach — each product (e.g. Private / Semi-private lesson) with its OWN
+    durations + payment modes — so the booking wizard offers the service name before the duration.
+        GET /api/diary/services?kind=lesson&coach_id=&audience= -> {services:[{product_id,name,
+        durations:[{duration_minutes,amount_minor,price_id}], payment_modes, currency_code}]}"""
+    p = _principal()
+    if not p or not _need_club(p):
+        return jsonify(error="unauthorized"), 401
+    q = request.args
+    kind = q.get("kind") or "lesson"
+    price_kind = {"court": "court_booking", "lesson": "lesson", "coach": "lesson",
+                  "class": "class"}.get(kind, kind)
+    audience = q.get("audience") or ("member" if p.role in ("member", "coach", "club_admin")
+                                     else "visitor")
+    with session_scope() as s:
+        svcs = pricing_mod.services_for(s, club_id=p.club_id, kind=price_kind,
+                                        coach_user_id=q.get("coach_id"), audience=audience)
+    return jsonify(services=svcs), 200
+
+
 @diary_bp.get("/resources")
 def resources():
     p = _principal()
@@ -234,6 +255,7 @@ def create_booking():
             parties=parties,
             coach_user_id=b.get("coach_user_id"),
             court_resource_id=b.get("court_resource_id"),
+            product_id=b.get("product_id"),   # the chosen SERVICE (Private/Semi-private) → price exactly it
             audience=audience, notes=b.get("notes"),
             recurrence_id=b.get("recurrence_id"),
             booked_for_user_id=booked_for_user_id,

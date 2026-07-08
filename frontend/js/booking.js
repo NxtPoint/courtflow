@@ -165,20 +165,44 @@
   function priceLabel() {
     if (st.settlement === "token" && st.tokenWallet) return "Covered by your pack · R0";
     if (courtCovered()) return coveredLabel();
-    var minor = (st.slot && st.slot.price != null) ? st.slot.price : st.selDurationPrice;
+    // Lessons price by the chosen SERVICE's duration (fixed) — never the availability slot price
+    // (which can't distinguish a coach's multiple services). Courts keep the per-slot price (covered).
+    var minor = (st.type !== "lesson" && st.slot && st.slot.price != null) ? st.slot.price : st.selDurationPrice;
     return minor != null ? UI.money(minor, ctx.billing.currency) : "—";
   }
 
   // ---- data loads ------------------------------------------------------------
   async function loadDurations() {
+    // Lessons: pick a COACH → their SERVICES (Private / Semi-private), each with its OWN durations +
+    // rate card (a coach can offer several; merging them showed the wrong price).
+    if (st.type === "lesson") { await loadLessonServices(); return; }
     var q = { kind: st.type, audience: "member" };
-    if (st.type === "lesson") { var _cid = chosenCoachUserId(); if (_cid) q.coach_id = _cid; }
     try {
       var r = await fetchDurations(q);
       st.durations = r.durations || [];
       st.membershipCovered = !!r.membership_covered;
       st.paymentModes = r.payment_modes || null;   // per-service payment preference (null = all)
     } catch (e) { st.durations = []; st.membershipCovered = false; st.paymentModes = null; }
+    applyDurationSelection();
+  }
+  async function loadLessonServices() {
+    var cid = chosenCoachUserId();
+    st.services = [];
+    if (cid) {
+      try { st.services = (await window.TFAuth.apiJSON("/api/diary/services" + qs({ kind: "lesson", coach_id: cid, audience: "member" }))).services || []; } catch (e) { st.services = []; }
+    }
+    var keep = st.selService && st.services.filter(function (x) { return x.product_id === st.selService.product_id; })[0];
+    st.selService = keep || st.services[0] || null;
+    applyServiceDurations();
+  }
+  function applyServiceDurations() {
+    var svc = st.selService;
+    st.durations = (svc && svc.durations) || [];
+    st.paymentModes = (svc && svc.payment_modes) || null;
+    st.membershipCovered = false;   // a lesson is never membership-covered
+    applyDurationSelection();
+  }
+  function applyDurationSelection() {
     if (st.durations.length) {
       var keep = st.durations.filter(function (x) { return x.duration_minutes === st.selDuration; })[0];
       if (!keep) { st.selDuration = st.durations[0].duration_minutes; st.selDurationPrice = st.durations[0].amount_minor; }
@@ -195,6 +219,7 @@
   async function loadSlots() {
     var box = document.getElementById("bk-slots"); if (!box) return;
     if (st.type === "class") { loadClasses(); return; }
+    if (st.type === "lesson" && !chosenCoachUserId()) { box.className = ""; UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: "Choose a coach to see their available times." })); return; }
     if (!st.durations.length) { box.className = ""; UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: "This service isn't priced yet — please contact the club." })); return; }
     var ck = slotCacheKey();
     if (st.slotsCache[ck]) { renderSlots(st.slotsCache[ck]); return; }
@@ -307,25 +332,41 @@
 
   function pickerControl() {
     if (st.type === "lesson") {
-      // Coach booking their OWN client → the coach is fixed; show it, don't offer a picker.
+      var fields = [];
+      // COACH FIRST (services + rates are per-coach, so no 'Any coach' for lessons). On-behalf locks it.
       if (st.coachLock) {
         var lockedName = (st.selCoach !== "ANY" && st.selCoach.name) || "You";
-        return el("div", { class: "cf-field" }, [
-          el("div", { class: "cf-select", style: "display:flex;align-items:center;background:var(--canvas,#f1f4ef)", text: lockedName }),
-          el("div", { class: "cf-pref-note", text: "We'll reserve a court for the lesson." }),
-        ]);
+        fields.push(el("div", { class: "cf-field" }, [ el("label", { text: "Coach" }),
+          el("div", { class: "cf-select", style: "display:flex;align-items:center;background:var(--canvas,#f1f4ef)", text: lockedName }) ]));
+      } else {
+        var coachSel = el("select", { class: "cf-select", onchange: async function (ev) {
+          st.selCoach = ctx.coaches.filter(function (c) { return c.id === ev.target.value; })[0] || "ANY";
+          st.selService = null; st.slot = null; st.slotsCache = {}; await loadDurations(); render();
+        } });
+        if (st.selCoach === "ANY") coachSel.appendChild(el("option", { value: "", text: "Choose a coach…", selected: "selected" }));
+        ctx.coaches.forEach(function (c) {
+          coachSel.appendChild(el("option", { value: c.id, text: c.name || "Coach",
+            selected: (st.selCoach !== "ANY" && st.selCoach.id === c.id) ? "selected" : null }));
+        });
+        fields.push(el("div", { class: "cf-field" }, [ el("label", { text: "Coach" }), coachSel ]));
       }
-      var coachSel = el("select", { class: "cf-select", onchange: async function (ev) {
-        var v = ev.target.value;
-        st.selCoach = v === "ANY" ? "ANY" : ctx.coaches.filter(function (c) { return c.id === v; })[0] || "ANY";
-        st.slot = null; st.slotsCache = {}; await loadDurations(); render();
-      } });
-      coachSel.appendChild(el("option", { value: "ANY", text: "Any coach", selected: st.selCoach === "ANY" ? "selected" : null }));
-      ctx.coaches.forEach(function (c) {
-        coachSel.appendChild(el("option", { value: c.id, text: c.name || "Coach",
-          selected: (st.selCoach !== "ANY" && st.selCoach.id === c.id) ? "selected" : null }));
-      });
-      return el("div", { class: "cf-field" }, [ coachSel, el("div", { class: "cf-pref-note", text: "We'll reserve a court for your lesson." }) ]);
+      // SERVICE (Private / Semi-private …) — a dropdown when the coach offers several; else the one.
+      if (st.services && st.services.length > 1) {
+        var svcSel = el("select", { class: "cf-select", onchange: function (ev) {
+          st.selService = st.services.filter(function (x) { return x.product_id === ev.target.value; })[0] || null;
+          st.slot = null; st.slotsCache = {}; applyServiceDurations(); render();
+        } });
+        st.services.forEach(function (sv) {
+          svcSel.appendChild(el("option", { value: sv.product_id, text: sv.name,
+            selected: (st.selService && st.selService.product_id === sv.product_id) ? "selected" : null }));
+        });
+        fields.push(el("div", { class: "cf-field" }, [ el("label", { text: "Service" }), svcSel ]));
+      } else if (st.selService) {
+        fields.push(el("div", { class: "cf-field" }, [ el("label", { text: "Service" }),
+          el("div", { class: "cf-select", style: "background:var(--canvas,#f1f4ef)", text: st.selService.name }) ]));
+      }
+      fields.push(el("div", { class: "cf-pref-note", text: "We'll reserve a court for the lesson." }));
+      return el("div", {}, fields);
     }
     var courtSel = el("select", { class: "cf-select", onchange: function (ev) {
       var v = ev.target.value;
@@ -372,9 +413,12 @@
       // The server prices each slot PER-SLOT (0 only inside the membership window; peak slots keep
       // their PAYG price), so "free" is simply price === 0 for a covered court — no client guess.
       var covered = st.type === "court" && st.membershipCovered && sl.price === 0;
+      // Lessons show the SERVICE's fixed duration price (the slot price can't tell a coach's services
+      // apart); courts show the per-slot price (0 inside a membership window).
+      var slPrice = st.type === "lesson" ? st.selDurationPrice : sl.price;
       var kids = [ el("span", { class: "cf-tb-time", text: UI.fmtTime(sl.start) }) ];
       if (covered) kids.push(el("span", { class: "cf-tb-price", text: "free" }));
-      else if (sl.price != null) kids.push(el("span", { class: "cf-tb-price", text: UI.money(sl.price, ctx.billing.currency) }));
+      else if (slPrice != null) kids.push(el("span", { class: "cf-tb-price", text: UI.money(slPrice, ctx.billing.currency) }));
       grid.appendChild(el("button", { class: "cf-timeblock", type: "button",
         onclick: function () { st.slot = sl; st.view = "confirm"; render(); } }, kids));
     });
@@ -447,7 +491,10 @@
   function summaryRows() {
     var rows = [["What", TITLES[st.type]]];
     if (st.type !== "class") {
-      if (st.type === "lesson") rows.push(["Coach", st.coachLock ? "You" : (st.selCoach !== "ANY" ? (st.selCoach.name || "Coach") : "Any coach")]);
+      if (st.type === "lesson") {
+        if (st.selService) rows.push(["Service", st.selService.name]);
+        rows.push(["Coach", st.coachLock ? "You" : (st.selCoach !== "ANY" ? (st.selCoach.name || "Coach") : "Any coach")]);
+      }
       else rows.push(["Court", st.selCourt !== "ANY" ? (st.selCourt.name || "Court") : (st.slot && st.slot.resource_name) || "Any court"]);
       rows.push(["Duration", (st.selDuration || "—") + " min"]);
       rows.push(["When", st.slot ? UI.fmtRange(st.slot.start, st.slot.end) : (UI.fmtDate(st.day) + " · pick a time")]);
@@ -615,6 +662,7 @@
         if (!body.for_email && st.onBehalf.name) body.for_guest_name = st.onBehalf.name; }
       if (st.type === "lesson") {
         body.coach_user_id = (st.selCoach !== "ANY" && st.selCoach.coach_user_id) || st.coachLock || null;
+        if (st.selService) body.product_id = st.selService.product_id;   // charge the CHOSEN service exactly
         body.resource_id = st.slot.resource_id;
         body.court_resource_id = (st.selCourt !== "ANY" && st.selCourt.id) || st.slot.court_resource_id || null;
       } else {
@@ -702,6 +750,7 @@
       selCoach: "ANY", selCourt: "ANY", slot: null, selClass: null, player: null, guest: null,
       settlement: "at_court", tokenWallet: null, showPayOptions: false, slotsCache: {},
       view: "schedule", _gName: null, _gEmail: null,
+      services: [], selService: null,
       onBehalf: opts.onBehalf || null, coachLock: opts.coachLock || null,
       backTo: opts.backTo || null, onDone: opts.onDone || null, skipOnline: !!opts.onBehalf,
       clientWallets: [],
