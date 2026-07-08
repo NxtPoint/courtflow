@@ -48,7 +48,9 @@ def _checkout_id_for_order(session, order_id: str) -> Optional[str]:
 
 def _checkout_is_paid(co: Dict[str, Any]) -> bool:
     status = str(co.get("status") or "").strip().lower()
-    return bool(co.get("paymentId")) and (status in _PAID_STATUSES or bool(co.get("paymentId")))
+    # Require BOTH a payment id AND a paid status. (The old `or bool(paymentId)` made the status
+    # check dead — any checkout carrying a paymentId, even a non-completed one, read as paid.)
+    return bool(co.get("paymentId")) and status in _PAID_STATUSES
 
 
 def reconcile_order(session, *, order_id: str) -> Dict[str, Any]:

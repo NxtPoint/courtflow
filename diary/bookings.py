@@ -1062,6 +1062,13 @@ def propose_time(session, *, club_id, booking_id, actor_user_id, role, starts_at
         return _err("BAD_RANGE", 400, message="ends_at must be after starts_at")
     if starts < now:
         return _err("IN_THE_PAST", 400, message="cannot propose a past slot")
+    # Validate the proposed slot is actually honourable, so the OTHER party can always accept it
+    # (otherwise a coach proposes a time they can't run → the client accepts → accept fails → a
+    # dead-end 'proposed'). Mirror accept_booking's coach∩court checks.
+    if _coach_class_conflict(session, club_id, bk.get("coach_user_id"), starts, ends):
+        return _err("COACH_BUSY", 409, message="the coach is running a class at that time")
+    if _first_free_court(session, club_id, starts, ends) is None:
+        return _err("NO_COURT_AVAILABLE", 422, message="no court is free at that time")
     new_status = "proposed" if bk["status"] == "requested" else "requested"
     session.execute(
         text("UPDATE diary.booking SET starts_at=:sa, ends_at=:ea, status=:st, updated_at=now() WHERE id=:id"),
