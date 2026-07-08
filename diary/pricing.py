@@ -35,6 +35,21 @@ def _membership_sub_exists(session):
     return row is not None
 
 
+def _coach_has_own_product(session, club_id, kind, coach_user_id):
+    """True if this coach has their OWN active product of `kind`. When they do, their rate card is
+    used EXACTLY (no shared / other-coach rows mixed in — that leaked phantom durations + zero-rated
+    prices); when they don't, a club-shared (coach-agnostic) product is the fallback. Guarded → False."""
+    try:
+        row = session.execute(
+            text("SELECT 1 FROM billing.product WHERE club_id = :c AND kind = :k "
+                 "AND coach_user_id = :u AND active = true LIMIT 1"),
+            {"c": club_id, "k": kind, "u": coach_user_id},
+        ).first()
+        return row is not None
+    except Exception:
+        return False
+
+
 def price_for(session, *, club_id, kind=None, duration_minutes=None, product_id=None,
               audience="any", coach_user_id=None):
     """Best matching billing.price for a service + a chosen duration. Returns a dict
@@ -64,18 +79,17 @@ def price_for(session, *, club_id, kind=None, duration_minutes=None, product_id=
             where.append("pr.kind = :kind")
             params["kind"] = kind
             if coach_user_id is not None and _product_has_coach_col(session):
-                # Prefer THIS coach's OWN product; fall back to a club-shared (coach-agnostic) row so a
-                # lesson prices on the coach's rate card when they have one, else the shared rate — NEVER
-                # another coach's (mirrors durations_for so the picker price == the charged price).
-                where.append("(pr.coach_user_id = :coach OR pr.coach_user_id IS NULL)")
+                # TWO-TIER (never merge): if the coach has their OWN product use ONLY it (their rate
+                # card exactly); else fall back to a club-shared (coach-agnostic) product. Merging
+                # leaked other durations + zero-rated a lesson (the cheapest matching row won).
+                where.append("pr.coach_user_id = :coach"
+                             if _coach_has_own_product(session, club_id, kind, coach_user_id)
+                             else "pr.coach_user_id IS NULL")
                 params["coach"] = coach_user_id
-                coach_scoped = True
         sql += "WHERE " + " AND ".join(where)
-        # Ranking: exact duration first, then the coach's OWN product, then the nearest priced
-        # duration <= requested, then any; tie-break to the exact audience, then cheapest.
-        # NULL-safe: the coach's OWN product ranks first, a shared (NULL-coach) product second.
-        # A bare `= :coach` yields NULL for a shared row and DESC sorts NULLs FIRST (wrong).
-        coach_rank = "(pr.coach_user_id IS NOT DISTINCT FROM :coach) DESC, " if coach_scoped else ""
+        # Ranking: exact duration first, then the nearest priced duration <= requested, then any;
+        # tie-break to the exact audience, then cheapest. (Coach scope is a hard filter above now.)
+        coach_rank = ""
         if duration_minutes is not None:
             params["dur"] = int(duration_minutes)
             sql += (" ORDER BY (p.duration_minutes = :dur) DESC, " + coach_rank +
@@ -113,11 +127,12 @@ def durations_for(session, *, club_id, kind, coach_user_id=None, audience="any")
                  "p.audience IN (:aud, 'any')"]
         coach_rank = ""
         if coach_user_id is not None and _product_has_coach_col(session):
-            # Prefer THIS coach's OWN product; fall back to a club-shared (coach-agnostic) row (mirrors
-            # price_for so the durations/prices the picker shows == what the booking is charged).
-            where.append("(pr.coach_user_id = :coach OR pr.coach_user_id IS NULL)")
+            # TWO-TIER (mirrors price_for so the picker shows EXACTLY what's charged): the coach's own
+            # rate card if they have one, else a club-shared product — never a merge of both.
+            where.append("pr.coach_user_id = :coach"
+                         if _coach_has_own_product(session, club_id, kind, coach_user_id)
+                         else "pr.coach_user_id IS NULL")
             params["coach"] = coach_user_id
-            coach_rank = "(pr.coach_user_id IS NOT DISTINCT FROM :coach) DESC, "
         sql = ("SELECT DISTINCT ON (p.duration_minutes) p.duration_minutes, p.amount_minor, "
                "       p.id AS price_id, p.currency_code "
                "FROM billing.price p "
@@ -151,11 +166,12 @@ def payment_modes_for(session, *, club_id, kind, coach_user_id=None):
         params = {"c": club_id, "kind": kind}
         coach_rank = ""
         if coach_user_id is not None and _product_has_coach_col(session):
-            # Prefer THIS coach's own product's preference; fall back to a club-shared (NULL) product —
-            # the SAME resolution as price_for/durations_for so the enforced modes match the priced ones.
-            where.append("(coach_user_id = :coach OR coach_user_id IS NULL)")
+            # TWO-TIER (same resolution as price_for/durations_for): the coach's own product's
+            # preference if they have one, else a club-shared product — never merged.
+            where.append("coach_user_id = :coach"
+                         if _coach_has_own_product(session, club_id, kind, coach_user_id)
+                         else "coach_user_id IS NULL")
             params["coach"] = coach_user_id
-            coach_rank = "(coach_user_id IS NOT DISTINCT FROM :coach) DESC, "
         csv = session.execute(
             text("SELECT payment_modes FROM billing.product WHERE " + " AND ".join(where)
                  + " ORDER BY " + coach_rank + "created_at LIMIT 1"),

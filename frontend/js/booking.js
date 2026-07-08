@@ -95,6 +95,9 @@
   function walletMinutesLeft(w) { return (w.minutes_remaining != null) ? w.minutes_remaining : (w.tokens_remaining || 0) * 60; }
   function chosenCoachUserId() {
     if (st.type !== "lesson") return null;
+    // On-behalf: the coach books their OWN lessons — always price/schedule/book against that coach id,
+    // even if they aren't in the bookable-coaches list (so the rate card + times are always theirs).
+    if (st.coachLock) return st.coachLock;
     if (st.selCoach !== "ANY" && st.selCoach && st.selCoach.coach_user_id) return st.selCoach.coach_user_id;
     return (st.slot && st.slot.coach_user_id) || null;
   }
@@ -154,7 +157,7 @@
   // ---- data loads ------------------------------------------------------------
   async function loadDurations() {
     var q = { kind: st.type, audience: "member" };
-    if (st.type === "lesson" && st.selCoach !== "ANY" && st.selCoach.coach_user_id) q.coach_id = st.selCoach.coach_user_id;
+    if (st.type === "lesson") { var _cid = chosenCoachUserId(); if (_cid) q.coach_id = _cid; }
     try {
       var r = await fetchDurations(q);
       st.durations = r.durations || [];
@@ -189,7 +192,7 @@
       // The availability API filters by coach_user_id (diary/routes.py), so send the coach's
       // USER id — not the resource id. (Bug: sending .id matched no resource → zero lesson slots
       // for a specific coach. loadDurations + createBooking already use coach_user_id.)
-      if (st.selCoach !== "ANY" && st.selCoach.coach_user_id) q.coach_id = st.selCoach.coach_user_id; else q.any = "1";
+      var _cid = chosenCoachUserId(); if (_cid) q.coach_id = _cid; else q.any = "1";
     } else {
       q.kind = "court";
       if (st.selCourt === "ANY") q.any = "1";
@@ -429,7 +432,7 @@
   function summaryRows() {
     var rows = [["What", TITLES[st.type]]];
     if (st.type !== "class") {
-      if (st.type === "lesson") rows.push(["Coach", st.selCoach !== "ANY" ? (st.selCoach.name || "Coach") : "Any coach"]);
+      if (st.type === "lesson") rows.push(["Coach", st.coachLock ? "You" : (st.selCoach !== "ANY" ? (st.selCoach.name || "Coach") : "Any coach")]);
       else rows.push(["Court", st.selCourt !== "ANY" ? (st.selCourt.name || "Court") : (st.slot && st.slot.resource_name) || "Any court"]);
       rows.push(["Duration", (st.selDuration || "—") + " min"]);
       rows.push(["When", st.slot ? UI.fmtRange(st.slot.start, st.slot.end) : (UI.fmtDate(st.day) + " · pick a time")]);

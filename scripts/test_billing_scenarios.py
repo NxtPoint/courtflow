@@ -1033,6 +1033,18 @@ def sc_coach_scoped_pricing(s, fx):
     check("coach B lesson priced at B's own R300",
           _order(s, rB["booking"]["order_id"])["amount_minor"] == 30000,
           str(_order(s, rB["booking"]["order_id"])["amount_minor"]))
+    # A club-shared product with a phantom 45-min + a ZERO-rated 60 must NOT leak into a coach who has
+    # their OWN rate card (the reported "45 appears / 60 comes through free" bug).
+    shared = s.execute(text("INSERT INTO billing.product (club_id, kind, name) "
+                            "VALUES (:c,'lesson','Shared Lesson') RETURNING id"),
+                       {"c": fx.club_id}).scalar_one()
+    _price(s, fx.club_id, shared, 55000, dur=45)   # phantom 45-min
+    _price(s, fx.club_id, shared, 0, dur=60)         # zero-rated 60 (the leak source)
+    dmins = [d["duration_minutes"] for d in PR.durations_for(s, club_id=fx.club_id, kind="lesson", coach_user_id=fx.coach_uid)]
+    check("coach A durations show ONLY their own (no leaked shared 45-min)", 45 not in dmins, str(dmins))
+    prA60 = PR.price_for(s, club_id=fx.club_id, kind="lesson", duration_minutes=60, coach_user_id=fx.coach_uid)
+    check("coach A 60-min is A's own R400, NOT the shared R0", prA60 and prA60["amount_minor"] == 40000,
+          str(prA60 and prA60.get("amount_minor")))
 
 
 def sc_settlement_guards(s, fx):
