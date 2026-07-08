@@ -530,6 +530,18 @@ def coach_member_search():
     return jsonify(members=rows), 200
 
 
+@coach_bp.get("/packages")
+def coach_packages():
+    """The coach's 'clients with packages' view — every client holding an active lesson pack with
+    this coach + their remaining balance."""
+    p, err = _coach()
+    if err:
+        return err
+    with session_scope() as s:
+        rows = repo.coach_package_holders(s, club_id=p.club_id, coach_user_id=p.user_id)
+    return jsonify(packages=rows), 200
+
+
 @coach_bp.get("/members/<client_user_id>/packages")
 def coach_client_packages(client_user_id):
     """A client's ACTIVE lesson packs that THIS coach can draw (coach-specific to them, or

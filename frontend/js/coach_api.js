@@ -36,6 +36,8 @@
     searchMembers: function (q) { return A().apiJSON("/api/coach/members/search?q=" + encodeURIComponent(q || "")); },
     // A client's active lesson packs THIS coach can draw (for on-behalf auto-routing to their pack).
     clientPackages: function (userId) { return A().apiJSON("/api/coach/members/" + enc(userId) + "/packages"); },
+    // Every client holding an active pack with this coach (the 'clients with packages' view).
+    packages: function () { return A().apiJSON("/api/coach/packages"); },
     // POST /api/coach/onboarding/complete -> {ok:true}
     completeOnboarding: function () {
       return A().apiJSON("/api/coach/onboarding/complete", { method: "POST", body: {} });

@@ -378,17 +378,41 @@
   // ---- CLIENTS (list → full record) ---------------------------------------
   async function renderClients() {
     ensureMonth(); loading();
-    var clients = [], money = {};
+    var clients = [], money = {}, packs = [];
     try {
-      var pair = await Promise.all([window.CoachAPI.clients({}), window.CoachAPI.statement(MONTH).catch(function () { return { clients: [] }; })]);
+      var pair = await Promise.all([
+        window.CoachAPI.clients({}),
+        window.CoachAPI.statement(MONTH).catch(function () { return { clients: [] }; }),
+        (window.CoachAPI.packages ? window.CoachAPI.packages() : Promise.resolve({ packages: [] })).catch(function () { return { packages: [] }; }),
+      ]);
       clients = pair[0].clients || [];
       ((pair[1] && pair[1].clients) || []).forEach(function (m) { money[String(m.client_user_id)] = m; });
+      packs = (pair[2] && pair[2].packages) || [];
     } catch (e) {}
     var wrap = el("div", {});
     wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [
       el("h1", { style: "margin:0", text: "Clients" }), monthNav(renderClients),
     ]));
     wrap.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 12px;font-size:.85rem", text: "Everyone who trains with you — what they've paid and still owe this month. Tap for their full record." }));
+
+    // Prepaid packages — clients who bought a pack WITH you (already funded); a lesson you book for
+    // them draws it down instead of raising a new charge. Tap → their full record.
+    if (packs.length) {
+      wrap.appendChild(el("h2", { style: "margin:4px 0 6px;font-size:1rem", text: "Prepaid packages" }));
+      var pc = el("div", { class: "cf-card", style: "padding:6px 14px" }), pl = el("div", { class: "cf-list" });
+      packs.forEach(function (p) {
+        pl.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { if (p.client_user_id) go("#/client/" + p.client_user_id); } }, [
+          el("div", { class: "cf-avatar", style: "width:34px;height:34px;font-size:.8rem", text: (p.client_name || "?").slice(0, 1).toUpperCase() }),
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: p.client_name || "Client" }),
+            el("div", { class: "cf-item-s", text: (p.label || "Lesson pack") }),
+          ]),
+          el("span", { class: "cf-chip", text: p.sessions_remaining + " left" }),
+        ]));
+      });
+      pc.appendChild(pl); wrap.appendChild(pc);
+      wrap.appendChild(el("h2", { style: "margin:16px 0 6px;font-size:1rem", text: "All clients" }));
+    }
     if (!clients.length) wrap.appendChild(el("div", { class: "cf-empty", text: "No clients yet." }));
     else {
       var c = el("div", { class: "cf-card", style: "padding:6px 14px" }), l = el("div", { class: "cf-list" });

@@ -307,6 +307,47 @@ def search_members(session, *, club_id, q, limit=10):
     return out
 
 
+def coach_package_holders(session, *, club_id, coach_user_id):
+    """Clients who hold an ACTIVE lesson pack bought WITH this coach (coach-specific token wallets) —
+    name + remaining balance — for the coach's 'clients with packages' view. Most-depleted-soonest.
+    Guarded → [] if the token engine isn't present."""
+    if not _table_present(session, "billing", "token_wallet"):
+        return []
+    try:
+        rows = session.execute(
+            text("""
+                SELECT w.user_id, bp.label, w.tokens_total, w.tokens_remaining,
+                       w.minutes_remaining, w.base_minutes, w.expires_at,
+                       COALESCE(NULLIF(TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.surname,'')),''),
+                                u.email) AS client_name
+                FROM billing.token_wallet w
+                LEFT JOIN billing.bundle_plan bp ON bp.id = w.bundle_plan_id
+                LEFT JOIN iam."user" u ON u.id = w.user_id
+                WHERE w.club_id = :c AND w.coach_user_id = :u
+                  AND w.service_kind = 'lesson' AND w.status = 'active' AND w.tokens_remaining > 0
+                ORDER BY client_name NULLS LAST, w.created_at DESC
+            """),
+            {"c": str(club_id), "u": str(coach_user_id)},
+        ).mappings().all()
+        out = []
+        for r in rows:
+            base = int(r["base_minutes"] or 0) or 60
+            mins = int(r["minutes_remaining"] or 0)
+            out.append({
+                "client_user_id": str(r["user_id"]) if r["user_id"] else None,
+                "client_name": r["client_name"] or "Client",
+                "label": r["label"] or "Lesson pack",
+                "tokens_total": int(r["tokens_total"] or 0),
+                "sessions_remaining": round(mins / base, 1) if base else 0,
+                "minutes_remaining": mins,
+                "expires_at": r["expires_at"].isoformat() if r["expires_at"] else None,
+            })
+        return out
+    except Exception:
+        session.rollback()
+        return []
+
+
 def list_services(session, *, club_id, user_id):
     """The coach's OWN lesson products + their active prices, flattened to one row per price
     (the booking-relevant shape). Scoped to (club_id, coach_user_id)."""

@@ -1159,6 +1159,11 @@ def sc_onbehalf_token(s, fx):
     bord = _order(s, r["booking"]["order_id"])
     check("on-behalf token booking is R0/paid — NO new owed financial entry",
           bord and bord["amount_minor"] == 0 and bord["status"] == "paid", str(bord))
+    # The coach's 'clients with packages' view lists the client + remaining balance.
+    from coach import repositories as CR
+    holders = CR.coach_package_holders(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    check("coach 'clients with packages' lists the pack holder",
+          any(str(h.get("client_user_id")) == str(fx.member) for h in holders), str(holders))
 
 
 SCENARIOS = [
