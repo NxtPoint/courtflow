@@ -32,6 +32,8 @@
     // GET /api/admin/people -> {people:[{user_id,email,first_name,surname,phone,role,
     //   member_status,display_name,invite_status,has_membership}]}
     people: function () { return A().apiJSON("/api/admin/people"); },
+    // A client's active lesson packs (optionally for a coach) — on-behalf auto-routes to their pack.
+    clientPackages: function (userId, coachId) { return A().apiJSON("/api/admin/clients/" + enc(userId) + "/packages" + (coachId ? ("?coach_id=" + enc(coachId)) : "")); },
     // POST /api/admin/clients  body:{name,email,phone} -> {user_id,email,name,created} — add a
     // walk-up / off-system client to the system (they link to their login by email on first sign-in).
     createClient: function (body) { return A().apiJSON("/api/admin/clients", { method: "POST", body: body || {} }); },

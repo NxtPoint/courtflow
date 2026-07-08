@@ -367,8 +367,9 @@
           coachLock: principal.user_id,            // the coach books their OWN lessons
           backTo: "#/schedule",
           onDone: function () { location.hash = "#/schedule"; route(); },
-          // Auto-route to the client's prepaid pack with this coach (draw, not a new charge).
-          loadPackages: function (uid) { return window.CoachAPI.clientPackages(uid).then(function (r) { return (r && r.packages) || []; }); },
+          // Auto-route to the client's prepaid pack with this coach (draw, not a new charge). The
+          // coach endpoint is self-scoped, so the coachId arg is unused here.
+          loadPackages: function (uid, coachId) { return window.CoachAPI.clientPackages(uid).then(function (r) { return (r && r.packages) || []; }); },
         });
       } }),
     ]));

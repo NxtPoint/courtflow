@@ -817,6 +817,26 @@ def create_client():
     return jsonify(res), 201
 
 
+@admin_bp.get("/clients/<client_user_id>/packages")
+def admin_client_packages(client_user_id):
+    """A client's ACTIVE lesson packs — for admin on-behalf booking to auto-route to a prepaid pack.
+    ?coach_id filters to packs drawable by that coach (coach-specific to them, or coach-agnostic)."""
+    p, err = _admin()
+    if err:
+        return err
+    coach_id = (request.args.get("coach_id") or "").strip() or None
+    try:
+        from billing import bundles
+        with session_scope() as s:
+            ws = bundles.wallets_for(s, club_id=p.club_id, user_id=client_user_id,
+                                     service_kind="lesson", active_only=True)
+        if coach_id:
+            ws = [w for w in ws if w.get("coach_user_id") in (None, coach_id)]
+    except Exception:
+        ws = []
+    return jsonify(packages=ws), 200
+
+
 @admin_bp.post("/members/<user_id>/issue")
 def issue_package(user_id):
     """Issue a membership OR a token pack to a client (walk-up / off-system). Reuses the offline-

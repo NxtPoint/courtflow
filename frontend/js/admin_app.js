@@ -858,13 +858,72 @@
     DIARY_LISTS = { courts: courts, coaches: coaches };
     return DIARY_LISTS;
   }
+  // Book a client in (owner/admin) — pick the client, then the SAME booking widget (window.BookFlow)
+  // in on-behalf mode with NO coach lock, so the owner PICKS which coach the lesson is with (e.g.
+  // Allon). Skips Yoco (collect at court / the client's pack / account); auto-routes to their pack.
+  async function adminBookForClient() {
+    if (!window.BookFlow) { UI.toast("Booking module still loading — try again in a moment.", "warn"); return; }
+    var m = UI.modal("Book a client in");
+    var selected = null, people = [];
+    try { people = (await window.AdminAPI.people()).people || []; } catch (e) {}
+    var searchInp = el("input", { class: "cf-input", placeholder: "Search client by name or email…" });
+    var resultsBox = el("div", { class: "cf-list", style: "max-height:200px;overflow:auto" });
+    var chosenBox = el("div", {});
+    var guest = el("input", { class: "cf-input", placeholder: "Guest name (walk-in, no account)" });
+    function pname(pp) { return [pp.first_name, pp.surname].filter(Boolean).join(" ").trim() || pp.display_name || pp.email || "Client"; }
+    function renderChosen() {
+      UI.clear(chosenBox);
+      if (selected) {
+        searchInp.style.display = "none"; resultsBox.style.display = "none"; guest.disabled = true;
+        chosenBox.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: selected.name }), el("div", { class: "cf-item-s", text: selected.email || "—" })]),
+          el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Change", onclick: function () { selected = null; searchInp.value = ""; UI.clear(resultsBox); renderChosen(); searchInp.focus(); } }),
+        ]));
+      } else { searchInp.style.display = ""; resultsBox.style.display = ""; guest.disabled = false; }
+    }
+    searchInp.addEventListener("input", function () {
+      var q = searchInp.value.trim().toLowerCase(); UI.clear(resultsBox);
+      if (q.length < 2) return;
+      var hits = people.filter(function (pp) { return (pname(pp) + " " + (pp.email || "")).toLowerCase().indexOf(q) >= 0; }).slice(0, 12);
+      if (!hits.length) { resultsBox.appendChild(el("div", { class: "cf-empty", style: "padding:8px", text: "No match — or use a guest name below." })); return; }
+      hits.forEach(function (pp) {
+        resultsBox.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { selected = { user_id: pp.user_id, name: pname(pp), email: pp.email }; renderChosen(); } }, [
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: pname(pp) }), el("div", { class: "cf-item-s", text: pp.email || "" })]),
+        ]));
+      });
+    });
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem", text: "Pick the client, then choose the coach, service, time and payment on the next screen — the same booking flow clients use." }));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Client" }), searchInp, resultsBox, chosenBox]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "…or guest name (walk-in, no account)" }), guest]));
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
+      el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
+      el("button", { class: "cf-btn cf-btn-primary", text: "Continue →", onclick: function () {
+        var onBehalf = null;
+        if (selected && selected.email) onBehalf = { name: selected.name, email: selected.email, user_id: selected.user_id };
+        else if (guest.value.trim()) onBehalf = { name: guest.value.trim() };
+        else { UI.toast("Pick a client, or enter a guest name.", "warn"); return; }
+        m.close();
+        window.BookFlow.start(principal, "lesson", {
+          onBehalf: onBehalf,                       // NO coachLock → the owner picks the coach
+          backTo: "#/diary",
+          onDone: function () { location.hash = "#/diary"; route(); },
+          loadPackages: function (uid, coachId) { return window.AdminAPI.clientPackages(uid, coachId).then(function (r) { return (r && r.packages) || []; }); },
+        });
+      } }),
+    ]));
+    renderChosen();
+  }
+
   // Diary — the shared Calendar widget (Widgets.Calendar) over the whole club (court + coach
   // filters), plus a Classes tab. FRONTEND-STANDARDISATION Wave 5. Router passes an optional date.
   async function renderDiary(dateKey) {
     loading();
     var lists = await ensureDiaryLists();
     var wrap = el("div", {});
-    wrap.appendChild(el("h1", { style: "margin:0 0 8px", text: "Diary" }));
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:0 0 8px" }, [
+      el("h1", { style: "margin:0", text: "Diary" }),
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ Book a client", onclick: adminBookForClient }),
+    ]));
     function seg(k, label) { return el("button", { class: DIARY_TAB === k ? "on" : "", text: label, onclick: function () { DIARY_TAB = k; renderDiary(dateKey); } }); }
     wrap.appendChild(el("div", { class: "cf-segment cf-seg-lg" }, [seg("diary", "Calendar"), seg("classes", "Classes")]));
     var body = el("div", {});

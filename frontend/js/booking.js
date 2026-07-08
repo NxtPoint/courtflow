@@ -194,6 +194,7 @@
     var keep = st.selService && st.services.filter(function (x) { return x.product_id === st.selService.product_id; })[0];
     st.selService = keep || st.services[0] || null;
     applyServiceDurations();
+    await loadOnBehalfPackages(cid);   // detect the client's pack WITH this coach (draw, not new charge)
   }
   function applyServiceDurations() {
     var svc = st.selService;
@@ -753,7 +754,7 @@
       services: [], selService: null,
       onBehalf: opts.onBehalf || null, coachLock: opts.coachLock || null,
       backTo: opts.backTo || null, onDone: opts.onDone || null, skipOnline: !!opts.onBehalf,
-      clientWallets: [],
+      clientWallets: [], loadPackagesFn: opts.loadPackages || null,
     };
     // Coach booking their OWN client: preselect + lock the coach.
     if (st.coachLock && type === "lesson") {
@@ -761,14 +762,18 @@
         return String(c.coach_user_id) === String(st.coachLock);
       })[0] || "ANY";
     }
+    // Package auto-detection happens in loadLessonServices (once a coach is resolved) — the coach may
+    // be picked in the widget (admin on-behalf), so we can't know it up front.
     if (type !== "class") await loadDurations();
-    // On-behalf: fetch the client's packs with this coach; if they hold one, DEFAULT to drawing it
-    // (auto-route to their prepaid pack instead of raising a new charge). Server does the precise draw.
-    if (st.onBehalf && st.onBehalf.user_id && typeof opts.loadPackages === "function") {
-      try { st.clientWallets = (await opts.loadPackages(st.onBehalf.user_id)) || []; } catch (e) { st.clientWallets = []; }
-      if (onBehalfMatchWallet()) st.settlement = "token";
-    }
     render();
+  }
+  // On-behalf: fetch the client's packs WITH the resolved coach; if they hold one, DEFAULT to drawing
+  // it (auto-route to their prepaid pack instead of raising a new charge). Server does the precise draw.
+  async function loadOnBehalfPackages(coachId) {
+    st.clientWallets = [];
+    if (!(st.onBehalf && st.onBehalf.user_id && coachId && typeof st.loadPackagesFn === "function")) return;
+    try { st.clientWallets = (await st.loadPackagesFn(st.onBehalf.user_id, coachId)) || []; } catch (e) { st.clientWallets = []; }
+    if (onBehalfMatchWallet()) st.settlement = "token";
   }
 
   window.BookFlow = { start: start };
