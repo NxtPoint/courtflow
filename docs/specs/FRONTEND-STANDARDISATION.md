@@ -81,6 +81,8 @@ widgets/_registry → widgets/* → <role>_app`):
 - **`window.ServiceEditor`** (`service_editor.js`) and **`window.ClassUI`** (`class_ui.js`, lazy) — the
   single-sourced editors the Setup sections mount. **`window.AdminUI`** (bottom of `admin_api.js`) — the
   owner's config editors (clubProfile, courtsManage, membershipServices, bundlePlans, coachManage).
+- **`window.BookFlow`** (`booking.js`) — the ONE full-screen booking flow (`start(principal, type, opts)`),
+  shared by client self-book and coach/admin on-behalf; role variation is `opts` config (§4a).
 
 **Data adapters are inlined** at each SPA's mount call (e.g. admin passes
 `data:{ get:(i)=>AdminAPI.bookingStory(i).then(r=>r.booking) }`) rather than a separate `adapters/`
@@ -109,7 +111,10 @@ turns the Day view into the grid; without it the Day view is the agenda list (st
 by any self-scoped adapter). **Week/Month stay agenda** (a 7-day × all-resources grid is unreadable).
 Grid columns come from `cfg.filterBar` (courts by `resource_id`, coaches by `user_id`); the court/coach
 dropdowns filter the columns; **coach columns with no lessons that day are hidden** (courts always shown);
-classes get their own column. Every block still drills to the ONE event story via `cfg.onNavigate`
+classes get their own column. A **coach filter** narrows the grid to one coach: `cfg.coachId` sets the
+initial selection (the coach app defaults it to the signed-in coach = "just me"; clear the dropdown to
+"All" for the whole club), collapsing the columns to that coach's used courts and filtering events —
+including a lesson's held court (which carries the `coach_user_id`) — to that coach. Every block still drills to the ONE event story via `cfg.onNavigate`
 (→ `Widgets.TransactionDetail`) — never the old minimal popup. **Walk-in / block-time / desk-pay editing
 were deliberately NOT ported** — they remain in the classic diary (`/admin-classic`, via the widget's
 `classicLink`); folding them into the grid is a possible post-launch follow-up.
@@ -132,6 +137,22 @@ list:
 lifecycle actions via `PATCH /api/services/<id> {status}`; `services/routes.py` authorises owner=any,
 coach=own). The **coach cannot touch club profile, courts, or memberships** — enforced both by the
 absent sections and by the server. The gold-standard menu→focused-editor interaction is unchanged.
+
+## 4a. Booking — `window.BookFlow` (the ONE booking flow, incl. on-behalf)
+
+ONE full-screen booking widget (`frontend/js/booking.js`, `window.BookFlow.start(principal, type, opts)`)
+serves **self-book AND on-behalf across all three roles** — a second booking sheet would be a golden-rule
+bug. Role differences are the `opts` config, never forked code:
+- **Client** self-book: no opts (`{}`).
+- **Coach** book-for-client (`coach_app.js` `bookForClient`): `{ onBehalf, coachLock: principal.user_id,
+  loadPackages }` — the coach is locked to their own lessons; `loadPackages` draws the client's
+  coach-scoped prepaid wallet.
+- **Admin/owner** book-for-client (`admin_app.js` `adminBookForClient`): `{ onBehalf, loadPackages }` with
+  **NO `coachLock`** — the owner picks the coach.
+
+On-behalf mode posts `for_email` + the chosen `product_id` (charging the selected service exactly),
+auto-draws a matching pack the client holds (`onBehalfMatchWallet`), and **skips Yoco** (the client isn't
+present to pay). The lesson picker is **coach-first** (no "Any coach") with a per-service dropdown.
 
 ---
 

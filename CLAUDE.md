@@ -100,6 +100,35 @@ NextPoint Tennis is club #1, migrating off Wix.
   **public-site vs member-area** (path proxy) **+ logged-in visitors** (precise, accrues from 2026-07-06).
   Gates: `py_compile` + `python -m db` twice + `python -m scripts.test_all` → **43 / 142 / 40** (statement
   grew from 35). (`docs/specs/INVENTORY.md` + `OUTSTANDING.md` §C + `ADMIN-PHASE2.md` #20/#23/#29 updated.)
+- **2026-07-08 — BOOKING-FLOW AUDIT SPRINT (all live + harness-gated):** a multi-agent end-to-end audit of
+  the whole booking flow, then fixes. **(1) Coach/product-scoped pricing is now STRICT TWO-TIER** — a
+  service uses the coach's OWN active product if they have one, ELSE the shared (NULL-coach) product,
+  **never merged** (`diary.pricing._coach_has_own_product` gates `price_for`/`durations_for`/
+  `payment_modes_for` AND `diary.bookings._create_order_guarded`). This fixed a coach's rate card coming
+  through blank/R0 ("Any coach" 60-min) and a client on coach A's **class** being billed coach B's cheaper
+  rate (`diary/classes.py` enrol now passes the class's own `price_id`). **(2) Per-service selection** —
+  lessons/classes expose their named services (Private/Semi-private) via new `diary.pricing.services_for`
+  → `GET /api/diary/services`; the picker offers the specific service + its own durations/modes.
+  **(3) The ONE booking widget now does ON-BEHALF for all three roles** (`frontend/js/booking.js`
+  `BookFlow.start(principal, service, {onBehalf, coachLock, loadPackages})`): client self-book · coach
+  book-for-client (coach-first picker, no "Any coach") · admin book-for-client (owner picks the coach) —
+  role diffs = config, a second sheet would be a bug (golden rule). On-behalf **auto-draws a matching pack
+  wallet** (lesson = coach-scoped, class = coach-agnostic) and skips Yoco. **(4) Rich transactional email**
+  (`marketing_crm/email/booking_detail.py`) — full detail (client name/email/cell · service · **SAST**
+  date&time · court · price · payment status), keeps the green banner, and **BCCs the coach** on lesson
+  bookings. **(5) Coach diary shows ALL club bookings** with a self-filter defaulting to just-me
+  (`Widgets.Calendar` `coachId`, grid court-columns + events filter). **(6) Coach "clients with packages"**
+  view (`coach.repositories.coach_package_holders` → `GET /api/coach/packages`, `.../members/<id>/packages`;
+  admin mirror `GET /api/admin/clients/<id>/packages`). **(7) Booking-integrity fixes:** a lesson's held
+  court is **never billed** and now confirms with the lesson (`billing.events._confirm_held_bookings` +
+  held-court excluded from lists/insights/person-360); reschedule **re-prices** to the new duration
+  (`billing.orders.reprice_booking_order`) and **auto-reassigns the court**; a **paid** booking can't be
+  extended (`PAID_CANNOT_EXTEND`); a **membership-covered** booking can't move to an uncovered time free
+  (`NOT_COVERED_AT_NEW_TIME`); trial/members never book a coach free (`free` dropped from the client
+  settlement set; accept coerces `membership_covered`/`free`→`at_court`); a **late-cancellation fee** is
+  billed on cancel; a paid cancel prompts a refund (`was_paid`). Gates: `py_compile` + `python -m db` twice
+  + `python -m scripts.test_all` → **43 / 176 / 40** (billing grew +34). (`docs/specs/OUTSTANDING.md` §B
+  records the edge backlog + the subscriptions/plans review plan.)
 - **2026-06-28 additions (all live + harness-gated):** the **unified client statement** (`billing/statement.py`
   — one debt = one `billing.order`, settled once; account page shows ONE reconciled "Your statement",
   grouped by category with tick-to-part-settle; admin void/write-off; coach `coach_arrears` kept in
@@ -308,9 +337,13 @@ carry a lifecycle **`status`** (active/dormant/retired). See `docs/specs/02-toke
 
 **Booking flow (`frontend/js/booking.js`, full-screen — replaced `book.js`/`quickbook.js`):** Service →
 **Schedule** (month calendar with **inline per-duration chips** for court/lesson — pick the duration right
-on the day; live price or "Covered by your membership"; coach/court dropdowns default to "Any") → **Pay &
-confirm** (at court / monthly / membership / online) → animated success. Also a **~2-tap quick-book** off
-the cockpit (`portal.js`). Classes have fixed session times: Service → pick a session → enrol. **When
+on the day; live price or "Covered by your membership"; a **court** booking's court dropdown defaults to
+"Any", but a **lesson is coach-FIRST** — you pick the coach up front and see THAT coach's rate card/
+durations, there is no "Any coach") → **Pay & confirm** (at court / monthly / membership / online) →
+animated success. Also a **~2-tap quick-book** off the cockpit (`portal.js`). Classes have fixed session
+times: Service → pick a session → enrol. **The SAME widget powers on-behalf booking for coach + admin**
+via `BookFlow.start(principal, service, {onBehalf, coachLock, loadPackages})` (coach = own lessons/classes
+coach-locked; admin = picks the coach), auto-drawing a matching pack wallet and skipping Yoco. **When
 editing `booking.js`, PRESERVE** the `createBooking` call + the online seam (`res.booking.order_id` →
 `Pay.startYocoCheckout`).
 
@@ -362,9 +395,11 @@ request→accept→settle chain green on a scratch DB.
 - **Scratch-DB scenario harnesses — the primary gate:** `python -m scripts.test_all` runs THREE
   rollback-only harnesses against the local sandbox DB (each its own scratch club, always rolled back):
   **booking** (`test_booking_scenarios`, 43 checks — double-book, lesson coach∩court, off-peak per-slot
-  pricing, lifecycle), **billing/commercial** (`test_billing_scenarios`, 142 — settlement modes, commission,
+  pricing, lifecycle), **billing/commercial** (`test_billing_scenarios`, 176 — settlement modes, commission,
   tokens, membership incl. offline + per-tier modes, refunds, refund clawback, dispute routing, void/
-  lockstep, the client/coach event stories + the by-service breakdown), and **statement reconciliation**
+  lockstep, the client/coach event stories + the by-service breakdown, **coach/per-service two-tier pricing,
+  class rate-card, on-behalf pack draw, cancel-fee/paid-resize guards, covered-reschedule guard**), and
+  **statement reconciliation**
   (`test_statement_reconciliation`, 40 — no double-count, pay-all-once, part-settle, reclaim,
   membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, pack offline). Run alongside
   `python -m db` twice + `py_compile`.

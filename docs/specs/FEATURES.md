@@ -53,13 +53,19 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 - **30-minute start cadence** — bookings can start on the hour or half-hour (configurable finer per
   club); duration sets the length. ✅
 - **Reschedule** — atomic move, conflict-checked; a failed move preserves the original slot; a
-  lesson's court moves with it. ✅
-- **Cancel** — frees the slot (coach **and** court for a lesson); policy cancellation-cutoff /
-  no-show fee for members; admins/coaches override. ✅
+  lesson's held court is **auto-reassigned** to a free court at the new time; you can't extend a
+  **paid** booking (`PAID_CANNOT_EXTEND`), and moving a **membership-covered** booking to a time the
+  plan doesn't cover is blocked (`NOT_COVERED_AT_NEW_TIME`). ✅
+- **Cancel** — frees the slot (coach **and** court for a lesson); a late cancellation raises a
+  **fee order** when club policy applies; cancelling a **paid** booking prompts the client to request
+  a refund; admins/coaches override. ✅
 - **Classes** — owner/coach create class types + schedule **recurring or one-off** sessions;
   **capacity + waitlist** (auto-promote the next person on a cancel); rosters + attendance. ✅
-- **Book-on-behalf** — a coach/admin books FOR a client (auto-confirms; client can reschedule/cancel).
-  **Book-for-a-child** — a parent books for a dependent, billed to the parent. 🔭
+- **Book-on-behalf** — a coach/admin books FOR a client (auto-confirms; client can reschedule/cancel)
+  through the **ONE shared booking widget** (golden rule) used across client, coach and admin — coach-
+  locked to themselves for a coach, coach-pickable for the owner — with on-behalf **pack auto-draw**
+  (lesson = coach-scoped wallet, class = coach-agnostic) and no Yoco redirect. **Book-for-a-child** —
+  a parent books for a dependent, billed to the parent. 🔭
 - **Booking window / lead time / cancellation cutoff** from club policy. ✅ (window) 🔭 (cutoff UI)
 - **Lazy hold-expiry** — abandoned online holds are released on the next availability/booking read
   (no paid cron). ✅ (implicit) 🔭
@@ -78,6 +84,10 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 ## 5. Pricing & the three purchasing models
 - **Per-duration PAYG** — one price per offered duration (e.g. court 30/60/90/120; lesson 30/60);
   the booking picker only ever offers durations the owner has priced. ✅
+- **Coach / per-service rate cards applied exactly (strict two-tier)** — a service uses the coach's
+  **own** active product if they have one, **else** the shared (NULL-coach) product; the two are
+  **never merged**. So a lesson/class always bills that coach's configured rate — a client enrolled on
+  one coach's class is never charged another coach's cheaper rate. ✅
 - **Membership (term plans)** — configurable (label, amount, term months); an active membership makes
   **court** bookings free; admin can also grant/revoke manually. ✅
   - **Tiers + access windows** — a tier can be time-boxed (e.g. weekdays 06:00–17:00); coverage is
@@ -160,11 +170,13 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
   Money · Setup**):
   - **Home** = business cockpit KPIs (**Total billed** + net-of-commission earnings / lessons / hours /
     fill-rate) + the **lesson approval queue** + today + book-for-a-client. 🔭
-  - **Schedule** = a **weekly calendar** (week-of-today, prev/this/next) — tap a lesson → the event
+  - **Schedule** = a **weekly calendar** (week-of-today, prev/this/next) on the shared Calendar widget
+    — defaults to **just this coach** but can switch to **all** club bookings; tap a lesson → the event
     story; tap a class → its roster. 🔭
   - **Clients** = list → the **full client record**: name + **Total billed**, then **BY SERVICE**
     ("Private lesson · 60 min · 3 · R750") → sessions → each → the event story. Each session shows its
-    REAL money state (paid / owed / **written-off** / **discounted** / covered). 🔭
+    REAL money state (paid / owed / **written-off** / **discounted** / covered). Plus a **"Prepaid
+    packages"** view — the clients who hold a pack with this coach and their remaining balance. 🔭
   - **Money** = account balance/rent/net + disputes + per-client rollup → record + activity log.
     **Setup** = Services (lifecycle Deactivate/Reactivate/Terminate + filter) + **Classes**
     (create / schedule / roster) + club-commission card + Edit-profile & Weekly-hours (as pages). 🔭
@@ -200,7 +212,9 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
 - **Transactional email — per-club branded, multi-tenant SES — LIVE** ✅ (interim via the Ten-Fifty5 AWS
   account, `eu-north-1`, `SES_SENDER=noreply@ten-fifty5.com`): confirmations + invites go out from **one
   verified domain** but under **each club's own From name and Reply-To**, so a new tenant needs no new
-  sender verification. The `.ics` attachment is currently OFF (see above); the long-term CourtFlow-domain
+  sender verification. Booking confirmations carry a **rich detail block** (client name, contact,
+  service, date & **time in SAST**, court, price, payment status); a lesson booking also **BCCs the
+  coach** so they get the booking in their inbox. 🌐 The `.ics` attachment is currently OFF (see above); the long-term CourtFlow-domain
   setup is `SES-SETUP.md`. Plus **Klaviyo** lifecycle/marketing — same feed, dark until keyed. 🌐
 - **Consent** capture; no minor PII in marketing payloads. 🔭
 
@@ -236,7 +250,7 @@ lesson needs a free court · **coach∩class conflict** (read + write) · 30-min
 class enrol/capacity/waitlist/promote · lesson approval lifecycle (request → accept/decline/propose →
 client accept).
 
-**Commercial engines — `scripts/test_billing_scenarios.py` (142 checks):** settlement per mode
+**Commercial engines — `scripts/test_billing_scenarios.py` (176 checks):** settlement per mode
 (at-court desk, online held→paid, monthly-account ledger) · **idempotent payment replay** · commission
 30%/40% scoping + accrual + idempotency · token pack buy→activate→**unit/minute draw-down**→credit-back
 + NO_TOKEN · membership coverage (R0) + **access window** inside/outside + trial idempotency · refund-
@@ -247,9 +261,14 @@ desk-pay & **void clears arrears** · abandoned-checkout **reclaim on read** · 
 **event/booking stories** · the **client BY-SERVICE breakdown** (incl. written-off + discounted per-
 session state, billed vs effective, total-billed unchanged by write-off/discount) · the **admin
 person-360** + **admin event story** (god-view) · the Phase-2 read-layer (**court-utilisation** heatmap
-+ **sales-by-day**).
++ **sales-by-day**) · the 2026-07-08 booking-audit additions: **strict two-tier coach/product-scoped
+pricing** (coach's own product ELSE shared, never merged) · **per-service selection** · **class rate-card
+fix** (each class bills its own price) · **cancel late-fee + paid-booking resize** (`PAID_CANNOT_EXTEND`) ·
+**lesson-reschedule court auto-reassign** · **membership-covered reschedule guard**
+(`NOT_COVERED_AT_NEW_TIME`) · **settlement/approval-gate whitelist** (no client `free`; accept coerces
+covered/free → at-court) · **online-only** + **off-platform reconcile** · **on-behalf token/pack draw-down**.
 
-**Unified statement — `scripts/test_statement_reconciliation.py` (35 checks):** no double-count
+**Unified statement — `scripts/test_statement_reconciliation.py` (40 checks):** no double-count
 (orders only, never ledger + arrears too) · pay-all-once · **partial settle** (selected lines only) ·
 reclaim of an abandoned settlement · membership-covered R0 never owed · **void / write-off** · arrears
 ↔ orders lockstep (commission once) · pack-offline owed · category + coach-name grouping.

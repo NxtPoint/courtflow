@@ -54,6 +54,22 @@ operating guide; **this folder is the detail.**
 > payment (`GET /api/coach/members/search`), and **5 new email templates** (cancel/reschedule/refund/class-
 > cancel/reminder) + club BCC. Post-launch cleanup: retired the unreachable `my.js`/`account.js`/`book.html`
 > shells + a duplicate `/api/me/activity` route. Remaining: **OUTSTANDING.md**.
+>
+> **2026-07-08 — BOOKING-FLOW AUDIT SPRINT (live):** a multi-agent end-to-end audit of the whole booking
+> flow, then fixes. **Coach/product-scoped pricing is now STRICT TWO-TIER** (a service uses the coach's own
+> active product if they have one, else the shared NULL-coach product — never merged; `diary.pricing.
+> _coach_has_own_product` gates pricing AND order creation), which fixed blank/R0 coach rate cards and a
+> class client being billed another coach's cheaper rate. **Per-service selection** (`services_for` →
+> `GET /api/diary/services`) offers each named service's own durations/modes. **The ONE booking widget now
+> does on-behalf across all three roles** (client · coach book-for-client · admin book-for-client picking the
+> coach — config, not a fork), auto-drawing a matching **pack wallet** and skipping Yoco. **Rich transactional
+> email** (full detail, **SAST** times, green banner kept, coach **BCC** on lessons). **Coach diary shows all
+> club bookings** with a self-filter (default just-me) + a **"clients with packages"** view. Booking-integrity
+> fixes: a lesson's held court is never billed and confirms with the lesson, reschedule re-prices + reassigns
+> the court, a paid booking can't be extended, a covered booking can't move to an uncovered time free, trial/
+> members never book a coach free, late-cancel fee billed, paid-cancel prompts a refund. Gated green:
+> **booking 43 / billing 176 / statement 40**. Edge backlog + the subscriptions/plans review plan are in
+> **OUTSTANDING.md §B**.
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,

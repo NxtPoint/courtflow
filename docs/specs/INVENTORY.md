@@ -45,9 +45,20 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 
 ## 3. API endpoints (by lane)
 **Diary `/api/diary/*`:** `GET availability` (membership coverage priced PER-SLOT — R0 only inside the
-access window, PAYG outside) · `GET resources` · `GET durations` · `GET/POST bookings` ·
-`GET bookings/<id>` · `PATCH bookings/<id>` (reschedule) · `POST bookings/<id>/cancel` (now **voids the
-linked unpaid order** via `billing.statement.void_order` — a cancelled court no longer stays phantom-owed) ·
+access window, PAYG outside) · `GET resources` · `GET durations` · **`GET services`** (`?kind=&coach_id=&audience=`
+— bookable SERVICES for a coach: each product [e.g. Private / Semi-private] with its OWN
+`durations:[{duration_minutes,amount_minor,price_id}]` + `payment_modes` + `currency_code`, so the wizard
+offers the service name before the duration; `diary/pricing.py::services_for`, STRICT TWO-TIER via
+`_coach_has_own_product` — a coach's OWN active product ELSE the shared NULL-coach product, never merged) ·
+`GET/POST bookings` (**POST now accepts `product_id`** — the chosen service is priced exactly, passing
+`coach_user_id`+`product_id` into the order) ·
+`GET bookings/<id>` · `PATCH bookings/<id>` (reschedule — auto-reassigns the held court for a lesson;
+re-prices unpaid order lines + `coach_arrears` from the same product on a duration change via
+`billing.orders.reprice_booking_order`; **`PAID_CANNOT_EXTEND` (422)** extending a PAID booking,
+**`NOT_COVERED_AT_NEW_TIME` (422)** moving a `membership_covered` booking to an uncovered time) ·
+`POST bookings/<id>/cancel` (now **voids the
+linked unpaid order** via `billing.statement.void_order` — a cancelled court no longer stays phantom-owed;
+raises a late-cancellation **fee order** when policy applies; returns `was_paid`) ·
 `POST bookings/<id>/status` · **`POST bookings/<id>/{accept,propose,decline}`** (lesson lifecycle — only
 the awaited party; admin always) · **`GET bookings/<id>/calendar.ics`** (booking .ics) ·
 `GET master` · `GET classes` · `POST classes` ·
@@ -73,6 +84,9 @@ hard-delete a court with no bookings/sessions, else soft-archive) · `GET/PUT ho
 **`PATCH coaches/<id>`** (lifecycle status) · **`DELETE coaches/<id>`** (real: hard-delete if no
 history, else archive) · `GET people` · `GET payments` · `POST|DELETE members/<id>/membership` ·
 **`POST clients`** (create a walk-up/off-system client now — returns `user_id`, idempotent on email) ·
+**`GET clients/<client_user_id>/packages`** (`?coach_id=` — a client's ACTIVE packs for admin on-behalf
+booking to auto-route to a prepaid pack; `coach_id` filters lesson packs to that coach's/coach-agnostic,
+class/court always included) ·
 **`POST members/<id>/issue`** (issue a **membership OR token pack** offline — `{kind, price_id?|bundle_plan_id?,
 start_date?, mark_paid?, pay_provider?}`; reuses the offline-purchase engine → owed order activated now,
 `mark_paid` settles immediately) ·
@@ -108,7 +122,12 @@ the Money lists by construction). Admin-gated, guarded (missing/empty → empty 
 (+`POST services/<pid>/rate`, `PATCH/DELETE services/<id>`) · `GET/POST bundle-plans`
 (+`PATCH bundle-plans/<id>` — own lesson packs, scoped + ownership-guarded) · `PUT hours` ·
 `GET/POST/DELETE time-off` · `GET clients` · **`GET members/search`** (`?q=` type-ahead client lookup for
-"book a client", min 2 chars; `coach/repositories.search_members`) · **`GET clients/<id>`** (`?month=` — the client 360;
+"book a client", min 2 chars; `coach/repositories.search_members`) · **`GET packages`** (every client
+holding an active lesson pack with THIS coach + remaining balance — the coach's "clients with packages"
+view; `coach/repositories.py::coach_package_holders`) · **`GET members/<client_user_id>/packages`**
+(a client's ACTIVE packs THIS coach can draw — coach-specific to them, or coach-agnostic; lesson filtered
+to self, class/court agnostic — so "book a client" auto-routes to a prepaid pack instead of a new charge) ·
+**`GET clients/<id>`** (`?month=` — the client 360;
 now returns a **by-service breakdown** `services[]` + `services_billed_minor` with the REAL per-session
 state paid/owed/written_off/discounted/covered, via `billing/commission.py::client_service_breakdown`) ·
 **`GET bookings/<id>`** (the coach **event story** — client/contact, court, charge, coaching-arrears line,
@@ -298,6 +317,8 @@ dashboard (`sync:false`).
 - Compile: `python -m py_compile $(git ls-files '*.py')`.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` (booking / billing / **`scripts/test_statement_reconciliation.py`** —
-  35 checks: no double-count, pay-all-once, partial settle, void/write-off, arrears↔orders lockstep).
+  `python -m scripts.test_all` → **booking 43 / billing 176 / statement 40** (`test_booking_scenarios` /
+  `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
+  settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
+  on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards).
 - Frontend: `node --check <file>.js`.

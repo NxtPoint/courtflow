@@ -34,14 +34,20 @@ a membership tier's lifecycle derives from its term plans' status.
 - **No double-booking:** a Postgres GiST EXCLUDE constraint guarantees one booking per resource per
   time; concurrent clashes → exactly one wins (`SLOT_TAKEN`).
 - **Lessons reserve a court:** availability for a lesson = slots where a **coach AND a court are both
-  free** (coach ∩ court); booking a lesson auto-holds a court (two rows, one `order_id`).
+  free** (coach ∩ court); booking a lesson auto-holds a court (two rows, one `order_id`). The held court
+  is **never billed separately** — the lesson's single order covers both, and the court row confirms
+  alongside the lesson when the order is paid.
 - **Classes:** owner/coach create class types + schedule **recurring or one-off** sessions; capacity +
   **waitlist** (auto-promote the next person on a cancellation); rosters + attendance; shown on the
   master diary.
 - **Book-on-behalf:** a coach/admin can book FOR a client (owned by the client via `booked_for_user_id`)
   — this **auto-confirms** (the client is just notified, and can reschedule/cancel). **Book-for-a-child:**
   a parent picks a dependent in "Who's playing?" — the booking is FOR the child but **owned and billed to
-  the parent**.
+  the parent**. **On-behalf pack auto-draw:** when a coach/admin books for a client who already holds a
+  matching prepaid pack, the booking **draws that client's wallet** (settlement `token`, R0) instead of
+  raising a new charge — a lesson matches a **coach-scoped** wallet, a class a **coach-agnostic** one. Staff
+  on-behalf settlement is desk-only (at-court / monthly / the client's pack) — it **skips online (Yoco)**,
+  and an online-only per-service preference does not restrict staff.
 - **Lesson approval lifecycle (accept / propose / decline).** A coach can require approval of lessons
   clients book with them (`iam.coach_profile.review_bookings`). When ON, a client self-booking that coach
   creates a **`requested`** lesson that **reserves nothing** (no court, no order, no payment) until the
@@ -56,10 +62,31 @@ a membership tier's lifecycle derives from its term plans' status.
 - **Holds expire lazily** (no cron): abandoned `held` bookings past `held_until` are released whenever
   anyone checks availability or books.
 - **Booking window / lead time / cancellation cutoff** come from `club.policy` (configurable).
+- **Reschedule rules.** Rescheduling **re-prices** the order + owed coaching to the new duration (from the
+  **same product**, so it's the coach's own rate for that length, never another coach's). But: a **paid**
+  booking can't be **extended** into a longer/pricier slot (`PAID_CANNOT_EXTEND`, 422 — cancel and rebook to
+  lengthen; a same-length or shorter move is fine), and a **membership-covered** court can't be moved to a
+  time the membership doesn't cover for free (`NOT_COVERED_AT_NEW_TIME`, 422 — pick a covered slot or book a
+  paid court). A lesson's auto-held court is **reassigned to a free court** at the new time.
+- **Late-cancellation fee.** When the club's cancellation policy applies at cancel time, a small **owed fee
+  order** is raised on the client's statement (owner decision M6); cancelling voids the booking's own unpaid
+  order so no phantom debt remains, and a **paid** cancellation is flagged (`was_paid`) so the UI can prompt a
+  refund (the refund itself stays a separate, explicit flow).
 
 ## 3. Pricing (per-duration PAYG)
 - A service carries **one `billing.price` row per offered duration** (`duration_minutes`,
   `unit='per_booking'`). `price_for(kind, duration)` resolves exact → nearest≤ → any.
+- **Coach/product pricing is STRICT TWO-TIER (never merged).** For a lesson/class, a service uses the
+  **coach's OWN active product if they have one, ELSE the shared (NULL-coach) product** — the two are never
+  mixed. This governs `price_for` / `durations_for` / `payment_modes_for` / `services_for` **and** order
+  creation in `create_booking`, so the coach's own rate card is applied **exactly** (their R400 60-min is
+  charged as R400), there are no phantom durations or zero-rated "cheapest matching row" leaks, and there is
+  **no "Any coach" R0 lesson** — a lesson is always coach-first. Classes charge the **enrolled session's own
+  `price_id`**, so a client on coach A's class is never given coach B's cheaper class rate.
+- **Per-service selection.** A lesson or class kind can have **several named services** (e.g. Private vs
+  Semi-private), each its own product with its own durations + payment modes. The picker offers the specific
+  service (`services_for` → a per-product list) and books that exact `product_id`; the two-tier coach scope
+  above still applies.
 - Seeded defaults (editable): Court 30/60/90/120 = R90/150/210/280; Lesson 30/60 = R250/400; classes
   per session. The legacy Wix "member R0 court" tier is gone.
 - The booking flow (`booking.js`, full-screen): **Service → Schedule (month calendar with inline
@@ -101,7 +128,9 @@ a membership tier's lifecycle derives from its term plans' status.
 ### Free week (signup gift)
 A brand-new member is **auto-granted a 7-day courts-free trial** on first login — a time-boxed
 `billing.membership_subscription` (`provider='trial'`, `current_period_end = today + N days`) that makes
-COURT bookings free via the membership engine and **auto-lapses** (no cron). Lessons/packs stay paid.
+COURT bookings free via the membership engine and **auto-lapses** (no cron). Lessons/packs stay paid —
+membership coverage (trial or paid) is **court-only**; a client booking a coach can never settle
+`free`/`membership_covered`, so a trial member still pays for lessons.
 One-shot + idempotent (never double-granted, never re-issued; existing/paid members get nothing). Length
 via `SIGNUP_TRIAL_DAYS` env (default 7; 0 disables). The booking page shows a "free week — N days left"
 banner; `GET /api/me/plan` exposes `is_trial` / `trial_days_left`. Granted in `auth/principal.py`
@@ -210,5 +239,8 @@ Full spec: [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md).
   *attachment* is gated OFF (`EMAIL_ICS_ENABLED=0`) until the interim SES key gains `ses:SendRawEmail`.
 - **Email** (SES transactional) is **LIVE** — interim via the Ten-Fifty5 AWS account (`eu-north-1`,
   `SES_SENDER=noreply@ten-fifty5.com`): invites + booking/statement confirmations send from each club's
-  From-name + Reply-To, alongside the in-app inbox. Child events notify the **guardian**. **Klaviyo**
-  marketing stays dark until keyed. (See ENV-STATUS.md / OUTSTANDING.md.)
+  From-name + Reply-To, alongside the in-app inbox. Child events notify the **guardian**. Booking emails
+  carry a **full detail block** (`marketing_crm/email/booking_detail.py`) — client name/email/cell, service,
+  **SAST** date & time, court, price and payment status — and a **lesson** booking **BCCs the coach** (on top
+  of the club's oversight BCC). **Klaviyo** marketing stays dark until keyed. (See ENV-STATUS.md /
+  OUTSTANDING.md.)

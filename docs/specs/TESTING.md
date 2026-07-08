@@ -13,12 +13,18 @@ the coach sets up services, then the client books against them. Expected results
 > own scratch club, always rolled back, never persisted):
 > - **booking** (`test_booking_scenarios`, **43** checks) — double-book refusal, coach∩court integrity,
 >   recurrence/waitlist, lazy hold-expiry.
-> - **billing / commercial** (`test_billing_scenarios`, **142** checks) — PAYG/membership/bundle settlement,
+> - **billing / commercial** (`test_billing_scenarios`, **176** checks) — PAYG/membership/bundle settlement,
 >   desk-payment idempotency, refunds, commission, refund clawback, membership-cancel-voids-order, the
 >   transaction log, dispute routing, client month-end, void clears arrears, abandoned reclaim on read, the
->   booking + coach event stories, cancel-voids-order + phantom cleanup, and the **client by-service breakdown**
->   (incl. the written-off + discounted states, billed vs effective).
-> - **statement reconciliation** (`test_statement_reconciliation`, **35** checks) — the unified-statement
+>   booking + coach event stories, cancel-voids-order + phantom cleanup, the **client by-service breakdown**
+>   (incl. the written-off + discounted states, billed vs effective), plus the 2026-07-08 booking-audit
+>   additions: **strict two-tier coach/product-scoped pricing** (coach's own product ELSE shared, never
+>   merged), per-service selection, **class rate-card fix** (each class bills its own price, not a cheaper
+>   coach's), **cancel late-fee + paid-booking resize** (`PAID_CANNOT_EXTEND`), **lesson-reschedule court
+>   auto-reassign**, **membership-covered reschedule guard** (`NOT_COVERED_AT_NEW_TIME`), **settlement/
+>   approval-gate whitelist** (no client `free`; accept coerces covered/free → at-court), **online-only**
+>   and **off-platform reconcile** paths, and **on-behalf token/pack draw-down**.
+> - **statement reconciliation** (`test_statement_reconciliation`, **40** checks) — the unified-statement
 >   money invariant: a client owes the SUM of unpaid orders with **no double-count** (ledger/arrears never
 >   added in), **pay-all** settles every debt **once + idempotent** (replay = no re-charge, no double
 >   commission), **partial settle** pays a ticked subset, an **abandoned settlement is reclaimed** (never

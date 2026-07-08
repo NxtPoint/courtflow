@@ -42,7 +42,11 @@ Three mobile-first, drill-through single-page apps, one per role, on the **one s
   Calendar widget + Classes — **Day view = resource-timeline grid**, Week/Month agenda, blocks drill to the
   event story) · **Overview** (first-class nav tab since 2026-07-05: month pager + ECharts sub-tabs
   Traffic/Bookings/Revenue/Members/NPS/Courts on `GET /api/insights/overview`; Courts = the court-utilisation
-  heatmap) · Setup. Money also carries **Bookings by day** next to Sales by day. The **classic tab console**
+  heatmap) · Setup. Money also carries **Bookings by day** next to Sales by day. Booking counts across
+the console **exclude the auto-held court row of a lesson** (it shares the lesson's order, so a lesson
+counts ONCE, not as a lesson + a phantom court) — a NULL-safe `notes IS DISTINCT FROM '(court held for
+lesson)'` filter applied in `insights.repositories` (`bookings_by_day` + `overview`), the person-360
+(`admin.repositories.get_person`) and `diary.list_bookings`. The **classic tab console**
   is preserved at **`/admin-classic`** (its full drag-timeline **editing** — walk-in/block-time/desk-pay —
   is not yet ported). `admin.html`/`admin.js` remain on disk; the dead classic **coach** console
   (`coach.js`/`coach.html`) was deleted.
@@ -94,9 +98,21 @@ have capacity + waitlist (auto-promote on cancel) and can **optionally reserve a
 `release_expired_holds` runs at the top of availability + booking, cancelling `held` rows past
 `held_until` — no paid cron needed.
 
+**Coach/product-scoped pricing is STRICT TWO-TIER.** `diary/pricing.py` resolves a service's rate card
+against the coach's **own** active product if they have one (`_coach_has_own_product`), **else** the
+shared (NULL-coach) product — the two tiers are **never merged** (mixing leaked phantom durations +
+zero-rated prices). `price_for` / `durations_for` / `payment_modes_for` all honour this, and
+`services_for(club_id, kind, coach_user_id, audience)` returns the per-product picker list
+(`{product_id, name, payment_modes, currency_code, durations:[…]}`) so a coach with several services
+(e.g. Private vs Semi-private) offers each separately.
+
 ## Billing & the commercial engines
 `billing/` core (`orders`, `ledger`, `gateway` registry, `apply_payment_event` — idempotent) is
-provider-agnostic. On top of it:
+provider-agnostic. `billing.orders.reprice_booking_order(club_id, booking_id, duration_minutes)`
+re-prices an **unpaid** booking order (+ its owed coaching arrears) to a new duration's price from the
+**same product** (so a rescheduled lesson is charged its actual length, never another coach's rate); a
+guarded no-op when the order is settled, a real charge has succeeded, it's an R0 mode
+(membership/token/free), or the new duration has no configured price. On top of the core:
 - **`yoco_billing/`** — the Yoco adapter (hosted checkout, Standard-Webhooks verify, refund, reconcile,
   receipt) behind `register_gateway`/`get_gateway`. `billing/` core is untouched.
 - **`billing/statement.py`** — the **single source of truth for what a client owes** (full spec:
@@ -146,7 +162,13 @@ Producers call `marketing_crm.emit(event, payload)` → writes `core.usage_event
 contract, `contracts/events.md`; includes the `lesson_requested|proposed|accepted|declined` lifecycle
 events). `emit()` also drives **notifications** (`marketing_crm/notifications.py`, non-fatal): mapped
 transactional kinds → a `core.notification` (in-app inbox, always) + a transactional email (SES).
-Child bookings route notifications to the **guardian**. Every booking has a downloadable **`.ics`**
+Child bookings route notifications to the **guardian**. Booking/class emails carry a **rich detail
+block** (`marketing_crm/email/booking_detail.py`, `DETAIL_KINDS`) — a guarded, read-only lookup
+(`load` → `html_block`/`text_block`) that renders the full booking under the green banner: client
+name+surname · email · cell · service (via `order_line→price→product`) · date & time in the club's
+timezone (**SAST**/`Africa/Johannesburg`, fixed +02:00 fallback where no zoneinfo) · court · coach ·
+duration · price + payment status. On a **lesson** the coach is **BCC'd** (`booking_detail.coach_email`
+adds to the `bcc` list in `notifications.py`). Every booking has a downloadable **`.ics`**
 (`diary/calendar.py` → `GET /api/diary/bookings/<id>/calendar.ics`; `ics_url` on the confirmation
 payload) — in-app "Add to calendar" works now; the email *attachment* is gated OFF (`EMAIL_ICS_ENABLED=0`).
 
