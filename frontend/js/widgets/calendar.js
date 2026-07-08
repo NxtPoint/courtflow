@@ -73,6 +73,11 @@
       if (state.courtId) courts = courts.filter(function (c) { return String(c.id) === String(state.courtId); });
       if (state.coachId) {
         coaches = coaches.filter(function (c) { return String(c.id) === String(state.coachId); });
+        // Only the courts THIS coach's events actually use (their held courts) — not every court —
+        // so picking a coach shows just their day, not the whole club's court grid.
+        var used = {};
+        (events || []).forEach(function (ev) { if (evKind(ev) === "court" && ev.resource_id != null) used["court:" + ev.resource_id] = true; });
+        courts = courts.filter(function (c) { return used["court:" + c.id]; });
       } else {
         // Hide coaches with NO lessons this day — keeps the grid court-focused on quiet days.
         // (A coach explicitly picked in the dropdown above is always shown, even if empty.)
@@ -93,7 +98,9 @@
     }
     function gridDayView(events) {
       var cols = gridColumns(events);
-      var hasClasses = !state.courtId && !state.coachId && events.some(function (ev) { return evKind(ev) === "class"; });
+      // Show the Classes column whenever there are class events in view (incl. a coach's own classes
+      // when they're filtered) — only a COURT filter hides it (courts have no classes).
+      var hasClasses = !state.courtId && events.some(function (ev) { return evKind(ev) === "class"; });
       if (!cols.length && !hasClasses) return el("div", { class: "cf-empty", text: "No courts or coaches configured." });
       var slots = ((DAY_END - DAY_START) * 60) / SLOT_MIN, totalCols = cols.length + (hasClasses ? 1 : 0);
       var wrap = el("div", { class: "cf-cal-wrap" }), grid = el("div", { class: "cf-cal" });
@@ -213,11 +220,15 @@
       Promise.resolve(cfg.data.events(range)).then(function (events) {
         events = (events || []).filter(function (ev) {
           if (ev.status === "cancelled") return false;
-          // In grid mode the COLUMNS carry the court/coach filter, so keep all events (a hidden
-          // column simply has no anchor). In agenda mode filter the events themselves.
+          // Agenda mode filters the events themselves. Grid mode normally lets the COLUMNS carry the
+          // court filter — BUT a COACH filter must show ONLY that coach's activity (their lessons +
+          // the courts those lessons hold; a held court carries the coach_user_id, a standalone court
+          // does not), so we filter events by coach even in grid mode.
           if (!useGrid) {
             if (state.courtId && String(ev.resource_id) !== String(state.courtId)) return false;
             if (state.coachId && String(ev.coach_user_id) !== String(state.coachId)) return false;
+          } else if (state.coachId && String(ev.coach_user_id) !== String(state.coachId)) {
+            return false;
           }
           return true;
         }).sort(function (a, b) { return String(a.starts_at).localeCompare(String(b.starts_at)); });
