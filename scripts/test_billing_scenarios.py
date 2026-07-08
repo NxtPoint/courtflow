@@ -1134,11 +1134,39 @@ def sc_offplatform_reconcile(s, fx):
           st1["totals"]["owed_minor"] == 0, str(st1["totals"]))
 
 
+def sc_onbehalf_token(s, fx):
+    """On-behalf auto-draw: when a coach books their client and the client has a prepaid pack WITH
+    that coach, it DRAWS the client's pack (R0 token order) — never a new owed charge/financial entry.
+    (Robert's pack with Allon is drawn when Allon books Robert.)"""
+    print("\n# On-behalf token: coach books their client on the client's OWN pack (draw, not a new charge)")
+    plan = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=10,
+                          price_minor=300000, duration_minutes=60, coach_user_id=fx.coach_uid, label="10 lessons")
+    order = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member, bundle_plan_id=plan["id"])
+    oid = order["order_id"]
+    apply_payment_event(NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
+        provider_payment_id="p_pack_ob", amount_minor=300000, currency="ZAR", status="succeeded",
+        direction="charge", club_id=str(fx.club_id), user_id=str(fx.member), raw={"t": 9}), session=s)
+    BN.activate_wallet_for_order(s, order_id=oid)
+    before = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"), {"o": str(oid)}).scalar()
+    # The COACH books the CLIENT on-behalf (settlement_mode=token, booked_for=client) → draws THEIR pack.
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)),
+                         settlement_mode="token", booked_for_user_id=fx.member)
+    check("on-behalf token lesson booked", r.get("ok"), str(r))
+    after = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"), {"o": str(oid)}).scalar()
+    check("client's own pack drawn 60 min (not a new charge)", (before - after) == 60, f"{before}->{after}")
+    bord = _order(s, r["booking"]["order_id"])
+    check("on-behalf token booking is R0/paid — NO new owed financial entry",
+          bord and bord["amount_minor"] == 0 and bord["status"] == "paid", str(bord))
+
+
 SCENARIOS = [
     sc_coach_scoped_pricing,
     sc_settlement_guards,
     sc_online_only,
     sc_offplatform_reconcile,
+    sc_onbehalf_token,
     sc_payment_preference,
     sc_person_360,
     sc_admin_event_story,

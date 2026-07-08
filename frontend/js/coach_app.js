@@ -358,7 +358,7 @@
       el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
       el("button", { class: "cf-btn cf-btn-primary", text: "Continue →", onclick: function () {
         var onBehalf = null;
-        if (selected && selected.email) onBehalf = { name: selected.name, email: selected.email };
+        if (selected && selected.email) onBehalf = { name: selected.name, email: selected.email, user_id: selected.user_id };
         else if (guest.value.trim()) onBehalf = { name: guest.value.trim() };
         else { UI.toast("Search & pick a client, or enter a guest name.", "warn"); return; }
         m.close();
@@ -367,6 +367,8 @@
           coachLock: principal.user_id,            // the coach books their OWN lessons
           backTo: "#/schedule",
           onDone: function () { location.hash = "#/schedule"; route(); },
+          // Auto-route to the client's prepaid pack with this coach (draw, not a new charge).
+          loadPackages: function (uid) { return window.CoachAPI.clientPackages(uid).then(function (r) { return (r && r.packages) || []; }); },
         });
       } }),
     ]));

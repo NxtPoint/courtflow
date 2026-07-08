@@ -129,10 +129,10 @@
     if (ctx.billing.allow_monthly !== false) modes.push("monthly_account");
     if (!st.skipOnline && ctx.billing.online_enabled && modes.indexOf("online") < 0) modes.push("online");
     if (st.onBehalf) {
-      // Staff override: collect at court / account / the client's pack — no Yoco. An online-only
-      // service preference does NOT restrict staff (the owner's decision), so we don't apply the
-      // per-service filter; the client's pack is drawn server-side (NO_TOKEN if they have none).
-      if (modes.indexOf("token") < 0) modes.unshift("token");
+      // Staff override: collect at court / account — no Yoco. An online-only service preference does
+      // NOT restrict staff (owner's decision). If the CLIENT holds a pack with this coach, offer it
+      // FIRST (default) so we draw their prepaid pack instead of raising a new charge.
+      if (onBehalfMatchWallet() && modes.indexOf("token") < 0) modes.unshift("token");
       return modes.filter(function (m) { return m === "token" || UI.SETTLEMENT[m]; });
     }
     // Per-service payment preference: keep only the methods THIS service offers (token = the
@@ -141,10 +141,25 @@
     if (matchTokenWallet() && modes.indexOf("token") < 0) modes.unshift("token");
     return modes.filter(function (m) { return m === "token" || UI.SETTLEMENT[m]; });
   }
+  // On-behalf: match a pack the CLIENT holds with THIS coach (loaded via opts.loadPackages). When
+  // one exists we default to it and DRAW it down (no new charge) instead of raising a fresh order.
+  function onBehalfMatchWallet() {
+    if (!st.onBehalf) return null;
+    var list = st.clientWallets || [];
+    var coach = chosenCoachUserId();
+    var hit = list.filter(function (w) {
+      if (w.status !== "active") return false;
+      if ((w.minutes_remaining || 0) <= 0 && (w.sessions_remaining || 0) <= 0) return false;
+      if (w.coach_user_id != null && coach != null && String(w.coach_user_id) !== String(coach)) return false;
+      return true;
+    })[0] || null;
+    st.tokenWallet = hit;
+    return hit;
+  }
   function tokenChipMeta() {
-    var w = st.tokenWallet;
-    if (!w) return { label: "Use your pack", hint: "" };
-    return { label: "Covered by your pack",
+    var w = st.tokenWallet, mine = st.onBehalf ? "their pack" : "your pack";
+    if (!w) return { label: "Use " + mine, hint: "" };
+    return { label: "Covered by " + mine,
              hint: walletSessionsLeft(w) + " of " + (w.tokens_total || 0) + " sessions left · this booking is free" };
   }
   function priceLabel() {
@@ -497,8 +512,8 @@
           ? ("Your free week — " + ctx.plan.trial_days_left + " day" + (ctx.plan.trial_days_left === 1 ? "" : "s") + " left")
           : "No charge for this court."));
     } else if (st.settlement === "token" && !st.showPayOptions) {
-      var w = st.tokenWallet;
-      card.appendChild(freePanel("Free with your pack.", w ? (walletSessionsLeft(w) + " of " + (w.tokens_total || 0) + " sessions left in your pack") : null));
+      var w = st.tokenWallet, whose = st.onBehalf ? "their" : "your";
+      card.appendChild(freePanel("Free with " + whose + " pack.", w ? (walletSessionsLeft(w) + " of " + (w.tokens_total || 0) + " sessions left in " + whose + " pack") : null));
       card.appendChild(el("p", { style: "text-align:center;margin-top:8px" }, [
         el("a", { href: "#", class: "cf-muted cf-tiny", text: "Pay another way instead", onclick: function (ev) { ev.preventDefault(); st.showPayOptions = true; renderConfirm(); } }),
       ]));
@@ -689,6 +704,7 @@
       view: "schedule", _gName: null, _gEmail: null,
       onBehalf: opts.onBehalf || null, coachLock: opts.coachLock || null,
       backTo: opts.backTo || null, onDone: opts.onDone || null, skipOnline: !!opts.onBehalf,
+      clientWallets: [],
     };
     // Coach booking their OWN client: preselect + lock the coach.
     if (st.coachLock && type === "lesson") {
@@ -697,6 +713,12 @@
       })[0] || "ANY";
     }
     if (type !== "class") await loadDurations();
+    // On-behalf: fetch the client's packs with this coach; if they hold one, DEFAULT to drawing it
+    // (auto-route to their prepaid pack instead of raising a new charge). Server does the precise draw.
+    if (st.onBehalf && st.onBehalf.user_id && typeof opts.loadPackages === "function") {
+      try { st.clientWallets = (await opts.loadPackages(st.onBehalf.user_id)) || []; } catch (e) { st.clientWallets = []; }
+      if (onBehalfMatchWallet()) st.settlement = "token";
+    }
     render();
   }
 

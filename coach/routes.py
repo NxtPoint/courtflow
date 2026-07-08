@@ -530,6 +530,25 @@ def coach_member_search():
     return jsonify(members=rows), 200
 
 
+@coach_bp.get("/members/<client_user_id>/packages")
+def coach_client_packages(client_user_id):
+    """A client's ACTIVE lesson packs that THIS coach can draw (coach-specific to them, or
+    coach-agnostic) — so 'book a client' can auto-route to a prepaid pack the client already funded
+    to the coach, instead of raising a NEW charge. Returns [] if the token engine isn't present."""
+    p, err = _coach()
+    if err:
+        return err
+    try:
+        from billing import bundles
+        with session_scope() as s:
+            ws = bundles.wallets_for(s, club_id=p.club_id, user_id=client_user_id,
+                                     service_kind="lesson", active_only=True)
+        mine = [w for w in ws if w.get("coach_user_id") in (None, str(p.user_id))]
+    except Exception:
+        mine = []
+    return jsonify(packages=mine), 200
+
+
 @coach_bp.get("/clients/<client_user_id>")
 def get_client(client_user_id):
     p, err = _coach()

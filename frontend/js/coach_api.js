@@ -34,6 +34,8 @@
     onboarding: function () { return A().apiJSON("/api/coach/onboarding"); },
     // GET /api/coach/members/search?q= -> {members:[{user_id,name,email,phone}]} — 'book a client' lookup.
     searchMembers: function (q) { return A().apiJSON("/api/coach/members/search?q=" + encodeURIComponent(q || "")); },
+    // A client's active lesson packs THIS coach can draw (for on-behalf auto-routing to their pack).
+    clientPackages: function (userId) { return A().apiJSON("/api/coach/members/" + enc(userId) + "/packages"); },
     // POST /api/coach/onboarding/complete -> {ok:true}
     completeOnboarding: function () {
       return A().apiJSON("/api/coach/onboarding/complete", { method: "POST", body: {} });
