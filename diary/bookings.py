@@ -174,10 +174,13 @@ def _settlement_allowed(mode, policy, role):
         return bool(policy.get("allow_monthly_account", True))
     if mode == "online":
         return bool(policy.get("allow_online_payment", False))
-    if mode in ("membership_covered", "free", "token"):
+    if mode in ("membership_covered", "token"):
         # token: a member spending their own prepaid pack is always allowed; the real gate is
         # whether they actually HOLD a matching wallet (match_wallet → NO_TOKEN otherwise).
+        # membership_covered is re-validated as COURT-only + inside the access window downstream.
         return True
+    # 'free' is a complimentary/admin-only mode the client UI never offers — a member POSTing it
+    # would otherwise get an R0 'paid' booking with no charge. Non-admins are refused here.
     return False
 
 
@@ -416,7 +419,12 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                 _coach_reviews(session, club_id, _gate_coach):
             _gate_status = "requested"
         if _gate_status and _gate_coach:
-            _gate_sm = "at_court" if settlement_mode == "online" else settlement_mode
+            # A gated (requested) lesson holds NO money yet. Whitelist the modes valid to store on it
+            # and coerce everything else to at_court so the coach's later accept settles it normally:
+            # online (prepay happens on/after accept), membership_covered (COURT-only — never trust a
+            # client's crafted claim on a lesson), and free (admin-only) all collapse to at_court.
+            _gate_sm = settlement_mode if settlement_mode in ("at_court", "monthly_account", "token") \
+                else "at_court"
             _gid = _insert_booking(
                 session, club_id=club_id, booking_type="lesson", resource_id=resource_id,
                 coach_user_id=_gate_coach, starts_at=starts, ends_at=ends, status=_gate_status,
@@ -955,6 +963,10 @@ def accept_booking(session, *, club_id, booking_id, actor_user_id, role, now=Non
     owner_user_id = bk.get("booked_by_user_id")
     coach_uid = bk.get("coach_user_id")
     settlement_mode = bk.get("settlement_mode") or "at_court"
+    # Defence in depth: a lesson is never membership_covered/free (court-only / admin-only). If a row
+    # somehow carries one, settle it at the desk rather than mint an R0 'paid' lesson on accept.
+    if settlement_mode in ("membership_covered", "free"):
+        settlement_mode = "at_court"
     online = settlement_mode == "online"
     status = "held" if online else "confirmed"
     held_until = (now + timedelta(minutes=HOLD_MINUTES_DEFAULT)) if online else None

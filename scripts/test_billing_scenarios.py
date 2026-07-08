@@ -1035,8 +1035,42 @@ def sc_coach_scoped_pricing(s, fx):
           str(_order(s, rB["booking"]["order_id"])["amount_minor"]))
 
 
+def sc_settlement_guards(s, fx):
+    """H3/H4: crafted settlement modes can't mint a free/R0 booking. 'free' is refused for a member;
+    'membership_covered' on a gated (review_bookings) lesson is coerced to at_court and CHARGED on
+    accept, never an R0 'paid' lesson."""
+    print("\n# Settlement guards: crafted 'free' refused; membership_covered lesson can't be R0")
+    rfree = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                             booking_type="court", resource_id=fx.courts[0],
+                             starts_at=iso(at(fx, 8)), ends_at=iso(at(fx, 9)), settlement_mode="free")
+    check("H3: member 'free' court booking refused (SETTLEMENT_NOT_ALLOWED)",
+          (not rfree.get("ok")) and rfree.get("error") == "SETTLEMENT_NOT_ALLOWED", str(rfree))
+    # Gated coach + a crafted membership_covered lesson.
+    s.execute(text("UPDATE iam.coach_profile SET review_bookings=true WHERE club_id=:c AND user_id=:u"),
+              {"c": fx.club_id, "u": fx.coach_uid})
+    rgate = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                             booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                             starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)),
+                             settlement_mode="membership_covered")
+    check("H4: gated lesson created as 'requested'",
+          rgate.get("ok") and rgate["booking"]["status"] == "requested",
+          str(rgate.get("booking", {}).get("status")))
+    bid = rgate["booking"]["id"]
+    stored = s.execute(text("SELECT settlement_mode FROM diary.booking WHERE id=:b"), {"b": bid}).scalar()
+    check("H4: crafted membership_covered coerced to at_court on the requested row",
+          stored == "at_court", str(stored))
+    acc = B.accept_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=fx.coach_uid, role="coach")
+    check("H4: coach accept confirms the lesson",
+          acc.get("ok") and acc["booking"]["status"] == "confirmed", str(acc))
+    oid = B._booking_dict(s, bid)["order_id"]
+    check("H4: accepted lesson is CHARGED (R400), not R0",
+          _order(s, oid) and _order(s, oid)["amount_minor"] == 40000,
+          str(_order(s, oid) and _order(s, oid)["amount_minor"]))
+
+
 SCENARIOS = [
     sc_coach_scoped_pricing,
+    sc_settlement_guards,
     sc_payment_preference,
     sc_person_360,
     sc_admin_event_story,
