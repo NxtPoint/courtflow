@@ -1020,6 +1020,13 @@ def list_people(session, *, club_id):
                           WHERE tw.club_id = :c AND tw.user_id = u.id AND tw.status = 'active'
                             AND COALESCE(tw.minutes_remaining, 0) > 0
                             AND tw.service_kind = 'court') AS has_court_pack,
+                   -- The coaches this client holds an active (lesson/class) pack WITH — for the
+                   -- People "by coach" holdings filter (packs are coach-scoped; the coach is paid).
+                   (SELECT array_agg(DISTINCT tw.coach_user_id)
+                    FROM billing.token_wallet tw
+                    WHERE tw.club_id = :c AND tw.user_id = u.id AND tw.status = 'active'
+                      AND COALESCE(tw.minutes_remaining, 0) > 0
+                      AND tw.coach_user_id IS NOT NULL) AS pack_coach_ids,
                    -- The active PAID membership's service/tier NAME (not the term) — for the 360 detail.
                    (SELECT COALESCE(pr.membership_tier, prod.name, pr.label)
                     FROM billing.membership_subscription ms2
@@ -1048,6 +1055,7 @@ def list_people(session, *, club_id):
         d["roles"] = roles
         d["role"] = next((x for x in prec if x in roles), (roles[0] if roles else "member"))
         d["member_status"] = "active" if r["any_active"] else "none"
+        d["pack_coach_ids"] = [str(x) for x in (r["pack_coach_ids"] or [])]
         d.pop("any_active", None)
         out.append(d)
     return out
