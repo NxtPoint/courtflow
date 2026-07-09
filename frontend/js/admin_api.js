@@ -577,10 +577,11 @@
       var listBox = el("div"); host.appendChild(listBox);
       host.appendChild(addCard());
       listBox.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
-      Promise.all([window.AdminAPI.resources(), window.AdminAPI.hours()]).then(function (res) {
+      Promise.all([window.AdminAPI.resources(), window.AdminAPI.hours(), window.AdminAPI.products()]).then(function (res) {
         DATA.courts = (res[0].resources || []).filter(function (x) { return x.kind === "court" && x.is_active !== false; });
         DATA.hoursByCourt = {};
         (res[1].hours || []).forEach(function (h) { (DATA.hoursByCourt[h.resource_id] = DATA.hoursByCourt[h.resource_id] || []).push(h); });
+        DATA.courtServices = (res[2].products || []).filter(function (p) { return p.kind === "court_booking" && p.active !== false; });
         UI.clear(listBox);
         if (!DATA.courts.length) { listBox.appendChild(el("div", { class: "cf-empty", text: "No courts yet. Add your first below." })); return; }
         var list = el("div", { class: "cf-list" });
@@ -589,6 +590,10 @@
       }, function (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
     }
 
+    function svcName(pid) {
+      var p = (DATA.courtServices || []).filter(function (x) { return String(x.id) === String(pid); })[0];
+      return p ? p.name : null;
+    }
     function hoursSummary(c) {
       var rows = DATA.hoursByCourt[c.id] || [];
       if (!rows.length) return "no hours set";
@@ -604,7 +609,7 @@
         el("span", { class: "cf-chip court", text: "court" }),
         el("div", { class: "cf-item-main" }, [
           el("div", { class: "cf-item-t", text: c.name || "Court" }),
-          el("div", { class: "cf-item-s", text: (c.surface || "hard") + " · " + hoursSummary(c) }),
+          el("div", { class: "cf-item-s", text: [(c.surface || "hard"), svcName(c.product_id), hoursSummary(c)].filter(Boolean).join(" · ") }),
         ]),
         el("span", { class: "cf-spacer" }),
         el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete", onclick: function (ev) { ev.stopPropagation(); delCourt(c); } }),
@@ -639,7 +644,7 @@
     function openCourt(c) {
       var existing = {}; (DATA.hoursByCourt[c.id] || []).forEach(function (h) { existing[h.weekday] = h; });
       var hasAny = Object.keys(existing).length > 0;  // a court with NO hours yet → default a sensible open week
-      var m = { name: c.name || "", surface: c.surface || "hard", rows: [] };
+      var m = { name: c.name || "", surface: c.surface || "hard", product_id: c.product_id || "", rows: [] };
       WEEKDAYS.forEach(function (lbl, wd) {
         var h = existing[wd];
         m.rows.push({ wd: wd, label: lbl, open: hasAny ? !!h : (wd < 6), start: h ? (h.start_time || "").slice(0, 5) : "07:00",
@@ -657,7 +662,14 @@
         ]));
         var nameI = input({ value: m.name, style: "max-width:260px;font-weight:700" }); nameI.addEventListener("input", function () { m.name = nameI.value; });
         var surfI = select(m.surface, SURFACES); surfI.addEventListener("change", function () { m.surface = surfI.value; });
-        host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Details" }), field("Court name", nameI), field("Surface", surfI)]));
+        // Court service allocation — which court-hire tier (Hardcourt / Clay …) this court belongs to.
+        // Its price + packs come from that service. Unassigned = the club's default court service.
+        var svcOpts = [{ value: "", label: "— Default court service —" }].concat(
+          (DATA.courtServices || []).map(function (p) { return { value: p.id, label: p.name }; }));
+        var svcI = select(m.product_id || "", svcOpts); svcI.addEventListener("change", function () { m.product_id = svcI.value; });
+        var details = [el("h3", { text: "Details" }), field("Court name", nameI), field("Surface", surfI)];
+        if ((DATA.courtServices || []).length) details.push(field("Court service", svcI));
+        host.appendChild(el("div", { class: "cf-card" }, details));
 
         var hc = el("div", { class: "cf-card" }, [el("h3", { text: "Playing hours" }),
           el("p", { class: "cf-muted cf-tiny", text: "The days and hours bookings can be made on this court. Untick a day to close it." })]);
@@ -681,7 +693,7 @@
         var name = (m.name || "").trim(); if (!name) { UI.toast("Name the court.", "warn"); return; }
         btn.disabled = true; btn.textContent = "Saving…";
         try {
-          await window.AdminAPI.patchResource(c.id, { name: name, surface: m.surface });
+          await window.AdminAPI.patchResource(c.id, { name: name, surface: m.surface, product_id: m.product_id || null });
           var week = m.rows.map(function (r) { return { weekday: r.wd, open: r.open, start_time: r.start || "07:00", end_time: r.end || "21:00", slot_minutes: r.slot || 60 }; });
           await window.AdminAPI.putHours({ scope: c.id, week: week });
           UI.toast("Saved.", "info"); reload();

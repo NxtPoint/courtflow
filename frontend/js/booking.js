@@ -180,12 +180,34 @@
     // Lessons: pick a COACH → their SERVICES (Private / Semi-private), each with its OWN durations +
     // rate card (a coach can offer several; merging them showed the wrong price).
     if (st.type === "lesson") { await loadLessonServices(); return; }
+    // Courts: pick a court SERVICE (Hardcourt / Clay …), each with its OWN courts + rate card.
+    if (st.type === "court") { await loadCourtServices(); return; }
     var q = { kind: st.type, audience: "member" };
     try {
       var r = await fetchDurations(q);
       st.durations = r.durations || [];
       st.membershipCovered = !!r.membership_covered;
       st.paymentModes = r.payment_modes || null;   // per-service payment preference (null = all)
+    } catch (e) { st.durations = []; st.membershipCovered = false; st.paymentModes = null; }
+    applyDurationSelection();
+  }
+  async function loadCourtServices() {
+    st.services = [];
+    try { st.services = (await window.TFAuth.apiJSON("/api/diary/services" + qs({ kind: "court", audience: "member" }))).services || []; } catch (e) { st.services = []; }
+    var keep = st.selService && st.services.filter(function (x) { return x.product_id === st.selService.product_id; })[0];
+    st.selService = keep || st.services[0] || null;
+    await loadCourtDurations();
+  }
+  async function loadCourtDurations() {
+    // Court durations + membership-coverage for the CHOSEN court service (product_id scopes the rate
+    // card; keeps "Covered by your membership" for members — courts are the only membership-covered kind).
+    var q = { kind: "court", audience: "member" };
+    if (st.selService && st.selService.product_id) q.product_id = st.selService.product_id;
+    try {
+      var r = await fetchDurations(q);
+      st.durations = r.durations || [];
+      st.membershipCovered = !!r.membership_covered;
+      st.paymentModes = r.payment_modes || null;
     } catch (e) { st.durations = []; st.membershipCovered = false; st.paymentModes = null; }
     applyDurationSelection();
   }
@@ -218,6 +240,7 @@
   function slotCacheKey() {
     var parts = [st.type, UI.dateKey(st.day), "d" + (st.selDuration || "")];
     if (st.type === "lesson") parts.push(st.selCoach === "ANY" ? "anycoach" : st.selCoach.id);
+    if (st.type === "court" && st.selService) parts.push("svc" + (st.selService.product_id || ""));
     parts.push(st.selCourt === "ANY" ? "anycourt" : st.selCourt.id);
     return parts.join("|");
   }
@@ -240,6 +263,7 @@
       var _cid = chosenCoachUserId(); if (_cid) q.coach_id = _cid; else q.any = "1";
     } else {
       q.kind = "court";
+      if (st.selService && st.selService.product_id) q.product_id = st.selService.product_id;
       if (st.selCourt === "ANY") q.any = "1";
       else if (st.selCourt && st.selCourt.id) q.resource_id = st.selCourt.id;
     }
@@ -375,17 +399,35 @@
       fields.push(el("div", { class: "cf-pref-note", text: "We'll reserve a court for the lesson." }));
       return el("div", {}, fields);
     }
+    // COURT: pick the court SERVICE (Hardcourt / Clay …) when the club runs several, then a court
+    // WITHIN that service (the dropdown is filtered to the service's allocated courts).
+    var courtFields = [];
+    if (st.services && st.services.length > 1) {
+      var csvcSel = el("select", { class: "cf-select", onchange: async function (ev) {
+        st.selService = st.services.filter(function (x) { return x.product_id === ev.target.value; })[0] || null;
+        st.selCourt = "ANY"; st.slot = null; st.slotsCache = {};
+        await loadCourtDurations(); render();
+      } });
+      st.services.forEach(function (sv) {
+        csvcSel.appendChild(el("option", { value: sv.product_id, text: sv.name,
+          selected: (st.selService && st.selService.product_id === sv.product_id) ? "selected" : null }));
+      });
+      courtFields.push(el("div", { class: "cf-field" }, [ el("label", { text: "Court type" }), csvcSel ]));
+    }
+    var svcId = st.selService && st.selService.product_id;
+    var svcCourts = ctx.courts.filter(function (c) { return !svcId || String(c.product_id || "") === String(svcId); });
     var courtSel = el("select", { class: "cf-select", onchange: function (ev) {
       var v = ev.target.value;
       st.selCourt = v === "ANY" ? "ANY" : ctx.courts.filter(function (c) { return c.id === v; })[0] || "ANY";
       st.slot = null; st.slotsCache = {}; loadSlots(); refreshSummary();
     } });
     courtSel.appendChild(el("option", { value: "ANY", text: "Any available court", selected: st.selCourt === "ANY" ? "selected" : null }));
-    ctx.courts.forEach(function (c) {
+    svcCourts.forEach(function (c) {
       courtSel.appendChild(el("option", { value: c.id, text: c.name || "Court",
         selected: (st.selCourt !== "ANY" && st.selCourt.id === c.id) ? "selected" : null }));
     });
-    return el("div", { class: "cf-field" }, [ courtSel ]);
+    courtFields.push(el("div", { class: "cf-field" }, (st.services && st.services.length > 1) ? [ el("label", { text: "Court" }), courtSel ] : [ courtSel ]));
+    return el("div", {}, courtFields);
   }
 
   function renderDurations() {
@@ -681,6 +723,7 @@
         body.court_resource_id = (st.selCourt !== "ANY" && st.selCourt.id) || st.slot.court_resource_id || null;
       } else {
         body.resource_id = st.slot.resource_id;
+        if (st.selService && st.selService.product_id) body.product_id = st.selService.product_id;  // the CHOSEN court service → priced exactly
       }
       res = await window.API.createBooking(body);
       var orderId = res.order_id || (res.booking && res.booking.order_id);

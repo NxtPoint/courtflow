@@ -1154,11 +1154,36 @@
     { key: "coaches", label: "Coaches & commission", desc: "Invite, hide or remove coaches · rent + commission",
       mount: function (h) { UI.clear(h); window.AdminUI.coachManage(h); } },
   ];
-  // Owner creates a service. Lessons are created PER COACH (pick the coach); classes & courts
-  // have their own homes. Delegates to POST /api/services (owner may name any coach).
+  // Owner creates a court SERVICE (a club-owned court-hire tier, e.g. Hardcourt vs Clay). Each is a
+  // billing.product(kind=court_booking) with its own price; courts are then ALLOCATED to it under
+  // Setup → Courts & hours. More durations / packs are added by opening it in the services list.
+  async function newCourtService() {
+    var m = modal("New court service");
+    var name = el("input", { class: "cf-input", placeholder: "e.g. Clay court hire" });
+    var dur = el("select", { class: "cf-input" }, [30, 60, 90, 120].map(function (d) { return el("option", { value: String(d), text: d + " min" }); })); dur.value = "60";
+    var price = el("input", { class: "cf-input", type: "number", placeholder: "Price e.g. 280" });
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem", text: "A court-hire tier with its own price. After creating it, allocate courts to it in Courts & hours, and add more durations or packs by opening it in the services list." }));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Name" }), name]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), dur]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Price (per booking)" }), price]));
+    var footer = el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [el("button", { class: "cf-btn", text: "Close", onclick: m.close })]);
+    footer.appendChild(el("button", { class: "cf-btn cf-btn-primary", text: "Create", onclick: async function () {
+      var nm = name.value.trim(); if (!nm) { UI.toast("Name the court service.", "warn"); return; }
+      var amt = Math.round(parseFloat(price.value) * 100);
+      if (isNaN(amt) || amt < 0) { UI.toast("Enter a price.", "warn"); return; }
+      try {
+        await window.AdminAPI.createProduct({ kind: "court_booking", name: nm, description: "",
+          prices: [{ audience: "any", amount_minor: amt, unit: "per_booking", duration_minutes: parseInt(dur.value, 10) || 60 }] });
+        UI.toast("Court service created — allocate courts to it in Courts & hours.", "info"); m.close(); renderSetup("services");
+      } catch (e) { UI.toast(UI.errMsg(e), "error"); }
+    } }));
+    m.body.appendChild(footer);
+  }
+  // Owner creates a service. Lessons are created PER COACH (pick the coach); classes have their own
+  // home; courts create a court SERVICE (tier). Delegates to POST /api/services or /products.
   async function adminNewService(kind) {
     if (kind === "class") { UI.toast("Create classes under Diary → Classes.", "info"); return; }
-    if (kind === "court") { UI.toast("Add courts under Setup → Courts & hours.", "info"); return; }
+    if (kind === "court") { newCourtService(); return; }
     var m = modal("New lesson");
     var sel = el("select", { class: "cf-input" }, [el("option", { value: "", text: "Loading coaches…" })]);
     var name = el("input", { class: "cf-input", placeholder: "e.g. Private lesson" });

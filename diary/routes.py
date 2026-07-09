@@ -194,7 +194,7 @@ def resources():
     with session_scope() as s:
         rows = s.execute(
             text("SELECT r.id, r.kind, r.name, r.surface, r.coach_user_id, r.capacity, "
-                 "       r.is_active, r.rank, "
+                 "       r.is_active, r.rank, r.product_id, "
                  # has_hours / is_bookable: a coach with no availability_rule OR marked not-bookable
                  # is unbookable — the client picker filters these out so they're never offered
                  # (booking-validation sprint). Courts have coach_user_id NULL -> is_bookable true.
@@ -210,7 +210,7 @@ def resources():
     out = []
     for r in rows:
         d = dict(r)
-        for k in ("id", "coach_user_id"):
+        for k in ("id", "coach_user_id", "product_id"):
             if d.get(k) is not None:
                 d[k] = str(d[k])
         out.append(d)
