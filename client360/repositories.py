@@ -100,11 +100,16 @@ def _membership_line(session, *, club_id, user_id, currency):
         ms = session.execute(
             text("""
                 SELECT ms.status, ms.current_period_end, ms.provider,
+                       -- Show the SERVICE/tier NAME (not the term). For a trial → the fixed name;
+                       -- else the tier, then the product/service name, then the price label (term)
+                       -- only as a last resort. The term itself lives in the 360 detail.
                        CASE WHEN ms.provider = 'trial' THEN '7 Day Trial Period'
-                            ELSE COALESCE(pr.label, pr.membership_tier) END AS plan_label,
+                            ELSE COALESCE(pr.membership_tier, prod.name, pr.label) END AS plan_label,
+                       pr.label AS term_label,
                        (ms.provider = 'trial') AS is_trial
                 FROM billing.membership_subscription ms
                 LEFT JOIN billing.price pr ON pr.id = ms.price_id
+                LEFT JOIN billing.product prod ON prod.id = pr.product_id
                 WHERE ms.club_id = :c AND ms.user_id = :u AND ms.status = 'active'
                   AND (ms.current_period_end IS NULL OR ms.current_period_end >= CURRENT_DATE)
                 ORDER BY ms.current_period_end DESC NULLS LAST LIMIT 1

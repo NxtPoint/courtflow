@@ -986,17 +986,37 @@ def list_people(session, *, club_id):
                             AND ms.status = 'active'
                             AND (ms.current_period_end IS NULL
                                  OR ms.current_period_end >= CURRENT_DATE)) AS has_membership,
-                   -- Holdings slicers for the People roster (subscription filters → drill to 360).
+                   -- Segmentation for the People roster. Billing status (mutually exclusive over
+                   -- members): a member is on a TRIAL, holds a PAID membership, or is PAYG.
                    EXISTS(SELECT 1 FROM billing.membership_subscription ms
                           WHERE ms.club_id = m.club_id AND ms.user_id = u.id
                             AND ms.status = 'active' AND ms.provider = 'trial'
                             AND (ms.current_period_end IS NULL
                                  OR ms.current_period_end >= CURRENT_DATE)) AS on_trial,
+                   EXISTS(SELECT 1 FROM billing.membership_subscription ms
+                          WHERE ms.club_id = m.club_id AND ms.user_id = u.id
+                            AND ms.status = 'active' AND ms.provider <> 'trial'
+                            AND (ms.current_period_end IS NULL
+                                 OR ms.current_period_end >= CURRENT_DATE)) AS has_paid_membership,
+                   -- Holdings (overlapping): an active prepaid pack, split by service kind.
                    EXISTS(SELECT 1 FROM billing.token_wallet tw
                           WHERE tw.club_id = m.club_id AND tw.user_id = u.id
                             AND tw.status = 'active'
                             AND COALESCE(tw.minutes_remaining, 0) > 0) AS has_active_pack,
-                   (SELECT COALESCE(pr.label, pr.membership_tier)
+                   EXISTS(SELECT 1 FROM billing.token_wallet tw
+                          WHERE tw.club_id = m.club_id AND tw.user_id = u.id AND tw.status = 'active'
+                            AND COALESCE(tw.minutes_remaining, 0) > 0
+                            AND tw.service_kind = 'lesson') AS has_lesson_pack,
+                   EXISTS(SELECT 1 FROM billing.token_wallet tw
+                          WHERE tw.club_id = m.club_id AND tw.user_id = u.id AND tw.status = 'active'
+                            AND COALESCE(tw.minutes_remaining, 0) > 0
+                            AND tw.service_kind = 'class') AS has_class_pack,
+                   EXISTS(SELECT 1 FROM billing.token_wallet tw
+                          WHERE tw.club_id = m.club_id AND tw.user_id = u.id AND tw.status = 'active'
+                            AND COALESCE(tw.minutes_remaining, 0) > 0
+                            AND tw.service_kind = 'court') AS has_court_pack,
+                   -- The active PAID membership's service/tier NAME (not the term) — for the 360 detail.
+                   (SELECT COALESCE(pr.membership_tier, pr.label)
                     FROM billing.membership_subscription ms2
                     LEFT JOIN billing.price pr ON pr.id = ms2.price_id
                     WHERE ms2.club_id = m.club_id AND ms2.user_id = u.id

@@ -240,10 +240,17 @@
 
   // ---- PEOPLE (roster + slicer + search → the unified person 360) -----------
   var PEOPLE = { rows: [], slice: "all", q: "" };
-  // Role slices (mutually exclusive) + holdings/subscription slices (the People "who holds what"
-  // filters — membership tier · on trial · has an active pack · no membership; drill to the 360).
-  var SLICES = [["all", "All"], ["members", "Members"], ["coaches", "Coaches"], ["guests", "Guests"], ["admins", "Admins"]];
-  var HOLDINGS_SLICES = [["on_trial", "On trial"], ["has_pack", "Has pack"], ["no_membership", "No membership"]];
+  // People segmentation — TWO groups (each a single-select filter; drill a row to the 360):
+  //   STATUS  (mutually exclusive over members): Members = PAYG + Memberships + Trial. Plus the
+  //           role views (Coaches/Guests/Admins) and All.
+  //   HOLDINGS (overlapping): who holds an active prepaid pack, split by service kind.
+  var STATUS_SLICES = [
+    ["all", "All"], ["members", "Members"], ["payg", "PAYG"], ["membership", "Memberships"],
+    ["trial", "Trial"], ["coaches", "Coaches"], ["guests", "Guests"], ["admins", "Admins"],
+  ];
+  var HOLDINGS_SLICES = [
+    ["has_pack", "Packages"], ["pack_lesson", "Lessons"], ["pack_class", "Classes"], ["pack_court", "Courts"],
+  ];
   function pName(r) { return r.display_name || [r.first_name, r.surname].filter(Boolean).join(" ").trim() || r.email || "Member"; }
   function pInit(r) { var n = pName(r).split(/\s+/); return ((n[0] || "?")[0] + (n.length > 1 ? n[n.length - 1][0] : "")).toUpperCase(); }
   function pSlice(r) {
@@ -253,23 +260,25 @@
     return "members";
   }
   function pRoleLabel(r) { return { coach: "Coach", guest: "Guest", club_admin: "Admin", platform_admin: "Admin", member: "Member" }[r.role] || r.role; }
-  // Does a person match the active slice? Role slices use pSlice; holdings/tier slices read the
-  // roster's subscription fields (has_membership/on_trial/has_active_pack/membership_tier).
+  function isMember(r) { return pSlice(r) === "members"; }
+  // Does a person match the active slice? Billing statuses are member-scoped + mutually exclusive
+  // (a member is exactly one of PAYG / Membership / Trial, so those three sum to Members).
   function matchSlice(r, slice) {
-    if (slice === "all") return true;
-    if (slice === "on_trial") return !!r.on_trial;
-    if (slice === "has_pack") return !!r.has_active_pack;
-    if (slice === "no_membership") return !r.has_membership && !r.on_trial;
-    if (slice.indexOf("tier:") === 0) return (r.membership_tier || "") === slice.slice(5);
-    return pSlice(r) === slice;
+    switch (slice) {
+      case "all": return true;
+      case "members": return isMember(r);
+      case "coaches": case "guests": case "admins": return pSlice(r) === slice;
+      case "membership": return isMember(r) && !!r.has_paid_membership;                       // active PAID plan
+      case "trial": return isMember(r) && !!r.on_trial && !r.has_paid_membership;              // 7 Day Trial Period
+      case "payg": return isMember(r) && !r.has_paid_membership && !r.on_trial;                // no coverage
+      case "has_pack": return !!r.has_active_pack;
+      case "pack_lesson": return !!r.has_lesson_pack;
+      case "pack_class": return !!r.has_class_pack;
+      case "pack_court": return !!r.has_court_pack;
+      default: return false;
+    }
   }
-  // The tier slices present in the current roster (distinct active membership tiers).
-  function tierSlices() {
-    var seen = {}, out = [];
-    PEOPLE.rows.forEach(function (r) { if (r.membership_tier && !seen[r.membership_tier]) { seen[r.membership_tier] = 1; out.push(["tier:" + r.membership_tier, r.membership_tier]); } });
-    return out.sort(function (a, b) { return a[1].localeCompare(b[1]); });
-  }
-  function allSlices() { return SLICES.concat(tierSlices()).concat(HOLDINGS_SLICES); }
+  function allSlices() { return STATUS_SLICES.concat(HOLDINGS_SLICES); }
   function peopleFiltered() {
     var q = (PEOPLE.q || "").trim().toLowerCase(), seen = {}, out = [];
     PEOPLE.rows.forEach(function (r) {
@@ -304,18 +313,31 @@
       style: "margin-bottom:10px",
       oninput: function (e) { PEOPLE.q = e.target.value; paintPeopleList(listBox); },
     }));
-    // Slicer (segmented control) — role slices + membership tiers + holdings filters. A holdings/
-    // tier slice with no one in it is hidden so the bar stays clean.
-    var seg = el("div", { class: "cf-segment cf-seg-lg" });
-    allSlices().forEach(function (sl) {
-      var n = sliceCount(sl[0]);
-      if (n === 0 && sl[0] !== "all" && sl[0] !== PEOPLE.slice) return;
-      seg.appendChild(el("button", {
-        class: PEOPLE.slice === sl[0] ? "on" : "", text: sl[1] + " · " + n,
-        onclick: function () { PEOPLE.slice = sl[0]; paintPeople(); },
-      }));
-    });
-    wrap.appendChild(seg);
+    // Slicer — two rows: billing STATUS (Members = PAYG + Memberships + Trial, plus role views)
+    // then HOLDINGS (who holds an active pack, by service). An empty slice is hidden (keep All +
+    // the active one) so the bars stay clean. Single-select across both rows.
+    function segRow(slices, label) {
+      var chips = [];
+      slices.forEach(function (sl) {
+        var n = sliceCount(sl[0]);
+        if (n === 0 && sl[0] !== "all" && sl[0] !== PEOPLE.slice) return;
+        chips.push(el("button", {
+          class: PEOPLE.slice === sl[0] ? "on" : "", text: sl[1] + " · " + n,
+          onclick: function () { PEOPLE.slice = sl[0]; paintPeople(); },
+        }));
+      });
+      if (!chips.length) return null;
+      var seg = el("div", { class: "cf-segment cf-seg-lg", style: "margin-bottom:8px" });
+      chips.forEach(function (c) { seg.appendChild(c); });
+      return el("div", {}, [
+        el("div", { class: "cf-muted", style: "font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin:2px 0 4px", text: label }),
+        seg,
+      ]);
+    }
+    var statusRow = segRow(STATUS_SLICES, "Status");
+    var holdingsRow = segRow(HOLDINGS_SLICES, "Holdings");
+    if (statusRow) wrap.appendChild(statusRow);
+    if (holdingsRow) wrap.appendChild(holdingsRow);
     wrap.appendChild(listBox);
     paintPeopleList(listBox);
     set(wrap);
