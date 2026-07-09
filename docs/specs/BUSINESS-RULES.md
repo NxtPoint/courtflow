@@ -124,6 +124,15 @@ a membership tier's lifecycle derives from its term plans' status.
    (no double-spend), credit-back **idempotent** (no double-credit). Expiry + use-it-or-lose-it (drains
    the soonest-expiring wallet first). Consumption is **seamless** — a matching pack auto-applies at
    checkout ("Covered by your pack · R0"); run-dry prompts a re-buy. Full spec: `02-token-bundle-engine.md`.
+   - **Manual admin adjust / soft-expire (2026-07-09).** From a client's record the owner can **top-up or
+     subtract** a wallet (`POST /api/admin/clients/<id>/wallets/<wid>/adjust`, `billing.bundles.adjust_wallet`)
+     or **expire** it (`.../expire`, `expire_wallet`). Admin edits are in **SESSIONS**, converted to minutes via
+     the wallet's base length. The balance is **clamped ≥ 0** (a top-up also raises `minutes_total` so the
+     wallet reads correctly); a **soft-expire** sets `status='expired'` and zeroes the balance but **keeps the
+     wallet row + its ledger** — never a hard-delete. Every change is **audited**: it writes a `billing.token_ledger`
+     row of a new `kind='adjust'`/`'expire'` carrying a **`reason`** + the **`actor_user_id`** (the token_ledger
+     idempotency index is now PARTIAL — `WHERE kind <> 'adjust'` — so system draws/credits stay idempotent while
+     manual adjusts stack).
 
 ### Free week (signup gift)
 A brand-new member is **auto-granted a 7-day courts-free trial** on first login — a time-boxed
@@ -206,6 +215,14 @@ Full spec: [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md).
 - **Admin void / write-off.** `GET /api/admin/members/<id>/statement` + `POST /api/admin/orders/<id>/void
   {write_off}` (`void_order`): **void** a mistaken order or **write-off** a forgiven debt (a paid order
   can't be voided). Surfaced in the People-360 drawer "Outstanding" section.
+- **Admin discount any open order (2026-07-09).** `POST /api/admin/orders/<order_id>/discount
+  {discount_minor|new_amount_minor, reason}` (`billing.statement.discount_order`) **reprices ANY open/awaiting
+  order** — court, lesson, class, pack or membership — down to a lower amount. It **mutates the ONE debt** (no
+  new debt row, no settlement order). A **multi-line** order splits the discount **pro-rata** (remainder on the
+  last line, so lines re-sum exactly) and preserves each line's **`order_line.original_amount_minor`** as the
+  audit trail. A linked **`coach_arrears`** line is kept in **LOCKSTEP** (delegates to `commission.adjust_arrears`),
+  so the coach's commission base moves with the discount. A **PAID** order rejects with `NOT_OPEN` — reducing a
+  paid charge is a **refund** (the separate path), not a discount.
 
 ## 7. Self-service per role
 - **Client (`/account.html` + action-first `/portal` cockpit):** edit profile/demographics (**email

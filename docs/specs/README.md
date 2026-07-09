@@ -70,6 +70,20 @@ operating guide; **this folder is the detail.**
 > members never book a coach free, late-cancel fee billed, paid-cancel prompts a refund. Gated green:
 > **booking 43 / billing 176 / statement 40**. Edge backlog + the subscriptions/plans review plan are in
 > **OUTSTANDING.md §B**.
+>
+> **2026-07-09 — CLIENT 360 CONSOLIDATION (live):** a new **`client360/`** lane composes the existing lane
+> readers into ONE scoped client read model (`get_client_360` — identity + membership(+status) + packages
+> {active,history} + statement/owed + payments + bookings + dependents + refunds + coaching + activity + a
+> per-scope `can{}` map); it is a **superset** of the old admin person-360, so `admin.get_person` now
+> **delegates** to it. New endpoints: `GET /api/coach/clients/<id>/360`, `GET /api/me/360`, plus admin
+> holdings actions `POST /api/admin/orders/<id>/discount` (reprice ANY open order — original preserved,
+> `coach_arrears` in lockstep, paid→refund path) and `POST /api/admin/clients/<id>/wallets/<wid>/{adjust,expire}`
+> (manual pack top-up/subtract clamped ≥0 / soft-expire, audited via a new `token_ledger` kind). The People
+> roster gains subscription/holdings slicers (membership tier · on-trial · has-pack · no-membership). One new
+> **`Widgets.ClientRecord`** renders the client record across all three apps (role diffs = config) — the three
+> hand-built renderers were deleted, **reversing** the FRONTEND-STANDARDISATION §7 "kept split" exception now
+> that the data is single-sourced. This closes **OUTSTANDING.md §B** (subscriptions/plans holdings). Gated
+> green: **booking 43 / billing 195 / statement 47**.
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,
@@ -99,8 +113,9 @@ operating guide; **this folder is the detail.**
     7 steps). *"The owner console (as built)."*
 11. **[FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)** — **the enshrined GOLDEN RULE:** one
     widget per capability, role differences = configuration. The widget contract, the shared widget set
-    (`TransactionDetail`/`Calendar`/`Setup`/`ServiceList`), guardrails, and what was deliberately not
-    merged. *"How the front end is architected — read before any new UI work."*
+    (`TransactionDetail`/`Calendar`/`Setup`/`ServiceList`/**`ClientRecord`**), guardrails, and what was
+    deliberately not merged (§7 — the person/client-record split was **reversed 2026-07-09** once
+    `client360` single-sourced the data). *"How the front end is architected — read before any new UI work."*
 12. **[ADMIN-PHASE2.md](ADMIN-PHASE2.md)** — the "world-class admin portal" backlog: 5 reusable
     primitives + ~40 features, no table sprawl. **Flagship shipped** (P1 insights lane: court-utilisation
     + sales-by-day); the rest awaits prioritisation. *"Where the admin portal goes next."*

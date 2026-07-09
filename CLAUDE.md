@@ -19,12 +19,13 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 43 / billing 176 / statement 40**. Each uses its own scratch club and always rolls back.
+   **booking 43 / billing 195 / statement 47**. Each uses its own scratch club and always rolls back.
    - `test_booking_scenarios` (43) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle.
-   - `test_billing_scenarios` (176) — settlement modes, commission, tokens, membership (offline + per-tier),
-     refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards.
-   - `test_statement_reconciliation` (40) — no double-count, pay-all-once, part-settle, reclaim,
-     membership-covered R0 never owed, void/write-off, arrears↔orders lockstep.
+   - `test_billing_scenarios` (195) — settlement modes, commission, tokens, membership (offline + per-tier),
+     refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
+     **wallet adjust/expire, general order discount**.
+   - `test_statement_reconciliation` (47) — no double-count, pay-all-once, part-settle, reclaim,
+     membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
 
 ## Deployment (LIVE on Render)
 - Repo `NxtPoint/courtflow`; Render auto-deploys `master`. Two web services + a Postgres DB, **all
@@ -70,7 +71,8 @@ Touch only your lane; coordinate on shared interface files (`contracts/events.md
 | **Diary** | `diary/` | Court/lesson/class lifecycle, GiST constraint, availability, classes, recurrence, book-on-behalf, `/api/diary/*`. |
 | **Billing** | `billing/`, `yoco_billing/` | orders/ledger, `apply_payment_event` (idempotent), membership/bundles/commission/refunds/statement engines, Yoco adapter, `/api/billing/*`. |
 | **CRM** | `core/`, `marketing_crm/` | `emit()`→`core.usage_event`, notifications (in-app inbox + transactional email), Klaviyo sync, consent. |
-| **Admin** | `admin/`, `services/`, `insights/` | Owner write APIs + onboarding, per-service commission editor, financial cockpit, person-360, the insights composer. |
+| **Client 360** | `client360/` | The ONE cross-lane read-model — `get_client_360(scope)` composes existing lane readers into a single client payload (identity/memberships/packages/statement/payments/bookings/refunds/coaching/activity + `can{}`). Read-only, reuse-first, guarded. `admin.get_person` delegates here; coach `/clients/<id>/360` + client `/me/360` call it. **The single source of truth every client view is a view off.** |
+| **Admin** | `admin/`, `services/`, `insights/` | Owner write APIs + onboarding, per-service commission editor, financial cockpit, person-360, the insights composer, **general order discount + pack-wallet adjust/expire**. |
 | **Coach / Client** | `coach/`, `me/` | Coach self-service (onboarding, approval queue, clients-360, statement, cockpit) + client self-service (profile, dependents, statement, refund requests). |
 | **Analytics** | `analytics/` | Read-only guarded aggregations → `/api/analytics/*` (the standalone `/overview.html`); first-party beacon in `beacon.py`. |
 | **Frontend** | `frontend/` | Three role SPAs on one widget layer (below). |
@@ -90,9 +92,11 @@ render code.** Full contract: `docs/specs/FRONTEND-STANDARDISATION.md`.
   `coach_app.js`, bottom-nav) · admin/owner (`admin_app.html` + `admin_app.js`, responsive, served at
   `/admin`; classic tab console preserved at `/admin-classic`).
 - **Shared render layer** `frontend/js/widgets/`: `Widgets.TransactionDetail` = the ONE booking "event story"
-  everywhere · `Widgets.Calendar` = the admin diary (Day view = resource-timeline grid, config via `cfg.grid`) ·
-  `Widgets.Setup` + `Widgets.ServiceList`. Common helpers promoted to `window.UI` (`card/backBar/kv/modal/
-  statusChip/…`); `crm_ui.js` = `CRMUI.*`. Also reuse `booking.js`, `service_editor.js`, `class_ui.js`.
+  everywhere · `Widgets.ClientRecord` = the ONE client/person-360 record across admin/coach/client (fed by the
+  `client360` composer; admin scope adds staff edits — discount/wallet-adjust/void/refund) · `Widgets.Calendar`
+  = the admin diary (Day view = resource-timeline grid, config via `cfg.grid`) · `Widgets.Setup` +
+  `Widgets.ServiceList`. Common helpers promoted to `window.UI` (`card/backBar/kv/modal/statusChip/…`);
+  `crm_ui.js` = `CRMUI.*`. Also reuse `booking.js`, `service_editor.js`, `class_ui.js`.
 - **Asset/nav links are ABSOLUTE** (`/app.css`, `/js/…`) so pages work at sub-paths.
 - **Two-stylesheet marketing model (respect it):** `frontend/_shared/theme.css` = the cross-lane design-system
   contract (portal + login) — **never add marketing styling there.** All public-site CSS lives in

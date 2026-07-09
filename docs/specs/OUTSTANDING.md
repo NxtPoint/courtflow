@@ -15,6 +15,19 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > end was then **standardised onto ONE widget per capability** — the enshrined golden rule in
 > **[FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)**. Design record: **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)**.
 
+> **Recently shipped (2026-07-09 — NOT outstanding): the CLIENT 360 CONSOLIDATION.** A new `client360/`
+> lane composes the existing lane readers into ONE client read model (`get_client_360`, scoped
+> admin/coach/client) — identity + membership(+status) + packages{active,history} + statement/owed +
+> payments + bookings + dependents + refunds + coaching + activity + a per-scope `can{}` map; it is a
+> superset of the old admin person-360, so `admin.get_person` now **delegates** to it. New endpoints:
+> `GET /api/coach/clients/<id>/360`, `GET /api/me/360`, plus admin holdings actions `POST /api/admin/orders/
+> <id>/discount` (reprice any OPEN order, original preserved, coach_arrears in lockstep) and
+> `POST /api/admin/clients/<id>/wallets/<wid>/{adjust,expire}` (manual pack top-up/subtract clamped ≥0 /
+> soft-expire, audited via a new `token_ledger` kind). The People roster gains subscription/holdings slicers
+> (membership tier · on-trial · has-pack · no-membership). Frontend: ONE new `Widgets.ClientRecord` renders
+> the client record across all three apps (role diffs = config) — the three hand-built person/client
+> renderers were deleted. Gated green: **booking 43 / billing 195 / statement 47**.
+>
 > **Recently shipped (2026-07-02 — NOT outstanding): the FRONT-END REDESIGN — three role SPAs.** The
 > old tab-based consoles are replaced by mobile-first (admin: responsive) **drill-through SPAs** on one
 > design system, with the **golden rule** of exactly one booking "event story" per app reused everywhere.
@@ -99,22 +112,29 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
         (payment_modes IS now enforced in the gate). Move the gate AFTER those checks, or re-run on accept.
   - [ ] **On-behalf class-pack draw** — shipped in the widget; add a backend harness assertion for the
         on-behalf class token draw to lock it in.
-- [ ] **SUBSCRIPTIONS / PLANS — one place to review who HOLDS what (PLANNED — design below).** The
-      *catalogue* of plans already lives in **Setup** (owner: membership tiers · court prices · lesson/class
-      packs; coach: their own packs). What's missing is a single place to review HOLDINGS. Proposed (lean, no
-      new tab — the owner's own idea: People filter → client 360):
-  - **Person 360 = the client's full holdings.** Extend `admin.get_person` (+ `renderPerson`) to ALSO return
-    the client's **active packages/wallets** (sessions left · expiry · coach) next to the membership line it
-    already shows — so one client record = membership + packs + owed statement in one view. (`get_person`
-    returns membership + statement + bookings today but NOT wallets — that's the gap.)
-  - **People slicer = subscription filters.** Add slices beyond role (`pSlice`/`SLICES`): **membership tier**
-    (Student/Full/…), **on trial**, **has an active pack**, **no membership** — backed by a small tier/holdings
-    field on `GET /api/admin/people`. The owner slices clients by plan, then drills into the 360.
+- [x] **SUBSCRIPTIONS / PLANS — one place to review who HOLDS what — DONE (CLIENT 360 CONSOLIDATION, 2026-07-09).**
+      The plan *catalogue* already lived in **Setup**; the missing piece — a single place to review HOLDINGS —
+      shipped as the owner's own lean idea (People filter → client 360, no new tab), built on a new
+      `client360/` single-source read model:
+  - **Person 360 = the client's full holdings.** ✅ `client360.get_client_360` composes membership
+    (+`membership_status`), **active packages/wallets** (sessions left · expiry · coach) AND history, owed
+    statement, payments, bookings, dependents, refunds, coaching and activity into ONE payload;
+    `admin.repositories.get_person` now **delegates** to it (`scope='admin'`), so one client record = membership
+    + packs + owed statement in one view (the wallets gap is closed). Coach + client get the same read model
+    scope-filtered (`GET /api/coach/clients/<id>/360`, `GET /api/me/360`).
+  - **People slicer = subscription filters.** ✅ `admin.list_people` now returns `on_trial`, `has_active_pack`
+    and `membership_tier` (alongside `has_membership`); the People segmented control gains **membership-tier ·
+    On-trial · Has-pack · No-membership** slices (empty ones hidden) that drill to the person-360.
+  - **PLUS new admin holdings actions** (beyond the original plan): the owner can now **adjust/top-up or
+    soft-expire a client's prepaid pack** (`POST /api/admin/clients/<id>/wallets/<wid>/{adjust,expire}`) and
+    **discount ANY open order** (`POST /api/admin/orders/<order_id>/discount`) right from the client record —
+    see [BUSINESS-RULES.md](BUSINESS-RULES.md) §4/§6. Gates: **booking 43 / billing 195 / statement 47**.
   - **Coach** already has **Clients → "Prepaid packages"** (SHIPPED) = which of my clients hold a pack with me;
     their pack *catalogue* stays in Setup. No new coach surface.
-  - **Admin plan catalogue** stays in **Setup** (don't duplicate it in People). *Optional later:* an Insights
+  - **Admin plan catalogue** stays in **Setup** (not duplicated in People). *Optional later:* an Insights
     "Subscriptions" panel (active memberships by tier + active packs + recurring value) — only if the
-    People-filter + 360 isn't enough.
+    People-filter + 360 isn't enough. Remaining plan edges below (upgrades/downgrades, bundle expiry policy)
+    are unchanged.
 - [ ] **Commission engine tail (Phase D deferrals):**
   - [x] **Refund clawback** — a refund now reverses the coach's accrued commission proportionally
         (arrears kept in lockstep); gated by `sc_refund_clawback` in the billing harness. **DONE.**

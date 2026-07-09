@@ -78,6 +78,15 @@ widgets/_registry → widgets/* → <role>_app`):
     **`Widgets.ServiceList`** (the ONE services list: edit via ServiceEditor + lifecycle
     deactivate/reactivate/terminate + optional create; owner sees ALL, coach sees only OWN;
     `/api/services` enforces who-may-change-what). Adopted by BOTH the owner and coach Setup.
+  - `client_record.js` → **`Widgets.ClientRecord`** (added 2026-07-09) — the ONE **client record** across
+    all three apps, on the same cfg contract (`data` adapter + `actions` map + `fields` + `onNavigate`). It
+    renders identity, membership, packages (admin: adjust/remove), the owed statement (admin: void/write-off/
+    discount; client: pay/request-refund), payments (admin: refund), bookings (drill to the event story),
+    refunds, dependents and activity — role differences are CONFIG only. Fed by the new **`client360`**
+    single-source composer (`GET /api/admin/people/<id>` · `GET /api/coach/clients/<id>/360` ·
+    `GET /api/me/360`). Adopted by admin `renderPerson` (full staff actions), coach `renderClient` (coaching
+    collect/discount only) and the client `#/activity` record view (pay/request_refund only); the three
+    previously hand-built person/client renderers were **DELETED** (see §7 — the reversal).
 - **`window.ServiceEditor`** (`service_editor.js`) and **`window.ClassUI`** (`class_ui.js`, lazy) — the
   single-sourced editors the Setup sections mount. **`window.AdminUI`** (bottom of `admin_api.js`) — the
   owner's config editors (clubProfile, courtsManage, membershipServices, bundlePlans, coachManage).
@@ -198,10 +207,19 @@ gold standard preserved.
 
 ## 7. Deliberately NOT merged (legitimate view-differences, not duplication)
 
-- **Person / client record.** Coach `renderClient` is a *month-scoped billing* view of a client (month
+- **Person / client record.** ~~Coach `renderClient` is a *month-scoped billing* view of a client (month
   nav + Invoice + by-service accordion); admin `renderPerson` is an *all-time* record (membership
   grant/revoke, coach settlement, owed/payments, bookings). They share only a small header — forcing one
-  widget would add config complexity, not remove it. Kept as two focused views.
+  widget would add config complexity, not remove it. Kept as two focused views.~~ **SUPERSEDED 2026-07-09
+  — now unified (the deliberate, owner-approved reversal).** The reason this was kept split was *config
+  complexity*, driven by the two views assembling their data differently. The **Client 360 consolidation**
+  removed that root cause: a new **`client360.get_client_360`** single-source composer returns ONE scoped
+  payload (`admin`/`coach`/`client`) for every lens, so admin `renderPerson`, coach `renderClient` AND the
+  client `#/activity` record view now all render through the ONE **`Widgets.ClientRecord`** (role
+  differences = the standard `data`/`actions`/`fields` config, no forked render code). The three
+  hand-built renderers were deleted — a second render *was* the bug. This was a conscious revisit of the
+  §7 exception, not a golden-rule violation: once the data was single-sourced, the config complexity that
+  justified the split no longer existed. Gates held at **43 / 195 / 47**.
 - **Coach Schedule time-grid** (hour × 7-day grid + time-off + book-a-client) and **client Home agenda**
   — richer, distinct views the audit recommended keeping; they share the event-row + drill-to-event.
 - **Client billing-by-category** — intentional, owner-loved bespoke design; not a generic money list.

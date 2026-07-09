@@ -150,6 +150,18 @@ guarded no-op when the order is settled, a real charge has succeeded, it's an R0
 - **`billing/refunds.py`** — client refund-request workflow + admin approve/decline.
 - **`billing/me.py`** — client financial reads.
 
+**`client360/` — the ONE cross-lane client read model (2026-07-09).** `client360.get_client_360(session, *,
+club_id, user_id, scope)` is the single source of truth every client-record view derives from. It is
+**reuse-first** — it does not query tables directly but **composes the existing lane readers**
+(`billing.statement`/`membership`/`bundles`/`commission`/`refunds`/`activity`, core notifications, diary
+bookings/enrolments, `iam.dependent`) into ONE guarded, club-scoped payload: identity, membership(+status),
+packages{active,history}, statement + owed, payments, bookings, dependents, refunds, coaching, activity,
+notifications-unread, and a per-`scope` (`admin`/`coach`/`client`) `can{}` capability map. It is a **superset**
+of the old admin person-360, so **`admin.repositories.get_person` now delegates to it** (`scope='admin'`) —
+existing consumers and the `sc_person_360` harness are unchanged — and the coach/client views read the same
+model scope-filtered (`GET /api/coach/clients/<id>/360`, `GET /api/me/360`). One read model → the ONE
+`Widgets.ClientRecord` renders it across all three apps.
+
 **The payment rule (one shared rule across every purchase).** What payment methods a purchase offers is
 configurable per service (`billing.product.payment_modes`) and **per membership tier** (new column
 `billing.price.payment_modes`), resolved in layers (tier price-pref → product default → the club's globally

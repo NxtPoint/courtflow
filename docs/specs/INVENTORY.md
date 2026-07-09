@@ -36,6 +36,7 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `coach/` | routes, repositories, schema | `/api/coach/*` coach self-service + cockpit |
 | `services/` | routes, repositories | `/api/services/*` — the ONE unified service-edit surface for owner + coach (owner can create a lesson per coach via `POST /api/services`); delegates to `coach/`/`billing/` repos |
 | `me/` | routes | `/api/me/*` client self-service (profile, dependents, financials, refund-requests, notifications) |
+| `client360/` | `get_client_360` | the ONE cross-lane **client read model** (identity + membership(+status) + packages{active,history} + statement/owed + payments + bookings + dependents + refunds + coaching + activity + notifications-unread + a per-scope `can{}` map). Read-only, reuse-first — composes the existing lane readers (`billing.statement`/`membership`/`bundles`/`commission`/`refunds`/`activity`, core notifications, diary bookings/enrolments, `iam.dependent`), every block guarded, club_id-scoped. Scoped `admin`/`coach`/`client`; a SUPERSET of the old admin person-360, so `admin.repositories.get_person` **delegates** to it (`scope='admin'`). Returns None if the user has no `iam.membership` in the club. |
 | `analytics/` | repositories, routes | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`); `/api/analytics/*`; the standalone `/overview.html` (rolling `?days=` window). The admin **native Overview tab** now uses the `insights/` lane instead (the old iframe embed was retired 2026-07-05). |
 | `insights/` | repositories, routes | **Phase-2 P1 read-layer** (guarded aggregations, no new tables): court-utilisation heatmap · **sales-by-day** · **bookings-by-day** · **overview** (month-scoped daily composer powering the native admin Overview tab — traffic incl. public-vs-member + logged-in split, bookings, revenue, members, NPS; reconciles with the Money lists by construction); `/api/insights/*` |
 | `crons/` | trigger | thin dispatcher → `/api/cron/*` |
@@ -82,7 +83,10 @@ hard-delete a court with no bookings/sessions, else soft-archive) · `GET/PUT ho
 `GET/POST products` (+`PATCH /<id>`) · `GET/POST prices` (+`PATCH/DELETE /<id>`) ·
 `GET coaches` · `POST coaches/invite` · `POST coaches/<id>/resend-invite` ·
 **`PATCH coaches/<id>`** (lifecycle status) · **`DELETE coaches/<id>`** (real: hard-delete if no
-history, else archive) · `GET people` · `GET payments` · `POST|DELETE members/<id>/membership` ·
+history, else archive) · `GET people` (roster; `admin.list_people` now also returns **`on_trial`**,
+**`has_active_pack`** and **`membership_tier`** alongside `has_membership` — the People segmented-control
+holdings slicers: membership-tier · On-trial · Has-pack · No-membership) · `GET payments` ·
+`POST|DELETE members/<id>/membership` ·
 **`POST clients`** (create a walk-up/off-system client now — returns `user_id`, idempotent on email) ·
 **`GET clients/<client_user_id>/packages`** (`?coach_id=` — a client's ACTIVE packs for admin on-behalf
 booking to auto-route to a prepaid pack; `coach_id` filters lesson packs to that coach's/coach-agnostic,
@@ -91,6 +95,15 @@ class/court always included) ·
 start_date?, mark_paid?, pay_provider?}`; reuses the offline-purchase engine → owed order activated now,
 `mark_paid` settles immediately) ·
 **`GET members/<id>/statement`** · **`POST orders/<id>/void`** (`{write_off}` — void/write-off an owed order) ·
+**`POST orders/<order_id>/discount`** (`{discount_minor|new_amount_minor, reason}` — reprice ANY OPEN/awaiting
+order [court/lesson/class/pack/membership]; multi-line orders split the discount pro-rata [remainder on the
+last line], `order_line.original_amount_minor` preserved as the audit, a linked `coach_arrears` line kept in
+LOCKSTEP via `commission.adjust_arrears`; a PAID order rejects `NOT_OPEN` — refund is the separate path; no
+new debt/settlement row — mutates the ONE debt; `billing.statement.discount_order`) ·
+**`POST clients/<client_id>/wallets/<wallet_id>/adjust`** (`{delta_sessions|delta_minutes, reason}` — manually
+add/subtract a client's prepaid token wallet [clamped ≥0, a top-up raises `minutes_total`]; `billing.bundles.adjust_wallet`) ·
+**`POST clients/<client_id>/wallets/<wallet_id>/expire`** (`{reason}` — SOFT-expire a wallet [status='expired',
+balance zeroed, row+ledger kept, never hard-deleted]; `billing.bundles.expire_wallet`) ·
 `GET/POST membership-plans` (+`PATCH/DELETE /<id>`) ·
 **`GET/PATCH membership-config`** (per-tier payment options) · `GET/POST bundle-plans` (+`PATCH/DELETE /<id>`) ·
 `GET coach-agreements` · `PUT coach-agreements/<coach_id>` · `GET/POST commission-rules`
@@ -99,7 +112,9 @@ start_date?, mark_paid?, pay_provider?}`; reuses the offline-purchase engine →
 **`PATCH coach-statement/arrears/<id>`** (discount/write-off) · `GET refund-requests` ·
 `POST refund-requests/<id>/{approve,decline}` · **`GET people/<id>`** (the unified **person 360** —
 profile + all roles + active membership + owed statement + online payments + bookings; if the person is a
-coach, a settlement summary; `admin/repositories.py::get_person`) · **`GET bookings/<id>`** (the **admin
+coach, a settlement summary; `admin/repositories.py::get_person` — now **delegates to `client360.get_client_360`
+`scope='admin'`**, a superset payload, so this endpoint gains the client's packages/wallets + refunds + activity
+in one read) · **`GET bookings/<id>`** (the **admin
 event story** / god-view — client + coach + charge + coaching-arrears + full action eligibility;
 `diary/bookings.py::admin_booking_story`) · **`POST bookings/<id>/reassign-coach`** (move a future/unpaid
 lesson to another bookable coach; `admin_reassign_coach`).
@@ -130,6 +145,8 @@ to self, class/court agnostic — so "book a client" auto-routes to a prepaid pa
 **`GET clients/<id>`** (`?month=` — the client 360;
 now returns a **by-service breakdown** `services[]` + `services_billed_minor` with the REAL per-session
 state paid/owed/written_off/discounted/covered, via `billing/commission.py::client_service_breakdown`) ·
+**`GET clients/<id>/360`** (`{person}` — the shared **client read model** for the coach, `client360.get_client_360`
+`scope='coach'` with coaching + packages filtered to THIS coach; feeds `Widgets.ClientRecord`) ·
 **`GET bookings/<id>`** (the coach **event story** — client/contact, court, charge, coaching-arrears line,
 players+attendance, can-flags for accept/propose/decline/reschedule/cancel/mark-completed/no-show +
 mark-collected/discount/write-off; `diary/bookings.py::coach_booking_story`) ·
@@ -152,6 +169,8 @@ A CHOSEN COACH** (body `coach_user_id`, validated by `admin/repositories.is_club
 `billing/me.py::billing_summary`) ·
 **`GET activity`** (`?month=YYYY-MM` — the monthly **Activity** view: that month's bookings + **spend by
 category** (money paid that month) + current outstanding; `billing/me.py::spend_by_category` + `statement`) ·
+**`GET 360`** (`{person}` — the shared **client read model** for the client viewing THEMSELVES,
+`client360.get_client_360` `scope='client'`; feeds the client `#/activity` record view via `Widgets.ClientRecord`) ·
 **`GET bookings/<id>`** (the client **event story** for a booking — `diary/bookings.py::booking_story`) ·
 **`GET statement`** (unified statement — unpaid `billing.order` rows, grouped by category) ·
 **`POST statement/pay`** (`{order_ids?}` → `create_settlement_order` → Yoco; pay all or a subset) · `GET orders` ·
@@ -197,7 +216,13 @@ CourtFlow AWS account is back): **`docs/specs/SES-SETUP.md`**. No schema change.
     'pay all' settlement order); **`order.status` now allows `void`/`written_off`** (admin void / debt
     write-off; a paid order can't be voided); `bundle_plan.status`;
     `token_wallet.base_minutes`/`minutes_total`/`minutes_remaining` (the unit
-    engine's authoritative minute balance — `tokens_*` are display only); **`booking.status` now allows
+    engine's authoritative minute balance — `tokens_*` are display only); **`token_ledger` now records
+    manual admin edits** — a new `kind='adjust'` (top-up/subtract via `adjust_wallet`) / `kind='expire'`
+    (soft-expire via `expire_wallet`), each carrying new columns **`reason text`** + **`actor_user_id uuid`**;
+    the `token_ledger` unique index was made **PARTIAL** (`WHERE kind <> 'adjust'`) so system draws/credits
+    keep their per-(wallet,booking,kind) idempotency while manual adjusts stack freely; a soft-expire keeps
+    the wallet row + ledger (never hard-deletes); **`billing.order_line.original_amount_minor`** preserves the
+    pre-discount amount when an order is repriced by `discount_order` (the audit); **`booking.status` now allows
     `requested`/`proposed`** (lesson approval lifecycle — NOT in the GiST exclusion, so they hold no
     slot; gated by `iam.coach_profile.review_bookings`); **`class_session.court_resource_id`/`court_booking_id`**
     (a scheduled class can optionally **reserve a court** — `court_booking_id` is a court-blocking
@@ -218,7 +243,10 @@ its full **event story** (GOLDEN RULE: exactly ONE booking capability per app, r
 the shared **`frontend/js/widgets/`** layer — **`Widgets.TransactionDetail`** (the one event story across
 all three apps), **`Widgets.Calendar`** (the admin diary — Day view = resource-timeline grid, Week/Month
 agenda; see below), **`Widgets.Setup`** + **`Widgets.ServiceList`**
-(owner + coach setup) — plus promoted `window.UI` helpers (`card/backBar/kv/modal/statusChip/…`) and
+(owner + coach setup), **`Widgets.ClientRecord`** (the ONE client record — identity/membership/packages/owed
+statement/payments/bookings/refunds/dependents/activity, fed by the `client360` composer; adopted by admin
+`renderPerson`, coach `renderClient` and the client `#/activity` record view, role diffs = config; the three
+hand-built person/client renderers were **deleted**) — plus promoted `window.UI` helpers (`card/backBar/kv/modal/statusChip/…`) and
 `crm_ui.js` (`CRMUI.*`). Role differences = configuration (a data adapter + an actions capability-map +
 `fields`), never forked render code.
 - **Client** — `frontend/app/app.html` + `frontend/js/client.js`. ONE page, **no bottom nav** (Book from
@@ -317,8 +345,9 @@ dashboard (`sync:false`).
 - Compile: `python -m py_compile $(git ls-files '*.py')`.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 43 / billing 176 / statement 40** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 43 / billing 195 / statement 47** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
-  on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards).
+  on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +
+  **`sc_order_discount`** (billing) and **`sc_discount_reconcile`** (statement) for the Client 360 sprint).
 - Frontend: `node --check <file>.js`.
