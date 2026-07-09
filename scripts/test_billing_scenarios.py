@@ -1347,6 +1347,123 @@ def sc_class_pack_coach(s, fx):
     check("X's class drew one unit (60 min) off X's pack", (before - afterw) == 60, f"{before}->{afterw}")
 
 
+def sc_class_commission_parity(s, fx):
+    """OWNER RULE (2026-07): a class enrolment pays the coach who runs it EXACTLY like a lesson.
+    Proves the whole coaching-money loop for classes: an OWED (at_court) class accrues a coach_arrears
+    row and collecting it accrues arrears_commission; a PAID (desk) class credits class_commission; the
+    coach's statement (owed + paid) + client by-service breakdown reflect the class like a lesson; the
+    accrual is idempotent; and a class can't be created without a coach."""
+    from diary import classes as CL
+    print("\n# Class = first-class coaching money: owed accrues, paid credits, statement/breakdown reflect it")
+
+    # A club 30% rule so class commission resolves to 70% coach net (12000 → 8400).
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',30,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+
+    def mk_class_session(name, hh, amt=12000, coach=None):
+        coach = coach or fx.coach_uid
+        prod = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                              "VALUES (:c,'class',:n,:u) RETURNING id"),
+                         {"c": fx.club_id, "n": name, "u": coach}).scalar_one()
+        pid = _price(s, fx.club_id, prod, amt, unit="per_session")
+        res = s.execute(text("INSERT INTO diary.resource (club_id, kind, name, coach_user_id, capacity) "
+                             "VALUES (:c,'class',:n,:u,10) RETURNING id"),
+                        {"c": fx.club_id, "n": name, "u": coach}).scalar_one()
+        return s.execute(text("INSERT INTO diary.class_session (club_id, resource_id, coach_user_id, "
+                              "starts_at, ends_at, capacity, price_id, status) "
+                              "VALUES (:c,:r,:u,:sa,:ea,10,:p,'scheduled') RETURNING id"),
+                         {"c": fx.club_id, "r": res, "u": coach, "sa": at(fx, hh), "ea": at(fx, hh + 1),
+                          "p": pid}).scalar_one()
+
+    def _arrears_count(coach_only=True):
+        return s.execute(text("SELECT count(*) FROM billing.coach_arrears WHERE club_id=:c "
+                              "AND coach_user_id=:u AND enrolment_id IS NOT NULL"),
+                         {"c": fx.club_id, "u": str(fx.coach_uid)}).scalar()
+
+    # (0) create_class_type WITHOUT a coach → COACH_REQUIRED.
+    coach_required = False
+    try:
+        CL.create_class_type(s, club_id=fx.club_id, name="Coachless", capacity=8,
+                             price_amount_minor=10000, duration_minutes=60)  # no coach
+    except ValueError as e:
+        coach_required = (str(e) == "COACH_REQUIRED")
+    check("create_class_type without a coach → COACH_REQUIRED", coach_required)
+
+    bal0 = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+
+    # (1) OWED class enrolment (at_court) → accrues a coach_arrears row for the class's coach.
+    csOwed = mk_class_session("Cardio Owed", 8)
+    ro = CL.enrol(s, club_id=fx.club_id, class_session_id=str(csOwed), user_id=fx.member,
+                  settlement_mode="at_court")
+    check("owed class enrolment booked (order created)", ro.get("ok") and ro["enrolment"].get("order_id"), str(ro))
+    n1 = CM.accrue_arrears_for_club(s, club_id=fx.club_id)
+    owed_row = s.execute(text("SELECT coach_user_id, client_user_id, gross_minor, status, booking_id "
+                              "FROM billing.coach_arrears WHERE club_id=:c AND enrolment_id=:e"),
+                         {"c": fx.club_id, "e": str(ro["enrolment"]["id"])}).mappings().first()
+    check("OWED class accrued a coach_arrears row for the class's coach (owed, R120, no booking)",
+          owed_row and str(owed_row["coach_user_id"]) == str(fx.coach_uid)
+          and str(owed_row["client_user_id"]) == str(fx.member)
+          and owed_row["gross_minor"] == 12000 and owed_row["status"] == "owed"
+          and owed_row["booking_id"] is None, str(dict(owed_row) if owed_row else None))
+
+    # (1b) IDEMPOTENT: a second accrual adds no new class arrears row.
+    cnt_after1 = _arrears_count()
+    CM.accrue_arrears_for_club(s, club_id=fx.club_id)
+    cnt_after2 = _arrears_count()
+    check("re-running accrual does NOT double-count the class", cnt_after1 == cnt_after2,
+          f"{cnt_after1}->{cnt_after2}")
+
+    # (2) Collecting the OWED class → arrears_commission accrues to the coach (70% of R120 = R84).
+    aid = s.execute(text("SELECT id FROM billing.coach_arrears WHERE club_id=:c AND enrolment_id=:e"),
+                    {"c": fx.club_id, "e": str(ro["enrolment"]["id"])}).scalar()
+    res_col = CM.mark_arrears_collected(s, club_id=fx.club_id, arrears_id=aid)
+    bal_after_collect = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    check("collecting the owed class accrues commission (coach +R84 net)",
+          res_col.get("status") == "collected" and (bal_after_collect - bal0) == 8400,
+          f"{bal0}->{bal_after_collect} res={res_col}")
+
+    # (3) PAID (desk) class enrolment → class_commission credits the coach (another +R84).
+    csPaid = mk_class_session("Cardio Paid", 10)
+    rp = CL.enrol(s, club_id=fx.club_id, class_session_id=str(csPaid), user_id=fx.member,
+                  settlement_mode="at_court")
+    poid = rp["enrolment"]["order_id"]
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=poid, amount_minor=12000, provider="cash",
+                          provider_payment_id="RCPT-CLASS", user_id=fx.member)
+    cls_split = s.execute(
+        text("SELECT COALESCE(SUM(amount_minor),0) FROM billing.commission_split WHERE club_id=:c "
+             "AND coach_user_id=:u AND party_type='coach' AND basis='class_commission'"),
+        {"c": fx.club_id, "u": str(fx.coach_uid)}).scalar()
+    check("PAID class wrote a class_commission coach split (>0)", int(cls_split or 0) == 8400, str(cls_split))
+    check("PAID class never lands on the owed tab (no succeeded charge → excluded)",
+          s.execute(text("SELECT count(*) FROM billing.coach_arrears WHERE club_id=:c AND enrolment_id=:e"),
+                    {"c": fx.club_id, "e": str(rp["enrolment"]["id"])}).scalar() == 0)
+
+    # (4) A STILL-OWED class (not collected) so the statement shows owed too.
+    csStillOwed = mk_class_session("Cardio Still", 12)
+    rs = CL.enrol(s, club_id=fx.club_id, class_session_id=str(csStillOwed), user_id=fx.member,
+                  settlement_mode="at_court")
+
+    # (5) Coach statement reflects classes (owed + paid) on the member's row — like a lesson.
+    stmt = CM.coach_statement(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    mrow = next((c for c in stmt["clients"] if str(c.get("client_user_id")) == str(fx.member)), None)
+    check("coach statement shows the class client with paid (collected + desk) coaching net > 0",
+          mrow and mrow["paid_minor"] == 16800, str(mrow))
+    check("coach statement shows the class client's still-owed class (R120)",
+          mrow and mrow["owed_minor"] == 12000, str(mrow))
+
+    # (6) Client by-service breakdown includes the class as its own service group (owner rule).
+    bd = CM.client_service_breakdown(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
+                                     client_user_id=fx.member, month=None)
+    class_items = [it for svc in bd["services"] for it in svc["items"] if it.get("enrolment_id")]
+    check("by-service breakdown surfaces class enrolments (with enrolment_id for the drill)",
+          len(class_items) == 3, f"n={len(class_items)}")
+    check("a collected class shows paid, a still-owed class shows owed in the breakdown",
+          any(it["status"] == "paid" for it in class_items)
+          and any(it["status"] == "owed" for it in class_items),
+          str(sorted(it["status"] for it in class_items)))
+
+
 def sc_lesson_reschedule_court_reassign(s, fx):
     """L2: rescheduling a lesson onto a time where ITS court is busy reassigns a FREE court instead
     of failing with SLOT_TAKEN (the lesson's court was auto-assigned)."""
@@ -1563,6 +1680,7 @@ SCENARIOS = [
     sc_pack_credits_coach,
     sc_class_scoped_pricing,
     sc_class_pack_coach,
+    sc_class_commission_parity,
     sc_cancel_fee_and_paid_resize,
     sc_lesson_reschedule_court_reassign,
     sc_covered_reschedule_guard,

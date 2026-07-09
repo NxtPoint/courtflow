@@ -590,12 +590,18 @@ def post_class():
     if err:
         return err
     b = _body()
-    with session_scope() as s:
-        res = classes_mod.create_class_type(
-            s, club_id=p.club_id, name=b.get("name"),
-            coach_user_id=b.get("coach_user_id"), capacity=b.get("capacity"),
-            price_amount_minor=b.get("price_amount_minor"),
-            duration_minutes=b.get("duration_minutes"), description=b.get("description"))
+    # A class must belong to a coach (its enrolments + commission attribute to them).
+    if not (b.get("coach_user_id") or "").strip():
+        return jsonify(error="COACH_REQUIRED", message="A class must be assigned to a coach."), 400
+    try:
+        with session_scope() as s:
+            res = classes_mod.create_class_type(
+                s, club_id=p.club_id, name=b.get("name"),
+                coach_user_id=b.get("coach_user_id"), capacity=b.get("capacity"),
+                price_amount_minor=b.get("price_amount_minor"),
+                duration_minutes=b.get("duration_minutes"), description=b.get("description"))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
     return _class_result(res)
 
 

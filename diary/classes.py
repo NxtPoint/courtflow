@@ -411,9 +411,15 @@ def class_type_dict(session, *, club_id, resource_id):
 def create_class_type(session, *, club_id, name, capacity, price_amount_minor,
                       duration_minutes, coach_user_id=None, description=None):
     """Create a class type = resource(kind='class') + product(kind='class') + price.
-    Returns {class:{...}}. Plain SQL (we don't import billing modules — docs lane rules)."""
+    Returns {class:{...}}. Plain SQL (we don't import billing modules — docs lane rules).
+
+    A class MUST have a coach: every enrolment pays the coach who runs it (owner rule 2026-07), so
+    without a coach the class's revenue can't attribute (no commission / arrears). Raise
+    ValueError('COACH_REQUIRED') when it's missing/empty (the route/UI provide + validate it)."""
     if not name:
         return _err("NAME_REQUIRED", 400)
+    if not coach_user_id or not str(coach_user_id).strip():
+        raise ValueError("COACH_REQUIRED")
     cap = int(capacity or 0)
     dur = int(duration_minutes or 0)
     amt = int(price_amount_minor or 0)

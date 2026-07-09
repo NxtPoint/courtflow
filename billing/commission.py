@@ -371,18 +371,25 @@ def record_refund_clawback(session, *, club_id, order_id, refund_payment_id,
 # ---------------------------------------------------------------------------
 
 def accrue_arrears_for_club(session, *, club_id) -> int:
-    """Lazily populate billing.coach_arrears from confirmed lesson bookings that have NOT been
-    paid online (no succeeded charge payment on their order) and are not membership-covered.
-    Each unpaid lesson posts to the coach's per-client tab (status='owed'). Idempotent on the
-    source booking (ux_coach_arrears_booking) — re-running adds nothing for already-tracked
-    bookings. Returns the count of NEW arrears rows. Guarded so a missing diary.* degrades to 0.
+    """Lazily populate billing.coach_arrears from confirmed lesson bookings AND enrolled class
+    seats that have NOT been paid online (no succeeded charge payment on their order) and are not
+    membership-covered. Each unpaid lesson/class posts to the coach's per-client tab (status='owed').
+    Idempotent on the source (ux_coach_arrears_booking for lessons; ux_coach_arrears_enrolment for
+    classes) — re-running adds nothing for already-tracked lessons/enrolments. Returns the count of
+    NEW arrears rows. Guarded so a missing diary.* degrades to 0.
 
-    The 'unpaid' test: the booking's order has settlement_mode in (at_court, monthly_account)
-    OR has no succeeded charge payment, and the order line carries a positive ex-VAT gross.
-    Online-paid lessons settle via record_split_for_order instead and are excluded here.
+    The 'unpaid' test: the order has settlement_mode <> membership_covered, is not already
+    settled/cleared, and has no succeeded charge payment, and the order line carries a positive ex-VAT
+    gross. Online-paid lessons/classes settle via record_split_for_order instead and are excluded here.
+
+    OWNER RULE (2026-07): a class enrolment pays the coach who runs it EXACTLY like a lesson. A class
+    has no diary.booking (it keys off diary.enrolment), so its arrears row carries enrolment_id (not
+    booking_id), coach = class_session.coach_user_id, client = the order's payer, gross = the class
+    order line. A class with no coach can't be attributed and is skipped.
     """
     try:
-        res = session.execute(
+        # (a) LESSONS — one arrears row per source booking (booking_id dedupe).
+        res_l = session.execute(
             text("""
                 INSERT INTO billing.coach_arrears
                     (club_id, coach_user_id, client_user_id, booking_id, order_line_id,
@@ -417,7 +424,45 @@ def accrue_arrears_for_club(session, *, club_id) -> int:
             """),
             {"club": club_id},
         )
-        return res.rowcount or 0
+        # (b) CLASSES — one arrears row per enrolled seat (enrolment_id dedupe). booking_id stays NULL;
+        # coach = the class's coach; client = the order's payer (o.user_id); gross = the class line.
+        res_c = session.execute(
+            text("""
+                INSERT INTO billing.coach_arrears
+                    (club_id, coach_user_id, client_user_id, booking_id, enrolment_id,
+                     order_line_id, product_id, gross_minor, currency, status)
+                SELECT cs.club_id,
+                       cs.coach_user_id AS coach_user_id,
+                       o.user_id        AS client_user_id,
+                       NULL::uuid       AS booking_id,
+                       e.id             AS enrolment_id,
+                       ol.id            AS order_line_id,
+                       pr.id            AS product_id,
+                       ol.amount_minor  AS gross_minor,
+                       o.currency_code  AS currency,
+                       'owed'
+                FROM diary.enrolment e
+                JOIN diary.class_session cs ON cs.id = e.class_session_id AND cs.club_id = e.club_id
+                JOIN billing.order_line ol  ON ol.enrolment_id = e.id AND ol.club_id = e.club_id
+                JOIN billing."order" o      ON o.id = ol.order_id
+                LEFT JOIN billing.price   p  ON p.id  = ol.price_id
+                LEFT JOIN billing.product pr ON pr.id = p.product_id
+                WHERE cs.club_id = :club
+                  AND e.status IN ('enrolled','attended','no_show')
+                  AND ol.amount_minor > 0
+                  AND o.settlement_mode <> 'membership_covered'
+                  AND o.status NOT IN ('paid','void','written_off')
+                  AND cs.coach_user_id IS NOT NULL
+                  AND NOT EXISTS (
+                        SELECT 1 FROM billing.payment pay
+                        WHERE pay.order_id = o.id AND pay.direction = 'charge'
+                          AND pay.status = 'succeeded')
+                ON CONFLICT (club_id, enrolment_id) WHERE enrolment_id IS NOT NULL
+                DO NOTHING
+            """),
+            {"club": club_id},
+        )
+        return (res_l.rowcount or 0) + (res_c.rowcount or 0)
     except Exception:
         session.rollback()
         log.info("accrue_arrears_for_club skipped (diary.* unavailable) club=%s", club_id)
@@ -514,28 +559,35 @@ def mark_arrears_collected(session, *, club_id, arrears_id, coach_user_id=None,
 
 def client_service_breakdown(session, *, club_id, coach_user_id, client_user_id, month=None) -> Dict[str, Any]:
     """One client's coaching grouped BY SERVICE (product + duration): e.g. 'Private lesson · 45 min ·
-    3 · R750', with the individual sessions (booking_id → the event story). Composes diary.booking +
-    order_line + price + product + coach_arrears, scoped to this coach + client. `month` (YYYY-MM)
-    filters by the lesson date; omit for all-time.
+    3 · R750', with the individual sessions (booking_id/enrolment_id → the event story). Composes
+    diary.booking + diary.enrolment/class_session + order_line + price + product + coach_arrears,
+    scoped to this coach + client. `month` (YYYY-MM) filters by the session date; omit for all-time.
+
+    OWNER RULE (2026-07): a CLASS the coach runs is a first-class coaching-money citizen alongside a
+    lesson — it appears here as its own service group with the SAME real money state. A class has no
+    diary.booking, so it keys off diary.enrolment (booking_id NULL, enrolment_id set) and its arrears
+    join is on enrolment_id.
 
     Each session carries its REAL money state (not just the order status): a written-off or DISCOUNTED
-    lesson shows as such — derived from coach_arrears (write-off status; a gross_minor that differs from
+    session shows as such — derived from coach_arrears (write-off status; a gross_minor that differs from
     what was billed = discounted). Returns {total_minor (effective), billed_minor (gross, pre-discount/
-    write-off), services:[{key,label,count,total_minor,billed_minor,items:[{booking_id,starts_at,
-    billed_minor,amount_minor(effective),status}]}]}. status ∈ paid|owed|written_off|discounted|
-    covered|pending|refunded. Guarded → empty."""
+    write-off), services:[{key,label,count,total_minor,billed_minor,items:[{booking_id,enrolment_id,
+    starts_at,billed_minor,amount_minor(effective),status}]}]}. status ∈ paid|owed|written_off|
+    discounted|covered|pending|refunded. Guarded → empty."""
     try:
-        accrue_arrears_for_club(session, club_id=club_id)   # so an owed lesson carries an arrears row
+        accrue_arrears_for_club(session, club_id=club_id)   # so an owed lesson/class carries an arrears row
     except Exception:
         pass
-    where_month = "AND to_char(b.starts_at,'YYYY-MM') = :ym" if month else ""
+    lesson_month = "AND to_char(b.starts_at,'YYYY-MM') = :ym" if month else ""
+    class_month = "AND to_char(cs.starts_at,'YYYY-MM') = :ym" if month else ""
     params: Dict[str, Any] = {"c": club_id, "coach": str(coach_user_id), "client": str(client_user_id)}
     if month:
         params["ym"] = month
     try:
         rows = session.execute(
             text("""
-                SELECT b.id AS booking_id, b.starts_at, b.ends_at, b.status AS bstatus,
+                SELECT b.id AS booking_id, NULL::uuid AS enrolment_id,
+                       b.starts_at, b.ends_at, b.status AS bstatus,
                        ol.amount_minor, ol.original_amount_minor, o.status AS ostatus, o.settlement_mode,
                        pr.duration_minutes AS price_dur, prod.id AS product_id, prod.name AS product_name,
                        ca.status AS arr_status, ca.gross_minor AS arr_gross
@@ -548,8 +600,24 @@ def client_service_breakdown(session, *, club_id, coach_user_id, client_user_id,
                 WHERE b.club_id = :c AND b.coach_user_id = :coach AND b.booked_by_user_id = :client
                   AND b.booking_type = 'lesson'
                   AND b.status IN ('confirmed','held','completed','no_show')
-                  """ + where_month + """
-                ORDER BY b.starts_at DESC
+                  """ + lesson_month + """
+                UNION ALL
+                SELECT NULL::uuid AS booking_id, e.id AS enrolment_id,
+                       cs.starts_at, cs.ends_at, e.status AS bstatus,
+                       ol.amount_minor, ol.original_amount_minor, o.status AS ostatus, o.settlement_mode,
+                       pr.duration_minutes AS price_dur, prod.id AS product_id, prod.name AS product_name,
+                       ca.status AS arr_status, ca.gross_minor AS arr_gross
+                FROM diary.enrolment e
+                JOIN diary.class_session cs ON cs.id = e.class_session_id AND cs.club_id = e.club_id
+                LEFT JOIN billing.order_line ol ON ol.enrolment_id = e.id
+                LEFT JOIN billing."order" o ON o.id = ol.order_id
+                LEFT JOIN billing.price pr ON pr.id = ol.price_id
+                LEFT JOIN billing.product prod ON prod.id = pr.product_id
+                LEFT JOIN billing.coach_arrears ca ON ca.enrolment_id = e.id AND ca.club_id = e.club_id
+                WHERE cs.club_id = :c AND cs.coach_user_id = :coach AND o.user_id = :client
+                  AND e.status IN ('enrolled','attended','no_show')
+                  """ + class_month + """
+                ORDER BY starts_at DESC
             """),
             params,
         ).mappings().all()
@@ -566,8 +634,9 @@ def client_service_breakdown(session, *, club_id, coach_user_id, client_user_id,
         dur = int(r["price_dur"] or 0)
         if not dur and r["starts_at"] and r["ends_at"]:
             dur = int((r["ends_at"] - r["starts_at"]).total_seconds() // 60)
-        name = r["product_name"] or "Lesson"
-        key = (str(r["product_id"]) if r["product_id"] else "x") + "-" + str(dur)
+        is_class = r["booking_id"] is None
+        name = r["product_name"] or ("Class" if is_class else "Lesson")
+        key = (str(r["product_id"]) if r["product_id"] else ("cls" if is_class else "x")) + "-" + str(dur)
         label = name + ((" · " + str(dur) + " min") if dur else "")
         # "billed" = the ORIGINAL charge (order_line.original_amount_minor is set on a discount; else the
         # current amount_minor IS the original). "eff"/arr_gross is the current (discounted) figure owed.
@@ -595,7 +664,8 @@ def client_service_breakdown(session, *, club_id, coach_user_id, client_user_id,
         g["billed_minor"] += billed
         total += eff
         billed_total += billed
-        g["items"].append({"booking_id": str(r["booking_id"]),
+        g["items"].append({"booking_id": str(r["booking_id"]) if r["booking_id"] else None,
+                           "enrolment_id": str(r["enrolment_id"]) if r["enrolment_id"] else None,
                            "starts_at": r["starts_at"].isoformat() if r["starts_at"] else None,
                            "billed_minor": billed, "amount_minor": eff, "status": status})
     services = sorted(groups.values(), key=lambda x: -x["billed_minor"])
@@ -633,12 +703,15 @@ def client_invoice_data(session, *, club_id, coach_user_id, client_user_id, mont
     # Paid this month (online or collected off-platform) — coach commission split rows.
     for r in session.execute(
         text("""
-            SELECT cs.gross_minor, cs.occurred_at, b.starts_at, b.booking_type
+            SELECT cs.gross_minor, cs.occurred_at, b.starts_at,
+                   COALESCE(b.booking_type, 'class') AS booking_type
             FROM billing.commission_split cs
-            LEFT JOIN diary.booking b ON b.id = cs.booking_id
+            LEFT JOIN diary.booking b   ON b.id  = cs.booking_id
+            LEFT JOIN billing.order_line ol ON ol.id = cs.order_line_id
+            LEFT JOIN billing."order" o  ON o.id  = ol.order_id
             WHERE cs.club_id = :c AND cs.coach_user_id = :coach AND cs.party_type = 'coach'
               AND cs.basis IN ('lesson_commission','class_commission','arrears_commission')
-              AND b.booked_by_user_id = :cu
+              AND COALESCE(b.booked_by_user_id, o.user_id) = :cu
               AND to_char(cs.occurred_at,'YYYY-MM') = :ym
             ORDER BY COALESCE(b.starts_at, cs.occurred_at)
         """),
@@ -795,18 +868,22 @@ def client_statement(session, *, club_id, user_id, month=None) -> Dict[str, Any]
     except Exception:
         currency = "ZAR"
 
+    # A CLASS split has no booking_id — resolve the client via the order's payer so a class the client
+    # paid shows on THEIR statement too (LEFT JOIN + COALESCE, matching coach_statement so both agree).
     paid = session.execute(
         text("""
             SELECT cs.coach_user_id,
                    count(*) FILTER (WHERE cs.basis <> 'refund_clawback') AS lesson_count,
                    COALESCE(SUM(cs.gross_minor),0) AS paid_minor
             FROM billing.commission_split cs
-            JOIN diary.booking b ON b.id = cs.booking_id
+            LEFT JOIN diary.booking b   ON b.id  = cs.booking_id
+            LEFT JOIN billing.order_line ol ON ol.id = cs.order_line_id
+            LEFT JOIN billing."order" o  ON o.id  = ol.order_id
             WHERE cs.club_id = :club AND cs.party_type = 'coach'
               -- refund_clawback (negative gross) nets a refunded lesson out of the client's paid-this-
               -- month, mirroring coach_statement so the two sides agree; count excludes it (not a lesson).
               AND cs.basis IN ('lesson_commission','class_commission','arrears_commission','refund_clawback')
-              AND b.booked_by_user_id = :u
+              AND COALESCE(b.booked_by_user_id, o.user_id) = :u
               AND to_char(cs.occurred_at,'YYYY-MM') = :ym
             GROUP BY 1
         """),
@@ -946,15 +1023,20 @@ def coach_statement(session, *, club_id, coach_user_id, month=None) -> Dict[str,
     # Paid-online lessons this month (from succeeded charge splits — coach party = net). A
     # refund_clawback is a NEGATIVE coach split: include it in coach_net_minor so a refunded lesson
     # reduces what the coach earned this month, but don't count it as a lesson/gross.
+    # A CLASS split carries NO booking_id (classes are enrolments), so resolve the client via the
+    # order's payer (order_line -> order.user_id) — mirrors how class arrears set client_user_id, so
+    # a class's paid + owed merge into the SAME per-client row exactly like a lesson does.
     paid = session.execute(
         text("""
-            SELECT b.booked_by_user_id AS client_user_id,
+            SELECT COALESCE(b.booked_by_user_id, o.user_id) AS client_user_id,
                    count(*) FILTER (WHERE cs.basis <> 'refund_clawback') AS lesson_count,
                    COALESCE(SUM(cs.gross_minor) FILTER (WHERE cs.basis <> 'refund_clawback'),0)
                        AS gross_minor,
                    COALESCE(SUM(cs.amount_minor),0) AS coach_net_minor
             FROM billing.commission_split cs
-            LEFT JOIN diary.booking b ON b.id = cs.booking_id
+            LEFT JOIN diary.booking b   ON b.id  = cs.booking_id
+            LEFT JOIN billing.order_line ol ON ol.id = cs.order_line_id
+            LEFT JOIN billing."order" o  ON o.id  = ol.order_id
             WHERE cs.club_id = :club AND cs.coach_user_id = :coach
               AND cs.party_type = 'coach'
               -- arrears_commission = a lesson the coach collected OFF-platform (at court). It counts as

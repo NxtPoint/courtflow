@@ -936,21 +936,34 @@ def _coach_activity_kpis(session, *, club_id, user_id, start_d, end_d):
 
 def _coach_billed(session, *, club_id, user_id, start_d, end_d):
     """Total GROSS coaching billed in the month: the sum of what was charged for this coach's
-    lessons — BEFORE any write-off / discount / (non-)collection. This is the 'Total billed'
-    headline that mirrors the client record, and unlike gross_minor (collected payments only)
-    it reflects the real business done. Guarded → 0."""
+    lessons AND class seats — BEFORE any write-off / discount / (non-)collection. This is the
+    'Total billed' headline that mirrors the client record, and unlike gross_minor (collected
+    payments only) it reflects the real business done. Classes pay the coach like lessons (owner
+    rule 2026-07), so class enrolments are billed here too — keyed by enrolment_id (no booking).
+    Guarded → 0."""
     try:
         v = session.execute(
             text("""
                 -- 'Total billed' = the ORIGINAL charge before any discount (original_amount_minor is
                 -- set when a line is discounted; else the current amount_minor IS the original) — so
-                -- the coach cockpit matches the client record's "before discount" figure.
-                SELECT COALESCE(SUM(COALESCE(ol.original_amount_minor, ol.amount_minor)), 0)
-                FROM diary.booking b
-                JOIN billing.order_line ol ON ol.booking_id = b.id AND ol.club_id = b.club_id
-                WHERE b.club_id = :c AND b.coach_user_id = :u AND b.booking_type = 'lesson'
-                  AND b.starts_at >= :s AND b.starts_at < :e
-                  AND b.status IN ('confirmed','completed','no_show','held')
+                -- the coach cockpit matches the client record's "before discount" figure. Lessons +
+                -- class enrolments, unioned (a class has no diary.booking).
+                SELECT COALESCE(SUM(billed), 0) FROM (
+                    SELECT COALESCE(ol.original_amount_minor, ol.amount_minor) AS billed
+                    FROM diary.booking b
+                    JOIN billing.order_line ol ON ol.booking_id = b.id AND ol.club_id = b.club_id
+                    WHERE b.club_id = :c AND b.coach_user_id = :u AND b.booking_type = 'lesson'
+                      AND b.starts_at >= :s AND b.starts_at < :e
+                      AND b.status IN ('confirmed','completed','no_show','held')
+                    UNION ALL
+                    SELECT COALESCE(ol.original_amount_minor, ol.amount_minor) AS billed
+                    FROM diary.class_session cs
+                    JOIN diary.enrolment e ON e.class_session_id = cs.id AND e.club_id = cs.club_id
+                    JOIN billing.order_line ol ON ol.enrolment_id = e.id AND ol.club_id = cs.club_id
+                    WHERE cs.club_id = :c AND cs.coach_user_id = :u
+                      AND cs.starts_at >= :s AND cs.starts_at < :e
+                      AND e.status IN ('enrolled','attended','no_show')
+                ) x
             """),
             {"c": club_id, "u": user_id, "s": start_d, "e": end_d},
         ).scalar()

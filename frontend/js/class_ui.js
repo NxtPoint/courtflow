@@ -76,7 +76,7 @@
       var name = input({ placeholder: "Class name (e.g. Cardio Tennis)" });
       var coachSel = null;
       if (opts.coaches && opts.coaches.length) {
-        coachSel = select("", [{ value: "", label: "— Unassigned —" }].concat(
+        coachSel = select("", [{ value: "", label: "— Select coach —" }].concat(
           opts.coaches.map(function (c) { return { value: c.user_id, label: c.name }; })));
       }
       var capacity = input({ type: "number", min: "1", value: "8", placeholder: "Max players" });
@@ -107,7 +107,11 @@
           duration_minutes: num(dur.value) || 60,
           description: desc.value.trim(),
         };
-        if (coachSel && coachSel.value) body.coach_user_id = coachSel.value;
+        // A class must belong to a coach (its enrolments + commission attribute to them).
+        if (coachSel) {
+          if (!coachSel.value) { UI.toast("Pick the coach who runs this class.", "warn"); return; }
+          body.coach_user_id = coachSel.value;
+        }
         save.disabled = true; save.textContent = "Creating…";
         try {
           var created = await api.createClass(body);

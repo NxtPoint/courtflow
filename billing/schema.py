@@ -446,6 +446,13 @@ _DDL = [
     # The online statement-payment order that's settling this arrears (set when the client pays
     # their month-end statement online; on charge_succeeded the arrears is marked collected). Idempotent.
     f"ALTER TABLE {SCHEMA}.coach_arrears ADD COLUMN IF NOT EXISTS pay_order_id uuid;",
+    # A CLASS enrolment has NO diary.booking (it keys off diary.enrolment) — so an OWED class
+    # enrolment can't dedupe on booking_id. Track its source enrolment here and dedupe on it, the
+    # exact mirror of ux_coach_arrears_booking for lessons. Additive + partial (existing lesson rows
+    # keep enrolment_id NULL → not indexed → no conflict). Idempotent (python -m db twice = no-op).
+    f"ALTER TABLE {SCHEMA}.coach_arrears ADD COLUMN IF NOT EXISTS enrolment_id uuid;",
+    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_arrears_enrolment "
+    f"ON {SCHEMA}.coach_arrears (club_id, enrolment_id) WHERE enrolment_id IS NOT NULL;",
     # --- end commission engine (owner) ---
 
     # ===========================================================================
