@@ -725,12 +725,15 @@ def client_invoice_data(session, *, club_id, coach_user_id, client_user_id, mont
     # Owed + written-off (the running tab — not month-bound; a written-off line stays visible).
     for r in session.execute(
         text("""
-            SELECT a.gross_minor, a.status, a.note, b.starts_at, a.created_at
+            SELECT a.gross_minor, a.status, a.note,
+                   COALESCE(b.starts_at, cs.starts_at) AS starts_at, a.created_at
             FROM billing.coach_arrears a
             LEFT JOIN diary.booking b ON b.id = a.booking_id
+            LEFT JOIN diary.enrolment e ON e.id = a.enrolment_id
+            LEFT JOIN diary.class_session cs ON cs.id = e.class_session_id
             WHERE a.club_id = :c AND a.coach_user_id = :coach AND a.client_user_id = :cu
               AND a.status IN ('owed','written_off')
-            ORDER BY COALESCE(b.starts_at, a.created_at)
+            ORDER BY COALESCE(b.starts_at, cs.starts_at, a.created_at)
         """),
         {"c": club_id, "coach": str(coach_user_id), "cu": str(client_user_id)},
     ).mappings().all():
@@ -904,9 +907,11 @@ def client_statement(session, *, club_id, user_id, month=None) -> Dict[str, Any]
     items = session.execute(
         text("""
             SELECT a.id, a.coach_user_id, a.gross_minor, a.status, a.note,
-                   a.created_at, b.starts_at
+                   a.created_at, COALESCE(b.starts_at, cs.starts_at) AS starts_at
             FROM billing.coach_arrears a
             LEFT JOIN diary.booking b ON b.id = a.booking_id
+            LEFT JOIN diary.enrolment e ON e.id = a.enrolment_id
+            LEFT JOIN diary.class_session cs ON cs.id = e.class_session_id
             WHERE a.club_id = :club AND a.client_user_id = :u
               AND a.status IN ('owed','written_off')
             ORDER BY (a.status = 'owed') DESC, a.created_at DESC
@@ -1070,10 +1075,13 @@ def coach_statement(session, *, club_id, coach_user_id, month=None) -> Dict[str,
     items = session.execute(
         text("""
             SELECT a.id, a.client_user_id, a.gross_minor, a.currency, a.status,
-                   a.note, a.created_at, a.updated_at, b.starts_at,
+                   a.note, a.created_at, a.updated_at,
+                   COALESCE(b.starts_at, cs.starts_at) AS starts_at,
                    u.first_name, u.surname, u.email
             FROM billing.coach_arrears a
             LEFT JOIN diary.booking b ON b.id = a.booking_id
+            LEFT JOIN diary.enrolment e ON e.id = a.enrolment_id
+            LEFT JOIN diary.class_session cs ON cs.id = e.class_session_id
             LEFT JOIN iam."user" u    ON u.id = a.client_user_id
             WHERE a.club_id = :club AND a.coach_user_id = :coach
               AND a.status IN ('owed','written_off')

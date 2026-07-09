@@ -1407,6 +1407,17 @@ def sc_class_commission_parity(s, fx):
           and owed_row["gross_minor"] == 12000 and owed_row["status"] == "owed"
           and owed_row["booking_id"] is None, str(dict(owed_row) if owed_row else None))
 
+    # (1a) The class arrears line resolves a DATE via enrolment→class_session (no blank date on the
+    # coach/client statements — a class has no booking to read starts_at from).
+    dated = s.execute(text(
+        "SELECT COALESCE(b.starts_at, cs.starts_at) AS d FROM billing.coach_arrears a "
+        "LEFT JOIN diary.booking b ON b.id=a.booking_id "
+        "LEFT JOIN diary.enrolment e ON e.id=a.enrolment_id "
+        "LEFT JOIN diary.class_session cs ON cs.id=e.class_session_id "
+        "WHERE a.club_id=:c AND a.enrolment_id=:e"),
+        {"c": fx.club_id, "e": str(ro["enrolment"]["id"])}).scalar()
+    check("class arrears line resolves a date (no blank date on statements)", dated is not None, str(dated))
+
     # (1b) IDEMPOTENT: a second accrual adds no new class arrears row.
     cnt_after1 = _arrears_count()
     CM.accrue_arrears_for_club(s, club_id=fx.club_id)

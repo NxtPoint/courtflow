@@ -1029,6 +1029,14 @@ def list_people(session, *, club_id):
                           AND b.status <> 'cancelled') AS does_lesson,
                    EXISTS(SELECT 1 FROM diary.enrolment e WHERE e.club_id = :c
                           AND e.user_id = u.id AND e.status <> 'cancelled') AS does_class,
+                   -- The specific services (products) this client has transacted — the drill under a
+                   -- service category (court/lesson/class → the actual named service).
+                   (SELECT array_agg(DISTINCT p.product_id)
+                    FROM billing.order_line ol
+                    JOIN billing."order" o ON o.id = ol.order_id
+                    JOIN billing.price p ON p.id = ol.price_id
+                    WHERE o.club_id = :c AND o.user_id = u.id AND o.status <> 'void'
+                      AND p.product_id IS NOT NULL) AS service_ids,
                    -- The coaches this client is linked to (lesson bookings + class enrolments + packs)
                    -- — for the People "by coach" filter (packs are coach-scoped + the coach is paid).
                    (SELECT array_agg(DISTINCT cid) FROM (
@@ -1074,6 +1082,7 @@ def list_people(session, *, club_id):
         d["role"] = next((x for x in prec if x in roles), (roles[0] if roles else "member"))
         d["member_status"] = "active" if r["any_active"] else "none"
         d["coach_ids"] = [str(x) for x in (r["coach_ids"] or [])]
+        d["service_ids"] = [str(x) for x in (r["service_ids"] or [])]
         d.pop("any_active", None)
         out.append(d)
     return out

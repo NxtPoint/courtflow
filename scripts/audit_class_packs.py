@@ -70,10 +70,26 @@ def main():
                   % ((w["email"] or "—")[:26], name[:22], w["minutes_remaining"],
                      w["expires_at"] or "never"))
         print()
-        if not plans and not wallets:
-            print("Nothing coachless — every class pack is already tied to a coach. ✅")
+
+        # (3) Upcoming coachless class SESSIONS — future enrolments won't attribute money to a coach.
+        sessions = s.execute(text(
+            "SELECT cs.starts_at, r.name, cs.capacity, "
+            "  (SELECT count(*) FROM diary.enrolment e WHERE e.class_session_id = cs.id "
+            "   AND e.status <> 'cancelled') AS enrolled "
+            "FROM diary.class_session cs LEFT JOIN diary.resource r ON r.id = cs.resource_id "
+            "WHERE cs.coach_user_id IS NULL AND cs.status <> 'cancelled' AND cs.starts_at >= now() "
+            "ORDER BY cs.starts_at")).mappings().all()
+        print("Upcoming coachless class SESSIONS (future enrolments pay no coach): %d" % len(sessions))
+        for cs in sessions:
+            print("  - %-22s %-20s %s enrolled / %s"
+                  % (str(cs["starts_at"])[:22], (cs["name"] or "—")[:20], cs["enrolled"], cs["capacity"]))
+        print()
+
+        if not plans and not wallets and not sessions:
+            print("Nothing coachless — every class pack + session is already tied to a coach. ✅")
         else:
-            print("These are LEGACY (pre-2026-07-09). New class packs now require a coach and pay them.")
+            print("These are LEGACY (pre-2026-07-09). New class packs + class sessions now require a "
+                  "coach and pay them. Assign a coach in Setup → Diary → Classes to fix a session.")
         return 0
     finally:
         s.close()

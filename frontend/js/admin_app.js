@@ -261,6 +261,27 @@
     Object.keys(ids).forEach(function (id) { out.push(["coach:" + id, coachName(id)]); });
     return out.sort(function (a, b) { return a[1].localeCompare(b[1]); });
   }
+  // Service-type DRILL: under a selected category (court/lesson/class), the specific named services.
+  var CAT_KIND = { does_court: "court_booking", does_lesson: "lesson", does_class: "class" };
+  var CAT_TITLE = { court_booking: "▸ Court services", lesson: "▸ Lesson services", class: "▸ Class types" };
+  function activeCategoryKind() {
+    var s = PEOPLE.slice || "";
+    if (CAT_KIND[s]) return CAT_KIND[s];
+    if (s.indexOf("svc:") === 0) { var p = PEOPLE.products && PEOPLE.products[s.slice(4)]; return p ? p.kind : null; }
+    return null;
+  }
+  function svcSlices(kind) {
+    if (!kind) return [];
+    var names = {}, out = [];
+    PEOPLE.rows.forEach(function (r) {
+      (r.service_ids || []).forEach(function (id) {
+        var p = PEOPLE.products && PEOPLE.products[id];
+        if (p && p.kind === kind) names[id] = p.name || "Service";
+      });
+    });
+    Object.keys(names).forEach(function (id) { out.push(["svc:" + id, names[id]]); });
+    return out.sort(function (a, b) { return a[1].localeCompare(b[1]); });
+  }
   function pName(r) { return r.display_name || [r.first_name, r.surname].filter(Boolean).join(" ").trim() || r.email || "Member"; }
   function pInit(r) { var n = pName(r).split(/\s+/); return ((n[0] || "?")[0] + (n.length > 1 ? n[n.length - 1][0] : "")).toUpperCase(); }
   function pSlice(r) {
@@ -275,6 +296,7 @@
   // (a member is exactly one of PAYG / Membership / Trial, so those three sum to Members).
   function matchSlice(r, slice) {
     if (slice.indexOf("coach:") === 0) return (r.coach_ids || []).indexOf(slice.slice(6)) >= 0;
+    if (slice.indexOf("svc:") === 0) return (r.service_ids || []).indexOf(slice.slice(4)) >= 0;
     switch (slice) {
       case "all": return true;
       case "members": return isMember(r);
@@ -315,6 +337,13 @@
         PEOPLE.coachName[c.user_id || c.id] = c.display_name || [c.first_name, c.surname].filter(Boolean).join(" ").trim() || c.email || "Coach";
       });
     } catch (e) { PEOPLE.coachName = PEOPLE.coachName || {}; }
+    // Product catalogue (id → name+kind) for the service-type drill under a category.
+    try {
+      PEOPLE.products = {};
+      ((await window.AdminAPI.products()).products || []).forEach(function (p) {
+        PEOPLE.products[p.id] = { name: p.name, kind: p.kind };
+      });
+    } catch (e) { PEOPLE.products = PEOPLE.products || {}; }
     paintPeople();
   }
   function paintPeople() {
@@ -353,9 +382,12 @@
     }
     var statusRow = segRow(STATUS_SLICES, "Status");
     var servicesRow = segRow(SERVICE_SLICES, "Services used");
+    var catKind = activeCategoryKind();
+    var svcRow = catKind ? segRow(svcSlices(catKind), CAT_TITLE[catKind] || "▸ Services") : null;
     var coachRow = segRow(coachSlices(), "By coach");
     if (statusRow) wrap.appendChild(statusRow);
     if (servicesRow) wrap.appendChild(servicesRow);
+    if (svcRow) wrap.appendChild(svcRow);   // service-type drill (shows when a category is active)
     if (coachRow) wrap.appendChild(coachRow);
     wrap.appendChild(listBox);
     paintPeopleList(listBox);
