@@ -1020,13 +1020,31 @@ def list_people(session, *, club_id):
                           WHERE tw.club_id = :c AND tw.user_id = u.id AND tw.status = 'active'
                             AND COALESCE(tw.minutes_remaining, 0) > 0
                             AND tw.service_kind = 'court') AS has_court_pack,
-                   -- The coaches this client holds an active (lesson/class) pack WITH — for the
-                   -- People "by coach" holdings filter (packs are coach-scoped; the coach is paid).
-                   (SELECT array_agg(DISTINCT tw.coach_user_id)
-                    FROM billing.token_wallet tw
-                    WHERE tw.club_id = :c AND tw.user_id = u.id AND tw.status = 'active'
-                      AND COALESCE(tw.minutes_remaining, 0) > 0
-                      AND tw.coach_user_id IS NOT NULL) AS pack_coach_ids,
+                   -- Services the client actually uses (the 3 booking types) — the "Services" filter.
+                   EXISTS(SELECT 1 FROM diary.booking b WHERE b.club_id = :c
+                          AND b.booked_by_user_id = u.id AND b.booking_type = 'court'
+                          AND b.status <> 'cancelled') AS does_court,
+                   EXISTS(SELECT 1 FROM diary.booking b WHERE b.club_id = :c
+                          AND b.booked_by_user_id = u.id AND b.booking_type = 'lesson'
+                          AND b.status <> 'cancelled') AS does_lesson,
+                   EXISTS(SELECT 1 FROM diary.enrolment e WHERE e.club_id = :c
+                          AND e.user_id = u.id AND e.status <> 'cancelled') AS does_class,
+                   -- The coaches this client is linked to (lesson bookings + class enrolments + packs)
+                   -- — for the People "by coach" filter (packs are coach-scoped + the coach is paid).
+                   (SELECT array_agg(DISTINCT cid) FROM (
+                       SELECT tw.coach_user_id AS cid FROM billing.token_wallet tw
+                        WHERE tw.club_id = :c AND tw.user_id = u.id AND tw.status = 'active'
+                          AND COALESCE(tw.minutes_remaining, 0) > 0 AND tw.coach_user_id IS NOT NULL
+                       UNION
+                       SELECT b.coach_user_id FROM diary.booking b
+                        WHERE b.club_id = :c AND b.booked_by_user_id = u.id AND b.booking_type = 'lesson'
+                          AND b.status <> 'cancelled' AND b.coach_user_id IS NOT NULL
+                       UNION
+                       SELECT cs.coach_user_id FROM diary.enrolment e
+                        JOIN diary.class_session cs ON cs.id = e.class_session_id
+                        WHERE e.club_id = :c AND e.user_id = u.id AND e.status <> 'cancelled'
+                          AND cs.coach_user_id IS NOT NULL
+                   ) x) AS coach_ids,
                    -- The active PAID membership's service/tier NAME (not the term) — for the 360 detail.
                    (SELECT COALESCE(pr.membership_tier, prod.name, pr.label)
                     FROM billing.membership_subscription ms2
@@ -1055,7 +1073,7 @@ def list_people(session, *, club_id):
         d["roles"] = roles
         d["role"] = next((x for x in prec if x in roles), (roles[0] if roles else "member"))
         d["member_status"] = "active" if r["any_active"] else "none"
-        d["pack_coach_ids"] = [str(x) for x in (r["pack_coach_ids"] or [])]
+        d["coach_ids"] = [str(x) for x in (r["coach_ids"] or [])]
         d.pop("any_active", None)
         out.append(d)
     return out

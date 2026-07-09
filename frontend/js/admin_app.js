@@ -248,16 +248,16 @@
     ["all", "All"], ["members", "Members"], ["payg", "PAYG"], ["membership", "Memberships"],
     ["trial", "Trial"], ["coaches", "Coaches"], ["guests", "Guests"], ["admins", "Admins"],
   ];
-  // Holdings by pack SERVICE CATEGORY (a client can hold packs in more than one → overlapping).
-  var HOLDINGS_SLICES = [
-    ["pack_lesson", "Lessons"], ["pack_class", "Classes"], ["pack_court", "Courts"],
+  // Services the client uses — the 3 booking types (court/lesson/class), by real activity (overlapping).
+  var SERVICE_SLICES = [
+    ["does_lesson", "Lessons"], ["does_class", "Classes"], ["does_court", "Courts"],
   ];
-  // "By coach" holdings — one chip per coach a client holds an active pack with (packs are
-  // coach-scoped + the coach is paid). Built dynamically from the roster.
+  // "By coach" — one chip per coach a client is linked to (lesson bookings + class enrolments +
+  // packs; packs are coach-scoped + the coach is paid). Built dynamically from the roster.
   function coachName(id) { return (PEOPLE.coachName && PEOPLE.coachName[id]) || "Coach"; }
   function coachSlices() {
     var ids = {}, out = [];
-    PEOPLE.rows.forEach(function (r) { (r.pack_coach_ids || []).forEach(function (id) { ids[id] = 1; }); });
+    PEOPLE.rows.forEach(function (r) { (r.coach_ids || []).forEach(function (id) { ids[id] = 1; }); });
     Object.keys(ids).forEach(function (id) { out.push(["coach:" + id, coachName(id)]); });
     return out.sort(function (a, b) { return a[1].localeCompare(b[1]); });
   }
@@ -274,7 +274,7 @@
   // Does a person match the active slice? Billing statuses are member-scoped + mutually exclusive
   // (a member is exactly one of PAYG / Membership / Trial, so those three sum to Members).
   function matchSlice(r, slice) {
-    if (slice.indexOf("coach:") === 0) return (r.pack_coach_ids || []).indexOf(slice.slice(6)) >= 0;
+    if (slice.indexOf("coach:") === 0) return (r.coach_ids || []).indexOf(slice.slice(6)) >= 0;
     switch (slice) {
       case "all": return true;
       case "members": return isMember(r);
@@ -282,9 +282,9 @@
       case "membership": return isMember(r) && !!r.has_paid_membership;                       // active PAID plan
       case "trial": return isMember(r) && !!r.on_trial && !r.has_paid_membership;              // 7 Day Trial Period
       case "payg": return isMember(r) && !r.has_paid_membership && !r.on_trial;                // no coverage
-      case "pack_lesson": return !!r.has_lesson_pack;
-      case "pack_class": return !!r.has_class_pack;
-      case "pack_court": return !!r.has_court_pack;
+      case "does_lesson": return !!r.does_lesson;
+      case "does_class": return !!r.does_class;
+      case "does_court": return !!r.does_court;
       default: return false;
     }
   }
@@ -352,10 +352,10 @@
       ]);
     }
     var statusRow = segRow(STATUS_SLICES, "Status");
-    var holdingsRow = segRow(HOLDINGS_SLICES, "Holdings (packs)");
-    var coachRow = segRow(coachSlices(), "By coach (pack holders)");
+    var servicesRow = segRow(SERVICE_SLICES, "Services used");
+    var coachRow = segRow(coachSlices(), "By coach");
     if (statusRow) wrap.appendChild(statusRow);
-    if (holdingsRow) wrap.appendChild(holdingsRow);
+    if (servicesRow) wrap.appendChild(servicesRow);
     if (coachRow) wrap.appendChild(coachRow);
     wrap.appendChild(listBox);
     paintPeopleList(listBox);
