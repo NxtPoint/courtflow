@@ -1196,6 +1196,131 @@ def sc_service_selection(s, fx):
           str(_order(s, r2["booking"]["order_id"])["amount_minor"]))
 
 
+def sc_per_service_packs(s, fx):
+    """PER-SERVICE packs (money-correctness): a pack tied to a SPECIFIC service (product_id) draws
+    ONLY for THAT service — never any service of the same kind+coach. Proves: create_plan derives
+    kind+coach FROM the product; a Private-lesson pack draws for Private but is REJECTED for
+    Semi-private; a Clay-court pack draws for Clay not Hardcourt; get_service shows only THIS
+    service's packs; and a LEGACY unscoped pack (no product_id) still draws by kind+coach."""
+    from services import repositories as SR
+    print("\n# Per-service packs: a pack draws ONLY for its own service (product_id); legacy = kind+coach")
+
+    # --- Two LESSON services for ONE coach (Private / Semi-private) ---
+    priv = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                          "VALUES (:c,'lesson','PS Private',:u) RETURNING id"),
+                     {"c": fx.club_id, "u": fx.coach_uid}).scalar_one()
+    _price(s, fx.club_id, priv, 40000, dur=60)
+    semi = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                          "VALUES (:c,'lesson','PS Semi',:u) RETURNING id"),
+                     {"c": fx.club_id, "u": fx.coach_uid}).scalar_one()
+    _price(s, fx.club_id, semi, 25000, dur=60)
+
+    # create_plan(product_id) derives kind+coach FROM the product (the product is authoritative).
+    plan = BN.create_plan(s, club_id=fx.club_id, product_id=str(priv), sessions_count=10,
+                          price_minor=300000, duration_minutes=60, label="10 Private")
+    check("create_plan(product_id) derives kind=lesson + the product's coach + stores product_id",
+          plan["service_kind"] == "lesson" and str(plan["coach_user_id"]) == str(fx.coach_uid)
+          and str(plan["product_id"]) == str(priv), str(plan))
+    order = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                   bundle_plan_id=plan["id"], settlement_mode="at_court")
+    w = s.execute(text("SELECT product_id, status FROM billing.token_wallet WHERE order_id=:o"),
+                  {"o": order["order_id"]}).mappings().first()
+    check("wallet inherits the plan's product_id + is active (offline grant)",
+          w and str(w["product_id"]) == str(priv) and w["status"] == "active",
+          str(dict(w) if w else None))
+
+    # Book the SEMI service on the Private pack → REJECTED, nothing drawn.
+    before = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                       {"o": order["order_id"]}).scalar()
+    rsemi = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                             booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                             starts_at=iso(at(fx, 8)), ends_at=iso(at(fx, 9)),
+                             settlement_mode="token", product_id=str(semi))
+    check("Private pack REJECTED for a Semi-private lesson (NO_TOKEN)",
+          rsemi.get("error") == "NO_TOKEN", str(rsemi))
+    mid = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                    {"o": order["order_id"]}).scalar()
+    check("Semi lesson did NOT draw the Private pack (balance unchanged)", mid == before, f"{before}->{mid}")
+
+    # Book the PRIVATE service on the Private pack → draws 60 min.
+    rpriv = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                             booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                             starts_at=iso(at(fx, 10)), ends_at=iso(at(fx, 11)),
+                             settlement_mode="token", product_id=str(priv))
+    check("Private pack draws for a Private lesson", rpriv.get("ok"), str(rpriv))
+    after = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                      {"o": order["order_id"]}).scalar()
+    check("Private lesson drew 60 min off the Private pack", (before - after) == 60, f"{before}->{after}")
+
+    # get_service(Private) shows ONLY the Private pack (a Semi pack is scoped to its own service).
+    semi_plan = BN.create_plan(s, club_id=fx.club_id, product_id=str(semi), sessions_count=5,
+                               price_minor=100000, duration_minutes=60, label="5 Semi")
+    svc = SR.get_service(s, club_id=fx.club_id, product_id=str(priv))
+    pkg_ids = {pk["id"] for pk in svc["packages"]}
+    check("get_service(Private) lists the Private pack", plan["id"] in pkg_ids, str(pkg_ids))
+    check("get_service(Private) does NOT list the Semi pack", semi_plan["id"] not in pkg_ids, str(pkg_ids))
+
+    # --- Two COURT services (Hardcourt / Clay); a Clay pack draws for Clay, NOT Hardcourt ---
+    hard_prod = s.execute(text("INSERT INTO billing.product (club_id, kind, name) "
+                               "VALUES (:c,'court_booking','PS Hardcourt') RETURNING id"),
+                          {"c": fx.club_id}).scalar_one()
+    _price(s, fx.club_id, hard_prod, 15000, dur=60)
+    clay_prod = s.execute(text("INSERT INTO billing.product (club_id, kind, name) "
+                               "VALUES (:c,'court_booking','PS Clay') RETURNING id"),
+                          {"c": fx.club_id}).scalar_one()
+    _price(s, fx.club_id, clay_prod, 18000, dur=60)
+
+    def mk_court(name, prod):
+        rid = s.execute(text("INSERT INTO diary.resource (club_id, kind, name, surface, product_id) "
+                             "VALUES (:c,'court',:n,'hard',:p) RETURNING id"),
+                        {"c": fx.club_id, "n": name, "p": str(prod)}).scalar_one()
+        s.execute(text("INSERT INTO diary.availability_rule (club_id, resource_id, weekday, "
+                       "start_time, end_time, slot_minutes) VALUES (:c,:r,:wd,'08:00','18:00',30)"),
+                  {"c": fx.club_id, "r": rid, "wd": fx.target.weekday()})
+        return rid
+    hard_court = mk_court("PS Hard 1", hard_prod)
+    clay_court = mk_court("PS Clay 1", clay_prod)
+
+    cplan = BN.create_plan(s, club_id=fx.club_id, product_id=str(clay_prod), sessions_count=5,
+                           price_minor=80000, duration_minutes=60, label="5 Clay")
+    check("court pack derives kind=court + coach NULL (coachless)",
+          cplan["service_kind"] == "court" and cplan["coach_user_id"] is None, str(cplan))
+    corder = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                    bundle_plan_id=cplan["id"], settlement_mode="at_court")
+    cbefore = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                        {"o": corder["order_id"]}).scalar()
+    rhard = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                             booking_type="court", resource_id=hard_court,
+                             starts_at=iso(at(fx, 8)), ends_at=iso(at(fx, 9)), settlement_mode="token")
+    check("Clay pack REJECTED for a Hardcourt booking (NO_TOKEN)", rhard.get("error") == "NO_TOKEN", str(rhard))
+    rclay = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                             booking_type="court", resource_id=clay_court,
+                             starts_at=iso(at(fx, 12)), ends_at=iso(at(fx, 13)), settlement_mode="token")
+    check("Clay pack draws for a Clay booking", rclay.get("ok"), str(rclay))
+    cafter = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                       {"o": corder["order_id"]}).scalar()
+    check("Clay booking drew 60 min off the Clay pack", (cbefore - cafter) == 60, f"{cbefore}->{cafter}")
+
+    # --- BACKWARD-COMPAT: a LEGACY unscoped pack (product_id NULL) still draws by kind+coach ---
+    legacy = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=10,
+                            price_minor=300000, duration_minutes=60, coach_user_id=fx.coach_uid,
+                            label="Legacy lessons")
+    check("a legacy pack (kind+coach, no product) has product_id NULL", legacy["product_id"] is None, str(legacy))
+    lorder = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                    bundle_plan_id=legacy["id"], settlement_mode="at_court")
+    lbefore = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                        {"o": lorder["order_id"]}).scalar()
+    # The Private-scoped pack won't match fx.lesson_product; the legacy unscoped pack draws by kind+coach.
+    rleg = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                            booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                            starts_at=iso(at(fx, 14)), ends_at=iso(at(fx, 15)),
+                            settlement_mode="token", product_id=str(fx.lesson_product))
+    check("legacy unscoped pack still draws by kind+coach (backward-compatible)", rleg.get("ok"), str(rleg))
+    lafter = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                       {"o": lorder["order_id"]}).scalar()
+    check("legacy pack drew 60 min", (lbefore - lafter) == 60, f"{lbefore}->{lafter}")
+
+
 def sc_cancel_fee_and_paid_resize(s, fx):
     """M6: a late cancel raises a REAL fee order (not just an email). M7: a PAID booking can't be
     stretched into a longer/pricier slot (cancel & rebook)."""
@@ -1689,6 +1814,7 @@ SCENARIOS = [
     sc_coach_scoped_pricing,
     sc_service_selection,
     sc_pack_credits_coach,
+    sc_per_service_packs,
     sc_class_scoped_pricing,
     sc_class_pack_coach,
     sc_class_commission_parity,

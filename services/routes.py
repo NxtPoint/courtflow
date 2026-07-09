@@ -225,14 +225,14 @@ def add_package(product_id):
         if err:
             return err
         from billing import bundles
-        # Owner rule: LESSON & CLASS packs belong to the coach who sells them (they get paid);
-        # COURT packs are coachless.
-        coach = svc.get("coach_user_id") if svc["service_kind"] in ("lesson", "class") else None
-        bundles.create_plan(s, club_id=p.club_id, service_kind=svc["service_kind"],
+        # PER-SERVICE: tie the pack to THIS exact service (product_id) so it only draws for it — the
+        # product is authoritative and derives service_kind + coach (owner rule: lesson/class packs
+        # belong to their coach; court packs are coachless).
+        bundles.create_plan(s, club_id=p.club_id, product_id=svc["id"],
                             sessions_count=int(b.get("sessions_count") or 1),
                             price_minor=int(b.get("price_minor") or 0),
                             label=b.get("label"), duration_minutes=b.get("duration_minutes"),
-                            coach_user_id=coach, validity_days=b.get("validity_days"))
+                            validity_days=b.get("validity_days"))
         out = repo.get_service(s, club_id=p.club_id, product_id=product_id)
     return jsonify(service=out), 201
 

@@ -241,10 +241,12 @@ _SERVICE_KIND_BY_BOOKING_TYPE = {"court": "court", "lesson": "lesson", "class": 
 
 
 def _match_token_wallet_guarded(session, *, club_id, user_id, booking_type,
-                                duration_minutes=None, coach_user_id=None):
+                                duration_minutes=None, coach_user_id=None, product_id=None):
     """Find (and LOCK, FOR UPDATE) the best token wallet for this booking, or None. Guarded so the
     diary self-verifies without billing.* present. The wallet is held under the caller's tx so the
-    subsequent draw_token can't race. service_kind/duration/coach drive the match (docs/specs/02)."""
+    subsequent draw_token can't race. service_kind/duration/coach/product drive the match
+    (docs/specs/02): a per-service pack (product_id) only draws for THAT service; a legacy unscoped
+    pack still draws by kind+coach."""
     try:
         from billing import bundles
     except Exception:
@@ -255,7 +257,8 @@ def _match_token_wallet_guarded(session, *, club_id, user_id, booking_type,
     try:
         return bundles.match_wallet(
             session, club_id=club_id, user_id=user_id, service_kind=service_kind,
-            duration_minutes=duration_minutes, coach_user_id=coach_user_id)
+            duration_minutes=duration_minutes, coach_user_id=coach_user_id,
+            product_id=product_id)
     except Exception:
         log.debug("token match_wallet suppressed (bundles/tables absent)", exc_info=False)
         return None
@@ -578,9 +581,13 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     if settlement_mode == "token":
         duration_for_match = int((ends - starts).total_seconds() // 60)
         match_coach = coach_uid if booking_type == "lesson" else None
+        # PER-SERVICE: the booking's CHOSEN service (court's own service or the lesson's product) —
+        # so a per-service pack only draws for that exact service. `product_id` was resolved above
+        # (court → its own service; lesson → the chosen product); None falls back to kind+coach.
         token_wallet = _match_token_wallet_guarded(
             session, club_id=club_id, user_id=owner_user_id, booking_type=booking_type,
-            duration_minutes=duration_for_match, coach_user_id=match_coach)
+            duration_minutes=duration_for_match, coach_user_id=match_coach,
+            product_id=product_id)
         if token_wallet is None:
             return _err("NO_TOKEN", 422,
                         message="no matching prepaid token — choose another way to pay")

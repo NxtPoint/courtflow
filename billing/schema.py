@@ -568,6 +568,13 @@ _DDL = [
         END IF;
     END $$;
     """,
+    # PER-SERVICE packs: tie a pack to its SPECIFIC billing.product (Private vs Semi-private, Clay vs
+    # Hardcourt) so it only draws for THAT service — not any service of the same kind+coach. NULL =
+    # a legacy unscoped pack (matches by kind+coach, exactly as before, until a backfill sets it).
+    # Additive + idempotent. service_kind/coach_user_id stay as the denormalised (product-derived) copy.
+    f"ALTER TABLE {SCHEMA}.bundle_plan ADD COLUMN IF NOT EXISTS product_id uuid;",
+    f"CREATE INDEX IF NOT EXISTS ix_bundle_plan_product "
+    f"ON {SCHEMA}.bundle_plan (club_id, product_id);",
 
     # 2. token_wallet — a member's purchased pack (denormalised for matching).
     f"""
@@ -620,6 +627,12 @@ _DDL = [
         WHERE base_minutes IS NULL;
     END $$;
     """,
+
+    # PER-SERVICE packs: the wallet inherits its plan's product_id, so a Private-lesson pack only
+    # draws for Private lessons (NULL = a legacy pack, matches by kind+coach). Additive + idempotent.
+    f"ALTER TABLE {SCHEMA}.token_wallet ADD COLUMN IF NOT EXISTS product_id uuid;",
+    f"CREATE INDEX IF NOT EXISTS ix_token_wallet_product "
+    f"ON {SCHEMA}.token_wallet (club_id, product_id);",
 
     # 3. token_ledger — audit + THE idempotency guard.
     # kind: draw/credit/grant/expire are SYSTEM movements (idempotent — at most one per wallet+booking);

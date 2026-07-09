@@ -33,6 +33,7 @@ log = logging.getLogger("billing.bundles")
 # service_kind ('court'|'lesson'|'class') <-> billing.product.kind. The bundle engine speaks the
 # diary's booking-type vocabulary; the commission/product side speaks product kinds.
 _PRODUCT_KIND_BY_SERVICE = {"court": "court_booking", "lesson": "lesson", "class": "class"}
+_SERVICE_BY_PRODUCT_KIND = {"court_booking": "court", "lesson": "lesson", "class": "class"}
 
 
 def _club_currency(session, *, club_id) -> str:
@@ -65,6 +66,9 @@ def _plan_dict(row) -> Optional[Dict[str, Any]]:
         "id": str(row["id"]),
         "service_kind": row["service_kind"],
         "coach_user_id": str(row["coach_user_id"]) if row["coach_user_id"] else None,
+        # The SPECIFIC service this pack is tied to (Private vs Semi-private); NULL = legacy unscoped.
+        "product_id": (str(row["product_id"]) if ("product_id" in row.keys() and row["product_id"])
+                       else None),
         "label": _plan_label(row["label"], row["service_kind"], row["sessions_count"]),
         "sessions_count": int(row["sessions_count"] or 0),
         "duration_minutes": int(row["duration_minutes"]) if row["duration_minutes"] is not None else None,
@@ -92,7 +96,7 @@ def list_plans(session, *, club_id, service_kind=None, active_only=True,
     if active_only:
         where.append("active = true")
     rows = session.execute(
-        text("SELECT id, club_id, service_kind, coach_user_id, label, sessions_count, "
+        text("SELECT id, club_id, service_kind, coach_user_id, product_id, label, sessions_count, "
              "       duration_minutes, price_minor, currency_code, validity_days, active, status "
              "FROM billing.bundle_plan WHERE " + " AND ".join(where) + " "
              "ORDER BY active DESC, price_minor ASC, created_at ASC"),
@@ -103,22 +107,42 @@ def list_plans(session, *, club_id, service_kind=None, active_only=True,
 
 def get_plan(session, *, club_id, plan_id) -> Optional[Dict[str, Any]]:
     return _plan_dict(session.execute(
-        text("SELECT id, club_id, service_kind, coach_user_id, label, sessions_count, "
+        text("SELECT id, club_id, service_kind, coach_user_id, product_id, label, sessions_count, "
              "       duration_minutes, price_minor, currency_code, validity_days, active, status "
              "FROM billing.bundle_plan WHERE club_id = :c AND id = :id"),
         {"c": str(club_id), "id": str(plan_id)},
     ).mappings().first())
 
 
-def create_plan(session, *, club_id, service_kind, sessions_count, price_minor,
+def create_plan(session, *, club_id, service_kind=None, sessions_count, price_minor,
                 label=None, duration_minutes=None, coach_user_id=None,
-                validity_days=None) -> Dict[str, Any]:
-    """Owner adds a bundle plan. service_kind ∈ court|lesson|class. Nothing hardcoded — all of it
-    is the owner's input.
+                validity_days=None, product_id=None) -> Dict[str, Any]:
+    """Owner adds a bundle plan. Nothing hardcoded — all of it is the owner's input.
+
+    PER-SERVICE (new): pass `product_id` = the SPECIFIC billing.product (Private lesson, Clay court)
+    the pack belongs to. The product is AUTHORITATIVE — we DERIVE service_kind (from product.kind) and
+    coach_user_id (from product.coach_user_id) FROM it, and store the product_id so this pack ONLY
+    draws for that exact service. BACKWARD-COMPATIBLE: a caller that passes only service_kind (+coach,
+    no product_id) creates a legacy unscoped pack exactly as before (product_id NULL → matches by
+    kind+coach until a backfill sets it).
 
     OWNER RULE (money-correctness): a LESSON or CLASS pack ALWAYS belongs to the coach who sold it
-    (that coach gets paid on the sale), so coach_user_id is REQUIRED for both — a missing/empty coach
-    raises ValueError('COACH_REQUIRED'). A COURT pack is coachless (courts have no coach) → coach NULL."""
+    (that coach gets paid on the sale), so a coach is REQUIRED for both — DERIVED from the product when
+    given, else the coach_user_id arg; a missing coach raises ValueError('COACH_REQUIRED'). A COURT
+    pack is coachless (courts have no coach) → coach NULL."""
+    prod_id = None
+    if product_id:
+        prow = session.execute(
+            text("SELECT id, kind, coach_user_id FROM billing.product "
+                 "WHERE club_id = :c AND id = :p"),
+            {"c": str(club_id), "p": str(product_id)},
+        ).mappings().first()
+        if not prow:
+            raise ValueError("PRODUCT_NOT_FOUND")
+        prod_id = str(prow["id"])
+        # The product is authoritative: derive kind + coach from it (owner-inherited).
+        service_kind = _SERVICE_BY_PRODUCT_KIND.get(prow["kind"], service_kind)
+        coach_user_id = str(prow["coach_user_id"]) if prow["coach_user_id"] else None
     if service_kind not in ("court", "lesson", "class"):
         raise ValueError(f"bad service_kind '{service_kind}'")
     if service_kind in ("lesson", "class"):
@@ -130,12 +154,12 @@ def create_plan(session, *, club_id, service_kind, sessions_count, price_minor,
     pid = session.execute(
         text("""
             INSERT INTO billing.bundle_plan
-                (club_id, service_kind, coach_user_id, label, sessions_count, duration_minutes,
-                 price_minor, currency_code, validity_days, active)
-            VALUES (:c, :sk, :coach, :label, :n, :dur, :price, :cur, :validity, true)
+                (club_id, service_kind, coach_user_id, product_id, label, sessions_count,
+                 duration_minutes, price_minor, currency_code, validity_days, active)
+            VALUES (:c, :sk, :coach, :prod, :label, :n, :dur, :price, :cur, :validity, true)
             RETURNING id
         """),
-        {"c": str(club_id), "sk": service_kind, "coach": coach,
+        {"c": str(club_id), "sk": service_kind, "coach": coach, "prod": prod_id,
          "label": (label or "").strip() or None, "n": int(sessions_count),
          "dur": int(duration_minutes) if duration_minutes else None,
          "price": int(price_minor), "cur": _club_currency(session, club_id=club_id),
@@ -236,7 +260,7 @@ def expire_due(session, *, club_id) -> int:
 # ---------------------------------------------------------------------------
 
 def match_wallet(session, *, club_id, user_id, service_kind, duration_minutes=None,
-                 coach_user_id=None) -> Optional[Dict[str, Any]]:
+                 coach_user_id=None, product_id=None) -> Optional[Dict[str, Any]]:
     """The best ACTIVE wallet to draw from for this booking, or None.
 
     Unit model (docs/specs/02): the balance is held in MINUTES, so ONE pack covers any duration —
@@ -244,11 +268,16 @@ def match_wallet(session, *, club_id, user_id, service_kind, duration_minutes=No
     Match rules (generic across court/lesson/class):
       * service_kind equal,
       * wallet coach_user_id equals the booking's OR is NULL (any coach),
+      * PER-SERVICE (backward-compatible): the wallet's product_id equals the booking's SPECIFIC
+        service, OR the wallet has NO product (legacy unscoped — draws by kind+coach as before), OR
+        the booking has no product_id. So a Private-lesson pack (product=Private) NEVER draws for a
+        Semi-private lesson; a legacy NULL-product pack still draws for any service of its kind+coach.
       * status = 'active', minutes_remaining > 0, not past expires_at.
     Duration is NO LONGER a match gate — any positive balance can be drawn against any duration
     (the draw computes the cost; the customer-wins tail lets the last credit cover any length).
-    Preference: the wallet EXPIRING SOONEST (use-it-or-lose-it; NULL expiry last), then the one
-    with the FEWEST minutes left (drain partial packs first), then oldest.
+    Preference: a PRODUCT-SPECIFIC wallet beats a legacy unscoped one, then the wallet EXPIRING
+    SOONEST (use-it-or-lose-it; NULL expiry last), then the one with the FEWEST minutes left (drain
+    partial packs first), then oldest.
 
     `SELECT … FOR UPDATE` locks the chosen wallet row so two concurrent draws for the same member
     serialise — combined with the token_ledger unique + the minutes_remaining>=0 CHECK, a wallet can
@@ -258,7 +287,7 @@ def match_wallet(session, *, club_id, user_id, service_kind, duration_minutes=No
     expire_due(session, club_id=club_id)
     row = session.execute(
         text("""
-            SELECT id, club_id, user_id, service_kind, coach_user_id, duration_minutes,
+            SELECT id, club_id, user_id, service_kind, coach_user_id, product_id, duration_minutes,
                    base_minutes, tokens_total, tokens_remaining,
                    minutes_total, minutes_remaining, status, expires_at
             FROM billing.token_wallet
@@ -270,14 +299,18 @@ def match_wallet(session, *, club_id, user_id, service_kind, duration_minutes=No
               AND (expires_at IS NULL OR expires_at >= CURRENT_DATE)
               AND (coach_user_id IS NULL OR CAST(:coach AS uuid) IS NULL
                    OR coach_user_id = CAST(:coach AS uuid))
-            ORDER BY (expires_at IS NULL) ASC, expires_at ASC,
+              AND (product_id IS NULL OR CAST(:product AS uuid) IS NULL
+                   OR product_id = CAST(:product AS uuid))
+            ORDER BY (product_id IS NULL) ASC,
+                     (expires_at IS NULL) ASC, expires_at ASC,
                      minutes_remaining ASC, created_at ASC
             LIMIT 1
             FOR UPDATE
         """),
         {"c": str(club_id), "u": str(user_id) if user_id else None, "sk": service_kind,
          "dur": int(duration_minutes) if duration_minutes is not None else None,
-         "coach": str(coach_user_id) if coach_user_id else None},
+         "coach": str(coach_user_id) if coach_user_id else None,
+         "product": str(product_id) if product_id else None},
     ).mappings().first()
     return dict(row) if row else None
 
@@ -548,9 +581,10 @@ def wallets_for(session, *, club_id, user_id, service_kind=None,
     if active_only:
         where.append("w.status = 'active' AND w.tokens_remaining > 0")
     rows = session.execute(
-        text("SELECT w.id, w.service_kind, w.coach_user_id, w.duration_minutes, w.base_minutes, "
-             "       w.tokens_total, w.tokens_remaining, w.minutes_total, w.minutes_remaining, "
-             "       w.status, w.expires_at, w.purchased_at, w.bundle_plan_id, bp.label "
+        text("SELECT w.id, w.service_kind, w.coach_user_id, w.product_id, w.duration_minutes, "
+             "       w.base_minutes, w.tokens_total, w.tokens_remaining, w.minutes_total, "
+             "       w.minutes_remaining, w.status, w.expires_at, w.purchased_at, w.bundle_plan_id, "
+             "       bp.label "
              "FROM billing.token_wallet w "
              "LEFT JOIN billing.bundle_plan bp ON bp.id = w.bundle_plan_id "
              "WHERE " + " AND ".join(where) + " "
@@ -565,6 +599,7 @@ def wallets_for(session, *, club_id, user_id, service_kind=None,
             "id": str(r["id"]),
             "service_kind": r["service_kind"],
             "coach_user_id": str(r["coach_user_id"]) if r["coach_user_id"] else None,
+            "product_id": str(r["product_id"]) if r["product_id"] else None,
             "duration_minutes": int(r["duration_minutes"]) if r["duration_minutes"] is not None else None,
             "base_minutes": base,
             "tokens_total": int(r["tokens_total"] or 0),       # nominal session count ("of N")
@@ -581,10 +616,11 @@ def wallets_for(session, *, club_id, user_id, service_kind=None,
 
 
 def has_matching_wallet(session, *, club_id, user_id, service_kind, duration_minutes=None,
-                        coach_user_id=None) -> Optional[Dict[str, Any]]:
+                        coach_user_id=None, product_id=None) -> Optional[Dict[str, Any]]:
     """Read-only probe for the UI: is there a drawable wallet for this service+duration(+coach)?
     Returns {wallet_id, tokens_remaining} or None. Does NOT lock (no FOR UPDATE) — purely
-    advisory; the real draw re-matches under a lock at booking time."""
+    advisory; the real draw re-matches under a lock at booking time. Product-aware + backward-
+    compatible, mirroring match_wallet (a product-scoped wallet only counts for that product)."""
     expire_due(session, club_id=club_id)
     row = session.execute(
         text("""
@@ -595,11 +631,15 @@ def has_matching_wallet(session, *, club_id, user_id, service_kind, duration_min
               AND (expires_at IS NULL OR expires_at >= CURRENT_DATE)
               AND (coach_user_id IS NULL OR CAST(:coach AS uuid) IS NULL
                    OR coach_user_id = CAST(:coach AS uuid))
-            ORDER BY (expires_at IS NULL) ASC, expires_at ASC, minutes_remaining ASC
+              AND (product_id IS NULL OR CAST(:product AS uuid) IS NULL
+                   OR product_id = CAST(:product AS uuid))
+            ORDER BY (product_id IS NULL) ASC,
+                     (expires_at IS NULL) ASC, expires_at ASC, minutes_remaining ASC
             LIMIT 1
         """),
         {"c": str(club_id), "u": str(user_id) if user_id else None, "sk": service_kind,
-         "coach": str(coach_user_id) if coach_user_id else None},
+         "coach": str(coach_user_id) if coach_user_id else None,
+         "product": str(product_id) if product_id else None},
     ).mappings().first()
     if not row:
         return None
@@ -684,10 +724,19 @@ def create_bundle_order(session, *, club_id, user_id, bundle_plan_id,
     # The line amount stays the pack price — the price_id only resolves product/coach, exactly as
     # lessons already do (the pack, not the single-session rate, is what's charged).
     price_id = None
-    if plan["service_kind"] in ("lesson", "class") and plan["coach_user_id"]:
-        _prod, price_id = _coach_service_product(
-            session, club_id=club_id, coach_user_id=plan["coach_user_id"],
-            kind=_PRODUCT_KIND_BY_SERVICE.get(plan["service_kind"], plan["service_kind"]))
+    if plan["service_kind"] in ("lesson", "class"):
+        if plan.get("product_id"):
+            # PER-SERVICE pack: hang the order line on THIS exact service's price so the commission
+            # fan-out attributes the collected purchase to precisely that product (+ its coach).
+            price_id = session.execute(
+                text("SELECT id FROM billing.price WHERE club_id = :c AND product_id = :p "
+                     "AND active = true ORDER BY amount_minor DESC LIMIT 1"),
+                {"c": str(club_id), "p": plan["product_id"]},
+            ).scalar()
+        elif plan["coach_user_id"]:
+            _prod, price_id = _coach_service_product(
+                session, club_id=club_id, coach_user_id=plan["coach_user_id"],
+                kind=_PRODUCT_KIND_BY_SERVICE.get(plan["service_kind"], plan["service_kind"]))
     session.execute(
         text("""
             INSERT INTO billing.order_line
@@ -703,14 +752,15 @@ def create_bundle_order(session, *, club_id, user_id, bundle_plan_id,
     session.execute(
         text("""
             INSERT INTO billing.token_wallet
-                (club_id, user_id, bundle_plan_id, order_id, service_kind, coach_user_id,
+                (club_id, user_id, bundle_plan_id, order_id, service_kind, coach_user_id, product_id,
                  duration_minutes, base_minutes, tokens_total, tokens_remaining,
                  minutes_total, minutes_remaining, status)
-            VALUES (:c, :u, :plan, :oid, :sk, :coach, :dur, :base, 0, 0, 0, 0, 'pending')
+            VALUES (:c, :u, :plan, :oid, :sk, :coach, :prod, :dur, :base, 0, 0, 0, 0, 'pending')
         """),
         {"c": str(club_id), "u": str(user_id) if user_id else None,
          "plan": plan["id"], "oid": order_id, "sk": plan["service_kind"],
-         "coach": plan["coach_user_id"], "dur": plan["duration_minutes"],
+         "coach": plan["coach_user_id"], "prod": plan.get("product_id"),
+         "dur": plan["duration_minutes"],
          "base": int(plan["duration_minutes"]) if plan["duration_minutes"] else 60},
     )
 

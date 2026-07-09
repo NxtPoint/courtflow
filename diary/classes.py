@@ -39,6 +39,21 @@ def _session_row(session, club_id, class_session_id, lock=False):
     return dict(row) if row else None
 
 
+def _class_product_id(session, club_id, price_id):
+    """The billing.product this class's price belongs to — so a PER-SERVICE class pack draws only for
+    THIS class's own product (Cardio pack ≠ Yoga pack), never any class of the same coach. Guarded →
+    None (no price / billing absent) so the match falls back to kind+coach (legacy)."""
+    if not price_id:
+        return None
+    try:
+        return session.execute(
+            text("SELECT product_id FROM billing.price WHERE club_id=:c AND id=:p"),
+            {"c": club_id, "p": str(price_id)},
+        ).scalar()
+    except Exception:
+        return None
+
+
 def _enrolled_count(session, class_session_id):
     return session.execute(
         text("SELECT count(*) FROM diary.enrolment "
@@ -110,7 +125,8 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
             from diary.bookings import _match_token_wallet_guarded
             token_wallet = _match_token_wallet_guarded(
                 session, club_id=club_id, user_id=payer_user_id, booking_type="class",
-                duration_minutes=None, coach_user_id=cs["coach_user_id"])
+                duration_minutes=None, coach_user_id=cs["coach_user_id"],
+                product_id=_class_product_id(session, club_id, cs.get("price_id")))
             if token_wallet is None:
                 return _err("NO_TOKEN", 422,
                             message="no matching prepaid class token — choose another way to pay")
@@ -200,7 +216,8 @@ def _bill_promoted_enrolment(session, *, club_id, cs, enrol):
             from diary.bookings import _match_token_wallet_guarded
             token_wallet = _match_token_wallet_guarded(
                 session, club_id=club_id, user_id=payer, booking_type="class",
-                duration_minutes=None, coach_user_id=cs["coach_user_id"])  # coach-scoped pack (owner rule)
+                duration_minutes=None, coach_user_id=cs["coach_user_id"],
+                product_id=_class_product_id(session, club_id, cs.get("price_id")))  # coach+product-scoped pack
         except Exception:
             token_wallet = None
         if token_wallet is None:

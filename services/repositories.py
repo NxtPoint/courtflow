@@ -119,13 +119,18 @@ def get_service(session, *, club_id, product_id):
         ).mappings().all()
     ]
 
-    # packages — bundle_plans for this service kind (lesson packs scoped to this coach OR any).
+    # packages — bundle_plans tied to THIS specific service (product_id), PLUS any legacy unscoped
+    # pack (product_id NULL) matching by kind+coach until a backfill scopes it. So two services under
+    # one coach no longer show each other's packs — each shows only its own (+ shared legacy ones).
     pkg_rows = session.execute(
         text("SELECT id, label, sessions_count, duration_minutes, price_minor, validity_days, status, "
-             "       coach_user_id "
-             "FROM billing.bundle_plan WHERE club_id = :c AND service_kind = :sk "
-             "  AND (coach_user_id IS NULL OR coach_user_id = :coach) ORDER BY sessions_count"),
-        {"c": club_id, "sk": service_kind, "coach": prod["coach_user_id"]},
+             "       coach_user_id, product_id "
+             "FROM billing.bundle_plan WHERE club_id = :c "
+             "  AND (product_id = :pid "
+             "       OR (product_id IS NULL AND service_kind = :sk "
+             "           AND (coach_user_id IS NULL OR coach_user_id = :coach))) "
+             "ORDER BY sessions_count"),
+        {"c": club_id, "pid": str(product_id), "sk": service_kind, "coach": prod["coach_user_id"]},
     ).mappings().all()
     packages = [{"id": str(r["id"]), "label": r["label"], "sessions_count": r["sessions_count"],
                  "duration_minutes": r["duration_minutes"], "price_minor": int(r["price_minor"] or 0),
