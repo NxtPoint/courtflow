@@ -1295,7 +1295,8 @@
     var addCoachWrap = el("span");
     function refreshCoachPicker() {
       UI.clear(addCoachWrap);
-      if (addKind.value === "lesson") {
+      // Lesson AND class packs must be tied to the coach who sells them (the coach gets paid).
+      if (addKind.value === "lesson" || addKind.value === "class") {
         var sel = select("", coachOptions()); sel.style.maxWidth = "150px"; sel.id = "ad-bundle-add-coach";
         addCoachWrap.appendChild(sel);
       }
@@ -1314,6 +1315,9 @@
       };
       var coachSel = document.getElementById("ad-bundle-add-coach");
       if (coachSel && coachSel.value) body.coach_user_id = coachSel.value;
+      if ((addKind.value === "lesson" || addKind.value === "class") && !body.coach_user_id) {
+        UI.toast("Pick the coach this " + addKind.value + " pack belongs to.", "warn"); return;
+      }
       addBtn.disabled = true;
       try {
         await window.AdminAPI.createBundlePlan(body);

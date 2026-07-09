@@ -101,14 +101,16 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
         # Token settlement (docs/specs/02): PRE-FLIGHT match a prepaid CLASS wallet for the PAYER
         # before billing. The token is keyed off the enrolment_id (a class has no booking_id). If
         # token settlement is asked but no wallet matches, reject cleanly (NO_TOKEN) so the seat is
-        # rolled back and the UI falls back to PAYG. Class tokens are duration/coach-agnostic by
-        # default (a class session has a fixed time); a plan with NULL duration/coach matches any.
+        # rolled back and the UI falls back to PAYG. A class pack is COACH-SCOPED (owner rule: it
+        # belongs to the coach who sold it), so we match on THIS class's coach — a pack for coach X
+        # only draws for X's classes, never coach Y's (whose classes bill instead). Duration is
+        # agnostic (a class = one per-session unit).
         token_wallet = None
         if settlement_mode == "token":
             from diary.bookings import _match_token_wallet_guarded
             token_wallet = _match_token_wallet_guarded(
                 session, club_id=club_id, user_id=payer_user_id, booking_type="class",
-                duration_minutes=None, coach_user_id=None)
+                duration_minutes=None, coach_user_id=cs["coach_user_id"])
             if token_wallet is None:
                 return _err("NO_TOKEN", 422,
                             message="no matching prepaid class token — choose another way to pay")
@@ -198,7 +200,7 @@ def _bill_promoted_enrolment(session, *, club_id, cs, enrol):
             from diary.bookings import _match_token_wallet_guarded
             token_wallet = _match_token_wallet_guarded(
                 session, club_id=club_id, user_id=payer, booking_type="class",
-                duration_minutes=None, coach_user_id=None)
+                duration_minutes=None, coach_user_id=cs["coach_user_id"])  # coach-scoped pack (owner rule)
         except Exception:
             token_wallet = None
         if token_wallet is None:

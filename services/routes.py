@@ -225,8 +225,9 @@ def add_package(product_id):
         if err:
             return err
         from billing import bundles
-        # Lesson packs are scoped to THIS coach; court/class packs are club-wide.
-        coach = svc.get("coach_user_id") if svc["service_kind"] == "lesson" else None
+        # Owner rule: LESSON & CLASS packs belong to the coach who sells them (they get paid);
+        # COURT packs are coachless.
+        coach = svc.get("coach_user_id") if svc["service_kind"] in ("lesson", "class") else None
         bundles.create_plan(s, club_id=p.club_id, service_kind=svc["service_kind"],
                             sessions_count=int(b.get("sessions_count") or 1),
                             price_minor=int(b.get("price_minor") or 0),

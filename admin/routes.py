@@ -518,12 +518,19 @@ def post_bundle_plan():
         return jsonify(error="sessions_count must be >= 1"), 400
     if price_minor is None or int(price_minor) < 0:
         return jsonify(error="price_minor required"), 400
-    with session_scope() as s:
-        plan = bundles_repo.create_plan(
-            s, club_id=p.club_id, service_kind=service_kind,
-            sessions_count=int(sessions_count), price_minor=int(price_minor),
-            label=b.get("label"), duration_minutes=b.get("duration_minutes"),
-            coach_user_id=b.get("coach_user_id"), validity_days=b.get("validity_days"))
+    # Lesson & class packs MUST name the coach who sold them (they get paid). Court packs are coachless.
+    if service_kind in ("lesson", "class") and not (b.get("coach_user_id") or "").strip():
+        return jsonify(error="COACH_REQUIRED",
+                       message="A " + service_kind + " pack must be tied to a coach."), 400
+    try:
+        with session_scope() as s:
+            plan = bundles_repo.create_plan(
+                s, club_id=p.club_id, service_kind=service_kind,
+                sessions_count=int(sessions_count), price_minor=int(price_minor),
+                label=b.get("label"), duration_minutes=b.get("duration_minutes"),
+                coach_user_id=b.get("coach_user_id"), validity_days=b.get("validity_days"))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
     return jsonify(plan=plan), 201
 
 

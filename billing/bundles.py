@@ -113,12 +113,20 @@ def get_plan(session, *, club_id, plan_id) -> Optional[Dict[str, Any]]:
 def create_plan(session, *, club_id, service_kind, sessions_count, price_minor,
                 label=None, duration_minutes=None, coach_user_id=None,
                 validity_days=None) -> Dict[str, Any]:
-    """Owner adds a bundle plan. service_kind ∈ court|lesson|class; coach_user_id only meaningful
-    for lesson packs (NULL = any). Nothing hardcoded — all of it is the owner's input."""
+    """Owner adds a bundle plan. service_kind ∈ court|lesson|class. Nothing hardcoded — all of it
+    is the owner's input.
+
+    OWNER RULE (money-correctness): a LESSON or CLASS pack ALWAYS belongs to the coach who sold it
+    (that coach gets paid on the sale), so coach_user_id is REQUIRED for both — a missing/empty coach
+    raises ValueError('COACH_REQUIRED'). A COURT pack is coachless (courts have no coach) → coach NULL."""
     if service_kind not in ("court", "lesson", "class"):
         raise ValueError(f"bad service_kind '{service_kind}'")
-    # A coach only makes sense on a lesson pack; ignore it elsewhere.
-    coach = str(coach_user_id) if (coach_user_id and service_kind == "lesson") else None
+    if service_kind in ("lesson", "class"):
+        if not (coach_user_id and str(coach_user_id).strip()):
+            raise ValueError("COACH_REQUIRED")
+        coach = str(coach_user_id)
+    else:
+        coach = None
     pid = session.execute(
         text("""
             INSERT INTO billing.bundle_plan
@@ -146,6 +154,11 @@ def update_plan(session, *, club_id, plan_id, label=None, sessions_count=None,
     to the club. Past purchases (wallets) are untouched — they carry their own denormalised terms."""
     if status is not None and status not in ("active", "dormant", "retired"):
         raise ValueError(f"bad status '{status}'")
+    # OWNER RULE: a lesson/class pack must ALWAYS keep its coach (they get paid) — refuse to clear it.
+    if _clear_coach:
+        cur = get_plan(session, club_id=club_id, plan_id=plan_id)
+        if cur and cur["service_kind"] in ("lesson", "class"):
+            raise ValueError("COACH_REQUIRED")
     res = session.execute(
         text("""
             UPDATE billing.bundle_plan SET
@@ -601,9 +614,10 @@ def has_matching_wallet(session, *, club_id, user_id, service_kind, duration_min
 # purchase — create an online order + a pending wallet linked by order_id
 # ---------------------------------------------------------------------------
 
-def _coach_lesson_product(session, *, club_id, coach_user_id):
-    """The coach's lesson billing.product (+ a price_id to hang the order line on) so a LESSON pack
-    purchase carries the coach/product → the commission engine attributes the collected payment.
+def _coach_service_product(session, *, club_id, coach_user_id, kind):
+    """The coach's billing.product of `kind` ('lesson'|'class') (+ a price_id to hang the pack order
+    line on) so a LESSON or CLASS pack purchase carries the coach/product → the commission engine
+    attributes the collected payment (lesson_commission / class_commission, keyed off product.kind).
     Returns (product_id, price_id) or (None, None). Guarded: billing.product.coach_user_id is added
     by the coach lane; absent in isolation → (None, None)."""
     try:
@@ -614,16 +628,16 @@ def _coach_lesson_product(session, *, club_id, coach_user_id):
                         WHERE p.product_id = pr.id AND p.active = true
                         ORDER BY p.amount_minor DESC LIMIT 1) AS price_id
                 FROM billing.product pr
-                WHERE pr.club_id = :c AND pr.kind = 'lesson' AND pr.coach_user_id = :coach
+                WHERE pr.club_id = :c AND pr.kind = :kind AND pr.coach_user_id = :coach
                 ORDER BY pr.created_at LIMIT 1
             """),
-            {"c": str(club_id), "coach": str(coach_user_id)},
+            {"c": str(club_id), "coach": str(coach_user_id), "kind": kind},
         ).mappings().first()
         if row:
             return (str(row["product_id"]) if row["product_id"] else None,
                     str(row["price_id"]) if row["price_id"] else None)
     except Exception:
-        log.debug("coach lesson product lookup suppressed (coach col absent)", exc_info=False)
+        log.debug("coach %s product lookup suppressed (coach col absent)", kind, exc_info=False)
     return (None, None)
 
 
@@ -636,8 +650,9 @@ def create_bundle_order(session, *, club_id, user_id, bundle_plan_id,
       online           -> 'awaiting_payment'; pay via Yoco; the webhook activates the wallet.
       at_court/monthly -> 'open' order (owed, on the unified statement); the wallet is granted
                           IMMEDIATELY so the member can use the pack now (collect at desk / month-end).
-    For a COACH LESSON pack the order line carries the coach's lesson product/price so the commission
-    fan-out accrues on the collected purchase. Returns {order_id, amount_minor, currency, plan,
+    For a COACH LESSON or CLASS pack the order line carries the coach's own product/price of that
+    kind so the commission fan-out accrues to the selling coach on the collected purchase (a lesson
+    pack pays lesson_commission, a class pack class_commission). Returns {order_id, amount_minor, currency, plan,
     settlement_mode, needs_checkout, activated} or None (plan missing/inactive)."""
     mode = (settlement_mode or "online").strip().lower()
     if mode not in _BUNDLE_PAY_MODES:
@@ -663,12 +678,16 @@ def create_bundle_order(session, *, club_id, user_id, bundle_plan_id,
     ).scalar_one()
     order_id = str(order_id)
 
-    # The order line documents the purchase (powers admin payments + receipts). For a coach lesson
-    # pack, carry the coach's lesson product/price so commission attributes the collected payment.
+    # The order line documents the purchase (powers admin payments + receipts). For a coach LESSON
+    # OR CLASS pack, carry the coach's own product/price of that kind so the commission fan-out
+    # attributes the collected payment to the selling coach (lesson_commission / class_commission).
+    # The line amount stays the pack price — the price_id only resolves product/coach, exactly as
+    # lessons already do (the pack, not the single-session rate, is what's charged).
     price_id = None
-    if plan["service_kind"] == "lesson" and plan["coach_user_id"]:
-        _prod, price_id = _coach_lesson_product(
-            session, club_id=club_id, coach_user_id=plan["coach_user_id"])
+    if plan["service_kind"] in ("lesson", "class") and plan["coach_user_id"]:
+        _prod, price_id = _coach_service_product(
+            session, club_id=club_id, coach_user_id=plan["coach_user_id"],
+            kind=_PRODUCT_KIND_BY_SERVICE.get(plan["service_kind"], plan["service_kind"]))
     session.execute(
         text("""
             INSERT INTO billing.order_line

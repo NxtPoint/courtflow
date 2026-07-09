@@ -1255,6 +1255,98 @@ def sc_class_scoped_pricing(s, fx):
           _order(s, oid)["amount_minor"] == 12000, str(_order(s, oid)["amount_minor"]))
 
 
+def sc_class_pack_coach(s, fx):
+    """OWNER RULE: a lesson AND class pack ALWAYS belongs to the coach who sold it (they get paid).
+    Proves: create_plan REQUIRES a coach for lesson & class; a class pack carries that coach on the
+    plan + wallet; the SALE credits the selling coach with class_commission on collection; and the
+    draw is COACH-SCOPED — coach X's pack draws for X's class, but is rejected for coach Y's class."""
+    from diary import classes as CL
+    print("\n# Class pack belongs to its coach: create needs a coach, sale pays the coach, draw is coach-scoped")
+
+    # (1) create_plan tightening — a lesson OR class pack WITHOUT a coach is refused.
+    def _raises_coach_required(kind):
+        try:
+            BN.create_plan(s, club_id=fx.club_id, service_kind=kind, sessions_count=10,
+                           price_minor=100000, duration_minutes=60)  # no coach
+            return False
+        except ValueError as e:
+            return str(e) == "COACH_REQUIRED"
+    check("class pack without a coach → COACH_REQUIRED", _raises_coach_required("class"))
+    check("lesson pack without a coach → COACH_REQUIRED (new tightening)", _raises_coach_required("lesson"))
+
+    # A coach's CLASS product + a club commission rule so the sale % resolves to class_commission.
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, effective_from, active) "
+                   "VALUES (:c,'club',30,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+    class_prod = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                                "VALUES (:c,'class','Cardio Pack',:u) RETURNING id"),
+                           {"c": fx.club_id, "u": fx.coach_uid}).scalar_one()
+    _price(s, fx.club_id, class_prod, 12000, unit="per_session")
+
+    # (2) create_plan WITH a coach succeeds; the plan + wallet carry that coach.
+    plan = BN.create_plan(s, club_id=fx.club_id, service_kind="class", sessions_count=10,
+                          price_minor=100000, duration_minutes=60, coach_user_id=fx.coach_uid,
+                          label="10 classes")
+    check("class pack created with a coach carries the coach",
+          str(plan["coach_user_id"]) == str(fx.coach_uid), str(plan.get("coach_user_id")))
+    order = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member, bundle_plan_id=plan["id"])
+    oid = order["order_id"]
+    w_coach = s.execute(text("SELECT coach_user_id FROM billing.token_wallet WHERE order_id=:o"),
+                        {"o": str(oid)}).scalar()
+    check("class pack wallet carries the coach", str(w_coach) == str(fx.coach_uid), str(w_coach))
+
+    # (3) SALE pays the coach: collecting the pack credits the SELLING coach with class_commission.
+    bal0 = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    apply_payment_event(NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
+        provider_payment_id="p_classpack", amount_minor=100000, currency="ZAR", status="succeeded",
+        direction="charge", club_id=str(fx.club_id), user_id=str(fx.member), raw={"t": 21}), session=s)
+    BN.activate_wallet_for_order(s, order_id=oid)
+    bal1 = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    check("class pack sale credits the selling coach (70% of R1000 = R700)",
+          (bal1 - bal0) == 70000, f"{bal0}->{bal1}")
+    cls_split = s.execute(
+        text("SELECT COALESCE(SUM(amount_minor),0) FROM billing.commission_split "
+             "WHERE club_id=:c AND coach_user_id=:u AND party_type='coach' AND basis='class_commission'"),
+        {"c": fx.club_id, "u": fx.coach_uid}).scalar()
+    check("a class_commission coach split was written (>0)", int(cls_split or 0) > 0, str(cls_split))
+
+    # (4) coach-scoped draw: X's pack draws for X's class, but is REJECTED for coach Y's class.
+    def mk_session(coach, amt, name):
+        prod = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                              "VALUES (:c,'class',:n,:u) RETURNING id"),
+                         {"c": fx.club_id, "n": name, "u": coach}).scalar_one()
+        pid = _price(s, fx.club_id, prod, amt, unit="per_session")
+        res = s.execute(text("INSERT INTO diary.resource (club_id, kind, name, coach_user_id, capacity) "
+                             "VALUES (:c,'class',:n,:u,10) RETURNING id"),
+                        {"c": fx.club_id, "n": name, "u": coach}).scalar_one()
+        return s.execute(text("INSERT INTO diary.class_session (club_id, resource_id, coach_user_id, "
+                              "starts_at, ends_at, capacity, price_id, status) "
+                              "VALUES (:c,:r,:u,:sa,:ea,10,:p,'scheduled') RETURNING id"),
+                         {"c": fx.club_id, "r": res, "u": coach, "sa": at(fx, 8), "ea": at(fx, 9),
+                          "p": pid}).scalar_one()
+
+    coachY = _mk_user(s, "classpackcoachy@bill.test", "CoachY")
+    s.execute(text("INSERT INTO iam.coach_profile (club_id, user_id, display_name, is_bookable) "
+                   "VALUES (:c,:u,'CoachY',true)"), {"c": fx.club_id, "u": coachY})
+    csX = mk_session(fx.coach_uid, 12000, "Cardio X")   # coach X's class (pack owner)
+    csY = mk_session(coachY, 8000, "Cardio Y")          # coach Y's class (must NOT draw X's pack)
+
+    before = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                       {"o": str(oid)}).scalar()
+    ry = CL.enrol(s, club_id=fx.club_id, class_session_id=str(csY), user_id=fx.member,
+                  settlement_mode="token")
+    check("X's class pack is REJECTED for coach Y's class (NO_TOKEN)", ry.get("error") == "NO_TOKEN", str(ry))
+    midw = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                     {"o": str(oid)}).scalar()
+    check("coach Y's class did NOT draw X's pack (balance unchanged)", midw == before, f"{before}->{midw}")
+    rx = CL.enrol(s, club_id=fx.club_id, class_session_id=str(csX), user_id=fx.member,
+                  settlement_mode="token")
+    check("X's class pack draws for X's own class", rx.get("ok"), str(rx))
+    afterw = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                       {"o": str(oid)}).scalar()
+    check("X's class drew one unit (60 min) off X's pack", (before - afterw) == 60, f"{before}->{afterw}")
+
+
 def sc_lesson_reschedule_court_reassign(s, fx):
     """L2: rescheduling a lesson onto a time where ITS court is busy reassigns a FREE court instead
     of failing with SLOT_TAKEN (the lesson's court was auto-assigned)."""
@@ -1470,6 +1562,7 @@ SCENARIOS = [
     sc_service_selection,
     sc_pack_credits_coach,
     sc_class_scoped_pricing,
+    sc_class_pack_coach,
     sc_cancel_fee_and_paid_resize,
     sc_lesson_reschedule_court_reassign,
     sc_covered_reschedule_guard,
