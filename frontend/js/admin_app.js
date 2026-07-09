@@ -405,7 +405,12 @@
           el("div", { class: "cf-item-t", text: pName(r) }),
           el("div", { class: "cf-item-s", text: r.email || "—" }),
         ]),
-        r.has_membership ? el("span", { class: "cf-chip member", text: "Member" }) : null,
+        // Membership STATUS chip — what they HOLD (never the word "Member", which is the role chip
+        // below; showing both read as a duplicate "Member Member"). Trial and paid are distinct.
+        r.has_membership
+          ? el("span", { class: "cf-chip member",
+                text: (r.on_trial && !r.has_paid_membership) ? "Trial" : "Membership" })
+          : null,
         el("span", { class: "cf-chip", text: pRoleLabel(r) }),
         el("span", { class: "cf-muted", text: "›" }),
       ].filter(Boolean)));
