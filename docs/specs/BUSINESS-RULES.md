@@ -87,6 +87,17 @@ a membership tier's lifecycle derives from its term plans' status.
   Semi-private), each its own product with its own durations + payment modes. The picker offers the specific
   service (`services_for` → a per-product list) and books that exact `product_id`; the two-tier coach scope
   above still applies.
+- **Court SERVICES (per-court-group court hire).** Courts can belong to distinct court services — e.g.
+  "Hardcourt Hire" over the hard courts vs "Clay Hire" over the clay court — each a
+  `billing.product(kind='court_booking')` with its **own** per-duration prices (multiple court products are
+  now supported), **own** allocated courts (`diary.resource.product_id`), and **own** packs. A court's service
+  resolves as the court's own `product_id`, else the club's single default court product, else unscoped
+  (`diary.pricing.court_service_for_resource`). `price_for` / `durations_for` / availability / `create_booking`
+  are court-service-aware (fixing the old "cheapest across court products" leak); a court booked under the
+  wrong service is rejected (`COURT_NOT_IN_SERVICE`). **Single-court-service clubs are unchanged.** The client
+  picks a court service like a lesson service and sees only its courts at its price; the owner allocates courts
+  in Setup → Courts & hours (a "Court service" picker per court, `PATCH /api/admin/resources`) and creates a
+  court service via "+ New" in Services.
 - Seeded defaults (editable): Court 30/60/90/120 = R90/150/210/280; Lesson 30/60 = R250/400; classes
   per session. The legacy Wix "member R0 court" tier is gone.
 - The booking flow (`booking.js`, full-screen): **Service → Schedule (month calendar with inline
@@ -124,6 +135,18 @@ a membership tier's lifecycle derives from its term plans' status.
    (no double-spend), credit-back **idempotent** (no double-credit). Expiry + use-it-or-lose-it (drains
    the soonest-expiring wallet first). Consumption is **seamless** — a matching pack auto-applies at
    checkout ("Covered by your pack · R0"); run-dry prompts a re-buy. Full spec: `02-token-bundle-engine.md`.
+   - **A pack belongs to ONE specific service (2026-07-09).** `billing.bundle_plan.product_id` +
+     `billing.token_wallet.product_id` carry the exact service the pack draws for, so a "Private Lesson" pack
+     only draws for Private lessons, a "Clay" pack only for Clay hire, etc.; the pack's coach + kind are
+     **inherited from the service** (`create_plan` derives them from the product). The draw matcher
+     (`match_wallet`) is **product-aware and BACKWARD-COMPATIBLE:** a product-scoped wallet draws only for its
+     product; a **legacy NULL-product** wallet still matches by coach+kind (product-specific wins the
+     tie-break). Draw callers pass the booking's product (lesson = chosen product, court = its court service,
+     class = the class product), so two services under one coach no longer show each other's packs.
+   - **Packs are managed ONLY under a service now (golden rule).** A pack is created/edited from the service
+     editor's packages card (label + validity/expiry); the standalone Setup "Session packs" section + the
+     coach-onboarding "Packs" step were removed. Existing live packs keep working (`product_id` NULL = legacy)
+     until `scripts/backfill_pack_products.py` maps them to their service.
    - **Manual admin adjust / soft-expire (2026-07-09).** From a client's record the owner can **top-up or
      subtract** a wallet (`POST /api/admin/clients/<id>/wallets/<wid>/adjust`, `billing.bundles.adjust_wallet`)
      or **expire** it (`.../expire`, `expire_wallet`). Admin edits are in **SESSIONS**, converted to minutes via

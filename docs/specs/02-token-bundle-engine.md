@@ -162,14 +162,21 @@ minutes, and burned minutes always have a confirmed booking.** `match_wallet`'s 
 
 ## 5. Owner / coach config + member UI
 
-- **Owner** — `AdminUI.bundlePlans` (in `admin_api.js`) under the consolidated **Settings → Pricing**
-  tab (`AdminUI.pricingHome`: court rates + packs + memberships in one place). CRUD `bundle_plan`s:
-  service kind, label, #sessions, **base duration**, price, validity, coach (lesson packs), and the
-  3-state lifecycle control (Active / Dormant / Retired). `/api/admin/bundle-plans*`.
-- **Coach** — a coach configures **their own lesson packs** in the coach console's **Packs** tab
-  (`CoachUI.packs`). `GET/POST /api/coach/bundle-plans` + `PATCH /api/coach/bundle-plans/<id>` force
-  `service_kind='lesson'` + `coach_user_id = the principal` and guard ownership (a coach can only edit
-  their own pack, else 404). Reuses the generic engine, so coach packs get the unit draw-down + lifecycle.
+> **UPDATED 2026-07-09 — packs are now managed ONLY under a service.** A pack carries `product_id` = the
+> SPECIFIC service it draws for (owner+kind inherited from the product), and is created/edited from the
+> **service editor's packages card** for BOTH roles via `POST/PATCH/DELETE /api/services/<product_id>/packages`
+> (→ `bundles.create_plan`/`update_plan`/`deactivate_plan`). The standalone editors below were DELETED: the
+> admin `AdminUI.bundlePlans` "Session packs" section, the coach-console **Packs** tab (`CoachUI.packs`) +
+> coach onboarding "Packs" step, and the `POST/PATCH/DELETE /api/{admin,coach}/bundle-plans` write routes.
+> `GET /api/admin/bundle-plans` is kept for the offline "issue a pack" picker. `match_wallet` is product-aware
+> + backward-compatible (a legacy NULL-`product_id` wallet still matches by coach+kind); existing live packs
+> stay NULL=legacy until `scripts/backfill_pack_products.py` maps them to their service.
+
+- **Owner + coach** — a pack is CRUD-ed from the **service editor's packages card** (service kind, label,
+  #sessions, **base duration**, price, validity/expiry + the 3-state Active/Dormant/Retired lifecycle) via
+  `/api/services/<product_id>/packages`; the coach can only edit packs under their own services (the services
+  lane guards ownership). The old standalone `AdminUI.bundlePlans` / `CoachUI.packs` surfaces + their
+  `/api/{admin,coach}/bundle-plans` write routes were removed.
 - **Member** — the consolidated **`/plan`** page (`frontend/app/plans.html` + `frontend/js/plan.js`; the
   old `/packs` 301s here): packs to buy + the member's wallets ("4.5 of 10 sessions left (270 min)" + expiry).
 - **Booking** — `booking.js` **auto-applies** a matching pack (no manual chip-hunt): a usable pack is the

@@ -106,6 +106,16 @@ zero-rated prices). `price_for` / `durations_for` / `payment_modes_for` all hono
 (`{product_id, name, payment_modes, currency_code, durations:[…]}`) so a coach with several services
 (e.g. Private vs Semi-private) offers each separately.
 
+**Court SERVICES (per-court-group court hire).** Courts can belong to distinct court services — e.g.
+"Hardcourt Hire" over the hard courts vs "Clay Hire" over the clay court — each a
+`billing.product(kind='court_booking')` with its **own** per-duration prices (multiple court products are
+now supported) and its **own** allocated courts (`diary.resource.product_id`). `diary/pricing.py::
+court_service_for_resource` resolves a court's service: the court's own `product_id`, else the club's
+single default court product, else the unscoped product. `price_for` / `durations_for` / availability /
+`create_booking` are all **court-service-aware** (fixing the old "cheapest across court products" leak), and
+a court booked under the wrong service is rejected (`COURT_NOT_IN_SERVICE`). **Single-court-service clubs
+are unchanged.** The client picks a court service like a lesson service and sees only its courts at its price.
+
 ## Billing & the commercial engines
 `billing/` core (`orders`, `ledger`, `gateway` registry, `apply_payment_event` — idempotent) is
 provider-agnostic. `billing.orders.reprice_booking_order(club_id, booking_id, duration_minutes)`
@@ -132,7 +142,18 @@ guarded no-op when the order is settled, a real charge has succeeded, it's an R0
   the booking's duration (90min off a 60-unit = 1.5 sessions; class = one full unit); customer-wins tail;
   atomic draw-down, idempotent credit-back of the exact minutes. Packs also buy **online OR offline**
   (`create_bundle_order(settlement_mode)`: offline → an `open` order + grant the wallet immediately).
-  Coaches configure their own lesson packs (`/api/coach/bundle-plans`). Catalogue items (services,
+  **A pack belongs to ONE specific service** — `billing.bundle_plan.product_id` + `billing.token_wallet.
+  product_id` carry the exact service the pack draws for (a "Private Lesson" pack only draws for Private, a
+  "Clay" pack only for Clay), the owner+kind **inherited** from that product (`create_plan` derives them). The
+  draw matcher `match_wallet` is **product-aware and backward-compatible:** a product-scoped wallet draws only
+  for its product; a **legacy NULL-product** wallet still matches by coach+kind (product-specific wins the
+  tie-break). Callers pass the booking's product (lesson = chosen product, court = its court service, class =
+  the class product). **Packs are configured ONLY under a service** (the service editor's packages card, via
+  `POST/PATCH/DELETE /api/services/<product_id>/packages` → `create_plan`/`update_plan`/`deactivate_plan`); the
+  standalone admin/coach pack editors + their `/api/{admin,coach}/bundle-plans` **write** routes were removed
+  (`GET /api/admin/bundle-plans` is kept for the offline "issue a pack" picker). Existing live packs keep
+  working (`product_id` NULL = legacy) until `scripts/backfill_pack_products.py` maps them to their service.
+  Catalogue items (services,
   memberships, packs) share **ONE lifecycle vocabulary** — Active / Deactivated / Terminated
   (`billing.product.status`; memberships derive theirs from their term plans' active/dormant/retired
   state) — with filter bars, status chips and per-row Deactivate/Reactivate/Terminate actions.

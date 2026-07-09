@@ -28,6 +28,20 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > the client record across all three apps (role diffs = config) — the three hand-built person/client
 > renderers were deleted. Gated green: **booking 43 / billing 195 / statement 47**.
 >
+> **Recently shipped (2026-07-09 — NOT outstanding): COURT SERVICES + PER-SERVICE PACKS.** **(1)** Courts can
+> belong to distinct court **services** (Hardcourt Hire vs Clay Hire) — each a `billing.product(kind='court_
+> booking')` with its own price + allocated courts (`diary.resource.product_id`; resolution own→club-default→
+> unscoped via `diary.pricing.court_service_for_resource`); pricing/availability/`create_booking` are
+> court-service-aware (fixed the "cheapest across court products" leak), a wrong-service court is rejected
+> (`COURT_NOT_IN_SERVICE`), single-service clubs unchanged. Owner allocates in Setup → Courts & hours
+> (`PATCH /api/admin/resources`) + creates a court service via Services "+ New". **(2)** A pack/wallet now
+> carries `product_id` = the SPECIFIC service it draws for (owner+kind inherited); `match_wallet` is
+> product-aware + backward-compatible (legacy NULL-product still matches by coach+kind). Packs are managed
+> ONLY under a service now (the standalone Setup "Session packs" + coach-onboarding "Packs" step + the
+> `/api/{admin,coach}/bundle-plans` **write** routes were DELETED; `GET /api/admin/bundle-plans` kept for the
+> offline issue-a-pack picker; write via `/api/services/<product_id>/packages`). Legacy packs stay NULL until
+> `scripts/backfill_pack_products.py`. Gated green: **booking 61 / billing 239 / statement 47**.
+>
 > **Recently shipped (2026-07-02 — NOT outstanding): the FRONT-END REDESIGN — three role SPAs.** The
 > old tab-based consoles are replaced by mobile-first (admin: responsive) **drill-through SPAs** on one
 > design system, with the **golden rule** of exactly one booking "event story" per app reused everywhere.
@@ -130,8 +144,10 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
     **discount ANY open order** (`POST /api/admin/orders/<order_id>/discount`) right from the client record —
     see [BUSINESS-RULES.md](BUSINESS-RULES.md) §4/§6. Gates: **booking 43 / billing 195 / statement 47**.
   - **Coach** already has **Clients → "Prepaid packages"** (SHIPPED) = which of my clients hold a pack with me;
-    their pack *catalogue* stays in Setup. No new coach surface.
-  - **Admin plan catalogue** stays in **Setup** (not duplicated in People). *Optional later:* an Insights
+    their pack *catalogue* stays in Setup — now edited **under each service** (the service editor's packages
+    card; the standalone coach-onboarding "Packs" step was removed 2026-07-09). No new coach surface.
+  - **Admin plan catalogue** stays in **Setup** (not duplicated in People); packs are now edited **under a
+    service**, not a standalone "Session packs" section (removed 2026-07-09). *Optional later:* an Insights
     "Subscriptions" panel (active memberships by tier + active packs + recurring value) — only if the
     People-filter + 360 isn't enough. Remaining plan edges below (upgrades/downgrades, bundle expiry policy)
     are unchanged.

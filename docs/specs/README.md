@@ -84,6 +84,26 @@ operating guide; **this folder is the detail.**
 > hand-built renderers were deleted, **reversing** the FRONTEND-STANDARDISATION §7 "kept split" exception now
 > that the data is single-sourced. This closes **OUTSTANDING.md §B** (subscriptions/plans holdings). Gated
 > green: **booking 43 / billing 195 / statement 47**.
+>
+> **2026-07-09 — COURT SERVICES + PER-SERVICE PACKS (live):** two shipped features. **(1) Court → service
+> allocation** — courts can belong to distinct court **services** (e.g. "Hardcourt Hire" over the hard courts
+> vs "Clay Hire" over the clay), each a `billing.product(kind='court_booking')` with its own price + allocated
+> courts (new `diary.resource.product_id`; resolution = own product → club default court product → unscoped,
+> `diary.pricing.court_service_for_resource`). Pricing/availability/`create_booking` are court-service-aware
+> (fixing the old "cheapest across court products" leak); a wrong-service court is rejected
+> (`COURT_NOT_IN_SERVICE`); single-service clubs unchanged. Owner allocates courts in Setup → Courts & hours
+> (a "Court service" picker, `PATCH /api/admin/resources`) + creates a court service via Services "+ New"; the
+> client picks a court service like a lesson service. **(2) Per-service packs + kill the standalone pack
+> editors** — a pack (`bundle_plan`) + wallet (`token_wallet`) now carry `product_id` = the SPECIFIC service it
+> draws for (a "Private Lesson" pack only draws for Private, a "Clay" pack only for Clay), owner+kind inherited
+> from the service; `match_wallet` is product-aware + BACKWARD-COMPATIBLE (legacy NULL-product wallet still
+> matches by coach+kind). **Golden-rule consolidation:** packs are created/edited **ONLY under a service** (the
+> service editor's packages card); the standalone Setup "Session packs" section + the coach-onboarding "Packs"
+> step (+ `AdminUI.bundlePlans`/`CoachUI.packs`, the `AdminAPI`/`CoachAPI` bundle-plan methods, and the
+> `POST/PATCH/DELETE /api/{admin,coach}/bundle-plans` routes) were DELETED — `GET /api/admin/bundle-plans` is
+> kept for the offline "issue a pack" picker; write goes through `/api/services/<product_id>/packages`. Live
+> packs keep working (`product_id` NULL = legacy) until `scripts/backfill_pack_products.py` maps them. Gated
+> green: **booking 61 / billing 239 / statement 47**.
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,

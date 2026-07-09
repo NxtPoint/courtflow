@@ -87,9 +87,11 @@ widgets/_registry → widgets/* → <role>_app`):
     `GET /api/me/360`). Adopted by admin `renderPerson` (full staff actions), coach `renderClient` (coaching
     collect/discount only) and the client `#/activity` record view (pay/request_refund only); the three
     previously hand-built person/client renderers were **DELETED** (see §7 — the reversal).
-- **`window.ServiceEditor`** (`service_editor.js`) and **`window.ClassUI`** (`class_ui.js`, lazy) — the
-  single-sourced editors the Setup sections mount. **`window.AdminUI`** (bottom of `admin_api.js`) — the
-  owner's config editors (clubProfile, courtsManage, membershipServices, bundlePlans, coachManage).
+- **`window.ServiceEditor`** (`service_editor.js`, whose `packagesCard` is now the ONE pack editor for
+  owner + coach) and **`window.ClassUI`** (`class_ui.js`, lazy) — the single-sourced editors the Setup
+  sections mount. **`window.AdminUI`** (bottom of `admin_api.js`) — the owner's config editors (clubProfile,
+  courtsManage, membershipServices, coachManage). *(`AdminUI.bundlePlans` was DELETED 2026-07-09 with the
+  standalone Session-packs section — see §5.)*
 - **`window.BookFlow`** (`booking.js`) — the ONE full-screen booking flow (`start(principal, type, opts)`),
   shared by client self-book and coach/admin on-behalf; role variation is `opts` config (§4a).
 
@@ -138,9 +140,13 @@ casts to midnight server-side and collapses a same-day query to a zero-width win
 ONE gold-standard Setup shell, shared by owner + coach; sections are role-gated by each app's section
 list:
 - **Owner (`ADMIN_SETUP`):** Club profile & payments · Courts & hours · Services & pricing
-  (`ServiceList`, all services) · Memberships · Session packs · Coaches & commission.
+  (`ServiceList`, all services) · Memberships · Coaches & commission. **(The standalone "Session packs"
+  section was DELETED 2026-07-09** — packs now live under the service editor's packages card; see §5.)
 - **Coach (`COACH_SETUP`):** Your profile · Weekly hours (both `href` links to their own routes) ·
   Services & pricing (`ServiceList`, own + create) · Classes (`ClassUI`) · Club commission (read-only).
+
+Packs are now created/edited **only under a service** (the service editor's `packagesCard`, which gained a
+label + validity/expiry) — for both owner and coach. The old standalone pack surfaces were removed (§5).
 
 **Owner can edit AND deactivate/terminate any service including coach lessons & classes** (inline
 lifecycle actions via `PATCH /api/services/<id> {status}`; `services/routes.py` authorises owner=any,
@@ -179,6 +185,15 @@ present to pay). The lesson picker is **coach-first** (no "Any coach") with a pe
 - **Wave 6 (b66f1bb + a1d0f4e):** owner service-terminate fix + `Widgets.Setup` / `Widgets.ServiceList`;
   both consoles adopt the shared Setup. Deleted admin `setupMenu/setupServices/drawSetupServices` +
   coach `serviceRow`.
+- **Packs consolidation (2026-07-09) — one place per capability.** Now that a pack belongs to ONE specific
+  service (`bundle_plan.product_id`), packs are created/edited **only** under a service (the service editor's
+  `packagesCard`, which gained label + validity/expiry). **DELETED:** the standalone Setup → "Session packs"
+  section + `AdminUI.bundlePlans`; the coach-onboarding "Packs" step + `CoachUI.packs` (coach onboarding is now
+  **Profile / Hours / Services**); `AdminAPI.create/patch/deleteBundlePlan` + the `CoachAPI` bundle-plan
+  methods; and the `POST/PATCH/DELETE /api/admin/bundle-plans` + all `/api/coach/bundle-plans` routes.
+  **KEPT:** `GET /api/admin/bundle-plans` (the offline "issue a pack" picker); `bundles.create_plan/
+  update_plan/deactivate_plan` reached only via the services lane (`POST/PATCH/DELETE /api/services/<product_id>/
+  packages`).
 
 Net effect: from ~5 copies of every capability to one widget per capability, ~1,700+ lines lighter, the
 gold standard preserved.

@@ -40,7 +40,7 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `analytics/` | repositories, routes | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`); `/api/analytics/*`; the standalone `/overview.html` (rolling `?days=` window). The admin **native Overview tab** now uses the `insights/` lane instead (the old iframe embed was retired 2026-07-05). |
 | `insights/` | repositories, routes | **Phase-2 P1 read-layer** (guarded aggregations, no new tables): court-utilisation heatmap · **sales-by-day** · **bookings-by-day** · **overview** (month-scoped daily composer powering the native admin Overview tab — traffic incl. public-vs-member + logged-in split, bookings, revenue, members, NPS; reconciles with the Money lists by construction); `/api/insights/*` |
 | `crons/` | trigger | thin dispatcher → `/api/cron/*` |
-| `scripts/` | seed_nextpoint, provision_club | seed/provision tenants |
+| `scripts/` | seed_nextpoint, provision_club, **backfill_pack_products** (map legacy NULL-product packs to their service — preview + `--commit`), **audit_class_packs** (report class packs vs their session `price_id`) | seed/provision tenants + data maintenance |
 | `web_app.py`, `frontend/` | host-switch + SPA shells + marketing | The web service |
 | `migration/` | Wix→Render URL/301 helper | SEO migration |
 
@@ -50,9 +50,14 @@ access window, PAYG outside) · `GET resources` · `GET durations` · **`GET ser
 — bookable SERVICES for a coach: each product [e.g. Private / Semi-private] with its OWN
 `durations:[{duration_minutes,amount_minor,price_id}]` + `payment_modes` + `currency_code`, so the wizard
 offers the service name before the duration; `diary/pricing.py::services_for`, STRICT TWO-TIER via
-`_coach_has_own_product` — a coach's OWN active product ELSE the shared NULL-coach product, never merged) ·
-`GET/POST bookings` (**POST now accepts `product_id`** — the chosen service is priced exactly, passing
-`coach_user_id`+`product_id` into the order) ·
+`_coach_has_own_product` — a coach's OWN active product ELSE the shared NULL-coach product, never merged;
+also returns **court SERVICES** [e.g. Hardcourt Hire / Clay Hire], each a `product(kind='court_booking')`
+with its own price + allocated courts, so the client picks a court service like a lesson service) ·
+`GET/POST bookings` (**POST now accepts `product_id`** — the chosen service [lesson, class OR court service]
+is priced exactly, passing `coach_user_id`+`product_id` into the order; pricing/availability/`create_booking`
+are **court-service-aware** — a court's service resolves via `diary.pricing.court_service_for_resource`
+[the court's own `product_id`, else the club default court product, else unscoped], and a court booked under
+the wrong service is rejected **`COURT_NOT_IN_SERVICE`**; single-court-service clubs unchanged) ·
 `GET bookings/<id>` · `PATCH bookings/<id>` (reschedule — auto-reassigns the held court for a lesson;
 re-prices unpaid order lines + `coach_arrears` from the same product on a duration change via
 `billing.orders.reprice_booking_order`; **`PAID_CANNOT_EXTEND` (422)** extending a PAID booking,
@@ -78,8 +83,9 @@ the awaited party; admin always) · **`GET bookings/<id>/calendar.ics`** (bookin
 **Admin `/api/admin/*`:** **`GET home`** (the owner **command-center** for the redesigned admin app —
 guarded focus cards: today / money (owed-to-club, net revenue, rent due) / people-needing-attention /
 approvals; `admin/repositories.py::admin_home`) · `GET/POST onboarding` (+`/complete`) · `GET/PATCH club` · `PUT location` ·
-`PATCH branding` · `PATCH policy` · `GET/POST resources` (+`PATCH/DELETE /<id>` — DELETE now real:
-hard-delete a court with no bookings/sessions, else soft-archive) · `GET/PUT hours` ·
+`PATCH branding` · `PATCH policy` · `GET/POST resources` (+`PATCH/DELETE /<id>` — **`PATCH` now also sets a
+court's `product_id`** = the court SERVICE it belongs to, the "Court service" picker per court in Setup →
+Courts & hours; DELETE now real: hard-delete a court with no bookings/sessions, else soft-archive) · `GET/PUT hours` ·
 `GET/POST products` (+`PATCH /<id>`) · `GET/POST prices` (+`PATCH/DELETE /<id>`) ·
 `GET coaches` · `POST coaches/invite` · `POST coaches/<id>/resend-invite` ·
 **`PATCH coaches/<id>`** (lifecycle status) · **`DELETE coaches/<id>`** (real: hard-delete if no
@@ -105,7 +111,9 @@ add/subtract a client's prepaid token wallet [clamped ≥0, a top-up raises `min
 **`POST clients/<client_id>/wallets/<wallet_id>/expire`** (`{reason}` — SOFT-expire a wallet [status='expired',
 balance zeroed, row+ledger kept, never hard-deleted]; `billing.bundles.expire_wallet`) ·
 `GET/POST membership-plans` (+`PATCH/DELETE /<id>`) ·
-**`GET/PATCH membership-config`** (per-tier payment options) · `GET/POST bundle-plans` (+`PATCH/DELETE /<id>`) ·
+**`GET/PATCH membership-config`** (per-tier payment options) · **`GET bundle-plans`** (kept for the offline
+"issue a pack" picker; the `POST/PATCH/DELETE /api/admin/bundle-plans` **write** routes were REMOVED 2026-07-09
+— packs are created/edited ONLY under a service via `POST/PATCH/DELETE /api/services/<product_id>/packages`) ·
 `GET coach-agreements` · `PUT coach-agreements/<coach_id>` · `GET/POST commission-rules`
 (+`DELETE /<id>`, `GET /preview`) · `GET financials/{summary,revenue,coach-earnings,memberships}` ·
 `GET coach-statement` · `POST coach-statement/arrears/<id>/collected` ·
@@ -134,8 +142,9 @@ the Money lists by construction). Admin-gated, guarded (missing/empty → empty 
 `insights/repositories.py`; registered in `app.py`.
 
 **Coach `/api/coach/*`:** `GET/PATCH profile` · `GET onboarding` · `POST/PATCH services`
-(+`POST services/<pid>/rate`, `PATCH/DELETE services/<id>`) · `GET/POST bundle-plans`
-(+`PATCH bundle-plans/<id>` — own lesson packs, scoped + ownership-guarded) · `PUT hours` ·
+(+`POST services/<pid>/rate`, `PATCH/DELETE services/<id>`) · `PUT hours` ·
+*(the `/api/coach/bundle-plans` routes were REMOVED 2026-07-09 — a coach edits their packs under a service
+via `POST/PATCH/DELETE /api/services/<product_id>/packages`; coach onboarding is now Profile/Hours/Services)* ·
 `GET/POST/DELETE time-off` · `GET clients` · **`GET members/search`** (`?q=` type-ahead client lookup for
 "book a client", min 2 chars; `coach/repositories.search_members`) · **`GET packages`** (every client
 holding an active lesson pack with THIS coach + remaining balance — the coach's "clients with packages"
@@ -159,8 +168,12 @@ for the month before write-off/discount/collection, distinct from collected `gro
 owner + coach; the route enforces who may change what): read via `services.repositories.get_service` ·
 **`POST /api/services`** — create a lesson: a coach creates one for themselves; the **OWNER creates one FOR
 A CHOSEN COACH** (body `coach_user_id`, validated by `admin/repositories.is_club_coach`) → delegates to
-`coach.repositories.create_service`. Frontend: `Widgets.ServiceList` `onCreate(kind)` → admin Setup → Services
-"+ New" coach-picker modal (`AdminAPI.createService`).
+`coach.repositories.create_service`. Owner also creates a **court service** here via Services "+ New".
+Frontend: `Widgets.ServiceList` `onCreate(kind)` → admin Setup → Services "+ New" coach-picker modal
+(`AdminAPI.createService`). · **`POST/PATCH/DELETE /api/services/<product_id>/packages`** — the ONE place a
+prepaid pack is now created/edited (owner + coach), scoped to that service; delegates to
+`billing.bundles.create_plan`/`update_plan`/`deactivate_plan` (owner+kind inherited from the product). This
+REPLACED the removed standalone `/api/{admin,coach}/bundle-plans` write routes.
 
 **Client `/api/me/*`:** `GET/PATCH profile` · `GET/POST dependents` (+`PATCH/DELETE /<id>`) ·
 `GET plan` (current plan + `is_trial`/`trial_days_left` + `membership_window`) ·
@@ -208,6 +221,15 @@ CourtFlow AWS account is back): **`docs/specs/SES-SETUP.md`**. No schema change.
   `account_ledger`, `membership_subscription`, `refund_request`, `bundle_plan`, `token_wallet`,
   `token_ledger`, `coach_agreement`, `commission_rule`, `commission_split`, `coach_ledger`,
   `coach_arrears`
+  - *Key recent columns (2026-07-09 — court services + per-service packs):* **`diary.resource.product_id`**
+    (the court SERVICE a court belongs to — e.g. Hardcourt Hire vs Clay Hire; resolution = own product → club
+    default court product → unscoped, `diary.pricing.court_service_for_resource`); **`billing.bundle_plan.
+    product_id`** + **`billing.token_wallet.product_id`** (the SPECIFIC service a pack/wallet draws for —
+    owner+kind inherited from the product; `match_wallet` is product-aware + backward-compatible: a
+    product-scoped wallet draws only for its product, a legacy NULL-product wallet still matches by coach+kind,
+    product-specific wins the tie-break; existing live packs stay NULL=legacy until
+    `scripts/backfill_pack_products.py` maps them). Multiple `product(kind='court_booking')` court products are
+    now supported (was effectively one).
   - *Key recent columns:* `product.status` + `price.status` (active/dormant/retired — the unified
     3-state lifecycle; `active` boolean kept in sync); `product.payment_modes` + **`price.payment_modes`**
     (per-tier/per-service allowed payment methods, CSV — layered tier→product→club resolution);
@@ -345,9 +367,11 @@ dashboard (`sync:false`).
 - Compile: `python -m py_compile $(git ls-files '*.py')`.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 43 / billing 195 / statement 47** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 61 / billing 239 / statement 47** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
   on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +
-  **`sc_order_discount`** (billing) and **`sc_discount_reconcile`** (statement) for the Client 360 sprint).
+  **`sc_order_discount`** (billing) and **`sc_discount_reconcile`** (statement) for the Client 360 sprint,
+  plus the **court-service allocation** checks (booking +18) and the **per-service-packs** scenario
+  (billing +44) for the 2026-07-09 court-services + per-service-packs sprint).
 - Frontend: `node --check <file>.js`.

@@ -81,8 +81,10 @@ tapped → the admin event story (golden rule).
 ### Setup (`#/setup`, `#/setup/:section`)
 Bring Settings INTO the SPA (retire the separate `/settings.html` jump). Embed the `AdminUI`
 editor library as in-SPA pages: Club profile / branding / **policy incl. online-payment toggle** ·
-Courts & hours · Services & prices · Membership plans (+access windows) · Session packs · Coaches
-(invite / remove / hide / **commission & agreements**) · Classes. All WRITE endpoints already exist.
+Courts & hours (incl. a court's **court-service** allocation) · Services & prices · Membership plans
+(+access windows) · Coaches (invite / remove / hide / **commission & agreements**) · Classes. **(The
+standalone "Session packs" section was removed 2026-07-09 — packs are now edited under each service's
+packages card.)** All WRITE endpoints already exist.
 
 ### Insights (`#/insights`) — reachable from Home
 > **SUPERSEDED 2026-07-05:** this is now the first-class **Overview** nav tab (`#/overview`; `#/insights`
