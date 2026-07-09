@@ -54,6 +54,21 @@
     voidOrder: function (id, body) {
       return A().apiJSON("/api/admin/orders/" + enc(id) + "/void", { method: "POST", body: body || {} });
     },
+    // POST /api/admin/orders/:order_id/discount  body: {discount_minor|new_amount_minor, reason}
+    //   -> {order_id, old_total_minor, new_total_minor, discount_minor} — reprice an OPEN order
+    //   (original preserved; coach_arrears kept in lockstep; a paid order rejects).
+    discountOrder: function (id, body) {
+      return A().apiJSON("/api/admin/orders/" + enc(id) + "/discount", { method: "POST", body: body || {} });
+    },
+    // POST /api/admin/clients/:id/wallets/:wallet_id/adjust  body: {delta_sessions|delta_minutes, reason}
+    //   -> {wallet_id, minutes_remaining, minutes_total, tokens_remaining, status} — add/subtract pack balance.
+    walletAdjust: function (clientId, walletId, body) {
+      return A().apiJSON("/api/admin/clients/" + enc(clientId) + "/wallets/" + enc(walletId) + "/adjust", { method: "POST", body: body || {} });
+    },
+    // POST /api/admin/clients/:id/wallets/:wallet_id/expire  body: {reason} -> soft-expire a pack (audited).
+    walletExpire: function (clientId, walletId, body) {
+      return A().apiJSON("/api/admin/clients/" + enc(clientId) + "/wallets/" + enc(walletId) + "/expire", { method: "POST", body: body || {} });
+    },
 
     // ---- admin event story (the ONE shared drill target) -----------------
     // GET /api/admin/bookings/:id -> {booking:{id,booking_type,status,starts_at,ends_at,

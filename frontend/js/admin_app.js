@@ -240,7 +240,10 @@
 
   // ---- PEOPLE (roster + slicer + search → the unified person 360) -----------
   var PEOPLE = { rows: [], slice: "all", q: "" };
+  // Role slices (mutually exclusive) + holdings/subscription slices (the People "who holds what"
+  // filters — membership tier · on trial · has an active pack · no membership; drill to the 360).
   var SLICES = [["all", "All"], ["members", "Members"], ["coaches", "Coaches"], ["guests", "Guests"], ["admins", "Admins"]];
+  var HOLDINGS_SLICES = [["on_trial", "On trial"], ["has_pack", "Has pack"], ["no_membership", "No membership"]];
   function pName(r) { return r.display_name || [r.first_name, r.surname].filter(Boolean).join(" ").trim() || r.email || "Member"; }
   function pInit(r) { var n = pName(r).split(/\s+/); return ((n[0] || "?")[0] + (n.length > 1 ? n[n.length - 1][0] : "")).toUpperCase(); }
   function pSlice(r) {
@@ -250,19 +253,37 @@
     return "members";
   }
   function pRoleLabel(r) { return { coach: "Coach", guest: "Guest", club_admin: "Admin", platform_admin: "Admin", member: "Member" }[r.role] || r.role; }
+  // Does a person match the active slice? Role slices use pSlice; holdings/tier slices read the
+  // roster's subscription fields (has_membership/on_trial/has_active_pack/membership_tier).
+  function matchSlice(r, slice) {
+    if (slice === "all") return true;
+    if (slice === "on_trial") return !!r.on_trial;
+    if (slice === "has_pack") return !!r.has_active_pack;
+    if (slice === "no_membership") return !r.has_membership && !r.on_trial;
+    if (slice.indexOf("tier:") === 0) return (r.membership_tier || "") === slice.slice(5);
+    return pSlice(r) === slice;
+  }
+  // The tier slices present in the current roster (distinct active membership tiers).
+  function tierSlices() {
+    var seen = {}, out = [];
+    PEOPLE.rows.forEach(function (r) { if (r.membership_tier && !seen[r.membership_tier]) { seen[r.membership_tier] = 1; out.push(["tier:" + r.membership_tier, r.membership_tier]); } });
+    return out.sort(function (a, b) { return a[1].localeCompare(b[1]); });
+  }
+  function allSlices() { return SLICES.concat(tierSlices()).concat(HOLDINGS_SLICES); }
   function peopleFiltered() {
     var q = (PEOPLE.q || "").trim().toLowerCase(), seen = {}, out = [];
     PEOPLE.rows.forEach(function (r) {
-      if (PEOPLE.slice !== "all" && pSlice(r) !== PEOPLE.slice) return;
+      if (!matchSlice(r, PEOPLE.slice)) return;
       if (q && (pName(r) + " " + (r.email || "")).toLowerCase().indexOf(q) < 0) return;
-      if (PEOPLE.slice === "all") { if (seen[r.user_id]) return; seen[r.user_id] = 1; }
+      if (seen[r.user_id]) return; seen[r.user_id] = 1;   // one row per person across role dupes
       out.push(r);
     });
     return out;
   }
   function sliceCount(k) {
-    if (k === "all") { var s = {}; PEOPLE.rows.forEach(function (r) { s[r.user_id] = 1; }); return Object.keys(s).length; }
-    return PEOPLE.rows.filter(function (r) { return pSlice(r) === k; }).length;
+    var s = {};
+    PEOPLE.rows.forEach(function (r) { if (matchSlice(r, k)) s[r.user_id] = 1; });
+    return Object.keys(s).length;
   }
   async function renderPeople() {
     loading();
@@ -283,11 +304,14 @@
       style: "margin-bottom:10px",
       oninput: function (e) { PEOPLE.q = e.target.value; paintPeopleList(listBox); },
     }));
-    // Slicer (segmented control).
+    // Slicer (segmented control) — role slices + membership tiers + holdings filters. A holdings/
+    // tier slice with no one in it is hidden so the bar stays clean.
     var seg = el("div", { class: "cf-segment cf-seg-lg" });
-    SLICES.forEach(function (sl) {
+    allSlices().forEach(function (sl) {
+      var n = sliceCount(sl[0]);
+      if (n === 0 && sl[0] !== "all" && sl[0] !== PEOPLE.slice) return;
       seg.appendChild(el("button", {
-        class: PEOPLE.slice === sl[0] ? "on" : "", text: sl[1] + " · " + sliceCount(sl[0]),
+        class: PEOPLE.slice === sl[0] ? "on" : "", text: sl[1] + " · " + n,
         onclick: function () { PEOPLE.slice = sl[0]; paintPeople(); },
       }));
     });
@@ -316,123 +340,101 @@
     c.appendChild(l); box.appendChild(c);
   }
 
-  // ---- PERSON 360 (unified record — members + coaches, one page) ------------
-  async function renderPerson(id) {
-    loading();
-    var pn;
-    try { pn = (await window.AdminAPI.person(id)).person; }
-    catch (e) { set(el("div", {}, [backBar("People", "#/people"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
-    var cur = pn.currency || "ZAR";
-    var wrap = el("div", {});
-    wrap.appendChild(backBar("People", "#/people"));
-
-    // Header — identity, role/status chips, membership line (+ grant/revoke), total owed.
-    var chips = el("div", { class: "cf-row", style: "gap:6px;flex-wrap:wrap;margin-top:6px" });
-    (pn.roles || []).forEach(function (role) { chips.appendChild(el("span", { class: "cf-chip", text: pRoleLabel({ role: role }) })); });
-    chips.appendChild(el("span", { class: "cf-chip " + (pn.member_status === "active" ? "confirmed" : "held"), text: pn.member_status || "—" }));
-    var head = card([
-      el("div", { class: "cf-detail-h" }, [
-        el("div", { class: "cf-row", style: "gap:10px;align-items:center" }, [
-          el("div", { class: "cf-avatar", text: pInit(pn) }),
-          el("div", {}, [
-            el("h1", { style: "margin:0;font-size:1.25rem", text: pn.name }),
-            el("div", { class: "cf-muted", style: "font-size:.85rem", text: [pn.email, pn.phone].filter(Boolean).join(" · ") || "—" }),
-            chips,
-          ]),
-        ]),
-      ]),
-    ]);
-    head.appendChild(membershipLine(pn, cur, id));
-    wrap.appendChild(head);
-
-    // Coach settlement (if they coach here) — gross / commission / rent / net / balance.
-    if (pn.is_coach && pn.settlement) {
-      var st = pn.settlement;
-      wrap.appendChild(card([
-        window.CRMUI.sectionHead("Coaching settlement"),
-        window.CRMUI.stats([
-          { value: money(st.gross_lesson_minor, cur), label: "Gross lessons" },
-          { value: money(st.commission_earned_minor, cur), label: "Club commission" },
-          { value: money(st.rent_due_minor, cur), label: "Rent due" },
-          { value: money(st.net_to_coach_minor, cur), label: "Net to coach" },
-        ]),
-        el("div", { class: "cf-muted", style: "font-size:.8rem;margin-top:8px", text: "Ledger balance: " + money(st.lifetime_balance_minor, cur) + " · full per-client settlement in Money." }),
-      ], "cf-mt"));
-    }
-
-    // Money — what they owe the club (each order Void / Write-off) + online payments.
-    var moneyCard = card([window.CRMUI.sectionHead("Money")], "cf-mt");
-    moneyCard.appendChild(el("div", { class: "cf-row", style: "margin:2px 0 10px" }, [
-      el("div", {}, [el("div", { style: "font-size:1.25rem;font-weight:800;color:" + (pn.owed_minor > 0 ? "var(--danger,#c0392b)" : "inherit"), text: money(pn.owed_minor, cur) }),
-        el("div", { class: "cf-muted", style: "font-size:.8rem", text: "Owed to the club" })]),
-    ]));
-    // Owed orders → the shared CRMUI.lineItems (same widget the coach money uses), with Void/Write-off.
-    var owed = (pn.statement && pn.statement.items) || [];
-    moneyCard.appendChild(window.CRMUI.lineItems(owed.map(function (it) { return Object.assign({}, it, { gross_minor: it.amount_minor }); }), {
-      currency: cur,
-      empty: "Nothing owed — all settled. 🎉",
-      label: function (it) { return it.description || it.category || "Owed"; },
-      sub: function (it) { return [it.category, it.coach_name, (function () { try { return it.date ? UI.fmtDate(it.date) : ""; } catch (e) { return ""; } })()].filter(Boolean).join(" · "); },
-      actions: [
-        { label: "Void", onClick: function (it) { voidOrder(id, it, false); } },
-        { label: "Write off", tone: "danger", onClick: function (it) { voidOrder(id, it, true); } },
-      ],
-    }));
-    var pays = pn.payments || [];
-    if (pays.length) {
-      moneyCard.appendChild(el("div", { class: "cf-muted", style: "margin:14px 0 4px;font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em", text: "Online payments" }));
-      var pl = el("div", { class: "cf-list" });
-      pays.forEach(function (pay) {
-        pl.appendChild(el("div", { class: "cf-item" }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: money(pay.amount_minor, pay.currency_code || cur) }),
-            el("div", { class: "cf-item-s", text: (pay.provider || "card") + " · " + (function () { try { return UI.fmtDate(pay.created_at); } catch (e) { return ""; } })() }),
-          ]),
-          el("span", { class: "cf-chip " + (pay.refunded ? "held" : "confirmed"), text: pay.refunded ? "refunded" : "paid" }),
-        ]));
-      });
-      moneyCard.appendChild(pl);
-    }
-    wrap.appendChild(moneyCard);
-
-    // Bookings — upcoming + history, each lesson/court row → the admin event story (golden rule).
-    wrap.appendChild(bookingsCard("Upcoming", pn.upcoming || [], "Nothing upcoming."));
-    wrap.appendChild(bookingsCard("History", pn.history || [], "No past bookings."));
-    set(wrap);
-  }
-
-  function membershipLine(pn, cur, id) {
-    var box = el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)" });
-    var m = pn.membership;
-    var label = m ? ("Member" + (m.plan_label ? " · " + m.plan_label : "") + (m.current_period_end ? " · until " + m.current_period_end : "")) : "No active membership";
-    box.appendChild(el("div", {}, [el("div", { style: "font-weight:700", text: m ? "Membership active" : "Not a member" }),
-      el("div", { class: "cf-muted", style: "font-size:.82rem", text: label })]));
-    var actions = el("div", { class: "cf-row", style: "gap:6px" });
-    if (m) actions.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Revoke", onclick: function () { revokeMembership(id, pn.name); } }));
-    actions.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Issue package", onclick: function () { issuePackage(id, pn.name); } }));
-    box.appendChild(actions);
-    return box;
-  }
-  function bookingsCard(title, rows, empty) {
-    var c = card([window.CRMUI.sectionHead(title)], "cf-mt");
-    if (!rows.length) { c.appendChild(el("div", { class: "cf-empty", text: empty })); return c; }
-    var l = el("div", { class: "cf-list" });
-    rows.forEach(function (b) {
-      var k = (b.kind || "court").toLowerCase();
-      var tap = !!(b.booking_id || b.enrolment_id);
-      var row = el("div", { class: "cf-item" + (tap ? " cf-item-tap" : "") }, [
-        el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(k) >= 0 ? k : "court"), text: k }),
-        el("div", { class: "cf-item-main" }, [
-          el("div", { class: "cf-item-t", text: (function () { try { return UI.fmtDate(b.starts_at) + "  " + UI.fmtTime(b.starts_at); } catch (e) { return b.starts_at || ""; } })() }),
-          el("div", { class: "cf-item-s", text: [b.resource_name, b.coach_name].filter(Boolean).join(" · ") || "" }),
-        ]),
-        el("span", { class: "cf-chip " + (b.status === "confirmed" ? "confirmed" : "held"), text: b.status }),
-        tap ? el("span", { class: "cf-muted", text: "›" }) : null,
-      ].filter(Boolean));
-      if (tap) row.addEventListener("click", function () { go(b.booking_id ? ("#/event/" + b.booking_id) : ("#/class/" + b.enrolment_id)); });
-      l.appendChild(row);
+  // ---- PERSON 360 (the unified client record — ONE widget, config only) ------
+  // Widgets.ClientRecord is the SINGLE render layer for a client record across admin/coach/client
+  // (golden rule). Admin scope wires the full staff action set; the data comes from the one
+  // client360 composer (AdminAPI.person → GET /api/admin/people/:id, scope='admin').
+  function renderPerson(id) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.ClientRecord.mount(host, {
+      scope: { id: id, role: "admin" },
+      back: { label: "People", hash: "#/people" },
+      fields: { showActivity: true },
+      data: { get: function (i) { return window.AdminAPI.person(i).then(function (r) { return r.person; }); } },
+      onNavigate: function (t) {
+        if (!t || !t.id) return;
+        if (t.kind === "person") go("#/person/" + t.id);
+        else if (t.kind === "class") go("#/class/" + t.id);
+        else go("#/event/" + t.id);
+      },
+      actions: {
+        // Membership + packages
+        issue: { manual: true, run: function (pn) { issuePackage(id, pn.name); } },
+        revoke_membership: {
+          confirm: function (pn) { return "Cancel " + (pn.name || "this member") + "'s membership? Their courts revert to pay-as-you-go."; },
+          done: "Membership cancelled.", run: function () { return window.AdminAPI.revokeMembership(id); },
+        },
+        wallet_adjust: { manual: true, run: function (w) { walletAdjustModal(id, w, function () { renderPerson(id); }); } },
+        wallet_expire: {
+          tone: "danger",
+          confirm: function (w) { return "Remove '" + (w.label || "this pack") + "'? Its balance is zeroed and it can no longer be used (kept for audit)."; },
+          done: "Package removed.", run: function (w) { return window.AdminAPI.walletExpire(id, w.wallet_id, { reason: "admin removed" }); },
+        },
+        // Owed statement lines
+        discount: { manual: true, run: function (it) { discountOrderModal(it, function () { renderPerson(id); }); } },
+        void: {
+          confirm: function (it) { return "Void " + money(it.amount_minor, it.currency || clubCur()) + " (" + (it.description || it.category || "this charge") + ")? Clears it off their statement."; },
+          done: "Voided.", run: function (it) { return window.AdminAPI.voidOrder(it.order_id, { write_off: false }); },
+        },
+        write_off: {
+          tone: "danger",
+          confirm: function (it) { return "Write off " + money(it.amount_minor, it.currency || clubCur()) + "? Forgives the debt — no money is collected."; },
+          done: "Written off.", run: function (it) { return window.AdminAPI.voidOrder(it.order_id, { write_off: true }); },
+        },
+        // Online payment refund (reuses the shared refund modal)
+        refund: { manual: true, run: function (pay) { refundModal(pay.order_id, { amount_minor: pay.amount_minor, currency: pay.currency_code || clubCur() }, function () { renderPerson(id); }); } },
+      },
     });
-    c.appendChild(l); return c;
+  }
+
+  // New client-record edit modals (admin only) — general order discount + pack-balance adjust.
+  function discountOrderModal(it, onDone) {
+    var cur = it.currency || clubCur();
+    var m = UI.modal("Apply a discount", {});
+    var curAmt = it.amount_minor || 0;
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
+      text: (it.description || it.category || "Charge") + " — currently " + money(curAmt, cur) + ". Set the new amount; the original is kept for the record." }));
+    var amt = el("input", { class: "cf-input", type: "number", step: "0.01", min: "0", placeholder: "New amount, e.g. 250.00" });
+    var reason = el("input", { class: "cf-input", placeholder: "Reason (shown on the statement)" });
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "New amount" }), amt]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Reason" }), reason]));
+    var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Apply discount" });
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
+      el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), btn,
+    ]));
+    btn.addEventListener("click", async function () {
+      var f = parseFloat(amt.value);
+      if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; }
+      var newMinor = Math.round(f * 100);
+      if (newMinor >= curAmt) { UI.toast("The new amount must be lower than " + money(curAmt, cur) + ".", "warn"); return; }
+      var why = reason.value.trim();
+      if (!why) { UI.toast("A reason is required.", "warn"); return; }
+      btn.disabled = true;
+      try { await window.AdminAPI.discountOrder(it.order_id, { new_amount_minor: newMinor, reason: why }); UI.toast("Discount applied.", "info"); m.close(); if (onDone) onDone(); }
+      catch (e) { btn.disabled = false; UI.toast(UI.errMsg(e), "error"); }
+    });
+  }
+  function walletAdjustModal(clientId, w, onDone) {
+    var m = UI.modal("Adjust package balance", {});
+    var sess = (w.sessions_remaining != null ? w.sessions_remaining : Math.round((w.minutes_remaining || 0) / (w.base_minutes || 60)));
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
+      text: (w.label || "Package") + " — currently " + sess + " session" + (sess === 1 ? "" : "s") + " left. Add (+) or subtract (−) sessions; the change is logged." }));
+    var delta = el("input", { class: "cf-input", type: "number", step: "1", placeholder: "e.g. 2 to add, -1 to remove" });
+    var reason = el("input", { class: "cf-input", placeholder: "Reason (e.g. goodwill, correction)" });
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Sessions to add / remove" }), delta]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Reason" }), reason]));
+    var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Apply" });
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
+      el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), btn,
+    ]));
+    btn.addEventListener("click", async function () {
+      var d = parseInt(delta.value, 10);
+      if (isNaN(d) || d === 0) { UI.toast("Enter a non-zero number of sessions.", "warn"); return; }
+      btn.disabled = true;
+      try { await window.AdminAPI.walletAdjust(clientId, w.wallet_id, { delta_sessions: d, reason: reason.value.trim() || null }); UI.toast("Package updated.", "info"); m.close(); if (onDone) onDone(); }
+      catch (e) { btn.disabled = false; UI.toast(UI.errMsg(e), "error"); }
+    });
   }
   // ---- person money/membership actions -------------------------------------
   async function issuePackage(id, name) {
@@ -565,17 +567,8 @@
       } catch (e) { btn.disabled = false; UI.toast(UI.errMsg(e), "error"); }
     });
   }
-  async function revokeMembership(id, name) {
-    if (!window.confirm("Cancel " + (name || "this member") + "'s membership? Their courts revert to pay-as-you-go.")) return;
-    try { await window.AdminAPI.revokeMembership(id); UI.toast("Membership cancelled.", "info"); renderPerson(id); }
-    catch (e) { UI.toast(UI.errMsg(e), "error"); }
-  }
-  async function voidOrder(id, it, writeOff) {
-    var verb = writeOff ? "Write off" : "Void";
-    if (!window.confirm(verb + " " + money(it.amount_minor, it.currency) + " (" + (it.description || it.category || "this charge") + ")? This clears it off their statement.")) return;
-    try { await window.AdminAPI.voidOrder(it.order_id, { write_off: !!writeOff }); UI.toast(verb + " done.", "info"); renderPerson(id); }
-    catch (e) { UI.toast(UI.errMsg(e), "error"); }
-  }
+  // (revokeMembership / voidOrder wrappers removed — the client record now drives these directly
+  //  through Widgets.ClientRecord actions calling AdminAPI.revokeMembership / AdminAPI.voidOrder.)
   // ---- MONEY (Setup-style: a clean section menu → focused pages) ----------------------------
   var MONEY_MONTH = null; // 'YYYY-MM' for Sales by day (null = current month)
   var MONEY_SECTIONS = [

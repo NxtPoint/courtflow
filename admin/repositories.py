@@ -985,7 +985,25 @@ def list_people(session, *, club_id):
                           WHERE ms.club_id = m.club_id AND ms.user_id = u.id
                             AND ms.status = 'active'
                             AND (ms.current_period_end IS NULL
-                                 OR ms.current_period_end >= CURRENT_DATE)) AS has_membership
+                                 OR ms.current_period_end >= CURRENT_DATE)) AS has_membership,
+                   -- Holdings slicers for the People roster (subscription filters → drill to 360).
+                   EXISTS(SELECT 1 FROM billing.membership_subscription ms
+                          WHERE ms.club_id = m.club_id AND ms.user_id = u.id
+                            AND ms.status = 'active' AND ms.provider = 'trial'
+                            AND (ms.current_period_end IS NULL
+                                 OR ms.current_period_end >= CURRENT_DATE)) AS on_trial,
+                   EXISTS(SELECT 1 FROM billing.token_wallet tw
+                          WHERE tw.club_id = m.club_id AND tw.user_id = u.id
+                            AND tw.status = 'active'
+                            AND COALESCE(tw.minutes_remaining, 0) > 0) AS has_active_pack,
+                   (SELECT COALESCE(pr.label, pr.membership_tier)
+                    FROM billing.membership_subscription ms2
+                    LEFT JOIN billing.price pr ON pr.id = ms2.price_id
+                    WHERE ms2.club_id = m.club_id AND ms2.user_id = u.id
+                      AND ms2.status = 'active' AND ms2.provider <> 'trial'
+                      AND (ms2.current_period_end IS NULL
+                           OR ms2.current_period_end >= CURRENT_DATE)
+                    ORDER BY ms2.current_period_end DESC NULLS LAST LIMIT 1) AS membership_tier
             FROM iam.membership m
             JOIN iam.user u ON u.id = m.user_id
             LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id AND cp.club_id = m.club_id
