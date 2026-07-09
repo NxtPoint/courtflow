@@ -101,15 +101,18 @@
   }
 
   function packagesCard() {
-    var c = card("Packages", "Prepaid bundles for this service — buy several upfront and draw them down.");
+    var c = card("Packages", "Prepaid bundles for THIS service only — buy several upfront and draw them down. A pack belongs to this service and its owner.");
     var list = el("div", { class: "cf-list" });
     st.m.packages.forEach(function (p) {
-      var nI = inp(p.sessions_count, { type: "number", min: 1, style: "max-width:90px" }); nI.addEventListener("input", function () { p.sessions_count = parseInt(nI.value, 10) || null; });
-      var dI = inp(p.duration_minutes, { type: "number", min: 1, placeholder: "mins", style: "max-width:90px" }); dI.addEventListener("input", function () { p.duration_minutes = parseInt(dI.value, 10) || null; });
-      var aI = inp((p.price_minor / 100).toFixed(2), { style: "max-width:120px" }); aI.addEventListener("input", function () { p.price_minor = Math.round(parseFloat(aI.value || "0") * 100); });
+      var lI = inp(p.label || "", { placeholder: "Label (optional)", style: "max-width:150px" }); lI.addEventListener("input", function () { p.label = lI.value; });
+      var nI = inp(p.sessions_count, { type: "number", min: 1, style: "max-width:80px" }); nI.addEventListener("input", function () { p.sessions_count = parseInt(nI.value, 10) || null; });
+      var dI = inp(p.duration_minutes, { type: "number", min: 1, placeholder: "mins", style: "max-width:80px" }); dI.addEventListener("input", function () { p.duration_minutes = parseInt(dI.value, 10) || null; });
+      var aI = inp((p.price_minor / 100).toFixed(2), { style: "max-width:100px" }); aI.addEventListener("input", function () { p.price_minor = Math.round(parseFloat(aI.value || "0") * 100); });
+      var vI = inp(p.validity_days || "", { type: "number", min: 0, placeholder: "never", style: "max-width:80px" }); vI.addEventListener("input", function () { p.validity_days = parseInt(vI.value, 10) || null; });
       var rm = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove" });
       rm.addEventListener("click", function () { if (p.id) st.del.packages.push(p.id); st.m.packages.splice(st.m.packages.indexOf(p), 1); render(); });
-      list.appendChild(el("div", { class: "cf-item" }, [nI, el("span", { class: "cf-muted", text: "× " }), dI, el("span", { class: "cf-muted", text: "min · R" }), aI, el("span", { class: "cf-spacer" }), rm]));
+      var row = [lI, nI, el("span", { class: "cf-muted", text: "×" }), dI, el("span", { class: "cf-muted", text: "min · R" }), aI, el("span", { class: "cf-muted", text: "· valid" }), vI, el("span", { class: "cf-muted", text: "days" }), el("span", { class: "cf-spacer" }), rm];
+      list.appendChild(el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:6px" }, row));
     });
     if (!st.m.packages.length) list.appendChild(el("div", { class: "cf-empty", text: "No packages yet." }));
     c.appendChild(list);
@@ -145,8 +148,8 @@
       for (var d = 0; d < del.variations.length; d++) await api("/variations/" + del.variations[d], { method: "DELETE" });
       for (var j = 0; j < m.packages.length; j++) {
         var pk = m.packages[j]; if (!pk.sessions_count) continue;
-        if (pk.id) await api("/packages/" + pk.id, { method: "PATCH", body: { label: pk.label, sessions_count: pk.sessions_count, duration_minutes: pk.duration_minutes, price_minor: pk.price_minor || 0 } });
-        else await api("/packages", { method: "POST", body: { sessions_count: pk.sessions_count, duration_minutes: pk.duration_minutes, price_minor: pk.price_minor || 0 } });
+        if (pk.id) await api("/packages/" + pk.id, { method: "PATCH", body: { label: pk.label, sessions_count: pk.sessions_count, duration_minutes: pk.duration_minutes, price_minor: pk.price_minor || 0, validity_days: pk.validity_days || null } });
+        else await api("/packages", { method: "POST", body: { label: pk.label || null, sessions_count: pk.sessions_count, duration_minutes: pk.duration_minutes, price_minor: pk.price_minor || 0, validity_days: pk.validity_days || null } });
       }
       for (var pd = 0; pd < del.packages.length; pd++) await api("/packages/" + del.packages[pd], { method: "PATCH", body: { status: "retired" } });
       UI.toast("Saved.", "info"); close();

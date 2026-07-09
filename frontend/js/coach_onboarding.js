@@ -12,13 +12,12 @@
 (function () {
   var UI, el;
   var state = { step: 0, data: null };
-  var LABELS = ["Profile", "Hours", "Services", "Packs"];
+  var LABELS = ["Profile", "Hours", "Services"];
   // Short, friendly explainer shown above each step.
   var HELP = [
     "Tell members who you are. A photo, headline and bio help them choose you. Toggle whether you’re taking bookings, whether you appear on the public site, and whether new bookings should wait for your approval.",
     "Set the hours you’re available to coach each day. Members can only book you inside these windows — without hours you’re invisible.",
-    "Add the lessons you offer and a price for each length. One lesson can have several durations (e.g. 30 min and 60 min) — use “Add another duration”. Settlement (pay at court, pay online, or use a pack) is chosen by the client at booking.",
-    "Optional: sell prepaid packs (e.g. 10 × 60 min). Clients buy once and book without paying each time; a longer lesson simply uses more of the pack. You can skip this and add packs later.",
+    "Add the lessons you offer and a price for each length. One lesson can have several durations (e.g. 30 min and 60 min) — use “Add another duration”. Prepaid packs are added per lesson (open a lesson to add its packs). Settlement (pay at court, pay online, or use a pack) is chosen by the client at booking.",
   ];
 
   function host() { return document.getElementById("cf-wizard"); }
@@ -72,18 +71,12 @@
         saveLabel: "Save & continue →", before: [backBtn()], onSaved: advance,
       });
     } else if (state.step === 2) {
-      // Services is a list-style step: the coach adds rows inline, then clicks Continue.
-      window.CoachUI.services(sectionHost, { before: [backBtn(), continueBtn()] });
-    } else if (state.step === 3) {
-      // Packs is optional — the coach can add some or skip straight to finish.
-      window.CoachUI.packs(sectionHost, { before: [backBtn(), finishBtn()] });
+      // Services is the FINAL step: add lessons + prices. Packs live under each lesson (added by
+      // opening a lesson in the console) — no standalone packs step.
+      window.CoachUI.services(sectionHost, { before: [backBtn(), finishBtn()] });
     }
   }
 
-  function continueBtn() {
-    return el("button", { class: "cf-btn cf-btn-primary", text: "Continue →",
-      onclick: function () { go(state.step + 1); } });
-  }
   function finishBtn() {
     return el("button", { class: "cf-btn cf-btn-primary", text: "Finish setup →",
       onclick: function () { go(LABELS.length); } });

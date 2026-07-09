@@ -198,21 +198,10 @@
     },
 
     // ---- session-pack (token bundle) plans (docs/specs/02) ---------------
-    // GET /api/admin/bundle-plans -> {plans:[{id,service_kind,coach_user_id,label,sessions_count,
-    //                                         duration_minutes,price_minor,validity_days,active}]}
+    // GET /api/admin/bundle-plans -> {plans:[...]} — READ ONLY, for the offline "issue a pack" picker.
+    // (create/patch/delete removed 2026-07-09 — packs are created/edited ONLY under a service via the
+    //  services lane /api/services/<id>/packages; there is no standalone pack editor.)
     bundlePlans: function () { return A().apiJSON("/api/admin/bundle-plans"); },
-    // POST body: {service_kind,sessions_count,price_minor,label?,duration_minutes?,coach_user_id?,validity_days?}
-    createBundlePlan: function (body) {
-      return A().apiJSON("/api/admin/bundle-plans", { method: "POST", body: body });
-    },
-    // PATCH /api/admin/bundle-plans/:id  body: any of the above + clear_coach/clear_duration/clear_validity/active
-    patchBundlePlan: function (id, body) {
-      return A().apiJSON("/api/admin/bundle-plans/" + enc(id), { method: "PATCH", body: body });
-    },
-    // DELETE /api/admin/bundle-plans/:id  (deactivate)
-    deleteBundlePlan: function (id) {
-      return A().apiJSON("/api/admin/bundle-plans/" + enc(id), { method: "DELETE" });
-    },
 
     // ---- coaches ---------------------------------------------------------
     // GET /api/admin/coaches -> {coaches:[{id,email,display_name,status,...}]}
@@ -1210,153 +1199,9 @@
     return { reload: reload };
   }
 
-  // ---------------------------------------------------------------------------
-  // SESSION PACKS (token bundles) — configurable prepaid packs (docs/specs/02). Generic across
-  // court/lesson/class: any service, duration, price, #sessions, validity, and (lesson) coach.
-  // Each plan is a billing.bundle_plan row. -> /bundle-plans.
-  // ---------------------------------------------------------------------------
-  function bundlePlans(host, opts) {
-    init(); opts = opts || {};
-    UI.clear(host);
-    var coaches = [];  // [{id,display_name|email}] for lesson-pack coach scoping
-    var card = el("div", { class: "cf-card" });
-    card.appendChild(el("h2", { text: "Session packs" }));
-    card.appendChild(el("p", { class: "cf-muted", text:
-      "Sell prepaid packs of sessions (tokens). A member buys N sessions upfront; booking a matching " +
-      "service draws one; cancelling credits it back. Works for courts, lessons and classes — set the " +
-      "service, how many sessions, the duration they cover (optional), the price, and an optional expiry. " +
-      "Lesson packs can be tied to one coach." }));
-    var listBox = el("div", { class: "cf-list", id: "ad-bundle-plans" });
-    card.appendChild(listBox);
-    host.appendChild(card);
-
-    var KINDS = [
-      { value: "court", label: "Court sessions" },
-      { value: "lesson", label: "Lessons" },
-      { value: "class", label: "Classes" },
-    ];
-    function coachOptions() {
-      return [{ value: "", label: "Any coach" }].concat(coaches.map(function (c) {
-        return { value: c.id, label: c.display_name || c.email || "Coach" };
-      }));
-    }
-    function kindLabel(k) { var m = { court: "Court", lesson: "Lesson", class: "Class" }; return m[k] || k; }
-
-    function planRow(plan) {
-      var labelI = input({ value: plan.label || "", placeholder: plan.sessions_count + " " + kindLabel(plan.service_kind), style: "max-width:150px" });
-      var nI = input({ type: "number", min: 1, value: plan.sessions_count || 1, style: "max-width:70px" });
-      var durI = input({ type: "number", min: 0, value: plan.duration_minutes || "", placeholder: "any", style: "max-width:80px" });
-      var amtI = input({ value: fromMinor(plan.price_minor), placeholder: "0.00", style: "max-width:100px" });
-      var valI = input({ type: "number", min: 0, value: plan.validity_days || "", placeholder: "never", style: "max-width:80px" });
-      // Lesson AND class packs are coach-scoped (the coach is paid) — show the picker for both so a
-      // legacy coachless class pack can be assigned a coach here instead of being retired.
-      var coachSel = (plan.service_kind === "lesson" || plan.service_kind === "class")
-        ? select(plan.coach_user_id || "", coachOptions()) : null;
-      if (coachSel) coachSel.style.maxWidth = "150px";
-      var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
-      var status = statusSelect(plan.status, async function (s) {
-        try { await window.AdminAPI.patchBundlePlan(plan.id, { status: s }); UI.toast("Pack " + s + ".", "info"); reload(); }
-        catch (e) { UI.toast(UI.errMsg(e), "error"); }
-      });
-      save.addEventListener("click", async function () {
-        var n = num(nI.value);
-        if (!n || n < 1) { UI.toast("Sessions must be at least 1.", "warn"); return; }
-        var body = {
-          label: labelI.value.trim(), sessions_count: n, price_minor: toMinor(amtI.value),
-          duration_minutes: num(durI.value) || null, validity_days: num(valI.value) || null,
-          clear_duration: !durI.value, clear_validity: !valI.value,
-        };
-        if (coachSel) {
-          if (!coachSel.value) { UI.toast("Pick the coach this " + plan.service_kind + " pack belongs to.", "warn"); return; }
-          body.coach_user_id = coachSel.value; body.clear_coach = false;
-        }
-        save.disabled = true;
-        try { await window.AdminAPI.patchBundlePlan(plan.id, body); UI.toast("Pack updated.", "info"); reload(); }
-        catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
-      });
-      var kids = [
-        el("span", { class: "cf-chip", text: kindLabel(plan.service_kind) }),
-        labelI,
-        el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [nI, el("span", { class: "cf-muted", text: "× " })]),
-        el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [durI, el("span", { class: "cf-muted", text: "min" })]),
-        amtI,
-        el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [valI, el("span", { class: "cf-muted", text: "days" })]),
-      ];
-      if (coachSel) kids.push(coachSel);
-      kids.push(el("span", { class: "cf-spacer" }), status, save);
-      var row = el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:6px" }, kids);
-      if ((plan.status || "active") !== "active") row.style.opacity = "0.6";
-      return row;
-    }
-
-    function renderList(plans) {
-      UI.clear(listBox);
-      if (!plans.length) listBox.appendChild(el("div", { class: "cf-empty", text: "No session packs yet. Add one below." }));
-      plans.forEach(function (pl) { listBox.appendChild(planRow(pl)); });
-    }
-
-    function reload() {
-      UI.clear(listBox);
-      listBox.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
-      window.AdminAPI.bundlePlans().then(function (r) { renderList(r.plans || []); })
-        .catch(function (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
-    }
-
-    // add-plan form — service kind drives whether a coach picker shows.
-    var addKind = select("court", KINDS);
-    var addLabel = input({ placeholder: "Label (optional)", style: "max-width:160px" });
-    var addN = input({ type: "number", min: 1, value: 10, placeholder: "Sessions", style: "max-width:80px" });
-    var addDur = input({ type: "number", min: 0, placeholder: "min (any)", style: "max-width:90px" });
-    var addAmt = input({ placeholder: "Price 0.00", style: "max-width:110px" });
-    var addVal = input({ type: "number", min: 0, placeholder: "days (never)", style: "max-width:100px" });
-    var addCoachWrap = el("span");
-    function refreshCoachPicker() {
-      UI.clear(addCoachWrap);
-      // Lesson AND class packs must be tied to the coach who sells them (the coach gets paid).
-      if (addKind.value === "lesson" || addKind.value === "class") {
-        var sel = select("", coachOptions()); sel.style.maxWidth = "150px"; sel.id = "ad-bundle-add-coach";
-        addCoachWrap.appendChild(sel);
-      }
-    }
-    addKind.addEventListener("change", refreshCoachPicker);
-    var addBtn = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Add pack" });
-    addBtn.addEventListener("click", async function () {
-      var amount = toMinor(addAmt.value);
-      var n = num(addN.value);
-      if (amount == null || amount < 0) { UI.toast("Enter a price.", "warn"); return; }
-      if (!n || n < 1) { UI.toast("Enter how many sessions (min 1).", "warn"); return; }
-      var body = {
-        service_kind: addKind.value, sessions_count: n, price_minor: amount,
-        label: addLabel.value.trim(), duration_minutes: num(addDur.value) || null,
-        validity_days: num(addVal.value) || null,
-      };
-      var coachSel = document.getElementById("ad-bundle-add-coach");
-      if (coachSel && coachSel.value) body.coach_user_id = coachSel.value;
-      if ((addKind.value === "lesson" || addKind.value === "class") && !body.coach_user_id) {
-        UI.toast("Pick the coach this " + addKind.value + " pack belongs to.", "warn"); return;
-      }
-      addBtn.disabled = true;
-      try {
-        await window.AdminAPI.createBundlePlan(body);
-        addLabel.value = ""; addAmt.value = ""; addN.value = 10; addDur.value = ""; addVal.value = "";
-        UI.toast("Pack added.", "info"); reload();
-      } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { addBtn.disabled = false; }
-    });
-    card.appendChild(el("h3", { text: "Add a pack", style: "margin-top:14px" }));
-    card.appendChild(el("div", { class: "cf-row", style: "gap:6px;align-items:center;flex-wrap:wrap" }, [
-      addKind, addLabel,
-      el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [addN, el("span", { class: "cf-muted", text: "sessions" })]),
-      el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [addDur, el("span", { class: "cf-muted", text: "min" })]),
-      addAmt,
-      el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [addVal, el("span", { class: "cf-muted", text: "valid days" })]),
-      addCoachWrap, addBtn,
-    ]));
-
-    // Load coaches (for lesson-pack scoping) then the plans.
-    window.AdminAPI.coaches().then(function (r) { coaches = r.coaches || []; })
-      .catch(function () {}).then(function () { refreshCoachPicker(); reload(); });
-    return { reload: reload };
-  }
+  // (SESSION PACKS standalone editor REMOVED 2026-07-09 — a pack belongs to ONE specific service
+  //  and is created/edited under it via Widgets.ServiceList -> the service editor's packagesCard.
+  //  See docs/specs/FRONTEND-STANDARDISATION.md. AdminAPI.bundlePlans (GET) stays for issue-package.)
 
   // ---------------------------------------------------------------------------
   // COURT RATES — clean per-DURATION editor for court hire (the core PAYG config).
@@ -1760,7 +1605,7 @@
     coachManage: coachManage,
     services: services, coaches: coaches, membershipPlans: membershipPlans,
     membershipServices: membershipServices,
-    coachAgreements: coachAgreements, bundlePlans: bundlePlans,
+    coachAgreements: coachAgreements,
     courtRates: courtRates, pricingHome: pricingHome,
   };
 })();

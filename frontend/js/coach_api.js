@@ -85,16 +85,6 @@
       return A().apiJSON("/api/coach/services/" + enc(priceId), { method: "DELETE" });
     },
 
-    // GET /api/coach/bundle-plans -> {plans:[...]}  (the coach's OWN lesson packs)
-    bundlePlans: function () { return A().apiJSON("/api/coach/bundle-plans"); },
-    // POST body: {sessions_count,price_minor,label?,duration_minutes?,validity_days?}
-    createBundlePlan: function (body) {
-      return A().apiJSON("/api/coach/bundle-plans", { method: "POST", body: body });
-    },
-    // PATCH body: {label?,sessions_count?,duration_minutes?,price_minor?,validity_days?,status?}
-    patchBundlePlan: function (id, body) {
-      return A().apiJSON("/api/coach/bundle-plans/" + enc(id), { method: "PATCH", body: body });
-    },
 
     // ---- time-off (view + remove; POST stays in the diary lane) ----------
     // GET /api/coach/time-off[?all=1] -> {time_off:[{id,resource_id,resource_name,
@@ -656,105 +646,10 @@
 
   // LESSON PACKS — a coach's own prepaid bundles (unit model: a pack covers any lesson length;
   // longer lessons use proportionally more). Scoped to /api/coach/bundle-plans (lesson + this coach).
-  function packs(host, opts) {
-    init(); opts = opts || {};
-    UI.clear(host);
-    var card = el("div", { class: "cf-card" });
-    card.appendChild(el("h2", { text: "Lesson packs" }));
-    card.appendChild(el("p", { class: "cf-muted", text: "Sell prepaid bundles of your lessons (e.g. 10 × 60 min). Clients buy once and book without paying each time; a longer lesson simply uses more of the pack." }));
-    var listBox = el("div", { class: "cf-list" });
-    card.appendChild(listBox); host.appendChild(card);
-
-    function statusSel(current, onChange) {
-      var sel = select(current || "active", [
-        { value: "active", label: "● Active" },
-        { value: "dormant", label: "◐ Dormant — hidden" },
-        { value: "retired", label: "✕ Retired" }]);
-      sel.style.maxWidth = "155px"; sel.style.fontSize = ".82rem";
-      sel.addEventListener("change", function () { onChange(sel.value); });
-      return sel;
-    }
-
-    function row(plan) {
-      var labelI = input({ value: plan.label || "", placeholder: plan.sessions_count + " lessons", style: "max-width:150px" });
-      var nI = input({ type: "number", min: 1, value: plan.sessions_count || 1, style: "max-width:70px" });
-      var durI = input({ type: "number", min: 0, value: plan.duration_minutes || "", placeholder: "60", style: "max-width:80px" });
-      var amtI = input({ value: fromMinor(plan.price_minor), placeholder: "0.00", style: "max-width:100px" });
-      var valI = input({ type: "number", min: 0, value: plan.validity_days || "", placeholder: "never", style: "max-width:80px" });
-      var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
-      var status = statusSel(plan.status, async function (s) {
-        try { await window.CoachAPI.patchBundlePlan(plan.id, { status: s }); UI.toast("Pack " + s + ".", "info"); reload(); }
-        catch (e) { UI.toast(UI.errMsg(e), "error"); }
-      });
-      save.addEventListener("click", async function () {
-        var n = num(nI.value);
-        if (!n || n < 1) { UI.toast("Sessions must be at least 1.", "warn"); return; }
-        save.disabled = true;
-        try {
-          await window.CoachAPI.patchBundlePlan(plan.id, {
-            label: labelI.value.trim(), sessions_count: n, price_minor: toMinor(amtI.value),
-            duration_minutes: num(durI.value) || null, validity_days: num(valI.value) || null,
-            clear_duration: !durI.value, clear_validity: !valI.value });
-          UI.toast("Pack updated.", "info"); reload();
-        } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
-      });
-      var r = el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:6px" }, [
-        el("span", { class: "cf-chip lesson", text: "lesson" }), labelI,
-        el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [nI, el("span", { class: "cf-muted", text: "×" })]),
-        el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [durI, el("span", { class: "cf-muted", text: "min" })]),
-        amtI,
-        el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [valI, el("span", { class: "cf-muted", text: "days" })]),
-        el("span", { class: "cf-spacer" }), status, save,
-      ]);
-      if ((plan.status || "active") !== "active") r.style.opacity = "0.6";
-      return r;
-    }
-
-    function renderList(plans) {
-      UI.clear(listBox);
-      if (!plans.length) listBox.appendChild(el("div", { class: "cf-empty", text: "No lesson packs yet. Add one below." }));
-      plans.forEach(function (p) { listBox.appendChild(row(p)); });
-    }
-
-    function reload() {
-      UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
-      window.CoachAPI.bundlePlans().then(function (r) { renderList(r.plans || []); })
-        .catch(function (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
-    }
-
-    var aLabel = input({ placeholder: "Label (optional)", style: "max-width:150px" });
-    var aN = input({ type: "number", min: 1, value: 10, style: "max-width:70px" });
-    var aDur = input({ type: "number", min: 0, placeholder: "60", style: "max-width:80px" });
-    var aAmt = input({ placeholder: "0.00", style: "max-width:100px" });
-    var aVal = input({ type: "number", min: 0, placeholder: "never", style: "max-width:80px" });
-    var addBtn = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Add pack" });
-    addBtn.addEventListener("click", async function () {
-      var n = num(aN.value);
-      if (!n || n < 1) { UI.toast("Sessions must be at least 1.", "warn"); return; }
-      addBtn.disabled = true;
-      try {
-        await window.CoachAPI.createBundlePlan({
-          label: aLabel.value.trim() || null, sessions_count: n,
-          duration_minutes: num(aDur.value) || null, price_minor: toMinor(aAmt.value),
-          validity_days: num(aVal.value) || null });
-        aLabel.value = ""; aAmt.value = ""; UI.toast("Pack added.", "info"); reload();
-      } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { addBtn.disabled = false; }
-    });
-    card.appendChild(el("h3", { text: "Add a pack", style: "margin-top:14px" }));
-    card.appendChild(el("div", { class: "cf-row", style: "gap:6px;align-items:center;flex-wrap:wrap" }, [
-      aLabel,
-      el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [aN, el("span", { class: "cf-muted", text: "lessons ×" })]),
-      el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [aDur, el("span", { class: "cf-muted", text: "min" })]),
-      aAmt,
-      el("div", { class: "cf-row", style: "gap:3px;align-items:center" }, [aVal, el("span", { class: "cf-muted", text: "valid days" })]),
-      addBtn,
-    ]));
-    if (opts.before && opts.before.length) card.appendChild(actionRow(opts.before));
-    reload();
-    return { reload: reload };
-  }
+  // (CoachUI.packs REMOVED 2026-07-09 — a coach's packs live under each of their
+  //  lessons/classes in the service editor, not a standalone packs surface.)
 
   window.CoachUI = {
-    profile: profile, hours: hours, services: services, packs: packs,
+    profile: profile, hours: hours, services: services,
   };
 })();

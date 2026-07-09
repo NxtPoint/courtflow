@@ -1149,8 +1149,8 @@
       mount: function (h) { window.Widgets.ServiceList.mount(h, { role: "admin", kinds: ["lesson", "class", "court"], allowCreate: true, onCreate: adminNewService }); } },
     { key: "memberships", label: "Memberships", desc: "Membership tiers and term plans",
       mount: function (h) { UI.clear(h); window.AdminUI.membershipServices(h); } },
-    { key: "packs", label: "Session packs", desc: "Prepaid bundles",
-      mount: function (h) { UI.clear(h); window.AdminUI.bundlePlans(h); } },
+    // (Session packs are no longer a standalone section — a pack belongs to ONE specific service and
+    //  is created/edited under it in Services & pricing. See docs/specs/FRONTEND-STANDARDISATION.md.)
     { key: "coaches", label: "Coaches & commission", desc: "Invite, hide or remove coaches · rent + commission",
       mount: function (h) { UI.clear(h); window.AdminUI.coachManage(h); } },
   ];
