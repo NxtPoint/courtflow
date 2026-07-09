@@ -797,12 +797,16 @@ def schedule_sessions(session, *, club_id, resource_id, weekdays=None, start_tim
 
 
 def _class_product_for_resource(session, *, club_id, name, coach_user_id):
-    """The billing.product(kind='class') row backing this class type (matched by name+coach, the same
-    join create_class_type set up). Returns its id, or None."""
+    """The billing.product(kind='class') row backing this class type. Matched by NAME, PREFERRING the
+    row whose coach matches (the create_class_type pairing) but falling back to the same-named product
+    regardless of coach — so the coach lockstep is resilient once the resource + product coach diverge
+    (e.g. a legacy class edited to assign a coach: the product is still coachless, so a strict name+coach
+    match would never re-find it and the coach would never propagate to Services). Returns its id, or None."""
     return session.execute(
         text("SELECT id FROM billing.product WHERE club_id=:c AND kind='class' AND active=true "
-             "AND lower(name)=lower(:n) AND coach_user_id IS NOT DISTINCT FROM :coach "
-             "ORDER BY created_at LIMIT 1"),
+             "AND lower(name)=lower(:n) "
+             "ORDER BY (coach_user_id IS NOT DISTINCT FROM :coach) DESC, created_at "
+             "LIMIT 1"),
         {"c": club_id, "n": name, "coach": coach_user_id},
     ).scalar()
 
