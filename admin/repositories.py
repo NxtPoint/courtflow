@@ -972,72 +972,85 @@ def list_payments(session, *, club_id):
 
 
 def list_people(session, *, club_id):
-    """Everyone with a membership in the club (members, coaches, guests, admins): iam.user
-    JOIN membership with role + status, coach display_name where applicable, and the latest
-    coach-invite status. Scoped to the club. Ordered by role then name."""
+    """Everyone in the club, exactly ONE row per person (a human with dual roles — e.g. a coach who
+    is also a member — is collapsed to a single row with a `roles` array + a single PRIMARY `role`,
+    so the roster never double-counts). Primary role precedence: admin > coach > member > guest, so a
+    coach is a coach (never also a member). Carries the billing-status + holdings segmentation fields.
+    Scoped to the club."""
     rows = session.execute(
         text("""
             SELECT u.id AS user_id, u.email, u.first_name, u.surname, u.phone,
-                   m.role, m.member_status,
                    cp.display_name,
-                   ci.status AS invite_status,
+                   array_agg(DISTINCT m.role) AS roles,
+                   bool_or(m.member_status = 'active') AS any_active,
+                   (SELECT status FROM iam.coach_invite
+                    WHERE club_id = :c AND user_id = u.id
+                    ORDER BY created_at DESC LIMIT 1) AS invite_status,
                    EXISTS(SELECT 1 FROM billing.membership_subscription ms
-                          WHERE ms.club_id = m.club_id AND ms.user_id = u.id
+                          WHERE ms.club_id = :c AND ms.user_id = u.id
                             AND ms.status = 'active'
                             AND (ms.current_period_end IS NULL
                                  OR ms.current_period_end >= CURRENT_DATE)) AS has_membership,
                    -- Segmentation for the People roster. Billing status (mutually exclusive over
                    -- members): a member is on a TRIAL, holds a PAID membership, or is PAYG.
                    EXISTS(SELECT 1 FROM billing.membership_subscription ms
-                          WHERE ms.club_id = m.club_id AND ms.user_id = u.id
+                          WHERE ms.club_id = :c AND ms.user_id = u.id
                             AND ms.status = 'active' AND ms.provider = 'trial'
                             AND (ms.current_period_end IS NULL
                                  OR ms.current_period_end >= CURRENT_DATE)) AS on_trial,
                    EXISTS(SELECT 1 FROM billing.membership_subscription ms
-                          WHERE ms.club_id = m.club_id AND ms.user_id = u.id
+                          WHERE ms.club_id = :c AND ms.user_id = u.id
                             AND ms.status = 'active' AND ms.provider <> 'trial'
                             AND (ms.current_period_end IS NULL
                                  OR ms.current_period_end >= CURRENT_DATE)) AS has_paid_membership,
                    -- Holdings (overlapping): an active prepaid pack, split by service kind.
                    EXISTS(SELECT 1 FROM billing.token_wallet tw
-                          WHERE tw.club_id = m.club_id AND tw.user_id = u.id
+                          WHERE tw.club_id = :c AND tw.user_id = u.id
                             AND tw.status = 'active'
                             AND COALESCE(tw.minutes_remaining, 0) > 0) AS has_active_pack,
                    EXISTS(SELECT 1 FROM billing.token_wallet tw
-                          WHERE tw.club_id = m.club_id AND tw.user_id = u.id AND tw.status = 'active'
+                          WHERE tw.club_id = :c AND tw.user_id = u.id AND tw.status = 'active'
                             AND COALESCE(tw.minutes_remaining, 0) > 0
                             AND tw.service_kind = 'lesson') AS has_lesson_pack,
                    EXISTS(SELECT 1 FROM billing.token_wallet tw
-                          WHERE tw.club_id = m.club_id AND tw.user_id = u.id AND tw.status = 'active'
+                          WHERE tw.club_id = :c AND tw.user_id = u.id AND tw.status = 'active'
                             AND COALESCE(tw.minutes_remaining, 0) > 0
                             AND tw.service_kind = 'class') AS has_class_pack,
                    EXISTS(SELECT 1 FROM billing.token_wallet tw
-                          WHERE tw.club_id = m.club_id AND tw.user_id = u.id AND tw.status = 'active'
+                          WHERE tw.club_id = :c AND tw.user_id = u.id AND tw.status = 'active'
                             AND COALESCE(tw.minutes_remaining, 0) > 0
                             AND tw.service_kind = 'court') AS has_court_pack,
                    -- The active PAID membership's service/tier NAME (not the term) — for the 360 detail.
-                   (SELECT COALESCE(pr.membership_tier, pr.label)
+                   (SELECT COALESCE(pr.membership_tier, prod.name, pr.label)
                     FROM billing.membership_subscription ms2
                     LEFT JOIN billing.price pr ON pr.id = ms2.price_id
-                    WHERE ms2.club_id = m.club_id AND ms2.user_id = u.id
+                    LEFT JOIN billing.product prod ON prod.id = pr.product_id
+                    WHERE ms2.club_id = :c AND ms2.user_id = u.id
                       AND ms2.status = 'active' AND ms2.provider <> 'trial'
                       AND (ms2.current_period_end IS NULL
                            OR ms2.current_period_end >= CURRENT_DATE)
                     ORDER BY ms2.current_period_end DESC NULLS LAST LIMIT 1) AS membership_tier
             FROM iam.membership m
             JOIN iam.user u ON u.id = m.user_id
-            LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id AND cp.club_id = m.club_id
-            LEFT JOIN LATERAL (
-                SELECT status FROM iam.coach_invite
-                WHERE club_id = m.club_id AND user_id = u.id
-                ORDER BY created_at DESC LIMIT 1
-            ) ci ON true
+            LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id AND cp.club_id = :c
             WHERE m.club_id = :c
-            ORDER BY m.role, u.surname NULLS LAST, u.first_name NULLS LAST
+            GROUP BY u.id, u.email, u.first_name, u.surname, u.phone, cp.display_name
+            ORDER BY u.surname NULLS LAST, u.first_name NULLS LAST
         """),
         {"c": club_id},
     ).mappings().all()
-    return _rows(rows)
+    # Collapse to one primary role per person so the roster never double-counts a dual-role human.
+    prec = ("platform_admin", "club_admin", "coach", "member", "guest")
+    out = []
+    for r in rows:
+        d = _row(r)
+        roles = [x for x in (r["roles"] or []) if x]
+        d["roles"] = roles
+        d["role"] = next((x for x in prec if x in roles), (roles[0] if roles else "member"))
+        d["member_status"] = "active" if r["any_active"] else "none"
+        d.pop("any_active", None)
+        out.append(d)
+    return out
 
 
 def get_person(session, *, club_id, user_id):
