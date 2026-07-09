@@ -19,11 +19,11 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 43 / billing 195 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 43 / billing 202 / statement 47**. Each uses its own scratch club and always rolls back.
    - `test_booking_scenarios` (43) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle.
-   - `test_billing_scenarios` (195) — settlement modes, commission, tokens, membership (offline + per-tier),
+   - `test_billing_scenarios` (202) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
-     **wallet adjust/expire, general order discount**.
+     **wallet adjust/expire, general order discount, 7-day-trial grant guard**.
    - `test_statement_reconciliation` (47) — no double-count, pay-all-once, part-settle, reclaim,
      membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
 
@@ -112,7 +112,11 @@ STRICT TWO-TIER** — a service uses the coach's OWN active product if they have
 product, **never merged** (`_coach_has_own_product` gates the pricing reads AND `_create_order_guarded`).
 An **active membership makes COURT bookings free** (`settlement_mode=membership_covered`, resolved server-side,
 guarded to courts only); memberships support typed tiers + optional access windows (outside the window → PAYG)
-and a 7-day free-week trial on signup. Bundles are unit/minute-based (a pack covers any length). The Wix-era
+and the **"7 Day Trial Period"** on signup (`provider='trial'`, court-only, auto-lapses → PAYG). **The trial
+is granted ONLY to a genuinely-new member** — `auth/principal.py` gates it on `upsert_user_by_clerk_id`
+returning `_created=True` (a fresh INSERT); a returning login or a seeded/imported Wix user (matched by
+clerk_id/email, `_created=False`) is NEVER trialed, so the ~880 Wix imports stay PAYG. Audit/cleanup:
+`scripts/audit_trials.py`. Bundles are unit/minute-based (a pack covers any length). The Wix-era
 "member R0" court tier is GONE.
 
 **Three purchasing models:** PAYG (per-duration) · membership (term plans) · tokens/bundles (prepaid packs,

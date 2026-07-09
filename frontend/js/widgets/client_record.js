@@ -128,11 +128,14 @@
     function membershipLine(pn, c) {
       var box = el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)" });
       var m = pn.membership, ms = pn.membership_status;
-      var trial = ms && ms.is_trial;
-      var label = m ? ("Member" + (m.plan_label ? " · " + m.plan_label : "") + (m.current_period_end ? " · until " + fDate(m.current_period_end) : ""))
-        : (trial ? ("Free-week trial" + (ms.trial_days_left != null ? " · " + ms.trial_days_left + " days left" : "")) : "No active membership");
+      var trial = (m && m.is_trial) || (ms && ms.is_trial);
+      var daysLeft = ms && ms.trial_days_left;
+      var label = trial
+        ? ("7 Day Trial Period" + (daysLeft != null ? " · " + daysLeft + " day" + (daysLeft === 1 ? "" : "s") + " left" : "") + " · courts only")
+        : (m ? ("Member" + (m.plan_label ? " · " + m.plan_label : "") + (m.current_period_end ? " · until " + fDate(m.current_period_end) : ""))
+             : "No active membership · pay-as-you-go");
       box.appendChild(el("div", {}, [
-        el("div", { style: "font-weight:700", text: m ? "Membership active" : (trial ? "On trial" : "Not a member") }),
+        el("div", { style: "font-weight:700", text: trial ? "On trial" : (m ? "Membership active" : "Pay-as-you-go") }),
         el("div", { class: "cf-muted", style: "font-size:.82rem", text: label }),
       ]));
       var actions = el("div", { class: "cf-row", style: "gap:6px" });

@@ -134,16 +134,27 @@ a membership tier's lifecycle derives from its term plans' status.
      idempotency index is now PARTIAL — `WHERE kind <> 'adjust'` — so system draws/credits stay idempotent while
      manual adjusts stack).
 
-### Free week (signup gift)
-A brand-new member is **auto-granted a 7-day courts-free trial** on first login — a time-boxed
-`billing.membership_subscription` (`provider='trial'`, `current_period_end = today + N days`) that makes
-COURT bookings free via the membership engine and **auto-lapses** (no cron). Lessons/packs stay paid —
-membership coverage (trial or paid) is **court-only**; a client booking a coach can never settle
-`free`/`membership_covered`, so a trial member still pays for lessons.
-One-shot + idempotent (never double-granted, never re-issued; existing/paid members get nothing). Length
-via `SIGNUP_TRIAL_DAYS` env (default 7; 0 disables). The booking page shows a "free week — N days left"
-banner; `GET /api/me/plan` exposes `is_trial` / `trial_days_left`. Granted in `auth/principal.py`
-auto-enrol; `billing.membership.grant_signup_trial`.
+### "7 Day Trial Period" (signup gift)
+The trial's canonical name is **"7 Day Trial Period"** (`membership_status.plan_name`; the composer's
+membership line labels a `provider='trial'` sub the same). A **genuinely-new member** is auto-granted a
+7-day courts-free trial on first login — a time-boxed `billing.membership_subscription`
+(`provider='trial'`, `current_period_end = today + N days`) that makes COURT bookings free via the
+membership engine and **auto-lapses → PAYG** (no cron; the active-check is date-bounded, so after 7 days
+— and whenever ANY membership drops off — the client is PAYG).
+- **COURT-ONLY:** lessons/classes/packs stay paid. Membership coverage (trial or paid) is court-only —
+  `membership_covered` is honoured ONLY for `booking_type='court'` (`diary.bookings`); a lesson can never
+  settle `free`/`membership_covered`, and classes never use membership coverage at all.
+- **"Email not in history" guard (the Wix-import rule):** the trial is granted **ONLY when the login
+  creates a brand-new `iam.user`** — `upsert_user_by_clerk_id` returns `_created=True` only on a fresh
+  INSERT; a returning login (matched by clerk_id) OR a seeded/imported user linking by email
+  (`_created=False`) is NEVER trialed. So none of the ~880 Wix imports (nor a coach) can be auto-trialed,
+  even if they somehow reach the auto-enrol path — they become active **PAYG** members instead.
+  `auth/principal.py` gates the grant on `user["_created"]`; `grant_signup_trial` is additionally one-shot
+  (never granted if any subscription ever existed). Length via `SIGNUP_TRIAL_DAYS` (default 7; 0 disables).
+- **Audit/cleanup:** `python scripts/audit_trials.py` (read-only) lists every active trial + flags
+  wrongly-granted ones (coach · pre-existing user · prior activity); `--cancel-flagged` reverts them to PAYG.
+`GET /api/me/plan` exposes `is_trial` / `trial_days_left`. Granted in `auth/principal.py`;
+`billing.membership.grant_signup_trial`.
 
 ### Plan lifecycle (active / dormant / retired)
 Every catalogue item — court rates, packs, membership plans — carries a `status`

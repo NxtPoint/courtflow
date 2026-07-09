@@ -47,9 +47,9 @@
     var line, sub;
     if (isTrial()) {
       var n = state.plan.trial_days_left;
-      line = "🎁 You're on your free week";
-      sub = (n != null) ? (n + " day" + (n === 1 ? "" : "s") + " left — courts are free. Pick a plan below to keep playing after.")
-                        : "Courts are free this week. Pick a plan below to keep playing after.";
+      line = "🎁 You're on your 7 Day Trial Period";
+      sub = (n != null) ? (n + " day" + (n === 1 ? "" : "s") + " left — courts are free (courts only). Pick a plan below to keep playing after.")
+                        : "Courts are free during your trial (courts only). Pick a plan below to keep playing after.";
     } else if (isRealMember()) {
       line = "⭐ Membership active";
       sub = state.mem.current_period_end ? ("Your courts are free until " + fmtDate(state.mem.current_period_end) + ".") : "Your court bookings are free.";

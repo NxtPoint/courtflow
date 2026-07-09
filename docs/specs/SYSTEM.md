@@ -136,9 +136,11 @@ guarded no-op when the order is settled, a real charge has succeeded, it's an R0
   memberships, packs) share **ONE lifecycle vocabulary** — Active / Deactivated / Terminated
   (`billing.product.status`; memberships derive theirs from their term plans' active/dormant/retired
   state) — with filter bars, status chips and per-row Deactivate/Reactivate/Terminate actions.
-- **Free week** — new members are auto-granted a 7-day courts-free trial membership on signup
-  (`billing.membership.grant_signup_trial`, `provider='trial'`, fired from `auth/principal.py`;
-  `SIGNUP_TRIAL_DAYS` env). **Membership access windows** — a tier can be time-boxed
+- **"7 Day Trial Period"** — a genuinely-NEW member is auto-granted a 7-day courts-free trial on signup
+  (`billing.membership.grant_signup_trial`, `provider='trial'`, court-only, auto-lapses → PAYG;
+  `SIGNUP_TRIAL_DAYS` env). Gated in `auth/principal.py` on `upsert_user_by_clerk_id` returning
+  `_created=True` — a returning/seeded/imported user (matched by clerk_id or email) is NEVER trialed, so the
+  Wix imports stay PAYG. Audit: `scripts/audit_trials.py`. **Membership access windows** — a tier can be time-boxed
   (`billing.price.access_days/access_start_min/access_end_min`), enforced server-side by
   `diary.pricing.membership_covers(starts_at)` (outside the window → PAYG). Off-peak coverage is priced
   **per slot**: `compute_availability` surfaces R0 only inside a member's window and PAYG outside it

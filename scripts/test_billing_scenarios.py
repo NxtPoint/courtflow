@@ -1438,6 +1438,33 @@ def sc_order_discount(s, fx):
           res2.get("ok") is False and res2.get("error") == "NOT_OPEN", str(res2))
 
 
+def sc_trial_guard(s, fx):
+    print("\n# 7-day trial: ONLY a brand-new email (not imported/returning); named '7 Day Trial Period'")
+    from iam import repositories as IAM
+    # (1) An existing user (email already in history — like a Wix import with no clerk login yet)
+    #     linking a Clerk login MUST link to the SAME row and report _created=False → NOT trial-eligible.
+    email = s.execute(text('SELECT email FROM iam."user" WHERE id=:i'), {"i": str(fx.member)}).scalar()
+    linked = IAM.upsert_user_by_clerk_id(s, clerk_user_id="clerk_wix_1", email=email)
+    check("existing email links to the SAME user (no duplicate human)",
+          str(linked["id"]) == str(fx.member), str(linked.get("id")))
+    check("email in history → _created False (never trialed — the Wix-import guard)",
+          linked.get("_created") is False, str(linked.get("_created")))
+    # (2) A brand-new email → a fresh row, _created True → trial-eligible.
+    fresh = IAM.upsert_user_by_clerk_id(s, clerk_user_id="clerk_new_1", email="brand.new@nobody.test")
+    check("brand-new email → _created True (trial-eligible)", fresh.get("_created") is True, str(fresh.get("_created")))
+    # (3) The granted trial is named '7 Day Trial Period', active, 7 days, court-covering.
+    MB.grant_signup_trial(s, club_id=fx.club_id, user_id=fresh["id"], days=7)
+    stt = MB.membership_status(s, club_id=fx.club_id, user_id=fresh["id"])
+    check("trial active + named '7 Day Trial Period'",
+          stt["is_trial"] and stt["plan_name"] == "7 Day Trial Period", str(stt.get("plan_name")))
+    check("trial runs 7 days", stt["trial_days_left"] == 7, str(stt.get("trial_days_left")))
+    check("trial makes an active membership (courts free via the engine)",
+          PR.has_active_membership(s, club_id=fx.club_id, user_id=fresh["id"]) is True, "not active")
+    # (4) Idempotent: an already-subscribed user is never re-trialed.
+    again = MB.grant_signup_trial(s, club_id=fx.club_id, user_id=fresh["id"], days=7)
+    check("never double-grants a trial", again.get("granted") is False, str(again))
+
+
 SCENARIOS = [
     sc_coach_scoped_pricing,
     sc_service_selection,
@@ -1464,6 +1491,7 @@ SCENARIOS = [
     sc_order_discount,
     sc_membership,
     sc_membership_purchase,
+    sc_trial_guard,
     sc_refund_request,
     sc_refund_clawback,
     sc_membership_cancel_voids_order,

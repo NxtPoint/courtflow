@@ -158,7 +158,7 @@
     // Greeting ribbon — profile at a glance: name, email, membership + Manage + Edit profile.
     // (The TS avatar top-right also opens the profile — kept as a shortcut for those who spot it.)
     var email = (DATA.profile && DATA.profile.email) || (principal && principal.email) || "";
-    var mLine = plan.is_trial ? ("🎁 Free week — " + (plan.trial_days_left || 0) + " days left")
+    var mLine = plan.is_trial ? ("🎁 7 Day Trial Period — " + (plan.trial_days_left || 0) + " days left · courts free")
       : plan.active ? ("⭐ " + (plan.name || "Member") + (plan.current_period_end ? " · renews " + plan.current_period_end : ""))
       : "Pay as you go — no membership";
     wrap.appendChild(el("div", { class: "cf-greet", style: "padding:22px 24px;align-items:flex-start" }, [
@@ -342,7 +342,7 @@
       el("h2", { style: "margin:0", text: "Plan & credits" }),
       el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Manage ›", onclick: openPlan }),
     ])]);
-    var line = plan.is_trial ? ("🎁 Free week — " + (plan.trial_days_left || 0) + " days left")
+    var line = plan.is_trial ? ("🎁 7 Day Trial Period — " + (plan.trial_days_left || 0) + " days left · courts free")
       : plan.active ? (plan.name || "Membership") + (plan.current_period_end ? " · renews " + plan.current_period_end : "")
       : "Pay as you go — no membership";
     c.appendChild(el("div", { class: "cf-item" }, [

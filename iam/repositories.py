@@ -46,7 +46,13 @@ def upsert_user_by_clerk_id(session, *, clerk_user_id, email=None, first_name=No
       2. Else, an existing row with the SAME email (e.g. a seeded/imported user) ->
          LINK it by stamping clerk_user_id (no duplicate human).
       3. Else, INSERT a fresh iam.user.
-    Returns the user row as a dict. Caller must have an open transaction."""
+    Returns the user row as a dict. Caller must have an open transaction.
+
+    The returned dict carries `_created`: True ONLY when a brand-new row was inserted (step 3 —
+    the email was NOT already in the system). Steps 1 & 2 return `_created=False` (the human is
+    already in history: a returning login or a seeded/imported user linking their login). Callers
+    use this to gate the signup free-week trial to genuinely-new members only (never to the ~880
+    Wix imports or any returning/seeded user)."""
     email = norm_email(email)
 
     existing = get_user_by_clerk_id(session, clerk_user_id)
@@ -57,6 +63,7 @@ def upsert_user_by_clerk_id(session, *, clerk_user_id, email=None, first_name=No
                 {"e": email, "id": existing["id"]},
             )
             existing["email"] = email
+        existing["_created"] = False
         return existing
 
     if email:
@@ -68,6 +75,7 @@ def upsert_user_by_clerk_id(session, *, clerk_user_id, email=None, first_name=No
                 {"cid": clerk_user_id, "id": by_email["id"]},
             )
             by_email["clerk_user_id"] = clerk_user_id
+            by_email["_created"] = False
             return by_email
 
     row = session.execute(
@@ -76,7 +84,9 @@ def upsert_user_by_clerk_id(session, *, clerk_user_id, email=None, first_name=No
              "RETURNING id, clerk_user_id, email, first_name, surname, phone"),
         {"cid": clerk_user_id, "e": email, "fn": first_name, "sn": surname, "ph": phone},
     ).mappings().first()
-    return dict(row)
+    d = dict(row)
+    d["_created"] = True
+    return d
 
 
 def get_user_by_id(session, user_id):

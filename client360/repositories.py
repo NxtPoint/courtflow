@@ -100,7 +100,9 @@ def _membership_line(session, *, club_id, user_id, currency):
         ms = session.execute(
             text("""
                 SELECT ms.status, ms.current_period_end, ms.provider,
-                       COALESCE(pr.label, pr.membership_tier) AS plan_label
+                       CASE WHEN ms.provider = 'trial' THEN '7 Day Trial Period'
+                            ELSE COALESCE(pr.label, pr.membership_tier) END AS plan_label,
+                       (ms.provider = 'trial') AS is_trial
                 FROM billing.membership_subscription ms
                 LEFT JOIN billing.price pr ON pr.id = ms.price_id
                 WHERE ms.club_id = :c AND ms.user_id = :u AND ms.status = 'active'

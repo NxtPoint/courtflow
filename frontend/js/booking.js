@@ -561,9 +561,9 @@
 
     if (free) {
       var trial = ctx.plan && ctx.plan.is_trial;
-      card.appendChild(freePanel(trial ? "Free this week — enjoy the club." : "Covered by your membership — free.",
+      card.appendChild(freePanel(trial ? "Free court on your 7 Day Trial Period." : "Covered by your membership — free.",
         trial && ctx.plan.trial_days_left != null
-          ? ("Your free week — " + ctx.plan.trial_days_left + " day" + (ctx.plan.trial_days_left === 1 ? "" : "s") + " left")
+          ? ("7 Day Trial Period — " + ctx.plan.trial_days_left + " day" + (ctx.plan.trial_days_left === 1 ? "" : "s") + " left (courts only)")
           : "No charge for this court."));
     } else if (st.settlement === "token" && !st.showPayOptions) {
       var w = st.tokenWallet, whose = st.onBehalf ? "their" : "your";

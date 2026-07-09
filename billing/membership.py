@@ -496,7 +496,7 @@ def membership_status(session, *, club_id, user_id) -> Dict[str, Any]:
     return {
         "active": row is not None,
         "subscription_id": str(row["sub_id"]) if row else None,
-        "plan_name": ("Free week" if is_trial else (plan_name or "Membership")) if row else None,
+        "plan_name": ("7 Day Trial Period" if is_trial else (plan_name or "Membership")) if row else None,
         "current_period_end": (end.isoformat() if hasattr(end, "isoformat") else end)
         if end is not None else None,
         "is_trial": is_trial,                       # the signup free-week (provider='trial')

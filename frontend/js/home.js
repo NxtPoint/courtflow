@@ -39,7 +39,7 @@
     ]);
     var kids = [left];
     if (plan) {
-      var chip = plan.is_trial && plan.trial_days_left != null ? ("🎁 Free week · " + plan.trial_days_left + "d left")
+      var chip = plan.is_trial && plan.trial_days_left != null ? ("🎁 7 Day Trial · " + plan.trial_days_left + "d left")
         : (plan.type === "membership" && plan.active ? "⭐ Member" : "Pay as you go");
       kids.push(el("span", { class: "cf-greet-plan", text: chip }));
     }
@@ -50,7 +50,7 @@
   function nudgeMaybe(host) {
     var plan = (st.fin && st.fin.plan) || null; if (!plan) return;
     if (plan.is_trial && plan.trial_days_left != null && plan.trial_days_left <= 3) {
-      host.appendChild(nudge("Your free week ends in " + plan.trial_days_left + " day" + (plan.trial_days_left === 1 ? "" : "s"),
+      host.appendChild(nudge("Your 7 Day Trial Period ends in " + plan.trial_days_left + " day" + (plan.trial_days_left === 1 ? "" : "s"),
         "Keep playing — go unlimited with membership, or grab a session pack.", "Choose a plan"));
     } else if (!plan.active && plan.sold) {
       host.appendChild(nudge("Make your court bookings free", "Go unlimited with a membership, or buy a prepaid pack.", "See plans"));

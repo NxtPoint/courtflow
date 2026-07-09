@@ -144,14 +144,18 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
                 iam_repo.upsert_membership(s, club_id=default_club, user_id=user["id"],
                                            role="member", member_status="active")
                 memberships = iam_repo.memberships_for_user(s, user["id"])
-                # Signup gift: a free week of COURT access. Grant a time-boxed trial membership
-                # (provider='trial') — courts become free via the membership engine and it lapses
-                # on its own. Guarded + one-shot (idempotent: never granted twice). SIGNUP_TRIAL_DAYS
-                # tunes the length (default 7; 0 disables).
+                # Signup gift: a free week of COURT access — the "7 Day Trial Period". Grant a
+                # time-boxed trial membership (provider='trial'); courts become free via the
+                # membership engine (COURT-only — never classes/coaching) and it lapses on its own
+                # after 7 days → PAYG. ONLY for a genuinely NEW member (email NOT already in history:
+                # user["_created"] is True only on a fresh INSERT). A returning login or any
+                # seeded/imported Wix user (matched by clerk_id/email) is NEVER trialed — they are
+                # auto-enrolled as an active PAYG member above and stop here. Also idempotent inside
+                # grant_signup_trial (never granted if any subscription ever existed).
                 try:
                     from billing.membership import grant_signup_trial
                     days = int(os.getenv("SIGNUP_TRIAL_DAYS", "7") or 0)
-                    if days > 0:
+                    if days > 0 and user.get("_created"):
                         grant_signup_trial(s, club_id=default_club, user_id=user["id"], days=days)
                 except Exception:
                     log.debug("signup trial grant skipped (billing absent/benign)", exc_info=False)
