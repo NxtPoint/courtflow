@@ -1236,7 +1236,9 @@
       var durI = input({ type: "number", min: 0, value: plan.duration_minutes || "", placeholder: "any", style: "max-width:80px" });
       var amtI = input({ value: fromMinor(plan.price_minor), placeholder: "0.00", style: "max-width:100px" });
       var valI = input({ type: "number", min: 0, value: plan.validity_days || "", placeholder: "never", style: "max-width:80px" });
-      var coachSel = plan.service_kind === "lesson"
+      // Lesson AND class packs are coach-scoped (the coach is paid) — show the picker for both so a
+      // legacy coachless class pack can be assigned a coach here instead of being retired.
+      var coachSel = (plan.service_kind === "lesson" || plan.service_kind === "class")
         ? select(plan.coach_user_id || "", coachOptions()) : null;
       if (coachSel) coachSel.style.maxWidth = "150px";
       var save = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
@@ -1252,7 +1254,10 @@
           duration_minutes: num(durI.value) || null, validity_days: num(valI.value) || null,
           clear_duration: !durI.value, clear_validity: !valI.value,
         };
-        if (coachSel) { body.coach_user_id = coachSel.value || null; body.clear_coach = !coachSel.value; }
+        if (coachSel) {
+          if (!coachSel.value) { UI.toast("Pick the coach this " + plan.service_kind + " pack belongs to.", "warn"); return; }
+          body.coach_user_id = coachSel.value; body.clear_coach = false;
+        }
         save.disabled = true;
         try { await window.AdminAPI.patchBundlePlan(plan.id, body); UI.toast("Pack updated.", "info"); reload(); }
         catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
