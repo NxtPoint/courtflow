@@ -19,8 +19,9 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 43 / billing 224 / statement 47**. Each uses its own scratch club and always rolls back.
-   - `test_booking_scenarios` (43) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle.
+   **booking 61 / billing 224 / statement 47**. Each uses its own scratch club and always rolls back.
+   - `test_booking_scenarios` (61) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+     **court→service allocation (per-service courts + pricing)**.
    - `test_billing_scenarios` (224) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
