@@ -208,8 +208,28 @@ _DDL = [
     f"ON {SCHEMA}.class_session (club_id, starts_at);",
     # A class can RESERVE A PHYSICAL COURT so it's booked out exactly like a member court booking:
     # court_booking_id -> the court-blocking diary.booking (reuses the GiST exclusion). Freed on cancel.
+    # SCALAR cols kept for back-compat (email builder / legacy readers) — set to the FIRST reserved
+    # court. The multi-court source of truth is diary.class_session_court below.
     f"ALTER TABLE {SCHEMA}.class_session ADD COLUMN IF NOT EXISTS court_resource_id uuid;",
     f"ALTER TABLE {SCHEMA}.class_session ADD COLUMN IF NOT EXISTS court_booking_id uuid;",
+
+    # --- diary.class_session_court : a class can reserve MULTIPLE courts ---
+    # One row per court a class occurrence holds (e.g. Cardio Tennis on courts 5–8). Each row's
+    # court_booking_id -> the court-blocking diary.booking (booking_type='class') that GiST-reserves
+    # that court so no lesson/court booking can take it. This is the SOURCE OF TRUTH for a session's
+    # courts (the scalar class_session.court_* cols mirror the first one for legacy readers). Additive.
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.class_session_court (
+        id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id           uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        class_session_id  uuid NOT NULL REFERENCES {SCHEMA}.class_session(id) ON DELETE CASCADE,
+        court_resource_id uuid NOT NULL REFERENCES {SCHEMA}.resource(id),
+        court_booking_id  uuid,                        -- -> the court-blocking diary.booking
+        created_at        timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_class_session_court_session "
+    f"ON {SCHEMA}.class_session_court (class_session_id);",
 
     # --- diary.enrolment : a player joining a class_session --------------
     f"""

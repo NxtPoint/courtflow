@@ -313,7 +313,31 @@ def post_class_schedule(resource_id):
             date_from=b.get("date_from"), date_until=b.get("date_until"),
             dates=b.get("dates"), duration_minutes=b.get("duration_minutes"),
             capacity=b.get("capacity"), price_id=b.get("price_id"),
-            court_resource_id=b.get("court_resource_id"))
+            court_resource_id=b.get("court_resource_id"),
+            court_resource_ids=b.get("court_resource_ids"))
+    return _class_result(res)
+
+
+@coach_bp.patch("/classes/<resource_id>")
+def patch_class(resource_id):
+    """Edit a class this coach OWNS. The coach is forced to themselves (a coach can't reassign their
+    class to another coach). Changing courts/capacity cascades to future sessions."""
+    p, err = _coach()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        if not repo.owns_class_resource(s, club_id=p.club_id, user_id=p.user_id,
+                                        resource_id=resource_id):
+            return jsonify(error="forbidden"), 403
+        try:
+            res = classes_mod.update_class_type(
+                s, club_id=p.club_id, resource_id=resource_id, coach_user_id=p.user_id,
+                name=b.get("name"), capacity=b.get("capacity"), description=b.get("description"),
+                court_resource_ids=b.get("court_resource_ids"),
+                court_resource_id=b.get("court_resource_id"))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
     return _class_result(res)
 
 

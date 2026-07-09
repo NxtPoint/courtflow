@@ -553,6 +553,140 @@ def sc_court_service_allocation(s, fx):
     check("unscoped booking still charged the court's own (hard) rate R150", namt == 15000, f"amount={namt}")
 
 
+def sc_class_courts(s, fx):
+    print("\n# Class courts: reserve MULTIPLE courts + auto-repick + coach-guard + edit + cancel")
+    # A 3rd court so a busy desired court has somewhere to be repicked to.
+    court3 = s.execute(
+        text("INSERT INTO diary.resource (club_id, kind, name, surface, rank) "
+             "VALUES (:c,'court','Court 3','hard',3) RETURNING id"),
+        {"c": fx.club_id}).scalar()
+    s.execute(text("INSERT INTO diary.availability_rule (club_id, resource_id, weekday, start_time, "
+                   "end_time, slot_minutes) VALUES (:c,:r,:wd,'08:00','18:00',60)"),
+              {"c": fx.club_id, "r": court3, "wd": fx.target.weekday()})
+
+    def session_courts(sid):
+        return {str(x) for x in s.execute(
+            text("SELECT court_resource_id FROM diary.class_session_court WHERE class_session_id=:cs"),
+            {"cs": sid}).scalars().all()}
+
+    def sid_at(hour):
+        return s.execute(text("SELECT id FROM diary.class_session WHERE club_id=:c AND resource_id=:r "
+                              "AND starts_at=:sa"),
+                         {"c": fx.club_id, "r": fx.class_res, "sa": at(fx, hour)}).scalar()
+
+    # --- (1) schedule a class on TWO courts at 10:00 → 2 link rows + 2 shadow holds; both blocked ---
+    r = C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                            dates=[fx.target.isoformat()], start_time="10:00",
+                            duration_minutes=90, capacity=2,
+                            court_resource_ids=[fx.courts[0], fx.courts[1]])
+    check("two-court class scheduled (created=1)", r.get("created") == 1, str(r))
+    sid = sid_at(10)
+    courts1 = session_courts(sid)
+    check("2 class_session_court rows on the session", len(courts1) == 2, str(courts1))
+    check("both desired courts linked", courts1 == {str(fx.courts[0]), str(fx.courts[1])}, str(courts1))
+    shadows = {str(x) for x in s.execute(
+        text("SELECT resource_id FROM diary.booking WHERE club_id=:c AND booking_type='class' "
+             "AND status='confirmed' AND starts_at=:sa"),
+        {"c": fx.club_id, "sa": at(fx, 10)}).scalars().all()}
+    check("2 shadow court holds block both courts", shadows == {str(fx.courts[0]), str(fx.courts[1])},
+          str(shadows))
+    # A court booking on EITHER reserved court at the class time → SLOT_TAKEN.
+    rc = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[0], role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 10, 30)))
+    check("court1 blocked by the class (SLOT_TAKEN)", rc.get("error") == "SLOT_TAKEN", str(rc))
+    rc2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[0], role="member",
+                           booking_type="court", resource_id=fx.courts[1],
+                           starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 10, 30)))
+    check("court2 blocked by the class (SLOT_TAKEN)", rc2.get("error") == "SLOT_TAKEN", str(rc2))
+
+    # --- (2) busy desired court → auto-substitutes a free court (still 2 courts) ---
+    occ = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[0], role="member",
+                           booking_type="court", resource_id=fx.courts[0],
+                           starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 14, 30)))
+    check("court1 pre-occupied at 13:00", occ.get("ok"), str(occ))
+    r2 = C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                             dates=[fx.target.isoformat()], start_time="13:00",
+                             duration_minutes=90, capacity=2,
+                             court_resource_ids=[fx.courts[0], fx.courts[1]])
+    check("class scheduled despite a busy desired court", r2.get("created") == 1, str(r2))
+    courts2 = session_courts(sid_at(13))
+    check("busy court1 substituted out, court3 in", str(fx.courts[0]) not in courts2
+          and str(court3) in courts2, str(courts2))
+    check("substitution kept 2 courts (court2 not cannibalised)",
+          courts2 == {str(fx.courts[1]), str(court3)}, str(courts2))
+
+    # --- (3) coach busy (held/confirmed lesson) → the class occurrence is SKIPPED ---
+    les = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[0], role="member",
+                           booking_type="lesson", resource_id=fx.coach_res,
+                           coach_user_id=fx.coach_uid,
+                           starts_at=utc_iso(at(fx, 16)), ends_at=utc_iso(at(fx, 17)))
+    check("coach has a confirmed lesson at 16:00", les.get("ok"), str(les))
+    r3 = C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                             dates=[fx.target.isoformat()], start_time="16:00",
+                             duration_minutes=90, capacity=2,
+                             court_resource_ids=[court3])
+    check("class over the coach's lesson skipped (coach_busy)",
+          r3.get("created") == 0 and r3.get("coach_busy") == 1, str(r3))
+    check("no class session created at 16:00", sid_at(16) is None)
+
+    # --- (4) update_class_type: change coach + courts; cascades to FUTURE sessions ---
+    coach2_uid = _mk_user(s, "coach2@scratch.test", "Coach2")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'coach','active')"), {"c": fx.club_id, "u": coach2_uid})
+    s.execute(text("INSERT INTO iam.coach_profile (club_id, user_id, display_name, is_bookable) "
+                   "VALUES (:c,:u,'Coach Two',true)"), {"c": fx.club_id, "u": coach2_uid})
+    prod_before = s.execute(
+        text("SELECT id FROM billing.product WHERE club_id=:c AND kind='class' AND active=true "
+             "AND lower(name)='cardio tennis'"), {"c": fx.club_id}).scalar()
+    up = C.update_class_type(s, club_id=fx.club_id, resource_id=fx.class_res,
+                             coach_user_id=coach2_uid, court_resource_ids=[court3])
+    check("update ok", up.get("ok"), str(up))
+    check("no new-coach conflicts reported", up.get("coach_conflicts") == [], str(up.get("coach_conflicts")))
+    res_coach = s.execute(text("SELECT coach_user_id FROM diary.resource WHERE id=:r"),
+                          {"r": fx.class_res}).scalar()
+    check("class resource now coach2", str(res_coach) == str(coach2_uid), str(res_coach))
+    prod_coach = s.execute(text("SELECT coach_user_id FROM billing.product WHERE id=:p"),
+                           {"p": prod_before}).scalar()
+    check("billing.product coach2 (commission attribution follows)",
+          str(prod_coach) == str(coach2_uid), str(prod_coach))
+    fut_coaches = {str(x) for x in s.execute(
+        text("SELECT DISTINCT coach_user_id FROM diary.class_session WHERE club_id=:c AND resource_id=:r "
+             "AND status='scheduled' AND starts_at >= now()"),
+        {"c": fx.club_id, "r": fx.class_res}).scalars().all()}
+    check("all future sessions carry coach2", fut_coaches == {str(coach2_uid)}, str(fut_coaches))
+    # Courts reassigned to [court3] on every future session; shadow holds carry coach2.
+    check("10:00 session re-reserved onto court3", session_courts(sid_at(10)) == {str(court3)},
+          str(session_courts(sid_at(10))))
+    check("13:00 session re-reserved onto court3", session_courts(sid_at(13)) == {str(court3)},
+          str(session_courts(sid_at(13))))
+    shadow_coaches = {str(x) for x in s.execute(
+        text("SELECT DISTINCT b.coach_user_id FROM diary.booking b "
+             "JOIN diary.class_session_court csc ON csc.court_booking_id=b.id "
+             "JOIN diary.class_session cs ON cs.id=csc.class_session_id "
+             "WHERE cs.club_id=:c AND cs.resource_id=:r AND b.status='confirmed'"),
+        {"c": fx.club_id, "r": fx.class_res}).scalars().all()}
+    check("shadow court holds carry coach2", shadow_coaches == {str(coach2_uid)}, str(shadow_coaches))
+    # The old court1/court2 holds at 10:00 were cancelled → those courts free again.
+    free1 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[1], role="member",
+                             booking_type="court", resource_id=fx.courts[0],
+                             starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 10, 30)))
+    check("court1 free again after courts reassigned off it", free1.get("ok"), str(free1))
+
+    # --- (5) cancel_session frees ALL the class's courts ---
+    cancel = C.cancel_session(s, club_id=fx.club_id, session_id=sid_at(10))
+    check("cancel_session ok", cancel.get("ok"), str(cancel))
+    still_held = s.execute(
+        text("SELECT count(*) FROM diary.booking b JOIN diary.class_session_court csc "
+             "ON csc.court_booking_id=b.id WHERE csc.class_session_id=:cs AND b.status='confirmed'"),
+        {"cs": sid_at(10)}).scalar()
+    check("no court hold left for the cancelled session", still_held == 0, str(still_held))
+    reuse = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[2], role="member",
+                             booking_type="court", resource_id=court3,
+                             starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 10, 30)))
+    check("court3 bookable after the class session is cancelled", reuse.get("ok"), str(reuse))
+
+
 SCENARIOS = [
     sc_court_book_cancel,
     sc_court_reschedule,
@@ -565,6 +699,7 @@ SCENARIOS = [
     sc_lesson_lifecycle,
     sc_offpeak_slot_pricing,
     sc_court_service_allocation,
+    sc_class_courts,
 ]
 
 
