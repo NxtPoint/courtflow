@@ -14,6 +14,7 @@ import logging
 import secrets
 
 from flask import Blueprint, jsonify, request
+from sqlalchemy import text
 
 from auth import resolve_principal
 from db import session_scope
@@ -1343,4 +1344,84 @@ def void_order(order_id):
                                         write_off=bool(b.get("write_off")))
     if not res.get("ok"):
         return jsonify(res), 409
+    return jsonify(res), 200
+
+
+@admin_bp.post("/orders/<order_id>/discount")
+def discount_order_route(order_id):
+    """Apply a discount to any OPEN order (court/lesson/class/pack/membership). Body:
+    {discount_minor | new_amount_minor, reason}. Reprices the order line(s) preserving the pre-discount
+    price in original_amount_minor, and keeps a linked coach_arrears line in LOCKSTEP. A paid order must
+    be refunded, not discounted (NOT_OPEN)."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    reason = (b.get("reason") or "").strip()
+    if not reason:
+        return jsonify(error="reason_required"), 400
+    from billing.statement import discount_order
+    try:
+        with session_scope() as s:
+            res = discount_order(
+                s, club_id=p.club_id, order_id=order_id,
+                discount_minor=b.get("discount_minor"), new_amount_minor=b.get("new_amount_minor"),
+                reason=reason, actor_user_id=p.user_id)
+    except ValueError as e:            # BAD_ARGS: not exactly one of discount / new-amount
+        return jsonify(error=str(e)), 400
+    if res.get("ok") is False:
+        code = res.get("error", "ERROR")
+        status = 404 if code == "ORDER_NOT_FOUND" else 400
+        return jsonify(error=code, **{k: v for k, v in res.items() if k not in ("ok", "error")}), status
+    return jsonify(res), 200
+
+
+@admin_bp.post("/clients/<client_user_id>/wallets/<wallet_id>/adjust")
+def admin_wallet_adjust(client_user_id, wallet_id):
+    """Manually adjust a client's prepaid pack balance (money-adjacent, audited). Body:
+    {delta_sessions | delta_minutes, reason}. delta_sessions is converted to minutes via the wallet's
+    base length. Writes a token_ledger 'adjust' row stamped with the acting admin."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    reason = (b.get("reason") or "").strip() or None
+    from billing import bundles
+    with session_scope() as s:
+        # Resolve the delta in MINUTES: an explicit delta_minutes wins, else delta_sessions × base length.
+        delta_minutes = b.get("delta_minutes")
+        if delta_minutes is None and b.get("delta_sessions") is not None:
+            base = s.execute(
+                text("SELECT COALESCE(base_minutes, duration_minutes, 60) "
+                     "FROM billing.token_wallet WHERE club_id = :c AND id = :w"),
+                {"c": p.club_id, "w": wallet_id}).scalar()
+            if base is None:
+                return jsonify(error="WALLET_NOT_FOUND"), 404
+            delta_minutes = int(round(float(b["delta_sessions"]) * int(base)))
+        try:
+            res = bundles.adjust_wallet(
+                s, club_id=p.club_id, wallet_id=wallet_id,
+                delta_minutes=int(delta_minutes or 0), reason=reason, actor_user_id=p.user_id)
+        except ValueError as e:
+            code = str(e)
+            return jsonify(error=code), (404 if code == "WALLET_NOT_FOUND" else 400)
+    return jsonify(res), 200
+
+
+@admin_bp.post("/clients/<client_user_id>/wallets/<wallet_id>/expire")
+def admin_wallet_expire(client_user_id, wallet_id):
+    """Soft-expire a client's prepaid pack (status→expired, balance zeroed; the row + ledger are kept
+    for audit — never hard-deleted). Body: {reason}."""
+    p, err = _admin()
+    if err:
+        return err
+    reason = (_body().get("reason") or "").strip() or None
+    from billing import bundles
+    with session_scope() as s:
+        try:
+            res = bundles.expire_wallet(
+                s, club_id=p.club_id, wallet_id=wallet_id, reason=reason, actor_user_id=p.user_id)
+        except ValueError as e:
+            code = str(e)
+            return jsonify(error=code), (404 if code == "WALLET_NOT_FOUND" else 400)
     return jsonify(res), 200

@@ -334,3 +334,118 @@ def void_order(session, *, club_id, order_id, write_off=False, reason=None) -> D
         {"c": str(club_id), "o": str(order_id)},
     )
     return {"ok": True, "status": new_status}
+
+
+def discount_order(session, *, club_id, order_id, discount_minor=None, new_amount_minor=None,
+                   reason, actor_user_id=None) -> Dict[str, Any]:
+    """Apply a discount to ANY open order (court / lesson / class / pack / membership) — reduce what the
+    client owes WITHOUT inventing a second debt or a settlement path. Acts on the ONE debt store
+    (billing.order + billing.order_line); the order total is the sum of its lines.
+
+    Provide EXACTLY ONE of:
+      * discount_minor     — subtract this many minor units from the order total, OR
+      * new_amount_minor    — set the order total to this figure (the discount is the difference).
+
+    Guards (mirror void_order): only an owed/in-flight order (open / awaiting_payment) can be discounted
+    — a PAID order must be REFUNDED, not discounted. A new total < 0 is rejected (DISCOUNT_EXCEEDS_TOTAL);
+    a no-op (new total == current) is rejected (NO_CHANGE).
+
+    MULTI-LINE RULE: the discount applies to the WHOLE order total and each line is scaled PRO-RATA by
+    its current amount (remainder lands on the last line so the lines always re-sum to the new total
+    exactly). A single-line order therefore just takes the whole discount.
+
+    LOCKSTEP (coaching): a line that funds an OWED coach_arrears row is re-priced by DELEGATING to
+    commission.adjust_arrears(gross_minor=new_line) — the SAME re-price mechanism used on a duration
+    change / a coach discount — so the coach's owed/commission view drops by exactly the same amount and
+    the lockstep lives in ONE place. A non-coaching line is re-priced directly here. Both paths preserve
+    the pre-discount price in order_line.original_amount_minor (set once — the audit of "was → now").
+
+    Returns {order_id, old_total_minor, new_total_minor, discount_minor, status, reason}
+    or {ok: False, error} on a guard failure."""
+    # --- validate the ask: exactly one of discount_minor / new_amount_minor ---
+    has_disc = discount_minor is not None
+    has_new = new_amount_minor is not None
+    if has_disc == has_new:  # both or neither
+        raise ValueError("BAD_ARGS")
+
+    # --- load the order, scoped, and guard its status (owed/in-flight only) ---
+    head = session.execute(
+        text('SELECT id, amount_minor, status FROM billing."order" '
+             "WHERE club_id = :c AND id = :o"),
+        {"c": str(club_id), "o": str(order_id)},
+    ).mappings().first()
+    if not head:
+        return {"ok": False, "error": "ORDER_NOT_FOUND"}
+    if head["status"] not in ("open", "awaiting_payment"):
+        return {"ok": False, "error": "NOT_OPEN", "status": head["status"]}
+
+    # The lines are the authoritative basis (the order total is their sum). Use line_sum as the current
+    # total so the pro-rata split always re-sums exactly to the new total (no drift vs the stored value).
+    lines = session.execute(
+        text("SELECT id, amount_minor FROM billing.order_line "
+             "WHERE order_id = :o ORDER BY created_at"),
+        {"o": str(order_id)},
+    ).mappings().all()
+    current_total = sum(int(l["amount_minor"] or 0) for l in lines)
+
+    # --- resolve the target new total + the effective discount ---
+    if has_new:
+        new_total = int(new_amount_minor)
+    else:
+        new_total = current_total - int(discount_minor)
+    discount = current_total - new_total
+
+    if new_total < 0:
+        return {"ok": False, "error": "DISCOUNT_EXCEEDS_TOTAL"}
+    if discount == 0:
+        return {"ok": False, "error": "NO_CHANGE"}
+    if not lines or current_total <= 0:
+        # nothing priced to discount (a R0 / empty order)
+        return {"ok": False, "error": "NO_CHANGE"}
+
+    # --- distribute the new total across the lines, pro-rata by current amount ---
+    allocated = 0
+    new_line_amounts: List[int] = []
+    last = len(lines) - 1
+    for i, l in enumerate(lines):
+        if i == last:
+            nl = new_total - allocated          # remainder — keeps the lines summing to new_total exactly
+        else:
+            amt = int(l["amount_minor"] or 0)
+            nl = round(amt * new_total / current_total)
+            allocated += nl
+        new_line_amounts.append(int(nl))
+
+    # --- apply per line: coaching lines DELEGATE to adjust_arrears (lockstep in one place) ---
+    for l, nl in zip(lines, new_line_amounts):
+        arrears_id = session.execute(
+            text("SELECT id FROM billing.coach_arrears "
+                 "WHERE club_id = :c AND order_line_id = :ol AND status = 'owed' LIMIT 1"),
+            {"c": str(club_id), "ol": str(l["id"])},
+        ).scalar()
+        if arrears_id:
+            # adjust_arrears sets original_amount_minor (once), drops the line + the coach's gross to
+            # `nl`, and recomputes the order total — the SAME re-price the duration-change path uses.
+            from billing.commission import adjust_arrears
+            adjust_arrears(session, club_id=club_id, arrears_id=arrears_id,
+                           gross_minor=int(nl), actor_user_id=actor_user_id, reason=reason)
+        else:
+            # Non-coaching line: preserve the pre-discount price ONCE, then drop to the new amount.
+            session.execute(
+                text("UPDATE billing.order_line SET "
+                     "  original_amount_minor = COALESCE(original_amount_minor, amount_minor), "
+                     "  amount_minor = :nl "
+                     "WHERE id = :id"),
+                {"nl": int(nl), "id": str(l["id"])},
+            )
+
+    # --- recompute the order total from its lines (covers non-coaching lines; idempotent for coaching) ---
+    session.execute(
+        text('UPDATE billing."order" SET amount_minor = '
+             "COALESCE((SELECT SUM(amount_minor) FROM billing.order_line WHERE order_id = :o), 0), "
+             "updated_at = now() WHERE club_id = :c AND id = :o"),
+        {"c": str(club_id), "o": str(order_id)},
+    )
+    return {"order_id": str(order_id), "old_total_minor": current_total,
+            "new_total_minor": new_total, "discount_minor": discount,
+            "status": head["status"], "reason": reason}

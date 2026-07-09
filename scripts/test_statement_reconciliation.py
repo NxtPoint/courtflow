@@ -302,8 +302,33 @@ def sc_cancelled_class_not_owed(s, fx):
           owed(s, fx)["total_owed_minor"] == int(sigma), f"stmt={owed(s, fx)['total_owed_minor']} sigma={sigma}")
 
 
+def sc_discount_reconcile(s, fx):
+    print("\n# Discount reprices the ONE debt: owed drops by EXACTLY the discount, no double-count")
+    before = owed(s, fx)["total_owed_minor"]
+    r = book_lesson(s, fx, 17, "monthly_account")     # R400 owed on the monthly tab
+    oid = r["booking"]["order_id"]
+    b1 = owed(s, fx)["total_owed_minor"]
+    check("lesson adds R400 owed", b1 - before == 40000, f"{before}->{b1}")
+    res = S.discount_order(s, club_id=fx.club_id, order_id=oid, discount_minor=10000,
+                           reason="loyalty", actor_user_id=fx.member)
+    check("discount ok → new total R300", res.get("new_total_minor") == 30000, str(res))
+    b2 = owed(s, fx)["total_owed_minor"]
+    check("owed drops by EXACTLY the discount (R100), no double-count", b1 - b2 == 10000, f"{b1}->{b2}")
+    check("owed == baseline + R300 (the ONE debt, repriced)", b2 - before == 30000, f"{before}->{b2}")
+    # A full discount to R0 drops the whole remainder — still ONE debt, no settlement/void row created.
+    res2 = S.discount_order(s, club_id=fx.club_id, order_id=oid, new_amount_minor=0,
+                            reason="comp", actor_user_id=fx.member)
+    check("full discount → new total 0", res2.get("new_total_minor") == 0, str(res2))
+    check("owed back to baseline (whole lesson discounted away)",
+          owed(s, fx)["total_owed_minor"] == before, str(owed(s, fx)["total_owed_minor"]))
+    # Clean footprint so later scenarios see the same running total.
+    S.void_order(s, club_id=fx.club_id, order_id=oid, write_off=True)
+    check("footprint clean — running owed total unchanged", owed(s, fx)["total_owed_minor"] == before,
+          str(owed(s, fx)["total_owed_minor"]))
+
+
 SCENARIOS = [sc_no_double_count, sc_membership_r0, sc_pay_all, sc_partial_and_reclaim, sc_void,
-             sc_arrears_lockstep, sc_pack_offline, sc_cancelled_class_not_owed]
+             sc_discount_reconcile, sc_arrears_lockstep, sc_pack_offline, sc_cancelled_class_not_owed]
 
 
 def main():

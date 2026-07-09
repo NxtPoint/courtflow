@@ -212,7 +212,7 @@ def expire_due(session, *, club_id) -> int:
         session.execute(
             text("INSERT INTO billing.token_ledger (club_id, wallet_id, booking_id, kind, delta, reason) "
                  "VALUES (:c, :w, NULL, 'expire', 0, 'past expires_at') "
-                 "ON CONFLICT (wallet_id, booking_id, kind) DO NOTHING"),
+                 "ON CONFLICT (wallet_id, booking_id, kind) WHERE kind <> 'adjust' DO NOTHING"),
             {"c": str(club_id), "w": str(w["id"])},
         )
     return len(expired)
@@ -299,7 +299,7 @@ def draw_token(session, *, club_id, wallet, booking_id, reason="booking",
             INSERT INTO billing.token_ledger
                 (club_id, wallet_id, booking_id, kind, delta, reason)
             VALUES (:c, :w, :b, 'draw', :delta, :reason)
-            ON CONFLICT (wallet_id, booking_id, kind) DO NOTHING
+            ON CONFLICT (wallet_id, booking_id, kind) WHERE kind <> 'adjust' DO NOTHING
             RETURNING id
         """),
         {"c": str(club_id), "w": str(wallet_id), "delta": -int(drawn),
@@ -344,7 +344,7 @@ def credit_token(session, *, club_id, booking_id, reason="cancellation") -> bool
             INSERT INTO billing.token_ledger
                 (club_id, wallet_id, booking_id, kind, delta, reason)
             VALUES (:c, :w, :b, 'credit', :delta, :reason)
-            ON CONFLICT (wallet_id, booking_id, kind) DO NOTHING
+            ON CONFLICT (wallet_id, booking_id, kind) WHERE kind <> 'adjust' DO NOTHING
             RETURNING id
         """),
         {"c": str(club_id), "w": str(wallet_id), "delta": credited,
@@ -368,6 +368,154 @@ def credit_token(session, *, club_id, booking_id, reason="cancellation") -> bool
         {"w": str(wallet_id), "credited": credited},
     )
     return True
+
+
+# ---------------------------------------------------------------------------
+# admin manual wallet ops — adjust balance / expire a pack (money-adjacent, audited)
+# ---------------------------------------------------------------------------
+
+def adjust_wallet(session, *, club_id, wallet_id, delta_minutes, reason,
+                  actor_user_id) -> Dict[str, Any]:
+    """MANUAL admin balance change on a prepaid pack wallet — money-adjacent, fully audited.
+
+    Add or remove MINUTES from a wallet (delta_minutes signed). The wallet row is SELECT … FOR UPDATE
+    locked (serialise against a concurrent draw), scoped by club_id AND wallet_id. A delta of 0 is
+    rejected ('NO_CHANGE') so the ledger never carries empty noise; an unknown/wrong-club wallet raises
+    'WALLET_NOT_FOUND'.
+
+    Clamp: new_remaining is floored at 0 (never negative). A genuine TOP-UP (delta pushes remaining
+    above the pack total) raises minutes_total to match (and the display tokens_total with it), so an
+    owner can legitimately add sessions to a pack. tokens_remaining/total (display) are recomputed as a
+    customer-favourable CEIL of minutes ÷ base_minutes (the same rounding draw/credit use).
+
+    Status: 0 remaining -> 'exhausted'; >0 remaining and was exhausted/expired -> 'active' (match_wallet
+    still gates draws on expires_at, so a date-expired wallet stays unusable). Writes ONE token_ledger
+    kind='adjust' row (booking_id NULL, delta=delta_minutes, reason, actor_user_id) — deliberately NOT
+    idempotency-guarded (the partial unique index excludes 'adjust'), so repeated manual adjusts stack.
+
+    Returns {wallet_id, minutes_remaining, minutes_total, tokens_remaining, status, delta_minutes}.
+    Never commits (caller composes via db.session_scope())."""
+    delta = int(delta_minutes or 0)
+    if delta == 0:
+        raise ValueError("NO_CHANGE")  # reject an empty adjust so the audit ledger stays meaningful
+    row = session.execute(
+        text("""
+            SELECT id, club_id, base_minutes, tokens_total, tokens_remaining,
+                   minutes_total, minutes_remaining, status, expires_at
+            FROM billing.token_wallet
+            WHERE club_id = :c AND id = :w
+            FOR UPDATE
+        """),
+        {"c": str(club_id), "w": str(wallet_id)},
+    ).mappings().first()
+    if not row:
+        raise ValueError("WALLET_NOT_FOUND")
+
+    base = int(row["base_minutes"] or 0) or 60           # unit length; guard divide-by-zero
+    cur_remaining = int(row["minutes_remaining"] or 0)
+    cur_total = int(row["minutes_total"] or 0)
+
+    new_remaining = max(cur_remaining + delta, 0)          # clamp at 0 (never negative)
+    new_total = max(cur_total, new_remaining)              # a top-up beyond total raises the total
+    # display counts = customer-favourable CEIL of minutes / base (matches draw/credit rounding)
+    new_tokens_remaining = (new_remaining + base - 1) // base if new_remaining > 0 else 0
+    new_tokens_total = (new_total + base - 1) // base if new_total > 0 else 0
+
+    new_status = row["status"]
+    if new_remaining == 0:
+        new_status = "exhausted"
+    elif row["status"] in ("exhausted", "expired"):
+        new_status = "active"
+
+    session.execute(
+        text("""
+            UPDATE billing.token_wallet
+            SET minutes_remaining = :mr,
+                minutes_total     = :mt,
+                tokens_remaining  = :tr,
+                tokens_total      = :tt,
+                status            = :st,
+                updated_at        = now()
+            WHERE id = :w
+        """),
+        {"mr": new_remaining, "mt": new_total, "tr": new_tokens_remaining,
+         "tt": new_tokens_total, "st": new_status, "w": str(wallet_id)},
+    )
+    # Audit row — NO ON CONFLICT: the partial unique index excludes kind='adjust', so repeated
+    # manual adjustments on the same wallet stack (each is a distinct deliberate action).
+    session.execute(
+        text("""
+            INSERT INTO billing.token_ledger
+                (club_id, wallet_id, booking_id, kind, delta, reason, actor_user_id)
+            VALUES (:c, :w, NULL, 'adjust', :delta, :reason, :actor)
+        """),
+        {"c": str(club_id), "w": str(wallet_id), "delta": delta,
+         "reason": (reason or None),
+         "actor": str(actor_user_id) if actor_user_id else None},
+    )
+    return {"wallet_id": str(wallet_id), "minutes_remaining": new_remaining,
+            "minutes_total": new_total, "tokens_remaining": new_tokens_remaining,
+            "status": new_status, "delta_minutes": delta}
+
+
+def expire_wallet(session, *, club_id, wallet_id, reason,
+                  actor_user_id) -> Dict[str, Any]:
+    """SOFT-expire a prepaid pack (admin): status -> 'expired' and the remaining balance is zeroed
+    (cleaner "no longer usable" than leaving a dangling balance). NEVER hard-deletes — the wallet row
+    and its ledger stay for audit.
+
+    The wallet is SELECT … FOR UPDATE locked, scoped by club_id AND wallet_id ('WALLET_NOT_FOUND' if
+    absent/wrong club). Writes an audited kind='expire' ledger row with delta = -(minutes forfeited)
+    (the truthful balance change, not 0), reason + actor_user_id. Because a LAZY auto-expire
+    (expire_due) may already have logged a (wallet, NULL, 'expire') row, the insert is
+    ON CONFLICT … DO UPDATE — it stamps the manual actor/reason/delta onto that row and re-expiring is
+    an idempotent re-stamp (no duplicate rows, balance already 0).
+
+    Returns {wallet_id, minutes_remaining, minutes_total, tokens_remaining, status, delta_minutes}.
+    Never commits (caller composes)."""
+    row = session.execute(
+        text("""
+            SELECT id, base_minutes, minutes_total, minutes_remaining, tokens_remaining, status
+            FROM billing.token_wallet
+            WHERE club_id = :c AND id = :w
+            FOR UPDATE
+        """),
+        {"c": str(club_id), "w": str(wallet_id)},
+    ).mappings().first()
+    if not row:
+        raise ValueError("WALLET_NOT_FOUND")
+    forfeited = int(row["minutes_remaining"] or 0)
+
+    session.execute(
+        text("""
+            UPDATE billing.token_wallet
+            SET status = 'expired',
+                minutes_remaining = 0,
+                tokens_remaining = 0,
+                updated_at = now()
+            WHERE id = :w
+        """),
+        {"w": str(wallet_id)},
+    )
+    # Audited expire row. ON CONFLICT … DO UPDATE (partial-index predicate) so a manual expire stamps
+    # the actor/reason even if expire_due already logged a system 'expire' row; re-expiring re-stamps.
+    session.execute(
+        text("""
+            INSERT INTO billing.token_ledger
+                (club_id, wallet_id, booking_id, kind, delta, reason, actor_user_id)
+            VALUES (:c, :w, NULL, 'expire', :delta, :reason, :actor)
+            ON CONFLICT (wallet_id, booking_id, kind) WHERE kind <> 'adjust'
+            DO UPDATE SET delta         = EXCLUDED.delta,
+                          reason        = EXCLUDED.reason,
+                          actor_user_id = EXCLUDED.actor_user_id
+        """),
+        {"c": str(club_id), "w": str(wallet_id), "delta": -forfeited,
+         "reason": (reason or "admin expired"),
+         "actor": str(actor_user_id) if actor_user_id else None},
+    )
+    return {"wallet_id": str(wallet_id), "minutes_remaining": 0,
+            "minutes_total": int(row["minutes_total"] or 0), "tokens_remaining": 0,
+            "status": "expired", "delta_minutes": -forfeited}
 
 
 # ---------------------------------------------------------------------------
@@ -634,7 +782,7 @@ def _grant_wallet_now(session, *, order_id, provider="yoco") -> Dict[str, Any]:
     session.execute(
         text("INSERT INTO billing.token_ledger (club_id, wallet_id, booking_id, kind, delta, reason) "
              "VALUES (:c, :w, NULL, 'grant', :minutes, :reason) "
-             "ON CONFLICT (wallet_id, booking_id, kind) DO NOTHING"),
+             "ON CONFLICT (wallet_id, booking_id, kind) WHERE kind <> 'adjust' DO NOTHING"),
         {"c": str(wallet["club_id"]), "w": str(wallet["id"]), "minutes": minutes,
          "reason": f"{provider} bundle purchase"},
     )

@@ -325,6 +325,22 @@ def get_financials():
     return jsonify(data), 200
 
 
+@me_bp.get("/360")
+def my_360():
+    """The caller's own unified Client 360 record — the SAME cross-lane composer the admin person-360
+    and the coach client record derive from (golden rule: one data layer, views off it). Client scope:
+    read-only + pay / request-refund, no staff edit actions."""
+    p, err = _principal()
+    if err:
+        return err
+    from client360 import get_client_360
+    with session_scope() as s:
+        data = get_client_360(s, club_id=p.club_id, user_id=p.user_id, scope="client")
+    if data is None:
+        return jsonify(error="not_a_member"), 404
+    return jsonify(person=data), 200
+
+
 @me_bp.get("/plan")
 def get_plan():
     """The caller's current plan only (type, is_trial, trial_days_left, current_period_end) — a

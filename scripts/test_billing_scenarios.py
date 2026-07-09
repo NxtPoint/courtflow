@@ -1325,6 +1325,119 @@ def sc_pack_credits_coach(s, fx):
     check("token→coach: coach credited at pack purchase (70% of R3000 = R2100)", (bal1 - bal0) == 210000, f"{bal0}->{bal1}")
 
 
+def sc_wallet_adjust(s, fx):
+    print("\n# Admin wallet ops: manual adjust (+/-, clamp) + expire; audited, repeatable")
+    plan = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=10,
+                          price_minor=300000, duration_minutes=60, coach_user_id=fx.coach_uid,
+                          label="10 lessons")
+    order = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                   bundle_plan_id=plan["id"])
+    oid = order["order_id"]
+    ev = NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
+                                provider_payment_id="p_adj_1", amount_minor=300000,
+                                currency="ZAR", status="succeeded", direction="charge",
+                                club_id=str(fx.club_id), user_id=str(fx.member), raw={"t": 9})
+    apply_payment_event(ev, session=s)
+    BN.activate_wallet_for_order(s, order_id=oid)
+    wid = s.execute(text("SELECT id FROM billing.token_wallet WHERE order_id=:o"),
+                    {"o": str(oid)}).scalar()
+
+    # +2 sessions worth of minutes (120) → 600 becomes 720; total rises to the top-up.
+    r1 = BN.adjust_wallet(s, club_id=fx.club_id, wallet_id=wid, delta_minutes=120,
+                          reason="goodwill top-up", actor_user_id=fx.member)
+    check("adjust +120 → 720 remaining", r1["minutes_remaining"] == 720, str(r1))
+    check("adjust +120 raises total to 720", r1["minutes_total"] == 720, str(r1))
+
+    # -1000 minutes → clamps at 0, status exhausted.
+    r2 = BN.adjust_wallet(s, club_id=fx.club_id, wallet_id=wid, delta_minutes=-1000,
+                          reason="correction", actor_user_id=fx.member)
+    check("adjust -1000 clamps at 0", r2["minutes_remaining"] == 0, str(r2))
+    check("zeroed wallet is exhausted", r2["status"] == "exhausted", str(r2))
+
+    # Repeated adjusts are allowed (no unique-index collision on kind='adjust').
+    r3 = BN.adjust_wallet(s, club_id=fx.club_id, wallet_id=wid, delta_minutes=60,
+                          reason="re-add one", actor_user_id=fx.member)
+    check("adjust reactivates 0→active", r3["status"] == "active" and r3["minutes_remaining"] == 60,
+          str(r3))
+    n_adj = s.execute(text("SELECT count(*) FROM billing.token_ledger "
+                           "WHERE wallet_id=:w AND kind='adjust'"), {"w": str(wid)}).scalar()
+    check("three 'adjust' ledger rows recorded", n_adj == 3, f"got {n_adj}")
+
+    # delta 0 rejected.
+    try:
+        BN.adjust_wallet(s, club_id=fx.club_id, wallet_id=wid, delta_minutes=0,
+                         reason="noop", actor_user_id=fx.member)
+        check("delta 0 rejected", False, "no error raised")
+    except ValueError as e:
+        check("delta 0 → NO_CHANGE", str(e) == "NO_CHANGE", str(e))
+
+    # Expire → status expired, balance zeroed, audit row present.
+    re = BN.expire_wallet(s, club_id=fx.club_id, wallet_id=wid, reason="lapsed",
+                          actor_user_id=fx.member)
+    check("expire → status expired + 0 remaining",
+          re["status"] == "expired" and re["minutes_remaining"] == 0, str(re))
+    w = s.execute(text("SELECT status, minutes_remaining FROM billing.token_wallet WHERE id=:w"),
+                  {"w": str(wid)}).mappings().first()
+    check("wallet row expired (soft, not deleted)",
+          w and w["status"] == "expired" and w["minutes_remaining"] == 0, str(dict(w) if w else None))
+    n_exp = s.execute(text("SELECT count(*) FROM billing.token_ledger "
+                           "WHERE wallet_id=:w AND kind='expire' AND actor_user_id IS NOT NULL"),
+                      {"w": str(wid)}).scalar()
+    check("audited 'expire' row with actor", n_exp == 1, f"got {n_exp}")
+
+    # Wrong wallet → WALLET_NOT_FOUND.
+    try:
+        BN.adjust_wallet(s, club_id=fx.club_id,
+                         wallet_id="00000000-0000-0000-0000-000000000000",
+                         delta_minutes=10, reason="x", actor_user_id=fx.member)
+        check("unknown wallet rejected", False, "no error raised")
+    except ValueError as e:
+        check("unknown wallet → WALLET_NOT_FOUND", str(e) == "WALLET_NOT_FOUND", str(e))
+
+
+def sc_order_discount(s, fx):
+    print("\n# Discount: reduce an open lesson order → order + coach_arrears drop in lockstep; PAID rejects")
+    # Book an at_court lesson (R400) → an OPEN order; accrue the coach's owed arrears line.
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res,
+                         coach_user_id=fx.coach_uid, starts_at=iso(at(fx, 11)), ends_at=iso(at(fx, 12)),
+                         settlement_mode="at_court")
+    oid = r["booking"]["order_id"]
+    bid = r["booking"]["id"]
+    check("lesson order opens at R400", _order(s, oid)["amount_minor"] == 40000,
+          str(_order(s, oid)["amount_minor"]))
+    CM.accrue_arrears_for_club(s, club_id=fx.club_id)
+    ar0 = s.execute(text("SELECT gross_minor, status FROM billing.coach_arrears "
+                         "WHERE club_id=:c AND booking_id=:b"), {"c": fx.club_id, "b": bid}).mappings().first()
+    check("coach_arrears owed at R400", ar0 and ar0["status"] == "owed" and ar0["gross_minor"] == 40000,
+          str(dict(ar0) if ar0 else None))
+
+    # Discount R100 off the order.
+    res = ST.discount_order(s, club_id=fx.club_id, order_id=oid, discount_minor=10000,
+                            reason="loyalty", actor_user_id=fx.member)
+    check("discount returns old=400/new=300/disc=100",
+          res.get("old_total_minor") == 40000 and res.get("new_total_minor") == 30000
+          and res.get("discount_minor") == 10000, str(res))
+    check("order total dropped by exactly R100 → R300", _order(s, oid)["amount_minor"] == 30000,
+          str(_order(s, oid)["amount_minor"]))
+    ol = s.execute(text("SELECT amount_minor, original_amount_minor FROM billing.order_line "
+                        "WHERE order_id=:o AND booking_id=:b"), {"o": str(oid), "b": bid}).mappings().first()
+    check("line amount=300, original preserved=400 (was→now)",
+          ol["amount_minor"] == 30000 and ol["original_amount_minor"] == 40000, str(dict(ol)))
+    ar1 = s.execute(text("SELECT gross_minor, status FROM billing.coach_arrears "
+                         "WHERE club_id=:c AND booking_id=:b"), {"c": fx.club_id, "b": bid}).mappings().first()
+    check("coach_arrears in LOCKSTEP → R300 owed", ar1["gross_minor"] == 30000 and ar1["status"] == "owed",
+          str(dict(ar1)))
+
+    # Pay the discounted order at the desk → 'paid'; a further discount must reject with NOT_OPEN.
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=oid, amount_minor=30000,
+                          provider="cash", provider_payment_id="RCPT-DISC", user_id=fx.member)
+    check("order is now paid", _order(s, oid)["status"] == "paid", _order(s, oid)["status"])
+    res2 = ST.discount_order(s, club_id=fx.club_id, order_id=oid, discount_minor=5000, reason="late")
+    check("a PAID order rejects discount (NOT_OPEN)",
+          res2.get("ok") is False and res2.get("error") == "NOT_OPEN", str(res2))
+
+
 SCENARIOS = [
     sc_coach_scoped_pricing,
     sc_service_selection,
@@ -1347,6 +1460,8 @@ SCENARIOS = [
     sc_settlement_monthly,
     sc_commission,
     sc_tokens,
+    sc_wallet_adjust,
+    sc_order_discount,
     sc_membership,
     sc_membership_purchase,
     sc_refund_request,

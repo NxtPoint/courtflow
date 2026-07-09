@@ -577,6 +577,23 @@ def get_client(client_user_id):
     return jsonify(client=client), 200
 
 
+@coach_bp.get("/clients/<client_user_id>/360")
+def coach_client_360(client_user_id):
+    """The unified Client 360 record, coach scope — the SAME cross-lane composer the admin person-360
+    and the client's own account derive from (golden rule: one data layer, views off it). Coaching +
+    packages are filtered to THIS coach's relevance."""
+    p, err = _coach()
+    if err:
+        return err
+    from client360 import get_client_360
+    with session_scope() as s:
+        data = get_client_360(s, club_id=p.club_id, user_id=client_user_id,
+                              scope="coach", coach_user_id=p.user_id)
+    if data is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(person=data), 200
+
+
 @coach_bp.get("/bookings/<booking_id>")
 def get_booking_story(booking_id):
     """The coach's full 'event story' for a lesson/class they run — client + contact, when, court,

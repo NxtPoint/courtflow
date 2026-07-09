@@ -615,17 +615,39 @@ _DDL = [
     """,
 
     # 3. token_ledger — audit + THE idempotency guard.
+    # kind: draw/credit/grant/expire are SYSTEM movements (idempotent — at most one per wallet+booking);
+    # 'adjust' is a MANUAL admin balance change (money-adjacent, deliberately REPEATABLE — see the
+    # partial unique index below). reason + actor_user_id carry the audit trail for manual actions.
     f"""
     CREATE TABLE IF NOT EXISTS {SCHEMA}.token_ledger (
-        id          bigserial PRIMARY KEY,
-        club_id     uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
-        wallet_id   uuid NOT NULL REFERENCES {SCHEMA}.token_wallet(id) ON DELETE CASCADE,
-        booking_id  uuid,                                -- diary.booking / enrolment (cross-lane)
-        kind        text NOT NULL CHECK (kind IN ('draw','credit','grant','expire')),
-        delta       int  NOT NULL,                        -- signed: draw -1, credit +1, grant +N
-        reason      text,
-        created_at  timestamptz NOT NULL DEFAULT now()
+        id            bigserial PRIMARY KEY,
+        club_id       uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        wallet_id     uuid NOT NULL REFERENCES {SCHEMA}.token_wallet(id) ON DELETE CASCADE,
+        booking_id    uuid,                              -- diary.booking / enrolment (cross-lane)
+        kind          text NOT NULL CHECK (kind IN ('draw','credit','grant','expire','adjust')),
+        delta         int  NOT NULL,                     -- signed: draw -N, credit +N, grant +N, adjust +/-N
+        reason        text,
+        actor_user_id uuid,                              -- admin who made a manual 'adjust'/'expire' (NULL = system)
+        created_at    timestamptz NOT NULL DEFAULT now()
     );
+    """,
+    # Audit columns on an EXISTING db (reason predates this; actor_user_id is new). Additive, idempotent.
+    f"ALTER TABLE {SCHEMA}.token_ledger ADD COLUMN IF NOT EXISTS reason text;",
+    f"ALTER TABLE {SCHEMA}.token_ledger ADD COLUMN IF NOT EXISTS actor_user_id uuid;",
+    # Allow the manual 'adjust' kind on an EXISTING db (a plain CREATE TABLE IF NOT EXISTS never
+    # re-applies the inline CHECK above). Drop the auto-named CHECK if present, then add the full set.
+    # Idempotent: a second boot drops the 5-value CHECK and re-adds the identical one → same end state.
+    f"""
+    DO $$
+    BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.constraint_column_usage
+                   WHERE table_schema = '{SCHEMA}' AND table_name = 'token_ledger'
+                     AND constraint_name = 'token_ledger_kind_check') THEN
+            ALTER TABLE {SCHEMA}.token_ledger DROP CONSTRAINT token_ledger_kind_check;
+        END IF;
+        ALTER TABLE {SCHEMA}.token_ledger ADD CONSTRAINT token_ledger_kind_check
+            CHECK (kind IN ('draw','credit','grant','expire','adjust'));
+    END $$;
     """,
     f"CREATE INDEX IF NOT EXISTS ix_token_ledger_wallet "
     f"ON {SCHEMA}.token_ledger (wallet_id, created_at);",
@@ -633,9 +655,27 @@ _DDL = [
     f"ON {SCHEMA}.token_ledger (booking_id) WHERE booking_id IS NOT NULL;",
     # THE idempotency guard: a draw and a credit-back are each recorded at most ONCE per
     # (wallet, booking). NULLS NOT DISTINCT so grant/expire rows (booking_id NULL) also dedupe
-    # — at most one grant per wallet. The balance only moves when the row actually inserts.
-    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_token_ledger_once "
-    f"ON {SCHEMA}.token_ledger (wallet_id, booking_id, kind) NULLS NOT DISTINCT;",
+    # — at most one grant / one auto-expire per wallet. The balance only moves when the row inserts.
+    # PARTIAL on `kind <> 'adjust'`: a MANUAL admin adjustment (booking_id NULL, kind 'adjust') must be
+    # allowed REPEATEDLY, so those rows sit OUTSIDE this guard; draw/credit/grant/expire keep their
+    # exact per-(wallet,booking,kind) idempotency. Recreated only when not already partial so a second
+    # boot is a true no-op. NB: every ON CONFLICT (wallet_id,booking_id,kind) in bundles.py MUST carry
+    # the matching `WHERE kind <> 'adjust'` predicate so Postgres can infer this partial arbiter index.
+    f"""
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE schemaname = '{SCHEMA}' AND indexname = 'ux_token_ledger_once'
+              AND indexdef ILIKE '%kind <> ''adjust''%'
+        ) THEN
+            DROP INDEX IF EXISTS {SCHEMA}.ux_token_ledger_once;
+            CREATE UNIQUE INDEX ux_token_ledger_once
+                ON {SCHEMA}.token_ledger (wallet_id, booking_id, kind) NULLS NOT DISTINCT
+                WHERE kind <> 'adjust';
+        END IF;
+    END $$;
+    """,
 
     # Migrate the order settlement_mode CHECK on an EXISTING db so 'token' is accepted (a plain
     # CREATE TABLE IF NOT EXISTS never re-applies the inline CHECK above). Idempotent: drop the
