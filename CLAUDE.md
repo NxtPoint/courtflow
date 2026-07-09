@@ -19,13 +19,13 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 61 / billing 224 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 61 / billing 239 / statement 47**. Each uses its own scratch club and always rolls back.
    - `test_booking_scenarios` (61) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing)**.
-   - `test_billing_scenarios` (224) — settlement modes, commission, tokens, membership (offline + per-tier),
+   - `test_billing_scenarios` (239) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
-     class↔coach commission parity**.
+     class↔coach commission parity, per-service packs (product-aware draw)**.
    - `test_statement_reconciliation` (47) — no double-count, pay-all-once, part-settle, reclaim,
      membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
 
@@ -120,6 +120,16 @@ returning `_created=True` (a fresh INSERT); a returning login or a seeded/import
 clerk_id/email, `_created=False`) is NEVER trialed, so the ~880 Wix imports stay PAYG. Audit/cleanup:
 `scripts/audit_trials.py`. Bundles are unit/minute-based (a pack covers any length). The Wix-era
 "member R0" court tier is GONE.
+**Court SERVICES:** courts can belong to distinct court services (e.g. "Hardcourt Hire" vs "Clay Hire"),
+each `billing.product(kind='court_booking')` with its own price + allocated courts via
+`diary.resource.product_id` (NULL → the club's single default court product; single-service clubs
+unchanged). Pricing/availability/booking are court-service-aware (`diary.pricing.court_service_for_resource`).
+**Per-service PACKS:** a pack (`billing.bundle_plan`) + wallet carry `product_id` = the SPECIFIC service
+it belongs to; `match_wallet` is product-aware + backward-compatible (legacy NULL-product = coach+kind
+match). **Packs are created/edited ONLY under a service** (the service editor → `/api/services/<id>/packages`);
+the standalone "Session packs" section + `AdminUI.bundlePlans` + the coach-onboarding packs step + the
+admin/coach bundle-plan write routes were DELETED (GET `/api/admin/bundle-plans` kept for offline
+issue-pack). Backfill existing packs onto their service with `scripts/backfill_pack_products.py`.
 
 **Three purchasing models:** PAYG (per-duration) · membership (term plans) · tokens/bundles (prepaid packs,
 atomic draw-down + idempotent credit-back). Memberships & packs are also purchasable **offline**
