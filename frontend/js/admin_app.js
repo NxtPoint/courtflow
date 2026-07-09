@@ -1009,10 +1009,15 @@
     });
   }
   async function renderDiaryClasses(box) {
+    UI.clear(box);
     box.appendChild(el("div", { class: "cf-loading", text: "Loading classes…" }));
     try { await ensureClassDeps(); } catch (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); return; }
+    // Coaches power the admin coach picker on the class create/edit form (a class must have a coach).
+    var COACHES = [];
+    try { COACHES = ((await window.AdminAPI.coaches()).coaches || []).map(function (c) { return { user_id: c.user_id || c.id, name: c.display_name || [c.first_name, c.surname].filter(Boolean).join(" ").trim() || c.email }; }); } catch (e) {}
+    UI.clear(box);
     box.appendChild(el("div", { class: "cf-row", style: "margin:8px 0" }, [
-      el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "＋ New class", onclick: function () { window.ClassUI.openClassForm({ api: window.AdminAPI, title: "New class", onSaved: function () { renderDiaryClasses(box); } }); } }),
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "＋ New class", onclick: function () { window.ClassUI.openClassForm({ api: window.AdminAPI, coaches: COACHES, title: "New class", onSaved: function () { renderDiaryClasses(box); } }); } }),
     ]));
     var listBox = el("div", {}), sessBox = el("div", {});
     box.appendChild(listBox); box.appendChild(sessBox);
@@ -1021,7 +1026,8 @@
       UI.clear(listBox);
       window.ClassUI.renderClassList({
         host: listBox, classes: r.classes || [],
-        onSchedule: function (c) { window.ClassUI.openScheduleForm({ api: window.AdminAPI, cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity, duration_minutes: c.duration_minutes }, onSaved: function () { renderDiaryClasses(box); } }); },
+        onEdit: function (c) { window.ClassUI.openClassForm({ api: window.AdminAPI, coaches: COACHES, title: "Edit class", cls: c, onSaved: function () { renderDiaryClasses(box); } }); },
+        onSchedule: function (c) { window.ClassUI.openScheduleForm({ api: window.AdminAPI, cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity, duration_minutes: c.duration_minutes, court_resource_ids: c.court_resource_ids }, onSaved: function () { renderDiaryClasses(box); } }); },
         onSessions: function (c) { UI.clear(sessBox); sessBox.appendChild(el("div", { style: "margin-top:14px" }, [el("h3", { style: "margin:0 0 6px", text: "Sessions · " + (c.name || "Class") }), el("div", { id: "adm-cls-sessions" })])); window.ClassUI.renderSessions({ api: window.AdminAPI, cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity }, host: document.getElementById("adm-cls-sessions") }); },
       });
     } catch (e) { UI.clear(listBox); listBox.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }

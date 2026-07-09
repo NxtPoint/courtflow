@@ -216,6 +216,11 @@
     createClass: function (body) {
       return A().apiJSON("/api/coach/classes", { method: "POST", body: body });
     },
+    // PATCH /api/coach/classes/:resource_id  body: {name?,capacity?,description?,court_resource_ids?}
+    //   — edit the coach's OWN class (coach forced to self) + reassign its upcoming sessions' courts.
+    updateClass: function (resourceId, body) {
+      return A().apiJSON("/api/coach/classes/" + enc(resourceId), { method: "PATCH", body: body || {} });
+    },
     // POST /api/coach/classes/:resource_id/schedule
     //   recurring: {weekdays:[0-6],start_time,duration_minutes?,date_from,date_until,capacity?}
     //   one-off:   {dates:[...],start_time,duration_minutes?,capacity?}  -> {created, skipped}

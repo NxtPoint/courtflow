@@ -622,6 +622,7 @@
     window.CoachAPI.classes().then(function (r) {
       UI.clear(box);
       window.ClassUI.renderClassList({ host: box, classes: r.classes || [],
+        onEdit: function (c) { window.ClassUI.openClassForm({ api: window.CoachAPI, title: "Edit class", cls: c, onSaved: function () { loadClasses(); } }); },
         onSchedule: function (c) { openSchedule(c); }, onSessions: function (c) { showSessions(c); } });
     }).catch(function (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
   }
@@ -632,7 +633,7 @@
   }
   function openSchedule(c) {
     window.ClassUI.openScheduleForm({ api: window.CoachAPI,
-      cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity, duration_minutes: c.duration_minutes },
+      cls: { resource_id: c.resource_id, name: c.name, capacity: c.capacity, duration_minutes: c.duration_minutes, court_resource_ids: c.court_resource_ids },
       onSaved: function () { loadClasses(); showSessions(c); } });
   }
   // Tap a class on the calendar → its roster (enrolled/waitlist + attendance). c is a diary.classes session.

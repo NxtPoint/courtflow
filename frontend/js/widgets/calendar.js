@@ -76,7 +76,10 @@
         // Only the courts THIS coach's events actually use (their held courts) — not every court —
         // so picking a coach shows just their day, not the whole club's court grid.
         var used = {};
-        (events || []).forEach(function (ev) { if (evKind(ev) === "court" && ev.resource_id != null) used["court:" + ev.resource_id] = true; });
+        (events || []).forEach(function (ev) {
+          if (evKind(ev) === "court" && ev.resource_id != null) used["court:" + ev.resource_id] = true;
+          if (evKind(ev) === "class" && ev.court_resource_id != null) used["court:" + ev.court_resource_id] = true;
+        });
         courts = courts.filter(function (c) { return used["court:" + c.id]; });
       } else {
         // Hide coaches with NO lessons this day — keeps the grid court-focused on quiet days.
@@ -92,7 +95,9 @@
     }
     function evColKey(ev) {
       var t = evKind(ev);
-      if (t === "class") return CLASS_COL;
+      // A class ON a court sits under THAT court column (the diary feed fans a multi-court class into
+      // one event per court, each carrying court_resource_id); a courtless class → the Classes column.
+      if (t === "class") return ev.court_resource_id ? ("court:" + ev.court_resource_id) : CLASS_COL;
       if (t === "lesson") return "coach:" + ev.coach_user_id;   // lessons sit under their coach
       return "court:" + ev.resource_id;                          // court bookings under the court
     }
@@ -100,7 +105,8 @@
       var cols = gridColumns(events);
       // Show the Classes column whenever there are class events in view (incl. a coach's own classes
       // when they're filtered) — only a COURT filter hides it (courts have no classes).
-      var hasClasses = !state.courtId && events.some(function (ev) { return evKind(ev) === "class"; });
+      // Only COURTLESS classes need the Classes column now — a class on a court renders under it.
+      var hasClasses = !state.courtId && events.some(function (ev) { return evKind(ev) === "class" && !ev.court_resource_id; });
       if (!cols.length && !hasClasses) return el("div", { class: "cf-empty", text: "No courts or coaches configured." });
       var slots = ((DAY_END - DAY_START) * 60) / SLOT_MIN, totalCols = cols.length + (hasClasses ? 1 : 0);
       var wrap = el("div", { class: "cf-cal-wrap" }), grid = el("div", { class: "cf-cal" });

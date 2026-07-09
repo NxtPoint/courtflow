@@ -482,7 +482,14 @@ def list_class_types(session, *, club_id, coach_user_id=None):
                    (SELECT count(*) FROM diary.class_session cs
                       WHERE cs.club_id = r.club_id AND cs.resource_id = r.id
                         AND cs.status = 'scheduled' AND cs.starts_at >= now())
-                       AS upcoming_sessions
+                       AS upcoming_sessions,
+                   -- The courts this class's UPCOMING sessions hold (for the edit form's prefill).
+                   (SELECT array_agg(DISTINCT csc.court_resource_id)
+                      FROM diary.class_session cs2
+                      JOIN diary.class_session_court csc ON csc.class_session_id = cs2.id
+                      WHERE cs2.club_id = r.club_id AND cs2.resource_id = r.id
+                        AND cs2.status = 'scheduled' AND cs2.starts_at >= now()
+                        AND csc.court_resource_id IS NOT NULL) AS court_resource_ids
             FROM diary.resource r
             LEFT JOIN billing.product p
                    ON p.club_id = r.club_id AND p.kind = 'class'
@@ -514,6 +521,7 @@ def list_class_types(session, *, club_id, coach_user_id=None):
         for k in ("resource_id", "coach_user_id", "price_id"):
             if d.get(k) is not None:
                 d[k] = str(d[k])
+        d["court_resource_ids"] = [str(x) for x in (d.get("court_resource_ids") or [])]
         out.append(d)
     return out
 

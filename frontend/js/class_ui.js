@@ -69,30 +69,55 @@
   // opts: {api, coaches?:[{user_id,name}] (admin only — shows a coach selector),
   //        title?, onSaved?(class)}. Renders into a fresh modal.
   // ---------------------------------------------------------------------------
+  // Create OR EDIT a class type. opts.cls (edit) prefills name/coach/capacity/description + its courts;
+  // editing calls api.updateClass(resource_id, …) and can (re)assign the coach + courts of upcoming
+  // sessions. Create keeps price + duration (billing set-up); those are billing-side edits afterwards.
   function openClassForm(opts) {
     init(); opts = opts || {};
-    var api = opts.api;
-    var mc = modal(opts.title || "New class", function (m, close) {
-      var name = input({ placeholder: "Class name (e.g. Cardio Tennis)" });
+    var api = opts.api, editing = !!opts.cls, cls = opts.cls || {};
+    var mc = modal(opts.title || (editing ? "Edit class" : "New class"), function (m, close) {
+      var name = input({ placeholder: "Class name (e.g. Cardio Tennis)", value: cls.name || "" });
       var coachSel = null;
       if (opts.coaches && opts.coaches.length) {
-        coachSel = select("", [{ value: "", label: "— Select coach —" }].concat(
+        coachSel = select(cls.coach_user_id || "", [{ value: "", label: "— Select coach —" }].concat(
           opts.coaches.map(function (c) { return { value: c.user_id, label: c.name }; })));
       }
-      var capacity = input({ type: "number", min: "1", value: "8", placeholder: "Max players" });
+      var capacity = input({ type: "number", min: "1", value: cls.capacity != null ? String(cls.capacity) : "8", placeholder: "Max players" });
       var price = input({ placeholder: "0.00", style: "max-width:140px" });
-      var dur = select(60, DURATIONS);
+      var dur = select(cls.duration_minutes || 60, DURATIONS);
       var desc = textarea({ rows: 3, placeholder: "Optional — what to expect, level, kit needed…" });
+      desc.value = cls.description || "";
+
+      // Court multi-select — EDIT only (courts apply to a class's upcoming sessions; on create there
+      // are no sessions yet — courts are chosen when you Schedule). Pre-ticked for the class's courts.
+      var courtToggles = [], courtBox = null;
+      if (editing) {
+        var preCourts = cls.court_resource_ids || [];
+        courtBox = el("div", { class: "cf-row", style: "flex-wrap:wrap;gap:8px" }, [el("span", { class: "cf-muted", text: "Loading courts…" })]);
+        if (window.API && typeof window.API.resources === "function") {
+          window.API.resources().then(function (r) {
+            UI.clear(courtBox); courtToggles = [];
+            var courts = (r && r.resources || []).filter(function (x) { return x.kind === "court"; });
+            if (!courts.length) { courtBox.appendChild(el("span", { class: "cf-muted", text: "No courts configured." })); return; }
+            courts.forEach(function (c) {
+              var cb = input({ type: "checkbox" });
+              if (preCourts.indexOf(String(c.id)) >= 0) cb.checked = true;
+              courtToggles.push({ id: String(c.id), cb: cb });
+              courtBox.appendChild(el("label", { class: "cf-row", style: "gap:6px;min-width:90px;font-weight:600" }, [cb, el("span", { text: c.name })]));
+            });
+          }, function () { UI.clear(courtBox); courtBox.appendChild(el("span", { class: "cf-muted", text: "Couldn't load courts." })); });
+        }
+      }
 
       m.appendChild(field("Class name", name));
       if (coachSel) m.appendChild(field("Coach", coachSel));
-      m.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [
-        field("Capacity", capacity), field("Duration", dur),
-      ]));
-      m.appendChild(field("Price per session", price));
+      if (editing) m.appendChild(field("Capacity", capacity));
+      else m.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [field("Capacity", capacity), field("Duration", dur)]));
+      if (!editing) m.appendChild(field("Price per session", price));
+      if (editing && courtBox) m.appendChild(field("Courts (applied to upcoming sessions)", courtBox));
       m.appendChild(field("Description", desc));
 
-      var save = el("button", { class: "cf-btn cf-btn-primary", text: "Create class" });
+      var save = el("button", { class: "cf-btn cf-btn-primary", text: editing ? "Save changes" : "Create class" });
       m.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:12px" }, [
         el("button", { class: "cf-btn", text: "Cancel", onclick: close }), save,
       ]));
@@ -101,25 +126,23 @@
         if (!nm) { UI.toast("Enter a class name.", "warn"); return; }
         var cap = num(capacity.value);
         if (!cap || cap < 1) { UI.toast("Capacity must be at least 1.", "warn"); return; }
-        var body = {
-          name: nm, capacity: cap,
-          price_amount_minor: toMinor(price.value),
-          duration_minutes: num(dur.value) || 60,
-          description: desc.value.trim(),
-        };
+        var body = { name: nm, capacity: cap, description: desc.value.trim() };
         // A class must belong to a coach (its enrolments + commission attribute to them).
         if (coachSel) {
           if (!coachSel.value) { UI.toast("Pick the coach who runs this class.", "warn"); return; }
           body.coach_user_id = coachSel.value;
         }
-        save.disabled = true; save.textContent = "Creating…";
+        if (!editing) { body.price_amount_minor = toMinor(price.value); body.duration_minutes = num(dur.value) || 60; }
+        else body.court_resource_ids = courtToggles.filter(function (t) { return t.cb.checked; }).map(function (t) { return t.id; });
+        save.disabled = true; save.textContent = editing ? "Saving…" : "Creating…";
         try {
-          var created = await api.createClass(body);
-          UI.toast("Class created.", "info");
+          var res = editing ? await api.updateClass(cls.resource_id, body) : await api.createClass(body);
+          var conflicts = (res && res.coach_conflicts) || [];
+          UI.toast(editing ? ("Class updated." + (conflicts.length ? " ⚠ " + conflicts.length + " upcoming session(s) clash with the coach's diary." : "")) : "Class created.", conflicts.length ? "warn" : "info");
           close();
-          if (typeof opts.onSaved === "function") opts.onSaved(created || {});
+          if (typeof opts.onSaved === "function") opts.onSaved(res || {});
         } catch (e) {
-          save.disabled = false; save.textContent = "Create class";
+          save.disabled = false; save.textContent = editing ? "Save changes" : "Create class";
           UI.toast(UI.errMsg(e), "error");
         }
       });
@@ -146,16 +169,24 @@
       var cap = input({ type: "number", min: "1", value: cls.capacity != null ? String(cls.capacity) : "",
         placeholder: "Default (class capacity)", style: "max-width:160px" });
 
-      // Reserve a physical court so the class books it out exactly like a member court booking
-      // (both the coach AND the court are held). "No court" keeps the class virtual (old behaviour).
-      var courtSel = select("", [{ value: "", label: "No court — don't reserve a court" }]);
+      // Reserve one or MORE physical courts so the class books them out exactly like member court
+      // bookings (both the coach AND every court are held; a busy court auto-repicks a free one).
+      // Tick none to keep the class virtual (no court reserved). Pre-ticked for the class's courts on edit.
+      var courtToggles = [];
+      var preCourts = (opts.cls && opts.cls.court_resource_ids) || [];
+      var courtBox = el("div", { class: "cf-row", style: "flex-wrap:wrap;gap:8px" }, [el("span", { class: "cf-muted", text: "Loading courts…" })]);
       if (window.API && typeof window.API.resources === "function") {
         window.API.resources().then(function (r) {
-          (r && r.resources || []).filter(function (x) { return x.kind === "court"; })
-            .forEach(function (c) {
-              courtSel.appendChild(el("option", { value: String(c.id), text: c.name }));
-            });
-        }, function () {});
+          UI.clear(courtBox); courtToggles = [];
+          var courts = (r && r.resources || []).filter(function (x) { return x.kind === "court"; });
+          if (!courts.length) { courtBox.appendChild(el("span", { class: "cf-muted", text: "No courts configured." })); return; }
+          courts.forEach(function (c) {
+            var cb = input({ type: "checkbox" });
+            if (preCourts.indexOf(String(c.id)) >= 0) cb.checked = true;
+            courtToggles.push({ id: String(c.id), cb: cb });
+            courtBox.appendChild(el("label", { class: "cf-row", style: "gap:6px;min-width:90px;font-weight:600" }, [cb, el("span", { text: c.name })]));
+          });
+        }, function () { UI.clear(courtBox); courtBox.appendChild(el("span", { class: "cf-muted", text: "Couldn't load courts." })); });
       }
 
       // recurring fields
@@ -198,10 +229,8 @@
       m.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [
         field("Start time", startTime), field("Duration", dur),
       ]));
-      m.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [
-        field("Capacity per session (optional)", cap),
-        field("Reserve a court (optional)", courtSel),
-      ]));
+      m.appendChild(field("Capacity per session (optional)", cap));
+      m.appendChild(field("Reserve courts (optional — held so no one else can book them)", courtBox));
 
       var mode = "recurring";
       function setMode(next) {
@@ -224,7 +253,8 @@
         if (!startTime.value) { UI.toast("Pick a start time.", "warn"); return; }
         var body = { start_time: startTime.value, duration_minutes: num(dur.value) || undefined };
         if (cap.value) body.capacity = num(cap.value);
-        if (courtSel.value) body.court_resource_id = courtSel.value;
+        var chosenCourts = courtToggles.filter(function (t) { return t.cb.checked; }).map(function (t) { return t.id; });
+        if (chosenCourts.length) body.court_resource_ids = chosenCourts;
         if (mode === "recurring") {
           var days = dayToggles.filter(function (d) { return d.cb.checked; }).map(function (d) { return d.wd; });
           if (!days.length) { UI.toast("Pick at least one weekday.", "warn"); return; }
@@ -244,10 +274,12 @@
           var created = (res && res.created != null) ? res.created : 0;
           var skipped = (res && res.skipped != null) ? res.skipped : 0;
           var busy = (res && res.court_busy != null) ? res.court_busy : 0;
+          var coachBusy = (res && res.coach_busy != null) ? res.coach_busy : 0;
           UI.toast("Scheduled " + created + " session" + (created === 1 ? "" : "s") +
             (skipped ? " (" + skipped + " already there)" : "") +
-            (busy ? " — " + busy + " skipped (court already booked)" : "") + ".",
-            busy ? "warn" : "info");
+            (busy ? " — " + busy + " skipped (no court free)" : "") +
+            (coachBusy ? " — " + coachBusy + " skipped (coach busy)" : "") + ".",
+            (busy || coachBusy) ? "warn" : "info");
           close();
           if (typeof opts.onSaved === "function") opts.onSaved(res || {});
         } catch (e) {
@@ -418,6 +450,8 @@
     var tb = el("tbody");
     classes.forEach(function (c) {
       var price = (c.price_amount_minor != null) ? UI.money(c.price_amount_minor, opts.currency) : "—";
+      var editBtn = opts.onEdit ? el("button", { class: "cf-btn cf-btn-sm", text: "Edit",
+        onclick: function () { opts.onEdit(c); } }) : null;
       var schedBtn = el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Schedule",
         onclick: function () { opts.onSchedule && opts.onSchedule(c); } });
       var sessBtn = el("button", { class: "cf-btn cf-btn-sm", text: "Sessions",
@@ -425,12 +459,13 @@
       tb.appendChild(el("tr", {}, [
         el("td", {}, [el("div", { class: "cf-item-t", text: c.name || "Class" }),
           c.description ? el("div", { class: "cf-item-s", text: c.description }) : null]),
-        el("td", { text: c.coach_name || "—" }),
+        el("td", {}, [c.coach_name ? el("span", { text: c.coach_name })
+          : el("span", { class: "cf-chip held", text: "No coach — Edit" })]),
         el("td", { text: c.capacity != null ? String(c.capacity) : "—" }),
         el("td", { text: price }),
         el("td", { text: (c.duration_minutes != null ? c.duration_minutes : "—") + " min" }),
         el("td", { text: String(c.upcoming_sessions != null ? c.upcoming_sessions : 0) }),
-        el("td", {}, [el("div", { class: "cf-row", style: "gap:6px;justify-content:flex-end" }, [schedBtn, sessBtn])]),
+        el("td", {}, [el("div", { class: "cf-row", style: "gap:6px;justify-content:flex-end" }, [editBtn, schedBtn, sessBtn].filter(Boolean))]),
       ]));
     });
     t.appendChild(tb);
