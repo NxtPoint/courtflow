@@ -435,71 +435,31 @@
   function clName(c) { return [c.first_name, c.surname].filter(Boolean).join(" ").trim() || c.email || "Client"; }
   function clInitials(c) { var n = clName(c).split(/\s+/); return ((n[0] || "C")[0] + (n.length > 1 ? n[n.length - 1][0] : "")).toUpperCase(); }
 
-  // The FULL client record — the heart of the coach app.
-  async function renderClient(userId) {
-    ensureMonth(); loading();
-    var c;
-    try { c = (await window.CoachAPI.client(userId, MONTH)).client; } catch (e) { set(el("div", {}, [backBar("Clients", "#/clients"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
-    var m = c.money || {}, cur = m.currency || "ZAR";
-    var wrap = el("div", {});
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [backBar("Clients", "#/clients"), monthNav(function () { renderClient(userId); })]));
-
-    // Header
-    var head = card([
-      el("div", { class: "cf-detail-h" }, [
-        el("div", { class: "cf-row", style: "gap:10px;align-items:center" }, [
-          el("div", { class: "cf-avatar", text: clInitials(c) }),
-          el("div", {}, [el("h1", { style: "margin:0;font-size:1.25rem", text: clName(c) }),
-            el("div", { class: "cf-muted", style: "font-size:.85rem", text: [c.email, c.phone].filter(Boolean).join(" · ") || "—" })]),
-        ]),
-        el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Invoice →", onclick: function () { issueInvoice(userId, c); } }),
-      ]),
-    ]);
-    head.appendChild(el("div", { style: "margin-top:12px" }, [window.CRMUI.stats([
-      { value: money(c.services_billed_minor || 0, cur), label: "Total billed" },
-      { value: money(m.paid_minor, cur), label: "Paid" },
-      { value: money(m.owed_minor, cur), label: "Owed" },
-      { value: money(m.written_off_minor, cur), label: "Written off" },
-    ])]));
-    wrap.appendChild(head);
-
-    // By service — client → services → sessions → the ONE event story (same drill as client billing).
-    var svcCard = card([window.CRMUI.sectionHead("By service · " + monthLabel(MONTH))], "cf-mt");
-    var services = c.services || [];
-    if (!services.length) svcCard.appendChild(el("div", { class: "cf-empty", text: "No coaching this month." }));
-    else {
-      var sl = el("div", { class: "cf-list" });
-      services.forEach(function (svc) {
-        var sessBox = el("div", { style: "display:none" });
-        (svc.items || []).forEach(function (it) {
-          sessBox.appendChild(el("div", { class: "cf-item cf-item-tap", style: "padding-left:18px", onclick: function () { go("#/event/" + it.booking_id); } }, [
-            el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: UI.fmtDate(it.starts_at) }), el("div", { class: "cf-item-s", text: (function () { try { return UI.fmtTime(it.starts_at); } catch (e) { return ""; } })() })]),
-            svcAmt(it, cur),
-            statusChip(it.status),
-          ]));
-        });
-        var chev = el("span", { class: "cf-muted", text: "▾" });
-        var rowHead = el("div", { class: "cf-item cf-item-tap", onclick: function () { var open = sessBox.style.display === "none"; sessBox.style.display = open ? "" : "none"; chev.textContent = open ? "▴" : "▾"; } }, [
-          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: svc.label }), el("div", { class: "cf-item-s", text: svc.count + " " + (svc.count === 1 ? "session" : "sessions") })]),
-          el("span", { style: "font-weight:700", text: money(svc.billed_minor, cur) }),
-          chev,
-        ]);
-        sl.appendChild(el("div", {}, [rowHead, sessBox]));
-      });
-      svcCard.appendChild(sl);
-    }
-    wrap.appendChild(svcCard);
-
-    // (Owed/write-off is now shown & managed per-session inside the by-service drill → event story.
-    //  No separate arrears list, no upcoming list — the client record is purely the money story.)
-    set(wrap);
-  }
-  // Amount for a by-service session: strike the billed value when written off, show was-price when discounted.
-  function svcAmt(it, cur) {
-    if (it.status === "written_off") return el("span", { style: "text-decoration:line-through;opacity:.55", text: money(it.billed_minor, cur) });
-    if (it.status === "discounted") return el("span", {}, [el("span", { style: "font-weight:600", text: money(it.amount_minor, cur) }),
-      el("span", { class: "cf-muted", style: "font-size:.78rem;margin-left:6px;text-decoration:line-through", text: money(it.billed_minor, cur) })]);
-    return el("span", { style: "font-weight:600", text: money(it.amount_minor, cur) });
+  // The FULL client record — the heart of the coach app. ONE shared widget (Widgets.ClientRecord),
+  // config only (the golden rule): data comes from the one client-360 composer (CoachAPI.client360 →
+  // GET /api/coach/clients/:id/360, scope='coach'); role differences are the fields + actions below,
+  // never a fork in the render code. The coach payload's `can` = {collect, discount} (coaching arrears).
+  function renderClient(userId) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.ClientRecord.mount(host, {
+      scope: { id: userId, role: "coach" },
+      back: { label: "Clients", hash: "#/clients" },
+      fields: { showActivity: false, showDependents: false, showPackages: true, showCoaching: true },
+      data: { get: function (i) { return window.CoachAPI.client360(i).then(function (r) { return r.person; }); } },
+      onNavigate: function (t) {
+        if (!t || !t.id) return;
+        if (t.kind === "person") go("#/client/" + t.id);
+        else go("#/event/" + t.id);   // event/class → the coach's ONE event story (renderEvent)
+      },
+      actions: {
+        // Coaching arrears money — collect / discount (ctx = an owed coaching line with an `id`).
+        // Reuse the coach's existing `arr` handler (arrearsCollected / arrearsAdjust{gross_minor}),
+        // the same one renderEvent's coaching actions call.
+        collect: { manual: true, run: function (it) { arr(it.id, "collect", function () { renderClient(userId); }); } },
+        discount: { manual: true, run: function (it) { arr(it.id, "discount", function () { renderClient(userId); }, it); } },
+      },
+    });
   }
   async function arr(id, action, then, it) {
     try {
@@ -509,11 +469,6 @@
       else { var r = window.prompt("Write off this lesson? Reason (shown to the client & club):", ""); if (r === null) return; await window.CoachAPI.arrearsAdjust(id, { status: "written_off", reason: r }); UI.toast("Written off.", "info"); }
       if (then) then();
     } catch (e) { UI.toast(UI.errMsg(e), "error"); }
-  }
-  async function issueInvoice(userId, c) {
-    if (!window.confirm("Send " + clName(c) + " their statement for " + monthLabel(MONTH) + "? They'll be notified with the amount owed + a pay link.")) return;
-    try { var res = await window.CoachAPI.issueInvoice(userId, MONTH); UI.toast(res.notified ? "Statement sent — " + money(res.owed_minor) + " owed." : "Nothing owed to send.", "info"); window.open("/invoice.html?client=" + encodeURIComponent(userId) + "&month=" + encodeURIComponent(MONTH), "_blank"); }
-    catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
   // ---- EVENT STORY (the drill-through heart) -------------------------------

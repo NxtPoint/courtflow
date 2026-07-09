@@ -113,7 +113,7 @@
       if (parts[1] === "cat") return renderBillingCategory(parts[2], parts[3]);
       return renderHome();
     }
-    if (top === "activity") return renderActivity(parts[1]);
+    if (top === "activity") return renderRecord();   // "Full activity ›" now opens the ONE Client-360 record
     if (top === "plan") return renderPlan();
     if (top === "profile") return parts[1] === "child" ? renderChildEdit(parts[2]) : renderProfile();  // /profile/edit → the same one screen
     return renderHome();                            // home / bookings / anything else
@@ -307,83 +307,33 @@
     }
   }
 
-  // ---- ACTIVITY (one screen, three answers: what did I book · what did I spend on what · what's owed) --
-  async function renderActivity(month) {
-    month = month || curMonth();
-    loading();
-    var d;
-    try { d = await window.API.activity(month); }
-    catch (e) { set(el("div", {}, [UI.backBar("Home", "#/home"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
-    month = d.month || month;
-    var sp = d.spend || { by_category: [], total_paid_minor: 0 };
-    var os = d.outstanding || { total_owed_minor: 0, count: 0 };
-    var cur = sp.currency || os.currency || "ZAR";
-    var wrap = el("div", {});
-    wrap.appendChild(UI.backBar("Home", "#/home"));
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:4px 0 12px" }, [
-      el("h1", { style: "margin:0", text: "Activity" }),
-      el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
-        el("button", { class: "cf-btn cf-btn-sm", text: "‹", onclick: function () { go("#/activity/" + shiftM(month, -1)); } }),
-        el("span", { class: "cf-chip", text: mLabel(month) }),
-        el("button", { class: "cf-btn cf-btn-sm", text: "›", onclick: function () { go("#/activity/" + shiftM(month, 1)); } }),
-      ]),
-    ]));
-
-    // 1) Your bookings this month → each drills to its full story.
-    var bc = card([el("h2", { style: "margin:0 0 8px", text: "Your bookings" })]);
-    if (!(d.bookings || []).length) bc.appendChild(el("div", { class: "cf-empty", text: "No bookings in " + mLabel(month) + "." }));
-    else {
-      var bl = el("div", { class: "cf-list" });
-      d.bookings.forEach(function (b) {
-        var tap = !!(b.booking_id || b.enrolment_id);
-        var row = el("div", { class: "cf-item" + (tap ? " cf-item-tap" : "") }, [
-          el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(b.kind) >= 0 ? b.kind : "court"), text: typeLabel(b.kind) }),
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: UI.fmtDate(b.when) + (b.coach_name ? " · " + b.coach_name : "") }),
-            el("div", { class: "cf-item-s", text: [b.resource_name, b.status].filter(Boolean).join(" · ") }),
-          ]),
-          tap ? el("span", { class: "cf-muted", text: "›" }) : null,
-        ].filter(Boolean));
-        if (tap) row.addEventListener("click", function () { go(b.booking_id ? ("#/booking/" + b.booking_id) : ("#/class/" + b.enrolment_id)); });
-        bl.appendChild(row);
-      });
-      bc.appendChild(bl);
-    }
-    wrap.appendChild(bc);
-
-    // 2) What you spent on what (paid this month, by category).
-    var sc = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [
-      el("h2", { style: "margin:0", text: "What you spent" }),
-      el("span", { style: "font-weight:800", text: money(sp.total_paid_minor, cur) }),
-    ])], "cf-mt");
-    if (!(sp.by_category || []).length) sc.appendChild(el("div", { class: "cf-empty", text: "No payments in " + mLabel(month) + "." }));
-    else {
-      var sl = el("div", { class: "cf-list" });
-      sp.by_category.forEach(function (c) {
-        sl.appendChild(el("div", { class: "cf-item" }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: c.category }),
-            el("div", { class: "cf-item-s", text: c.count + " " + (c.count === 1 ? "item" : "items") }),
-          ]),
-          el("span", { style: "font-weight:700", text: money(c.paid_minor, cur) }),
-        ]));
-      });
-      sc.appendChild(sl);
-    }
-    wrap.appendChild(sc);
-
-    // 3) Outstanding on the account (running balance, settle anytime).
-    var oc = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center" }, [
-      el("div", {}, [el("h2", { style: "margin:0", text: "Outstanding" }),
-        el("div", { class: "cf-muted", style: "font-size:.82rem", text: (os.count || 0) + " to settle" })]),
-      el("span", { class: "cf-amountbig", style: "font-size:1.2rem", text: money(os.total_owed_minor, cur) }),
-    ])], "cf-mt");
-    if ((os.total_owed_minor || 0) > 0) oc.appendChild(el("div", { class: "cf-row", style: "margin-top:10px;justify-content:flex-end" }, [
-      el("button", { class: "cf-btn cf-btn-primary", text: "Settle now", onclick: function () { payOrders(null); } }),
-    ]));
-    wrap.appendChild(oc);
-    wrap.appendChild(el("div", { style: "height:24px" }));
-    set(wrap);
+  // ---- MY RECORD (the ONE Client-360 widget, client scope — golden rule) ----
+  // The member's full account is a VIEW off the one client360 composer (API.my360 →
+  // GET /api/me/360, scope='client') rendered by the SAME Widgets.ClientRecord used in the
+  // admin + coach apps — identity, membership, packages, owed statement, online payments,
+  // bookings (drill), refunds, dependents, activity. Role differences are CONFIG ONLY: the
+  // client `can` map allows pay + request_refund and nothing else (staff actions never wire,
+  // so their controls never render). Reached via Home's "Full activity ›" (route #/activity).
+  function renderRecord() {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.ClientRecord.mount(host, {
+      scope: { id: null, role: "client" },   // self — the adapter ignores the id
+      back: { label: "Home", hash: "#/home" },
+      fields: { showActivity: true, showDependents: true, showPackages: true, showCoaching: false },
+      data: { get: function () { return window.API.my360().then(function (r) { return r.person; }); } },
+      onNavigate: function (t) {
+        if (!t || !t.id) return;
+        if (t.kind === "class") go("#/class/" + t.id);
+        else go("#/booking/" + t.id);        // event → the client's booking story (same hash as everywhere)
+      },
+      actions: {
+        // Owed statement line → settle it online (unified statement → Yoco). Reuses payOrders.
+        pay: { manual: true, run: function (it) { payOrders([it.order_id]); } },
+        // Raise a refund request for the club/coach to review. Reuses requestRefund.
+        request_refund: { manual: true, run: function (it) { requestRefund(it.order_id); } },
+      },
+    });
   }
 
   // plan & credits
