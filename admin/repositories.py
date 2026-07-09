@@ -203,8 +203,8 @@ def set_onboarding_completed(session, *, club_id, completed=True):
 def list_resources(session, *, club_id, include_inactive=True):
     where = "WHERE club_id = :c" if include_inactive else "WHERE club_id = :c AND is_active = true"
     return _rows(session.execute(
-        text("SELECT id, club_id, location_id, kind, name, surface, coach_user_id, capacity, "
-             "       is_active, rank, created_at, updated_at "
+        text("SELECT id, club_id, location_id, kind, name, surface, coach_user_id, product_id, "
+             "       capacity, is_active, rank, created_at, updated_at "
              f"FROM diary.resource {where} ORDER BY kind, rank, name"),
         {"c": club_id},
     ).mappings().all())
@@ -212,42 +212,46 @@ def list_resources(session, *, club_id, include_inactive=True):
 
 def get_resource(session, *, club_id, resource_id):
     return _row(session.execute(
-        text("SELECT id, club_id, location_id, kind, name, surface, coach_user_id, capacity, "
-             "       is_active, rank, created_at, updated_at "
+        text("SELECT id, club_id, location_id, kind, name, surface, coach_user_id, product_id, "
+             "       capacity, is_active, rank, created_at, updated_at "
              "FROM diary.resource WHERE club_id = :c AND id = :r"),
         {"c": club_id, "r": resource_id},
     ).mappings().first())
 
 
 def create_resource(session, *, club_id, kind, name=None, surface=None, capacity=None,
-                    coach_user_id=None, rank=None):
+                    coach_user_id=None, rank=None, product_id=None):
+    # product_id (courts only): the court SERVICE this court belongs to (billing.product
+    # kind='court_booking'). NULL = unallocated → resolves to the club's default court product.
     row = session.execute(
         text("INSERT INTO diary.resource (club_id, kind, name, surface, capacity, "
-             "coach_user_id, rank) "
-             "VALUES (:c, :kind, :name, :surface, COALESCE(:capacity, 1), :coach, "
+             "coach_user_id, product_id, rank) "
+             "VALUES (:c, :kind, :name, :surface, COALESCE(:capacity, 1), :coach, :pid, "
              "COALESCE(:rank, 0)) RETURNING id"),
         {"c": club_id, "kind": kind, "name": name, "surface": surface,
-         "capacity": capacity, "coach": coach_user_id, "rank": rank},
+         "capacity": capacity, "coach": coach_user_id, "pid": product_id, "rank": rank},
     ).mappings().first()
     return get_resource(session, club_id=club_id, resource_id=row["id"])
 
 
 def patch_resource(session, *, club_id, resource_id, name=None, surface=None, is_active=None,
-                   rank=None, capacity=None):
+                   rank=None, capacity=None, product_id=None):
+    # product_id: re-allocate a court to a different court SERVICE (COALESCE = set-or-unchanged).
     res = session.execute(
         text("""
             UPDATE diary.resource SET
-                name      = COALESCE(:name, name),
-                surface   = COALESCE(:surface, surface),
-                is_active = COALESCE(:is_active, is_active),
-                rank      = COALESCE(:rank, rank),
-                capacity  = COALESCE(:capacity, capacity),
+                name       = COALESCE(:name, name),
+                surface    = COALESCE(:surface, surface),
+                is_active  = COALESCE(:is_active, is_active),
+                rank       = COALESCE(:rank, rank),
+                capacity   = COALESCE(:capacity, capacity),
+                product_id = COALESCE(:product_id, product_id),
                 updated_at = now()
             WHERE club_id = :c AND id = :r
             RETURNING id
         """),
         {"c": club_id, "r": resource_id, "name": name, "surface": surface,
-         "is_active": is_active, "rank": rank, "capacity": capacity},
+         "is_active": is_active, "rank": rank, "capacity": capacity, "product_id": product_id},
     ).mappings().first()
     if not res:
         return None

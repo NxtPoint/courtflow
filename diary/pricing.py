@@ -50,6 +50,66 @@ def _coach_has_own_product(session, club_id, kind, coach_user_id):
         return False
 
 
+def _default_court_product_id(session, club_id):
+    """The club's DEFAULT court-hire product (billing.product kind='court_booking'): the SINGLE
+    active court product, or None when there are zero or MANY. Many → ambiguous, so callers keep
+    the unscoped 'cheapest across court products' fallback (a NULL-product court in a multi-service
+    club is a misconfiguration the owner resolves by allocating it). Guarded → None. Mirrors the
+    coach two-tier fallback: a court with no explicit service falls back to the one shared product."""
+    try:
+        rows = session.execute(
+            text("SELECT id FROM billing.product WHERE club_id = :c AND kind = 'court_booking' "
+                 "AND active = true LIMIT 2"),
+            {"c": club_id},
+        ).scalars().all()
+        return str(rows[0]) if len(rows) == 1 else None
+    except Exception:
+        return None
+
+
+def _resource_has_product_col(session):
+    """diary.resource.product_id is added by this lane's boot DDL; absent only pre-migration.
+    Cached per session so we don't re-probe information_schema on every court read."""
+    cache = getattr(session, "_cf_resource_product_col", None)
+    if cache is not None:
+        return cache
+    try:
+        row = session.execute(
+            text("SELECT 1 FROM information_schema.columns "
+                 "WHERE table_schema='diary' AND table_name='resource' "
+                 "  AND column_name='product_id'")
+        ).first()
+        present = row is not None
+    except Exception:
+        present = False
+    try:
+        session._cf_resource_product_col = present
+    except Exception:
+        pass
+    return present
+
+
+def court_service_for_resource(session, *, club_id, resource_id):
+    """The court SERVICE (billing.product id, as a str) a court resource belongs to: its OWN
+    resource.product_id when set, else the club's DEFAULT court product (single court_booking
+    product). None when neither resolves — an unconfigured multi-product club, or billing absent —
+    in which case callers price unscoped (cheapest across court products). Guarded → default/None.
+
+    This is the single resolution rule booking + availability use to price a court at ITS service's
+    rate and to enumerate a service's own courts."""
+    if resource_id and _resource_has_product_col(session):
+        try:
+            pid = session.execute(
+                text("SELECT product_id FROM diary.resource WHERE club_id = :c AND id = :r"),
+                {"c": club_id, "r": resource_id},
+            ).scalar()
+            if pid:
+                return str(pid)
+        except Exception:
+            pass
+    return _default_court_product_id(session, club_id)
+
+
 def price_for(session, *, club_id, kind=None, duration_minutes=None, product_id=None,
               audience="any", coach_user_id=None):
     """Best matching billing.price for a service + a chosen duration. Returns a dict
@@ -65,6 +125,12 @@ def price_for(session, *, club_id, kind=None, duration_minutes=None, product_id=
     try:
         if not _billing_price_exists(session):
             return None
+        # COURT services are product-scoped: with several court products (Hardcourt vs Clay) the old
+        # 'cheapest across ALL court products' pick blended their rates. When no product_id is given
+        # for a court, resolve the club's DEFAULT court product so a single-service club is unchanged
+        # and a NULL-product court prices via the one shared product — never the cheapest of many.
+        if product_id is None and kind == "court_booking":
+            product_id = _default_court_product_id(session, club_id)
         params = {"c": club_id, "aud": audience}
         coach_scoped = False
         sql = ("SELECT p.id AS price_id, p.amount_minor, p.currency_code, p.unit, "
@@ -113,20 +179,31 @@ def price_for(session, *, club_id, kind=None, duration_minutes=None, product_id=
         return None
 
 
-def durations_for(session, *, club_id, kind, coach_user_id=None, audience="any"):
+def durations_for(session, *, club_id, kind, coach_user_id=None, audience="any", product_id=None):
     """Every priced duration for a service (the frontend duration picker). Returns a list of
     {duration_minutes, amount_minor, price_id, currency_code} sorted by duration ascending.
     Only rows with a duration set are returned (per-duration pricing). Guarded -> [] if billing
-    absent. For a lesson, coach_user_id scopes to that coach's product when available."""
+    absent. For a lesson, coach_user_id scopes to that coach's product when available. For a COURT,
+    product_id scopes to a specific court SERVICE (Hardcourt vs Clay); when omitted the DEFAULT
+    court product is resolved so a single-service club is unchanged."""
     try:
         if not _billing_price_exists(session):
             return []
-        params = {"c": club_id, "kind": kind, "aud": audience}
+        # COURT: scope to the chosen (or default) court product so durations don't blend services.
+        if product_id is None and kind == "court_booking":
+            product_id = _default_court_product_id(session, club_id)
+        params = {"c": club_id, "aud": audience}
         where = ["p.club_id = :c", "p.active = true", "pr.active = true",
-                 "pr.kind = :kind", "p.duration_minutes IS NOT NULL",
-                 "p.audience IN (:aud, 'any')"]
+                 "p.duration_minutes IS NOT NULL", "p.audience IN (:aud, 'any')"]
+        if product_id is not None:
+            # Hard product scope (a specific court/lesson service) — no kind/coach merge possible.
+            where.append("p.product_id = :pid")
+            params["pid"] = product_id
+        else:
+            where.append("pr.kind = :kind")
+            params["kind"] = kind
         coach_rank = ""
-        if coach_user_id is not None and _product_has_coach_col(session):
+        if product_id is None and coach_user_id is not None and _product_has_coach_col(session):
             # TWO-TIER (mirrors price_for so the picker shows EXACTLY what's charged): the coach's own
             # rate card if they have one, else a club-shared product — never a merge of both.
             where.append("pr.coach_user_id = :coach"
@@ -160,7 +237,11 @@ def services_for(session, *, club_id, kind, coach_user_id=None, audience="any"):
     modes + name — so the picker can offer e.g. 'Private lesson' vs 'Semi-private' separately (a coach
     can have several). Two-tier coach scope (own products, else shared), like price_for/durations_for.
     Returns [{product_id, name, payment_modes, currency_code, durations:[{duration_minutes,
-    amount_minor, price_id}]}] ordered by name. Guarded → []."""
+    amount_minor, price_id}]}] ordered by name. Guarded → [].
+
+    For kind='court_booking' this returns each court SERVICE (Hardcourt Hire, Clay Hire, …) with its
+    OWN durations + price — exactly what the client court picker calls to offer a specific service."""
+    _default_name = {"court_booking": "Court hire", "class": "Class"}.get(kind, "Lesson")
     try:
         if not _billing_price_exists(session):
             return []
@@ -187,7 +268,7 @@ def services_for(session, *, club_id, kind, coach_user_id=None, audience="any"):
             if svc is None:
                 modes = [m.strip() for m in str(r["payment_modes"] or "").split(",")
                          if m.strip() in _PAY_MODES]
-                svc = {"product_id": pid, "name": r["name"] or "Lesson",
+                svc = {"product_id": pid, "name": r["name"] or _default_name,
                        "payment_modes": (modes or None), "currency_code": r["currency_code"],
                        "durations": []}
                 by_id[pid] = svc
@@ -202,13 +283,25 @@ def services_for(session, *, club_id, kind, coach_user_id=None, audience="any"):
         return []
 
 
-def payment_modes_for(session, *, club_id, kind, coach_user_id=None):
+def payment_modes_for(session, *, club_id, kind, coach_user_id=None, product_id=None):
     """The per-service payment preference (allowed settlement modes) for this service's product —
     a subset of the club-enabled methods, or None (= no per-service restriction, all club-enabled).
-    `kind` is the PRODUCT kind (court_booking|lesson|class). Guarded -> None (never blocks booking)."""
+    `kind` is the PRODUCT kind (court_booking|lesson|class); product_id scopes to a specific court/
+    lesson SERVICE when given (a court service's own payment options). Guarded -> None."""
     try:
         if not _billing_price_exists(session):
             return None
+        if product_id is not None:
+            # Exact service — the one product's own preference.
+            csv = session.execute(
+                text("SELECT payment_modes FROM billing.product "
+                     "WHERE club_id = :c AND id = :pid AND active = true"),
+                {"c": club_id, "pid": product_id},
+            ).scalar()
+            if not csv:
+                return None
+            modes = [m.strip() for m in str(csv).split(",") if m.strip() in _PAY_MODES]
+            return modes or None
         where = ["club_id = :c", "kind = :kind", "active = true"]
         params = {"c": club_id, "kind": kind}
         coach_rank = ""

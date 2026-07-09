@@ -101,6 +101,17 @@ def _service_payment_modes_guarded(session, club_id, booking_type, coach_user_id
         return None
 
 
+def _court_service_guarded(session, club_id, resource_id):
+    """The court SERVICE (billing.product id) a court belongs to — its own resource.product_id, else
+    the club's default court product. Guarded → None (billing/column absent). Used to price a court
+    at ITS service's rate and to reject a court booked under the wrong service."""
+    try:
+        from diary.pricing import court_service_for_resource
+        return court_service_for_resource(session, club_id=club_id, resource_id=resource_id)
+    except Exception:
+        return None
+
+
 def _coach_class_conflict(session, club_id, coach_user_id, starts, ends):
     """True if the coach RUNS a scheduled class overlapping [starts, ends). A class_session is
     NOT a diary.booking, so the GiST exclusion constraint can't arbitrate a lesson-vs-class clash
@@ -418,6 +429,18 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     res = _resource(session, club_id, resource_id)
     if not res or not res["is_active"]:
         return _err("RESOURCE_NOT_FOUND", 404)
+
+    # Court SERVICE resolution + guard (Hardcourt vs Clay). `product_id` from the caller is the CHOSEN
+    # court service; the court MUST belong to it (its own resource.product_id, else the club's default
+    # court product) — a mismatch is rejected so a hard court can't be booked (and cheaply priced)
+    # under the Clay service. When no product_id is posted (single-service club) we still resolve the
+    # court's own service so the order is priced by THAT service, and the guard is skipped.
+    if booking_type == "court":
+        court_own_service = _court_service_guarded(session, club_id, resource_id)
+        if product_id and court_own_service and str(product_id) != str(court_own_service):
+            return _err("COURT_NOT_IN_SERVICE", 422,
+                        message="that court isn't part of the chosen court service")
+        product_id = product_id or court_own_service
 
     # ---- lesson approval gate (accept/propose/decline lifecycle) ----------------------------
     # A lesson is "gated" — created as 'requested' (reserving NOTHING: no court, no order, no

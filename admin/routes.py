@@ -216,6 +216,7 @@ def post_resource():
             kind=b.get("kind", "court"), name=b.get("name"),
             surface=b.get("surface"), capacity=b.get("capacity"),
             coach_user_id=b.get("coach_user_id"), rank=b.get("rank"),
+            product_id=b.get("product_id"),   # court SERVICE allocation (Hardcourt vs Clay)
         )
     return jsonify(resource=res), 201
 
@@ -231,6 +232,7 @@ def patch_resource(resource_id):
             s, club_id=p.club_id, resource_id=resource_id,
             name=b.get("name"), surface=b.get("surface"),
             is_active=b.get("is_active"), rank=b.get("rank"), capacity=b.get("capacity"),
+            product_id=b.get("product_id"),   # re-allocate the court to a court SERVICE
         )
     if res is None:
         return jsonify(error="NOT_FOUND"), 404

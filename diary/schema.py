@@ -47,6 +47,14 @@ _DDL = [
     f"ON {SCHEMA}.resource (club_id, kind, is_active);",
     f"CREATE INDEX IF NOT EXISTS ix_resource_coach "
     f"ON {SCHEMA}.resource (club_id, coach_user_id);",
+    # A COURT belongs to a court SERVICE (billing.product kind='court_booking') — e.g. 'Hardcourt
+    # Hire' vs 'Clay Hire' — so distinct court services can carry their OWN price + allocated courts.
+    # Plain uuid (NOT a hard FK) to keep the diary decoupled from billing.* (same as coach_user_id).
+    # NULL = unallocated → resolves to the club's DEFAULT court product (single-service clubs behave
+    # exactly as before). Meaningful only for kind='court'.
+    f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS product_id uuid;",
+    f"CREATE INDEX IF NOT EXISTS ix_resource_product "
+    f"ON {SCHEMA}.resource (club_id, product_id);",
 
     # --- diary.availability_rule : recurring open hours per resource ------
     f"""

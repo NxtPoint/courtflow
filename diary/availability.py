@@ -59,9 +59,15 @@ def _policy(session, club_id):
     }
 
 
-def _resources(session, *, club_id, resource_id, kind, coach_user_id, surface):
+def _resources(session, *, club_id, resource_id, kind, coach_user_id, surface,
+               product_id=None, include_null_product=False):
     """Resolve the set of resources to compute over. A single resource_id, or a filtered
-    set (kind/coach/surface) for the 'any court' / 'any coach' union."""
+    set (kind/coach/surface) for the 'any court' / 'any coach' union.
+
+    product_id (court services): when given, restrict COURT resources to that court SERVICE — the
+    courts whose resource.product_id = :pid, plus NULL-product courts ONLY when :pid is the club's
+    DEFAULT court product (include_null_product). This is what keeps a Clay-service availability from
+    leaking hard courts."""
     if resource_id:
         rows = session.execute(
             text("SELECT id, name, kind, surface, capacity, coach_user_id FROM diary.resource "
@@ -77,6 +83,9 @@ def _resources(session, *, club_id, resource_id, kind, coach_user_id, surface):
         where.append("coach_user_id = :coach"); params["coach"] = coach_user_id
     if surface:
         where.append("surface = :surface"); params["surface"] = surface
+    if product_id is not None:
+        where.append("(product_id = :pid" + (" OR product_id IS NULL)" if include_null_product else ")"))
+        params["pid"] = product_id
     # Exclude coaches not accepting bookings (is_bookable=false) from the union ("any coach"). Court
     # resources have coach_user_id NULL so they're unaffected. (booking-validation sprint #8)
     where.append("NOT EXISTS (SELECT 1 FROM iam.coach_profile cp "
@@ -197,7 +206,8 @@ _LESSON_KINDS = ("coach", "lesson")
 def compute_availability(session, *, club_id, resource_id=None, kind=None,
                          coach_user_id=None, surface=None, date_from=None, date_to=None,
                          duration_minutes=None, audience="member", any_resource=False,
-                         membership_covered=False, membership_windows=None, now=None):
+                         membership_covered=False, membership_windows=None, product_id=None,
+                         now=None):
     """Return free slots for the resolved resource(s). Each slot:
         {start, end, resource_id, resource_name, kind, price}
     where price is the per-duration price for the chosen duration_minutes (guarded; None if
@@ -234,8 +244,18 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
     if range_end <= range_start:
         return []
 
+    # Court-service scope (Hardcourt vs Clay): a court request scoped to a service enumerates ONLY
+    # that service's courts and prices via that service's product. NULL-product courts are included
+    # only when the requested product IS the club's default court product (a single-service club, or
+    # the unallocated fallback). Lessons/classes ignore product_id here (their court is auto-picked).
+    court_product_id = product_id if kind == "court" else None
+    include_null_courts = False
+    if court_product_id is not None:
+        include_null_courts = (str(court_product_id) ==
+                               str(pricing._default_court_product_id(session, club_id) or ""))
     resources = _resources(session, club_id=club_id, resource_id=resource_id, kind=kind,
-                           coach_user_id=coach_user_id, surface=surface)
+                           coach_user_id=coach_user_id, surface=surface,
+                           product_id=court_product_id, include_null_product=include_null_courts)
     # Per-duration PAYG price for the chosen slot length (always computed — an off-peak member still
     # pays this at PEAK times). amount_minor (cents) or None when unpriced. Coverage is then decided
     # PER SLOT below: 0 only when an active membership window covers that slot's local start; outside
@@ -243,6 +263,7 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
     # then RX" correct in the calendar — and matches the server's settle decision (membership_covers).
     pr = pricing.price_for(session, club_id=club_id, kind=_price_kind(kind),
                            duration_minutes=duration_min, coach_user_id=coach_user_id,
+                           product_id=court_product_id,   # price a court slot at ITS service's rate
                            audience=audience)
     payg_price = pr.get("amount_minor") if pr else None
     windows = membership_windows or []

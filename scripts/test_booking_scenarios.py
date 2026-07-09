@@ -454,6 +454,105 @@ def sc_offpeak_slot_pricing(s, fx):
           f"weekday={is_weekday} price={s10 and s10.get('price')}")
 
 
+def sc_court_service_allocation(s, fx):
+    print("\n# Court services: distinct products over allocated courts (price + availability isolation)")
+    member = fx.members[0]
+    # Two court SERVICES at DIFFERENT prices (Hardcourt R150/60, Clay R280/60).
+    hard = s.execute(text("INSERT INTO billing.product (club_id, kind, name, active) "
+                          "VALUES (:c,'court_booking','Hardcourt Hire',true) RETURNING id"),
+                     {"c": fx.club_id}).scalar()
+    clay = s.execute(text("INSERT INTO billing.product (club_id, kind, name, active) "
+                          "VALUES (:c,'court_booking','Clay Hire',true) RETURNING id"),
+                     {"c": fx.club_id}).scalar()
+    for pid, amt in ((hard, 15000), (clay, 28000)):
+        s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                       "currency_code, unit, duration_minutes, active) "
+                       "VALUES (:c,:p,'any',:a,'ZAR','per_booking',60,true)"),
+                  {"c": fx.club_id, "p": pid, "a": amt})
+    # Allocate: the two existing (hard) courts → Hardcourt; a NEW clay court → Clay.
+    for cid in fx.courts:
+        s.execute(text("UPDATE diary.resource SET product_id=:p WHERE id=:r"), {"p": hard, "r": cid})
+    clay_court = s.execute(
+        text("INSERT INTO diary.resource (club_id, kind, name, surface, rank, product_id) "
+             "VALUES (:c,'court','Clay Court','clay',3,:p) RETURNING id"),
+        {"c": fx.club_id, "p": clay}).scalar()
+    s.execute(text("INSERT INTO diary.availability_rule (club_id, resource_id, weekday, start_time, "
+                   "end_time, slot_minutes) VALUES (:c,:r,:wd,'08:00','18:00',60)"),
+              {"c": fx.club_id, "r": clay_court, "wd": fx.target.weekday()})
+
+    # --- pricing scoped per product (NO cheapest-across leak) ---
+    hp = P.price_for(s, club_id=fx.club_id, kind="court_booking", duration_minutes=60, product_id=hard)
+    cp = P.price_for(s, club_id=fx.club_id, kind="court_booking", duration_minutes=60, product_id=clay)
+    check("hardcourt price scoped to R150", bool(hp) and hp["amount_minor"] == 15000, str(hp))
+    check("clay price scoped to R280 (not the cheaper hard rate)", bool(cp) and cp["amount_minor"] == 28000, str(cp))
+    hd = P.durations_for(s, club_id=fx.club_id, kind="court_booking", product_id=hard)
+    cd = P.durations_for(s, club_id=fx.club_id, kind="court_booking", product_id=clay)
+    check("hardcourt durations = its price only", len(hd) == 1 and hd[0]["amount_minor"] == 15000, str(hd))
+    check("clay durations = its price only", len(cd) == 1 and cd[0]["amount_minor"] == 28000, str(cd))
+
+    # court_service_for_resource resolves each court's own service.
+    check("hard court resolves → Hardcourt product",
+          str(P.court_service_for_resource(s, club_id=fx.club_id, resource_id=fx.courts[0])) == str(hard))
+    check("clay court resolves → Clay product",
+          str(P.court_service_for_resource(s, club_id=fx.club_id, resource_id=clay_court)) == str(clay))
+
+    # --- availability scoped to the service's courts + priced by the service ---
+    clay_slots = A.compute_availability(
+        s, club_id=fx.club_id, kind="court", product_id=clay,
+        date_from=utc_iso(at(fx, 8)), date_to=utc_iso(at(fx, 18)),
+        duration_minutes=60, audience="member")
+    clay_rids = {sl["resource_id"] for sl in clay_slots}
+    check("clay availability returns ONLY the clay court", clay_rids == {str(clay_court)}, str(clay_rids))
+    check("clay slots priced at the clay rate (R280)",
+          bool(clay_slots) and all(sl["price"] == 28000 for sl in clay_slots),
+          str(clay_slots[:1]))
+    hard_slots = A.compute_availability(
+        s, club_id=fx.club_id, kind="court", product_id=hard,
+        date_from=utc_iso(at(fx, 8)), date_to=utc_iso(at(fx, 18)),
+        duration_minutes=60, audience="member")
+    hard_rids = {sl["resource_id"] for sl in hard_slots}
+    # (The 'any court' union collapses identical times to the first free court, so hard_rids is a
+    # SUBSET of the hard courts — the invariant is that only hard courts appear, never the clay one.)
+    check("hardcourt availability excludes the clay court", str(clay_court) not in hard_rids, str(hard_rids))
+    check("hardcourt availability returns only hard courts",
+          bool(hard_rids) and hard_rids <= {str(c) for c in fx.courts}, str(hard_rids))
+    check("hardcourt slots priced at the hard rate (R150)",
+          bool(hard_slots) and all(sl["price"] == 15000 for sl in hard_slots), str(hard_slots[:1]))
+
+    # --- booking charges the SERVICE's rate ---
+    start = at(fx, 9)
+    rc = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=member, role="member",
+                          booking_type="court", resource_id=clay_court, product_id=clay,
+                          starts_at=utc_iso(start), ends_at=utc_iso(at(fx, 10)))
+    check("clay court booked", rc.get("ok"), str(rc))
+    clay_amt = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                         {"o": rc["booking"]["order_id"]}).scalar() if rc.get("ok") else None
+    check("clay booking charged R280", clay_amt == 28000, f"amount={clay_amt}")
+    rh = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=member, role="member",
+                          booking_type="court", resource_id=fx.courts[0], product_id=hard,
+                          starts_at=utc_iso(start), ends_at=utc_iso(at(fx, 10)))
+    check("hard court booked", rh.get("ok"), str(rh))
+    hard_amt = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                         {"o": rh["booking"]["order_id"]}).scalar() if rh.get("ok") else None
+    check("hard booking charged R150 (not blended)", hard_amt == 15000, f"amount={hard_amt}")
+
+    # --- wrong-service guard: a Hardcourt court booked under the Clay service → rejected ---
+    rw = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[1], role="member",
+                          booking_type="court", resource_id=fx.courts[1], product_id=clay,
+                          starts_at=utc_iso(at(fx, 11)), ends_at=utc_iso(at(fx, 12)))
+    check("hard court booked under Clay service → COURT_NOT_IN_SERVICE",
+          rw.get("error") == "COURT_NOT_IN_SERVICE", str(rw))
+
+    # --- NULL-fallback: no product_id posted → prices via the court's own service (R150) ---
+    rn = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[2], role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 14)))
+    check("hard court booked with NO posted service", rn.get("ok"), str(rn))
+    namt = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                     {"o": rn["booking"]["order_id"]}).scalar() if rn.get("ok") else None
+    check("unscoped booking still charged the court's own (hard) rate R150", namt == 15000, f"amount={namt}")
+
+
 SCENARIOS = [
     sc_court_book_cancel,
     sc_court_reschedule,
@@ -465,6 +564,7 @@ SCENARIOS = [
     sc_class_waitlist,
     sc_lesson_lifecycle,
     sc_offpeak_slot_pricing,
+    sc_court_service_allocation,
 ]
 
 

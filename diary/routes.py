@@ -124,6 +124,7 @@ def availability():
             audience=audience,
             any_resource=(q.get("any") in ("1", "true", "yes")),
             membership_covered=bool(windows), membership_windows=windows,
+            product_id=q.get("product_id"),   # court SERVICE scope (Hardcourt vs Clay)
         )
     return jsonify(slots=slots, count=len(slots)), 200
 
@@ -144,16 +145,18 @@ def durations():
                                      else "visitor")
     # The booking 'court'/'lesson' kind maps to the billing product kind (court_booking/lesson).
     price_kind = {"court": "court_booking", "lesson": "lesson", "coach": "lesson"}.get(kind, kind)
+    product_id = q.get("product_id")   # a specific court/lesson SERVICE (Hardcourt vs Clay, etc.)
     with session_scope() as s:
         rows = pricing_mod.durations_for(
             s, club_id=p.club_id, kind=price_kind,
-            coach_user_id=q.get("coach_id"), audience=audience)
+            coach_user_id=q.get("coach_id"), audience=audience, product_id=product_id)
         covered = bool(kind == "court" and pricing_mod.has_active_membership(
             s, club_id=p.club_id, user_id=p.user_id))
         # Per-service payment preference (which methods THIS service offers) — the booking flow
         # intersects its pay options with this. None = no restriction (all club-enabled).
         pay_modes = pricing_mod.payment_modes_for(
-            s, club_id=p.club_id, kind=price_kind, coach_user_id=q.get("coach_id"))
+            s, club_id=p.club_id, kind=price_kind, coach_user_id=q.get("coach_id"),
+            product_id=product_id)
     currency = rows[0]["currency_code"] if rows else None
     out = [{"duration_minutes": r["duration_minutes"], "amount_minor": r["amount_minor"],
             "price_id": r["price_id"]} for r in rows]
