@@ -33,6 +33,7 @@ import glob
 import json
 import base64
 import logging
+import re
 from flask import Flask, send_file, jsonify, request, Response, abort, redirect
 
 log = logging.getLogger("courtflow.web")
@@ -251,6 +252,19 @@ def _inject_head(html: str, b: Branding) -> str:
     return head + html
 
 
+# Per-deploy cache-bust token: RENDER_GIT_COMMIT changes on every deploy (stable within one), so
+# appending it to asset URLs makes browsers refetch new JS/CSS after a deploy — no more stale SPA
+# JS needing a manual hard-refresh. Falls back to "dev" locally.
+ASSET_VERSION = ((os.environ.get("RENDER_GIT_COMMIT") or "")[:12]) or "dev"
+_ASSET_RE = re.compile(r'((?:src|href)="/[^"?]+\.(?:js|css))"')
+
+
+def _bust(html: str) -> str:
+    """Append ?v=<deploy> to root-relative, query-less .js/.css asset refs so a deploy invalidates
+    the browser cache. External URLs (https://…) and already-versioned refs are left untouched."""
+    return _ASSET_RE.sub(r'\1?v=' + ASSET_VERSION + '"', html)
+
+
 def _html(rel_path: str):
     """Serve an HTML file with branding/config injected. `rel_path` is relative to
     FRONTEND_DIR. Non-HTML files are streamed as-is."""
@@ -265,6 +279,7 @@ def _html(rel_path: str):
         b = _branding()
         html = apply_chrome(html, b)   # shared nav/footer markers (marketing pages)
         html = _inject_head(html, b)
+        html = _bust(html)             # per-deploy cache-bust on local js/css refs
         return Response(html, mimetype="text/html")
     except Exception:
         return send_file(path)
