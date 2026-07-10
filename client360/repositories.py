@@ -349,6 +349,75 @@ def _notifications_unread(session, *, club_id, user_id):
 
 
 # ---------------------------------------------------------------------------
+# Mission 1.2 — data now reachable via the iam.user <-> core.person bridge: full
+# demographics, consent state, and the CRM/behavioural event stream. All guarded (a
+# missing/empty core.* degrades to a safe default), reuse-first, additive to the payload.
+# ---------------------------------------------------------------------------
+
+def _profile(session, *, user_id):
+    """Full member demographics (dob, address, emergency contact, marketing_opt_in) from iam.user.
+    Reuses iam.repositories.get_profile. Guarded → {}."""
+    try:
+        from iam.repositories import get_profile
+        return get_profile(session, user_id=user_id) or {}
+    except Exception:
+        session.rollback()
+        return {}
+
+
+def _consent(session, *, user_id):
+    """Latest consent state per type (marketing_email / privacy / parental) for this human, joined
+    via the bridge (iam.user → core.person → core.consent). Guarded → []."""
+    try:
+        rows = session.execute(text("""
+            SELECT c.consent_type, c.status, c.policy_version, c.granted_at, c.withdrawn_at
+            FROM core.person p
+            JOIN core.consent c ON c.subject_person_id = p.id
+            WHERE p.iam_user_id = :u
+            ORDER BY c.consent_type, c.granted_at DESC NULLS LAST
+        """), {"u": str(user_id)}).mappings().all()
+    except Exception:
+        session.rollback()
+        return []
+    seen, out = set(), []
+    for r in rows:
+        t = r["consent_type"]
+        if t in seen:
+            continue
+        seen.add(t)
+        out.append({
+            "consent_type": t, "status": r["status"], "policy_version": r["policy_version"],
+            "granted_at": r["granted_at"].isoformat() if hasattr(r["granted_at"], "isoformat") else r["granted_at"],
+            "withdrawn_at": r["withdrawn_at"].isoformat() if hasattr(r["withdrawn_at"], "isoformat") else r["withdrawn_at"],
+        })
+    return out
+
+
+def _events(session, *, user_id, limit=50):
+    """The CRM/behavioural event stream (booking/payment/lifecycle/marketing) for this human — the
+    behavioural half of the activity timeline, now attributable via the bridge (iam.user →
+    core.person → core.usage_event by account). billing.activity remains the money half.
+    Guarded → []. (Sparse historically — account_id was NULL before the Slice-0 backfill — and
+    fills going forward as emit() resolves the now-existing accounts.)"""
+    try:
+        rows = session.execute(text("""
+            SELECT ue.event_type, ue.ref_type, ue.ref_id, ue.occurred_at
+            FROM core.person p
+            JOIN core.usage_event ue ON ue.account_id = p.account_id
+            WHERE p.iam_user_id = :u AND p.account_id IS NOT NULL
+            ORDER BY ue.occurred_at DESC
+            LIMIT :lim
+        """), {"u": str(user_id), "lim": int(limit)}).mappings().all()
+    except Exception:
+        session.rollback()
+        return []
+    return [{
+        "event_type": r["event_type"], "ref_type": r["ref_type"], "ref_id": r["ref_id"],
+        "at": r["occurred_at"].isoformat() if hasattr(r["occurred_at"], "isoformat") else r["occurred_at"],
+    } for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # capability map (per scope) — booleans the frontend gates actions on
 # ---------------------------------------------------------------------------
 
@@ -415,6 +484,11 @@ def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=No
     out["refunds"] = _refunds(session, club_id=club_id, user_id=user_id)
     out["activity"] = _activity(session, club_id=club_id, user_id=user_id)
     out["notifications_unread"] = _notifications_unread(session, club_id=club_id, user_id=user_id)
+    # Mission 1.2 — surface the now-linked data on the 360 (via the iam.user<->core.person bridge):
+    # full demographics, consent state, and the CRM/behavioural event stream.
+    out["profile"] = _profile(session, user_id=user_id)
+    out["consent"] = _consent(session, user_id=user_id)
+    out["events"] = _events(session, user_id=user_id)
 
     # Coaching statement — coach + admin scopes only (the coach's per-client coaching view).
     if scope in ("coach", "admin"):
