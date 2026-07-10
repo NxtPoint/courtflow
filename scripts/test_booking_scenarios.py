@@ -363,6 +363,70 @@ def sc_class_waitlist(s, fx):
     check("cancel promotes the waitlister", cr.get("promoted") is not None, str(cr))
 
 
+def sc_class_online_hold_expiry(s, fx):
+    print("\n# Class: unpaid ONLINE seat is HELD, lazily released on abandonment, waitlister promoted")
+    C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                        dates=[fx.target.isoformat()], start_time="16:00",
+                        duration_minutes=90, capacity=1)
+    sid = s.execute(
+        text("SELECT id FROM diary.class_session WHERE club_id=:c AND resource_id=:r "
+             "AND starts_at = :sa"),
+        {"c": fx.club_id, "r": fx.class_res, "sa": at(fx, 16)},
+    ).scalar()
+    # Online enrol HOLDS the seat pending the Yoco payment: awaiting_payment order + held_until stamp,
+    # and the response carries the order to pay (the paywall seam the frontend drives).
+    r1 = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[0],
+                 settlement_mode="online")
+    check("online enrol seated (held)", r1.get("status_value") == "enrolled", str(r1))
+    check("online enrol returns an order to pay", bool(r1.get("order_id")), str(r1))
+    held, ostatus = s.execute(
+        text('SELECT e.held_until, o.status FROM diary.enrolment e '
+             'JOIN billing."order" o ON o.id = e.order_id '
+             'WHERE e.class_session_id=:cs AND e.user_id=:u'),
+        {"cs": sid, "u": fx.members[0]}).first()
+    check("held_until stamped on the online seat", held is not None)
+    check("order awaiting_payment (paywall pending)", ostatus == "awaiting_payment", str(ostatus))
+    # A second member is waitlisted behind the held seat (capacity 1).
+    r2 = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[1],
+                 settlement_mode="online")
+    check("2nd online enrol waitlisted behind the held seat",
+          r2.get("status_value") == "waitlisted", str(r2))
+    # Simulate an abandoned checkout: backdate the hold, then run lazy expiry (as a class read would).
+    s.execute(text("UPDATE diary.enrolment SET held_until = now() - interval '1 minute' "
+                   "WHERE class_session_id=:cs AND user_id=:u"),
+              {"cs": sid, "u": fx.members[0]})
+    released = C.release_expired_enrolments(s, club_id=fx.club_id, class_session_id=sid)
+    check("lapsed unpaid seat released", released == 1, f"released={released}")
+    st0, ost0 = s.execute(
+        text('SELECT e.status, o.status FROM diary.enrolment e '
+             'JOIN billing."order" o ON o.id = e.order_id '
+             'WHERE e.class_session_id=:cs AND e.user_id=:u'),
+        {"cs": sid, "u": fx.members[0]}).first()
+    check("abandoned seat is now cancelled", st0 == "cancelled", str(st0))
+    check("its unpaid order was voided", ost0 == "void", str(ost0))
+    st1 = s.execute(text("SELECT status FROM diary.enrolment WHERE class_session_id=:cs AND user_id=:u"),
+                    {"cs": sid, "u": fx.members[1]}).scalar()
+    check("waitlister promoted into the freed seat", st1 == "enrolled", str(st1))
+    # A PAID online seat must NEVER be expired even once its hold lapses.
+    C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                        dates=[fx.target.isoformat()], start_time="15:00",
+                        duration_minutes=60, capacity=1)
+    sid2 = s.execute(
+        text("SELECT id FROM diary.class_session WHERE club_id=:c AND resource_id=:r AND starts_at=:sa"),
+        {"c": fx.club_id, "r": fx.class_res, "sa": at(fx, 15)}).scalar()
+    check("paid-guard session created", sid2 is not None)
+    rp = C.enrol(s, club_id=fx.club_id, class_session_id=sid2, user_id=fx.members[2],
+                 settlement_mode="online")
+    s.execute(text("UPDATE billing.\"order\" SET status='paid' WHERE id=:o"), {"o": rp.get("order_id")})
+    s.execute(text("UPDATE diary.enrolment SET held_until = now() - interval '1 minute' "
+                   "WHERE class_session_id=:cs AND user_id=:u"), {"cs": sid2, "u": fx.members[2]})
+    rel2 = C.release_expired_enrolments(s, club_id=fx.club_id, class_session_id=sid2)
+    check("a PAID seat is never released", rel2 == 0, f"released={rel2}")
+    stp = s.execute(text("SELECT status FROM diary.enrolment WHERE class_session_id=:cs AND user_id=:u"),
+                    {"cs": sid2, "u": fx.members[2]}).scalar()
+    check("paid seat stays enrolled", stp == "enrolled", str(stp))
+
+
 def sc_lesson_lifecycle(s, fx):
     print("\n# Lesson approval lifecycle (coach review ON): request → accept / decline / propose")
     s.execute(text("UPDATE iam.coach_profile SET review_bookings = true "
@@ -696,6 +760,7 @@ SCENARIOS = [
     sc_coach_class_conflict,
     sc_slot_granularity,
     sc_class_waitlist,
+    sc_class_online_hold_expiry,
     sc_lesson_lifecycle,
     sc_offpeak_slot_pricing,
     sc_court_service_allocation,

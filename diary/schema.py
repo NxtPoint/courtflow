@@ -256,6 +256,13 @@ _DDL = [
     f"ALTER TABLE {SCHEMA}.enrolment ADD COLUMN IF NOT EXISTS payer_user_id uuid;",
     f"ALTER TABLE {SCHEMA}.enrolment ADD COLUMN IF NOT EXISTS settlement_mode text;",
     f"ALTER TABLE {SCHEMA}.enrolment ADD COLUMN IF NOT EXISTS audience text;",
+    # An ONLINE enrolment HOLDS its seat (status='enrolled') the instant it's created, awaiting the
+    # Yoco payment — held_until stamps when that hold lapses. If the client abandons checkout the seat
+    # is lazily released (release_expired_enrolments), the class analogue of the court hold. NULL for
+    # firm seats (at-court/monthly/token/membership) — those are never auto-expired.
+    f"ALTER TABLE {SCHEMA}.enrolment ADD COLUMN IF NOT EXISTS held_until timestamptz;",
+    f"CREATE INDEX IF NOT EXISTS ix_enrolment_held "
+    f"ON {SCHEMA}.enrolment (held_until) WHERE held_until IS NOT NULL;",
 
     # --- diary.waitlist : generic waitlist (court slot freeing up) -------
     f"""

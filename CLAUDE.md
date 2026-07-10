@@ -19,10 +19,11 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 86 / billing 239 / statement 47**. Each uses its own scratch club and always rolls back.
-   - `test_booking_scenarios` (86) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   **booking 98 / billing 239 / statement 47**. Each uses its own scratch club and always rolls back.
+   - `test_booking_scenarios` (98) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
-     conflict guard + auto-repick) + editable**.
+     conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
+     waitlister promoted (paid seat never expired)**.
    - `test_billing_scenarios` (239) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
@@ -241,7 +242,10 @@ else `sole_club_id`) because the DB-less web can't emit the UUID, and stores a n
   not `account_id`).
 - **Capacity-sweep needs no cron:** abandoned `held` bookings are released by **lazy expiry** —
   `release_expired_holds` runs at the top of `compute_availability` + `create_booking`. The four `render.yaml`
-  crons stay commented out.
+  crons stay commented out. **Classes have the same seam:** an `online` class enrolment holds its seat
+  (`diary.enrolment.held_until`) pending the Yoco payment; `release_expired_enrolments` (top of
+  `list_sessions` + `enrol`) cancels the lapsed-unpaid seat, voids its `awaiting_payment` order, and promotes
+  the waitlist — a **paid** seat (order no longer `awaiting_payment`) is never touched.
 
 ## Still needs Tomo (config, not code)
 - **S3** (`S3_BUCKET` + AWS keys) for coach photo uploads — until set, coaches paste a photo URL.

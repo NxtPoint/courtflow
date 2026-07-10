@@ -22,6 +22,10 @@ from diary.bookings import _create_order_guarded
 
 log = logging.getLogger("diary.classes")
 
+# Unpaid ONLINE class seat: how long the seat is held before lazy expiry frees it. Mirrors the court
+# hold (diary.bookings.HOLD_MINUTES_DEFAULT) so a class checkout behaves like a court checkout.
+ONLINE_HOLD_MINUTES = 30
+
 
 def _err(error, status, **extra):
     d = {"ok": False, "error": error, "status": status}
@@ -78,6 +82,10 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
     if cs["status"] != "scheduled":
         return _err("SESSION_CLOSED", 409, status_value=cs["status"])
 
+    # Free any lapsed unpaid-online seats on THIS session first, so a new enrolee can take a freed
+    # seat instead of queueing on the waitlist behind someone's abandoned checkout.
+    release_expired_enrolments(session, club_id=club_id, class_session_id=class_session_id)
+
     existing = session.execute(
         text("SELECT id, status FROM diary.enrolment "
              "WHERE class_session_id=:cs AND user_id=:u"),
@@ -95,19 +103,26 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
     # Capture the billing intent on the enrolment (payer / mode / audience) so a WAITLIST promotion
     # can settle the seat exactly as an enrol would — even for a parent-paid child.
     intent = {"payer": payer_user_id, "mode": settlement_mode, "aud": audience}
+    # An ONLINE seat is HELD pending the Yoco payment; abandonment lazily frees it (see
+    # release_expired_enrolments). Firm modes (at-court/monthly/token/membership) get no hold, and a
+    # waitlisted seat holds nothing (it bills only on promotion). CAST guards the psycopg :param-IS-NULL.
+    hold_mins = ONLINE_HOLD_MINUTES if (settlement_mode == "online" and target == "enrolled") else None
+    held_expr = ("CASE WHEN CAST(:hold_mins AS int) IS NULL THEN NULL "
+                 "ELSE now() + make_interval(mins => :hold_mins) END")
     if existing:  # reactivate a previously cancelled enrolment (refresh the billing intent)
         session.execute(
             text("UPDATE diary.enrolment SET status=:st, payer_user_id=:payer, "
-                 "settlement_mode=:mode, audience=:aud, updated_at=now() WHERE id=:id"),
-            dict(intent, st=target, id=existing["id"]),
+                 "settlement_mode=:mode, audience=:aud, held_until=" + held_expr + ", "
+                 "updated_at=now() WHERE id=:id"),
+            dict(intent, st=target, id=existing["id"], hold_mins=hold_mins),
         )
         enrol_id = existing["id"]
     else:
         row = session.execute(
             text("INSERT INTO diary.enrolment (club_id, class_session_id, user_id, status, "
-                 "payer_user_id, settlement_mode, audience) "
-                 "VALUES (:c, :cs, :u, :st, :payer, :mode, :aud) RETURNING id"),
-            dict(intent, c=club_id, cs=class_session_id, u=user_id, st=target),
+                 "payer_user_id, settlement_mode, audience, held_until) "
+                 "VALUES (:c, :cs, :u, :st, :payer, :mode, :aud, " + held_expr + ") RETURNING id"),
+            dict(intent, c=club_id, cs=class_session_id, u=user_id, st=target, hold_mins=hold_mins),
         ).mappings().first()
         enrol_id = row["id"]
 
@@ -273,8 +288,65 @@ def _promote_waitlist(session, *, club_id, cs):
     return str(nxt["id"])
 
 
+def release_expired_enrolments(session, *, club_id, class_session_id=None):
+    """Lazy expiry of UNPAID online class seats — the class analogue of release_expired_holds for
+    courts. An 'online' enrolment holds its seat (status='enrolled') the moment it's created, stamped
+    with held_until; if the client abandons the Yoco checkout the seat would otherwise sit unpaid
+    forever. Here we cancel each enrolment whose hold lapsed AND whose order is STILL awaiting_payment
+    (a seat that got paid — or was manually collected/converted — is NEVER touched), void the pending
+    order, and promote the waitlist into the freed seat. Runs at the top of the class read + enrol
+    paths (session_scope commits), so freed seats reappear with no cron. Returns the count released."""
+    where = ["e.club_id = :c", "e.status = 'enrolled'", "e.held_until IS NOT NULL",
+             "e.held_until < now()", "o.status = 'awaiting_payment'"]
+    params = {"c": club_id}
+    if class_session_id:
+        where.append("e.class_session_id = :cs")
+        params["cs"] = class_session_id
+    rows = session.execute(
+        text('SELECT e.id, e.class_session_id FROM diary.enrolment e '
+             'JOIN billing."order" o ON o.id = e.order_id '
+             'WHERE ' + " AND ".join(where)),
+        params,
+    ).mappings().all()
+    if not rows:
+        return 0
+    # Group by session so we lock each session once and promote AFTER freeing all its lapsed seats.
+    by_session = {}
+    for r in rows:
+        by_session.setdefault(r["class_session_id"], []).append(r["id"])
+    released = 0
+    for cs_id, enrol_ids in by_session.items():
+        cs = _session_row(session, club_id, cs_id, lock=True)
+        if not cs:
+            continue
+        for eid in enrol_ids:
+            oid = session.execute(
+                text("SELECT order_id FROM diary.enrolment WHERE id=:id"), {"id": eid}).scalar()
+            session.execute(
+                text("UPDATE diary.enrolment SET status='cancelled', held_until=NULL, "
+                     "updated_at=now() WHERE id=:id"),
+                {"id": eid})
+            # Void the still-unpaid order (void_order no-ops if it somehow got paid between the
+            # SELECT above and here — the paid seat then simply stays cancelled-but-that-won't-happen).
+            if oid:
+                try:
+                    from billing.statement import void_order
+                    void_order(session, club_id=club_id, order_id=oid,
+                               reason="online class hold expired (unpaid)")
+                except Exception:
+                    log.debug("expired-hold order void skipped", exc_info=False)
+            released += 1
+        # A freed seat may let a waitlisted player in — billed as an owed at-court seat (async
+        # promotion can't drive an online checkout), exactly as a normal cancellation would.
+        _promote_waitlist(session, club_id=club_id, cs=cs)
+    return released
+
+
 def list_sessions(session, *, club_id, date_from=None, date_to=None, resource_id=None):
     """Class sessions with capacity + spots_left (docs/03 §8 GET /classes)."""
+    # Lazy expiry (mirrors courts releasing holds inside compute_availability): free any lapsed
+    # unpaid-online seats first so spots_left reflects real availability without a cron.
+    release_expired_enrolments(session, club_id=club_id)
     where = ["cs.club_id = :c", "cs.status = 'scheduled'"]
     params = {"c": club_id}
     if date_from:
