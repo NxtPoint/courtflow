@@ -99,6 +99,15 @@ _SUPPLEMENTAL = [
     f'CREATE INDEX IF NOT EXISTS ix_person_club ON {SCHEMA}.person (club_id)',
     f'CREATE INDEX IF NOT EXISTS ix_usage_event_club_time ON {SCHEMA}.usage_event (club_id, occurred_at)',
     f'CREATE INDEX IF NOT EXISTS ix_consent_club ON {SCHEMA}.consent (club_id)',
+
+    # Client-360 bridge (Slice-0 Step 1): core.person <-> the canonical identity iam.user (UUID).
+    # ADD COLUMN here because create_all() only creates missing TABLES, never alters an existing
+    # one (the prod core.person predates this column). The partial-unique index enforces the 1:1
+    # link while allowing many NULLs during the Step-3 backfill; the plain index is the lookup path
+    # for the forward-create helper. FK to iam.user is added post-backfill. See CLIENT-360-CRM-PLAN §10.
+    f'ALTER TABLE {SCHEMA}.person ADD COLUMN IF NOT EXISTS iam_user_id uuid',
+    f'CREATE UNIQUE INDEX IF NOT EXISTS uq_person_iam_user ON {SCHEMA}.person (iam_user_id) WHERE iam_user_id IS NOT NULL',
+    f'CREATE INDEX IF NOT EXISTS ix_person_iam_user ON {SCHEMA}.person (iam_user_id)',
 ]
 
 # Cross-schema FKs to club.club, added defensively (ADD CONSTRAINT has no IF NOT EXISTS,

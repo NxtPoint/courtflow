@@ -136,6 +136,12 @@ class Person(Base):
     club_id = _club_id(nullable=True)
     user_id = Column(BigInteger, ForeignKey(f"{SCHEMA}.app_user.id", ondelete="SET NULL"), nullable=True)
 
+    # Client-360 bridge to the CANONICAL identity (iam.user, a UUID). This CRM person is the
+    # 1:1 satellite of an iam.user; the link is set by the Step-2 forward-create + Step-3 backfill.
+    # Nullable during the transition; the partial-unique index (schema.py) enforces 1:1. The FK to
+    # iam.user is added post-backfill. See docs/specs/CLIENT-360-CRM-PLAN.md §10.
+    iam_user_id = Column(UUID(as_uuid=True), nullable=True)
+
     role = Column(Text, nullable=False, server_default=text("'player'"))  # player|parent|coach
     is_primary = Column(Boolean, nullable=False, server_default=text("false"))
     full_name = Column(Text, nullable=False)
