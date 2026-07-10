@@ -17,6 +17,7 @@ from auth import resolve_principal
 from db import session_scope
 from iam.permissions import can
 from iam import repositories as iam_repo
+from iam.validation import missing_min_fields
 from diary import availability as availability_mod
 from diary import bookings as bookings_mod
 from diary import classes as classes_mod
@@ -61,6 +62,35 @@ def _result(res):
 
 def _body():
     return request.get_json(silent=True) or {}
+
+
+def _min_profile_gate(p, b):
+    """Client-360 Step 4 — minimum-data capture at the first booking. For a SELF-booking member
+    (staff + on-behalf are exempt), persist any name/surname/cell the SPA supplied, sync the CRM
+    satellite, then return a 422 {needs_profile:[...]} response if the profile is still incomplete
+    (the booking widget renders a 'confirm your details' step + re-submits). Returns None to
+    proceed. See docs/specs/CLIENT-360-CRM-PLAN.md §10 Step 4."""
+    if p.role != "member":
+        return None
+    supplied = {k: (b.get(k) or "").strip() for k in ("first_name", "surname", "phone")}
+    supplied = {k: v for k, v in supplied.items() if v}
+    with session_scope() as s:
+        if supplied:
+            iam_repo.patch_profile(s, user_id=p.user_id, fields=supplied)
+            try:  # keep the CRM satellite in step (best-effort — never blocks the booking)
+                prof = iam_repo.get_profile(s, user_id=p.user_id)
+                from core.repositories.persons import link_person_for_user
+                link_person_for_user(
+                    s, iam_user_id=p.user_id, club_id=p.club_id, email=prof.get("email"),
+                    first_name=prof.get("first_name"), surname=prof.get("surname"),
+                    phone=prof.get("phone"))
+            except Exception:
+                log.debug("satellite sync at booking skipped (benign)", exc_info=False)
+        prof = iam_repo.get_profile(s, user_id=p.user_id)
+    missing = missing_min_fields(prof or {})
+    if missing:
+        return jsonify(error="profile_incomplete", needs_profile=missing), 422
+    return None
 
 
 # Roles permitted to book ON BEHALF of someone else (docs/08). A member/guest may only
@@ -248,6 +278,13 @@ def create_booking():
             guest_name = for_guest_name or (for_email or "Guest")
             parties.append({"party_role": "player", "guest_name": guest_name,
                             "guest_email": for_guest_email or for_email or None})
+
+    # Client-360 Step 4 — capture name+surname+cell at the first booking (self-booking members).
+    if booked_for_user_id is None:
+        gate = _min_profile_gate(p, b)
+        if gate is not None:
+            return gate
+
     with session_scope() as s:
         res = bookings_mod.create_booking(
             s, club_id=p.club_id, booked_by_user_id=p.user_id, role=p.role,
@@ -493,6 +530,11 @@ def enrol(class_session_id):
     if not can(p, "book_class", {"club_id": p.club_id}):
         return jsonify(error="forbidden"), 403
     b = _body()
+    # Client-360 Step 4 — capture the minimum profile on a member's own class enrolment too
+    # (so classes aren't a bypass of the first-booking capture).
+    gate = _min_profile_gate(p, b)
+    if gate is not None:
+        return gate
     # admins/coaches may enrol another user; members enrol themselves.
     target_user = b.get("user_id") if p.role in ("club_admin", "platform_admin", "coach") else p.user_id
     target_user = target_user or p.user_id

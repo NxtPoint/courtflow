@@ -691,6 +691,7 @@
       if (st.type === "class") {
         var enrolBody = { settlement_mode: st.settlement, audience: "member" };
         if (playerDepId) enrolBody.dependent_user_id = playerDepId;
+        mergeProfileFields(enrolBody);   // Client-360 Step 4: carry captured name/surname/cell
         if (st.onBehalf) {
           // Staff on-behalf: enrol the CLIENT (the enrol route honours user_id for coach/admin). A
           // class needs a member account, so a walk-in guest (no user_id) can't be enrolled here.
@@ -734,6 +735,7 @@
         body.resource_id = st.slot.resource_id;
         if (st.selService && st.selService.product_id) body.product_id = st.selService.product_id;  // the CHOSEN court service → priced exactly
       }
+      mergeProfileFields(body);   // Client-360 Step 4: carry captured name/surname/cell
       res = await window.API.createBooking(body);
       var orderId = res.order_id || (res.booking && res.booking.order_id);
       // Staff on-behalf never goes to Yoco (they collect at court / pack / account).
@@ -757,8 +759,55 @@
         UI.toast("That slot was just taken — pick another.", "error");
         st.slot = null; st.slotsCache = {}; st.view = "schedule"; render(); return;
       }
+      if (e && e.status === 422 && code === "profile_incomplete") {
+        promptProfile(e.body && e.body.needs_profile, btn); return;
+      }
       UI.toast(UI.errMsg(e), "error");
     }
+  }
+
+  // Client-360 Step 4: merge any captured minimum-profile fields into an outgoing booking body.
+  function mergeProfileFields(o) {
+    if (!st.profileFields) return o;
+    ["first_name", "surname", "phone"].forEach(function (k) {
+      if (st.profileFields[k]) o[k] = st.profileFields[k];
+    });
+    return o;
+  }
+
+  // The server 422s a self-booking member whose profile lacks name/surname/cell. Collect the
+  // missing fields at the committed moment (feels like onboarding, not a barrier), stash them on
+  // state, and re-submit — the body now carries them, so the booking goes through.
+  function promptProfile(needs, btn) {
+    needs = (needs && needs.length) ? needs : [
+      { field: "first_name", label: "First name" },
+      { field: "surname", label: "Surname" },
+      { field: "phone", label: "Cell number" },
+    ];
+    var m = UI.modal("Confirm your details", {});
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 12px;font-size:.85rem",
+      text: "One quick thing before we confirm — we use these to send your booking confirmation and reminders." }));
+    var inputs = {};
+    needs.forEach(function (n) {
+      var inp = el("input", { class: "cf-input", placeholder: n.label,
+        type: n.field === "phone" ? "tel" : "text" });
+      inputs[n.field] = inp;
+      m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: n.label }), inp]));
+    });
+    var go = el("button", { class: "cf-btn cf-btn-primary", text: "Save & continue" });
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
+      el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), go,
+    ]));
+    go.addEventListener("click", function () {
+      var vals = {}, ok = true;
+      Object.keys(inputs).forEach(function (k) {
+        var v = (inputs[k].value || "").trim(); if (!v) ok = false; vals[k] = v;
+      });
+      if (!ok) { UI.toast("Please fill in all the fields.", "warn"); return; }
+      st.profileFields = Object.assign(st.profileFields || {}, vals);
+      m.close();
+      submit(btn);   // re-submit; mergeProfileFields now attaches the captured fields
+    });
   }
 
   function success(kind, res) {
