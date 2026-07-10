@@ -16,7 +16,7 @@ import logging
 import os
 import threading
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from db import norm_email, session_scope
 from core.models import AppUser
@@ -47,6 +47,25 @@ def build_traits(session, email, club_id=None):
     if user is not None:
         traits["marketing_opt_in"] = bool(user.marketing_opt_in)
         traits["club"] = traits["club"] or (str(user.club_id) if user.club_id else None)
+    # Enrich from the People record (iam.user) for segmentation: name + the dormancy signal
+    # (never_logged_in = clerk_user_id NULL → the imported-but-not-yet-activated cohort) + member state.
+    try:
+        iam = session.execute(text("""
+            SELECT u.first_name, u.surname, u.clerk_user_id,
+                   EXISTS (SELECT 1 FROM iam.membership m
+                           WHERE m.user_id = u.id AND m.member_status = 'active') AS active_member
+            FROM iam.user u WHERE lower(u.email) = :e ORDER BY u.created_at LIMIT 1
+        """), {"e": email}).mappings().first()
+        if iam:
+            if iam["first_name"]:
+                traits["first_name"] = iam["first_name"]
+            if iam["surname"]:
+                traits["last_name"] = iam["surname"]
+            traits["never_logged_in"] = (iam["clerk_user_id"] is None)
+            traits["member_status"] = "active" if iam["active_member"] else "inactive"
+    except Exception:
+        session.rollback()
+        log.debug("build_traits: iam enrichment skipped for %s", email)
     return traits
 
 

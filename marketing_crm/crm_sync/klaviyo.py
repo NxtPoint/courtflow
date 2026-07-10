@@ -45,6 +45,9 @@ def upsert_profile(traits):
         "marketing_opt_in": bool(traits.get("marketing_opt_in")),
         "role": traits.get("role"),
         "signup_source": traits.get("source"),
+        # Segmentation extras (for reactivation + lifecycle): member state + dormancy signal.
+        "member_status": traits.get("member_status"),
+        "never_logged_in": traits.get("never_logged_in"),
     }
     props = {k: v for k, v in props.items() if v is not None}
     attrs = {"email": email, "properties": props}
@@ -52,6 +55,8 @@ def upsert_profile(traits):
         attrs["first_name"] = str(traits["first_name"]).split(" ")[0]
     elif traits.get("display_name"):
         attrs["first_name"] = str(traits["display_name"]).split(" ")[0]
+    if traits.get("last_name"):
+        attrs["last_name"] = str(traits["last_name"])
     body = {"data": {"type": "profile", "attributes": attrs}}
     try:
         # POST creates; on duplicate (409) Klaviyo returns the existing id → PATCH it.
