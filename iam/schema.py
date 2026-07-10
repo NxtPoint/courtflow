@@ -34,6 +34,11 @@ _DDL = [
     """,
     # Case-insensitive email lookup (link-by-email at first Clerk login).
     f"CREATE INDEX IF NOT EXISTS ix_user_email_lower ON {SCHEMA}.user (lower(email));",
+    # Client-360 Slice-0 Step 5: one human = one row. UNIQUE on lower(email), PARTIAL so
+    # login-less dependents (NULL email) are exempt. Safe: upsert_user_by_clerk_id INSERTs only
+    # for a genuinely-new email (else it links by email), and the audit confirmed 0 collisions.
+    f"CREATE UNIQUE INDEX IF NOT EXISTS uq_user_email_lower ON {SCHEMA}.user (lower(email)) "
+    f"WHERE email IS NOT NULL;",
 
     # --- iam.membership : user <-> club, role + member status.
     f"""

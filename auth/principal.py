@@ -160,6 +160,24 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
                 except Exception:
                     log.debug("signup trial grant skipped (billing absent/benign)", exc_info=False)
 
+        # Client-360 bridge: on a genuinely-NEW account, create the linked core.person CRM
+        # satellite (Slice-0 Step 2). Gated on `_created` so it runs ONCE per human and adds no
+        # cost to the per-request hot path — every existing member was already backfilled, and a
+        # returning/imported user linking their login (branch 2, _created=False) already has one.
+        # Best-effort: a CRM-side hiccup must NEVER block a login (mirrors the trial grant above).
+        if resolved_email and user.get("_created"):
+            try:
+                from core.repositories.persons import link_person_for_user
+                sat_club = str(memberships[0]["club_id"]) if memberships else (host_club_id or None)
+                link_person_for_user(
+                    s,
+                    iam_user_id=user["id"], club_id=sat_club, email=resolved_email,
+                    first_name=user.get("first_name"), surname=user.get("surname"),
+                    phone=user.get("phone"),
+                )
+            except Exception:
+                log.debug("core.person satellite link skipped (benign)", exc_info=False)
+
     club_id, role = _resolve_active_club(memberships, host_club_id, x_club)
 
     return Principal(
