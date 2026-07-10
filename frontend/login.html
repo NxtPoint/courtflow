@@ -129,7 +129,14 @@ async function initClerk(){
     if (Clerk.user){ verifyWithBackend(Clerk); return; }
     renderAuth(Clerk);
     // "Start free" links to /login#/sign-up, "Sign in" to /login — swap the widget on hash change.
-    window.addEventListener("hashchange", function(){ if (!Clerk.user) renderAuth(Clerk); });
+    // Only re-mount for OUR OWN sign-in↔sign-up toggle. Clerk uses virtual routing (below) so its
+    // internal steps (email-verification code, etc.) NEVER touch the URL hash — without this guard a
+    // Clerk step changing the hash would wipe the widget and bounce a signing-up user back to a blank
+    // form ("I click Continue and nothing happens").
+    window.addEventListener("hashchange", function(){
+      var h = location.hash || "";
+      if (!Clerk.user && (h === "" || h.indexOf("sign-up") !== -1 || h.indexOf("sign-in") !== -1)) renderAuth(Clerk);
+    });
     Clerk.addListener(function(e){ if (e && e.user) verifyWithBackend(Clerk); });
   } catch (err) {
     showNotice("Sign-in unavailable","Something went wrong loading sign-in. Please retry shortly.");
@@ -140,7 +147,11 @@ async function initClerk(){
 // forward to /login after, where verifyWithBackend links the Clerk account to the member's record by email.
 function renderAuth(Clerk){
   mount.innerHTML = "";
-  const opts = { forceRedirectUrl: "/login", signUpForceRedirectUrl: "/login", signInForceRedirectUrl: "/login" };
+  // routing:"virtual" keeps ALL of Clerk's step navigation in-memory so it never writes to the URL
+  // hash — this is what stops a sign-up "Continue" (which advances to the email-verification step)
+  // from tripping our hashchange listener and wiping the form. We switch sign-in↔sign-up ourselves
+  // via the hash below, so we don't need Clerk's URL routing.
+  const opts = { routing: "virtual", forceRedirectUrl: "/login", signUpForceRedirectUrl: "/login", signInForceRedirectUrl: "/login" };
   if ((location.hash || "").indexOf("sign-up") !== -1){
     Clerk.mountSignUp(mount, Object.assign({ signInUrl: "/login" }, opts));
   } else {
