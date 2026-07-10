@@ -177,6 +177,14 @@ def main():
             _row("core.person", "table not present / not readable — skipping bridge stats")
         else:
             core_appuser = scalar("SELECT count(*) FROM core.app_user") or 0
+            # Actual bridge state — needs the Step-1 iam_user_id column (guarded: None pre-deploy).
+            linked = scalar("SELECT count(*) FROM core.person WHERE iam_user_id IS NOT NULL")
+            fk_valid = scalar("SELECT count(*) FROM core.person p "
+                              "JOIN iam.user u ON u.id = p.iam_user_id")
+            members_linked = scalar(
+                "SELECT count(*) FROM iam.user u "
+                "WHERE EXISTS (SELECT 1 FROM iam.membership m WHERE m.user_id = u.id) "
+                "AND EXISTS (SELECT 1 FROM core.person p WHERE p.iam_user_id = u.id)") or 0
             # (a) match by Clerk id: iam.user.clerk_user_id = core.app_user.auth_provider_uid
             match_clerk = scalar(
                 "SELECT count(DISTINCT u.id) FROM iam.user u "
@@ -198,6 +206,10 @@ def main():
             need_create = max(0, total_users - matchable)
             _row("core.person rows (satellites today)", core_person)
             _row("core.app_user rows", core_appuser)
+            if linked is not None:
+                _row("core.person LINKED (iam_user_id set)", linked)
+                _row("  FK-valid (-> a real iam.user)", fk_valid)
+                _row("members WITH a linked satellite", f"{members_linked} / {pop}  ({_pct(members_linked, pop)})")
             _row("iam.user matchable by CLERK id", match_clerk)
             _row("iam.user matchable by EMAIL (only)", match_email)
             _row("iam.user with NO core match (forward-create)", f"{need_create}  ({_pct(need_create, total_users)})")
