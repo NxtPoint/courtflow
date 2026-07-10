@@ -112,6 +112,7 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
         enrol_id = row["id"]
 
     # Order only for a real (enrolled) seat; waitlist doesn't bill until promoted.
+    order = None
     if target == "enrolled":
         # Token settlement (docs/specs/02): PRE-FLIGHT match a prepaid CLASS wallet for the PAYER
         # before billing. The token is keyed off the enrolment_id (a class has no booking_id). If
@@ -150,7 +151,15 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
         events.emit("class_enrolled", payload)
     else:
         events.emit("class_waitlisted", payload)
-    return {"ok": True, "enrolment": enrolment, "status_value": target}
+    resp = {"ok": True, "enrolment": enrolment, "status_value": target}
+    # Surface the order so the client can be driven through the SAME paywall as a court/lesson: an
+    # 'online' enrolment creates an awaiting_payment order → the frontend redirects to Yoco. Without
+    # this the enrolment silently succeeded with an UNPAID order (classes bypassed the paywall).
+    if order and order.get("order_id"):
+        resp["order_id"] = order["order_id"]
+        resp["order_status"] = order.get("status")
+        resp["checkout"] = order.get("checkout")
+    return resp
 
 
 def cancel_enrolment(session, *, club_id, class_session_id, user_id, actor_user_id=None):

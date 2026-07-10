@@ -699,6 +699,15 @@
           enrolBody.user_id = st.onBehalf.user_id;
         }
         res = await window.API.enrol(st.selClass.id, enrolBody);
+        // SAME paywall as court/lesson: an online enrolment now creates an awaiting_payment order —
+        // drive the client to Yoco instead of silently confirming an unpaid seat. Staff on-behalf
+        // (skipOnline) collect at court / pack / account, so they never hit this.
+        var enrolOrderId = res.order_id || (res.enrolment && res.enrolment.order_id);
+        if (!st.skipOnline && st.settlement === "online" && enrolOrderId) {
+          if (window.Pay) { await window.Pay.startYocoCheckout(enrolOrderId); return; }
+          UI.toast("Couldn't open the payment page — please refresh and try again.", "error"); return;
+        }
+        if (res.checkout && res.checkout.redirect_url) { location.href = res.checkout.redirect_url; return; }
         success("class", res); return;
       }
       var parties = [];
