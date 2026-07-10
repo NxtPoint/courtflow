@@ -81,6 +81,14 @@
       head.appendChild(membershipLine(pn, c));
       wrap.appendChild(head);
 
+      // ---- Details (demographics) + consent — Mission 1.2. Not shown to a COACH (client PII:
+      // home address / DOB / emergency contact); admin + the client themselves see it. ----
+      var _role = (cfg.scope && cfg.scope.role) || "";
+      if (fields.showDetails !== false && _role !== "coach") {
+        wrap.appendChild(detailsCard(pn));
+        if ((pn.consent || []).length) wrap.appendChild(consentCard(pn));
+      }
+
       // ---- Coach settlement (if they coach here) ----
       if (pn.is_coach && pn.settlement) {
         var st = pn.settlement;
@@ -117,9 +125,14 @@
       // ---- Dependents (children who can be booked for) ----
       if (fields.showDependents !== false && (pn.dependents || []).length) wrap.appendChild(dependentsCard(pn));
 
-      // ---- Activity feed ----
+      // ---- Activity feed (money) ----
       if (fields.showActivity && (pn.activity || []).length) {
         wrap.appendChild(UI.card([CRMUI.sectionHead("Activity"), CRMUI.activityFeed(pn.activity)], "cf-mt"));
+      }
+
+      // ---- CRM / behavioural event stream — Mission 1.2 (the timeline's non-money half) ----
+      if (fields.showEvents !== false && (pn.events || []).length) {
+        wrap.appendChild(eventsCard(pn));
       }
 
       UI.clear(host); host.appendChild(wrap);
@@ -301,6 +314,61 @@
           ]),
           d.can_self_book ? el("span", { class: "cf-chip confirmed", text: "can self-book" }) : null,
         ].filter(Boolean)));
+      });
+      card.appendChild(l);
+      return card;
+    }
+
+    // ---- Mission 1.2: demographics, consent, CRM event stream (now linked via the bridge) ----
+    function kvRow(k, v) {
+      return el("div", { class: "cf-row", style: "justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--border)" }, [
+        el("span", { class: "cf-muted", style: "font-size:.82rem", text: k }),
+        el("span", { style: "font-size:.9rem;text-align:right", text: v }),
+      ]);
+    }
+    function detailsCard(pn) {
+      var pr = pn.profile || {};
+      var card = UI.card([CRMUI.sectionHead("Details")], "cf-mt");
+      var rows = [];
+      function add(k, v) { if (v) rows.push([k, v]); }
+      add("Email", pn.email);
+      add("Cell", pn.phone || pr.phone);
+      add("Date of birth", pr.dob ? fDate(pr.dob) : "");
+      add("Address", [pr.address_line1, pr.address_line2, pr.city, pr.postal_code, pr.country].filter(Boolean).join(", "));
+      add("Emergency contact", [pr.emergency_contact_name, pr.emergency_contact_phone].filter(Boolean).join(" · "));
+      add("Marketing", pr.marketing_opt_in ? "Opted in ✓" : "Not opted in");
+      if (!rows.length) { card.appendChild(el("div", { class: "cf-empty", text: "No contact details on file." })); return card; }
+      rows.forEach(function (r) { card.appendChild(kvRow(r[0], r[1])); });
+      return card;
+    }
+    var CONSENT_LABELS = { marketing_email: "Marketing email", privacy_policy: "Privacy policy", terms_of_service: "Terms of service", minor_processing_parental: "Parental (minor)" };
+    function consentCard(pn) {
+      var card = UI.card([CRMUI.sectionHead("Consent")], "cf-mt");
+      var l = el("div", { class: "cf-list" });
+      (pn.consent || []).forEach(function (co) {
+        var granted = co.status === "granted";
+        l.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: CONSENT_LABELS[co.consent_type] || co.consent_type }),
+            el("div", { class: "cf-item-s", text: granted ? (co.granted_at ? "since " + fDate(co.granted_at) : "") : (co.withdrawn_at ? "withdrawn " + fDate(co.withdrawn_at) : "") }),
+          ]),
+          el("span", { class: "cf-chip " + (granted ? "confirmed" : "held"), text: granted ? "granted" : (co.status || "—") }),
+        ]));
+      });
+      card.appendChild(l);
+      return card;
+    }
+    function prettyEvent(t) { return (t || "event").replace(/_/g, " ").replace(/^\w/, function (m) { return m.toUpperCase(); }); }
+    function eventsCard(pn) {
+      var card = UI.card([CRMUI.sectionHead("Recent activity")], "cf-mt");
+      var l = el("div", { class: "cf-list" });
+      (pn.events || []).forEach(function (e) {
+        l.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: prettyEvent(e.event_type) }),
+            el("div", { class: "cf-item-s", text: fDT(e.at) }),
+          ]),
+        ]));
       });
       card.appendChild(l);
       return card;
