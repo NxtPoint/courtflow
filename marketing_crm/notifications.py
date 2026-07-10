@@ -39,8 +39,11 @@ def _money(minor, currency=None):
 
 
 def _when(ctx):
-    """A short, non-PII time string if the payload carries one (ISO passthrough)."""
-    return ctx.get("starts_at") or ctx.get("when") or None
+    """Intentionally None. The intro SENTENCE must not print a time: these templates are pure (no DB /
+    timezone), so any time here is the raw UTC ISO from the payload — which reads as the wrong time
+    (SAST is +2h) and looks broken. The correctly-formatted, club-timezone "When" is rendered in the
+    booking-detail block instead (booking_detail.fmt_when). Kept as a function so callers are unchanged."""
+    return None
 
 
 def _g(ctx, *keys, default=None):
@@ -320,7 +323,7 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
     # emit payload is untouched. Guarded → None → the plain body is used. For a lesson/class this
     # also yields the coach's email, which we BCC so the coach gets a copy of the booking.
     detail = None
-    if kind in booking_detail.DETAIL_KINDS:
+    if kind in booking_detail.DETAIL_KINDS or kind in _PURCHASE_KINDS:
         try:
             detail = booking_detail.load(session, club_id, ctx or {})
         except Exception:
@@ -341,6 +344,12 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
 
 # Booking-ish events that carry a start/end time → attach a calendar invite (.ics).
 _ICS_KINDS = {"booking_confirmed", "lesson_accepted", "lesson_proposed", "class_enrolled"}
+
+# PURCHASE events (membership / pack / payment receipt) that carry an order_id (or ref_type='order')
+# → enrich with the order block: the exact item(s) bought, the amount, and the payment method (paid
+# online / pay at court / on monthly account). This is what turns a bare "payment processed" into a
+# proper "you bought Adult Anytime Membership — Paid online" confirmation.
+_PURCHASE_KINDS = {"payment_succeeded", "membership_started", "membership_activated", "bundle_activated"}
 
 
 def _club_identity(session, club_id):

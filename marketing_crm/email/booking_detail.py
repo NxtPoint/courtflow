@@ -146,6 +146,10 @@ def load(session, club_id, ctx):
             return _load_booking(session, club_id, ctx)
         if ctx.get("class_session_id"):
             return _load_class(session, club_id, ctx)
+        # A PURCHASE (membership / pack / paid booking receipt) carries an order but no booking id.
+        oid = ctx.get("order_id") or (ctx.get("ref_id") if ctx.get("ref_type") == "order" else None)
+        if oid:
+            return _load_order(session, club_id, oid)
     except Exception:
         log.debug("booking_detail.load failed", exc_info=False)
     return None
@@ -264,6 +268,63 @@ def _load_class(session, club_id, ctx):
     )
 
 
+def _load_order(session, club_id, order_id):
+    """Rich detail for a PURCHASE (membership / session pack / a paid-booking receipt) keyed off the
+    billing.order — the exact item(s) bought, the amount, and HOW it's being paid (paid online / pay
+    at court / on monthly account). Powers the payment/membership/pack confirmation emails so they say
+    WHAT was bought and WHERE it's paid from, not just 'payment processed'. Guarded → None."""
+    from sqlalchemy import text
+    o = session.execute(
+        text('''
+            SELECT o.id, o.settlement_mode,
+                   cl.first_name AS cl_first, cl.surname AS cl_surname,
+                   cl.email AS cl_email, cl.phone AS cl_phone
+            FROM billing."order" o
+            LEFT JOIN iam."user" cl ON cl.id = o.user_id
+            WHERE o.id = :o AND o.club_id = :c
+        '''),
+        {"o": str(order_id), "c": str(club_id)},
+    ).mappings().first()
+    if not o:
+        return None
+    # The exact item(s): the order-line description (e.g. "Membership — Unlimited Courts (Adult
+    # Anytime)", "Session pack — 10 sessions"), else the product name. A bare booking-type word
+    # ("court"/"lesson"/"class") is prettified to its label so a paid-booking receipt reads cleanly.
+    rows = session.execute(
+        text('''
+            SELECT COALESCE(NULLIF(ol.description,''), p.name) AS item
+            FROM billing.order_line ol
+            LEFT JOIN billing.price pr ON pr.id = ol.price_id
+            LEFT JOIN billing.product p ON p.id = pr.product_id
+            WHERE ol.order_id = :o ORDER BY ol.created_at
+        '''),
+        {"o": str(order_id)},
+    ).scalars().all()
+    items = []
+    for it in rows:
+        if not it:
+            continue
+        items.append(_TYPE_LABEL.get(str(it).lower(), it))
+    # Dedupe while preserving order (a settlement 'pay all' order can repeat a type).
+    service = ", ".join(dict.fromkeys(items)) or None
+    charge = _charge(session, club_id, str(order_id), o["settlement_mode"])
+    name = " ".join(x for x in [o["cl_first"], o["cl_surname"] if o["cl_surname"] else ""] if x).strip() or None
+    price = None
+    if charge and charge.get("amount_minor"):
+        price = _money(charge.get("amount_minor"), charge.get("currency"))
+    return {
+        "is_purchase": True,
+        "booking_type": "purchase",
+        "service": service,
+        "when": None, "duration_minutes": None, "court": None,
+        "coach": {"name": None, "email": None},
+        "client": {"first": o["cl_first"], "surname": o["cl_surname"], "name": name,
+                   "email": o["cl_email"], "phone": o["cl_phone"]},
+        "price": price,
+        "pay_status": _pay_status(o["settlement_mode"], charge),
+    }
+
+
 def _charge(session, club_id, order_id, settlement_mode):
     """The pure price/payment-status read (reuse diary's, so figures never drift). Guarded."""
     try:
@@ -277,7 +338,9 @@ def _normalize(*, service, booking_type, starts, ends, tzname, court, coach_name
                cl_first, cl_surname, cl_email, cl_phone, settlement_mode, charge):
     s, e = _as_dt(starts), _as_dt(ends)
     dur = int((e - s).total_seconds() // 60) if (s and e) else None
-    name = " ".join(x for x in [cl_first, cl_surname] if x).strip() or (cl_email or None)
+    # Name is the real name ONLY — never the email as a fallback (that duplicated the email into the
+    # "Name" row for imported/name-less clients). No name → the Name row is simply omitted.
+    name = " ".join(x for x in [cl_first, cl_surname] if x).strip() or None
     price = None
     if charge and charge.get("amount_minor"):
         price = _money(charge.get("amount_minor"), charge.get("currency"))
@@ -339,6 +402,13 @@ def html_block(d):
         ("Email", cl.get("email")),
         ("Cell", cl.get("phone")),
     ])
+    if d.get("is_purchase"):
+        purchase_rows = _rows_html([
+            ("Item", d.get("service")),
+            ("Amount", d.get("price")),
+            ("Payment", d.get("pay_status")),
+        ])
+        return _section("Client details", client_rows) + _section("Purchase details", purchase_rows)
     dur = ("%d min" % d["duration_minutes"]) if d.get("duration_minutes") else None
     booking_rows = _rows_html([
         ("Service", d.get("service")),
@@ -363,6 +433,13 @@ def text_block(d):
         if value:
             lines.append("  %s: %s" % (label, value))
     lines.append("")
+    if d.get("is_purchase"):
+        lines.append("PURCHASE DETAILS")
+        for label, value in [("Item", d.get("service")), ("Amount", d.get("price")),
+                             ("Payment", d.get("pay_status"))]:
+            if value:
+                lines.append("  %s: %s" % (label, value))
+        return "\n".join(lines)
     lines.append("BOOKING DETAILS")
     dur = ("%d min" % d["duration_minutes"]) if d.get("duration_minutes") else None
     for label, value in [("Service", d.get("service")), ("When", d.get("when")),
