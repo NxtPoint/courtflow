@@ -829,6 +829,17 @@
       msg = "They've been notified. Collect payment at court, from their pack, or on their account.";
     }
 
+    // Google Ads + GA4 conversion: a completed self-booking teaches Ads to bid toward REAL bookings,
+    // not just calls. Skip staff on-behalf, and skip 'held' (online awaiting-payment → the conversion
+    // fires on payment return instead). cfConversion is a no-op until GOOGLE_ADS_CONVERSIONS maps
+    // 'booking'; cfTrack fires the GA4 event regardless. Never breaks the success screen.
+    if (!st.onBehalf && stt !== "held") {
+      try {
+        if (window.cfTrack) window.cfTrack("booking_completed", { kind: kind, currency: "ZAR" });
+        if (window.cfConversion) window.cfConversion("booking", { currency: "ZAR" });
+      } catch (e) { /* ignore */ }
+    }
+
     var detail = el("div", { class: "cf-summary cf-success-detail" });
     summaryRows().forEach(function (r) {
       detail.appendChild(el("div", { class: "cf-summary-row" }, [ el("span", { class: "cf-summary-k", text: r[0] }), el("span", { class: "cf-summary-v", text: r[1] == null ? "—" : String(r[1]) }) ]));
