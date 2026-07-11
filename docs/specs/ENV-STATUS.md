@@ -187,6 +187,8 @@ SES_REGION=eu-north-1
 EMAIL_ICS_ENABLED=0            # flip to 1 when the key gains ses:SendRawEmail
 # courtflow-api — OPTIONAL (add when you want the feature)
 KLAVIYO_API_KEY=               # future: Klaviyo email
+GOOGLE_ADS_FEED_USER=          # HTTP Basic user for the Google Ads offline-conversion CSV feed (set)
+GOOGLE_ADS_FEED_PASS=          # HTTP Basic pass (feed 404/dark until BOTH set)
 S3_BUCKET=                     # coach photo uploads
 AWS_ACCESS_KEY_ID=             # S3
 AWS_SECRET_ACCESS_KEY=
@@ -205,8 +207,8 @@ TF5_EMBED_ALLOW_EMAILS=tomos@nedbank.co.za   # empty = all members (launch)
 # courtflow-web — GOOGLE TAGS (GA4+Ads live; conversions/GSC optional)
 GA4_MEASUREMENT_ID=G-...
 GOOGLE_ADS_ID=AW-17077631191
-GOOGLE_ADS_CONVERSIONS=            # {"purchase":"AW-.../label","sign_up":"AW-.../label"}
-GSC_VERIFICATION_FILE=             # optional (GSC already verified)
+GOOGLE_ADS_CONVERSIONS={"start_free_week":"AW-17077631191/rEy7CNKNsc4cENfxn88_","booking":"AW-17077631191/tu5JCNWNsc4cENfxn88_"}
+GSC_VERIFICATION_FILE=             # optional (GSC already verified via the nextpointtennis.com domain property; GA4↔GSC linked 2026-07-11)
 GSC_META_TOKEN=
 ```
 

@@ -72,6 +72,12 @@ then best-effort forwards to Klaviyo. Off-key Klaviyo is a clean no-op. See
 `page_view` is also written by the beacon (`POST /api/track/page`) but is intentionally **not**
 forwarded to Klaviyo (too noisy/expensive) — DB only.
 
+**A second consumer of money events (2026-07-11):** `offline_conversions/` adds a best-effort 4th forward in
+`emit()` — for `payment_succeeded` it resolves the buyer's captured `gclid` (`core.acquisition`) and ledgers a
+`core.offline_conversion` row for the Google Ads offline-conversion feed. It NEVER blocks the producer and adds
+no new event names; it's a pure downstream reader of the existing `payment_succeeded` payload
+(`amount_minor`/`currency`/`user_id`). See root `CLAUDE.md` → "Growth & acquisition measurement".
+
 ## Transactional vs marketing — the send rule (`docs/06 §4`)
 
 The `txn?` column above is the gate the consumer (`crm_sync.forward_event`) enforces:

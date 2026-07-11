@@ -147,6 +147,12 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       workflow safely no-ops (nothing accrues/notifies). See §B "Month-end automation".
 - [ ] **`KLAVIYO_API_KEY`** → CRM lifecycle/marketing flows go live (event feed already emits).
 - [ ] **`S3_BUCKET` + AWS keys** → coach **photo uploads** (until then coaches paste a photo URL).
+- [ ] **Ten-Fifty5 embed — widen from private test → all members.** LIVE but gated to one email
+      (`TF5_EMBED_ALLOW_EMAILS=tomos@nedbank.co.za`; others see a "Coming soon" card). **Launch = clear that
+      env** (empty → all members). Depends on the Ten-Fifty5-side env staying set (`AUTH_ISSUERS` on the
+      "Sport AI - API call" service, `TF_TRUSTED_PARENT_ORIGINS` on `locker-room`). Deferred code follow-ups:
+      surface it in the coach console (one widget, per the golden rule) + optional entitlement gating.
+      Full write-up: root `CLAUDE.md` → "Ten-Fifty5 embed".
 - [x] **DNS / SEO cutover — DONE 2026-07-05.** Live at `https://nextpointtennis.com` (apex canonical,
       `www`→apex 301, HTTPS). DNS at Wix: apex A→`216.24.57.1`, www CNAME→`courtflow-web.onrender.com`;
       `api.nextpointtennis.com` (1050) untouched. Prod Clerk + Google login live; 48-rule 301 map; GA4
@@ -295,8 +301,10 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       platform-admin with a club filter. First-party page-view beacon (`analytics.js` → `/api/track/page`,
       geo via Cloudflare `CF-IPCountry`).
 - [x] **Embedded in the admin console** as the "Overview" tab (+ standalone `/overview.html`).
-- [x] **Per-business by design** — the cross-business "Ten-Fifty5 bridge" was **deprecated 2026-06-21**
-      (removed); each app shows its own overview. Ten-Fifty5 uses its own `/backoffice` cockpit.
+- [x] **Per-business by design** — the cross-business *analytics* "Ten-Fifty5 bridge" was **deprecated
+      2026-06-21** (removed); each app shows its own overview. Ten-Fifty5 uses its own `/backoffice` cockpit.
+      *(Unrelated to the 2026-07-11 **members-area Ten-Fifty5 SSO embed** in §A above — that's a live member
+      feature, not a resurrection of this removed analytics bridge.)*
 - [x] Follow-up **DONE (2026-07-05)**: per-club web-traffic attribution — the DB-less web can't emit the
       club UUID, so `beacon.py` resolves `club_id` server-side from the browsing host (Origin/Referer →
       `iam.resolve_club_by_host`), falling back to `sole_club_id` for a single-club deploy (cached per host).
@@ -308,6 +316,27 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       signal** (`analytics.js` sends a non-PII `authed` flag once Clerk resolves; `beacon.py` stores
       `metadata.authed`; logged-in data accrues from 2026-07-06). Added `billing.membership_subscription.
       period_start`/`cancelled_at` for an accurate active-members-per-day curve.
+- [x] **Members-area no longer inflates marketing traffic (2026-07-11)** — the SPA fires a `page_view` per
+      route change, so a few signed-in members swamped "website traffic". Every public panel in
+      `analytics/repositories.py` now filters `metadata.authed != 'true'` (marketing = PUBLIC visitors only);
+      `members_area()` reports signed-in activity separately; the headline KPI is **Unique visitors** (people),
+      "Website visits" relabelled **Page views** (`overview.js`).
+
+## C2. Acquisition measurement — Google Ads / gclid — LIVE ✅ (2026-07-11)
+The measured-acquisition stack (know which ad clicks become paying members; feed it back to Google). Full
+runbook: `docs/specs/GOOGLE-ADS-PLAN.md`; design captured in root `CLAUDE.md` → "Growth & acquisition".
+- [x] **gclid capture** — `frontend/js/attribution.js` (first-touch) → `POST /api/me/acquisition` →
+      `core.repositories.acquisition.record_acquisition` fills `core.acquisition.gclid` (first-touch wins).
+- [x] **Offline conversions** — `offline_conversions/` (SHARED byte-identical with the 1050 repo):
+      `payment_succeeded` → gclid → `core.offline_conversion` → `GET /feeds/google-ads/offline-conversions.csv`
+      (HTTP Basic, `GOOGLE_ADS_FEED_USER`/`PASS`). **No dev token** (API Center is manager-only → CSV route).
+- [x] **Account-side** (NextPoint Tennis Centre `AW-17077631191`): 2 web conversions + `Offline purchase`
+      action; GA4↔Ads (auto-tagging + Personalized Advertising) + GA4↔Search Console linked; remarketing
+      audience; 6 rebuilt sitelinks; bidding = Max Clicks R15.
+- [ ] **Tomo (config):** the scheduled CSV upload (Uploads → Schedules; done, daily 4am) · complete advertiser
+      verification · revert bidding to Max Conversions after ~15–30 conversions · Google Business Profile.
+- [ ] **Follow-up:** value-enrich the conversion (attach the plan price to the money event) for value-based
+      bidding; a `sign_up` conversion fired on real trial-grant (not just CTA click).
 
 ## D. Hardening / pre-launch (later phases, from the original docs)
 - [ ] **RLS** (row-level security) on domain tables — Phase 8; today multi-tenant is a query discipline.

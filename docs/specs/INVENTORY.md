@@ -29,7 +29,8 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `auth/` | `principal.py`, `verifier.py` | Clerk JWKS verify → club-scoped `Principal`; **auto-enrol** new users as members |
 | `iam/` | `schema.py`, `repositories.py`, `permissions.py` | user, membership, coach_profile, coach_invite, player_profile, **dependent** |
 | `club/` | `schema.py` | club, branding, location, policy |
-| `core/` | `schema.py`, `repositories/` | core.user/account/person, usage_event, consent, nps, **notification** |
+| `core/` | `schema.py`, `repositories/` | core.user/account/person, usage_event, consent, nps, **notification**, **acquisition** (`repositories/acquisition.py` gclid/utm capture; `repositories/persons.py::link_person_for_user` = the iam↔core identity bridge) |
+| `offline_conversions/` | `schema.py`, `recorder.py`, `feed.py`, `blueprint.py` | **Google Ads offline-conversion loop** — SHARED/byte-identical with the 1050 repo. `core.offline_conversion` ledger + `GET /feeds/google-ads/offline-conversions.csv`; `recorder.record_from_emit` is a 4th forward in `marketing_crm/tracking` (event `payment_succeeded` → gclid → row). Only per-repo glue = `CONVERSION_MAP`. |
 | `diary/` | bookings, availability, classes, recurrence, pricing, routes | The booking engine (the heart) |
 | `billing/` | orders, ledger, gateway, membership, bundles, commission, refunds, statement, me, activity, events, routes | Orders/ledger + the commercial engines (`statement.py` = unified client statement; `activity.py::transaction_log` = unified per-client/coach money log; `me.py::billing_summary` = ORDER-based monthly by-category) |
 | `yoco_billing/` | client, adapter, routes, reconcile, receipt | Yoco online payments (adapter behind the gateway registry) |
@@ -218,8 +219,11 @@ here — emails the club via SES, self-gating; logs the lead if SES unset).
 `billing/routes.py` → `commission.run_month_end`).
 
 **Analytics `/api/analytics/*`:** `GET overview` (`?days`, `?club_id`) · `GET clubs`. **Tracking:**
-`POST /api/track/page` (first-party page-view beacon;
-geolocation via Cloudflare `CF-IPCountry`). **Core:** `GET /healthz` · `GET /api/whoami`.
+`POST /api/track/page` (first-party page-view beacon; geolocation via Cloudflare `CF-IPCountry`) ·
+**`POST /api/me/acquisition`** (first-touch gclid/utm capture from `attribution.js` → `core.acquisition`).
+**Feeds:** **`GET /feeds/google-ads/offline-conversions.csv`** (`offline_conversions/`; HTTP Basic auth,
+404/dark until `GOOGLE_ADS_FEED_USER`/`PASS` set — Google Ads scheduled-upload feed). **Core:** `GET /healthz`
+· `GET /api/whoami`.
 
 **Transactional email (`marketing_crm/email/ses.py`)** — no HTTP surface; called from `notifications.deliver`.
 **LIVE since 2026-07-03**, riding the **Ten-Fifty5 (1050) AWS account** interim (CourtFlow's own AWS was
@@ -290,7 +294,9 @@ coach BCC only on his own lesson/class. (`send_booking_confirmation` is legacy; 
     slot; gated by `iam.coach_profile.review_bookings`); **`class_session.court_resource_id`/`court_booking_id`**
     (a scheduled class can optionally **reserve a court** — `court_booking_id` is a court-blocking
     `diary.booking` reusing the GiST exclusion, freed on cancel).
-- **`core`**: account/user/person, `usage_event`, consent, nps, `notification`
+- **`core`**: account/user/person, `usage_event`, consent, nps, `notification`, **`acquisition`** (gclid/utm,
+  1:1 with app_user; `person.iam_user_id` = the iam↔core bridge), **`offline_conversion`** (Google Ads
+  offline-conversion ledger, owned by `offline_conversions/schema.py`)
   *(the Business Overview analytics are read-only views over `core.usage_event` — no separate schema)*
 
 Settlement modes on `billing.order`: `at_court`, `monthly_account`, `online`, `membership_covered`,
