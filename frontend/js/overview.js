@@ -42,10 +42,15 @@
 
   function kpis(k, currency, extra) {
     var visSub = (k.new_visitors == null) ? "" : (num(k.new_visitors) + " new · " + num(k.returning_visitors) + " returning");
+    // People first (distinct visitors), then raw page views — so the headline number is humans, not
+    // page loads. Both are PUBLIC traffic only; signed-in members-area navigation is its own card.
     var cards = [
-      card("Website visits", num(k.visits)),
       card("Unique visitors", num(k.unique_visitors), visSub),
+      card("Page views", num(k.visits), "public site"),
     ];
+    if (k.members_area_views != null && (k.members_area_views || k.members_active))
+      cards.push(card("Members-area views", num(k.members_area_views),
+                      num(k.members_active) + " members active"));
     if (k.avg_seconds != null) cards.push(card("Avg time on page", fmtDuration(k.avg_seconds), "median " + fmtDuration(k.median_seconds)));
     cards.push(card("Customers", num(k.total_customers), "+" + num(k.new_customers) + " in period"));
     if (k.bookings != null) cards.push(card("Bookings", num(k.bookings)));

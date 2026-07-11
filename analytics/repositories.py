@@ -17,6 +17,13 @@ log = logging.getLogger("analytics.repositories")
 _PV = "event_type = 'page_view'"
 _PL = "event_type = 'page_leave'"   # carries duration_ms for time-on-site
 
+# Signed-in members navigating the portal SPA fire a page_view on EVERY route change, which would
+# otherwise swamp the *marketing* traffic numbers (a few active members = hundreds of views). The
+# beacon tags those hits metadata.authed='true', so every public-traffic panel filters them out with
+# this clause and the signed-in activity is reported separately via members_area(). NULL/absent =
+# anonymous public visitor (kept); only 'true' is excluded.
+_PUBLIC = "(metadata->>'authed') IS DISTINCT FROM 'true'"
+
 
 def _window(days: int) -> str:
     return f"occurred_at >= now() - interval '{int(days)} days'"
@@ -52,7 +59,7 @@ def traffic_summary(session, *, club_id, days) -> Dict[str, Any]:
                    count(DISTINCT metadata->>'anon_id')
                      FILTER (WHERE metadata->>'anon_id' IS NOT NULL) AS unique_visitors
             FROM core.usage_event
-            WHERE {_PV} AND {_window(days)}{_club_clause('club_id', club_id)}
+            WHERE {_PV} AND {_window(days)} AND {_PUBLIC}{_club_clause('club_id', club_id)}
         """), _p(club_id)).mappings().first()
         return {"visits": int(row["visits"] or 0),
                 "unique_visitors": int(row["unique_visitors"] or 0)}
@@ -67,13 +74,13 @@ def new_vs_returning(session, *, club_id, days) -> Dict[str, Any]:
             WITH active AS (
                 SELECT DISTINCT metadata->>'anon_id' AS aid
                 FROM core.usage_event
-                WHERE {_PV} AND {_window(days)} AND metadata->>'anon_id' IS NOT NULL
+                WHERE {_PV} AND {_window(days)} AND metadata->>'anon_id' IS NOT NULL AND {_PUBLIC}
                   {_club_clause('club_id', club_id)}
             ),
             firsts AS (
                 SELECT metadata->>'anon_id' AS aid, min(occurred_at) AS first_seen
                 FROM core.usage_event
-                WHERE {_PV} AND metadata->>'anon_id' IS NOT NULL
+                WHERE {_PV} AND metadata->>'anon_id' IS NOT NULL AND {_PUBLIC}
                   {_club_clause('club_id', club_id)}
                 GROUP BY 1
             )
@@ -94,7 +101,7 @@ def visits_daily(session, *, club_id, days) -> List[Dict[str, Any]]:
                    count(*) AS visits,
                    count(DISTINCT metadata->>'anon_id') AS unique_visitors
             FROM core.usage_event
-            WHERE {_PV} AND {_window(days)}{_club_clause('club_id', club_id)}
+            WHERE {_PV} AND {_window(days)} AND {_PUBLIC}{_club_clause('club_id', club_id)}
             GROUP BY 1 ORDER BY 1
         """), _p(club_id)).mappings().all()
         return [{"day": str(r["day"]), "visits": int(r["visits"] or 0),
@@ -113,7 +120,7 @@ def traffic_sources(session, *, club_id, days) -> List[Dict[str, Any]]:
                      ELSE 'direct' END AS source,
                    count(*) AS visits
             FROM core.usage_event
-            WHERE {_PV} AND {_window(days)}{_club_clause('club_id', club_id)}
+            WHERE {_PV} AND {_window(days)} AND {_PUBLIC}{_club_clause('club_id', club_id)}
             GROUP BY 1 ORDER BY 2 DESC LIMIT 10
         """), _p(club_id)).mappings().all()
         return [{"source": r["source"] or "direct", "visits": int(r["visits"] or 0)} for r in rows]
@@ -125,7 +132,7 @@ def top_pages(session, *, club_id, days) -> List[Dict[str, Any]]:
         rows = session.execute(text(f"""
             SELECT metadata->>'path' AS path, count(*) AS visits
             FROM core.usage_event
-            WHERE {_PV} AND {_window(days)} AND metadata->>'path' IS NOT NULL
+            WHERE {_PV} AND {_window(days)} AND metadata->>'path' IS NOT NULL AND {_PUBLIC}
               {_club_clause('club_id', club_id)}
             GROUP BY 1 ORDER BY 2 DESC LIMIT 10
         """), _p(club_id)).mappings().all()
@@ -139,7 +146,7 @@ def by_country(session, *, club_id, days) -> List[Dict[str, Any]]:
             SELECT COALESCE(NULLIF(metadata->>'country',''), 'unknown') AS country,
                    count(*) AS visits
             FROM core.usage_event
-            WHERE {_PV} AND {_window(days)}{_club_clause('club_id', club_id)}
+            WHERE {_PV} AND {_window(days)} AND {_PUBLIC}{_club_clause('club_id', club_id)}
             GROUP BY 1 ORDER BY 2 DESC LIMIT 15
         """), _p(club_id)).mappings().all()
         return [{"country": r["country"], "visits": int(r["visits"] or 0)} for r in rows]
@@ -152,7 +159,7 @@ def by_device(session, *, club_id, days) -> List[Dict[str, Any]]:
             SELECT COALESCE(NULLIF(metadata->>'device',''), 'unknown') AS device,
                    count(*) AS visits
             FROM core.usage_event
-            WHERE {_PV} AND {_window(days)}{_club_clause('club_id', club_id)}
+            WHERE {_PV} AND {_window(days)} AND {_PUBLIC}{_club_clause('club_id', club_id)}
             GROUP BY 1 ORDER BY 2 DESC
         """), _p(club_id)).mappings().all()
         return [{"device": r["device"], "visits": int(r["visits"] or 0)} for r in rows]
@@ -165,7 +172,7 @@ def by_browser(session, *, club_id, days) -> List[Dict[str, Any]]:
             SELECT COALESCE(NULLIF(metadata->>'browser',''), 'unknown') AS browser,
                    count(*) AS visits
             FROM core.usage_event
-            WHERE {_PV} AND {_window(days)}{_club_clause('club_id', club_id)}
+            WHERE {_PV} AND {_window(days)} AND {_PUBLIC}{_club_clause('club_id', club_id)}
             GROUP BY 1 ORDER BY 2 DESC LIMIT 10
         """), _p(club_id)).mappings().all()
         return [{"browser": r["browser"], "visits": int(r["visits"] or 0)} for r in rows]
@@ -188,6 +195,24 @@ def time_on_site(session, *, club_id, days) -> Dict[str, Any]:
                 "median_seconds": float(row["median_seconds"] or 0),
                 "samples": int(row["samples"] or 0)}
     return _guard(q, {"avg_seconds": 0, "median_seconds": 0, "samples": 0})
+
+
+def members_area(session, *, club_id, days) -> Dict[str, Any]:
+    """Signed-in members-area activity — the mirror image of the public panels above. Kept SEPARATE
+    on purpose: the portal is an SPA, so one member clicking around fires many page_views; folding
+    that into 'website traffic' made a handful of members look like a flood of visitors. `views` =
+    in-app page views; `members` = distinct signed-in people who generated them."""
+    def q():
+        row = session.execute(text(f"""
+            SELECT count(*) AS views,
+                   count(DISTINCT metadata->>'anon_id')
+                     FILTER (WHERE metadata->>'anon_id' IS NOT NULL) AS members
+            FROM core.usage_event
+            WHERE {_PV} AND {_window(days)} AND metadata->>'authed' = 'true'
+              {_club_clause('club_id', club_id)}
+        """), _p(club_id)).mappings().first()
+        return {"views": int(row["views"] or 0), "members": int(row["members"] or 0)}
+    return _guard(q, {"views": 0, "members": 0})
 
 
 # ---------------------------------------------------------------------------
@@ -291,17 +316,22 @@ def overview(session, *, club_id: Optional[str] = None, days: int = 30) -> Dict[
     traffic = traffic_summary(session, club_id=club_id, days=days)
     nvr = new_vs_returning(session, club_id=club_id, days=days)
     tos = time_on_site(session, club_id=club_id, days=days)
+    members = members_area(session, club_id=club_id, days=days)
     cust = customers(session, club_id=club_id, days=days)
     rev = bookings_and_revenue(session, club_id=club_id, days=days)
     return {
         "scope": {"club_id": str(club_id) if club_id else None, "days": int(days)},
         "kpis": {
-            "visits": traffic["visits"],
-            "unique_visitors": traffic["unique_visitors"],
+            # Public marketing traffic only (signed-in members-area navigation excluded).
+            "visits": traffic["visits"],                 # public page views
+            "unique_visitors": traffic["unique_visitors"],  # public PEOPLE (distinct anon_id)
             "new_visitors": nvr["new_visitors"],
             "returning_visitors": nvr["returning_visitors"],
             "avg_seconds": tos["avg_seconds"],
             "median_seconds": tos["median_seconds"],
+            # Signed-in members-area activity, reported separately (not marketing traffic).
+            "members_area_views": members["views"],
+            "members_active": members["members"],
             "total_customers": cust["total"],
             "new_customers": cust["new_in_window"],
             "bookings": rev["bookings"],
