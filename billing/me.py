@@ -253,7 +253,8 @@ def activity_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]
     ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
     currency = session.execute(
         text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": str(club_id)}).scalar() or "ZAR"
-    LBL = {"lesson": "Lessons", "court": "Court hire", "class": "Classes", "other": "Other"}
+    LBL = {"lesson": "Lessons", "court": "Court hire", "class": "Classes",
+           "pack": "Session packs", "membership": "Membership", "other": "Other"}
     out = {"month": ym, "currency": currency,
            "counts": {"lesson": 0, "court": 0, "class": 0, "total": 0},
            "minutes": 0, "billed_minor": 0, "paid_minor": 0, "outstanding_minor": 0,
@@ -297,7 +298,11 @@ def activity_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]
         # Spend BY SERVICE (billed, ex-cancelled) — one row per order, categorised by its booking/product.
         svc = {}
         for r in session.execute(
-            text("SELECT COALESCE(b.booking_type, "
+            text("SELECT COALESCE("
+                 "  CASE WHEN EXISTS (SELECT 1 FROM billing.token_wallet w WHERE w.order_id = o.id) THEN 'pack' "
+                 "       WHEN EXISTS (SELECT 1 FROM billing.membership_subscription ms WHERE ms.order_id = o.id) THEN 'membership' "
+                 "  END, "
+                 "  b.booking_type, "
                  "  CASE WHEN pr.kind = 'court_booking' THEN 'court' ELSE pr.kind END) AS k, "
                  "  o.amount_minor AS amt "
                  'FROM billing."order" o '
@@ -311,13 +316,13 @@ def activity_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]
                  "  AND to_char(COALESCE(b.starts_at, o.created_at),'YYYY-MM') = :ym"),
             {"c": str(club_id), "u": str(user_id), "ym": ym},
         ).mappings().all():
-            k = r["k"] if r["k"] in ("lesson", "court", "class") else "other"
+            k = r["k"] if r["k"] in ("lesson", "court", "class", "pack", "membership") else "other"
             e = svc.setdefault(k, {"count": 0, "billed_minor": 0})
             e["count"] += 1
             e["billed_minor"] += int(r["amt"] or 0)
         out["by_service"] = [{"key": k, "label": LBL[k], "count": svc[k]["count"],
                               "billed_minor": svc[k]["billed_minor"]}
-                             for k in ("lesson", "court", "class", "other") if k in svc]
+                             for k in ("lesson", "court", "class", "pack", "membership", "other") if k in svc]
         # Billed (orders raised this month, excluding cancelled/void) + still outstanding (open).
         m = session.execute(
             text("SELECT "

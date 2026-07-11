@@ -164,9 +164,8 @@
   async function renderHome() {
     if (!HBMONTH) HBMONTH = curMonth();
     loading();
-    var fin = {}, bookings = [], asum = null;
+    var fin = {}, bookings = [];
     try { fin = await window.API.financials(); } catch (e) {}
-    try { asum = await window.API.activitySummary(); } catch (e) {}
     try { bookings = (await window.API.bookings({ date_from: UI.dateKey(UI.addDays(new Date(), -730)), date_to: UI.dateKey(UI.addDays(new Date(), 365)) })).bookings || []; } catch (e) {}
     try { DATA.enrolments = (await window.API.myEnrolments()).enrolments || []; } catch (e) { DATA.enrolments = []; }
     DATA.fin = fin; DATA.bookings = bookings;
@@ -214,25 +213,41 @@
     // Your sessions (Upcoming / Past) — what's next, right after choosing a service.
     wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your sessions" }), el("div", { id: "home-sessions" })]));
 
-    // BILLING — spend by service · paid vs outstanding · settle. Tap → Client 360 statement.
-    if (asum) wrap.appendChild(window.CRMUI.spendBlock(asum, {
-      onSettle: function () { payOrders(null); },
-      onOpen: function () { go("#/activity"); },
-    }));
-
-    // ACTIVITY — the month at a glance (counts · total time · weekly chart). Tap → Client 360.
-    if (asum) wrap.appendChild(window.CRMUI.activityBlock(asum, { onOpen: function () { go("#/activity"); } }));
-
-    // Match analysis & technique — the embedded Ten-Fifty5 product.
+    // Match analysis & technique — directly under bookings (the embedded Ten-Fifty5 product).
     // Allowlisted (private test) → the working embed; everyone else → a "Coming soon" teaser.
     if (TF5_URL) wrap.appendChild(tf5Enabled() ? analysisPromo() : analysisSoon());
+
+    // BILLING + ACTIVITY — a month-navigable summary section (‹ month › re-fetches). Tap a block → 360.
+    wrap.appendChild(el("div", { id: "home-summary" }));
 
     // Plan & credits — the member's standing + manage/cancel.
     wrap.appendChild(planCard(plan, cur));
 
     set(wrap);
     paintSessions();
+    loadHomeSummary(HBMONTH);
     loadWallets(cur);
+  }
+
+  // The month-navigable Billing + Activity summary (re-fetches on ‹ ›). Reuses HBMONTH.
+  async function loadHomeSummary(month) {
+    var box = document.getElementById("home-summary"); if (!box) return;
+    UI.clear(box); box.appendChild(el("div", { class: "cf-loading", style: "min-height:90px", text: "…" }));
+    var a = null;
+    try { a = await window.API.activitySummary(month); } catch (e) {}
+    UI.clear(box);
+    // Month switcher — outside the tappable blocks so the arrows don't trigger a drill-through.
+    box.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:2px 2px 12px" }, [
+      el("h2", { style: "margin:0;font-size:1.05rem", text: "Your month" }),
+      el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹", onclick: function () { HBMONTH = shiftM(month, -1); loadHomeSummary(HBMONTH); } }),
+        el("span", { class: "cf-chip", style: "min-width:96px;text-align:center", text: mLabel(month) }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { HBMONTH = shiftM(month, 1); loadHomeSummary(HBMONTH); } }),
+      ]),
+    ]));
+    if (!a) { box.appendChild(el("div", { class: "cf-empty", text: "Couldn't load this month." })); return; }
+    box.appendChild(window.CRMUI.spendBlock(a, { onSettle: function () { payOrders(null); }, onOpen: function () { go("#/activity"); } }));
+    box.appendChild(window.CRMUI.activityBlock(a, { onOpen: function () { go("#/activity"); } }));
   }
 
   // A drawn line-glyph per service type (no emoji) — court net, lesson mortarboard, class group.
@@ -267,33 +282,33 @@
   // ---- Match analysis & technique (embedded Ten-Fifty5) ---------------------
   // A Home card that drills into the embedded product. Inside the iframe the member is
   // signed in with their own Clerk token (relayed by auth_client.js) — no second login.
+  // A drawn "analysis" glyph (a signal waveform + a spark) on the AI panel's glass tile — no emoji.
+  function aiGlyph() {
+    var g = el("span", { class: "cf-ai-ic" });
+    g.innerHTML = "<svg width='22' height='22' viewBox='0 0 24 24' fill='none'>" +
+      "<path d='M2.5 13c3-6.5 5-6.5 6.5 0S12.5 19.5 14 13s3-4.2 6.5-1.2' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/>" +
+      "<circle cx='20' cy='5' r='1.7' fill='var(--lime)'/></svg>";
+    return g;
+  }
+  function aiPanel(bodyText, tail) {
+    var box = el("div", { class: "cf-ai" });
+    box.appendChild(el("div", { class: "cf-ai-top" }, [aiGlyph(), el("span", { class: "cf-ai-badge", text: "AI · Ten-Fifty5" })]));
+    box.appendChild(el("h2", { text: "Match analysis & technique" }));
+    box.appendChild(el("p", { text: bodyText }));
+    box.appendChild(tail);
+    return box;
+  }
   function analysisPromo() {
-    return card([
-      el("div", { class: "cf-row", style: "gap:12px;align-items:flex-start" }, [
-        el("div", { style: "font-size:1.8rem;line-height:1", text: "🎥" }),
-        el("div", { style: "flex:1" }, [
-          el("h2", { style: "margin:0 0 2px", text: "Match analysis & technique" }),
-          el("p", { class: "cf-muted", style: "margin:0", text: "AI-powered match stats and technique analysis, powered by Ten-Fifty5 — opens right here, already signed in." }),
-        ]),
-      ]),
-      el("div", { class: "cf-row", style: "margin-top:12px" }, [
-        el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Open ›", onclick: function () { go("#/analysis"); } }),
-      ]),
-    ]);
+    return aiPanel(
+      "AI match stats and stroke-by-stroke technique breakdowns from your video — spot patterns, track progress, and sharpen your game. Opens right here, already signed in.",
+      el("button", { class: "cf-ai-cta", text: "Open analysis ›", onclick: function () { go("#/analysis"); } }));
   }
 
   // Non-allowlisted members see this teaser on Home (private test in progress).
   function analysisSoon() {
-    return card([
-      el("div", { class: "cf-row", style: "gap:12px;align-items:flex-start" }, [
-        el("div", { style: "font-size:1.8rem;line-height:1", text: "🎥" }),
-        el("div", { style: "flex:1" }, [
-          el("h2", { style: "margin:0 0 2px", text: "Match analysis & technique" }),
-          el("p", { class: "cf-muted", style: "margin:0", text: "AI-powered match stats and technique analysis, powered by Ten-Fifty5 — coming soon to your account." }),
-        ]),
-        el("span", { style: "align-self:center;background:#eef2f5;color:#5b6b7a;padding:4px 10px;border-radius:999px;font-size:.72rem;font-weight:700;white-space:nowrap", text: "Coming soon" }),
-      ]),
-    ]);
+    return aiPanel(
+      "AI match stats and stroke-by-stroke technique breakdowns from your video. Landing in your account soon.",
+      el("span", { class: "cf-ai-soon", text: "Coming soon" }));
   }
 
   function renderAnalysis() {

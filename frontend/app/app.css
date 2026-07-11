@@ -654,7 +654,9 @@ p{margin:0 0 10px}
 .cf-chart svg{display:block;width:100%;height:auto;overflow:visible}
 .cf-segbar{display:flex;height:14px;border-radius:7px;overflow:hidden;margin:14px 0 12px;background:var(--border)}
 .cf-seg{height:100%}
-.cf-seg.lesson{background:var(--info)}.cf-seg.court{background:var(--green)}.cf-seg.class{background:var(--lime-700)}.cf-seg.other{background:var(--dim)}
+.cf-seg.lesson{background:var(--info)}.cf-seg.court{background:var(--green)}.cf-seg.class{background:var(--lime-700)}
+.cf-seg.pack{background:var(--warning)}.cf-seg.membership{background:var(--green-700)}.cf-seg.other{background:var(--dim)}
+.cf-swatch.pack{background:var(--warning)}.cf-swatch.membership{background:var(--green-700)}
 .cf-legend{display:flex;flex-direction:column;gap:9px}
 .cf-lrow{display:flex;align-items:center;gap:10px;font-size:.9rem}
 .cf-swatch{width:10px;height:10px;border-radius:3px;flex:none}
@@ -677,3 +679,22 @@ p{margin:0 0 10px}
 /* Book / Analysis tiles — drawn line-glyph in the service colour, no emoji */
 .cf-gtile{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;margin:0 auto 9px}
 .cf-gtile.court{background:var(--green-050)}.cf-gtile.lesson{background:var(--info-bg)}.cf-gtile.class{background:#F1F8D6}
+/* Match analysis / technique — a distinctive "AI" panel (deliberately unlike the white cards) */
+.cf-ai{position:relative;overflow:hidden;border-radius:var(--radius);padding:22px 20px;margin-bottom:16px;color:#fff;
+  background:radial-gradient(130% 150% at 88% 8%, rgba(200,232,92,.30), transparent 55%),linear-gradient(135deg,#08431F,#0E7A47 58%,#0C6E54);
+  box-shadow:var(--shadow-md)}
+.cf-ai::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(85% 65% at 12% 115%, rgba(45,116,214,.38), transparent 60%)}
+.cf-ai>*{position:relative;z-index:1}
+.cf-ai-top{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.cf-ai-ic{width:44px;height:44px;border-radius:12px;flex:none;display:grid;place-items:center;
+  background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2)}
+.cf-ai-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:var(--radius-pill);
+  font-size:.64rem;font-weight:800;letter-spacing:.13em;text-transform:uppercase;background:var(--lime);color:#26330a}
+.cf-ai h2{color:#fff;font-size:1.15rem;letter-spacing:-.02em;margin:0}
+.cf-ai p{margin:7px 0 0;color:rgba(255,255,255,.82);font-size:.9rem;line-height:1.45}
+.cf-ai-cta{display:inline-flex;align-items:center;gap:7px;margin-top:16px;padding:11px 18px;border:0;cursor:pointer;
+  border-radius:var(--radius-pill);background:var(--lime);color:#26330a;font:700 .92rem Inter,system-ui,sans-serif}
+.cf-ai-cta:hover{filter:brightness(1.06)}
+.cf-ai-soon{margin-top:16px;display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border-radius:var(--radius-pill);
+  background:rgba(255,255,255,.14);color:#fff;font-weight:600;font-size:.82rem}

@@ -332,6 +332,10 @@
       el("div", { class: "cf-paycell" }, [el("div", { class: "cf-payk", text: "Paid" }), el("div", { class: "cf-payv num", text: money(paid, cur) })]),
       el("div", { class: "cf-paycell " + (owe > 0 ? "owe-bad" : "owe-ok") }, [el("div", { class: "cf-payk", text: "Outstanding" }), el("div", { class: "cf-payv num", text: money(owe, cur) })]),
     ]));
+    // Clarify where the rest went when billed > paid + outstanding (refunds / write-offs / cancellations)
+    // — otherwise "billed R1380 · paid R0 · nothing outstanding" reads as a puzzle.
+    var reversed = Math.max(0, billed - paid - owe);
+    if (reversed > 0) body.appendChild(el("div", { class: "cf-muted", style: "margin-top:9px;font-size:.82rem", text: money(reversed, cur) + " refunded or written off this month" }));
     if (owe > 0 && opts.onSettle) {
       var b = el("button", { class: "cf-settle", text: "Settle " + money(owe, cur) + " now" });
       b.addEventListener("click", function (e) { e.stopPropagation(); opts.onSettle(); });
