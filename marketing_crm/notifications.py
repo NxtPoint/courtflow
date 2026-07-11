@@ -156,9 +156,13 @@ def _t_coach_invited(ctx):
 
 
 def _t_statement_ready(ctx):
-    amt = _money(_g(ctx, "amount_minor"), _g(ctx, "currency"))
-    body = (f"You have {amt} due for coaching this month. Pay securely online from your "
-            "dashboard — tap to go straight in.")
+    amt = _money(_g(ctx, "amount_minor"), _g(ctx, "currency_code", "currency"))
+    if amt:
+        body = (f"You have {amt} due for coaching this month. Pay securely online from your "
+                "dashboard — tap to go straight in.")
+    else:
+        body = ("Your coaching invoice for this month is ready. Pay securely online from your "
+                "dashboard — tap to go straight in.")
     return ("Your invoice is ready", body, "/account.html")
 
 
@@ -252,7 +256,10 @@ KIND_MAP = {
     "refund_decided":        _t_refund_decided,
     "class_enrolled":        _t_class_enrolled,
     "class_waitlisted":      _t_class_waitlisted,
-    "waitlist_slot_open":    _t_class_promoted,          # a seat freed → "you're in" / claim
+    # NOTE: waitlist_slot_open is intentionally NOT mapped to an email. On auto-promotion the diary
+    # emits waitlist_slot_open AND class_enrolled back-to-back for the same seat; mapping both sent the
+    # promoted player TWO emails. class_enrolled is the single confirmation. The waitlist_slot_open
+    # EVENT still fires (kept for CRM/Klaviyo triggers) — it just no longer sends a transactional email.
     "coach_invited":         _t_coach_invited,
     "statement_ready":       _t_statement_ready,         # month-end: invoice ready → pay online
     "lesson_requested":      _t_lesson_requested,        # lesson approval lifecycle (→ coach)
@@ -349,7 +356,8 @@ _ICS_KINDS = {"booking_confirmed", "lesson_accepted", "lesson_proposed", "class_
 # → enrich with the order block: the exact item(s) bought, the amount, and the payment method (paid
 # online / pay at court / on monthly account). This is what turns a bare "payment processed" into a
 # proper "you bought Adult Anytime Membership — Paid online" confirmation.
-_PURCHASE_KINDS = {"payment_succeeded", "membership_started", "membership_activated", "bundle_activated"}
+_PURCHASE_KINDS = {"payment_succeeded", "membership_started", "membership_activated", "bundle_activated",
+                   "payment_refunded"}
 
 
 def _club_identity(session, club_id):

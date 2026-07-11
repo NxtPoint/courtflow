@@ -839,9 +839,15 @@ def issue_package(user_id):
             return jsonify(error=str(e)), 400
     try:
         from marketing_crm.tracking import emit
-        emit("membership_activated" if kind == "membership" else "bundle_activated",
-             {"club_id": str(p.club_id), "user_id": str(user_id), "ref_type": "order",
-              "ref_id": str(res.get("order_id"))})
+        payload = {"club_id": str(p.club_id), "user_id": str(user_id), "ref_type": "order",
+                   "ref_id": str(res.get("order_id"))}
+        # For a PACK, carry the pack name + session count so the "Pack activated" email body reads
+        # "Your <pack> is ready. N sessions added" instead of the generic "Your session pack is ready".
+        if kind != "membership":
+            plan = res.get("plan") or {}
+            payload["label"] = plan.get("label")
+            payload["tokens_total"] = plan.get("sessions_count")
+        emit("membership_activated" if kind == "membership" else "bundle_activated", payload)
     except Exception:
         log.debug("issue_package activation emit skipped")
     return jsonify(res), 201

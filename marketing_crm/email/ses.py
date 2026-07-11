@@ -74,16 +74,29 @@ def _esc(s):
 
 
 def html_wrap(title, body_html, footer=None):
-    """A light, brand-consistent HTML shell for a transactional email (the app's cf-* palette).
-    `body_html` is trusted markup the caller built; `title`/`footer` are escaped."""
+    """A brand-consistent, email-client-ROBUST HTML shell for a transactional email (the app's cf-*
+    palette). A full document with a viewport meta (correct mobile scaling) and a TABLE-based layout
+    (Outlook's Word engine ignores max-width/border-radius on <div>s, so a bare div renders full-width
+    square) on a soft page background. `body_html` is trusted markup the caller built; `title`/`footer`
+    are escaped."""
+    foot = ('<p style="color:#5F7268;font-size:12px;margin:18px 0 0">' + _esc(footer) + "</p>") if footer else ""
     return (
-        '<div style="font-family:Inter,Segoe UI,Arial,sans-serif;max-width:560px;margin:0 auto;color:#10231A">'
-        '<div style="background:#0E7A47;color:#fff;padding:16px 20px;border-radius:14px 14px 0 0;'
-        'font-weight:800;font-size:18px">' + _esc(title) + '</div>'
-        '<div style="border:1px solid #E2E9E5;border-top:0;border-radius:0 0 14px 14px;padding:20px 22px;'
-        'background:#fff;font-size:15px;line-height:1.5">' + (body_html or "") +
-        ('<p style="color:#5F7268;font-size:12px;margin:18px 0 0">' + _esc(footer) + "</p>" if footer else "") +
-        "</div></div>")
+        '<!DOCTYPE html><html lang="en"><head>'
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="color-scheme" content="light only">'
+        '<title>' + _esc(title) + '</title></head>'
+        '<body style="margin:0;padding:0;background:#F4F7F5;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'style="background:#F4F7F5"><tr><td align="center" style="padding:24px 12px">'
+        '<table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" '
+        'style="width:560px;max-width:560px;font-family:Inter,Segoe UI,Arial,sans-serif;color:#10231A">'
+        '<tr><td style="background:#0E7A47;color:#ffffff;padding:16px 20px;'
+        'border-radius:14px 14px 0 0;font-weight:800;font-size:18px">' + _esc(title) + '</td></tr>'
+        '<tr><td style="border:1px solid #E2E9E5;border-top:0;border-radius:0 0 14px 14px;'
+        'padding:20px 22px;background:#ffffff;font-size:15px;line-height:1.5">'
+        + (body_html or "") + foot +
+        '</td></tr></table></td></tr></table></body></html>')
 
 
 def _bcc_list(bcc, to_email):

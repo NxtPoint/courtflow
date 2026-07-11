@@ -18,7 +18,7 @@ log = logging.getLogger("marketing_crm.email.booking_detail")
 # Which notification kinds carry a booking/class we can enrich.
 DETAIL_KINDS = {
     "booking_confirmed", "booking_cancelled", "booking_rescheduled", "booking_reminder",
-    "class_enrolled", "class_waitlisted", "waitlist_slot_open",
+    "class_enrolled", "class_waitlisted", "waitlist_slot_open", "class_cancelled",
     "lesson_requested", "lesson_proposed", "lesson_accepted", "lesson_declined",
 }
 
@@ -264,12 +264,16 @@ def _load_class(session, club_id, ctx):
             cl_first, cl_surname = u["first_name"], u["surname"]
             cl_email, cl_phone = u["email"], u["phone"]
         en = session.execute(
-            text("SELECT order_id FROM diary.enrolment "
+            text("SELECT order_id, settlement_mode FROM diary.enrolment "
                  "WHERE class_session_id = :cs AND user_id = :u ORDER BY enrolled_at DESC LIMIT 1"),
             {"cs": str(cs["id"]), "u": str(uid)},
-        ).first()
-        if en and en[0]:
-            charge = _charge(session, club_id, en[0], None)
+        ).mappings().first()
+        if en:
+            # Use the enrolment's REAL settlement mode (was hardcoded None → the class Payment line
+            # was mislabelled). Feeds both the charge read and the pay-status wording.
+            settlement_mode = en["settlement_mode"]
+            if en["order_id"]:
+                charge = _charge(session, club_id, en["order_id"], settlement_mode)
 
     tzname = _club_tzname(session, club_id)
     return _normalize(
@@ -332,17 +336,24 @@ def _load_order(session, club_id, order_id):
                     WHERE order_id = :o ORDER BY created_at LIMIT 1'''),
             {"o": str(order_id)},
         ).mappings().first()
-        # The item(s): line description(s), preferring the real product name; a bare booking-type
-        # word ("court") is cleaned to a label. Dedupe (a 'pay all' order can repeat a type).
+        # The item(s). For a PACK the line description IS the pack ("Session pack — 10 sessions") while
+        # its price points at the coach's lesson/class PRODUCT ("Private Lesson") — so a pack must
+        # prefer the DESCRIPTION or it renders as the bare service (the "package details not showing"
+        # bug). A booking prefers the real product name; a bare booking-type word is cleaned to a label.
         rows = session.execute(
-            text('''SELECT COALESCE(p.name, NULLIF(ol.description,'')) AS item
+            text('''SELECT NULLIF(ol.description,'') AS descr, p.name AS pname
                     FROM billing.order_line ol
                     LEFT JOIN billing.price pr ON pr.id = ol.price_id
                     LEFT JOIN billing.product p ON p.id = pr.product_id
                     WHERE ol.order_id = :o ORDER BY ol.created_at'''),
             {"o": str(order_id)},
-        ).scalars().all()
-        service = ", ".join(dict.fromkeys(_clean_service(it) for it in rows if it)) or None
+        ).mappings().all()
+        items = []
+        for r in rows:
+            it = (r["descr"] or r["pname"]) if pack else (r["pname"] or r["descr"])
+            if it:
+                items.append(_clean_service(it))
+        service = ", ".join(dict.fromkeys(items)) or None
         if pack:
             when_label = "Validity"
             when = _fmt_period(pack["purchased_at"], pack["expires_at"]) if pack["expires_at"] else "No expiry"
