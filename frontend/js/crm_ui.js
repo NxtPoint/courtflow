@@ -246,22 +246,29 @@
   }
   var SVC_FILL = { lesson: "#1F5BAB", court: "var(--green,#0E7A47)", class: "var(--lime-700,#5B7A12)" };
 
-  // Stacked weekly bars (SVG, no chart lib) — sessions per week, coloured by service type.
+  // Stacked weekly bars (SVG, no chart lib) — sessions per week, coloured by service type. Shows
+  // EVERY week of the month (>=4 slots) with headroom, so a single active week reads as a normal bar
+  // among empty ones — not one giant slab.
   function weekChart(byWeek) {
     byWeek = byWeek || [];
-    var W = 340, H = 118, pad = 18, base = H - 18, top = 8, n = byWeek.length || 1;
-    var max = byWeek.reduce(function (mx, w) { return Math.max(mx, (w.lesson || 0) + (w.court || 0) + (w["class"] || 0)); }, 0) || 1;
-    var slot = (W - pad * 2) / n, bw = Math.min(46, slot * 0.6);
+    var maxW = byWeek.reduce(function (m, w) { return Math.max(m, w.week || 0); }, 0);
+    var nWeeks = Math.max(4, maxW), map = {};
+    byWeek.forEach(function (w) { map[w.week] = w; });
+    var weeks = [];
+    for (var i = 1; i <= nWeeks; i++) weeks.push(map[i] || { week: i, lesson: 0, court: 0, class: 0 });
+    var W = 340, H = 120, pad = 16, base = H - 20, top = 14;
+    var max = weeks.reduce(function (mx, w) { return Math.max(mx, (w.lesson || 0) + (w.court || 0) + (w["class"] || 0)); }, 0) || 1;
+    var slot = (W - pad * 2) / weeks.length, bw = Math.min(38, slot * 0.5);
     var s = ["<svg viewBox='0 0 " + W + " " + H + "' role='img' aria-label='Sessions per week by type'>"];
     s.push("<line x1='0' y1='" + base + "' x2='" + W + "' y2='" + base + "' stroke='var(--border,#E4EBE5)'/>");
-    byWeek.forEach(function (w, i) {
+    weeks.forEach(function (w, i) {
       var cx = pad + slot * i + slot / 2, x = cx - bw / 2, y = base;
       ["court", "lesson", "class"].forEach(function (k) {
         var v = w[k] || 0; if (!v) return;
         var h = v / max * (base - top); y -= h;
         s.push("<rect x='" + x.toFixed(1) + "' y='" + y.toFixed(1) + "' width='" + bw.toFixed(1) + "' height='" + h.toFixed(1) + "' rx='4' fill='" + SVC_FILL[k] + "'/>");
       });
-      s.push("<text x='" + cx.toFixed(1) + "' y='" + (H - 2) + "' text-anchor='middle' fill='var(--dim,#95A69C)' font-size='11' font-weight='600'>Wk " + (w.week || i + 1) + "</text>");
+      s.push("<text x='" + cx.toFixed(1) + "' y='" + (H - 3) + "' text-anchor='middle' fill='var(--dim,#95A69C)' font-size='11' font-weight='600'>Wk " + (w.week || i + 1) + "</text>");
     });
     s.push("</svg>");
     var box = el("div", { class: "cf-chart" }); box.innerHTML = s.join(""); return box;

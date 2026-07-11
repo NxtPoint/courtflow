@@ -227,7 +227,7 @@
       var owed = (pn.statement && pn.statement.items) || [];
       card.appendChild(CRMUI.lineItems(owed.map(function (it) { return Object.assign({}, it, { gross_minor: it.amount_minor }); }), {
         currency: c,
-        empty: "Nothing owed — all settled. 🎉",
+        empty: "Nothing owed — all settled.",
         label: function (it) { return it.description || it.category || "Owed"; },
         sub: function (it) { return [it.category, it.coach_name, it.date ? fDate(it.date) : ""].filter(Boolean).join(" · "); },
         actions: rowActs,

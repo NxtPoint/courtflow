@@ -86,7 +86,7 @@
   // ---- shell (appbar + view + bottom nav) ----------------------------------
   var NAV = [
     { k: "home", ic: "⌂", label: "Home" },
-    { k: "book", ic: "🎾", label: "Book" },
+    { k: "book", ic: "", label: "Book" },
   ];
   function renderShell() {
     // The client experience is ONE page — no bottom nav. (Book is reached from the Home tiles;
@@ -449,7 +449,7 @@
       el("h2", { style: "margin:0", text: "Plan & credits" }),
       el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Manage ›", onclick: openPlan }),
     ])]);
-    var line = plan.is_trial ? ("🎁 7 Day Trial Period — " + (plan.trial_days_left || 0) + " days left · courts free")
+    var line = plan.is_trial ? ("7 Day Trial Period — " + (plan.trial_days_left || 0) + " days left · courts free")
       : plan.active ? (plan.name || "Membership") + (plan.current_period_end ? " · renews " + plan.current_period_end : "")
       : "Pay as you go — no membership";
     c.appendChild(el("div", { class: "cf-item" }, [
