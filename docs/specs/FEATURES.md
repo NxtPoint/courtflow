@@ -312,3 +312,14 @@ reclaim of an abandoned settlement · membership-covered R0 never owed · **void
 > **Honest status:** the core booking + money engines are now under automated regression tests; auth,
 > the live gateway round-trip, email, and the UI are validated manually / by the offline Yoco suite.
 > When a new bug is found, the fix should add a scenario here so it can't regress.
+
+## 14. Match analysis — embedded Ten-Fifty5 (members-area SSO)
+- **AI match analysis & technique, inside the members area** — a member opens **Ten-Fifty5** (the separate
+  live 1050 product: upload a match → AI stats, shot breakdowns, technique) in an iframe on the client SPA,
+  **signed in automatically with their NextPoint login** (no second account, no second login). The two are
+  separate Clerk apps bridged by a `postMessage` token relay + issuer federation; email is the identity key
+  (Ten-Fifty5 auto-provisions the member). 🌐 (needs the Ten-Fifty5-side env — see `ENV-STATUS.md`.)
+- **Private allowlist-gated test** — currently shown only to `TF5_EMBED_ALLOW_EMAILS`; everyone else sees a
+  **"Coming soon"** card. Launch = clear that env (open to all members). 🌐
+- **Public marketing funnel** — a "Match analysis" section on the public home page links out to
+  ten-fifty5.com (drives discovery traffic, independent of the embed). ✅

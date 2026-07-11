@@ -34,7 +34,10 @@ Three mobile-first, drill-through single-page apps, one per role, on the **one s
   billing view (`GET /api/me/billing/summary`). Served at `/`, `/portal`, `/app`. Home and the 360 rollup
   open on a **month-at-a-glance** summary (`GET /api/me/activity-summary`) rendered by the shared
   `CRMUI.activityBlock`/`spendBlock`/`weekChart` presenters (month navigation, an AI-styled analysis panel,
-  no emoji) — the same blocks the person-360 uses, so the client sees exactly what staff see.
+  no emoji) — the same blocks the person-360 uses, so the client sees exactly what staff see. **Also embeds
+  Ten-Fifty5** (`#/analysis`, 2026-07-11): the separate live 1050 product (AI match analysis) iframed inside
+  the members area, the member signed in with their OWN NextPoint Clerk token relayed via `postMessage` — see
+  "Cross-app SSO" under Auth below.
 - **Coach** — `coach_app.html` + `coach_app.js`. Bottom nav Home · Schedule · Clients · Money · Setup;
   Schedule is an hour-by-hour week time-grid (+ time-off + book-a-client); the event story
   (`GET /api/coach/bookings/<id>`) carries the arrears actions. Served at `/coach` (+ `/coach.html`).
@@ -76,6 +79,16 @@ portal, defaulting to PAYG; admins/coaches are seeded/invited).
 `Principal{user_id, club_id, role, email}`. Roles: `platform_admin`, `club_admin`, `coach`, `member`,
 `guest`. **Every domain query is `club_id`-scoped** — multi-tenant is a discipline (RLS is a future
 phase). The client can never assert a `club_id`; it's derived server-side.
+
+**Cross-app SSO — the Ten-Fifty5 embed (2026-07-11).** NextPoint and Ten-Fifty5 (the 1050 product) are
+**separate Clerk apps** (`clerk.nextpointtennis.com` vs `clerk.ten-fifty5.com`), so a NextPoint token doesn't
+natively verify on Ten-Fifty5. To sign a member into the embedded Ten-Fifty5 iframe with no second login:
+the NextPoint portal (parent) mints its own Clerk JWT and relays it to the iframe via the shared
+`auth_client.js` `postMessage` seam (a **multi-hop** relay — Ten-Fifty5's portal nests each page in a content
+iframe, so a middle frame proxies its grandchild's request up to its own parent). Ten-Fifty5's verifier was
+taught to **also** trust NextPoint's issuer (**multi-issuer federation**); **email** is the cross-system
+identity key (Ten-Fifty5 auto-provisions the member by email). The NextPoint side only *relays* the token —
+the verifier change lives in the Ten-Fifty5 repo (`auth_v2/verifier.py`). Full write-up: root `CLAUDE.md`.
 
 ## The five schemas (idempotent boot DDL — NO migration framework)
 `club` (tenants/branding/location/policy) · `iam` (identity/membership/coach/dependents) · `diary`

@@ -39,6 +39,13 @@ deleted.) The `can()` boundary and role model are unchanged by the SPA rebuild.
 **Verdict:** no cross-role leakage. A member/coach cannot use the admin console. The gaps below are
 about **granularity** and **surfacing**, not a security hole.
 
+> **A 4th, non-role gate (2026-07-11):** the members-area **Ten-Fifty5 embed** (`#/analysis` in the client
+> SPA) is gated by an **email allowlist** (`TF5_EMBED_ALLOW_EMAILS`), not by role — allowlisted members get
+> the live embed, everyone else a "Coming soon" card. This is a temporary **private-test** switch (launch =
+> clear the env → all members); it sits outside the `can()` / shell-role / nav-landing model above. The embed
+> itself is authorised by the member's own Clerk token relayed into the iframe (cross-app SSO), so no extra
+> Ten-Fifty5 login/role applies.
+
 ## 2. The 5 roles (today)
 `platform_admin` > `club_admin` > `coach` > `member` > `guest` (most-privileged first).
 - **platform_admin** — cross-club, everything (us, the platform operator).
