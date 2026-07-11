@@ -230,6 +230,15 @@
     applyDurationSelection();
   }
   function applyDurationSelection() {
+    // SILENT membership cap: a member never sees a court duration longer than their membership covers (a
+    // longer booking would just be PAYG) — so the limit is never felt. Court hire only; the server enforces
+    // the same cap authoritatively. If EVERY configured duration exceeds the cap, keep them all (so the
+    // court stays bookable at PAYG rather than becoming un-bookable).
+    var cap = (st.type === "court" && ctx.plan && ctx.plan.max_covered_minutes) ? ctx.plan.max_covered_minutes : null;
+    if (cap && st.durations.length) {
+      var within = st.durations.filter(function (d) { return d.duration_minutes <= cap; });
+      if (within.length) st.durations = within;
+    }
     if (st.durations.length) {
       var keep = st.durations.filter(function (x) { return x.duration_minutes === st.selDuration; })[0];
       if (!keep) { st.selDuration = st.durations[0].duration_minutes; st.selDurationPrice = st.durations[0].amount_minor; }

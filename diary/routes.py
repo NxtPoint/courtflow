@@ -168,6 +168,8 @@ def availability():
             any_resource=(q.get("any") in ("1", "true", "yes")),
             membership_covered=bool(windows), membership_windows=windows,
             product_id=q.get("product_id"),   # court SERVICE scope (Hardcourt vs Clay)
+            # The member whose entitlement (caps + court-service eligibility) silently shapes coverage.
+            member_user_id=(p.user_id if kind == "court" else None),
         )
     return jsonify(slots=slots, count=len(slots)), 200
 

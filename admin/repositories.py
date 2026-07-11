@@ -462,6 +462,16 @@ def patch_product(session, *, club_id, product_id, kind=None, name=None, descrip
     return get_product(session, club_id=club_id, product_id=product_id)
 
 
+def set_members_covered(session, *, club_id, product_id, members_covered):
+    """Set a court SERVICE's membership eligibility (false = PAYG-only for everyone, e.g. a clay court).
+    Scoped to the club. No-op return if the product isn't found."""
+    session.execute(
+        text("UPDATE billing.product SET members_covered = :m, updated_at = now() "
+             "WHERE club_id = :c AND id = :p"),
+        {"c": club_id, "p": product_id, "m": bool(members_covered)},
+    )
+
+
 def _get_price(session, *, club_id, price_id):
     return _row(session.execute(
         text("SELECT id, club_id, product_id, audience, amount_minor, peak_amount_minor, currency_code, "
@@ -569,12 +579,19 @@ def _plan_row(row):
         # Per-tier payment preference (None = inherit the membership default / club global).
         "payment_modes": ([m for m in str(row["payment_modes"]).split(",") if m]
                           if ("payment_modes" in row.keys() and row["payment_modes"]) else None),
+        # Silent anti-abuse caps (None = no cap) + the signup-trial config.
+        "max_covered_minutes": int(row["max_covered_minutes"]) if row.get("max_covered_minutes") is not None else None,
+        "max_covered_per_day": int(row["max_covered_per_day"]) if row.get("max_covered_per_day") is not None else None,
+        "max_courts_per_day": int(row["max_courts_per_day"]) if row.get("max_courts_per_day") is not None else None,
+        "is_trial": bool(row["is_trial"]) if "is_trial" in row.keys() else False,
+        "trial_days": int(row["trial_days"]) if row.get("trial_days") is not None else None,
     }
 
 
 _MEMBERSHIP_PLAN_COLS = (
     "p.id AS price_id, p.label, p.amount_minor, p.term_months, p.currency_code, p.active, p.status, "
-    "p.membership_tier, p.access_days, p.access_start_min, p.access_end_min, p.payment_modes")
+    "p.membership_tier, p.access_days, p.access_start_min, p.access_end_min, p.payment_modes, "
+    "p.max_covered_minutes, p.max_covered_per_day, p.max_courts_per_day, p.is_trial, p.trial_days")
 
 
 _PAY_MODES = ("online", "at_court", "monthly_account")
@@ -648,35 +665,56 @@ def _days_csv(days):
 
 def create_membership_plan(session, *, club_id, label, amount_minor, term_months, tier=None,
                            access_days=None, access_start_min=None, access_end_min=None,
-                           payment_modes=None):
+                           payment_modes=None, max_covered_minutes=None, max_covered_per_day=None,
+                           max_courts_per_day=None, is_trial=None, trial_days=None):
     """Add a term plan = a billing.price (term_months, unit='per_month', audience='member') on the
     club's membership product (creating the product if missing). `tier` is the optional grouping name
     (Student/Family/…) the wizard drills (tier → term). Optional access window (Phase 5) time-boxes a
-    tier. `payment_modes` (list/CSV/None) is the tier's payment preference (None = inherit)."""
+    tier. `payment_modes` (list/CSV/None) is the tier's payment preference (None = inherit). The
+    max_covered_* caps are the SILENT anti-abuse limits; is_trial/trial_days make the tier the signup trial."""
     prod_id = _membership_product_id(session, club_id=club_id, create_if_missing=True)
     pid = session.execute(
         text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
              "currency_code, unit, term_months, label, membership_tier, active, "
-             "access_days, access_start_min, access_end_min, payment_modes) "
+             "access_days, access_start_min, access_end_min, payment_modes, "
+             "max_covered_minutes, max_covered_per_day, max_courts_per_day, is_trial, trial_days) "
              "VALUES (:c, :prod, 'member', :amt, :cur, 'per_month', :tm, :lbl, :tier, true, "
-             ":days, :smin, :emin, :modes) RETURNING id"),
+             ":days, :smin, :emin, :modes, :mcm, :mcpd, :mctd, :trial, :tdays) RETURNING id"),
         {"c": club_id, "prod": prod_id, "amt": int(amount_minor),
          "cur": _club_currency(session, club_id=club_id), "tm": int(term_months),
          "lbl": (label or "").strip() or None, "tier": (tier or "").strip() or None,
          "days": _days_csv(access_days), "smin": access_start_min, "emin": access_end_min,
-         "modes": _modes_csv(payment_modes)},
+         "modes": _modes_csv(payment_modes),
+         "mcm": max_covered_minutes, "mcpd": max_covered_per_day, "mctd": max_courts_per_day,
+         "trial": bool(is_trial), "tdays": trial_days},
     ).scalar_one()
+    if is_trial:
+        _make_sole_trial(session, club_id=club_id, price_id=pid)
     return _get_membership_plan(session, club_id=club_id, price_id=pid)
+
+
+def _make_sole_trial(session, *, club_id, price_id):
+    """Only ONE tier can be the signup trial — clear is_trial on every OTHER membership price of this club."""
+    session.execute(
+        text("UPDATE billing.price p SET is_trial = false, updated_at = now() "
+             "FROM billing.product pr WHERE p.product_id = pr.id AND pr.club_id = :c "
+             "  AND pr.kind = 'membership' AND p.id <> :pid AND p.is_trial = true"),
+        {"c": club_id, "pid": price_id},
+    )
 
 
 def patch_membership_plan(session, *, club_id, price_id, label=None, amount_minor=None,
                           term_months=None, active=None, status=None, tier=None,
                           access_days=None, access_start_min=None, access_end_min=None,
-                          set_window=False, set_modes=False, payment_modes=None):
+                          set_window=False, set_modes=False, payment_modes=None,
+                          set_limits=False, max_covered_minutes=None, max_covered_per_day=None,
+                          max_courts_per_day=None, set_trial=False, is_trial=None, trial_days=None):
     """COALESCE partial update of a term plan. Scoped to the club + the membership product so a
     booking price can't be reshaped into a plan here. `label`='' clears to NULL (derive default).
     `status` (active|dormant|retired) keeps the `active` boolean in sync. `set_window=True` writes
-    the access window. `set_modes=True` writes the tier's payment preference (None = inherit)."""
+    the access window. `set_modes=True` writes the tier's payment preference (None = inherit).
+    `set_limits=True` writes the silent anti-abuse caps (None clears a cap). `set_trial=True` writes the
+    signup-trial flag + days (making this the sole trial tier when is_trial)."""
     if status is not None and status not in ("active", "dormant", "retired"):
         return None
     lbl = label.strip() if isinstance(label, str) else None
@@ -694,6 +732,11 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
                 access_start_min = CASE WHEN :set_win THEN :smin ELSE p.access_start_min END,
                 access_end_min   = CASE WHEN :set_win THEN :emin ELSE p.access_end_min END,
                 payment_modes    = CASE WHEN :set_modes THEN :modes ELSE p.payment_modes END,
+                max_covered_minutes = CASE WHEN :set_lim THEN :mcm ELSE p.max_covered_minutes END,
+                max_covered_per_day = CASE WHEN :set_lim THEN :mcpd ELSE p.max_covered_per_day END,
+                max_courts_per_day  = CASE WHEN :set_lim THEN :mctd ELSE p.max_courts_per_day END,
+                is_trial     = CASE WHEN :set_trial THEN :trial ELSE p.is_trial END,
+                trial_days   = CASE WHEN :set_trial THEN :tdays ELSE p.trial_days END,
                 updated_at   = now()
             FROM billing.product pr
             WHERE p.product_id = pr.id AND pr.club_id = :c AND pr.kind = 'membership'
@@ -707,10 +750,15 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
          "active": active, "status": status,
          "set_win": bool(set_window), "days": _days_csv(access_days),
          "smin": access_start_min, "emin": access_end_min,
-         "set_modes": bool(set_modes), "modes": _modes_csv(payment_modes)},
+         "set_modes": bool(set_modes), "modes": _modes_csv(payment_modes),
+         "set_lim": bool(set_limits), "mcm": max_covered_minutes,
+         "mcpd": max_covered_per_day, "mctd": max_courts_per_day,
+         "set_trial": bool(set_trial), "trial": bool(is_trial), "tdays": trial_days},
     ).mappings().first()
     if not res:
         return None
+    if set_trial and is_trial:
+        _make_sole_trial(session, club_id=club_id, price_id=price_id)
     return _get_membership_plan(session, club_id=club_id, price_id=price_id)
 
 

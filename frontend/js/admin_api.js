@@ -1393,6 +1393,9 @@
         del: [],
         win: { days: (g && g.plans[0]) ? g.plans[0].access_days : null, start: (g && g.plans[0]) ? g.plans[0].access_start_min : null, end: (g && g.plans[0]) ? g.plans[0].access_end_min : null },
         modes: (g && g.plans[0] && g.plans[0].payment_modes) ? g.plans[0].payment_modes.slice() : null,  // null = inherit
+        // Silent anti-abuse caps (null = no cap) + the signup-trial config.
+        limits: { minutes: (g && g.plans[0]) ? g.plans[0].max_covered_minutes : null, perDay: (g && g.plans[0]) ? g.plans[0].max_covered_per_day : null, courtsDay: (g && g.plans[0]) ? g.plans[0].max_courts_per_day : null },
+        trial: { on: !!(g && g.plans[0] && g.plans[0].is_trial), days: (g && g.plans[0] && g.plans[0].trial_days != null) ? g.plans[0].trial_days : null },
         clubMethods: [],
       };
       // Need the club's enabled methods for the payment-options checkboxes; fetch then render.
@@ -1415,8 +1418,42 @@
         nameI.addEventListener("input", function () { m.name = nameI.value; });
         host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Details" }), field("Membership name", nameI)]));
         host.appendChild(accessCard());
+        host.appendChild(limitsCard());
+        host.appendChild(trialCard());
         host.appendChild(paymentCard());
         host.appendChild(termsCard());
+      }
+
+      // Silent anti-abuse caps. Blank = no cap. Exceeding any -> that booking is PAYG (never blocked);
+      // over-length durations are simply hidden from the member so it's never felt.
+      function limitsCard() {
+        var c = el("div", { class: "cf-card" }, [el("h3", { text: "Member limits" }),
+          el("p", { class: "cf-muted cf-tiny", text: "Caps on what this membership covers for free. Leave blank for no cap. Beyond a cap the member simply pays as normal — they're never blocked." })]);
+        function numRow(label, key, hint) {
+          var i = input({ type: "number", min: 0, value: (m.limits[key] != null ? m.limits[key] : ""), placeholder: "no cap", style: "max-width:120px" });
+          i.addEventListener("input", function () { var t = i.value.trim(); m.limits[key] = (t === "" ? null : (parseInt(t, 10) || 0)); });
+          return el("div", { class: "cf-field" }, [el("label", { text: label }), i, hint ? el("div", { class: "cf-pref-note", text: hint }) : null].filter(Boolean));
+        }
+        c.appendChild(numRow("Max minutes per booking", "minutes", "e.g. 90 — longer durations are hidden for members."));
+        c.appendChild(numRow("Max covered bookings per day", "perDay", "How many free courts a member can book in a day."));
+        c.appendChild(numRow("Max courts per day", "courtsDay", "Distinct courts per day — stops one member holding several."));
+        return c;
+      }
+
+      // Configurable signup trial (Feature 3): mark THIS tier as the free trial granted to a brand-new
+      // member, scaled to N days (0 = trials off). A trial member inherits every limit above.
+      function trialCard() {
+        var c = el("div", { class: "cf-card" }, [el("h3", { text: "Signup trial" }),
+          el("p", { class: "cf-muted cf-tiny", text: "Make this the free trial a brand-new member gets on their first login. Only one tier can be the trial. All the limits above apply to trial members too." })]);
+        var cb = el("input", { type: "checkbox" }); cb.style.width = "auto"; cb.checked = !!m.trial.on;
+        var daysWrap = el("div", { class: "cf-field", style: m.trial.on ? "" : "display:none" });
+        var daysI = input({ type: "number", min: 0, value: (m.trial.days != null ? m.trial.days : 7), style: "max-width:100px" });
+        daysI.addEventListener("input", function () { var t = daysI.value.trim(); m.trial.days = (t === "" ? null : (parseInt(t, 10) || 0)); });
+        daysWrap.appendChild(el("label", { text: "Trial length (days)" })); daysWrap.appendChild(daysI);
+        cb.addEventListener("change", function () { m.trial.on = cb.checked; if (cb.checked && m.trial.days == null) m.trial.days = 7; daysWrap.style.display = cb.checked ? "" : "none"; });
+        c.appendChild(el("label", { class: "cf-row", style: "gap:10px;align-items:center;cursor:pointer;margin-top:6px" }, [cb, el("span", { style: "font-weight:600", text: "This tier is the signup trial" })]));
+        c.appendChild(daysWrap);
+        return c;
       }
 
       // Per-membership payment options. Inherits the membership default (then the club's global
@@ -1480,8 +1517,9 @@
         try {
           for (var i = 0; i < m.terms.length; i++) {
             var t = m.terms[i]; if (!t.term_months) continue;
-            if (t.price_id) await window.AdminAPI.patchMembershipPlan(t.price_id, { tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, set_window: true, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end, set_modes: true, payment_modes: m.modes });
-            else await window.AdminAPI.createMembershipPlan({ tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end, payment_modes: m.modes });
+            var caps = { max_covered_minutes: m.limits.minutes, max_covered_per_day: m.limits.perDay, max_courts_per_day: m.limits.courtsDay };
+            if (t.price_id) await window.AdminAPI.patchMembershipPlan(t.price_id, Object.assign({ tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, set_window: true, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end, set_modes: true, payment_modes: m.modes, set_limits: true, set_trial: true, is_trial: !!m.trial.on, trial_days: m.trial.days }, caps));
+            else await window.AdminAPI.createMembershipPlan(Object.assign({ tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end, payment_modes: m.modes, is_trial: !!m.trial.on, trial_days: m.trial.days }, caps));
           }
           for (var d = 0; d < m.del.length; d++) await window.AdminAPI.deleteMembershipPlan(m.del[d]);
           UI.toast("Saved.", "info"); membershipServices(host);

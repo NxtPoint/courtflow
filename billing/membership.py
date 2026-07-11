@@ -92,7 +92,8 @@ def membership_plans(session, *, club_id, active_only=True) -> List[Dict[str, An
              "FROM billing.product pr "
              "JOIN billing.price p ON p.product_id = pr.id "
              "WHERE pr.club_id = :c AND pr.kind = 'membership' "
-             "  AND p.term_months IS NOT NULL " + where + " "
+             "  AND p.term_months IS NOT NULL "
+             "  AND COALESCE(p.is_trial, false) = false " + where + " "   # the trial tier isn't for sale
              "ORDER BY p.amount_minor ASC, p.term_months ASC, p.created_at ASC"),
         {"c": str(club_id)},
     ).mappings().all()
@@ -466,7 +467,7 @@ def membership_status(session, *, club_id, user_id) -> Dict[str, Any]:
     row = session.execute(
         text("SELECT ms.id AS sub_id, ms.current_period_end, ms.provider, "
              "       (ms.current_period_end - CURRENT_DATE) AS days_left, "
-             "       p.access_days, p.access_start_min, p.access_end_min, "
+             "       p.access_days, p.access_start_min, p.access_end_min, p.max_covered_minutes, "
              "       p.membership_tier, p.label, p.term_months "
              "FROM billing.membership_subscription ms "
              "LEFT JOIN billing.price p ON p.id = ms.price_id "
@@ -502,6 +503,10 @@ def membership_status(session, *, club_id, user_id) -> Dict[str, Any]:
         "is_trial": is_trial,                       # the signup free-week (provider='trial')
         "trial_days_left": days_left if is_trial else None,
         "membership_window": window,                # Phase 5 access window (None = any time)
+        # The longest COVERED court booking on this tier — the booking UI silently hides over-cap durations
+        # for the member (a longer booking would just be PAYG). None = no cap.
+        "max_covered_minutes": (int(row["max_covered_minutes"])
+                                if row and row["max_covered_minutes"] is not None else None),
         "membership_window_summary": (_window_summary(row["access_days"], row["access_start_min"],
                                                        row["access_end_min"]) if row else None),
         "price_minor": offer["amount_minor"] if offer else None,
@@ -559,8 +564,29 @@ def grant_signup_trial(session, *, club_id, user_id, days=7) -> Dict[str, Any]:
 
     IDEMPOTENT + one-shot: grants ONLY if the member has NEVER held any subscription (no paid plan, no
     prior trial) — so it can't double-grant on repeated logins and an expired trial is never reissued.
-    Returns {granted: bool, current_period_end?, reason?}. Never raises on a benign skip."""
-    if not user_id or int(days) <= 0:
+    Returns {granted: bool, current_period_end?, reason?}. Never raises on a benign skip.
+
+    CONFIGURABLE TRIAL: if the owner has flagged a membership tier as the signup trial (billing.price
+    is_trial=true), the trial LINKS that tier's price_id and uses its trial_days — so it inherits the tier's
+    access window + entitlement caps (all membership rules apply to trial members). No trial tier configured
+    -> the legacy NULL-price, `days`-length trial (unchanged, covers any time)."""
+    if not user_id:
+        return {"granted": False, "reason": "disabled"}
+    # Prefer an owner-configured trial TIER so the trial inherits its window + caps.
+    trial = None
+    try:
+        trial = session.execute(
+            text("SELECT p.id AS price_id, p.trial_days FROM billing.price p "
+                 "JOIN billing.product pr ON pr.id = p.product_id "
+                 "WHERE pr.club_id = :c AND pr.kind = 'membership' AND p.is_trial = true AND p.active = true "
+                 "ORDER BY p.created_at LIMIT 1"),
+            {"c": str(club_id)},
+        ).mappings().first()
+    except Exception:
+        trial = None
+    price_id = trial["price_id"] if trial else None
+    length = int(trial["trial_days"]) if (trial and trial["trial_days"] is not None) else int(days)
+    if length <= 0:
         return {"granted": False, "reason": "disabled"}
     existing = session.execute(
         text("SELECT 1 FROM billing.membership_subscription "
@@ -573,11 +599,11 @@ def grant_signup_trial(session, *, club_id, user_id, days=7) -> Dict[str, Any]:
         text("""
             INSERT INTO billing.membership_subscription
                 (club_id, user_id, price_id, status, provider, order_id, current_period_end)
-            VALUES (:c, :u, NULL, 'active', 'trial', NULL,
+            VALUES (:c, :u, :pid, 'active', 'trial', NULL,
                     (CURRENT_DATE + make_interval(days => :d))::date)
             RETURNING current_period_end
         """),
-        {"c": str(club_id), "u": str(user_id), "d": int(days)},
+        {"c": str(club_id), "u": str(user_id), "pid": price_id, "d": length},
     ).mappings().first()
     end = row["current_period_end"] if row else None
     return {"granted": True,

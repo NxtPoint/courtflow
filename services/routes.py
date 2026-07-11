@@ -144,6 +144,11 @@ def patch_service(product_id):
         if "payment_modes" in b:
             repo.set_payment_modes(s, club_id=p.club_id, product_id=product_id,
                                    modes=b.get("payment_modes"))
+        # Court-SERVICE membership eligibility (owner only) — false = a PAYG-only court (e.g. clay), never
+        # free for members. Only meaningful for a court service; harmless on others.
+        if "members_covered" in b and _is_owner(p):
+            admin_repo.set_members_covered(s, club_id=p.club_id, product_id=product_id,
+                                           members_covered=bool(b.get("members_covered")))
         # Commission — OWNER ONLY. A coach's request to change it is ignored (defence in depth: the
         # UI greys it out, and the API refuses it here).
         if "commission_pct" in b and _is_owner(p):

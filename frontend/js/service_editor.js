@@ -38,6 +38,7 @@
       commission_pct: (s.commission && s.commission.effective_pct) || 0,
       variations: (s.variations || []).map(function (v) { return { price_id: v.price_id, duration_minutes: v.duration_minutes, amount_minor: v.amount_minor, peak_amount_minor: (v.peak_amount_minor != null ? v.peak_amount_minor : null) }; }),
       packages: (s.packages || []).map(function (p) { return { id: p.id, label: p.label, sessions_count: p.sessions_count, duration_minutes: p.duration_minutes, price_minor: p.price_minor, assigned: p.assigned !== false, adopt: false }; }),
+      members_covered: (s.members_covered !== false),   // court services: false = PAYG-only (clay)
     };
     st.del = { variations: [], packages: [] };
   }
@@ -63,6 +64,7 @@
     host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Details" }), field("Name", nameI)]));
 
     host.appendChild(variationsCard());
+    if (s.kind === "court_booking") host.appendChild(membersCard());
     host.appendChild(paymentCard());
     host.appendChild(packagesCard());
     if (s.commission && s.commission.applies) host.appendChild(commissionCard());
@@ -96,6 +98,16 @@
     if (!st.m.variations.length) list.appendChild(el("div", { class: "cf-empty", text: "No prices yet. Add one below." }));
     c.appendChild(list);
     c.appendChild(el("button", { class: "cf-btn cf-btn-sm", style: "margin-top:10px", text: "+ Add variation", onclick: function () { st.m.variations.push({ duration_minutes: 60, amount_minor: 0 }); render(); } }));
+    return c;
+  }
+
+  function membersCard() {
+    var c = card("Membership", "Whether an active member's booking of this court is free. Turn OFF for a PAYG-only court (e.g. a premium clay court) — members pay like everyone else.");
+    var cb = el("input", { type: "checkbox" }); cb.style.width = "auto"; cb.checked = !!st.m.members_covered;
+    cb.addEventListener("change", function () { st.m.members_covered = cb.checked; });
+    c.appendChild(el("label", { class: "cf-row", style: "gap:10px;align-items:center;cursor:pointer;margin-top:6px" }, [
+      cb, el("span", { style: "font-weight:600", text: "Members book this court free" }),
+    ]));
     return c;
   }
 
@@ -167,6 +179,7 @@
     var m = st.m, del = st.del;
     try {
       var body = { name: m.name, payment_modes: m.payment_modes };
+      if (st.svc.kind === "court_booking") body.members_covered = !!m.members_covered;
       if (st.svc.can_edit_commission) { var v = parseFloat(m.commission_pct); if (!isNaN(v)) body.commission_pct = Math.max(0, Math.min(100, v)); }
       await api("", { method: "PATCH", body: body });
       var isCourtSvc = (st.svc.kind === "court_booking");

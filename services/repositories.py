@@ -96,7 +96,8 @@ def get_service(session, *, club_id, product_id):
     """The full service config (or None). One payload: identity · variations · payment · packages ·
     commission · the club's enabled methods (for the payment picker)."""
     prod = session.execute(
-        text("SELECT id, kind, name, description, coach_user_id, payment_modes, active, status "
+        text("SELECT id, kind, name, description, coach_user_id, payment_modes, active, status, "
+             "       members_covered "
              "FROM billing.product WHERE club_id = :c AND id = :id"),
         {"c": club_id, "id": str(product_id)},
     ).mappings().first()
@@ -160,6 +161,8 @@ def get_service(session, *, club_id, product_id):
         "coach_user_id": str(prod["coach_user_id"]) if prod["coach_user_id"] else None,
         "currency": currency,
         "payment_modes": _modes_list(prod["payment_modes"]),          # None = all club-enabled
+        # Court-service membership eligibility (court services only) — false = PAYG-only (clay).
+        "members_covered": (bool(prod["members_covered"]) if prod["members_covered"] is not None else True),
         "club_payment_methods": club_payment_methods(session, club_id=club_id),
         "variations": variations,
         "packages": packages,

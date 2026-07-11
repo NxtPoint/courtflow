@@ -216,6 +216,19 @@ def _membership_covers_guarded(session, *, club_id, user_id, starts_at):
         return False
 
 
+def _court_covered_guarded(session, *, club_id, user_id, starts_at, ends_at, resource_id, now=None):
+    """True if the member's FULL entitlement covers this court booking for free — active membership + inside
+    the access window + court-service member-eligible + within max_covered_minutes + under the daily
+    booking/court caps (diary.entitlement.court_covered). Outside entitlement -> False -> billed PAYG.
+    Guarded; never raises (a missing entitlement module must never block a booking)."""
+    try:
+        from diary.entitlement import court_covered
+        return court_covered(session, club_id=club_id, user_id=user_id, starts_at=starts_at,
+                             ends_at=ends_at, resource_id=resource_id, now=now)
+    except Exception:
+        return False
+
+
 def release_expired_holds(session, club_id, now=None):
     """Lazy expiry (NO cron): cancel 'held' bookings whose held_until has passed, freeing the
     slot. Called opportunistically at the start of availability + booking creation, so an
@@ -529,9 +542,13 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     # a lesson/class, or a court OUTSIDE the membership window) falls back to per-duration PAYG at
     # the court — the booking still succeeds, just billed normally. Never trust the client's claim.
     if settlement_mode == "membership_covered":
-        if booking_type == "court" and _membership_covers_guarded(
-                session, club_id=club_id, user_id=owner_user_id, starts_at=starts):
-            pass  # legitimately covered (active membership + inside its access window)
+        # Full entitlement check (the SILENT anti-abuse rules — access window + court-service eligibility
+        # + max covered minutes + daily booking/court caps). Anything outside entitlement DOWNGRADES to
+        # PAYG (never blocks) — the same behaviour off-peak already uses. resource_id is the primary court.
+        if booking_type == "court" and _court_covered_guarded(
+                session, club_id=club_id, user_id=owner_user_id, starts_at=starts, ends_at=ends,
+                resource_id=resource_id, now=now):
+            pass  # legitimately covered (active membership, in window, within caps, member-eligible court)
         else:
             settlement_mode = "at_court"
 

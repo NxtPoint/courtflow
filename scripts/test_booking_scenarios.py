@@ -613,6 +613,102 @@ def sc_peak_court_pricing(s, fx):
         _drop_peak_cache()
 
 
+def sc_membership_entitlement(s, fx):
+    print("\n# Membership entitlement (SILENT caps): duration cap, courts/day cap, clay exclusion -> PAYG")
+    from billing.membership import membership_product_id
+    from diary import entitlement as E
+    member, court1, court2 = fx.members[0], fx.courts[0], fx.courts[1]
+    # A members-covered court service (Hardcourt) + a PAYG-only one (Clay, members_covered=false).
+    hard = s.execute(text("INSERT INTO billing.product (club_id, kind, name, active, members_covered) "
+                          "VALUES (:c,'court_booking','Hardcourt',true,true) RETURNING id"),
+                     {"c": fx.club_id}).scalar()
+    clay = s.execute(text("INSERT INTO billing.product (club_id, kind, name, active, members_covered) "
+                          "VALUES (:c,'court_booking','Clay',true,false) RETURNING id"),
+                     {"c": fx.club_id}).scalar()
+    for pid, amt in ((hard, 15000), (clay, 28000)):
+        s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                       "currency_code, unit, duration_minutes, active) "
+                       "VALUES (:c,:p,'any',:a,'ZAR','per_booking',60,true)"),
+                  {"c": fx.club_id, "p": pid, "a": amt})
+        # a 120-min price too so an over-cap booking has a PAYG rate to fall to.
+        s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                       "currency_code, unit, duration_minutes, active) "
+                       "VALUES (:c,:p,'any',:a,'ZAR','per_booking',120,true)"),
+                  {"c": fx.club_id, "p": pid, "a": amt * 2})
+    s.execute(text("UPDATE diary.resource SET product_id=:p WHERE id IN (:a,:b)"),
+              {"p": hard, "a": court1, "b": court2})
+    clay_court = s.execute(
+        text("INSERT INTO diary.resource (club_id, kind, name, surface, rank, product_id) "
+             "VALUES (:c,'court','Clay Court','clay',9,:p) RETURNING id"),
+        {"c": fx.club_id, "p": clay}).scalar()
+    # A membership tier: any-time coverage, max 90 covered minutes, max 1 court/day.
+    mprod = membership_product_id(s, club_id=fx.club_id, create_if_missing=True)
+    mprice = s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                            "currency_code, unit, term_months, membership_tier, active, "
+                            "max_covered_minutes, max_courts_per_day) "
+                            "VALUES (:c,:p,'member',18000,'ZAR','per_month',1,'Adult',true,90,1) RETURNING id"),
+                       {"c": fx.club_id, "p": mprod}).scalar()
+    s.execute(text("INSERT INTO billing.membership_subscription (club_id, user_id, price_id, status, "
+                   "provider, current_period_end) VALUES (:c,:u,:pr,'active','manual',CURRENT_DATE+30)"),
+              {"c": fx.club_id, "u": member, "pr": mprice})
+
+    def ent(res, h0, h1):
+        return E.court_covered(s, club_id=fx.club_id, user_id=member,
+                               starts_at=at(fx, h0), ends_at=at(fx, h1), resource_id=res)
+    check("60-min court booking is covered (within caps)", ent(court1, 10, 11) is True)
+    check("120-min court booking NOT covered (over the 90-min cap)", ent(court1, 10, 12) is False)
+    check("clay court NEVER covered for a member (members_covered=false)", ent(clay_court, 10, 11) is False)
+
+    def _order_amt(bid):
+        return s.execute(text('SELECT o.amount_minor, o.settlement_mode FROM billing."order" o '
+                              'JOIN billing.order_line ol ON ol.order_id=o.id WHERE ol.booking_id=:b LIMIT 1'),
+                         {"b": bid}).mappings().first()
+    # A covered 60-min booking settles R0 (membership pays).
+    r1 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=member, role="member",
+                          booking_type="court", resource_id=court1, settlement_mode="membership_covered",
+                          starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)), product_id=hard)
+    o1 = _order_amt(r1["booking"]["id"]) if r1.get("ok") else None
+    check("covered court booking is R0 + membership_covered", bool(o1) and o1["amount_minor"] == 0 and o1["settlement_mode"] == "membership_covered", str(o1))
+    # A 2nd DISTINCT court the same day exceeds max_courts_per_day=1 -> silently PAYG (R150).
+    check("2nd distinct court same day is NOT covered (courts/day cap)", ent(court2, 12, 13) is False)
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=member, role="member",
+                          booking_type="court", resource_id=court2, settlement_mode="membership_covered",
+                          starts_at=utc_iso(at(fx, 12)), ends_at=utc_iso(at(fx, 13)), product_id=hard)
+    o2 = _order_amt(r2["booking"]["id"]) if r2.get("ok") else None
+    check("over-cap 2nd court silently downgrades to PAYG R150 (never blocked)", bool(o2) and o2["amount_minor"] == 15000 and o2["settlement_mode"] == "at_court", str(o2))
+
+
+def sc_configurable_trial(s, fx):
+    print("\n# Configurable trial: the signup trial is a real membership tier + inherits its caps")
+    from billing.membership import membership_product_id, grant_signup_trial, membership_status
+    from diary import entitlement as E
+    # A trial TIER: is_trial, 5 days, max 1 court/day (an entitlement cap the trial must inherit).
+    mprod = membership_product_id(s, club_id=fx.club_id, create_if_missing=True)
+    tprice = s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                            "currency_code, unit, term_months, membership_tier, active, is_trial, "
+                            "trial_days, max_courts_per_day) "
+                            "VALUES (:c,:p,'member',0,'ZAR','per_month',1,'Trial',true,true,5,1) RETURNING id"),
+                       {"c": fx.club_id, "p": mprod}).scalar()
+    # A brand-new member (no prior subscription) gets the trial.
+    newu = s.execute(text("INSERT INTO iam.user (email, first_name) VALUES (:e,'New') RETURNING id"),
+                     {"e": "trialtest+%s@example.com" % str(fx.club_id)[:8]}).scalar()
+    g = grant_signup_trial(s, club_id=fx.club_id, user_id=newu, days=7)
+    check("trial granted to a brand-new member", g.get("granted") is True, str(g))
+    sub = s.execute(text("SELECT price_id, provider, (current_period_end - CURRENT_DATE) AS days_left "
+                         "FROM billing.membership_subscription WHERE club_id=:c AND user_id=:u"),
+                    {"c": fx.club_id, "u": newu}).mappings().first()
+    check("trial LINKS the configured trial tier (not a NULL-price special case)", sub and str(sub["price_id"]) == str(tprice), str(sub and sub["price_id"]))
+    check("trial length comes from the tier (5 days, not the env 7)", sub and int(sub["days_left"]) == 5, str(sub and sub["days_left"]))
+    caps = E.active_caps(s, club_id=fx.club_id, user_id=newu)
+    check("trial INHERITS the tier's caps (max 1 court/day)", caps["max_courts_per_day"] == 1, str(caps))
+    stt = membership_status(s, club_id=fx.club_id, user_id=newu)
+    check("membership_status still flags it as the trial", stt.get("is_trial") is True and stt.get("active") is True, str({"is_trial": stt.get("is_trial")}))
+    # The trial tier is NOT offered for sale.
+    from billing.membership import membership_plans
+    plans = membership_plans(s, club_id=fx.club_id)
+    check("the trial tier is NOT in the buyable plans list", all(str(pl["price_id"]) != str(tprice) for pl in plans), str(len(plans)))
+
+
 def sc_court_service_allocation(s, fx):
     print("\n# Court services: distinct products over allocated courts (price + availability isolation)")
     member = fx.members[0]
@@ -904,6 +1000,8 @@ SCENARIOS = [
     sc_lesson_lifecycle,
     sc_offpeak_slot_pricing,
     sc_peak_court_pricing,
+    sc_membership_entitlement,
+    sc_configurable_trial,
     sc_court_service_allocation,
     sc_class_courts,
 ]

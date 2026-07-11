@@ -237,7 +237,7 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
                          coach_user_id=None, surface=None, date_from=None, date_to=None,
                          duration_minutes=None, audience="member", any_resource=False,
                          membership_covered=False, membership_windows=None, product_id=None,
-                         now=None):
+                         member_user_id=None, now=None):
     """Return free slots for the resolved resource(s). Each slot:
         {start, end, resource_id, resource_name, kind, price}
     where price is the per-duration price for the chosen duration_minutes (guarded; None if
@@ -299,11 +299,32 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
     peak_price = pr.get("peak_amount_minor") if pr else None  # court peak amount (or None)
     windows = membership_windows or []
     covers_any_time = membership_covered and not windows  # legacy bool with no windows = full cover
-    def _slot_price(s_utc):
-        if covers_any_time:
-            return 0
+    # SILENT membership entitlement (member court queries only): the caps + court-service eligibility that
+    # decide whether an in-window slot is ACTUALLY free (shown == what create_booking charges). Precomputed
+    # once per call (not per slot). ent_ctx None = no membership → the window logic alone stands (unchanged).
+    ent_ctx = None
+    svc_cov = {}
+    if member_user_id and kind == "court":
+        try:
+            from diary import entitlement as _ent
+            ent_ctx = _ent.availability_context(
+                session, club_id=club_id, user_id=member_user_id, duration_min=duration_min,
+                range_start_utc=range_start, range_end_utc=range_end)
+            for r in resources:
+                svc_cov[str(r["id"])] = _ent.service_members_covered(session, club_id=club_id, resource_id=r["id"])
+        except Exception:
+            ent_ctx = None
+
+    def _slot_price(s_utc, court_id=None):
         s_local = s_utc.astimezone(tz)
-        if windows and pricing.any_window_covers(windows, s_local):
+        free = covers_any_time or bool(windows and pricing.any_window_covers(windows, s_local))
+        # Apply the silent caps/exclusion: an in-window slot is free ONLY if entitlement still allows it
+        # here (duration cap, clay exclusion, daily booking/court caps). Once used up → PAYG below.
+        if free and ent_ctx is not None:
+            from diary import entitlement as _ent
+            free = _ent.slot_covered(ent_ctx, service_covered=svc_cov.get(str(court_id), True),
+                                     slot_local=s_local, court_id=court_id)
+        if free:
             return 0
         # PEAK court pricing: a non-covered court slot inside the club peak window is charged its peak
         # amount (shown here == charged in create_booking). Only court rows carry peak_amount_minor.
@@ -379,7 +400,8 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
                 "resource_id": str(res["id"]),
                 "resource_name": res.get("name"),
                 "kind": res.get("kind"),
-                "price": _slot_price(s_utc),
+                # For a court, res IS the court → pass it so the entitlement caps/exclusion resolve per court.
+                "price": _slot_price(s_utc, res["id"]),
             }
             if court:
                 slot["court_resource_id"] = court["resource_id"]
