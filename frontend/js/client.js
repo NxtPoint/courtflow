@@ -223,7 +223,8 @@
     wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your sessions" }), el("div", { id: "home-sessions" })]));
 
     // Match analysis & technique — under bookings (the embedded Ten-Fifty5 product).
-    if (tf5Enabled()) wrap.appendChild(analysisPromo());
+    // Allowlisted (private test) → the working embed; everyone else → a "Coming soon" teaser.
+    if (TF5_URL) wrap.appendChild(tf5Enabled() ? analysisPromo() : analysisSoon());
 
     // Plan & credits — the member's standing + manage/cancel.
     wrap.appendChild(planCard(plan, cur));
@@ -280,18 +281,32 @@
     ]);
   }
 
+  // Non-allowlisted members see this teaser on Home (private test in progress).
+  function analysisSoon() {
+    return card([
+      el("div", { class: "cf-row", style: "gap:12px;align-items:flex-start" }, [
+        el("div", { style: "font-size:1.8rem;line-height:1", text: "🎥" }),
+        el("div", { style: "flex:1" }, [
+          el("h2", { style: "margin:0 0 2px", text: "Match analysis & technique" }),
+          el("p", { class: "cf-muted", style: "margin:0", text: "AI-powered match stats and technique analysis, powered by Ten-Fifty5 — coming soon to your account." }),
+        ]),
+        el("span", { style: "align-self:center;background:#eef2f5;color:#5b6b7a;padding:4px 10px;border-radius:999px;font-size:.72rem;font-weight:700;white-space:nowrap", text: "Coming soon" }),
+      ]),
+    ]);
+  }
+
   function renderAnalysis() {
-    if (!tf5Enabled()) { go("#/"); return; }   // gated to the test allowlist until launch
+    if (!tf5Enabled()) { go("#/"); return; }   // non-allowlisted see the "Coming soon" card on Home
     var wrap = el("div", {});
     wrap.appendChild(pageHeader("Match analysis & technique", "Home", "#/"));
     var frameWrap = el("div", { style: "position:relative;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08)" });
     var frame = el("iframe", {
       src: TF5_URL,
       title: "Ten-Fifty5 match analysis",
-      style: "display:block;width:100%;height:calc(100vh - 170px);min-height:420px;border:0",
+      // height is set by fit() below; allow="fullscreen" (no legacy allowfullscreen attr → no console warning).
+      style: "display:block;width:100%;height:70vh;border:0",
       allow: "fullscreen; encrypted-media; clipboard-write",
     });
-    frame.setAttribute("allowfullscreen", "");
     var fsBtn = el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", style: "position:absolute;top:10px;right:10px;z-index:2",
       text: "⤢ Fullscreen", onclick: function () {
         var fn = frameWrap.requestFullscreen || frameWrap.webkitRequestFullscreen;
@@ -300,8 +315,19 @@
     frameWrap.appendChild(frame);
     frameWrap.appendChild(fsBtn);
     wrap.appendChild(frameWrap);
-    wrap.appendChild(el("p", { class: "cf-muted", style: "margin:10px 2px 0;font-size:.78rem", text: "Powered by Ten-Fifty5 — you're signed in automatically." }));
     set(wrap);
+    // Fill from the iframe's top to the viewport bottom (accounts for the appbar, page header and
+    // cf-main's bottom padding) so the OUTER page never scrolls — only Ten-Fifty5's own content does.
+    // Uses live window.innerHeight so it's correct on mobile too; re-fits on resize/orientation change.
+    function fit() {
+      if (!frameWrap.isConnected) { window.removeEventListener("resize", fit); return; }
+      var main = document.getElementById("cf-main");
+      var padB = main ? (parseFloat(getComputedStyle(main).paddingBottom) || 0) : 0;
+      var top = frameWrap.getBoundingClientRect().top;
+      frame.style.height = Math.max(320, window.innerHeight - top - padB - 24) + "px";
+    }
+    requestAnimationFrame(fit);
+    window.addEventListener("resize", fit);
   }
 
   // sessions: a Current / Past toggle (default Current) on the shared cf-segment filter look — Home
