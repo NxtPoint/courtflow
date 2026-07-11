@@ -253,31 +253,71 @@ def activity_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]
     ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
     currency = session.execute(
         text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": str(club_id)}).scalar() or "ZAR"
+    LBL = {"lesson": "Lessons", "court": "Court hire", "class": "Classes", "other": "Other"}
     out = {"month": ym, "currency": currency,
            "counts": {"lesson": 0, "court": 0, "class": 0, "total": 0},
-           "billed_minor": 0, "paid_minor": 0, "outstanding_minor": 0}
+           "minutes": 0, "billed_minor": 0, "paid_minor": 0, "outstanding_minor": 0,
+           "by_service": [], "by_week": []}
     try:
-        # Sessions PLAYED this month (confirmed/completed), by type. A lesson is ONE session: its
-        # auto-held court row (booking_type='court' WITH the coach set) is excluded so it isn't
-        # double-counted — a STANDALONE court booking has no coach (coach_user_id IS NULL).
-        cnt = session.execute(
-            text("SELECT "
-                 "count(*) FILTER (WHERE booking_type = 'lesson') AS lessons, "
-                 "count(*) FILTER (WHERE booking_type = 'court' AND coach_user_id IS NULL) AS courts "
+        # Sessions PLAYED this month (confirmed/completed): counts + total minutes + weekly buckets by
+        # type (the stacked chart). A lesson is ONE session: its auto-held court row (booking_type
+        # ='court' WITH the coach set) is excluded so it isn't double-counted — a STANDALONE court has
+        # no coach (coach_user_id IS NULL). Week = which week of the month the session falls in.
+        weeks = {}   # wk(int) -> {"lesson":n,"court":n,"class":n}
+
+        def _wk(w):
+            return weeks.setdefault(int(w or 1), {"lesson": 0, "court": 0, "class": 0})
+        for r in session.execute(
+            text("SELECT booking_type AS k, "
+                 "  ((EXTRACT(DAY FROM starts_at)::int - 1) / 7 + 1) AS wk, "
+                 "  COALESCE(EXTRACT(EPOCH FROM (ends_at - starts_at)) / 60, 0) AS mins "
                  "FROM diary.booking WHERE club_id = :c AND booked_by_user_id = :u "
-                 "  AND status IN ('confirmed','completed') AND to_char(starts_at,'YYYY-MM') = :ym"),
+                 "  AND status IN ('confirmed','completed') "
+                 "  AND ((booking_type = 'lesson') OR (booking_type = 'court' AND coach_user_id IS NULL)) "
+                 "  AND to_char(starts_at,'YYYY-MM') = :ym"),
             {"c": str(club_id), "u": str(user_id), "ym": ym},
-        ).mappings().first()
-        out["counts"]["lesson"] = int((cnt or {}).get("lessons") or 0)
-        out["counts"]["court"] = int((cnt or {}).get("courts") or 0)
-        out["counts"]["class"] = int(session.execute(
-            text("SELECT count(*) FROM diary.enrolment e "
-                 "JOIN diary.class_session cs ON cs.id = e.class_session_id "
+        ).mappings().all():
+            k = r["k"]
+            out["counts"][k] = out["counts"].get(k, 0) + 1
+            out["minutes"] += int(r["mins"] or 0)
+            _wk(r["wk"])[k] += 1
+        for r in session.execute(
+            text("SELECT ((EXTRACT(DAY FROM cs.starts_at)::int - 1) / 7 + 1) AS wk, "
+                 "  COALESCE(EXTRACT(EPOCH FROM (cs.ends_at - cs.starts_at)) / 60, 0) AS mins "
+                 "FROM diary.enrolment e JOIN diary.class_session cs ON cs.id = e.class_session_id "
                  "WHERE e.club_id = :c AND e.user_id = :u AND e.status = 'enrolled' "
                  "  AND to_char(cs.starts_at,'YYYY-MM') = :ym"),
             {"c": str(club_id), "u": str(user_id), "ym": ym},
-        ).scalar() or 0)
+        ).mappings().all():
+            out["counts"]["class"] += 1
+            out["minutes"] += int(r["mins"] or 0)
+            _wk(r["wk"])["class"] += 1
         out["counts"]["total"] = out["counts"]["lesson"] + out["counts"]["court"] + out["counts"]["class"]
+        out["by_week"] = [dict(week=w, **weeks[w]) for w in sorted(weeks)]
+        # Spend BY SERVICE (billed, ex-cancelled) — one row per order, categorised by its booking/product.
+        svc = {}
+        for r in session.execute(
+            text("SELECT COALESCE(b.booking_type, "
+                 "  CASE WHEN pr.kind = 'court_booking' THEN 'court' ELSE pr.kind END) AS k, "
+                 "  o.amount_minor AS amt "
+                 'FROM billing."order" o '
+                 "LEFT JOIN LATERAL (SELECT booking_id, price_id FROM billing.order_line "
+                 "                   WHERE order_id = o.id ORDER BY created_at LIMIT 1) ol ON true "
+                 "LEFT JOIN diary.booking b ON b.id = ol.booking_id "
+                 "LEFT JOIN billing.price p ON p.id = ol.price_id "
+                 "LEFT JOIN billing.product pr ON pr.id = p.product_id "
+                 "WHERE o.club_id = :c AND o.user_id = :u AND o.settled_by_order_id IS NULL "
+                 "  AND o.status IN ('open','paid','refunded','written_off') "
+                 "  AND to_char(COALESCE(b.starts_at, o.created_at),'YYYY-MM') = :ym"),
+            {"c": str(club_id), "u": str(user_id), "ym": ym},
+        ).mappings().all():
+            k = r["k"] if r["k"] in ("lesson", "court", "class") else "other"
+            e = svc.setdefault(k, {"count": 0, "billed_minor": 0})
+            e["count"] += 1
+            e["billed_minor"] += int(r["amt"] or 0)
+        out["by_service"] = [{"key": k, "label": LBL[k], "count": svc[k]["count"],
+                              "billed_minor": svc[k]["billed_minor"]}
+                             for k in ("lesson", "court", "class", "other") if k in svc]
         # Billed (orders raised this month, excluding cancelled/void) + still outstanding (open).
         m = session.execute(
             text("SELECT "

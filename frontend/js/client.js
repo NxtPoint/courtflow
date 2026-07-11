@@ -164,33 +164,32 @@
   async function renderHome() {
     if (!HBMONTH) HBMONTH = curMonth();
     loading();
-    var fin = {}, bookings = [];
+    var fin = {}, bookings = [], asum = null;
     try { fin = await window.API.financials(); } catch (e) {}
+    try { asum = await window.API.activitySummary(); } catch (e) {}
     try { bookings = (await window.API.bookings({ date_from: UI.dateKey(UI.addDays(new Date(), -730)), date_to: UI.dateKey(UI.addDays(new Date(), 365)) })).bookings || []; } catch (e) {}
     try { DATA.enrolments = (await window.API.myEnrolments()).enrolments || []; } catch (e) { DATA.enrolments = []; }
     DATA.fin = fin; DATA.bookings = bookings;
     var plan = fin.plan || {}, cur = fin.currency || "ZAR";
     var wrap = el("div", {});
 
-    // Greeting ribbon — profile at a glance: name, email, membership + Manage + Edit profile.
-    // (The TS avatar top-right also opens the profile — kept as a shortcut for those who spot it.)
+    // Greeting — name, email, membership standing as a quiet chip (no emoji). Edit profile shortcut.
     var email = (DATA.profile && DATA.profile.email) || (principal && principal.email) || "";
-    var mLine = plan.is_trial ? ("🎁 7 Day Trial Period — " + (plan.trial_days_left || 0) + " days left · courts free")
-      : plan.active ? ("⭐ " + (plan.name || "Member") + (plan.current_period_end ? " · renews " + plan.current_period_end : ""))
-      : "Pay as you go — no membership";
+    var mLine = plan.is_trial ? ("7-day trial — " + (plan.trial_days_left || 0) + " days left · courts free")
+      : plan.active ? ((plan.name || "Member") + (plan.current_period_end ? " · renews " + plan.current_period_end : ""))
+        : "Pay as you go";
     wrap.appendChild(el("div", { class: "cf-greet", style: "padding:22px 24px;align-items:flex-start" }, [
       el("div", { style: "flex:1" }, [
         el("h1", { text: greet() + ", " + firstName() }),
         email ? el("p", { style: "opacity:.92;margin-top:2px", text: email }) : null,
-        el("p", { style: "margin-top:8px;font-weight:600", text: mLine }),
-        el("div", { class: "cf-row", style: "gap:8px;margin-top:12px;flex-wrap:wrap" }, [
+        el("div", { class: "cf-row", style: "gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center" }, [
+          el("span", { class: "cf-chip", style: "background:rgba(255,255,255,.18);color:#fff", text: mLine }),
           el("button", { class: "cf-btn cf-btn-sm", text: "Edit profile", onclick: function () { go("#/profile"); } }),
         ]),
       ].filter(Boolean)),
     ]));
 
-    // First-login nudge: gently prompt to complete a sparse profile (imported members land with just
-    // name + email). Skippable, remembered per user, and gone the moment they add a phone.
+    // First-login nudge: gently prompt to complete a sparse profile.
     if (DATA.profile && !DATA.profile.phone && !nudgeDismissed()) wrap.appendChild(profileNudge());
 
     // Needs attention
@@ -201,40 +200,49 @@
       wrap.appendChild(ac);
     }
 
-    // Plan & credits FIRST (above Book) — the member's standing before they act.
-    wrap.appendChild(planCard(plan, cur));
+    // ACTIVITIES — first. The month at a glance (counts · total time · weekly chart). Tap → Client 360.
+    if (asum) wrap.appendChild(window.CRMUI.activityBlock(asum, { onOpen: function () { go("#/activity"); } }));
 
-    // Book quick tiles
-    var qb = card([el("h2", { style: "margin:0 0 10px", text: "Book" })]);
+    // FINANCIAL — spend by service · paid vs outstanding · settle. Tap → Client 360 statement.
+    if (asum) wrap.appendChild(window.CRMUI.spendBlock(asum, {
+      onSettle: function () { payOrders(null); },
+      onOpen: function () { go("#/activity"); },
+    }));
+
+    // Book — Court / Lesson / Class, drawn glyphs (no emoji).
+    var qb = card([el("h2", { style: "margin:0 0 10px", text: "Book a session" })]);
     var tiles = el("div", { class: "cf-qb" });
-    [["court", "🎾", "Court"], ["lesson", "🎓", "Lesson"], ["class", "👥", "Class"]].forEach(function (t) {
-      tiles.appendChild(el("button", { class: "cf-qb-btn", onclick: function () { go("#/book/" + t[0]); } }, [el("span", { class: "cf-qb-ic", text: t[1] }), el("span", { class: "cf-qb-t", text: t[2] })]));
+    ["court", "lesson", "class"].forEach(function (k) {
+      tiles.appendChild(el("button", { class: "cf-qb-btn", onclick: function () { go("#/book/" + k); } }, [
+        svcGlyph(k), el("span", { class: "cf-qb-t", text: TYPE_LABEL[k] }),
+      ]));
     });
     qb.appendChild(tiles); wrap.appendChild(qb);
 
-    // Your sessions (Upcoming / Past) — the Bookings function, now on Home.
+    // Your sessions (Upcoming / Past).
     wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your sessions" }), el("div", { id: "home-sessions" })]));
 
-    // Match analysis & technique — the embedded Ten-Fifty5 product (opens in-app, signed in).
+    // Match analysis & technique — under bookings (the embedded Ten-Fifty5 product).
     if (tf5Enabled()) wrap.appendChild(analysisPromo());
 
-    // Billing — what you owe + a monthly breakdown by category.
-    var owe = (fin.account && fin.account.balance_minor) || 0;
-    var bc = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [
-      el("h2", { style: "margin:0", text: "Billing" }),
-      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Full activity ›", onclick: function () { go("#/activity"); } }),
-    ])]);
-    if (owe > 0) bc.appendChild(el("div", { class: "cf-owe cf-tap", style: "margin-bottom:12px", onclick: function () { payOrders(null); } }, [
-      el("div", {}, [el("div", { class: "cf-muted", style: "font-size:.78rem;font-weight:700", text: "YOU OWE" }), el("div", { class: "cf-amountbig", text: money(owe, cur) })]),
-      el("span", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Settle ›" }),
-    ]));
-    bc.appendChild(el("div", { id: "home-billing", class: "cf-loading", text: "…" }));
-    wrap.appendChild(bc);
+    // Plan & credits — the member's standing + manage/cancel.
+    wrap.appendChild(planCard(plan, cur));
 
     set(wrap);
     paintSessions();
-    loadHomeBilling(cur);
     loadWallets(cur);
+  }
+
+  // A drawn line-glyph per service type (no emoji) — court net, lesson mortarboard, class group.
+  function svcGlyph(kind) {
+    var svg = {
+      court: "<rect x='3' y='4' width='18' height='16' rx='2' stroke='var(--green)' stroke-width='2'/><path d='M12 4v16M3 12h18' stroke='var(--green)' stroke-width='2'/>",
+      lesson: "<path d='M3 9l9-5 9 5-9 5-9-5z' stroke='var(--info)' stroke-width='2' stroke-linejoin='round'/><path d='M7 11v4c0 1.1 2.2 2 5 2s5-.9 5-2v-4' stroke='var(--info)' stroke-width='2'/>",
+      class: "<circle cx='9' cy='8' r='3' stroke='var(--lime-700)' stroke-width='2'/><circle cx='17' cy='9' r='2.4' stroke='var(--lime-700)' stroke-width='2'/><path d='M3.5 19c.4-3 2.8-4.5 5.5-4.5S14.1 16 14.5 19M15 15.5c2.2.2 4 1.4 4.4 3.5' stroke='var(--lime-700)' stroke-width='2' stroke-linecap='round'/>",
+    }[kind] || "";
+    var box = el("span", { class: "cf-gtile " + kind });
+    box.innerHTML = "<svg width='22' height='22' viewBox='0 0 24 24' fill='none'>" + svg + "</svg>";
+    return box;
   }
   function greet() { var h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
 
@@ -386,6 +394,7 @@
       // OFF for the client (it was the confusing transaction firehose — refunds/voids/write-offs).
       fields: { showActivity: false, showDependents: true, showPackages: true, showCoaching: false },
       onEditProfile: function () { PROFILE_RETURN = "#/activity"; go("#/profile"); },
+      onSettleAll: function () { payOrders(null); },   // the spend rollup's "Settle" → pay all outstanding
       data: { get: function () { return window.API.my360().then(function (r) { return r.person; }); } },
       onNavigate: function (t) {
         if (!t || !t.id) return;

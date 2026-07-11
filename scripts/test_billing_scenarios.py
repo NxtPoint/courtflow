@@ -1969,6 +1969,12 @@ def sc_activity_summary(s, fx):
     check("billed = lesson + court gross", a["billed_minor"] == 40000 + a["outstanding_minor"], str(a))
     check("paid reflects the settled lesson (R400)", a["paid_minor"] == 40000, str(a["paid_minor"]))
     check("outstanding reflects the owed court", a["outstanding_minor"] > 0, str(a["outstanding_minor"]))
+    check("total minutes tallied (lesson 60 + court 60)", a["minutes"] == 120, str(a["minutes"]))
+    check("by_service breaks spend into lesson + court",
+          {x["key"] for x in a["by_service"]} == {"lesson", "court"}, str(a["by_service"]))
+    check("by_week buckets the sessions for the chart",
+          bool(a["by_week"]) and sum(w["lesson"] + w["court"] + w["class"] for w in a["by_week"]) == 2,
+          str(a["by_week"]))
 
 
 SCENARIOS = [

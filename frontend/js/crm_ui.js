@@ -230,10 +230,119 @@
     return list;
   }
 
+  // ---- activity + spend blocks (ONE renderer, shared: client Home modules + Client 360 rollup) ----
+  // Fed by billing.me.activity_summary. Home passes onOpen/onSettle (tappable → Client 360); the
+  // record renders them read-only at the top of the 360. cf-* styled, no emoji. (Golden rule.)
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function monthLabel(ym) {
+    if (!ym || String(ym).length < 7) return ym || "";
+    var m = parseInt(String(ym).slice(5, 7), 10);
+    return (MON[m - 1] || "") + " " + String(ym).slice(0, 4);
+  }
+  function fmtDur(mins) {
+    mins = Math.round(mins || 0); var h = Math.floor(mins / 60), m = mins % 60;
+    if (!mins) return "0m";
+    return (h ? h + "h" : "") + (m ? (h ? " " : "") + m + "m" : "");
+  }
+  var SVC_FILL = { lesson: "#1F5BAB", court: "var(--green,#0E7A47)", class: "var(--lime-700,#5B7A12)" };
+
+  // Stacked weekly bars (SVG, no chart lib) — sessions per week, coloured by service type.
+  function weekChart(byWeek) {
+    byWeek = byWeek || [];
+    var W = 340, H = 118, pad = 18, base = H - 18, top = 8, n = byWeek.length || 1;
+    var max = byWeek.reduce(function (mx, w) { return Math.max(mx, (w.lesson || 0) + (w.court || 0) + (w["class"] || 0)); }, 0) || 1;
+    var slot = (W - pad * 2) / n, bw = Math.min(46, slot * 0.6);
+    var s = ["<svg viewBox='0 0 " + W + " " + H + "' role='img' aria-label='Sessions per week by type'>"];
+    s.push("<line x1='0' y1='" + base + "' x2='" + W + "' y2='" + base + "' stroke='var(--border,#E4EBE5)'/>");
+    byWeek.forEach(function (w, i) {
+      var cx = pad + slot * i + slot / 2, x = cx - bw / 2, y = base;
+      ["court", "lesson", "class"].forEach(function (k) {
+        var v = w[k] || 0; if (!v) return;
+        var h = v / max * (base - top); y -= h;
+        s.push("<rect x='" + x.toFixed(1) + "' y='" + y.toFixed(1) + "' width='" + bw.toFixed(1) + "' height='" + h.toFixed(1) + "' rx='4' fill='" + SVC_FILL[k] + "'/>");
+      });
+      s.push("<text x='" + cx.toFixed(1) + "' y='" + (H - 2) + "' text-anchor='middle' fill='var(--dim,#95A69C)' font-size='11' font-weight='600'>Wk " + (w.week || i + 1) + "</text>");
+    });
+    s.push("</svg>");
+    var box = el("div", { class: "cf-chart" }); box.innerHTML = s.join(""); return box;
+  }
+
+  function _moduleCard(eyebrow, month, bodyNode, drill) {
+    var card = el("div", { class: "cf-mod" + (drill ? " cf-mod-tap" : "") });
+    card.appendChild(el("div", { class: "cf-mod-h" }, [
+      el("span", { class: "cf-eyebrow", text: eyebrow }),
+      month ? el("span", { class: "cf-muted num", style: "font-size:.82rem;font-weight:600", text: monthLabel(month) }) : null,
+    ].filter(Boolean)));
+    card.appendChild(bodyNode);
+    if (drill) {
+      card.appendChild(el("div", { class: "cf-drill" }, [el("span", { text: drill.label }), el("span", { class: "cf-drill-a", text: "›" })]));
+      card.addEventListener("click", drill.onOpen);
+    }
+    return card;
+  }
+
+  function activityBlock(a, opts) {
+    opts = opts || {}; a = a || {}; var c = a.counts || {};
+    function metric(v, label, kind) {
+      return el("div", { class: "cf-metric " + kind }, [
+        el("div", { class: "cf-metric-v num", text: String(v || 0) }),
+        el("div", { class: "cf-metric-k", text: label }),
+      ]);
+    }
+    var body = el("div", { class: "cf-mod-b" }, [
+      el("div", { class: "cf-metrics" }, [metric(c.lesson, "Lessons", "lesson"), metric(c.court, "Court", "court"), metric(c["class"], "Classes", "class")]),
+    ]);
+    if (a.minutes) body.appendChild(el("div", { class: "cf-totline" }, [
+      el("span", { class: "cf-totline-v num", text: fmtDur(a.minutes) }),
+      el("span", { class: "cf-muted", style: "font-size:.88rem", text: "on court · " + (c.total || 0) + " session" + (c.total === 1 ? "" : "s") }),
+    ]));
+    if ((a.by_week || []).length) body.appendChild(weekChart(a.by_week));
+    return _moduleCard("Activity", a.month, body, opts.onOpen ? { label: "View all activity", onOpen: opts.onOpen } : null);
+  }
+
+  function spendBlock(a, opts) {
+    opts = opts || {}; a = a || {}; var cur = a.currency || "ZAR";
+    var svc = a.by_service || [], billed = a.billed_minor || 0, paid = a.paid_minor || 0, owe = a.outstanding_minor || 0;
+    var body = el("div", { class: "cf-mod-b" });
+    body.appendChild(el("div", { style: "display:flex;align-items:baseline;gap:8px" }, [
+      el("span", { class: "num", style: "font-size:1.55rem;font-weight:800", text: money(billed, cur) }),
+      el("span", { class: "cf-muted", style: "font-size:.9rem", text: "billed" }),
+    ]));
+    if (svc.length && billed > 0) {
+      var seg = el("div", { class: "cf-segbar" });
+      svc.forEach(function (x) { if (x.billed_minor > 0) seg.appendChild(el("div", { class: "cf-seg " + x.key, style: "width:" + Math.max(2, Math.round(x.billed_minor / billed * 100)) + "%" })); });
+      body.appendChild(seg);
+      var leg = el("div", { class: "cf-legend" });
+      svc.forEach(function (x) {
+        leg.appendChild(el("div", { class: "cf-lrow" }, [
+          el("span", { class: "cf-swatch " + x.key }), el("span", { text: x.label }),
+          el("span", { class: "cf-lct", text: "· " + x.count }), el("span", { class: "cf-lamt num", text: money(x.billed_minor, cur) }),
+        ]));
+      });
+      body.appendChild(leg);
+    }
+    body.appendChild(el("div", { class: "cf-paybar" }, [
+      el("div", { class: "cf-paycell" }, [el("div", { class: "cf-payk", text: "Paid" }), el("div", { class: "cf-payv num", text: money(paid, cur) })]),
+      el("div", { class: "cf-paycell " + (owe > 0 ? "owe-bad" : "owe-ok") }, [el("div", { class: "cf-payk", text: "Outstanding" }), el("div", { class: "cf-payv num", text: money(owe, cur) })]),
+    ]));
+    if (owe > 0 && opts.onSettle) {
+      var b = el("button", { class: "cf-settle", text: "Settle " + money(owe, cur) + " now" });
+      b.addEventListener("click", function (e) { e.stopPropagation(); opts.onSettle(); });
+      body.appendChild(b);
+    } else if (billed > 0) {
+      body.appendChild(el("div", { class: "cf-settled", text: "All settled — nothing outstanding." }));
+    }
+    return _moduleCard("Billing", a.month, body, opts.onOpen ? { label: "View statement & history", onOpen: opts.onOpen } : null);
+  }
+
   window.CRMUI = {
     money: money,
     stats: stats,
     bars: bars,
+    weekChart: weekChart,
+    activityBlock: activityBlock,
+    spendBlock: spendBlock,
+    monthLabel: monthLabel,
     statementTable: statementTable,
     lineItems: lineItems,
     requestQueue: requestQueue,

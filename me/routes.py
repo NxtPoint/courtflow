@@ -363,6 +363,23 @@ def get_financials():
     return jsonify(data), 200
 
 
+@me_bp.get("/activity-summary")
+def get_activity_summary():
+    """The month-at-a-glance headline for the home + Client 360 rollup: sessions played
+    (lessons/court/classes) + minutes + spend-by-service + billed/paid/outstanding + the weekly
+    chart buckets. `?month=YYYY-MM` (default this month). Member-scoped, guarded."""
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "view_own_ledger", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    month = (request.args.get("month") or "").strip() or None
+    from billing import me as billing_me
+    with session_scope() as s:
+        data = billing_me.activity_summary(s, club_id=p.club_id, user_id=p.user_id, month=month)
+    return jsonify(data), 200
+
+
 @me_bp.get("/360")
 def my_360():
     """The caller's own unified Client 360 record — the SAME cross-lane composer the admin person-360

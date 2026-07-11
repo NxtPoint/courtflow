@@ -626,3 +626,54 @@ p{margin:0 0 10px}
 /* a summary block that opens its editor on click */
 .cf-pickable{cursor:pointer;transition:border-color .12s,box-shadow .12s}
 .cf-pickable:hover{border-color:var(--green);box-shadow:var(--shadow-md)}
+
+/* ---- Activity / Billing modules — CRMUI.activityBlock / spendBlock (client Home + Client 360 rollup) ---- */
+.num{font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.cf-eyebrow{font-size:.68rem;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:var(--dim)}
+.cf-mod{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  box-shadow:var(--shadow-sm);margin-bottom:16px;overflow:hidden;transition:box-shadow .18s,transform .18s,border-color .18s}
+.cf-mod-tap{cursor:pointer}
+.cf-mod-tap:hover{box-shadow:var(--shadow-md);transform:translateY(-2px);border-color:#cfe0d6}
+.cf-mod-h{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 4px}
+.cf-mod-b{padding:8px 18px 18px}
+.cf-drill{display:flex;align-items:center;gap:6px;color:var(--green);font-weight:600;font-size:.85rem;
+  padding:12px 18px;border-top:1px solid var(--border);background:var(--border-2)}
+.cf-drill-a{transition:transform .15s}
+.cf-mod-tap:hover .cf-drill-a{transform:translateX(3px)}
+.cf-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:6px}
+.cf-metric{padding:14px 12px;border-radius:var(--radius-sm);background:var(--border-2);border:1px solid var(--border)}
+.cf-metric-v{font-size:1.8rem;font-weight:800;line-height:1}
+.cf-metric-k{margin-top:6px;font-size:.78rem;font-weight:600;color:var(--muted)}
+.cf-metric-k::before{content:"";display:inline-block;width:8px;height:8px;border-radius:3px;margin-right:6px}
+.cf-metric.lesson .cf-metric-k::before{background:var(--info)}
+.cf-metric.court .cf-metric-k::before{background:var(--green)}
+.cf-metric.class .cf-metric-k::before{background:var(--lime-700)}
+.cf-totline{display:flex;align-items:baseline;gap:8px;margin-top:16px;padding-top:14px;border-top:1px dashed var(--border)}
+.cf-totline-v{font-size:1.15rem;font-weight:700}
+.cf-chart{margin-top:16px}
+.cf-chart svg{display:block;width:100%;height:auto;overflow:visible}
+.cf-segbar{display:flex;height:14px;border-radius:7px;overflow:hidden;margin:14px 0 12px;background:var(--border)}
+.cf-seg{height:100%}
+.cf-seg.lesson{background:var(--info)}.cf-seg.court{background:var(--green)}.cf-seg.class{background:var(--lime-700)}.cf-seg.other{background:var(--dim)}
+.cf-legend{display:flex;flex-direction:column;gap:9px}
+.cf-lrow{display:flex;align-items:center;gap:10px;font-size:.9rem}
+.cf-swatch{width:10px;height:10px;border-radius:3px;flex:none}
+.cf-swatch.lesson{background:var(--info)}.cf-swatch.court{background:var(--green)}.cf-swatch.class{background:var(--lime-700)}.cf-swatch.other{background:var(--dim)}
+.cf-lct{color:var(--dim);font-size:.82rem}
+.cf-lamt{margin-left:auto;font-weight:700}
+.cf-paybar{display:flex;gap:10px;margin-top:16px}
+.cf-paycell{flex:1;padding:12px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--border-2)}
+.cf-payk{font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--dim)}
+.cf-payv{margin-top:4px;font-size:1.2rem;font-weight:800}
+.cf-paycell.owe-ok{border-color:var(--success);background:var(--success-bg)}
+.cf-paycell.owe-ok .cf-payv{color:var(--success)}
+.cf-paycell.owe-bad{border-color:var(--danger);background:var(--danger-bg)}
+.cf-paycell.owe-bad .cf-payv{color:var(--danger)}
+.cf-settle{display:flex;align-items:center;justify-content:center;width:100%;margin-top:14px;padding:14px;
+  border:0;border-radius:12px;background:var(--green);color:#fff;font:700 1rem Inter,system-ui,sans-serif;cursor:pointer}
+.cf-settle:hover{background:var(--green-600)}
+.cf-settled{display:flex;align-items:center;gap:8px;margin-top:14px;padding:11px 14px;border-radius:10px;
+  background:var(--green-050);color:var(--green-700);font-weight:600;font-size:.9rem}
+/* Book / Analysis tiles — drawn line-glyph in the service colour, no emoji */
+.cf-gtile{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;margin:0 auto 9px}
+.cf-gtile.court{background:var(--green-050)}.cf-gtile.lesson{background:var(--info-bg)}.cf-gtile.class{background:#F1F8D6}

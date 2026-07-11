@@ -399,7 +399,8 @@ def _activity_summary(session, *, club_id, user_id, month=None):
     for the client. Guarded → zeros."""
     default = {"month": month, "currency": None,
                "counts": {"lesson": 0, "court": 0, "class": 0, "total": 0},
-               "billed_minor": 0, "paid_minor": 0, "outstanding_minor": 0}
+               "minutes": 0, "billed_minor": 0, "paid_minor": 0, "outstanding_minor": 0,
+               "by_service": [], "by_week": []}
 
     def _run():
         from billing import me as ME

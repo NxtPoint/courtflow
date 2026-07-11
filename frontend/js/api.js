@@ -161,6 +161,10 @@
     //   usage_this_month:{court,lesson,class,total}, spend:{this_month_minor,history:[{period,paid_minor,orders}]},
     //   account:{balance_minor,open_charges}, next_charge:{kind,amount_minor,due_date}}
     financials: function () { return A().apiJSON("/api/me/financials"); },
+    // GET /api/me/activity-summary[?month=] -> {month,currency,counts:{lesson,court,class,total},minutes,
+    //   billed_minor,paid_minor,outstanding_minor,by_service:[{key,label,count,billed_minor}],
+    //   by_week:[{week,lesson,court,class}]} — the month headline (activityBlock/spendBlock).
+    activitySummary: function (month) { return A().apiJSON("/api/me/activity-summary" + (month ? ("?month=" + encodeURIComponent(month)) : "")); },
     // GET /api/me/statement?month= -> client coaching statement (mirror of the coach's): per coach,
     // lessons paid this month + outstanding arrears. {month, currency, coaches:[...], arrears_items, totals}
     myStatement: function (opts) { return A().apiJSON("/api/me/statement" + qs(opts)); },
