@@ -41,20 +41,82 @@ sign-ups + bookings.
   booking, confirm the two conversions fire.
 - (Optional) demote the vanity **"Page views"** action to secondary; leave "Calls from ads" as secondary.
 
+## Live ASSET audit (2026-07-11 pt 2) — what the agency left + the sitelink leak
+Full account asset library (via the Ads API), not just the "19 images" one view shows:
+- **59 images** (13 landscape, 13 square, 10 portrait, 2 logos, 3 logo-landscape, 9 other) + **5 YouTube
+  videos** ("Become a Better Tennis Player") — all agency (Cyborg Digital) creative, sitting in the **paused
+  PMax**. Plenty of raw material; **don't commission more creative yet** (measure first — see below).
+- **11 callouts** — good ("Only Clay Court in GP", "8 Resurfaced Courts", "ATP-Certified Coaches", "Free
+  First Lesson"). Keep.
+- **1 structured snippet** (Service catalog) — add 1–2 more.
+- **17 sitelinks — THE leak.** Messy, duplicated (Contact Us ×2, three "Book a Lesson" variants) and every
+  one points at **dead Wix `copy-of-…` / `service-page/…` / `booking-calendar/…` URLs**. Those slugs do NOT
+  exist on the new site — `nextpointtennis.com` is now the CourtFlow app (courtflow-web), where the tag also
+  fires. So paid clicks partly land on broken/redirected pages AND miss the tag.
+
+**FIX — replace all 17 sitelinks with these 6 clean ones (new-site paths, where the tag fires):**
+
+| Sitelink | → path on nextpointtennis.com |
+|---|---|
+| Start Your Free Week | `/login#/sign-up` |
+| Free First Lesson | `/free-lesson` |
+| Book a Court | `/book` |
+| Our Coaches | `/coaches` |
+| High Performance | `/programs/high-performance` |
+| Pricing & Membership | `/pricing` |
+
+**Cyborg PMax:** leave PAUSED, do NOT delete — it holds the 59 images + 5 videos + learning history for a
+future *tracked* PMax. Deleting throws away paid creative.
+
 ## Deeper loop — next builds (engineering; say the word)
 These close "Google ↔ site, both directions" and are the real ROI compounders:
 1. **Completed-signup conversion (accurate)** — fire `sign_up` only when the trial is actually granted (a
    client hook after Clerk sign-up), not just on CTA click. Small.
-2. **gclid capture → offline conversion import** — capture `gclid` on landing (column exists in
-   `core.acquisition`), store it on the person, then upload the *real* conversion (booking / membership) to
-   Google Ads via the Ads API — even when it happens days later or off-device. **The biggest ROI lever**:
-   teaches Ads to bid for people who actually become paying members, not just clickers. Bigger build (Ads API
-   + a conversion action + a cron).
+2. **gclid capture → offline conversion import** — **The biggest ROI lever**: teaches Ads to bid for people
+   who actually become paying members, not just clickers.
+   - ✅ **Increment 1 SHIPPED (2026-07-11, commit `96a9cf5`)** — first-touch capture live:
+     `frontend/js/attribution.js` buffers `gclid`/`gbraid`/`wbraid`/`fbclid` + `utm_*` on landing →
+     flushes once via `TFAuth` to `POST /api/me/acquisition` after sign-in →
+     `core.repositories.acquisition.record_acquisition()` persists onto `core.acquisition`
+     (first-touch wins). gclid now accrues on every ad-driven signup.
+   - ⏳ **Increment 2 (needs creds)** — a cron that finds `core.acquisition` rows WITH a `gclid` whose user
+     has a qualifying downstream conversion (first booking / membership) not yet uploaded, and uploads the
+     ClickConversion to Google Ads via the Ads API. Requires: a NEW **"Offline booking/membership"**
+     conversion action in the account (Import → API), plus env `GOOGLE_ADS_DEVELOPER_TOKEN`,
+     `GOOGLE_ADS_OAUTH_*` (refresh token), `GOOGLE_ADS_LOGIN_CUSTOMER_ID`. Add an `uploaded_at` marker so
+     each conversion uploads once. Enhanced-conversions (hash + send email) layers on cheaply once this
+     exists.
 3. **Customer Match audiences** — upload hashed member emails to (a) **exclude existing members** from ad spend
    (stop paying to advertise to people who already joined), (b) seed **lookalike** audiences. Medium build.
 4. **GA4 conversion events** — mark `booking_completed` + `start_free_week` as GA4 key events (in the GA4
    console) for funnel + attribution reporting.
 5. **Enhanced conversions** — hash + send email on conversion for better match rates. Low effort once #2 exists.
+
+## The rest of the Google estate — GA4, Search Console, Business Profile
+Beyond Ads, these are the other Google surfaces and what to do with each:
+
+**GA4 (Analytics)** — collecting now that `GA4_MEASUREMENT_ID=G-EKQP47P8M9` is set.
+- Mark `booking_completed` + `start_free_week` as **Key events** (Admin → Events).
+- **Link GA4 ↔ Google Ads** (GA4 Admin → Product links → Google Ads) → import those key events as Ads
+  conversions AND build a **remarketing audience** (site visitors who didn't sign up).
+- Note: we ALSO have a first-party, cookieless beacon (`analytics.js` → Business Overview cockpit), so GA4 is
+  the *ad-attribution* view, not our only analytics — no lock-in.
+
+**Search Console (GSC)** — the free organic-search truth. `nextpointtennis.com` should be a verified
+property (the ten-fifty5 `seo/` engine already holds GSC OAuth that covers this domain). Actions: confirm
+the property is verified (domain-level), submit `sitemap.xml` (the site generates one at `/sitemap.xml`),
+then feed the striking-distance queries into the content cadence below. Verification meta is wired: set
+`GSC_META_TOKEN` to drop the verification `<meta>` on every page (`web_app._gsc_meta`).
+
+**Google Business Profile (Maps)** — for a PHYSICAL club this is the highest-leverage FREE Google asset
+(the map pack for "tennis lessons johannesburg", "clay court near me"). Actions: claim/verify the listing,
+complete every field (hours, photos of the 8 clay courts, services), keep the website link pointing at
+`nextpointtennis.com`, and wire a **review-request** into the post-lesson flow (Klaviyo `lesson_completed`
+→ ask happy players for a Google review). Reviews + proximity are what win the map pack. No code needed —
+this is an account/ops task, playbook-driven.
+
+**Merchant Center / Shopping** — only relevant if the pro-shop sells online (there's a "Shop" sitelink).
+Low priority; revisit if e-commerce becomes a real revenue line.
 
 ## SEO (separate track)
 The `seo/` engine (shared with ten-fifty5, keyless GSC OAuth) already surfaces striking-distance queries.
