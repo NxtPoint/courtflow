@@ -326,7 +326,13 @@
       var top = frameWrap.getBoundingClientRect().top;
       frame.style.height = Math.max(320, window.innerHeight - top - padB - 24) + "px";
     }
+    // Fire the initial fit through several settle points — a single rAF can land before layout
+    // is stable (leaving the 70vh fallback), so also fit synchronously, after the iframe loads,
+    // and after a short delay. Then keep it fitted on resize / orientation change.
+    fit();
     requestAnimationFrame(fit);
+    frame.addEventListener("load", fit);
+    setTimeout(fit, 300);
     window.addEventListener("resize", fit);
   }
 
