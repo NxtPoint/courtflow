@@ -90,6 +90,13 @@ _DDL = [
         updated_at               timestamptz NOT NULL DEFAULT now()
     );
     """,
+    # PEAK court-pricing window (one per club, court hire only). A court booking whose LOCAL start falls in
+    # this window is charged its duration's peak price (billing.price.peak_amount_minor) instead of the base
+    # amount; membership coverage still wins first. NULL = no peak pricing (unchanged behaviour). Same shape
+    # as the membership access window (CSV ISO weekdays Mon=1..Sun=7; minutes-from-midnight, end exclusive).
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS peak_days text;",
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS peak_start_min int;",
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS peak_end_min int;",
 ]
 
 

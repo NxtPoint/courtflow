@@ -107,12 +107,14 @@ def get_service(session, *, club_id, product_id):
     currency = session.execute(
         text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": club_id}).scalar() or "ZAR"
 
-    # variations — per-duration prices (the membership term-plans are excluded).
+    # variations — per-duration prices (the membership term-plans are excluded). peak_amount_minor is the
+    # optional court peak price (NULL = no peak uplift) — surfaced so the service editor can show/edit it.
     variations = [
         {"price_id": str(r["id"]), "duration_minutes": r["duration_minutes"],
-         "amount_minor": int(r["amount_minor"] or 0), "status": r["status"]}
+         "amount_minor": int(r["amount_minor"] or 0), "status": r["status"],
+         "peak_amount_minor": (int(r["peak_amount_minor"]) if r["peak_amount_minor"] is not None else None)}
         for r in session.execute(
-            text("SELECT id, duration_minutes, amount_minor, status FROM billing.price "
+            text("SELECT id, duration_minutes, amount_minor, peak_amount_minor, status FROM billing.price "
                  "WHERE club_id = :c AND product_id = :p AND term_months IS NULL "
                  "ORDER BY duration_minutes NULLS FIRST, amount_minor"),
             {"c": club_id, "p": str(product_id)},

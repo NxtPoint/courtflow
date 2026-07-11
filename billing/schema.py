@@ -81,10 +81,30 @@ _DDL = [
     # Membership TIER name (Student/Family/…) — the grouping the plan wizard drills (tier → term),
     # distinct from `label`. NULL = ungrouped. Only meaningful on membership term plans. Idempotent.
     f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS membership_tier text;",
+    # PEAK price (court durations only): the amount charged instead of amount_minor when a court booking's
+    # local start falls inside the club peak window (club.policy.peak_*). NULL = no peak uplift for this
+    # duration (charged amount_minor at all times). Explicit amount so the customer sees a clean price.
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS peak_amount_minor int;",
+    # MEMBERSHIP entitlement caps (membership term plans only) — anti-abuse, enforced SILENTLY server-side
+    # via diary/entitlement.py and mirrored in the availability picker. NULL = no cap. max_covered_minutes:
+    # longest covered single booking; max_covered_per_day: covered bookings/day; max_courts_per_day: distinct
+    # covered courts/day. A booking beyond any cap falls back to PAYG (never blocked).
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS max_covered_minutes int;",
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS max_covered_per_day int;",
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS max_courts_per_day int;",
+    # TRIAL config (membership term plans only): is_trial marks the tier granted on signup; trial_days scales
+    # the free period (0 = trials off). grant_signup_trial links a new member to this tier's price_id so the
+    # trial inherits every entitlement cap above. NULL/false = not the trial tier.
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS trial_days int;",
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS is_trial boolean NOT NULL DEFAULT false;",
     # Per-SERVICE payment preference: a CSV of allowed settlement modes this service offers
     # (subset of the club-enabled methods), e.g. 'online,at_court'. NULL = all club-enabled. The
     # single source of truth the unified service editor writes + the booking flow reads. Idempotent.
     f"ALTER TABLE {SCHEMA}.product ADD COLUMN IF NOT EXISTS payment_modes text;",
+    # Court-SERVICE membership eligibility: a court product with members_covered=false is NEVER free for a
+    # member (e.g. a clay court sold as a PAYG-only premium surface) — every booking of it is PAYG for all.
+    # Only meaningful for kind='court_booking'. Default true = unchanged (a member's court is covered).
+    f"ALTER TABLE {SCHEMA}.product ADD COLUMN IF NOT EXISTS members_covered boolean NOT NULL DEFAULT true;",
     # Unified statement: a child unpaid order, once cleared by a 'pay all' settlement order, points at
     # that settlement order. The settlement order pays the SUM of its children; on its charge_succeeded
     # we mark each child paid + fan out its consequence (commission split). NULL = a standalone order.

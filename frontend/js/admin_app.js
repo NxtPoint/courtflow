@@ -1331,6 +1331,53 @@
     c.appendChild(flag("allow_pay_at_court", "Pay at the club", "Settle at the front desk."));
     c.appendChild(flag("allow_monthly_account", "Monthly account", "Charges accrue on a tab, invoiced monthly."));
     host.appendChild(c);
+    host.appendChild(peakHoursCard(policy));
+  }
+
+  // Peak court-hours editor (club-wide). When a court booking STARTS in this window it's charged the PEAK
+  // price set per duration (Setup → Services); membership coverage still wins first. Empty = no peak pricing.
+  function peakHoursCard(policy) {
+    var DOW = [["1", "Mon"], ["2", "Tue"], ["3", "Wed"], ["4", "Thu"], ["5", "Fri"], ["6", "Sat"], ["7", "Sun"]];
+    function m2t(m) { if (m == null || m === "") return ""; m = parseInt(m, 10); return ("0" + Math.floor(m / 60)).slice(-2) + ":" + ("0" + (m % 60)).slice(-2); }
+    function t2m(s) { if (!s) return null; var p = String(s).split(":"); return (parseInt(p[0], 10) || 0) * 60 + (parseInt(p[1], 10) || 0); }
+    var c = el("div", { class: "cf-card" }, [
+      el("h3", { text: "Peak court hours" }),
+      el("p", { class: "cf-muted", text: "During these hours, court hire is charged the PEAK price you set per duration (Setup → Services → a court). Members covered by their plan stay free. Leave empty for no peak pricing." }),
+    ]);
+    var curDays = (policy.peak_days != null && policy.peak_days !== "") ? String(policy.peak_days).split(",").map(function (x) { return x.trim(); }).filter(Boolean) : null;
+    var sel = {};
+    var chips = el("div", { class: "cf-row", style: "gap:4px;flex-wrap:wrap;margin-top:6px" });
+    DOW.forEach(function (o) {
+      var on = curDays ? curDays.indexOf(o[0]) >= 0 : false;   // default none selected = peak off
+      sel[o[0]] = on;
+      var b = el("button", { class: "cf-chip" + (on ? " class" : ""), text: o[1], type: "button" });
+      b.addEventListener("click", function () { sel[o[0]] = !sel[o[0]]; b.className = "cf-chip" + (sel[o[0]] ? " class" : ""); });
+      chips.appendChild(b);
+    });
+    var pf = el("input", { type: "time", value: m2t(policy.peak_start_min), style: "max-width:110px" });
+    var pt = el("input", { type: "time", value: m2t(policy.peak_end_min), style: "max-width:110px" });
+    var save = el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Save peak hours", style: "margin-top:10px" });
+    save.addEventListener("click", async function () {
+      var days = DOW.filter(function (o) { return sel[o[0]]; }).map(function (o) { return parseInt(o[0], 10); });
+      var startMin = t2m(pf.value), endMin = t2m(pt.value);
+      // Incomplete = clear (peak off). "All 7 days" is sent as null (= every day) like the access window.
+      var body = (!days.length || startMin == null || endMin == null)
+        ? { peak_days: null, peak_start_min: null, peak_end_min: null }
+        : { peak_days: (days.length === 7 ? null : days), peak_start_min: startMin, peak_end_min: endMin };
+      save.disabled = true;
+      try {
+        await window.AdminAPI.patchPolicy(body);
+        policy.peak_days = body.peak_days; policy.peak_start_min = body.peak_start_min; policy.peak_end_min = body.peak_end_min;
+        UI.toast("Peak hours saved.", "info");
+      } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
+    });
+    c.appendChild(el("div", { class: "cf-row", style: "gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px" }, [
+      el("span", { class: "cf-muted cf-tiny", text: "Peak on:" }), chips,
+      el("span", { class: "cf-muted cf-tiny", text: "from" }), pf,
+      el("span", { class: "cf-muted cf-tiny", text: "to" }), pt,
+    ]));
+    c.appendChild(save);
+    return c;
   }
 
   // ---- INSIGHTS (Phase-2 court-utilisation heatmap + the Business Overview dashboard) -------

@@ -111,10 +111,15 @@ def court_service_for_resource(session, *, club_id, resource_id):
 
 
 def price_for(session, *, club_id, kind=None, duration_minutes=None, product_id=None,
-              audience="any", coach_user_id=None):
+              audience="any", coach_user_id=None, at_local=None):
     """Best matching billing.price for a service + a chosen duration. Returns a dict
-    {price_id, amount_minor, currency_code, unit, duration_minutes} or None (billing absent /
-    no match). Never raises — pricing is best-effort here.
+    {price_id, amount_minor, base_amount_minor, is_peak, currency_code, unit, duration_minutes} or None
+    (billing absent / no match). Never raises — pricing is best-effort here.
+
+    PEAK pricing (court hire): pass `at_local` (the booking/slot's CLUB-LOCAL start). If it falls in the
+    club peak window (club.policy.peak_*) AND this price row has a peak_amount_minor, `amount_minor` is the
+    PEAK amount (and is_peak=True); `base_amount_minor` always carries the off-peak amount. Only court rows
+    ever set peak_amount_minor, so this is naturally court-only. at_local=None -> always the base amount.
 
     Scope: by product_id if given, else by product kind (via billing.product). For a lesson,
     coach_user_id scopes to that coach's product when billing.product.coach_user_id exists.
@@ -133,7 +138,7 @@ def price_for(session, *, club_id, kind=None, duration_minutes=None, product_id=
             product_id = _default_court_product_id(session, club_id)
         params = {"c": club_id, "aud": audience}
         coach_scoped = False
-        sql = ("SELECT p.id AS price_id, p.amount_minor, p.currency_code, p.unit, "
+        sql = ("SELECT p.id AS price_id, p.amount_minor, p.peak_amount_minor, p.currency_code, p.unit, "
                "       p.audience, p.duration_minutes "
                "FROM billing.price p ")
         where = ["p.club_id = :c", "p.active = true", "p.audience IN (:aud, 'any')"]
@@ -167,9 +172,16 @@ def price_for(session, *, club_id, kind=None, duration_minutes=None, product_id=
         row = session.execute(text(sql), params).mappings().first()
         if not row:
             return None
+        base = row["amount_minor"]
+        peak = row["peak_amount_minor"]
+        is_peak = (at_local is not None and peak is not None
+                   and in_peak_window(session, club_id=club_id, local_dt=at_local))
         return {
             "price_id": str(row["price_id"]),
-            "amount_minor": row["amount_minor"],
+            "amount_minor": (peak if is_peak else base),
+            "base_amount_minor": base,
+            "peak_amount_minor": peak,     # raw peak (or None) — lets callers price per-slot without re-query
+            "is_peak": is_peak,
             "currency_code": row["currency_code"],
             "unit": row["unit"],
             "duration_minutes": row["duration_minutes"],
@@ -395,6 +407,46 @@ def any_window_covers(windows, starts_local):
             continue
         return True
     return False
+
+
+def _peak_window(session, club_id):
+    """The club's PEAK court-pricing window as {days:[int]|None, start_min, end_min}, or None when no peak
+    window is configured. Cached per (session, club) so per-slot availability pricing never re-queries.
+    Guarded -> None (a missing/empty policy just means no peak pricing)."""
+    cache = getattr(session, "_cf_peak_window", None)
+    if cache is None:
+        cache = {}
+        try:
+            session._cf_peak_window = cache
+        except Exception:
+            pass
+    key = str(club_id)
+    if key in cache:
+        return cache[key]
+    win = None
+    try:
+        row = session.execute(
+            text("SELECT peak_days, peak_start_min, peak_end_min FROM club.policy WHERE club_id = :c"),
+            {"c": key},
+        ).mappings().first()
+        if row and (row["peak_start_min"] is not None or row["peak_end_min"] is not None or row["peak_days"]):
+            win = {
+                "days": [int(x) for x in row["peak_days"].split(",") if str(x).strip()] if row["peak_days"] else None,
+                "start_min": row["peak_start_min"], "end_min": row["peak_end_min"],
+            }
+    except Exception:
+        win = None
+    cache[key] = win
+    return win
+
+
+def in_peak_window(session, *, club_id, local_dt):
+    """True if local_dt (a CLUB-LOCAL datetime) falls inside the club peak window. Reuses any_window_covers'
+    day/time semantics (ISO weekday, minutes-from-midnight, end exclusive). Guarded -> False."""
+    win = _peak_window(session, club_id)
+    if not win or local_dt is None:
+        return False
+    return any_window_covers([win], local_dt)
 
 
 def membership_covers(session, *, club_id, user_id, starts_at):

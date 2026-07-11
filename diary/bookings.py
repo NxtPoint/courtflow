@@ -343,6 +343,17 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
     # Price the CHOSEN service (product_id) exactly when given — so a coach with several lesson
     # products (Private / Semi-private) charges the one that was booked, not the cheapest. Falls back
     # to coach-scoped kind pricing when no product was specified (older callers / court bookings).
+    # PEAK court pricing: convert the booking's UTC start to the club-local time so price_for can pick the
+    # peak amount when it falls in the club peak window (charged == what compute_availability showed). Only
+    # court rows carry a peak amount, so lessons/classes are unaffected. Guarded -> no peak (base amount).
+    at_local = None
+    if starts_at is not None:
+        try:
+            from diary.availability import _club_tz
+            at_local = starts_at.astimezone(_club_tz(session, club_id))
+        except Exception:
+            at_local = None
+
     def _price(aud):
         # EXACT price row (a class session's own price_id) — never re-resolved/merged, so a class
         # enrolment charges THAT class's rate, not the cheapest class across coaches.
@@ -354,9 +365,10 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
             return dict(row) if row else {}
         if product_id:
             return price_for(session, club_id=club_id, audience=aud, product_id=product_id,
-                             duration_minutes=duration_minutes) or {}
+                             duration_minutes=duration_minutes, at_local=at_local) or {}
         return price_for(session, club_id=club_id, audience=aud, kind=kind,
-                         duration_minutes=duration_minutes, coach_user_id=coach_user_id) or {}
+                         duration_minutes=duration_minutes, coach_user_id=coach_user_id,
+                         at_local=at_local) or {}
     if member_parties:
         for p in member_parties:
             pr = _price("member")

@@ -175,9 +175,11 @@ def add_variation(product_id):
         svc, err = _load_manageable(s, p, product_id)
         if err:
             return err
+        _peak = b.get("peak_amount_minor")
         admin_repo.create_price(s, club_id=p.club_id, product_id=product_id,
                                 amount_minor=int(b.get("amount_minor") or 0),
-                                duration_minutes=int(dur))
+                                duration_minutes=int(dur),
+                                peak_amount_minor=(int(_peak) if _peak not in (None, "") else None))
         out = repo.get_service(s, club_id=p.club_id, product_id=product_id)
     return jsonify(service=out), 201
 
@@ -192,9 +194,15 @@ def patch_variation(product_id, price_id):
         svc, err = _load_manageable(s, p, product_id)
         if err:
             return err
+        # peak_amount_minor passed ONLY when present (None clears it, sentinel = leave unchanged).
+        _peak_kw = {}
+        if "peak_amount_minor" in b:
+            _pv = b.get("peak_amount_minor")
+            _peak_kw["peak_amount_minor"] = (int(_pv) if _pv not in (None, "") else None)
         admin_repo.patch_price(s, club_id=p.club_id, price_id=price_id,
                                amount_minor=b.get("amount_minor"),
-                               duration_minutes=b.get("duration_minutes"), status=b.get("status"))
+                               duration_minutes=b.get("duration_minutes"), status=b.get("status"),
+                               **_peak_kw)
         out = repo.get_service(s, club_id=p.club_id, product_id=product_id)
     return jsonify(service=out), 200
 

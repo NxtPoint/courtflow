@@ -295,14 +295,21 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
                            duration_minutes=duration_min, coach_user_id=coach_user_id,
                            product_id=court_product_id,   # price a court slot at ITS service's rate
                            audience=audience)
-    payg_price = pr.get("amount_minor") if pr else None
+    payg_price = pr.get("amount_minor") if pr else None       # off-peak base
+    peak_price = pr.get("peak_amount_minor") if pr else None  # court peak amount (or None)
     windows = membership_windows or []
     covers_any_time = membership_covered and not windows  # legacy bool with no windows = full cover
     def _slot_price(s_utc):
         if covers_any_time:
             return 0
-        if windows and pricing.any_window_covers(windows, s_utc.astimezone(tz)):
+        s_local = s_utc.astimezone(tz)
+        if windows and pricing.any_window_covers(windows, s_local):
             return 0
+        # PEAK court pricing: a non-covered court slot inside the club peak window is charged its peak
+        # amount (shown here == charged in create_booking). Only court rows carry peak_amount_minor.
+        if peak_price is not None and kind == "court" and \
+                pricing.in_peak_window(session, club_id=club_id, local_dt=s_local):
+            return peak_price
         return payg_price
 
     is_lesson = kind in _LESSON_KINDS

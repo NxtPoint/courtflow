@@ -36,7 +36,7 @@
       name: s.name || "",
       payment_modes: (s.payment_modes ? s.payment_modes.slice() : (s.club_payment_methods || []).slice()),
       commission_pct: (s.commission && s.commission.effective_pct) || 0,
-      variations: (s.variations || []).map(function (v) { return { price_id: v.price_id, duration_minutes: v.duration_minutes, amount_minor: v.amount_minor }; }),
+      variations: (s.variations || []).map(function (v) { return { price_id: v.price_id, duration_minutes: v.duration_minutes, amount_minor: v.amount_minor, peak_amount_minor: (v.peak_amount_minor != null ? v.peak_amount_minor : null) }; }),
       packages: (s.packages || []).map(function (p) { return { id: p.id, label: p.label, sessions_count: p.sessions_count, duration_minutes: p.duration_minutes, price_minor: p.price_minor, assigned: p.assigned !== false, adopt: false }; }),
     };
     st.del = { variations: [], packages: [] };
@@ -71,7 +71,10 @@
   function card(title, hint) { var c = el("div", { class: "cf-card" }); c.appendChild(el("h3", { text: title })); if (hint) c.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:-4px 0 10px", text: hint })); return c; }
 
   function variationsCard() {
-    var c = card("Pricing & variations", "The same service at different lengths — each its own price.");
+    var isCourt = (st.svc.kind === "court_booking");
+    var c = card("Pricing & variations", isCourt
+      ? "The same service at different lengths — each its own price. Set an optional PEAK price to charge more during your club's peak hours (Settings → Club profile)."
+      : "The same service at different lengths — each its own price.");
     var list = el("div", { class: "cf-list" });
     st.m.variations.forEach(function (v) {
       var durI = inp(v.duration_minutes, { type: "number", min: 1, style: "max-width:90px" });
@@ -80,7 +83,15 @@
       amtI.addEventListener("input", function () { v.amount_minor = Math.round(parseFloat(amtI.value || "0") * 100); });
       var rm = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove" });
       rm.addEventListener("click", function () { if (v.price_id) st.del.variations.push(v.price_id); st.m.variations.splice(st.m.variations.indexOf(v), 1); render(); });
-      list.appendChild(el("div", { class: "cf-item" }, [durI, el("span", { class: "cf-muted", text: "min →" }), amtI, el("span", { class: "cf-spacer" }), rm]));
+      var row = [durI, el("span", { class: "cf-muted", text: "min →" }), amtI];
+      if (isCourt) {
+        // Court PEAK price (optional). Blank = no uplift (charged the normal price at all times).
+        var peakI = inp(v.peak_amount_minor != null ? (v.peak_amount_minor / 100).toFixed(2) : "", { placeholder: "off-peak only", style: "max-width:120px" });
+        peakI.addEventListener("input", function () { var t = peakI.value.trim(); v.peak_amount_minor = (t === "" ? null : Math.round(parseFloat(t || "0") * 100)); });
+        row.push(el("span", { class: "cf-muted", text: "· peak R" }), peakI);
+      }
+      row.push(el("span", { class: "cf-spacer" }), rm);
+      list.appendChild(el("div", { class: "cf-item" }, row));
     });
     if (!st.m.variations.length) list.appendChild(el("div", { class: "cf-empty", text: "No prices yet. Add one below." }));
     c.appendChild(list);
@@ -158,10 +169,14 @@
       var body = { name: m.name, payment_modes: m.payment_modes };
       if (st.svc.can_edit_commission) { var v = parseFloat(m.commission_pct); if (!isNaN(v)) body.commission_pct = Math.max(0, Math.min(100, v)); }
       await api("", { method: "PATCH", body: body });
+      var isCourtSvc = (st.svc.kind === "court_booking");
       for (var i = 0; i < m.variations.length; i++) {
         var vr = m.variations[i]; if (!vr.duration_minutes) continue;
-        if (vr.price_id) await api("/variations/" + vr.price_id, { method: "PATCH", body: { duration_minutes: vr.duration_minutes, amount_minor: vr.amount_minor || 0 } });
-        else await api("/variations", { method: "POST", body: { duration_minutes: vr.duration_minutes, amount_minor: vr.amount_minor || 0 } });
+        var vbody = { duration_minutes: vr.duration_minutes, amount_minor: vr.amount_minor || 0 };
+        // Peak price only meaningful for court services; send it (incl. null to clear) so it round-trips.
+        if (isCourtSvc) vbody.peak_amount_minor = (vr.peak_amount_minor != null ? vr.peak_amount_minor : null);
+        if (vr.price_id) await api("/variations/" + vr.price_id, { method: "PATCH", body: vbody });
+        else await api("/variations", { method: "POST", body: vbody });
       }
       for (var d = 0; d < del.variations.length; d++) await api("/variations/" + del.variations[d], { method: "DELETE" });
       for (var j = 0; j < m.packages.length; j++) {

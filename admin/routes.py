@@ -175,9 +175,15 @@ def patch_policy():
     if err:
         return err
     b = _body()
+    # Peak-window fields are passed ONLY when present in the body (a partial patch that touches something
+    # else must not clear peak). When present, None is honoured = clear the window (peak pricing off).
+    peak_kwargs = {}
+    if any(k in b for k in ("peak_days", "peak_start_min", "peak_end_min")):
+        peak_kwargs = {"peak_days": b.get("peak_days"), "peak_start_min": b.get("peak_start_min"),
+                       "peak_end_min": b.get("peak_end_min")}
     with session_scope() as s:
         policy = repo.patch_policy(
-            s, club_id=p.club_id,
+            s, club_id=p.club_id, **peak_kwargs,
             booking_window_days=b.get("booking_window_days"),
             min_booking_minutes=b.get("min_booking_minutes"),
             cancellation_cutoff_hours=b.get("cancellation_cutoff_hours"),

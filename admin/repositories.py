@@ -12,6 +12,11 @@
 from sqlalchemy import text
 
 
+# Sentinel for partial-update args where None is a MEANINGFUL value (explicitly clear the field) and must
+# be distinguished from "argument omitted / leave unchanged".
+_UNSET = object()
+
+
 # ---------------------------------------------------------------------------
 # serialization helpers
 # ---------------------------------------------------------------------------
@@ -148,6 +153,7 @@ def get_policy(session, *, club_id):
         text("SELECT club_id, booking_window_days, min_booking_minutes, "
              "       cancellation_cutoff_hours, no_show_fee_minor, guest_requires_member, "
              "       allow_pay_at_court, allow_monthly_account, allow_online_payment, "
+             "       peak_days, peak_start_min, peak_end_min, "
              "       created_at, updated_at "
              "FROM club.policy WHERE club_id = :c"),
         {"c": club_id},
@@ -157,8 +163,13 @@ def get_policy(session, *, club_id):
 def patch_policy(session, *, club_id, booking_window_days=None, min_booking_minutes=None,
                  cancellation_cutoff_hours=None, no_show_fee_minor=None,
                  guest_requires_member=None, allow_pay_at_court=None,
-                 allow_monthly_account=None, allow_online_payment=None):
-    """Upsert-then-partial-update policy (1 row per club). Inserts a defaults row if absent."""
+                 allow_monthly_account=None, allow_online_payment=None,
+                 peak_days=_UNSET, peak_start_min=_UNSET, peak_end_min=_UNSET):
+    """Upsert-then-partial-update policy (1 row per club). Inserts a defaults row if absent.
+
+    The peak-window fields use a sentinel (_UNSET) rather than None so the owner can explicitly CLEAR the
+    window (pass None) to turn peak pricing off, distinct from "don't touch it" (omit the arg)."""
+    set_peak = any(v is not _UNSET for v in (peak_days, peak_start_min, peak_end_min))
     session.execute(
         text("INSERT INTO club.policy (club_id) VALUES (:c) ON CONFLICT (club_id) DO NOTHING"),
         {"c": club_id},
@@ -174,6 +185,9 @@ def patch_policy(session, *, club_id, booking_window_days=None, min_booking_minu
                 allow_pay_at_court        = COALESCE(:allow_pay_at_court, allow_pay_at_court),
                 allow_monthly_account     = COALESCE(:allow_monthly_account, allow_monthly_account),
                 allow_online_payment      = COALESCE(:allow_online_payment, allow_online_payment),
+                peak_days                 = CASE WHEN :set_peak THEN :peak_days ELSE peak_days END,
+                peak_start_min            = CASE WHEN :set_peak THEN :peak_start_min ELSE peak_start_min END,
+                peak_end_min              = CASE WHEN :set_peak THEN :peak_end_min ELSE peak_end_min END,
                 updated_at                = now()
             WHERE club_id = :c
         """),
@@ -184,7 +198,11 @@ def patch_policy(session, *, club_id, booking_window_days=None, min_booking_minu
          "guest_requires_member": guest_requires_member,
          "allow_pay_at_court": allow_pay_at_court,
          "allow_monthly_account": allow_monthly_account,
-         "allow_online_payment": allow_online_payment},
+         "allow_online_payment": allow_online_payment,
+         "set_peak": set_peak,
+         "peak_days": (None if peak_days is _UNSET else _days_csv(peak_days)),
+         "peak_start_min": (None if peak_start_min is _UNSET else peak_start_min),
+         "peak_end_min": (None if peak_end_min is _UNSET else peak_end_min)},
     )
     return get_policy(session, club_id=club_id)
 
@@ -446,15 +464,15 @@ def patch_product(session, *, club_id, product_id, kind=None, name=None, descrip
 
 def _get_price(session, *, club_id, price_id):
     return _row(session.execute(
-        text("SELECT id, club_id, product_id, audience, amount_minor, currency_code, unit, "
-             "       duration_minutes, active, status, created_at, updated_at "
+        text("SELECT id, club_id, product_id, audience, amount_minor, peak_amount_minor, currency_code, "
+             "       unit, duration_minutes, active, status, created_at, updated_at "
              "FROM billing.price WHERE club_id = :c AND id = :p"),
         {"c": club_id, "p": price_id},
     ).mappings().first())
 
 
 def create_price(session, *, club_id, product_id, audience="any", amount_minor=0,
-                 unit="per_booking", duration_minutes=None):
+                 unit="per_booking", duration_minutes=None, peak_amount_minor=None):
     # Scope-check the product belongs to this club before attaching a price.
     owned = session.execute(
         text("SELECT 1 FROM billing.product WHERE club_id = :c AND id = :p"),
@@ -464,18 +482,22 @@ def create_price(session, *, club_id, product_id, audience="any", amount_minor=0
         return None
     pid = session.execute(
         text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
-             "currency_code, unit, duration_minutes, active) "
-             "VALUES (:c, :prod, :a, :amt, :cur, :u, :dur, true) RETURNING id"),
+             "currency_code, unit, duration_minutes, peak_amount_minor, active) "
+             "VALUES (:c, :prod, :a, :amt, :cur, :u, :dur, :peak, true) RETURNING id"),
         {"c": club_id, "prod": product_id, "a": audience, "amt": amount_minor,
-         "cur": _club_currency(session, club_id=club_id), "u": unit, "dur": duration_minutes},
+         "cur": _club_currency(session, club_id=club_id), "u": unit, "dur": duration_minutes,
+         "peak": peak_amount_minor},
     ).scalar_one()
     return _get_price(session, club_id=club_id, price_id=pid)
 
 
 def patch_price(session, *, club_id, price_id, audience=None, amount_minor=None, unit=None,
-                duration_minutes=None, active=None, status=None):
+                duration_minutes=None, active=None, status=None, peak_amount_minor=_UNSET):
     """Partial update. `status` (active|dormant|retired) moves the price through its lifecycle and
-    keeps the `active` boolean in sync (active = status='active') so customer reads Just Work."""
+    keeps the `active` boolean in sync (active = status='active') so customer reads Just Work.
+
+    `peak_amount_minor` uses the _UNSET sentinel so the owner can CLEAR a peak price (pass None -> no peak
+    uplift) distinctly from leaving it unchanged (omit the arg)."""
     if status is not None and status not in ("active", "dormant", "retired"):
         return None
     res = session.execute(
@@ -485,6 +507,7 @@ def patch_price(session, *, club_id, price_id, audience=None, amount_minor=None,
                 amount_minor     = COALESCE(:amount_minor, amount_minor),
                 unit             = COALESCE(:unit, unit),
                 duration_minutes = COALESCE(:duration_minutes, duration_minutes),
+                peak_amount_minor = CASE WHEN :set_peak THEN :peak_amount_minor ELSE peak_amount_minor END,
                 status           = COALESCE(:status, status),
                 active           = CASE WHEN :status IS NOT NULL THEN (:status = 'active')
                                         ELSE COALESCE(:active, active) END,
@@ -493,7 +516,9 @@ def patch_price(session, *, club_id, price_id, audience=None, amount_minor=None,
             RETURNING id
         """),
         {"c": club_id, "p": price_id, "audience": audience, "amount_minor": amount_minor,
-         "unit": unit, "duration_minutes": duration_minutes, "active": active, "status": status},
+         "unit": unit, "duration_minutes": duration_minutes, "active": active, "status": status,
+         "set_peak": peak_amount_minor is not _UNSET,
+         "peak_amount_minor": (None if peak_amount_minor is _UNSET else peak_amount_minor)},
     ).mappings().first()
     if not res:
         return None

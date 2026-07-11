@@ -544,6 +544,75 @@ def sc_offpeak_slot_pricing(s, fx):
           f"weekday={is_weekday} price={s10 and s10.get('price')}")
 
 
+def sc_peak_court_pricing(s, fx):
+    print("\n# PEAK court pricing: a booking inside the club peak window is charged its peak price (shown == charged)")
+    member, court = fx.members[0], fx.courts[0]
+    # A court PAYG price: 60 min = R150 base, R250 peak.
+    cprod = s.execute(text("INSERT INTO billing.product (club_id, kind, name, active) "
+                           "VALUES (:c,'court_booking','Court Hire',true) RETURNING id"),
+                      {"c": fx.club_id}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, unit, duration_minutes, peak_amount_minor, active) "
+                   "VALUES (:c,:p,'any',15000,'ZAR','per_booking',60,25000,true)"),
+              {"c": fx.club_id, "p": cprod})
+    # Allocate the test court to THIS court service (the fixture already has a court product, so we scope
+    # every read to cprod — otherwise price resolution blends the cheapest across court products).
+    s.execute(text("UPDATE diary.resource SET product_id=:p WHERE id=:r"), {"p": cprod, "r": court})
+    # Club peak window: 17:00–19:00 EVERY day (peak_days NULL = all days) so the test is weekday-agnostic.
+    s.execute(text("INSERT INTO club.policy (club_id, peak_start_min, peak_end_min, peak_days) "
+                   "VALUES (:c,1020,1140,NULL) ON CONFLICT (club_id) DO UPDATE SET "
+                   "peak_start_min=1020, peak_end_min=1140, peak_days=NULL"),
+              {"c": fx.club_id})
+
+    def _drop_peak_cache():
+        # The peak window is cached on the SHARED session; clear it so reads see the just-set window,
+        # and again at the end so the savepoint-rolled-back policy doesn't leak "peak on" into later scenarios.
+        try:
+            delattr(s, "_cf_peak_window")
+        except Exception:
+            pass
+
+    _drop_peak_cache()
+    try:
+        # 1) The resolver: peak in-window, base off-window, base when no time given (backward compat).
+        pk = P.price_for(s, club_id=fx.club_id, product_id=cprod, duration_minutes=60, at_local=at(fx, 17))
+        op = P.price_for(s, club_id=fx.club_id, product_id=cprod, duration_minutes=60, at_local=at(fx, 10))
+        nt = P.price_for(s, club_id=fx.club_id, product_id=cprod, duration_minutes=60)
+        check("price_for peak (17:00) = R250 + is_peak", bool(pk) and pk["amount_minor"] == 25000 and pk.get("is_peak"), str(pk))
+        check("price_for off-peak (10:00) = R150", bool(op) and op["amount_minor"] == 15000 and not op.get("is_peak"), str(op))
+        check("price_for no time = base R150 (backward compat)", bool(nt) and nt["amount_minor"] == 15000, str(nt))
+
+        # 2) Availability shows peak at 17:00, base at 10:00 (no membership → straight PAYG).
+        slots = A.compute_availability(s, club_id=fx.club_id, resource_id=court, kind="court",
+                                       date_from=utc_iso(at(fx, 8)), date_to=utc_iso(at(fx, 18)),
+                                       duration_minutes=60, audience="member", product_id=cprod)
+        by_start = {sl["start"]: sl for sl in slots}
+        s17 = by_start.get(utc_iso(at(fx, 17)))
+        s10 = by_start.get(utc_iso(at(fx, 10)))
+        check("availability 17:00 slot shows R250 (peak)", bool(s17) and s17["price"] == 25000, str(s17 and s17.get("price")))
+        check("availability 10:00 slot shows R150 (off-peak)", bool(s10) and s10["price"] == 15000, str(s10 and s10.get("price")))
+
+        # 3) create_booking CHARGES what was shown — peak at 17:00, base at 10:00.
+        def _order_amt(booking_id):
+            return s.execute(text('SELECT o.amount_minor FROM billing."order" o '
+                                  'JOIN billing.order_line ol ON ol.order_id = o.id '
+                                  'WHERE ol.booking_id = :b LIMIT 1'), {"b": booking_id}).scalar()
+        rp = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=member, role="member",
+                              booking_type="court", resource_id=court, settlement_mode="at_court", product_id=cprod,
+                              starts_at=utc_iso(at(fx, 17)), ends_at=utc_iso(at(fx, 18)))
+        check("peak court booking charges R250 (shown == charged)",
+              rp.get("ok") and _order_amt(rp["booking"]["id"]) == 25000,
+              str(rp.get("error") or (rp.get("booking") and _order_amt(rp["booking"]["id"]))))
+        ro = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=member, role="member",
+                              booking_type="court", resource_id=court, settlement_mode="at_court", product_id=cprod,
+                              starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)))
+        check("off-peak court booking charges R150",
+              ro.get("ok") and _order_amt(ro["booking"]["id"]) == 15000,
+              str(ro.get("error") or (ro.get("booking") and _order_amt(ro["booking"]["id"]))))
+    finally:
+        _drop_peak_cache()
+
+
 def sc_court_service_allocation(s, fx):
     print("\n# Court services: distinct products over allocated courts (price + availability isolation)")
     member = fx.members[0]
@@ -834,6 +903,7 @@ SCENARIOS = [
     sc_class_online_hold_expiry,
     sc_lesson_lifecycle,
     sc_offpeak_slot_pricing,
+    sc_peak_court_pricing,
     sc_court_service_allocation,
     sc_class_courts,
 ]
