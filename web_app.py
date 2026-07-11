@@ -249,6 +249,10 @@ def _inject_head(html: str, b: Branding) -> str:
         # First-party page-view beacon (powers the Business Overview dashboard). Loaded on every
         # served page; reads window.__API_BASE set just above. Privacy-first, no third parties.
         + f"<script src=\"/js/analytics.js\" async></script>\n"
+        # First-touch ad-click / UTM capture (nextpoint-only; NOT the shared beacon). Buffers gclid
+        # on the landing page, flushes to /api/me/acquisition once signed in → Google Ads offline
+        # conversions. Safe no-op on organic visits + before auth.
+        + f"<script src=\"/js/attribution.js\" async></script>\n"
         # Google tag (GA4 + Ads) — campaign attribution + conversions. Dark until IDs set.
         + _google_tag_head()
     )

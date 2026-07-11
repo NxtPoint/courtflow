@@ -198,6 +198,44 @@ def patch_profile():
 
 
 # ---------------------------------------------------------------------------
+# acquisition  (Google Ads / Client-360 first-touch attribution — gclid capture)
+# ---------------------------------------------------------------------------
+
+@me_bp.post("/acquisition")
+def record_my_acquisition():
+    """Persist the caller's FIRST-TOUCH ad/UTM attribution (gclid, utm_*) onto core.acquisition.
+    Fired once by frontend/js/attribution.js after the visitor signs in. Best-effort + idempotent
+    (first-touch wins in the repo) — always returns 200 so the client can clear its buffer even if
+    the CRM core is momentarily unavailable. No permission gate: a user records only their OWN
+    attribution (keyed off the JWT principal; the client never asserts a user_id)."""
+    p, err = _principal()
+    if err:
+        return err
+    b = _body()
+    attr = {
+        "gclid": b.get("gclid"),
+        "fbclid": b.get("fbclid"),
+        "source": b.get("utm_source") or b.get("source"),
+        "medium": b.get("utm_medium") or b.get("medium"),
+        "campaign": b.get("utm_campaign") or b.get("campaign"),
+        "term": b.get("utm_term") or b.get("term"),
+        "content": b.get("utm_content") or b.get("content"),
+        "referrer": b.get("referrer"),
+        "landing_page": b.get("landing_page"),
+    }
+    stored = False
+    try:
+        from core.repositories.acquisition import record_acquisition
+        with session_scope() as s:
+            row = record_acquisition(s, iam_user_id=p.user_id, email=p.email,
+                                     club_id=p.club_id, attr=attr)
+            stored = row is not None
+    except Exception:
+        log.debug("acquisition capture skipped (core unavailable/benign)", exc_info=False)
+    return jsonify(ok=True, stored=stored), 200
+
+
+# ---------------------------------------------------------------------------
 # dependents / children  (spec §3.3)
 # ---------------------------------------------------------------------------
 
