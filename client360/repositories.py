@@ -1,21 +1,27 @@
 # client360/repositories.py — the unified Client-360 read-model composer.
 #
 # Discipline (matches admin/repositories.py + the lane repos): SQLAlchemy Core text(), every fn
-# takes an explicit `session` and NEVER commits (callers compose via db.session_scope()). club_id
-# is ALWAYS passed in and scopes every query. READ-ONLY throughout.
+# takes an explicit `session` and NEVER commits/rolls-back the caller's transaction (callers compose
+# via db.session_scope()). club_id is ALWAYS passed in and scopes every query. READ-ONLY throughout.
 #
 # get_client_360 is the SINGLE SOURCE OF TRUTH read behind every client view. It is a SUPERSET of
 # what admin.repositories.get_person historically returned (which now delegates here), so existing
 # consumers keep working, PLUS new cross-lane blocks (packages, dependents, refunds, coaching,
-# activity, notifications, capability map). Every optional block is wrapped in try/except with
-# session.rollback() on failure so a broken block degrades to empty/None and never 500s.
+# activity, notifications, profile/consent/events, capability map).
+#
+# GUARDING — each optional block runs inside a SAVEPOINT via _guard(): a failing block (bad SQL /
+# schema drift / a lane reader raising) rolls back ONLY that block and degrades to an empty/None
+# default — it NEVER rolls back the caller's transaction. This matters because the composer runs
+# inside the caller's session_scope: a bare session.rollback() here would nuke the caller's pending
+# writes (e.g. an admin action that then re-reads the 360) and, in the scenario harness, the fixture
+# club itself (which is exactly the sc_person_360 FK break this pattern fixes).
 
 from sqlalchemy import text
 
 
 # ---------------------------------------------------------------------------
-# serialization helpers (local copies — no import from admin, to avoid a cycle:
-# admin.repositories delegates INTO this module)
+# serialization + guard helpers (local copies — no import from admin, to avoid a
+# cycle: admin.repositories delegates INTO this module)
 # ---------------------------------------------------------------------------
 
 def _row(row):
@@ -35,6 +41,21 @@ def _row(row):
 
 def _rows(rows):
     return [_row(r) for r in rows]
+
+
+def _guard(session, thunk, default):
+    """Run a read `thunk()` inside a SAVEPOINT so a failure rolls back ONLY this block — never the
+    caller's transaction. The composer runs inside the caller's session_scope, so a bare
+    session.rollback() would discard the caller's pending work; a savepoint rollback recovers the
+    aborted-statement state while preserving everything before it. Returns `default` on any error."""
+    sp = session.begin_nested()
+    try:
+        result = thunk()
+        sp.commit()
+        return result
+    except Exception:
+        sp.rollback()
+        return default
 
 
 def _club_currency(session, *, club_id):
@@ -96,7 +117,7 @@ def _identity(session, *, club_id, user_id):
 
 def _membership_line(session, *, club_id, user_id, currency):
     """The simple active-membership line grant/revoke acts on (get_person's inline shape)."""
-    try:
+    def _run():
         ms = session.execute(
             text("""
                 SELECT ms.status, ms.current_period_end, ms.provider,
@@ -117,14 +138,12 @@ def _membership_line(session, *, club_id, user_id, currency):
             {"c": club_id, "u": user_id},
         ).mappings().first()
         return _row(ms) if ms else None
-    except Exception:
-        session.rollback()
-        return None
+    return _guard(session, _run, None)
 
 
 def _payments(session, *, club_id, user_id):
     """Online payments by this person (succeeded charges + refund flag), newest 50. Guarded → []."""
-    try:
+    def _run():
         pays = session.execute(
             text("""
                 SELECT p.id, p.order_id, p.provider, p.amount_minor, p.currency_code, p.status,
@@ -140,15 +159,13 @@ def _payments(session, *, club_id, user_id):
             {"c": club_id, "u": user_id},
         ).mappings().all()
         return _rows(pays)
-    except Exception:
-        session.rollback()
-        return []
+    return _guard(session, _run, [])
 
 
 def _bookings(session, *, club_id, user_id):
     """Bookings (as the party) + class enrolments, split upcoming/history. Copied from get_person so
     the phantom '(court held for lesson)' exclusion + cancelled filter + row shape are identical."""
-    try:
+    def _run():
         rows = session.execute(
             text("""
                 SELECT bk.id AS booking_id, NULL::uuid AS enrolment_id, bk.booking_type AS kind, bk.starts_at, bk.ends_at,
@@ -179,10 +196,8 @@ def _bookings(session, *, club_id, user_id):
             """),
             {"c": club_id, "u": user_id},
         ).mappings().all()
-        allb = _rows(rows)
-    except Exception:
-        session.rollback()
-        allb = []
+        return _rows(rows)
+    allb = _guard(session, _run, [])
     upcoming = [b for b in allb if b.get("is_upcoming")]
     upcoming.reverse()  # soonest-first
     return upcoming, [b for b in allb if not b.get("is_upcoming")], len(allb)
@@ -190,20 +205,18 @@ def _bookings(session, *, club_id, user_id):
 
 def _settlement(session, *, club_id, user_id):
     """Coach settlement summary (gross/commission/rent/net/balance) from cockpit earnings. Guarded."""
-    settle = {"gross_lesson_minor": 0, "commission_earned_minor": 0, "coach_earning_minor": 0,
-              "rent_due_minor": 0, "net_to_coach_minor": 0, "lifetime_balance_minor": 0,
-              "lesson_count": 0}
-    try:
+    default = {"gross_lesson_minor": 0, "commission_earned_minor": 0, "coach_earning_minor": 0,
+               "rent_due_minor": 0, "net_to_coach_minor": 0, "lifetime_balance_minor": 0,
+               "lesson_count": 0}
+
+    def _run():
         # Lazy import to avoid the import cycle (admin.repositories delegates into this module).
         from admin.repositories import cockpit_coach_earnings
         uid = str(user_id)
         match = next((r for r in cockpit_coach_earnings(session, club_id=club_id)
                       if str(r.get("coach_user_id")) == uid), None)
-        if match:
-            settle = match
-    except Exception:
-        session.rollback()
-    return settle
+        return match or default
+    return _guard(session, _run, default)
 
 
 # ---------------------------------------------------------------------------
@@ -214,21 +227,23 @@ def _packages(session, *, club_id, user_id, coach_user_id=None):
     """A member's token/bundle wallets (active + history), each enriched with the coach's name.
     Reuses billing.bundles.wallets_for (active_only=False → includes exhausted/expired). For coach
     scope, filter to that coach's relevance (their own lesson packs + coach-agnostic packs)."""
-    try:
+    def _fetch():
         from billing import bundles as BN
-        wallets = BN.wallets_for(session, club_id=club_id, user_id=user_id, active_only=False)
-    except Exception:
-        session.rollback()
+        return BN.wallets_for(session, club_id=club_id, user_id=user_id, active_only=False)
+    wallets = _guard(session, _fetch, None)
+    if wallets is None:
         return {"active": [], "history": []}
     if coach_user_id is not None:
         cid = str(coach_user_id)
         wallets = [w for w in wallets
                    if w.get("coach_user_id") in (cid, None)]
-    # Resolve coach display names for the wallets that name a coach.
+    # Resolve coach display names for the wallets that name a coach (own savepoint — a names failure
+    # must not lose the wallet list).
     coach_ids = sorted({w["coach_user_id"] for w in wallets if w.get("coach_user_id")})
     names = {}
     if coach_ids:
-        try:
+        def _names():
+            out = {}
             for n in session.execute(
                 text("""SELECT u.id, COALESCE(cp.display_name,
                                 NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)), ''),
@@ -238,9 +253,9 @@ def _packages(session, *, club_id, user_id, coach_user_id=None):
                         WHERE u.id = ANY(:ids)"""),
                 {"c": club_id, "ids": coach_ids},
             ).mappings().all():
-                names[str(n["id"])] = n["coach_name"]
-        except Exception:
-            session.rollback()
+                out[str(n["id"])] = n["coach_name"]
+            return out
+        names = _guard(session, _names, {})
     active, history = [], []
     for w in wallets:
         item = {
@@ -266,7 +281,7 @@ def _packages(session, *, club_id, user_id, coach_user_id=None):
 def _dependents(session, *, club_id, user_id):
     """Guardian-managed dependents (login-less children who can be booked for). is_minor +
     can_self_book included (list_dependents omits can_self_book, so query direct)."""
-    try:
+    def _run():
         rows = session.execute(
             text("""SELECT dependent_user_id, first_name, surname, dob, relationship,
                            is_minor, can_self_book
@@ -276,31 +291,27 @@ def _dependents(session, *, club_id, user_id):
             {"c": club_id, "u": user_id},
         ).mappings().all()
         return _rows(rows)
-    except Exception:
-        session.rollback()
-        return []
+    return _guard(session, _run, [])
 
 
 def _refunds(session, *, club_id, user_id):
     """The client's own refund requests (newest first). Reuses billing.refunds.list_refund_requests."""
-    try:
+    def _run():
         from billing import refunds as RF
         return RF.list_refund_requests(session, club_id=club_id, user_id=user_id)
-    except Exception:
-        session.rollback()
-        return []
+    return _guard(session, _run, [])
 
 
 def _coaching(session, *, club_id, user_id, coach_user_id=None):
     """The client's coaching statement (per-coach paid/owed/net + arrears items). Reuses
     billing.commission.client_statement. For coach scope, filter to just that coach."""
-    try:
+    default = {"month": None, "currency": None, "coaches": [], "arrears_items": [],
+               "totals": {"paid_minor": 0, "owed_minor": 0, "written_off_minor": 0, "net_minor": 0}}
+
+    def _run():
         from billing import commission as CM
-        cs = CM.client_statement(session, club_id=club_id, user_id=user_id, month=None)
-    except Exception:
-        session.rollback()
-        return {"month": None, "currency": None, "coaches": [], "arrears_items": [],
-                "totals": {"paid_minor": 0, "owed_minor": 0, "written_off_minor": 0, "net_minor": 0}}
+        return CM.client_statement(session, club_id=club_id, user_id=user_id, month=None)
+    cs = _guard(session, _run, default)
     if coach_user_id is not None:
         cid = str(coach_user_id)
         coaches = [c for c in cs.get("coaches", []) if str(c.get("coach_user_id")) == cid]
@@ -319,33 +330,27 @@ def _coaching(session, *, club_id, user_id, coach_user_id=None):
 def _activity(session, *, club_id, user_id):
     """The client's chronological transaction log. Reuses billing.activity.transaction_log. Heavily
     guarded (composes several lanes)."""
-    try:
+    def _run():
         from billing import activity as ACT
         return ACT.transaction_log(session, scope="client", club_id=club_id, user_id=user_id)
-    except Exception:
-        session.rollback()
-        return []
+    return _guard(session, _run, [])
 
 
 def _membership_status(session, *, club_id, user_id):
     """The richer member-facing membership status (trial, window, plans). Reuses
     billing.membership.membership_status. Guarded → None."""
-    try:
+    def _run():
         from billing import membership as MB
         return MB.membership_status(session, club_id=club_id, user_id=user_id)
-    except Exception:
-        session.rollback()
-        return None
+    return _guard(session, _run, None)
 
 
 def _notifications_unread(session, *, club_id, user_id):
     """Unread in-app notification count. Reuses core.repositories.notifications.unread_count."""
-    try:
+    def _run():
         from core.repositories import notifications as NOT
         return NOT.unread_count(session, club_id=club_id, user_id=user_id)
-    except Exception:
-        session.rollback()
-        return 0
+    return _guard(session, _run, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -357,18 +362,16 @@ def _notifications_unread(session, *, club_id, user_id):
 def _profile(session, *, user_id):
     """Full member demographics (dob, address, emergency contact, marketing_opt_in) from iam.user.
     Reuses iam.repositories.get_profile. Guarded → {}."""
-    try:
+    def _run():
         from iam.repositories import get_profile
         return get_profile(session, user_id=user_id) or {}
-    except Exception:
-        session.rollback()
-        return {}
+    return _guard(session, _run, {})
 
 
 def _consent(session, *, user_id):
     """Latest consent state per type (marketing_email / privacy / parental) for this human, joined
     via the bridge (iam.user → core.person → core.consent). Guarded → []."""
-    try:
+    def _run():
         rows = session.execute(text("""
             SELECT c.consent_type, c.status, c.policy_version, c.granted_at, c.withdrawn_at
             FROM core.person p
@@ -376,21 +379,19 @@ def _consent(session, *, user_id):
             WHERE p.iam_user_id = :u
             ORDER BY c.consent_type, c.granted_at DESC NULLS LAST
         """), {"u": str(user_id)}).mappings().all()
-    except Exception:
-        session.rollback()
-        return []
-    seen, out = set(), []
-    for r in rows:
-        t = r["consent_type"]
-        if t in seen:
-            continue
-        seen.add(t)
-        out.append({
-            "consent_type": t, "status": r["status"], "policy_version": r["policy_version"],
-            "granted_at": r["granted_at"].isoformat() if hasattr(r["granted_at"], "isoformat") else r["granted_at"],
-            "withdrawn_at": r["withdrawn_at"].isoformat() if hasattr(r["withdrawn_at"], "isoformat") else r["withdrawn_at"],
-        })
-    return out
+        seen, out = set(), []
+        for r in rows:
+            t = r["consent_type"]
+            if t in seen:
+                continue
+            seen.add(t)
+            out.append({
+                "consent_type": t, "status": r["status"], "policy_version": r["policy_version"],
+                "granted_at": r["granted_at"].isoformat() if hasattr(r["granted_at"], "isoformat") else r["granted_at"],
+                "withdrawn_at": r["withdrawn_at"].isoformat() if hasattr(r["withdrawn_at"], "isoformat") else r["withdrawn_at"],
+            })
+        return out
+    return _guard(session, _run, [])
 
 
 def _events(session, *, user_id, limit=50):
@@ -399,7 +400,7 @@ def _events(session, *, user_id, limit=50):
     core.person → core.usage_event by account). billing.activity remains the money half.
     Guarded → []. (Sparse historically — account_id was NULL before the Slice-0 backfill — and
     fills going forward as emit() resolves the now-existing accounts.)"""
-    try:
+    def _run():
         rows = session.execute(text("""
             SELECT ue.event_type, ue.ref_type, ue.ref_id, ue.occurred_at
             FROM core.person p
@@ -408,13 +409,11 @@ def _events(session, *, user_id, limit=50):
             ORDER BY ue.occurred_at DESC
             LIMIT :lim
         """), {"u": str(user_id), "lim": int(limit)}).mappings().all()
-    except Exception:
-        session.rollback()
-        return []
-    return [{
-        "event_type": r["event_type"], "ref_type": r["ref_type"], "ref_id": r["ref_id"],
-        "at": r["occurred_at"].isoformat() if hasattr(r["occurred_at"], "isoformat") else r["occurred_at"],
-    } for r in rows]
+        return [{
+            "event_type": r["event_type"], "ref_type": r["ref_type"], "ref_id": r["ref_id"],
+            "at": r["occurred_at"].isoformat() if hasattr(r["occurred_at"], "isoformat") else r["occurred_at"],
+        } for r in rows]
+    return _guard(session, _run, [])
 
 
 # ---------------------------------------------------------------------------
@@ -442,8 +441,9 @@ def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=No
 
     scope in {'admin','coach','client'} governs which optional blocks are included and the `can`
     capability map. For scope='coach', pass coach_user_id — the coaching statement + packages are
-    filtered to that coach's relevance. Every optional block is guarded (session.rollback() on
-    failure → empty/None) so a partial DB degrades rather than 500s. club_id-scoped throughout.
+    filtered to that coach's relevance. Every optional block runs inside its own SAVEPOINT (_guard),
+    so a partial DB degrades block-by-block rather than 500-ing OR rolling back the caller's
+    transaction. club_id-scoped throughout.
 
     The payload is a SUPERSET of the legacy admin get_person shape (which delegates here), so
     existing consumers keep working."""
@@ -457,12 +457,11 @@ def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=No
     out["membership"] = _membership_line(session, club_id=club_id, user_id=user_id,
                                          currency=out["currency"])
 
-    try:
+    def _stmt():
         from billing import statement as ST
-        stmt = ST.statement(session, club_id=club_id, user_id=user_id)
-    except Exception:
-        session.rollback()
-        stmt = {"items": [], "count": 0, "total_owed_minor": 0, "currency": out["currency"]}
+        return ST.statement(session, club_id=club_id, user_id=user_id)
+    stmt = _guard(session, _stmt,
+                  {"items": [], "count": 0, "total_owed_minor": 0, "currency": out["currency"]})
     out["statement"] = stmt
     out["owed_minor"] = int(stmt.get("total_owed_minor") or 0)
 
