@@ -75,6 +75,61 @@ def upsert_profile(traits):
         return False
 
 
+def get_or_create_list(name):
+    """Return the id of a Klaviyo list by name, creating it if absent. None on failure / no key.
+    Used to hold a consented import cohort (e.g. the reactivation list)."""
+    if not _key():
+        return None
+    import requests
+    try:
+        r = requests.get(f"{_BASE}/lists/", headers=_headers(),
+                         params={"filter": f'equals(name,"{name}")'}, timeout=8)
+        if r.status_code < 300:
+            data = (r.json() or {}).get("data") or []
+            if data:
+                return data[0]["id"]
+        body = {"data": {"type": "list", "attributes": {"name": name}}}
+        r = requests.post(f"{_BASE}/lists/", headers=_headers(), json=body, timeout=8)
+        if r.status_code < 300:
+            return ((r.json() or {}).get("data") or {}).get("id")
+        log.warning("klaviyo list create %s -> %s %s", name, r.status_code, r.text[:200])
+    except Exception:
+        log.exception("klaviyo get_or_create_list failed for %s", name)
+    return None
+
+
+def subscribe_emails(list_id, emails):
+    """Subscribe a batch of emails to a list with email-marketing consent = SUBSCRIBED. We hold the
+    opt-in in our OWN DB (imported Wix consent), so recording it here is legitimate — this is what
+    makes API-imported profiles (which land as 'Never subscribed') actually marketable. Batches of
+    100. Returns True if all batches were accepted. No-op (False) without key/list/emails."""
+    if not _key() or not list_id or not emails:
+        return False
+    import requests
+    ok_all = True
+    for i in range(0, len(emails), 100):
+        chunk = [e for e in emails[i:i + 100] if e]
+        profiles = [{"type": "profile", "attributes": {
+            "email": e,
+            "subscriptions": {"email": {"marketing": {"consent": "SUBSCRIBED"}}},
+        }} for e in chunk]
+        body = {"data": {
+            "type": "profile-subscription-bulk-create-job",
+            "attributes": {"profiles": {"data": profiles}},
+            "relationships": {"list": {"data": {"type": "list", "id": str(list_id)}}},
+        }}
+        try:
+            r = requests.post(f"{_BASE}/profile-subscription-bulk-create-jobs/",
+                              headers=_headers(), json=body, timeout=15)
+            if r.status_code >= 300:
+                ok_all = False
+                log.warning("klaviyo subscribe -> %s %s", r.status_code, r.text[:200])
+        except Exception:
+            ok_all = False
+            log.exception("klaviyo subscribe batch failed")
+    return ok_all
+
+
 def track_event(email, metric, properties=None):
     """Forward a product event to Klaviyo (drives flow triggers). No-op (False) without key/email."""
     if not _key() or not email:

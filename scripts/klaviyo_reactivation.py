@@ -109,19 +109,30 @@ def main():
     limit_clause = f"LIMIT {int(args.limit)}" if args.limit else ""
     with db.session_scope() as s:
         rows = s.execute(text(_COHORT_SQL.format(limit=limit_clause))).mappings().all()
-    pushed = 0
+    pushed, emails = 0, []
     for r in rows:
         try:
             with db.session_scope() as s:
                 traits = SYNC.build_traits(s, r["email"], club_id=r["club_id"])
             SYNC._push(traits)
+            emails.append(r["email"])
             pushed += 1
         except Exception as e:
             print(f"   !! {r['email']}: {e.__class__.__name__}")
+
+    # Subscribe the cohort to a list WITH consent. API-imported profiles land as 'Never subscribed'
+    # and can't receive campaigns; we hold the opt-in in our own DB, so recording it here is
+    # legitimate and makes them marketable. The campaign then targets this list.
+    from marketing_crm.crm_sync import klaviyo
+    list_name = os.getenv("KLAVIYO_REACTIVATION_LIST", "NextPoint Reactivation")
+    list_id = klaviyo.get_or_create_list(list_name)
+    subscribed = klaviyo.subscribe_emails(list_id, emails) if list_id else False
+
     _hdr("RESULT")
     _row("profiles upserted to Klaviyo", pushed)
-    print("\n>>> DONE. In Klaviyo, build a segment (club = <nextpoint club_id> AND never_logged_in = true\n"
-          "    AND marketing_opt_in = true) and trigger the win-back flow on it.\n")
+    _row(f"subscribed to list '{list_name}'",
+         f"{len(emails)} (list id {list_id})" if subscribed else f"FAILED (list id {list_id})")
+    print(f"\n>>> DONE. In Klaviyo → Campaigns, send a campaign to the list '{list_name}'.\n")
     sys.exit(0)
 
 
