@@ -1,0 +1,39 @@
+# month-end — fire the OPS-only month-end statement sweep on the 1st of each month.
+# Accrues coach arrears + rent, then notifies every client with an open statement balance
+# (statement_ready — in-app + email). Idempotent per (club,user,period), so a re-run never
+# re-notifies. Free (GitHub Actions) — no always-on Render cron needed (all four render.yaml
+# crons stay commented out; this piggybacks on the keep-warm CI pattern).
+#
+# REQUIRES a repository secret OPS_KEY set to the SAME value as the API service's OPS_KEY env var
+# (Settings → Secrets and variables → Actions). Without it the job no-ops (it won't fail the run).
+name: month-end
+
+on:
+  schedule:
+    - cron: "0 6 1 * *"     # 06:00 UTC (08:00 SAST) on the 1st of each month
+  workflow_dispatch:
+    inputs:
+      period:
+        description: "Period YYYY-MM to sweep (blank = current month)"
+        required: false
+        default: ""
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire the month-end statement sweep
+        env:
+          OPS_KEY: ${{ secrets.OPS_KEY }}
+          PERIOD: ${{ github.event.inputs.period }}
+        run: |
+          if [ -z "$OPS_KEY" ]; then
+            echo "OPS_KEY secret not set — skipping the sweep (add it in repo Settings → Secrets)."
+            exit 0
+          fi
+          curl -fsS --max-time 120 -X POST \
+            https://courtflow-api.onrender.com/api/cron/month-end \
+            -H "X-Ops-Key: $OPS_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"period\": \"${PERIOD}\"}" \
+          || echo "month-end sweep call failed (idempotent — safe to re-run from the Actions tab)."

@@ -302,6 +302,17 @@
     },
     cockpitMemberships: function () { return A().apiJSON("/api/admin/financials/memberships"); },
 
+    // ---- club <-> coach settlement (payouts + aging) ---------------------
+    // GET /api/admin/financials/settlement -> {clients:[{user_id,name,owed_minor,age_days,bucket}],
+    //   client_totals:{"0-30","31-60","61+"}, coaches:[{coach_user_id,name,balance_minor}], total_owed_minor}
+    settlementOverview: function () { return A().apiJSON("/api/admin/financials/settlement"); },
+    // GET /api/admin/coach-payouts[?coach_user_id=] -> {payouts:[...]}
+    coachPayouts: function (opts) { return A().apiJSON("/api/admin/coach-payouts" + qs(opts)); },
+    // POST /api/admin/coach-payouts {coach_user_id,amount_minor,direction,method?,reference?,note?,status?}
+    recordCoachPayout: function (body) { return A().apiJSON("/api/admin/coach-payouts", { method: "POST", body: body }); },
+    // PATCH /api/admin/coach-payouts/:id {status:'paid'|'void'}
+    setCoachPayout: function (id, body) { return A().apiJSON("/api/admin/coach-payouts/" + enc(id), { method: "PATCH", body: body }); },
+
     // ---- insights (Phase 2 P1 read-layer) --------------------------------
     // GET /api/insights/court-utilisation?days= -> {days, overall_pct, booked_hours,
     //   available_hours, cells:[{weekday,hour,booked_hours,available_hours,pct}]}

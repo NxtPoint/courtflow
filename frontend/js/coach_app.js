@@ -546,6 +546,17 @@
     if (t.written_off_minor) acct.appendChild(el("div", { class: "cf-muted", style: "margin-top:6px;font-size:.85rem", text: "Written off this month: " + money(t.written_off_minor, cur) }));
     wrap.appendChild(acct);
 
+    // Month-end reconciliation — the "finalise this month" ritual (C2): clients who STILL owe.
+    // Reuses the same statement rollup, filtered to owed>0; tap → client record to collect / issue.
+    var owing = (st.clients || []).filter(function (r) { return (r.owed_minor || 0) > 0; });
+    var recCard = card([window.CRMUI.sectionHead("To finalise" + (owing.length ? " · " + owing.length : ""))]);
+    if (!owing.length) recCard.appendChild(el("div", { class: "cf-empty", text: "All settled for " + monthLabel(MONTH) + " — nothing to finalise. 🎉" }));
+    else {
+      recCard.appendChild(el("p", { class: "cf-muted", style: "margin:-6px 0 8px;font-size:.85rem", text: "These clients still owe this month. Tap to collect (mark paid at court / off-platform) or issue their statement." }));
+      recCard.appendChild(window.CRMUI.statementTable(owing, { nameKey: "client_name", nameLabel: "Client", currency: cur, onRow: function (r) { if (r.client_user_id) go("#/client/" + r.client_user_id); } }));
+    }
+    wrap.appendChild(recCard);
+
     // Disputes
     if (disputes.length) {
       var dc = card([el("h2", { style: "margin:0 0 6px", text: "Refund requests" }), el("p", { class: "cf-muted", style: "margin:-2px 0 8px;font-size:.85rem", text: "A client asked for a refund on your lesson — you decide." })]);

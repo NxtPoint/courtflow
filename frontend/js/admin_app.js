@@ -819,26 +819,101 @@
     set(wrap);
   }
 
+  // Record a club<->coach settlement (payout) — nets the coach_ledger balance (append-only).
+  function recordPayoutModal(coach, onDone) {
+    var cur = clubCur(), bal = coach.balance_minor || 0;
+    var m = UI.modal("Record settlement · " + (coach.name || "Coach"), {});
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
+      text: bal > 0 ? ("The club owes this coach " + money(bal, cur) + ". Record the EFT you paid to settle it.")
+        : bal < 0 ? ("This coach owes the club " + money(-bal, cur) + " (commission / rent). Record the settlement received.")
+          : "This coach's balance is settled — record a settlement only if money moved." }));
+    var dir = el("select", { class: "cf-input" });
+    [["club_to_coach", "Club paid the coach"], ["coach_to_club", "Coach paid the club"], ["offset", "Offset (net, no cash)"]].forEach(function (o) {
+      var opt = el("option", { value: o[0], text: o[1] });
+      if ((bal >= 0 && o[0] === "club_to_coach") || (bal < 0 && o[0] === "coach_to_club")) opt.selected = true;
+      dir.appendChild(opt);
+    });
+    var amt = el("input", { class: "cf-input", type: "number", step: "0.01", min: "0", value: (Math.abs(bal) / 100).toFixed(2) });
+    var method = el("select", { class: "cf-input" });
+    [["eft", "EFT"], ["cash", "Cash"], ["offset", "Offset"]].forEach(function (o) { method.appendChild(el("option", { value: o[0], text: o[1] })); });
+    var ref = el("input", { class: "cf-input", placeholder: "Reference (e.g. EFT number)" });
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Direction" }), dir]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Amount" }), amt]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Method" }), method]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Reference" }), ref]));
+    var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Record payout" });
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
+      el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), btn,
+    ]));
+    btn.addEventListener("click", async function () {
+      var f = parseFloat(amt.value);
+      if (isNaN(f) || f <= 0) { UI.toast("Enter a valid amount.", "warn"); return; }
+      btn.disabled = true;
+      try {
+        await window.AdminAPI.recordCoachPayout({ coach_user_id: coach.coach_user_id, amount_minor: Math.round(f * 100), direction: dir.value, method: method.value, reference: ref.value.trim() || null });
+        UI.toast("Payout recorded.", "info"); m.close(); if (onDone) onDone();
+      } catch (e) { btn.disabled = false; UI.toast(UI.errMsg(e), "error"); }
+    });
+  }
+
   async function moneySettlement() {
     loading();
-    var coaches = [];
-    try { coaches = (await window.AdminAPI.cockpitCoachEarnings()).coaches || []; } catch (e) {}
+    var ov = { clients: [], client_totals: {}, coaches: [] }, payouts = [];
+    try { ov = await window.AdminAPI.settlementOverview(); } catch (e) {}
+    try { payouts = (await window.AdminAPI.coachPayouts()).payouts || []; } catch (e) {}
     var cur = clubCur();
-    var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Coach settlement" })]);
-    if (!coaches.length) wrap.appendChild(el("div", { class: "cf-empty", text: "No coach settlement yet." }));
-    else {
-      var c = card([]), l = el("div", { class: "cf-list" });
-      coaches.forEach(function (co) {
-        l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/person/" + co.coach_user_id); } }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: co.coach_name || "Coach" }),
-            el("div", { class: "cf-item-s", text: (co.lesson_count || 0) + " lessons · commission " + money(co.commission_earned_minor, cur) }),
-          ]),
-          el("span", { style: "font-weight:700", text: money(co.net_to_coach_minor, cur) }),
+    var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Settlement" })]);
+    // Client aging (who owes the club, bucketed by age).
+    var t = ov.client_totals || {};
+    wrap.appendChild(card([window.CRMUI.sectionHead("Clients owing"), window.CRMUI.stats([
+      { value: money(t["0-30"] || 0, cur), label: "0–30 days" },
+      { value: money(t["31-60"] || 0, cur), label: "31–60 days" },
+      { value: money(t["61+"] || 0, cur), label: "61+ days" },
+    ])]));
+    var cls = ov.clients || [];
+    if (cls.length) {
+      var cc = card([]), cl = el("div", { class: "cf-list" });
+      cls.forEach(function (x) {
+        cl.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/person/" + x.user_id); } }, [
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: x.name || "Client" }), el("div", { class: "cf-item-s", text: x.age_days + " days · " + x.bucket })]),
+          el("span", { style: "font-weight:700", text: money(x.owed_minor, cur) }),
           el("span", { class: "cf-muted", text: "›" }),
         ]));
       });
-      c.appendChild(l); wrap.appendChild(c);
+      cc.appendChild(cl); wrap.appendChild(cc);
+    }
+    // Coach balances (the club<->coach settlement worklist) + Record payout.
+    var coachKids = [window.CRMUI.sectionHead("Coach balances")];
+    var coaches = ov.coaches || [];
+    if (!coaches.length) coachKids.push(el("div", { class: "cf-empty", text: "All coaches settled." }));
+    else {
+      var l = el("div", { class: "cf-list" });
+      coaches.forEach(function (co) {
+        var bal = co.balance_minor || 0;
+        l.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main cf-item-tap", onclick: function () { go("#/person/" + co.coach_user_id); } }, [
+            el("div", { class: "cf-item-t", text: co.name || "Coach" }),
+            el("div", { class: "cf-item-s", text: (bal > 0 ? "Club owes " : "Owes club ") + money(Math.abs(bal), cur) }),
+          ]),
+          el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Record payout", onclick: function () { recordPayoutModal(co, moneySettlement); } }),
+        ]));
+      });
+      coachKids.push(l);
+    }
+    wrap.appendChild(card(coachKids));
+    // Recent settlements.
+    if (payouts.length) {
+      var pc = card([window.CRMUI.sectionHead("Recent settlements")]), pl = el("div", { class: "cf-list" });
+      payouts.slice(0, 12).forEach(function (pay) {
+        var dirTxt = pay.direction === "club_to_coach" ? "to coach" : (pay.direction === "coach_to_club" ? "from coach" : "offset");
+        pl.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: money(pay.amount_minor, pay.currency || cur) + " · " + dirTxt }),
+            el("div", { class: "cf-item-s", text: (pay.method || "eft") + (pay.reference ? " · " + pay.reference : "") + " · " + (pay.status || "paid") }),
+          ]),
+        ]));
+      });
+      pc.appendChild(pl); wrap.appendChild(pc);
     }
     set(wrap);
   }

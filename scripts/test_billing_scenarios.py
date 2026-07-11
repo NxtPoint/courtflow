@@ -1866,7 +1866,65 @@ def sc_partial_refund_state(s, fx):
           _order(s, oid)["status"] == "refunded", _order(s, oid)["status"])
 
 
+def sc_coach_payout(s, fx):
+    """C1: recording a club<->coach settlement nets the running coach_ledger balance (append-only,
+    idempotent on ref_id=payout.id). The other half of the loop — the cockpit reports the balance,
+    a payout pays it down."""
+    print("\n# Coach payout: record a settlement → nets the coach_ledger balance (both directions)")
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',30,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="online")
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="yoco", kind="charge_succeeded", order_ref=r["booking"]["order_id"],
+        provider_payment_id="p_payout_1", amount_minor=40000, currency="ZAR", status="succeeded",
+        direction="charge", club_id=str(fx.club_id), user_id=str(fx.member)), session=s)
+    check("club owes the coach R280 after a paid lesson",
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == 28000)
+    res = CM.record_coach_payout(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
+                                 amount_minor=28000, direction="club_to_coach", method="eft",
+                                 reference="EFT-001", created_by=fx.coach_uid)
+    check("payout recorded + ledger delta is -R280 (club paid coach)",
+          res["ok"] and res["ledger_delta"] == -28000, str(res))
+    check("balance nets to zero after the payout", res["balance_minor"] == 0, str(res["balance_minor"]))
+    CM._post_payout_ledger(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
+                           payout_id=res["payout_id"], delta=-28000, note="dup")
+    check("the payout ledger entry is idempotent (still R0)",
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == 0)
+    payouts = CM.list_coach_payouts(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    check("the settlement is listed for the coach",
+          len(payouts) == 1 and payouts[0]["direction"] == "club_to_coach", str(len(payouts)))
+    # A DRAFT records intent without moving the balance until it's flipped to paid.
+    d = CM.record_coach_payout(s, club_id=fx.club_id, coach_user_id=fx.coach_uid, amount_minor=5000,
+                               direction="coach_to_club", status="draft", created_by=fx.coach_uid)
+    check("a draft payout doesn't move the balance",
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == 0)
+    CM.set_payout_status(s, club_id=fx.club_id, payout_id=d["payout_id"], status="paid")
+    check("flipping the draft to paid posts a +R50 settlement (coach paid club)",
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == 5000)
+
+
+def sc_month_end_sweep(s, fx):
+    """C3: the month-end sweep notifies every client with an open statement balance exactly once per
+    period (idempotent), accruing coach arrears + rent first. Soft snapshot + notify — no month lock."""
+    print("\n# Month-end sweep: notify open balances once per period (idempotent)")
+    ym = s.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    # An OWED at-court lesson → the client has an open statement balance.
+    B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                     booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                     starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    r1 = CM.run_month_end(s, club_id=fx.club_id, period_label=ym)
+    check("sweep notifies the client who owes", r1["notified"] >= 1 and r1["clients_owing"] >= 1, str(r1))
+    r2 = CM.run_month_end(s, club_id=fx.club_id, period_label=ym)
+    check("a re-run notifies NO ONE again (idempotent per period)",
+          r2["notified"] == 0 and r2["already"] >= 1, str(r2))
+
+
 SCENARIOS = [
+    sc_coach_payout,
+    sc_month_end_sweep,
     sc_desk_amount_guard,
     sc_partial_refund_state,
     sc_coach_scoped_pricing,

@@ -1139,6 +1139,75 @@ def get_cockpit_memberships():
     return jsonify(data), 200
 
 
+# --- club <-> coach SETTLEMENT (payouts) — the other half of the loop ---------------------
+# The cockpit REPORTS each coach's running coach_ledger balance (financials/coach-earnings →
+# lifetime_balance_minor). These endpoints RECORD the settlement that pays it down, netting the
+# ledger (append-only). Admin-only.
+
+@admin_bp.get("/financials/settlement")
+def get_settlement_overview():
+    """The 'who owes what' aging view: clients bucketed by age + coaches with a non-zero ledger
+    balance (the club<->coach settlement worklist). Read-only, guarded."""
+    p, err = _admin()
+    if err:
+        return err
+    from billing import commission as comm
+    with session_scope() as s:
+        data = comm.settlement_overview(s, club_id=p.club_id)
+    return jsonify(data), 200
+
+
+@admin_bp.get("/coach-payouts")
+def list_coach_payouts_route():
+    p, err = _admin()
+    if err:
+        return err
+    coach_uid = (request.args.get("coach_user_id") or "").strip() or None
+    from billing import commission as comm
+    with session_scope() as s:
+        rows = comm.list_coach_payouts(s, club_id=p.club_id, coach_user_id=coach_uid)
+    return jsonify(payouts=rows, count=len(rows)), 200
+
+
+@admin_bp.post("/coach-payouts")
+def record_coach_payout_route():
+    """Record a club<->coach settlement. Body: {coach_user_id, amount_minor, direction
+    (club_to_coach|coach_to_club|offset), method?(eft|cash|offset), reference?, period_label?,
+    note?, status?(paid|draft)}. A 'paid' payout nets the coach_ledger balance (append-only)."""
+    p, err = _admin()
+    if err:
+        return err
+    b = request.get_json(silent=True) or {}
+    coach_uid = (b.get("coach_user_id") or "").strip()
+    if not coach_uid:
+        return jsonify(error="coach_user_id required"), 400
+    from billing import commission as comm
+    with session_scope() as s:
+        res = comm.record_coach_payout(
+            s, club_id=p.club_id, coach_user_id=coach_uid,
+            amount_minor=b.get("amount_minor"), direction=(b.get("direction") or ""),
+            method=(b.get("method") or "eft"), reference=b.get("reference"),
+            period_label=b.get("period_label"), note=b.get("note"),
+            created_by=p.user_id, status=(b.get("status") or "paid"))
+    return (jsonify(res), 200) if res.get("ok") else (jsonify(res), 422)
+
+
+@admin_bp.patch("/coach-payouts/<payout_id>")
+def patch_coach_payout_route(payout_id):
+    """Flip a payout status: draft->paid (posts the ledger entry) or void (a draft only)."""
+    p, err = _admin()
+    if err:
+        return err
+    b = request.get_json(silent=True) or {}
+    from billing import commission as comm
+    with session_scope() as s:
+        res = comm.set_payout_status(s, club_id=p.club_id, payout_id=payout_id,
+                                     status=(b.get("status") or ""))
+    if not res.get("ok"):
+        return jsonify(res), (404 if res.get("error") == "NOT_FOUND" else 422)
+    return jsonify(res), 200
+
+
 # ---------------------------------------------------------------------------
 # coach month-end statement (coach self-service surface — NOT admin-only).
 # Per docs/specs/01 the coach's most-wanted surface. Accessible to the logged-in coach

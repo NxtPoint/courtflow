@@ -1015,6 +1015,235 @@ def coach_balance(session, *, club_id, coach_user_id) -> int:
     ).scalar() or 0)
 
 
+# ---------------------------------------------------------------------------
+# club <-> coach SETTLEMENT (payouts) — the other half of the loop: the cockpit REPORTS the
+# running coach_ledger balance; a payout is how it's actually paid DOWN. Append-only: a payout
+# posts ONE 'payout' coach_ledger entry (idempotent on ref_id=payout.id) that nets the balance.
+# ---------------------------------------------------------------------------
+
+def _payout_ledger_delta(direction, amount, balance):
+    """The SIGNED coach_ledger delta a payout posts. amount is a positive magnitude.
+    club_to_coach -> -amount (club paid the coach; reduces what the club owes).
+    coach_to_club -> +amount (coach paid the club; reduces what the coach owes).
+    offset        -> net against the live balance (sign = toward zero)."""
+    if direction == "club_to_coach":
+        return -amount
+    if direction == "coach_to_club":
+        return amount
+    return -amount if balance > 0 else amount   # offset
+
+
+def _post_payout_ledger(session, *, club_id, coach_user_id, payout_id, delta, note):
+    """Post the append-only 'payout' coach_ledger entry (idempotent on ref_id=payout.id)."""
+    session.execute(
+        text("""
+            INSERT INTO billing.coach_ledger
+                (club_id, coach_user_id, entry_type, amount_minor, currency, ref_type, ref_id, note)
+            VALUES (:c, :coach, 'payout', :amt, 'ZAR', 'payout', :ref, :note)
+            ON CONFLICT (club_id, coach_user_id, ref_id) WHERE entry_type = 'payout' DO NOTHING
+        """),
+        {"c": club_id, "coach": str(coach_user_id), "amt": int(delta),
+         "ref": str(payout_id), "note": note},
+    )
+
+
+def record_coach_payout(session, *, club_id, coach_user_id, amount_minor, direction,
+                        method="eft", reference=None, period_label=None, note=None,
+                        created_by=None, status="paid") -> Dict[str, Any]:
+    """Record a club<->coach settlement and, when status='paid', post the matching coach_ledger entry
+    that nets the running balance (append-only, never an edit). `amount_minor` is a POSITIVE magnitude;
+    `direction` (club_to_coach|coach_to_club|offset) decides the ledger sign (see _payout_ledger_delta).
+    A 'draft' records the intent without moving the balance (flip it with set_payout_status). Returns
+    {ok, payout_id, ledger_delta, balance_minor} or {ok:False, error}."""
+    amt = abs(int(amount_minor or 0))
+    if amt <= 0:
+        return {"ok": False, "error": "AMOUNT_REQUIRED"}
+    direction = (direction or "").strip().lower()
+    if direction not in ("club_to_coach", "coach_to_club", "offset"):
+        return {"ok": False, "error": "BAD_DIRECTION"}
+    method = (method or "eft").strip().lower()
+    if method not in ("eft", "cash", "offset"):
+        method = "eft"
+    status = (status or "paid").strip().lower()
+    if status not in ("draft", "paid"):
+        status = "paid"
+    pid = session.execute(
+        text("""
+            INSERT INTO billing.coach_payout
+                (club_id, coach_user_id, direction, amount_minor, method, reference,
+                 period_label, status, note, created_by_user_id, paid_at)
+            VALUES (:c, :coach, :dir, :amt, :method, :ref, :period, :status, :note, :by,
+                    CASE WHEN :status = 'paid' THEN now() ELSE NULL END)
+            RETURNING id
+        """),
+        {"c": club_id, "coach": str(coach_user_id), "dir": direction, "amt": amt, "method": method,
+         "ref": reference, "period": period_label, "status": status, "note": note,
+         "by": str(created_by) if created_by else None},
+    ).scalar()
+    delta = 0
+    if status == "paid":
+        bal = coach_balance(session, club_id=club_id, coach_user_id=coach_user_id)
+        delta = _payout_ledger_delta(direction, amt, bal)
+        _post_payout_ledger(session, club_id=club_id, coach_user_id=coach_user_id, payout_id=pid,
+                            delta=delta, note=note or ("payout " + direction))
+    return {"ok": True, "payout_id": str(pid), "ledger_delta": delta,
+            "balance_minor": coach_balance(session, club_id=club_id, coach_user_id=coach_user_id)}
+
+
+def set_payout_status(session, *, club_id, payout_id, status) -> Dict[str, Any]:
+    """Flip a payout's status. 'draft'->'paid' posts the ledger entry (idempotent); 'void' on a
+    still-'draft' payout just marks it void (no ledger). Voiding a PAID payout is refused here (a
+    reversal would need its own compensating entry — out of scope). Returns {ok, status, balance}."""
+    status = (status or "").strip().lower()
+    if status not in ("paid", "void"):
+        return {"ok": False, "error": "BAD_STATUS"}
+    row = session.execute(
+        text("SELECT coach_user_id, direction, amount_minor, status, note "
+             "FROM billing.coach_payout WHERE club_id = :c AND id = :id"),
+        {"c": club_id, "id": str(payout_id)},
+    ).mappings().first()
+    if row is None:
+        return {"ok": False, "error": "NOT_FOUND"}
+    if row["status"] == "paid" and status == "void":
+        return {"ok": False, "error": "CANNOT_VOID_PAID"}
+    if row["status"] == status:
+        return {"ok": True, "status": status,
+                "balance_minor": coach_balance(session, club_id=club_id, coach_user_id=row["coach_user_id"])}
+    coach = row["coach_user_id"]
+    if status == "paid":
+        session.execute(
+            text("UPDATE billing.coach_payout SET status='paid', paid_at=now() "
+                 "WHERE club_id=:c AND id=:id"), {"c": club_id, "id": str(payout_id)})
+        bal = coach_balance(session, club_id=club_id, coach_user_id=coach)
+        delta = _payout_ledger_delta(row["direction"], abs(int(row["amount_minor"] or 0)), bal)
+        _post_payout_ledger(session, club_id=club_id, coach_user_id=coach, payout_id=payout_id,
+                            delta=delta, note=row["note"] or ("payout " + row["direction"]))
+    else:  # void a draft
+        session.execute(
+            text("UPDATE billing.coach_payout SET status='void' WHERE club_id=:c AND id=:id"),
+            {"c": club_id, "id": str(payout_id)})
+    return {"ok": True, "status": status,
+            "balance_minor": coach_balance(session, club_id=club_id, coach_user_id=coach)}
+
+
+def list_coach_payouts(session, *, club_id, coach_user_id=None, limit=100) -> List[Dict[str, Any]]:
+    """Recorded club<->coach settlements, newest first (optionally one coach)."""
+    where = "club_id = :c" + (" AND coach_user_id = :coach" if coach_user_id else "")
+    params: Dict[str, Any] = {"c": club_id, "lim": int(limit)}
+    if coach_user_id:
+        params["coach"] = str(coach_user_id)
+    rows = session.execute(
+        text(f"SELECT id, coach_user_id, direction, amount_minor, currency, method, reference, "
+             f"period_label, status, note, created_at, paid_at "
+             f"FROM billing.coach_payout WHERE {where} ORDER BY created_at DESC LIMIT :lim"),
+        params,
+    ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def run_month_end(session, *, club_id, period_label=None) -> Dict[str, Any]:
+    """The month-end sweep (C3, OPS-triggered — no always-on cron, fired by the keep-warm Action):
+    (1) accrue coach arrears + rent for the period so the coach tabs are current, then (2) notify
+    EVERY client who owes an open statement balance with a `statement_ready` message (in-app + email
+    best-effort). Idempotent per (club, user, period) via billing.month_end_notice, so a re-run never
+    re-notifies. Respects the LIVE-statement model (soft snapshot + notify, never a hard month lock).
+    Returns {period, clients_owing, notified, already, rent_charges}. Never raises per-user."""
+    period = period_label or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    try:
+        accrue_arrears_for_club(session, club_id=club_id)
+    except Exception:
+        log.info("run_month_end: arrears accrual skipped club=%s", club_id)
+    rent_charges = 0
+    try:
+        rent_charges = accrue_rent_for_club(session, club_id=club_id, year_month=period)
+    except Exception:
+        log.info("run_month_end: rent accrual skipped club=%s", club_id)
+    # Every client with an OPEN statement balance (the unified debt = sum of open, unsettled orders).
+    rows = session.execute(
+        text('SELECT user_id, COALESCE(SUM(amount_minor),0) AS owed, MIN(currency_code) AS cur '
+             'FROM billing."order" WHERE club_id = :c AND status = \'open\' '
+             '  AND settled_by_order_id IS NULL AND user_id IS NOT NULL '
+             'GROUP BY user_id HAVING COALESCE(SUM(amount_minor),0) > 0'),
+        {"c": club_id},
+    ).mappings().all()
+    notified = 0
+    already = 0
+    for r in rows:
+        fresh = session.execute(
+            text("INSERT INTO billing.month_end_notice (club_id, user_id, period_label, owed_minor) "
+                 "VALUES (:c, :u, :p, :owed) "
+                 "ON CONFLICT (club_id, user_id, period_label) DO NOTHING RETURNING user_id"),
+            {"c": club_id, "u": r["user_id"], "p": period, "owed": int(r["owed"] or 0)},
+        ).first()
+        if not fresh:
+            already += 1
+            continue
+        try:
+            from marketing_crm.tracking import emit
+            emit("statement_ready", {"club_id": str(club_id), "user_id": str(r["user_id"]),
+                                     "amount_minor": int(r["owed"] or 0), "currency": r["cur"] or "ZAR"})
+        except Exception:
+            log.info("run_month_end: notify skipped user=%s", r["user_id"])
+        notified += 1
+    return {"period": period, "clients_owing": len(rows), "notified": notified,
+            "already": already, "rent_charges": rent_charges}
+
+
+def settlement_overview(session, *, club_id) -> Dict[str, Any]:
+    """The admin 'who owes what' aging view (C4). Two ledgers, kept apart:
+      - clients: everyone with an OPEN statement balance, bucketed by age (0-30 / 31-60 / 61+ days
+        from the oldest open order), + per-bucket totals.
+      - coaches: every coach with a non-zero coach_ledger balance (+ = club owes coach, - = coach
+        owes club) — the club<->coach settlement worklist.
+    Read-only + guarded (a degraded DB returns empty lists, never a 500)."""
+    empty = {"clients": [], "client_totals": {"0-30": 0, "31-60": 0, "61+": 0},
+             "coaches": [], "total_owed_minor": 0}
+    try:
+        clients = session.execute(
+            text('SELECT o.user_id, u.first_name, u.surname, '
+                 '       COALESCE(SUM(o.amount_minor),0) AS owed, '
+                 '       EXTRACT(DAY FROM now() - MIN(o.created_at))::int AS age_days '
+                 'FROM billing."order" o JOIN iam.user u ON u.id = o.user_id '
+                 "WHERE o.club_id = :c AND o.status = 'open' AND o.settled_by_order_id IS NULL "
+                 'GROUP BY o.user_id, u.first_name, u.surname '
+                 'HAVING COALESCE(SUM(o.amount_minor),0) > 0 ORDER BY age_days DESC'),
+            {"c": club_id},
+        ).mappings().all()
+    except Exception:
+        return empty
+
+    def _bucket(days):
+        return "0-30" if days <= 30 else ("31-60" if days <= 60 else "61+")
+    client_rows = []
+    totals = {"0-30": 0, "31-60": 0, "61+": 0}
+    for r in clients:
+        days = int(r["age_days"] or 0)
+        b = _bucket(days)
+        owed = int(r["owed"] or 0)
+        totals[b] += owed
+        client_rows.append({"user_id": str(r["user_id"]),
+                            "name": ((r["first_name"] or "") + " " + (r["surname"] or "")).strip(),
+                            "owed_minor": owed, "age_days": days, "bucket": b})
+    coach_rows = []
+    try:
+        coaches = session.execute(
+            text("SELECT l.coach_user_id, u.first_name, u.surname, "
+                 "       COALESCE(SUM(l.amount_minor),0) AS balance "
+                 "FROM billing.coach_ledger l LEFT JOIN iam.user u ON u.id = l.coach_user_id "
+                 "WHERE l.club_id = :c "
+                 "GROUP BY l.coach_user_id, u.first_name, u.surname "
+                 "HAVING COALESCE(SUM(l.amount_minor),0) <> 0 ORDER BY balance DESC"),
+            {"c": club_id},
+        ).mappings().all()
+        coach_rows = [{"coach_user_id": str(r["coach_user_id"]),
+                       "name": ((r["first_name"] or "") + " " + (r["surname"] or "")).strip() or "Coach",
+                       "balance_minor": int(r["balance"] or 0)} for r in coaches]
+    except Exception:
+        coach_rows = []
+    return {"clients": client_rows, "client_totals": totals, "coaches": coach_rows,
+            "total_owed_minor": sum(c["owed_minor"] for c in client_rows)}
+
+
 def coach_statement(session, *, club_id, coach_user_id, month=None) -> Dict[str, Any]:
     """The coach month-end statement (docs/specs/01 — the coach's most-wanted surface).
     For the given month (YYYY-MM, default current), per CLIENT:

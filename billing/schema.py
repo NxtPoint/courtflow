@@ -457,6 +457,51 @@ _DDL = [
     f"ALTER TABLE {SCHEMA}.coach_arrears ADD COLUMN IF NOT EXISTS enrolment_id uuid;",
     f"CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_arrears_enrolment "
     f"ON {SCHEMA}.coach_arrears (club_id, enrolment_id) WHERE enrolment_id IS NOT NULL;",
+
+    # 6. coach_payout — a recorded club<->coach SETTLEMENT (the missing half of the loop). The cockpit
+    # REPORTS the running coach_ledger balance; a payout is how it gets paid DOWN. Recording a 'paid'
+    # payout posts ONE append-only coach_ledger 'payout' entry (idempotent on ref_id=payout.id via
+    # ux_coach_ledger_payout below), signed to net the balance toward zero. Both directions:
+    # club_to_coach (club pays the coach) / coach_to_club (coach settles commission+rent) / offset (net).
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.coach_payout (
+        id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id            uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        coach_user_id      uuid NOT NULL,
+        direction          text NOT NULL
+                             CHECK (direction IN ('club_to_coach','coach_to_club','offset')),
+        amount_minor       integer NOT NULL,             -- POSITIVE magnitude; ledger sign is derived
+        currency           text NOT NULL DEFAULT 'ZAR',
+        method             text NOT NULL DEFAULT 'eft'
+                             CHECK (method IN ('eft','cash','offset')),
+        reference          text,                         -- EFT reference / note the admin captured
+        period_label       text,                         -- 'YYYY-MM' this settlement covers (optional)
+        status             text NOT NULL DEFAULT 'paid'
+                             CHECK (status IN ('draft','paid','void')),
+        note               text,
+        created_by_user_id uuid,
+        created_at         timestamptz NOT NULL DEFAULT now(),
+        paid_at            timestamptz
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_coach_payout_coach "
+    f"ON {SCHEMA}.coach_payout (club_id, coach_user_id, created_at);",
+    # Payout ledger idempotency (mirrors the rent/earning guards): one 'payout' entry per payout row.
+    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_ledger_payout "
+    f"ON {SCHEMA}.coach_ledger (club_id, coach_user_id, ref_id) WHERE entry_type = 'payout';",
+
+    # 7. month_end_notice — idempotency marker for the month-end statement sweep: ONE 'statement_ready'
+    # notice per (club, user, period) so a re-run of the sweep never re-notifies a client. (C3.)
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.month_end_notice (
+        club_id      uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        user_id      uuid NOT NULL,
+        period_label text NOT NULL,
+        owed_minor   integer NOT NULL DEFAULT 0,
+        sent_at      timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (club_id, user_id, period_label)
+    );
+    """,
     # --- end commission engine (owner) ---
 
     # ===========================================================================

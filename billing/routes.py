@@ -146,3 +146,38 @@ def desk_payment():
 # The monthly-invoice cron route was RETIRED with the account_ledger monthly tab — the unified
 # statement (billing/statement.py) is the single debt of record, settleable online any time, and a
 # coach issues a client's month-end statement per-client via POST /api/coach/clients/<id>/issue-invoice.
+
+
+# ---------------------------------------------------------------------------
+# POST /api/cron/month-end — OPS-only month-end sweep (fired by the keep-warm GitHub Action, NOT an
+# always-on Render cron). Accrues coach arrears + rent for the period, then notifies every client with
+# an open statement balance (statement_ready). Idempotent per (club,user,period). Body/query:
+# {club_id?, period?(YYYY-MM)}. No club_id → sweep all clubs.
+# ---------------------------------------------------------------------------
+
+@billing_bp.post("/api/cron/month-end")
+def cron_month_end():
+    import logging
+    from sqlalchemy import text
+    from auth import resolve_principal
+    from db import session_scope
+    from billing import commission as comm
+
+    log = logging.getLogger("billing.routes")
+    p = resolve_principal(request)
+    if p is None or not p.is_platform_admin:
+        return jsonify(error="unauthorized"), 401
+
+    body = request.get_json(silent=True) or {}
+    club_id = (body.get("club_id") or request.args.get("club_id") or "").strip() or None
+    period = (body.get("period") or request.args.get("period") or "").strip() or None
+
+    results = []
+    with session_scope() as s:
+        clubs = [club_id] if club_id else [str(r[0]) for r in s.execute(text("SELECT id FROM club.club")).all()]
+        for cid in clubs:
+            try:
+                results.append(comm.run_month_end(s, club_id=cid, period_label=period))
+            except Exception:
+                log.warning("month-end sweep failed for club=%s", cid, exc_info=False)
+    return jsonify(clubs=len(results), results=results), 200
