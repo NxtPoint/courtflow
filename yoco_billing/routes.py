@@ -482,6 +482,21 @@ def bundles_checkout():
         if int(res.get("amount_minor") or 0) <= 0:
             return jsonify(error="bundle_has_no_price"), 400
 
+    # Offline self-serve pack (at-court/monthly) is granted immediately above — the ONLINE path emits
+    # bundle_activated from the paid webhook, so mirror it here or the member gets NO confirmation of
+    # their pack (silent grant). Best-effort + guarded; the order already committed with session_scope.
+    if res.get("activated") and not res.get("needs_checkout"):
+        try:
+            from marketing_crm.tracking import emit
+            plan = res.get("plan") or {}
+            emit("bundle_activated", {
+                "club_id": str(p.club_id), "user_id": str(p.user_id),
+                "ref_type": "order", "ref_id": str(res.get("order_id")),
+                "label": plan.get("label"), "tokens_total": plan.get("sessions_count"),
+            })
+        except Exception:
+            log.debug("self-serve bundle_activated emit skipped")
+
     return jsonify(order_id=res["order_id"], amount_minor=res["amount_minor"],
                    currency=res["currency"], plan=res["plan"],
                    settlement_mode=res.get("settlement_mode"),
