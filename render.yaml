@@ -158,7 +158,7 @@ services:
       # PRIVATE PROD TEST: the members-area embed is shown ONLY to these emails until we
       # launch to the whole community. Clear this value (empty) to enable it for ALL members.
       - key: TF5_EMBED_ALLOW_EMAILS
-        value: "tomos@gmail.com"
+        value: "tomos@nedbank.com.za"
       # Marketing hosts → these serve the public site at "/" (app stays at /portal).
       # Includes the onrender URL so the public site is viewable before DNS cutover;
       # the real domains are here too (also in branding.py registry) for go-live.
