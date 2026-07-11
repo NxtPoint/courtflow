@@ -1945,7 +1945,34 @@ def sc_pack_service_isolation(s, fx):
     check("assign never steals an already-scoped pack (still only PRIVATE)", bool(has_pack(priv)) and not has_pack(semi))
 
 
+def sc_activity_summary(s, fx):
+    """The client month-at-a-glance: sessions PLAYED (lessons/court/classes) + billed / paid /
+    outstanding — counts everything that happened (unlike the owed-only billing_summary), so a
+    settled month still tells its story. Surfaced on Client 360 as the clean headline."""
+    print("\n# Client activity summary: sessions played + billed/paid/outstanding this month")
+    from billing import me as ME
+    ym = s.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    # A PAID online lesson (played + paid) and an OWED at-court court booking (played + outstanding).
+    r1 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="online")
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="yoco", kind="charge_succeeded", order_ref=r1["booking"]["order_id"],
+        provider_payment_id="p_as_1", amount_minor=40000, currency="ZAR", status="succeeded",
+        direction="charge", club_id=str(fx.club_id), user_id=str(fx.member)), session=s)
+    B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                     booking_type="court", resource_id=fx.courts[0],
+                     starts_at=iso(at(fx, 11)), ends_at=iso(at(fx, 12)), settlement_mode="at_court")
+    a = ME.activity_summary(s, club_id=fx.club_id, user_id=fx.member, month=ym)
+    check("counts 1 lesson + 1 court played", a["counts"]["lesson"] == 1 and a["counts"]["court"] == 1,
+          str(a["counts"]))
+    check("billed = lesson + court gross", a["billed_minor"] == 40000 + a["outstanding_minor"], str(a))
+    check("paid reflects the settled lesson (R400)", a["paid_minor"] == 40000, str(a["paid_minor"]))
+    check("outstanding reflects the owed court", a["outstanding_minor"] > 0, str(a["outstanding_minor"]))
+
+
 SCENARIOS = [
+    sc_activity_summary,
     sc_pack_service_isolation,
     sc_coach_payout,
     sc_month_end_sweep,

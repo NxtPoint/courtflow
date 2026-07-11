@@ -244,6 +244,71 @@ def _spend(session, *, club_id, user_id, months=6) -> Dict[str, Any]:
 # monthly activity — spend BY CATEGORY for one calendar month
 # ---------------------------------------------------------------------------
 
+def activity_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]:
+    """A client's MONTH at a glance — how many times they played (lessons / court / classes) and the
+    money: billed (orders raised, ex-cancelled), paid (net of refunds), and still outstanding.
+    Complements billing_summary (which is OWED-only): this counts EVERYTHING that happened, so a
+    fully-settled month still tells its story ('you played 5, billed R2000, paid R2000, owe R0')
+    instead of just looking empty. Month = booking date, else order/payment date. Guarded → zeros."""
+    ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    currency = session.execute(
+        text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": str(club_id)}).scalar() or "ZAR"
+    out = {"month": ym, "currency": currency,
+           "counts": {"lesson": 0, "court": 0, "class": 0, "total": 0},
+           "billed_minor": 0, "paid_minor": 0, "outstanding_minor": 0}
+    try:
+        # Sessions PLAYED this month (confirmed/completed), by type. A lesson is ONE session: its
+        # auto-held court row (booking_type='court' WITH the coach set) is excluded so it isn't
+        # double-counted — a STANDALONE court booking has no coach (coach_user_id IS NULL).
+        cnt = session.execute(
+            text("SELECT "
+                 "count(*) FILTER (WHERE booking_type = 'lesson') AS lessons, "
+                 "count(*) FILTER (WHERE booking_type = 'court' AND coach_user_id IS NULL) AS courts "
+                 "FROM diary.booking WHERE club_id = :c AND booked_by_user_id = :u "
+                 "  AND status IN ('confirmed','completed') AND to_char(starts_at,'YYYY-MM') = :ym"),
+            {"c": str(club_id), "u": str(user_id), "ym": ym},
+        ).mappings().first()
+        out["counts"]["lesson"] = int((cnt or {}).get("lessons") or 0)
+        out["counts"]["court"] = int((cnt or {}).get("courts") or 0)
+        out["counts"]["class"] = int(session.execute(
+            text("SELECT count(*) FROM diary.enrolment e "
+                 "JOIN diary.class_session cs ON cs.id = e.class_session_id "
+                 "WHERE e.club_id = :c AND e.user_id = :u AND e.status = 'enrolled' "
+                 "  AND to_char(cs.starts_at,'YYYY-MM') = :ym"),
+            {"c": str(club_id), "u": str(user_id), "ym": ym},
+        ).scalar() or 0)
+        out["counts"]["total"] = out["counts"]["lesson"] + out["counts"]["court"] + out["counts"]["class"]
+        # Billed (orders raised this month, excluding cancelled/void) + still outstanding (open).
+        m = session.execute(
+            text("SELECT "
+                 "COALESCE(SUM(CASE WHEN o.status IN ('open','paid','refunded','written_off') "
+                 "               THEN o.amount_minor END),0) AS billed, "
+                 "COALESCE(SUM(CASE WHEN o.status = 'open' THEN o.amount_minor END),0) AS outstanding "
+                 'FROM billing."order" o '
+                 "LEFT JOIN LATERAL (SELECT booking_id FROM billing.order_line "
+                 "                   WHERE order_id = o.id ORDER BY created_at LIMIT 1) ol ON true "
+                 "LEFT JOIN diary.booking b ON b.id = ol.booking_id "
+                 "WHERE o.club_id = :c AND o.user_id = :u AND o.settled_by_order_id IS NULL "
+                 "  AND to_char(COALESCE(b.starts_at, o.created_at),'YYYY-MM') = :ym"),
+            {"c": str(club_id), "u": str(user_id), "ym": ym},
+        ).mappings().first()
+        out["billed_minor"] = int(m["billed"] or 0)
+        out["outstanding_minor"] = int(m["outstanding"] or 0)
+        # Paid = net money movement (charges − refunds) recorded this month, over THIS client's orders.
+        out["paid_minor"] = int(session.execute(
+            text("SELECT COALESCE(SUM(CASE "
+                 "  WHEN direction='charge' AND status='succeeded' THEN amount_minor "
+                 "  WHEN direction='refund' AND status IN ('refunded','succeeded') THEN -amount_minor "
+                 "  END),0) FROM billing.payment "
+                 'WHERE club_id = :c AND to_char(created_at,\'YYYY-MM\') = :ym AND order_id IN '
+                 '  (SELECT id FROM billing."order" WHERE club_id = :c AND user_id = :u)'),
+            {"c": str(club_id), "u": str(user_id), "ym": ym},
+        ).scalar() or 0)
+    except Exception:
+        log.debug("activity_summary suppressed (billing/diary not ready)", exc_info=False)
+    return out
+
+
 def _month_bounds(month=None):
     """(start, next_start) ISO date strings for a 'YYYY-MM' month (default the current month)."""
     import re

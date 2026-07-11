@@ -393,6 +393,20 @@ def _service_breakdown(session, *, club_id, coach_user_id, user_id, month=None):
     return _guard(session, _run, default)
 
 
+def _activity_summary(session, *, club_id, user_id, month=None):
+    """A client's month at a glance — sessions played (lessons/court/classes) + billed/paid/outstanding.
+    Reuses billing.me.activity_summary. The clean headline that replaces the raw transaction firehose
+    for the client. Guarded → zeros."""
+    default = {"month": month, "currency": None,
+               "counts": {"lesson": 0, "court": 0, "class": 0, "total": 0},
+               "billed_minor": 0, "paid_minor": 0, "outstanding_minor": 0}
+
+    def _run():
+        from billing import me as ME
+        return ME.activity_summary(session, club_id=club_id, user_id=user_id, month=month)
+    return _guard(session, _run, default)
+
+
 def _activity(session, *, club_id, user_id):
     """The client's chronological transaction log. Reuses billing.activity.transaction_log. Heavily
     guarded (composes several lanes)."""
@@ -550,6 +564,9 @@ def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=No
     out["dependents"] = _dependents(session, club_id=club_id, user_id=user_id)
     out["refunds"] = _refunds(session, club_id=club_id, user_id=user_id)
     out["activity"] = _activity(session, club_id=club_id, user_id=user_id)
+    # Month-at-a-glance summary (sessions played + billed/paid/outstanding) — the clean headline every
+    # scope can show; for the client it replaces the raw transaction firehose. month=None → this month.
+    out["activity_summary"] = _activity_summary(session, club_id=club_id, user_id=user_id, month=month)
     out["notifications_unread"] = _notifications_unread(session, club_id=club_id, user_id=user_id)
     # Mission 1.2 — surface the now-linked data on the 360 (via the iam.user<->core.person bridge):
     # full demographics, consent state, and the CRM/behavioural event stream.

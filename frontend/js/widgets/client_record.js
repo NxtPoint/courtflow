@@ -79,7 +79,16 @@
         ]),
       ]);
       head.appendChild(membershipLine(pn, c));
+      // Edit profile — config-driven (client scope wires it); returns to this record on save.
+      if (cfg.onEditProfile) {
+        head.appendChild(el("div", { class: "cf-row", style: "margin-top:10px" }, [
+          el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Edit profile", onclick: function () { cfg.onEditProfile(); } }),
+        ]));
+      }
       wrap.appendChild(head);
+
+      // ---- This month at a glance: sessions played + billed / paid / outstanding ----
+      if (pn.activity_summary && pn.activity_summary.counts) wrap.appendChild(activitySummaryCard(pn, c));
 
       // ---- Details (demographics) + consent — Mission 1.2. Not shown to a COACH (client PII:
       // home address / DOB / emergency contact); admin + the client themselves see it. ----
@@ -262,6 +271,25 @@
           actions: rowActs,
         }));
       }
+      return card;
+    }
+
+    function activitySummaryCard(pn, c) {
+      // "How many times did I play, and what's the money?" — the clean monthly headline that answers
+      // the client's question without the raw transaction firehose below.
+      var a = pn.activity_summary, cur = a.currency || c;
+      var card = UI.card([CRMUI.sectionHead("This month" + (a.month ? " · " + a.month : ""))]);
+      card.appendChild(CRMUI.stats([
+        { value: a.counts.lesson || 0, label: "Lessons" },
+        { value: a.counts.court || 0, label: "Court" },
+        { value: a.counts["class"] || 0, label: "Classes" },
+      ]));
+      var owe = a.outstanding_minor || 0;
+      card.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:6px" }, [
+        el("span", { class: "cf-muted", style: "font-size:.9rem", text: "Billed " + money(a.billed_minor, cur) }),
+        el("span", { class: "cf-muted", style: "font-size:.9rem", text: "Paid " + money(a.paid_minor, cur) }),
+        el("span", { style: "font-weight:800;font-size:.95rem;color:" + (owe > 0 ? "var(--danger,#c0392b)" : "var(--ok,#1a7f4b)"), text: owe > 0 ? ("Outstanding " + money(owe, cur)) : "Nothing outstanding" }),
+      ]));
       return card;
     }
 

@@ -7,6 +7,7 @@
   var view;                       // #cf-main (the routed content area)
   var DATA = {};                  // small cache; refreshed after actions
   var NAME = "";
+  var PROFILE_RETURN = null;      // where to go after a profile Save (set when opened from the record)
   // Ten-Fifty5 (AI match analysis / technique) embed URL, injected server-side (web_app.py).
   // Empty -> the members-area entry + route stay hidden. The member is signed in inside the
   // iframe via the auth_client.js token relay (no second login).
@@ -381,7 +382,10 @@
     window.Widgets.ClientRecord.mount(host, {
       scope: { id: null, role: "client" },   // self — the adapter ignores the id
       back: { label: "Home", hash: "#/home" },
-      fields: { showActivity: true, showDependents: true, showPackages: true, showCoaching: false },
+      // The "This month" summary + the owed statement are the headline; the raw money activity feed is
+      // OFF for the client (it was the confusing transaction firehose — refunds/voids/write-offs).
+      fields: { showActivity: false, showDependents: true, showPackages: true, showCoaching: false },
+      onEditProfile: function () { PROFILE_RETURN = "#/activity"; go("#/profile"); },
       data: { get: function () { return window.API.my360().then(function (r) { return r.person; }); } },
       onNavigate: function (t) {
         if (!t || !t.id) return;
@@ -695,8 +699,11 @@
       el("button", { class: "cf-btn cf-btn-primary cf-btn-block", text: "Save", onclick: function () {
         var body = {}; FIELDS.forEach(function (f) { body[f[0]] = inputs[f[0]].value.trim() || null; });
         body.marketing_opt_in = !!inputs._mk.checked;
-        window.API.patchProfile(body).then(function (res) { DATA.profile = res; NAME = fullName(res); paintAvatar(); UI.toast("Saved.", "info"); },
-          function (e) { UI.toast((e && e.body && e.body.error === "VALIDATION") ? "Please check the fields." : UI.errMsg(e), "error"); });
+        window.API.patchProfile(body).then(function (res) {
+          DATA.profile = res; NAME = fullName(res); paintAvatar(); UI.toast("Saved.", "info");
+          // Close back to wherever the edit was launched from (the record → Client 360); else stay.
+          if (PROFILE_RETURN) { var r = PROFILE_RETURN; PROFILE_RETURN = null; go(r); }
+        }, function (e) { UI.toast((e && e.body && e.body.error === "VALIDATION") ? "Please check the fields." : UI.errMsg(e), "error"); });
       } }),
     ]));
     wrap.appendChild(dc);
