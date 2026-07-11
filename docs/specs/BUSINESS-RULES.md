@@ -67,11 +67,21 @@ a membership tier's lifecycle derives from its term plans' status.
   booking can't be **extended** into a longer/pricier slot (`PAID_CANNOT_EXTEND`, 422 — cancel and rebook to
   lengthen; a same-length or shorter move is fine), and a **membership-covered** court can't be moved to a
   time the membership doesn't cover for free (`NOT_COVERED_AT_NEW_TIME`, 422 — pick a covered slot or book a
-  paid court). A lesson's auto-held court is **reassigned to a free court** at the new time.
+  paid court). A **member reschedule of a LESSON must stay inside the coach's PUBLISHED hours**
+  (`OUTSIDE_COACH_HOURS`, 422 — via `availability.resource_hours_cover`), matching what the picker already
+  enforces on create; admins/coaches override. A lesson's auto-held court is **reassigned to a free court**
+  at the new time.
 - **Late-cancellation fee.** When the club's cancellation policy applies at cancel time, a small **owed fee
   order** is raised on the client's statement (owner decision M6); cancelling voids the booking's own unpaid
   order so no phantom debt remains, and a **paid** cancellation is flagged (`was_paid`) so the UI can prompt a
   refund (the refund itself stays a separate, explicit flow).
+- **Can't cancel a delivered session.** A member/guest may **not** cancel a lesson/class that has already
+  **started** (`CANNOT_CANCEL_STARTED`, 422) — otherwise a delivered-but-owed booking could be cancelled
+  after the fact, voiding its order and **erasing the debt**. Admins/coaches may still cancel a started
+  booking (correction/no-show handling). A pending `requested`/`proposed` booking can always be withdrawn —
+  it holds no slot and no debt.
+- **Can't complete a future booking.** A booking can't be marked **completed / no-show** before it has
+  started (`CANNOT_COMPLETE_FUTURE`, 422) — completion attests a session was actually delivered.
 
 ## 3. Pricing (per-duration PAYG)
 - A service carries **one `billing.price` row per offered duration** (`duration_minutes`,
@@ -87,6 +97,10 @@ a membership tier's lifecycle derives from its term plans' status.
   Semi-private), each its own product with its own durations + payment modes. The picker offers the specific
   service (`services_for` → a per-product list) and books that exact `product_id`; the two-tier coach scope
   above still applies.
+- **No silent R0 order.** A billable booking whose duration has **no configured `billing.price` row** is
+  **refused up-front** (`PRICE_NOT_CONFIGURED`, 422) — a delivered service must never fall through to a
+  zero-rated order that's never owed. (Membership-covered courts are the only legitimate R0, resolved
+  server-side.)
 - **Court SERVICES (per-court-group court hire).** Courts can belong to distinct court services — e.g.
   "Hardcourt Hire" over the hard courts vs "Clay Hire" over the clay court — each a
   `billing.product(kind='court_booking')` with its **own** per-duration prices (multiple court products are
@@ -213,7 +227,11 @@ show active items — dormant/retired vanish for customers but stay visible to t
   suppressed for those). See [SYSTEM.md](SYSTEM.md) "Events, CRM & notifications".
 - **Two gates** for online pay: global `PAYMENTS_ENABLED=1` + per-club `club.policy.allow_online_payment`
   (Settings → Payments toggle; the policy upsert is INSERT-ONLY so the boot re-seed can't reset it).
-- **At-court / monthly account** settlement modes for desk/credit flows.
+- **At-court / monthly account** settlement modes for desk/credit flows. A desk/at-court payment **stamps
+  who recorded the money** (`billing.payment.recorded_by_user_id`, distinct from the payer) and **refuses an
+  amount that isn't the order's outstanding balance** (`AMOUNT_MISMATCH`, 422; an `allow_partial` override
+  exists) — so a short amount can never mark a bill fully paid. (A coach's "mark collected" already records
+  `collected_by`.)
 - **Reconciliation:** if the free-tier API misses a webhook, `reconcile` asks Yoco and replays the
   charge (idempotent) — on the pay-return page + a bulk cron.
 - **Receipts:** `/api/billing/receipt/<order_id>` → a printable receipt page (online + desk).
@@ -222,6 +240,10 @@ show active items — dormant/retired vanish for customers but stay visible to t
   (executes the Yoco refund, money-first, then marks refunded) or **declines** → the client is notified.
   Refunds are record-only unless the admin also cancels the booking. **Yoco fees are the owner's
   account** (recovered via commission), never deducted from the coach.
+- **Partial vs full refund.** A **partial** refund keeps the order `paid` and reports **`part_refunded`**
+  (derived from the `billing.payment` charge/refund sums); only a **full** refund flips the order to
+  `refunded` — either a Yoco full refund (no amount) or cumulative refunds reaching ≥ the amount paid. The
+  proportional commission clawback is unchanged.
 
 ## 6. Commission / coaching-settlement engine (the commercial core)
 - The owner monetises each coach via **rent and/or commission %** — freely combinable, per coach.
@@ -239,6 +261,11 @@ show active items — dormant/retired vanish for customers but stay visible to t
   /api/me/statement`) — one engine, two lenses.
 - **Owner cockpit** (`/api/admin/financials/*`): revenue by service, **commission owed + rent due per
   coach**, membership MRR; reconciles (collected − commission = coach net).
+- **Club↔coach settlement (`coach_payout`).** The running `coach_ledger` balance (**+ = club owes coach,
+  − = coach owes club**) is the single authoritative **net-owed** figure, and is settled by a recorded
+  **`coach_payout`** in **either direction** — **append-only + idempotent** (never mutated, no double-pay).
+- **Month-end sweep.** A month-end job **accrues arrears + rent** and **notifies the clients who owe**,
+  **idempotent per month** (a re-run is a no-op). It is fired by a **GitHub Action** — no always-on cron.
 - Splits/accruals are **idempotent** (a replayed webhook never double-charges).
 
 ### Unified client statement (one debt = one order)

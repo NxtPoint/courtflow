@@ -55,10 +55,12 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 - **Reschedule** — atomic move, conflict-checked; a failed move preserves the original slot; a
   lesson's held court is **auto-reassigned** to a free court at the new time; you can't extend a
   **paid** booking (`PAID_CANNOT_EXTEND`), and moving a **membership-covered** booking to a time the
-  plan doesn't cover is blocked (`NOT_COVERED_AT_NEW_TIME`). ✅
+  plan doesn't cover is blocked (`NOT_COVERED_AT_NEW_TIME`). A **member** rescheduling a lesson must
+  land **inside the coach's published hours** (`OUTSIDE_COACH_HOURS`). ✅
 - **Cancel** — frees the slot (coach **and** court for a lesson); a late cancellation raises a
   **fee order** when club policy applies; cancelling a **paid** booking prompts the client to request
-  a refund; admins/coaches override. ✅
+  a refund; admins/coaches override. A member/guest **can't cancel a lesson/class that has already
+  started** (`CANNOT_CANCEL_STARTED`); admins/coaches can. ✅
 - **Classes** — owner/coach create class types + schedule **recurring or one-off** sessions;
   **capacity + waitlist** (auto-promote the next person on a cancel); rosters + attendance. ✅
 - **Book-on-behalf** — a coach/admin books FOR a client (auto-confirms; client can reschedule/cancel)
@@ -66,6 +68,8 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   locked to themselves for a coach, coach-pickable for the owner — with on-behalf **pack auto-draw**
   (lesson = coach-scoped wallet, class = coach-agnostic) and no Yoco redirect. **Book-for-a-child** —
   a parent books for a dependent, billed to the parent. 🔭
+- **No completing the future** — a booking can't be marked completed / no-showed before it has
+  started (`CANNOT_COMPLETE_FUTURE`). ✅
 - **Booking window / lead time / cancellation cutoff** from club policy. ✅ (window) 🔭 (cutoff UI)
 - **Lazy hold-expiry** — abandoned online holds are released on the next availability/booking read
   (no paid cron). ✅ (implicit) 🔭
@@ -83,7 +87,8 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 
 ## 5. Pricing & the three purchasing models
 - **Per-duration PAYG** — one price per offered duration (e.g. court 30/60/90/120; lesson 30/60);
-  the booking picker only ever offers durations the owner has priced. ✅
+  the booking picker only ever offers durations the owner has priced. A billable booking with **no
+  configured price is refused** (`PRICE_NOT_CONFIGURED`) rather than silently opening an R0 order. ✅
 - **Coach / per-service rate cards applied exactly (strict two-tier)** — a service uses the coach's
   **own** active product if they have one, **else** the shared (NULL-coach) product; the two are
   **never merged**. So a lesson/class always bills that coach's configured rate — a client enrolled on
@@ -100,6 +105,8 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   **minutes** so one pack covers any length (a 90-min booking off a 60-min unit = 1.5 sessions);
   **atomic draw-down**, **idempotent credit-back** on cancel, expiry/use-it-or-lose-it; coaches
   configure their own lesson packs. ✅
+  - **Pack service isolation** — a legacy **unscoped** pack can be pinned to a **specific service** in
+    the service editor, so it stops cross-showing under a coach's other same-kind services. 🔭
 - **Catalogue lifecycle** — every price/pack/plan carries a status: **active / dormant** (hidden but
   kept) **/ retired** (soft-deleted); customers only ever see active. 🔭
 - **Unified lifecycle (Active / Deactivated / Terminated)** — services, memberships and coaches share
@@ -124,11 +131,15 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   verified webhook → paid + confirmed. ✅ (settlement core) 🌐 (live webhook/signature)
 - **Idempotent settlement** — a replayed payment/webhook never double-charges, double-confirms, or
   double-grants. ✅
-- **Desk payments** — record cash/card/EFT at the desk; idempotent on a receipt id. ✅
+- **Desk payments** — record cash/card/EFT at the desk; idempotent on a receipt id. Every desk /
+  at-court payment records **who took the money** (`billing.payment.recorded_by_user_id`) and **refuses
+  an amount that isn't the order balance** (`AMOUNT_MISMATCH`) — no over/under-settling. ✅
 - **Reconciliation** — recover a missed webhook by asking Yoco and replaying the charge. 🌐
 - **Receipts** — a printable/PDF receipt for online and desk payments. 🔭
 - **Refunds** — admin direct ("refund only" / "refund & cancel" frees the slot) and a **client
-  refund-request → admin approve/decline** workflow. ✅ (request lifecycle) 🌐 (Yoco execution)
+  refund-request → admin approve/decline** workflow. A **partial** refund keeps the order `paid`
+  (recorded as **`part_refunded`**); only a **full** refund flips it to `refunded`. ✅ (request
+  lifecycle) 🌐 (Yoco execution)
 - **Two gates** for online pay: a global flag + a per-club Settings toggle. 🔭
 - **Unified client statement** — ONE reconciled "what you owe" (the sum of unpaid orders, no double-
   count), **grouped by category** (Coaching / Court hire / Classes / Membership / Session packs / Other)
@@ -149,7 +160,13 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   refund-aware. 🔭
 - **Proportional commission clawback on refund** — a refund reverses the coach's accrued commission in
   the same proportion (arrears kept in lockstep). ✅
-- *(Deferred: coach-payout objects, scheduled rent accrual — see OUTSTANDING.)*
+- **Club ↔ coach payouts** — record a payout in **either direction** (`billing.coach_payout`) that
+  **nets the running `coach_ledger` balance**. Admin → Money → **Settlement** shows client **aging
+  buckets** (0–30 / 31–60 / 61+) plus each coach's balance with a **"Record payout"** action; the coach
+  **Money** tab gains a **"To finalise"** section (clients still owing this month). 🔭
+- **Month-end sweep** — `POST /api/cron/month-end` (fired by `.github/workflows/month-end.yml`) accrues
+  **arrears + rent** and **emails every client with an open balance** — **idempotent per month**. 🌐
+- *(Deferred: scheduled per-day rent accrual — see OUTSTANDING.)*
 
 - **Role-focused nav** — each role lands on and sees only its own surface: members/guests get
   **Home · Account**, coaches get their **Coach** console, owners get **Admin · Settings** (staff no
@@ -162,10 +179,16 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
 (calendar, client record, money) — never a second booking sheet.
 - **Client** (`app.html` + `client.js`, at `/`,`/portal`,`/app`) — **ONE page, no bottom nav**
   (Book from Home tiles; avatar top-right → profile). Green profile ribbon (name + email + membership
-  + Edit profile / Manage membership). Home = book tiles + **Your sessions** (all, upcoming + past) +
-  **Billing by category** (month nav → category → items → the booking story / receipt) + Plan & credits.
-  Every booking/charge drills to its **booking story** (`GET /api/me/bookings/<id>`), every line to its
-  order/receipt. My-Bookings needs-attention (accept/decline a proposed time) + **add-to-calendar**. 🔭
+  + Edit profile / Manage membership). Home reads top-to-bottom **Book (services) → Your sessions →
+  Match analysis → Billing + Activity → Plan & credits**, with a **month-navigable month-at-a-glance
+  summary**: **sessions played** (lessons / court / classes + **total minutes**) and **billed / paid /
+  outstanding** with **spend-by-service** (`GET /api/me/activity-summary`), plus an "R… refunded or
+  written off this month" clarity note. **Billing by category** (month nav → category → items → the
+  booking story / receipt). Every booking/charge drills to its **booking story**
+  (`GET /api/me/bookings/<id>`), every line to its order/receipt. The **Match-analysis** block is a
+  distinctive **"AI" gradient panel**. **Emoji removed** throughout (replaced by drawn line-glyphs). The
+  **Edit-profile** button on the record returns to **Client 360** on save. My-Bookings needs-attention
+  (accept/decline a proposed time) + **add-to-calendar**. 🔭
 - **Coach** (`coach_app.html` + `coach_app.js`, at `/coach`; bottom nav **Home · Schedule · Clients ·
   Money · Setup**):
   - **Home** = business cockpit KPIs (**Total billed** + net-of-commission earnings / lessons / hours /
@@ -173,11 +196,17 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
   - **Schedule** = a **weekly calendar** (week-of-today, prev/this/next) on the shared Calendar widget
     — defaults to **just this coach** but can switch to **all** club bookings; tap a lesson → the event
     story; tap a class → its roster. 🔭
-  - **Clients** = list → the **full client record**: name + **Total billed**, then **BY SERVICE**
-    ("Private lesson · 60 min · 3 · R750") → sessions → each → the event story. Each session shows its
-    REAL money state (paid / owed / **written-off** / **discounted** / covered). Plus a **"Prepaid
-    packages"** view — the clients who hold a pack with this coach and their remaining balance. 🔭
-  - **Money** = account balance/rent/net + disputes + per-client rollup → record + activity log.
+  - **Clients** = list → the **full client record**, drilling **month → client → SERVICE →
+    transaction**: name + **Total billed**, then **BY SERVICE** ("Private lesson · 60 min · 3 · R750") →
+    sessions → each → the event story. The service accordion opens the **SAME shared
+    `Widgets.TransactionDetail`**. Each session shows its REAL money state (paid / owed / **written-off**
+    / **discounted** / covered). Fed by the **single `get_client_360` composer** (now **month-aware**,
+    `month=`, with a **per-service breakdown**) — every coach client view is a view off it; the parallel
+    `coach.get_client` reader was **retired**. The shared **Client 360** record surfaces the same
+    **activity + spend rollup** (numbers, no chart). Plus a **"Prepaid packages"** view — the clients who
+    hold a pack with this coach and their remaining balance. 🔭
+  - **Money** = account balance/rent/net + disputes + per-client rollup + a **"To finalise"** section
+    (clients still owing this month) → record + activity log.
     **Setup** = Services (lifecycle Deactivate/Reactivate/Terminate + filter) + **Classes**
     (create / schedule / roster) + club-commission card + Edit-profile & Weekly-hours (as pages). 🔭
   - **THE ONE COACH EVENT STORY** (`#/event/:id`, `GET /api/coach/bookings/<id>`): client + contact,

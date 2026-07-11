@@ -117,6 +117,30 @@ operating guide; **this folder is the detail.**
 > `/portal` links, coach BCC only on his own lesson/class, and ONE canonical payment-status vocabulary
 > (`billing.statement.settlement_status_label`, shared by email + Client 360 so wording never drifts). Gated
 > green: **booking 98 / billing 239 / statement 47**.
+>
+> **2026-07 — LESSON→BILLING→SETTLEMENT TIGHTENING + CLIENT-HOME REDESIGN (live):** booking/billing
+> **integrity guards** (no cancel-after-start, desk-payment cashier audit + amount guard, reschedule stays in
+> the coach's hours, no completing a future session, no silent R0, a partial refund → `part_refunded`); ONE
+> **month-aware Client 360** (`get_client_360(month=)` + per-service breakdown + activity summary — the parallel
+> `coach.get_client` reader retired, so the coach client view is month→client→service→transaction on the shared
+> `TransactionDetail`); the **club↔coach settlement loop CLOSED** (new `billing.coach_payout` record/settle/list
+> nets the append-only `coach_ledger` to ONE net-owed figure, aging view `GET /api/admin/financials/settlement`,
+> month-end sweep `POST /api/cron/month-end` fired by `.github/workflows/month-end.yml` — accrues arrears+rent,
+> notifies open-balance clients, idempotent per month); and a **client account/home redesign** (month-at-a-glance
+> `GET /api/me/activity-summary`, shared `CRMUI.activityBlock`/`spendBlock`/`weekChart` on Home + the 360
+> rollup, month navigation, AI-styled analysis panel, no emoji; pack "assign to this service" fix). Gated green:
+> **booking 103 / billing 267 / statement 47**.
+>
+> **2026-07-11 — TEN-FIFTY5 EMBED (members-area SSO, private test):** a logged-in member opens **Ten-Fifty5**
+> (AI match analysis / technique — the separate live 1050 product) **inside** the client SPA in an iframe,
+> signed in with their OWN NextPoint Clerk token — **no second login**. The two products are separate Clerk
+> apps; the seam is a `postMessage` **token relay** + **issuer federation** on Ten-Fifty5's verifier (it now
+> trusts both issuers), with **email as the cross-system key** (Ten-Fifty5 auto-provisions by email). NextPoint
+> side: `client.js` `#/analysis` route + an auto-fitting iframe + a Home card (**"Coming soon"** for
+> non-allowlisted); `auth_client.js` parent relay allowlist + `mode` field; `web_app.py`/`render.yaml` inject
+> the `TF5_EMBED_*` config. **Gated to a private test** (`TF5_EMBED_ALLOW_EMAILS`; launch = clear it) + a public
+> "Match analysis" marketing CTA → ten-fifty5.com. The 1050 repo was modified (additive/flag-guarded) — the ONE
+> exception to "read-only reference." Full write-up: root `CLAUDE.md` → "Ten-Fifty5 embed"; env: `ENV-STATUS.md`.
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,
@@ -177,4 +201,5 @@ build. They remain the source of the big-picture design and the Ten-Fifty5 (1050
   twice = no-op. Verify schema changes with the boot-twice gate.
 - **Nothing hardcoded:** prices, durations, plans, commission, bundles are owner-configured *data* —
   build configurable capabilities (white-label).
-- **Reuse, don't import** from the 1050 repo at `C:\dev\webhook-server` (READ-ONLY reference).
+- **Reuse, don't import** from the 1050 repo at `C:\dev\webhook-server` (READ-ONLY reference — the ONE
+  exception is the 2026-07-11 Ten-Fifty5 members-area embed, which required additive auth changes there).

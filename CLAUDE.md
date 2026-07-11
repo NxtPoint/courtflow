@@ -19,15 +19,17 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 98 / billing 239 / statement 47**. Each uses its own scratch club and always rolls back.
-   - `test_booking_scenarios` (98) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   **booking 103 / billing 267 / statement 47**. Each uses its own scratch club and always rolls back.
+   - `test_booking_scenarios` (103) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
-     waitlister promoted (paid seat never expired)**.
-   - `test_billing_scenarios` (239) — settlement modes, commission, tokens, membership (offline + per-tier),
+     waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused**.
+   - `test_billing_scenarios` (267) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
-     class↔coach commission parity, per-service packs (product-aware draw)**.
+     class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
+     partial-refund state, coach payout nets the ledger, month-end sweep idempotent, pack service-isolation
+     (assign), client activity-summary (counts/minutes/by-service/by-week)**.
    - `test_statement_reconciliation` (47) — no double-count, pay-all-once, part-settle, reclaim,
      membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
 
@@ -57,7 +59,10 @@ the handlers. **All four crons are currently commented out** — see the capacit
 - `iam.*` — user↔Clerk, membership, coach_profile, dependents, coach_invite
 - `diary.*` — resources, availability, booking, class_session, enrolment, waitlist, recurrence (**the heart**);
   a **GiST exclusion constraint** (needs `btree_gist`) enforces no-double-booking
-- `billing.*` — product, price, order, payment, account_ledger, membership_subscription, bundle_plan/token_wallet
+- `billing.*` — product, price, order, payment (carries `recorded_by_user_id` = who took a desk payment),
+  membership_subscription, bundle_plan/token_wallet, commission engine (`coach_agreement`/`commission_rule`/
+  `commission_split`/`coach_ledger`/`coach_arrears`), **`coach_payout`** (recorded club↔coach settlements —
+  nets the ledger) + **`month_end_notice`** (month-end-sweep idempotency)
 - `core.*` — account/user/person, usage_event, consent, nps (ported from 1050 `core_db`)
 
 **Decoupling interfaces** (why the lanes stay independent): the **schema** is the contract between diary,
@@ -180,6 +185,27 @@ page shows ONE reconciled "Your statement", grouped by category with tick-to-par
 coach `coach_arrears` kept in **lockstep** with orders so commission accrues exactly once. Design:
 `docs/specs/UNIFIED-STATEMENT.md`.
 
+**Club↔coach settlement (the loop is CLOSED).** The cockpit *reports* each coach's running `coach_ledger`
+balance (`+` = club owes coach, `−` = coach owes club); a recorded **`coach_payout`** (`billing.commission.
+record_coach_payout`, both directions club↔coach + offset) posts ONE **append-only** ledger entry (idempotent
+on `ref_id=payout.id`) that nets it — the single authoritative net-owed figure. Admin → Money → **Settlement**
+(`GET /api/admin/financials/settlement`) shows client **aging** (0-30/31-60/61+) + per-coach balance with a
+"Record payout"; routes `POST/PATCH/GET /api/admin/coach-payouts`. **Month-end sweep** (`billing.commission.
+run_month_end` → `POST /api/cron/month-end`, `OPS_KEY`-guarded): accrues coach arrears + rent, then notifies
+every client with an OPEN balance (`statement_ready`), idempotent per `(club,user,period)` via
+`billing.month_end_notice`. Fired by **`.github/workflows/month-end.yml`** (rides the keep-warm CI pattern — the
+four `render.yaml` crons stay commented out). The coach Money tab has a **"To finalise"** list (clients still
+owing this month).
+
+**Client month-at-a-glance + the ONE month-aware 360.** `billing.me.activity_summary(month)` →
+`GET /api/me/activity-summary`: sessions PLAYED (lessons/court/classes, standalone courts only) + minutes +
+spend-by-service + billed/paid/outstanding + weekly buckets. Surfaced on `get_client_360` (now takes `month=`,
+adds a per-service breakdown — the **month → client → service → transaction** coach drill; the parallel
+`coach.get_client` reader was retired, so every coach client view is a view off the ONE composer). Frontend:
+`CRMUI.activityBlock / spendBlock / weekChart` = ONE shared renderer for the client Home modules AND the Client
+360 rollup (no chart on the 360). The client Home is Book(services) → Your sessions → Match-analysis (an "AI"
+gradient panel) → a month-navigable Billing+Activity summary → Plan; **no emoji** (drawn line-glyphs).
+
 ## First-party analytics + the admin Overview tab
 `analytics/` is a read-only, platform-owner dashboard (`/overview.html`, rolling `?days=`) built on **guarded**
 aggregations (a missing/empty table → empty panel, never a 500). The admin console's **native Overview tab**
@@ -217,6 +243,31 @@ Know which ad clicks become paying members, and feed that back to Google so bidd
   final state: `docs/specs/GOOGLE-ADS-PLAN.md`. Bidding: Maximize Clicks R15 cap → revert to Max Conversions
   after ~15–30 conversions accrue.
 
+## Ten-Fifty5 embed — match analysis inside the members area (LIVE, private test 2026-07-11)
+A logged-in member opens **Ten-Fifty5** (AI match analysis / technique — the 1050 product; web at
+`ten-fifty5.com`, API at `api.nextpointtennis.com`) **inside** the client SPA in an iframe, signed in with
+their OWN NextPoint Clerk token — **no second login**. The two products are **separate Clerk apps**
+(`clerk.nextpointtennis.com` vs `clerk.ten-fifty5.com`); the seam is a `postMessage` **token relay** (both
+repos' `auth_client.js` share the Wix-era lineage) + **issuer federation** on Ten-Fifty5's verifier (it now
+trusts BOTH issuers via `AUTH_ISSUERS`). **Email is the cross-system key** — Ten-Fifty5 auto-provisions the
+member by email on the first authenticated hit.
+- **NextPoint side:** `client.js` `#/analysis` route + `renderAnalysis()` (auto-fits the iframe height —
+  `innerHeight − frameTop − cf-main paddingBottom − 24`, re-fit on resize — so the OUTER page never scrolls) +
+  a Home card (**"Coming soon"** card for non-allowlisted); `auth_client.js` parent `serveChild` serves a token
+  ONLY to the allowlisted Ten-Fifty5 origin (`TF5_EMBED_ORIGINS`) and its status payload carries **`mode`** (the
+  TF5 child reads `status.mode`, NextPoint children read `status.authed`); `web_app.py` injects
+  `__TF5_EMBED_URL`/`__TF5_EMBED_ALLOW` + substitutes `__TF5_EMBED_ORIGINS__`.
+- **Gated to a PRIVATE prod test** via `TF5_EMBED_ALLOW_EMAILS` (courtflow-web). **Launch = clear that env**
+  (empty → all members). Marketing funnel: a public **"Match analysis"** CTA on `frontend/marketing/home.html`
+  → `ten-fifty5.com` (this is separate from the embed and stays live).
+- **The 1050 repo IS modified for this** (the ONE exception to "read-only reference" below): `auth_v2/verifier.py`
+  (multi-issuer allowlist), `frontend/auth_client.js` (trusted-parent guard + **multi-hop relay** — the portal
+  nests each page in a content iframe, so a middle frame proxies its grandchild's auth up to its own parent;
+  without this only the empty portal shell authed), `locker_room_app.py`, `render.yaml`. All additive +
+  flag-guarded; **commit code in that repo with `CLAUDE_CODE=1`** (its lane-guard hook blocks code commits
+  otherwise). Rollback = clear `AUTH_ISSUERS` (Ten-Fifty5) or `TF5_EMBED_URL` (NextPoint). Env values +
+  the Render-service-name map → `docs/specs/ENV-STATUS.md`.
+
 ## Commands
 - **Run the API locally:** `gunicorn wsgi:app` (or `python -m app`) — needs `DATABASE_URL`.
 - **Run the web/portal locally:** `python web_wsgi.py` (DB-less; `PORT=5060`). Preview marketing:
@@ -241,11 +292,23 @@ Know which ad clicks become paying members, and feed that back to Google so bidd
 - Vanilla-JS SPAs (no heavy framework). The one dependency added for the diary UI is a calendar/ECharts seam
   (lazy-loaded).
 - **Reuse, don't import.** Copy patterns from the Ten-Fifty5 repo at `C:\dev\webhook-server` (**READ-ONLY
-  reference — never touch its repo/DB**). Do NOT bring over the ML/T5/GPU/video machinery.
+  reference — never touch its repo/DB**). Do NOT bring over the ML/T5/GPU/video machinery. **ONE exception:**
+  the Ten-Fifty5 members-area embed (above) required careful, additive, flag-guarded changes to that repo's
+  auth (`auth_v2/verifier.py`, `frontend/auth_client.js`); commit there with `CLAUDE_CODE=1`. Its live DB
+  (`sportai-db`) is still off-limits.
 
 ## Gotchas
 - **`api.nextpointtennis.com` is already live on the 1050 service** — do not break it. The new platform has its
-  own API host; changing a Render custom domain can recreate a service.
+  own API host; changing a Render custom domain can recreate a service. (The members-area **Ten-Fifty5 embed**
+  now *deliberately* calls this API with federated NextPoint tokens — see the embed section.)
+- **Ten-Fifty5 embed — Render service names ≠ `render.yaml` `name:`.** The live 1050 API is the Render service
+  **"Sport AI - API call"** (custom domain `api.nextpointtennis.com`), NOT the service literally named
+  `webhook-server` (that's a **cron**). Set env on the real service; the blueprint does **not** auto-sync env.
+  Federation trap: **`AUTH_ISSUER` (singular) vs `AUTH_ISSUERS` (plural)** — the multi-issuer allowlist is
+  `AUTH_ISSUERS` (a comma-list in the singular var is now tolerated, but use the plural); leave `AUTH_JWKS_URLS`
+  UNSET (JWKS derived from each issuer, no ordering to break). The nested-portal iframe needs the **multi-hop
+  relay** in `auth_client.js` (a middle frame proxies its grandchild's auth up) or nested pages fall back to
+  legacy → "Missing email or API key".
 - **Never let an agent change DNS.** The Wix→Render SEO cutover is supervised by Tomo.
 - **The booking API returns `{booking:{order_id,status}, checkout}`** — read `res.booking.order_id`, NOT
   `res.order_id` (that bug silently confirmed online bookings without redirecting).
@@ -283,6 +346,8 @@ Know which ad clicks become paying members, and feed that back to Google so bidd
   order-keyed email needs `booking_detail.load` to import `text` (a missing import silently blanks the block).
 
 ## Still needs Tomo (config, not code)
+- **`OPS_KEY` GitHub repository secret** (Settings → Secrets → Actions) = the API's `OPS_KEY` env value, so
+  `.github/workflows/month-end.yml` can fire the month-end sweep. Without it the workflow safely no-ops.
 - **S3** (`S3_BUCKET` + AWS keys) for coach photo uploads — until set, coaches paste a photo URL.
 - **SES** transactional email is **LIVE** but interim (rides the Ten-Fifty5 AWS account, `eu-north-1`); the
   `.ics` email attachment is OFF (`EMAIL_ICS_ENABLED=0` — interim key lacks `ses:SendRawEmail`; the in-app "Add

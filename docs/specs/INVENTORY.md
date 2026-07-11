@@ -1,6 +1,6 @@
 # INVENTORY — everything that exists
 
-Exhaustive as-built inventory (generated from the live code, 2026-06-21; refreshed 2026-06-26). Paths relative to repo root.
+Exhaustive as-built inventory (generated from the live code, 2026-06-21; refreshed 2026-06-26, 2026-07-11). Paths relative to repo root.
 
 ## 1. Services (Render, **Frankfurt**, **Starter** plan)
 - **`courtflow-api`** (`wsgi:app`) — the Flask API, has the DB. `https://courtflow-api.onrender.com`.
@@ -19,6 +19,8 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
   a 70s `apiFetch` timeout so a cold/hung call errors instead of spinning forever — `frontend/js/auth_client.js`.)
   Now that both services are on **Starter** (2026-07-05) they no longer sleep, so the keep-warm is redundant
   and can be removed.
+- **Month-end sweep** — `.github/workflows/month-end.yml` (GitHub Action) fires `POST /api/cron/month-end`
+  (OPS-guarded) so the month-end statement-ready notify runs without an always-on Render cron.
 
 ## 2. Code lanes (Python)
 | Lane | Owns | Purpose |
@@ -36,7 +38,9 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `coach/` | routes, repositories, schema | `/api/coach/*` coach self-service + cockpit |
 | `services/` | routes, repositories | `/api/services/*` — the ONE unified service-edit surface for owner + coach (owner can create a lesson per coach via `POST /api/services`); delegates to `coach/`/`billing/` repos |
 | `me/` | routes | `/api/me/*` client self-service (profile, dependents, financials, refund-requests, notifications) |
-| `client360/` | `get_client_360` | the ONE cross-lane **client read model** (identity + membership(+status) + packages{active,history} + statement/owed + payments + bookings + dependents + refunds + coaching + activity + notifications-unread + a per-scope `can{}` map). Read-only, reuse-first — composes the existing lane readers (`billing.statement`/`membership`/`bundles`/`commission`/`refunds`/`activity`, core notifications, diary bookings/enrolments, `iam.dependent`), club_id-scoped. **Each block runs inside a SAVEPOINT** (`_guard` → `session.begin_nested()`) so a failing block degrades to empty/None and **never rolls back the caller's transaction** (fixed 2026-07-11 — a bare `session.rollback()` was discarding the caller's writes + the harness fixture). Booking rows carry **service + payment status** (same vocabulary as the receipts). Scoped `admin`/`coach`/`client`; a SUPERSET of the old admin person-360, so `admin.repositories.get_person` **delegates** to it (`scope='admin'`). Returns None if the user has no `iam.membership` in the club. |
+| `client360/` | `get_client_360` | the ONE cross-lane **client read model** (identity + membership(+status) + packages{active,history} + statement/owed + payments + bookings + dependents + refunds + coaching + activity + notifications-unread + a per-scope `can{}` map). Read-only, reuse-first — composes the existing lane readers (`billing.statement`/`membership`/`bundles`/`commission`/`refunds`/`activity`, core notifications, diary bookings/enrolments, `iam.dependent`), club_id-scoped. **`get_client_360(…, month=None)`** now takes an optional month (default =
+this month) that scopes the coaching figures and adds a per-service breakdown (`_service_breakdown`) + a
+month-at-a-glance `activity_summary` block (`_activity_summary` → `billing.me.activity_summary`). **Each block runs inside a SAVEPOINT** (`_guard` → `session.begin_nested()`) so a failing block degrades to empty/None and **never rolls back the caller's transaction** (fixed 2026-07-11 — a bare `session.rollback()` was discarding the caller's writes + the harness fixture). Booking rows carry **service + payment status** (same vocabulary as the receipts). Scoped `admin`/`coach`/`client`; a SUPERSET of the old admin person-360, so `admin.repositories.get_person` **delegates** to it (`scope='admin'`). Returns None if the user has no `iam.membership` in the club. |
 | `analytics/` | repositories, routes | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`); `/api/analytics/*`; the standalone `/overview.html` (rolling `?days=` window). The admin **native Overview tab** now uses the `insights/` lane instead (the old iframe embed was retired 2026-07-05). |
 | `insights/` | repositories, routes | **Phase-2 P1 read-layer** (guarded aggregations, no new tables): court-utilisation heatmap · **sales-by-day** · **bookings-by-day** · **overview** (month-scoped daily composer powering the native admin Overview tab — traffic incl. public-vs-member + logged-in split, bookings, revenue, members, NPS; reconciles with the Money lists by construction); `/api/insights/*` |
 | `crons/` | trigger | thin dispatcher → `/api/cron/*` |
@@ -61,7 +65,8 @@ the wrong service is rejected **`COURT_NOT_IN_SERVICE`**; single-court-service c
 `GET bookings/<id>` · `PATCH bookings/<id>` (reschedule — auto-reassigns the held court for a lesson;
 re-prices unpaid order lines + `coach_arrears` from the same product on a duration change via
 `billing.orders.reprice_booking_order`; **`PAID_CANNOT_EXTEND` (422)** extending a PAID booking,
-**`NOT_COVERED_AT_NEW_TIME` (422)** moving a `membership_covered` booking to an uncovered time) ·
+**`NOT_COVERED_AT_NEW_TIME` (422)** moving a `membership_covered` booking to an uncovered time; a member
+reschedule is now held inside the coach's PUBLISHED hours via `diary.availability.resource_hours_cover`) ·
 `POST bookings/<id>/cancel` (now **voids the
 linked unpaid order** via `billing.statement.void_order` — a cancelled court no longer stays phantom-owed;
 raises a late-cancellation **fee order** when policy applies; returns `was_paid`) ·
@@ -117,7 +122,14 @@ balance zeroed, row+ledger kept, never hard-deleted]; `billing.bundles.expire_wa
 `GET coach-agreements` · `PUT coach-agreements/<coach_id>` · `GET/POST commission-rules`
 (+`DELETE /<id>`, `GET /preview`) · `GET financials/{summary,revenue,coach-earnings,memberships}` ·
 `GET coach-statement` · `POST coach-statement/arrears/<id>/collected` ·
-**`PATCH coach-statement/arrears/<id>`** (discount/write-off) · `GET refund-requests` ·
+**`PATCH coach-statement/arrears/<id>`** (discount/write-off) ·
+**`GET financials/settlement`** (the "who owes what" aging view: clients bucketed by age + coaches with a
+non-zero `coach_ledger` balance — the club↔coach settlement worklist; `commission.settlement_overview`) ·
+**`GET coach-payouts`** (`?coach_user_id=` — list recorded settlements) · **`POST coach-payouts`** (record a
+club↔coach settlement — `{coach_user_id, amount_minor, direction, method?, reference?, period_label?, note?,
+status?}`; a `paid` payout nets the `coach_ledger` balance append-only; `commission.record_coach_payout`) ·
+**`PATCH coach-payouts/<id>`** (flip status: draft→paid posts the ledger entry, or void a draft;
+`commission.set_payout_status`) · `GET refund-requests` ·
 `POST refund-requests/<id>/{approve,decline}` · **`GET people/<id>`** (the unified **person 360** —
 profile + all roles + active membership + owed statement + online payments + bookings; if the person is a
 coach, a settlement summary; `admin/repositories.py::get_person` — now **delegates to `client360.get_client_360`
@@ -151,11 +163,11 @@ holding an active lesson pack with THIS coach + remaining balance — the coach'
 view; `coach/repositories.py::coach_package_holders`) · **`GET members/<client_user_id>/packages`**
 (a client's ACTIVE packs THIS coach can draw — coach-specific to them, or coach-agnostic; lesson filtered
 to self, class/court agnostic — so "book a client" auto-routes to a prepaid pack instead of a new charge) ·
-**`GET clients/<id>`** (`?month=` — the client 360;
-now returns a **by-service breakdown** `services[]` + `services_billed_minor` with the REAL per-session
-state paid/owed/written_off/discounted/covered, via `billing/commission.py::client_service_breakdown`) ·
-**`GET clients/<id>/360`** (`{person}` — the shared **client read model** for the coach, `client360.get_client_360`
-`scope='coach'` with coaching + packages filtered to THIS coach; feeds `Widgets.ClientRecord`) ·
+**`GET clients/<id>/360`** (`{person}`, `?month=YYYY-MM` — the shared **client read model** for the coach,
+`client360.get_client_360` `scope='coach'` with coaching + packages filtered to THIS coach; `?month=` scopes
+the coaching figures and adds the per-SERVICE breakdown; feeds `Widgets.ClientRecord`. *The parallel non-360
+reader `GET clients/<id>` + `CoachAPI.client` was RETIRED 2026-07-11 — this is the ONE coach client reader,
+the by-service breakdown now composes inside the 360*) ·
 **`GET bookings/<id>`** (the coach **event story** — client/contact, court, charge, coaching-arrears line,
 players+attendance, can-flags for accept/propose/decline/reschedule/cancel/mark-completed/no-show +
 mark-collected/discount/write-off; `diary/bookings.py::coach_booking_story`) ·
@@ -173,7 +185,10 @@ Frontend: `Widgets.ServiceList` `onCreate(kind)` → admin Setup → Services "+
 (`AdminAPI.createService`). · **`POST/PATCH/DELETE /api/services/<product_id>/packages`** — the ONE place a
 prepaid pack is now created/edited (owner + coach), scoped to that service; delegates to
 `billing.bundles.create_plan`/`update_plan`/`deactivate_plan` (owner+kind inherited from the product). This
-REPLACED the removed standalone `/api/{admin,coach}/bundle-plans` write routes.
+REPLACED the removed standalone `/api/{admin,coach}/bundle-plans` write routes. **`PATCH …/packages/<plan_id>`
+now also accepts `{adopt:true}`** — assign a legacy unscoped (product_id NULL) pack to THIS service so it
+stops cross-showing under the coach's other same-kind services (guarded to `product_id IS NULL`;
+`billing.bundles.assign_plan_product`).
 
 **Client `/api/me/*`:** `GET/PATCH profile` · `GET/POST dependents` (+`PATCH/DELETE /<id>`) ·
 `GET plan` (current plan + `is_trial`/`trial_days_left` + `membership_window`) ·
@@ -182,6 +197,9 @@ REPLACED the removed standalone `/api/{admin,coach}/bundle-plans` write routes.
 `billing/me.py::billing_summary`) ·
 **`GET activity`** (`?month=YYYY-MM` — the monthly **Activity** view: that month's bookings + **spend by
 category** (money paid that month) + current outstanding; `billing/me.py::spend_by_category` + `statement`) ·
+**`GET activity-summary`** (`?month=YYYY-MM` — the month-at-a-glance headline for the client Home + Client
+360 rollup: sessions played (lessons/court/classes) + minutes + spend-by-service + billed/paid/outstanding +
+the weekly-chart buckets; `billing/me.py::activity_summary`) ·
 **`GET 360`** (`{person}` — the shared **client read model** for the client viewing THEMSELVES,
 `client360.get_client_360` `scope='client'`; feeds the client `#/activity` record view via `Widgets.ClientRecord`) ·
 **`GET bookings/<id>`** (the client **event story** for a booking — `diary/bookings.py::booking_story`) ·
@@ -194,7 +212,10 @@ here — emails the club via SES, self-gating; logs the lead if SES unset).
 
 **Crons `/api/cron/*`** (handlers exist; cron services off): `POST capacity-sweep` · `POST reminders` ·
 `POST monthly-invoice` · `POST membership-refill` · `POST reconcile-payments` · **`POST ses-selftest`**
-(OPS-guarded — sends a live SES test + surfaces the real SES error; `diary/routes.py`).
+(OPS-guarded — sends a live SES test + surfaces the real SES error; `diary/routes.py`) · **`POST month-end`**
+(OPS-guarded month-end sweep — notifies every client with an open statement balance once per period via
+`billing.month_end_notice`; fired by the `.github/workflows/month-end.yml` Action, NOT an always-on cron;
+`billing/routes.py` → `commission.run_month_end`).
 
 **Analytics `/api/analytics/*`:** `GET overview` (`?days`, `?club_id`) · `GET clubs`. **Tracking:**
 `POST /api/track/page` (first-party page-view beacon;
@@ -229,7 +250,18 @@ coach BCC only on his own lesson/class. (`send_booking_confirmation` is legacy; 
 - **`billing`**: `product`, `price`, `order`, `order_line`, `payment`, `payment_attempt`,
   `account_ledger`, `membership_subscription`, `refund_request`, `bundle_plan`, `token_wallet`,
   `token_ledger`, `coach_agreement`, `commission_rule`, `commission_split`, `coach_ledger`,
-  `coach_arrears`
+  `coach_arrears`, **`coach_payout`**, **`month_end_notice`**
+  - *New tables (2026-07-11 — club↔coach settlement + month-end sweep):* **`billing.coach_payout`** — a
+    recorded club↔coach settlement (the missing half of the loop; the cockpit REPORTS the running
+    `coach_ledger` balance, a payout pays it DOWN): `direction club_to_coach|coach_to_club|offset`,
+    `amount_minor` (positive magnitude, ledger sign derived), `method eft|cash|offset`, `reference`,
+    `period_label`, `status draft|paid|void`, `note`, `created_by_user_id`, `paid_at`. A `paid` payout posts
+    ONE append-only `coach_ledger` `entry_type='payout'` entry, made idempotent by the new partial unique
+    index **`ux_coach_ledger_payout`** (`ON billing.coach_ledger (club_id, coach_user_id, ref_id) WHERE
+    entry_type='payout'` — one payout entry per payout row). **`billing.month_end_notice`** — the idempotency
+    marker for the month-end statement sweep (PK `club_id,user_id,period_label` + `owed_minor`, `sent_at`), so
+    a re-run never re-notifies a client. Plus **`billing.payment.recorded_by_user_id`** (cash-audit: who
+    recorded a desk / at-court payment).
   - *Key recent columns (2026-07-09 — court services + per-service packs):* **`diary.resource.product_id`**
     (the court SERVICE a court belongs to — e.g. Hardcourt Hire vs Clay Hire; resolution = own product → club
     default court product → unscoped, `diary.pricing.court_service_for_resource`); **`billing.bundle_plan.
@@ -284,6 +316,12 @@ hand-built person/client renderers were **deleted**) — plus promoted `window.U
   Home tiles; avatar top-right → profile). Home = greeting + book tiles + **Your sessions** (all,
   upcoming+past) + **Billing by category** (month nav → category → items → booking story / receipt) + Plan &
   credits. Drills via `GET /api/me/bookings/<id>` + `GET /api/me/billing/summary`. Served at `/`, `/portal`, `/app`.
+  **Ten-Fifty5 embed (2026-07-11):** `#/analysis` route + `renderAnalysis()` iframes Ten-Fifty5's portal
+  (`__TF5_EMBED_URL`), the member signed in via the `auth_client.js` token relay (no 2nd login); a Home card
+  drills to it, **"Coming soon"** for members outside `TF5_EMBED_ALLOW_EMAILS`. `auth_client.js` gained the
+  parent `serveChild` origin allowlist + a `mode` field in its status payload; `web_app.py` injects
+  `__TF5_EMBED_URL`/`__TF5_EMBED_ALLOW` + substitutes `__TF5_EMBED_ORIGINS__`. Env + Render-service map:
+  `ENV-STATUS.md`.
 - **Coach** — `frontend/app/coach_app.html` + `frontend/js/coach_app.js`. **Bottom nav Home · Schedule ·
   Clients · Money · Setup.** Schedule = a **weekly calendar** (tap lesson → the event story; tap class →
   roster). Clients → full client record (by-service breakdown). Money = account + disputes + per-client
@@ -319,9 +357,10 @@ hand-built person/client renderers were **deleted**) — plus promoted `window.U
 **Portal SPA shells** (`frontend/app/*.html`, each `cf-*` design system, absolute asset links):
 `portal` (dashboard) · `book` (full-screen booking) · `my` (my bookings) · `plans` (consolidated
 Membership/Packs/PAYG — served at `/plan`; `/membership` + `/packs` 301 here) · `account` (profile/family/
-financials) · `coach` (+`coach-onboarding`) · `statement` (**superseded** — the coach month-end statement
-now lives in the coach console's **Money** tab; `/statement.html` is kept as a fallback page, no longer
-linked) · `admin` · `onboarding` (owner) · `settings` · `overview` (**Business Overview dashboard**, ECharts) ·
+financials) · `coach` (+`coach-onboarding`) · *(the `statement` shell — `frontend/app/statement.html` +
+`frontend/js/statement.js` — was **DELETED 2026-07-11** as an orphaned coach-statement duplicate; the coach
+month-end statement lives in the coach console's **Money** tab)* · `admin` · `onboarding` (owner) ·
+`settings` · `overview` (**Business Overview dashboard**, ECharts) ·
 `receipt` · `pay-return` · `styleguide`.
 
 **Role-focused nav (`frontend/js/portal.js` + `home.js`).** Nav is role-precise — the client booking Home +
@@ -344,9 +383,11 @@ story) · **`coach_app`** (coach SPA — bottom-nav Home·Schedule·Clients·Mon
 story) · **`admin_app`** (admin SPA, in progress — responsive shell + command-center Home) ·
 `portal` (role-focused nav + `landingFor` + notification bell) ·
 `home` (client Home + staff redirect) · `booking` (full-screen; replaced `book`/`quickbook`) · `my` ·
-`plan` · `account` · `coach` (5-tab console; +`coach_api`, `coach_onboarding`) · `statement` (fallback page) ·
+`plan` · `account` · `coach` (5-tab console; +`coach_api`, `coach_onboarding`) *(`statement.js` DELETED 2026-07-11)* ·
 `admin` (5-tab console; +`admin_api`, `class_ui`; `AdminUI.courtsManage` = per-court click-to-edit hours) ·
-**`crm_ui`** (shared CRMUI components for both consoles) · `settings` · `onboarding` · `notifications` ·
+**`crm_ui`** (shared CRMUI components for both consoles — now incl. **`CRMUI.activityBlock`/`spendBlock`/
+`weekChart`**, the shared month-at-a-glance activity + spend-by-service + weekly-chart blocks rendered on the
+client Home AND the Client 360 rollup) · `settings` · `onboarding` · `notifications` ·
 `pay` (`Pay.purchase`/`buyMembership`/`buyPack` — THE payment rule) · `pay_return` · `receipt` ·
 `analytics` (page-view beacon) · `overview` (Business Overview dashboard) · `api` · `auth_client` ·
 `ui` (+`UI.lifecycleBar`/`lifeActions`/`statusChip`/`subtabs` lifecycle helpers). `account.js` renders the
@@ -359,7 +400,10 @@ side-rail). Marketing site: `frontend/marketing/`, `frontend/_shared/`.
 **Full reference: `docs/specs/ENV-STATUS.md`** — every var, live/dark status, copy-paste checklist.
 Live now: `DATABASE_URL`, `OPS_KEY`, Clerk `AUTH_*`, Yoco (`PAYMENTS_ENABLED=1`, `PAYMENTS_PROVIDER=yoco`,
 `YOCO_SECRET_KEY`/`YOCO_PUBLIC_KEY`/`YOCO_WEBHOOK_SECRET`), `APP_BASE_URL`, `SEED_NEXTPOINT=1`,
-`MARKETING_HOSTS`, and **transactional email** — LIVE via the interim Ten-Fifty5 AWS account
+`MARKETING_HOSTS`, the **Ten-Fifty5 members-area embed** (`TF5_EMBED_URL`, `TF5_EMBED_ORIGINS`,
+`TF5_EMBED_ALLOW_EMAILS` — the last gates a private test to one email; its Ten-Fifty5-side counterpart is
+`AUTH_ISSUERS` on the "Sport AI - API call" service + `TF_TRUSTED_PARENT_ORIGINS` on `locker-room`), and
+**transactional email** — LIVE via the interim Ten-Fifty5 AWS account
 (`SES_SENDER=noreply@ten-fifty5.com`, `SES_AWS_ACCESS_KEY_ID`/`SES_AWS_SECRET_ACCESS_KEY`,
 `SES_REGION=eu-north-1`; **`EMAIL_ICS_ENABLED=0`** — the .ics attachment is OFF until the key gains
 `ses:SendRawEmail`, so confirmations attach nothing yet). Dark until keyed: `KLAVIYO_API_KEY`

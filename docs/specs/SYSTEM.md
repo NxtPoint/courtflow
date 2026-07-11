@@ -31,7 +31,10 @@ Three mobile-first, drill-through single-page apps, one per role, on the **one s
 (`frontend/app/app.css`, every page in `cf-*` classes — no inline component styles).
 - **Client** — `app.html` + `client.js`. ONE page, no bottom nav: Home (book tiles + Your sessions +
   Billing-by-category) drilling into the event story (`GET /api/me/bookings/<id>`) + the ORDER-based
-  billing view (`GET /api/me/billing/summary`). Served at `/`, `/portal`, `/app`.
+  billing view (`GET /api/me/billing/summary`). Served at `/`, `/portal`, `/app`. Home and the 360 rollup
+  open on a **month-at-a-glance** summary (`GET /api/me/activity-summary`) rendered by the shared
+  `CRMUI.activityBlock`/`spendBlock`/`weekChart` presenters (month navigation, an AI-styled analysis panel,
+  no emoji) — the same blocks the person-360 uses, so the client sees exactly what staff see.
 - **Coach** — `coach_app.html` + `coach_app.js`. Bottom nav Home · Schedule · Clients · Money · Setup;
   Schedule is an hour-by-hour week time-grid (+ time-off + book-a-client); the event story
   (`GET /api/coach/bookings/<id>`) carries the arrears actions. Served at `/coach` (+ `/coach.html`).
@@ -176,7 +179,10 @@ guarded no-op when the order is settled, a real charge has succeeded, it's an R0
   matches what `create_booking` actually charges.
 - **`billing/commission.py`** — the coach **commission/rent** engine: scoped dated rules
   (`coach+product > product > coach > club`), split computed **on collection** inside `apply_payment_event`
-  (idempotent), arrears statement, owner cockpit aggregations.
+  (idempotent), arrears statement, owner cockpit aggregations. **The club↔coach settlement loop is CLOSED:**
+  a new `billing.coach_payout` (record/settle/list) nets the append-only **`coach_ledger`** — the ONE net-owed
+  figure per coach — so recording a payout draws the balance down and the aging view `GET /api/admin/financials/
+  settlement` shows what each coach is still owed.
 - **`billing/refunds.py`** — client refund-request workflow + admin approve/decline.
 - **`billing/me.py`** — client financial reads.
 
@@ -256,7 +262,10 @@ event. No new endpoints, no schema change. **Running now** via the **interim** T
 Render auto-deploys `master` (push → both services rebuild). Both web services + the DB are pinned to the
 **Frankfurt** region and the **Starter** plan in `render.yaml`. Go-live flags are committed in `render.yaml`
 so a blueprint sync can't wipe them (`SEED_NEXTPOINT=1` boot seed, `SES_REGION=eu-north-1`); secrets are
-`sync:false`. No paid crons (hence lazy expiry + on-read accrual + the reconcile sweep for missed webhooks).
+`sync:false`. No paid Render crons (hence lazy expiry + on-read accrual + the reconcile sweep for missed
+webhooks). Scheduled work rides **GitHub Actions** instead: `.github/workflows/month-end.yml` fires the
+**month-end sweep** `POST /api/cron/month-end` (OPS-guarded) — it accrues arrears + court rent, notifies
+clients with an open balance, and is **idempotent per month** (a re-run is a no-op).
 
 ## Key conventions
 - **Nothing hardcoded** — prices/durations/plans/commission/bundles are owner-configured data

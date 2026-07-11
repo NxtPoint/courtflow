@@ -68,7 +68,7 @@ drift can never ship again.
 | # | Sev | Bug | Where | Fix |
 |---|---|---|---|---|
 | 1 | **Critical** | Cancelled **class** stays OWED (the reported bug) | `classes.cancel_enrolment` never voids the order (cf. `bookings.py:783`); self-heal skips enrolment lines (`statement.py:88`) | Void the unpaid order in `cancel_enrolment` (mirror `cancel_booking`); extend `_void_phantom_cancelled_orders` to cancelled-enrolment orders (heals existing stuck rows) |
-| 2 | High | Partial refund flips whole order to `refunded`, loses net kept | `events.py:178`; `_booking_charge` `bookings.py:1172` | Derive paid/refunded/**net**/state from `billing.payment` sums; add computed `part_refunded` |
+| 2 | ✅ **DONE** | ~~Partial refund flips whole order to `refunded`, loses net kept~~ **FIXED** | `events.py:178`; `_booking_charge` `bookings.py:1172` | A partial refund keeps `order.status='paid'`; state is derived from `billing.payment` sums (paid − refunded) → `part_refunded`. Only a full refund (Yoco full = no amount, or cumulative refunds ≥ paid) flips the order to `refunded`. |
 | 3 | High | Written-off client orders **vanish** from the monthly view | `me.py:69` status filter | Add `written_off`/`void`; render struck, owed=0 |
 | 4 | High | Class enrolments have **no** drill-through record | no `enrolment_story` | Add `enrolment_story` + `record:enrolment:<id>` |
 | 5 | Med | "YOU OWE" (all-time) vs monthly breakdown look inconsistent | `client.js` vs `me.py:33` | Owed = all-time statement; relabel breakdown "This month"; drive owed drill from `statement.items` |

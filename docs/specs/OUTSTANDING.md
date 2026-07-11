@@ -15,6 +15,27 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > end was then **standardised onto ONE widget per capability** — the enshrined golden rule in
 > **[FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)**. Design record: **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)**.
 
+> **Recently shipped (2026-07-11 — NOT outstanding): the COACH SETTLEMENT LOOP + MONTH-END AUTOMATION.**
+> - **Coach payout objects** — new `billing.coach_payout` table + `commission.record_coach_payout` /
+>   `set_payout_status` / `list_coach_payouts`; recording a `paid` payout posts ONE append-only `coach_ledger`
+>   `payout` entry (idempotent on `ref_id=payout.id`) that nets the running balance, both directions
+>   (`club_to_coach` / `coach_to_club` / offset). Admin routes `POST/PATCH/GET /api/admin/coach-payouts`;
+>   Admin → Money → Settlement has a per-coach "Record payout". The two coach-revenue readers no longer
+>   drift — the `coach_ledger` balance is now the single authoritative net figure.
+> - **Month-end automation (no always-on cron)** — `commission.run_month_end` + `POST /api/cron/month-end`
+>   (OPS_KEY-guarded) accrues coach arrears + **rent** (the orphaned `accrue_rent_for_club` is now WIRED here)
+>   and notifies every client with an open statement balance (`statement_ready`), idempotent per
+>   (club,user,period) via new `billing.month_end_notice`; fired by a NEW GitHub Action
+>   `.github/workflows/month-end.yml` (piggybacks the keep-warm CI pattern; the four `render.yaml` crons stay
+>   commented out). Needs an `OPS_KEY` GitHub repo secret (§A) or it safely no-ops.
+> - **Aging / who-owes view** — `GET /api/admin/financials/settlement` (`commission.settlement_overview`)
+>   buckets clients by age (0-30 / 31-60 / 61+) + lists coaches with a non-zero ledger balance.
+> - **Pack cross-show fix** — a legacy unscoped pack (`product_id` NULL) no longer cross-shows under a coach's
+>   other same-kind services: the service editor gains an explicit **"Assign to this service"** adopt path
+>   (`billing.bundles.assign_plan_product`, `PATCH /api/services/<id>/packages/<id> {adopt:true}`), so the
+>   backfill's "AMBIGUOUS → assign in the editor" resolution now actually exists. Gated green: **booking 98 /
+>   billing 239 / statement 47**.
+
 > **Recently shipped (2026-07-10/11 — NOT outstanding): CLASSES-ONLINE + CLIENT-360 hardening + the
 > TRANSACTIONAL-EMAIL AUDIT (notifications SIGNED OFF).**
 > - **Classes online:** class enrolment now goes through the **Yoco paywall** (was silently confirmed unpaid
@@ -121,6 +142,9 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       `ses:SendRawEmail` — flip to `1` once the key gains it; (b) move to the **proper CourtFlow-domain**
       setup (verify `courtflow.app`/`nextpointtennis.com` DKIM in the CourtFlow AWS account) — full guide:
       **[SES-SETUP.md](SES-SETUP.md)**.
+- [ ] **`OPS_KEY` GitHub repository secret** (= the API's `OPS_KEY`) so the new
+      `.github/workflows/month-end.yml` Action can fire `POST /api/cron/month-end` — until it's set the
+      workflow safely no-ops (nothing accrues/notifies). See §B "Month-end automation".
 - [ ] **`KLAVIYO_API_KEY`** → CRM lifecycle/marketing flows go live (event feed already emits).
 - [ ] **`S3_BUCKET` + AWS keys** → coach **photo uploads** (until then coaches paste a photo URL).
 - [x] **DNS / SEO cutover — DONE 2026-07-05.** Live at `https://nextpointtennis.com` (apex canonical,
@@ -180,13 +204,39 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
     "Subscriptions" panel (active memberships by tier + active packs + recurring value) — only if the
     People-filter + 360 isn't enough. Remaining plan edges below (upgrades/downgrades, bundle expiry policy)
     are unchanged.
-- [ ] **Commission engine tail (Phase D deferrals):**
+- [x] **Commission engine tail (Phase D deferrals) — DONE 2026-07-11.**
   - [x] **Refund clawback** — a refund now reverses the coach's accrued commission proportionally
         (arrears kept in lockstep); gated by `sc_refund_clawback` in the billing harness. **DONE.**
-  - [ ] **Coach payout objects** — `coach_payout` records (owner↔coach settlement). Today the cockpit
-        *reports* who owes what; settlement is offline.
-  - [ ] **Rent auto-accrual** — `accrue_rent_for_club` exists + is idempotent; it runs on-read. A
-        scheduled monthly accrual would be cleaner (needs a scheduler — see crons below).
+  - [x] **Coach payout objects — DONE.** New `billing.coach_payout` table + `commission.record_coach_payout`
+        / `set_payout_status` / `list_coach_payouts`; recording a `paid` payout posts ONE append-only
+        `coach_ledger` `payout` entry (idempotent on `ref_id=payout.id`) that nets the running balance, both
+        directions (`club_to_coach` / `coach_to_club` / offset). Admin routes `POST/PATCH/GET
+        /api/admin/coach-payouts`; Admin → Money → Settlement has a per-coach "Record payout". The cockpit no
+        longer merely *reports* who owes what — settlement is recorded in-app.
+  - [x] **Rent auto-accrual — DONE (WIRED).** The idempotent `accrue_rent_for_club` is now called from the
+        month-end sweep (below), not on-read only.
+- [x] **Month-end automation — DONE 2026-07-11 (no always-on cron).** `commission.run_month_end` +
+      `POST /api/cron/month-end` (OPS_KEY-guarded) accrues coach arrears + rent and notifies every client with
+      an open statement balance (`statement_ready`), idempotent per (club,user,period) via new
+      `billing.month_end_notice`. Fired by a NEW GitHub Action `.github/workflows/month-end.yml` (piggybacks
+      the keep-warm CI pattern; the four `render.yaml` crons stay commented out). **Config:** needs an
+      `OPS_KEY` GitHub repository secret (§A) — until set it safely no-ops.
+- [x] **Aging / who-owes view — DONE 2026-07-11.** `GET /api/admin/financials/settlement`
+      (`commission.settlement_overview`): clients bucketed by age (0-30 / 31-60 / 61+) + coaches with a
+      non-zero ledger balance. (Dunning *automation* remains backlog — only the aging VIEW shipped.)
+- [x] **Pack cross-show fix — DONE 2026-07-11.** A legacy unscoped pack (`product_id` NULL) cross-showed
+      under a coach's other same-kind services; the service editor now has an explicit **"Assign to this
+      service"** (adopt) path (`billing.bundles.assign_plan_product`, `PATCH /api/services/<id>/packages/<id>
+      {adopt:true}`) — the backfill's "AMBIGUOUS → assign in the editor" resolution now actually exists.
+- [ ] **Coach pay for R0 (membership-covered) lessons — OWNER DECISION (parked).** A lesson taught under a
+      member's covered court settles at R0, so there's no charge to base commission on; whether/how the coach
+      is paid for a covered lesson is an open owner call — parked pending Tomo.
+- [ ] **Client 360 month navigation** — the client Home has a month pager but the person-360 record is
+      **current-month only**; add month-nav to the 360, and **promote a shared `UI.monthNav`** helper so Home,
+      Insights and the 360 share ONE pager (the golden rule).
+- [ ] **Coach-lane aliases for the arrears/holdings write routes** — discount / wallet adjust-expire / payout
+      currently sit on the **admin** blueprint; add coach-lane route aliases (guarded to the coach's own
+      clients) so the coach app calls its own lane, not `/api/admin/*`.
 - [ ] **Bundle/arrears edges:** bundle **expiry** policy for unused minutes/credits (refund/transfer?); a
       "too-late cancellation forfeits the credit" option (today cancel always credits back the exact
       minutes). *(Paying a statement online is now DONE — `POST /api/me/statement/pay` → settlement order
@@ -209,7 +259,8 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
       **BUILT + LIVE** in the admin SPA (`admin/repositories.get_person`); gated by `sc_person_360`.
 - [ ] **Reminders** — booking reminders (the `/api/cron/reminders` handler exists but cron services are
       off). Needs a scheduler: re-enable a Render cron, or an external pinger, or a lazy "due reminders"
-      sweep. Same blocker for scheduled rent accrual + the reconcile/membership-refill sweeps.
+      sweep. The reconcile / membership-refill sweeps share this blocker (scheduled **rent** accrual now rides
+      the month-end GitHub Action — see §B "Month-end automation").
 - [~] **Diary timeline port (PARTIALLY DONE)** — the resource-timeline **grid VIEW** now ships in the new
       admin Diary **Day view** (courts + coaches as columns, config-driven via `cfg.grid`; blocks drill to
       the shared event story). Still to port: the drag-timeline **editing actions** — click-to-create /

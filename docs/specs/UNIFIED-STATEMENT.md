@@ -91,7 +91,15 @@ it's an internal audit journal, not the headline number.
   `charge_succeeded`, mark each referenced order `paid` + fire its consequence (commission split).
   This generalises today's `create_statement_payment` (which already does this for arrears) to
   **all** unpaid orders, keyed by `order_id` instead of `arrears_id`.
-- **Anytime in the month**: nothing is time-gated; the statement is live. Month-end is just a reminder.
+- **Anytime in the month**: nothing is time-gated; the statement is live. Month-end is a soft
+  reminder, not a lock.
+
+> **Month-end sweep (shipped).** `POST /api/cron/month-end` (`billing.commission.run_month_end`,
+> OPS-guarded, fired by `.github/workflows/month-end.yml`) accrues coach arrears + rent for the period,
+> then notifies every client with an OPEN statement balance via a `statement_ready` message (in-app +
+> best-effort email). Idempotent per `(club, user, period)` through `billing.month_end_notice`, so a
+> re-run never re-notifies. It's a **soft snapshot + notify** — it does NOT month-box or freeze the live
+> statement, which stays current-unpaid with no month-boxing (§9.4).
 
 ### 3.5 Online + offline, per the existing payment rule
 Reuse the per-service payment rule already shipped: an order owed at_court is settle-at-desk by default
