@@ -74,7 +74,7 @@ Touch only your lane; coordinate on shared interface files (`contracts/events.md
 | **Foundation** | `app.py`, `wsgi.py`, `db.py`, `render.yaml`, `auth/`, `iam/`, `club/`, `core/`, `scripts/`, `crons/` | Boot/schema runner, Clerk JWKS + club-scoped `Principal`, seed/provision. |
 | **Diary** | `diary/` | Court/lesson/class lifecycle, GiST constraint, availability, classes, recurrence, book-on-behalf, `/api/diary/*`. |
 | **Billing** | `billing/`, `yoco_billing/` | orders/ledger, `apply_payment_event` (idempotent), membership/bundles/commission/refunds/statement engines, Yoco adapter, `/api/billing/*`. |
-| **CRM** | `core/`, `marketing_crm/` | `emit()`→`core.usage_event`, notifications (in-app inbox + transactional email), Klaviyo sync, consent. |
+| **CRM** | `core/`, `marketing_crm/`, `offline_conversions/` | `emit()`→`core.usage_event`, notifications (in-app inbox + transactional email), Klaviyo sync, consent. **Identity bridge** `core.repositories.persons.link_person_for_user` (iam.user ↔ `core.person.iam_user_id`, adopt-or-create by email; 911 backfilled) — feeds Client-360. **gclid capture** → `core.acquisition` + the **Google Ads offline-conversion feed** (`offline_conversions/`). |
 | **Client 360** | `client360/` | The ONE cross-lane read-model — `get_client_360(scope)` composes existing lane readers into a single client payload (identity/memberships/packages/statement/payments/bookings/refunds/coaching/activity + `can{}`; booking rows carry service + pay-status). Read-only, reuse-first. **Each block runs in a SAVEPOINT (`_guard`→`begin_nested`), NEVER a bare `session.rollback()`** — the composer runs inside the caller's `session_scope`, so a full rollback would discard the caller's writes. `admin.get_person` delegates here; coach `/clients/<id>/360` + client `/me/360` call it. **The single source of truth every client view is a view off.** |
 | **Admin** | `admin/`, `services/`, `insights/` | Owner write APIs + onboarding, per-service commission editor, financial cockpit, person-360, the insights composer, **general order discount + pack-wallet adjust/expire**. |
 | **Coach / Client** | `coach/`, `me/` | Coach self-service (onboarding, approval queue, clients-360, statement, cockpit) + client self-service (profile, dependents, statement, refund requests). |
@@ -188,6 +188,34 @@ aggregations (a missing/empty table → empty panel, never a 500). The admin con
 → `POST /api/track/page`; **`beacon.py` resolves `club_id` server-side** (browsing host → `iam.resolve_club_by_host`,
 else `sole_club_id`) because the DB-less web can't emit the UUID, and stores a non-PII `metadata.authed` flag
 (set client-side via `window.cfAuthed` in `auth_client.js` once Clerk resolves) for the logged-in-visitors metric.
+**Public vs members-area (2026-07-11):** the portal is an SPA, so a signed-in member fires a `page_view` on
+every route change — which used to swamp the "website traffic" numbers. Every public-traffic panel in
+`analytics/repositories.py` now filters `metadata.authed != 'true'` (marketing traffic = PUBLIC visitors only)
+and `members_area()` reports signed-in in-app activity separately; the KPI headline is **Unique visitors**
+(people), "Website visits" was relabelled **Page views**.
+
+## Growth & acquisition measurement (Google Ads / GA4 / gclid) — LIVE 2026-07-11
+Know which ad clicks become paying members, and feed that back to Google so bidding chases buyers, not clickers.
+- **Google tag (GA4 + Ads)** injected by `web_app._google_tag_head` — dark until `GA4_MEASUREMENT_ID` /
+  `GOOGLE_ADS_ID` set. `window.cfConversion(name)` maps a semantic event → the Ads conversion `send_to`
+  (`GOOGLE_ADS_CONVERSIONS` env JSON); `cfTrack` fires GA4. Sign-up CTAs + booking-complete fire client-side.
+- **gclid capture** (`frontend/js/attribution.js`, injected on every served page): records the FIRST
+  gclid/gbraid/wbraid/utm on landing → flushes once via `TFAuth` to `POST /api/me/acquisition` after sign-in →
+  `core.repositories.acquisition.record_acquisition` persists onto `core.acquisition` (FIRST-TOUCH WINS).
+  Populated the previously-dark `core.acquisition.gclid`.
+- **Offline conversions** (`offline_conversions/` — a SHARED, PORTABLE package kept **byte-identical** with the
+  1050/ten-fifty5 repo, like the analytics engine): when a gclid'd buyer PAYS, the `emit()` funnel's 4th forward
+  (`recorder.record_from_emit`, event `payment_succeeded`) ledgers a `core.offline_conversion` row; the feed
+  `GET /feeds/google-ads/offline-conversions.csv` (HTTP Basic auth via `GOOGLE_ADS_FEED_USER`/`PASS`, **dark/404
+  until set**) serves it to Google Ads' scheduled upload. **NO developer token / manager account needed** — the
+  API Center is manager-only, which is exactly why we use the CSV-upload route. The Google Ads conversion action
+  MUST stay named exactly **`Offline purchase`** (matches `recorder.CONVERSION_MAP`); the only per-repo glue is
+  that map. `schema.py` owns `core.offline_conversion` (in `db.BOOT_MODULES`); registered in `app.py`.
+- **Account (NextPoint Tennis Centre, `AW-17077631191`)**: 2 primary web conversions (start_free_week, booking)
+  + `Offline purchase` (Purchase, value-based ZAR); GA4↔Ads linked (auto-tagging + Personalized Advertising on);
+  GA4↔Search Console linked; a "High-intent visitors (booking/pricing)" remarketing audience. Full runbook +
+  final state: `docs/specs/GOOGLE-ADS-PLAN.md`. Bidding: Maximize Clicks R15 cap → revert to Max Conversions
+  after ~15–30 conversions accrue.
 
 ## Commands
 - **Run the API locally:** `gunicorn wsgi:app` (or `python -m app`) — needs `DATABASE_URL`.

@@ -1,9 +1,12 @@
 # Google Ads / Analytics — Plan & Console Steps
 
-> The R2k/month Search campaign is well-built, but the account had **no real conversions** — so it was
-> flying blind. A live audit + build was done in the account on **2026-07-11** (account `704-275-3564`,
-> `AW-17077631191`, owned by `info@nextpointtennis.com` ✓). Two real conversion actions were created and the
-> broken bidding was fixed. **One thing remains: set the env on `courtflow-web` so the tag actually fires.**
+> **STATUS 2026-07-11: measured-acquisition stack COMPLETE.** Account `704-275-3564` / `AW-17077631191`
+> (`info@nextpointtennis.com`). The account went from *flying blind* (0 conversions, blind bidding, no tag
+> firing) to fully instrumented: web tag live, **2 primary web conversions + `Offline purchase`** (gclid CSV),
+> bidding fixed, **GA4↔Ads** + **GA4↔Search Console** linked, a remarketing audience, and 6 rebuilt sitelinks.
+> The gclid → offline-conversion loop is coded (`offline_conversions/` + `attribution.js`) and the conversion
+> action is live. **The only remaining user step is the scheduled CSV upload (needs the feed password) — see
+> "FINAL STATE" below.** Ongoing: complete advertiser verification; revert bidding after conversions accrue.
 
 ## Live audit (2026-07-11) — what was found
 - **0 conversions recorded.** The only goal was a vanity **"Page views"** action with **no primary
@@ -23,15 +26,22 @@
 - Code (already shipped): `cfConversion('booking')` on the booking success screen; `cfConversion('start_free_week')`
   site-wide on any `/login#/sign-up` (or `a[data-conv]`) CTA click. Both no-op until the env below is set.
 
-## ⭐ YOUR remaining step — set the env on `courtflow-web` (Render → Environment)
-This makes the Google tag fire on the live site (fixing "No tag found") AND maps the conversions:
-```
-GA4_MEASUREMENT_ID     = G-EKQP47P8M9
-GOOGLE_ADS_ID          = AW-17077631191
-GOOGLE_ADS_CONVERSIONS = {"start_free_week":"AW-17077631191/rEy7CNKNsc4cENfxn88_","booking":"AW-17077631191/tu5JCNWNsc4cENfxn88_"}
-```
-(Valid JSON on one line; redeploy.) Within a few hours Google detects the tag and starts recording real
-sign-ups + bookings.
+## ✅ FINAL STATE (2026-07-11) — what's live + the ONE remaining user step
+**Env set on `courtflow-web` (done):** `GA4_MEASUREMENT_ID=G-EKQP47P8M9`, `GOOGLE_ADS_ID=AW-17077631191`,
+`GOOGLE_ADS_CONVERSIONS={"start_free_week":"AW-17077631191/rEy7CNKNsc4cENfxn88_","booking":"AW-17077631191/tu5JCNWNsc4cENfxn88_"}`.
+**Env for the offline-conversion feed (courtflow-api):** `GOOGLE_ADS_FEED_USER` / `GOOGLE_ADS_FEED_PASS` (set).
+
+**Live in the account:** web tag firing · 2 primary web conversions (start_free_week, booking) · **`Offline
+purchase`** conversion action (Purchase, Primary, value-based ZAR, count Every — name MUST match code) ·
+bidding = Maximize Clicks R15 cap · GA4↔Ads linked (auto-tagging + Personalized Advertising ON) · GA4↔Search
+Console (`nextpointtennis.com` domain property) linked · remarketing audience "High-intent visitors
+(booking/pricing)" (90-day) · 6 clean sitelinks (all → live `nextpointtennis.com` paths).
+
+**⭐ THE ONE REMAINING USER STEP — the scheduled CSV upload** (needs the feed password, so Tomo does it):
+Google Ads → Goals → Conversions → **Uploads → Schedules → New schedule** → Source **HTTPS**, URL
+`https://courtflow-api.onrender.com/feeds/google-ads/offline-conversions.csv` (or the custom club-API domain),
+Auth **HTTP Basic** = `GOOGLE_ADS_FEED_USER`/`PASS`, Frequency **Daily**. First run shows **0 imported** (normal
+— no gclid'd purchase yet); check Uploads → History only shows *auth/format* errors. *(Set to daily 4am SAST.)*
 
 ## Then (Tomo, no rush)
 - **Complete advertiser verification** (in progress) — or ads can pause.
