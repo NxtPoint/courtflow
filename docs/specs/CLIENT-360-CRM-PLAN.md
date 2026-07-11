@@ -1,7 +1,16 @@
 # Client-360 & CRM — Data Foundation Plan + Roadmap
 
-> **Status:** PLANNING (analysis only — no code changed). Written from a full read of both repos
-> (`C:\dev\nextpoint` + `C:\dev\webhook-server`) on 2026-07-10.
+> **Status (updated 2026-07-11): FOUNDATION BUILT + acquisition loop LIVE.** Shipped since the plan below:
+> **Slice 0** — the iam↔core identity bridge (`core.person.iam_user_id` + `core.repositories.persons.
+> link_person_for_user`, adopt-or-create by email; **911/911 backfilled** via `scripts/backfill_person_links`)
+> so every login has a linked CRM satellite; **Mission 1.2** — linked data surfaced on the People/Client-360
+> record (`client360` composer + `Widgets.ClientRecord`). **Growth/acquisition** — first-booking profile capture
+> (name/surname/cell at checkout, not signup); Klaviyo trigger wiring (trial-conversion + reactivation);
+> **gclid capture → `core.acquisition`** (`attribution.js` + `/api/me/acquisition`) feeding the **Google Ads
+> offline-conversion loop** (`offline_conversions/`, see `docs/specs/GOOGLE-ADS-PLAN.md`); GA4↔Ads↔Search
+> Console linked + a remarketing audience. Original plan (still the roadmap for later slices) follows.
+>
+> Written from a full read of both repos (`C:\dev\nextpoint` + `C:\dev\webhook-server`) on 2026-07-10.
 > **Owner ask:** grow 907 people → thousands, convert them, keep courts ~95% full. Data foundation
 > first, marketing engine second. People tab = single source of truth. Maximise reuse across
 > NextPoint + ten-fifty5 (and future white-label clubs). Kill duplication.
