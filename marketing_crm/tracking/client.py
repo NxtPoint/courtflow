@@ -116,3 +116,15 @@ def _emit(event, payload):
         forward_event(event, email, club_id=club_id, properties=meta)
     except Exception:
         log.exception("emit: crm forward failed for %s", event)
+
+    # 3) Best-effort: ledger a Google Ads offline conversion if THIS money-event's buyer arrived via a
+    #    gclid'd ad click (closes the loop on the core.acquisition capture). Own session; a no-op for
+    #    non-conversion events and for organic buyers. NEVER affects the payment path (separate thread,
+    #    already-committed usage_event above). Shared, portable — ten-fifty5 wires the identical hook.
+    try:
+        from offline_conversions.recorder import record_from_emit
+        from db import session_scope
+        with session_scope() as s3:
+            record_from_emit(s3, event, payload)
+    except Exception:
+        log.exception("emit: offline-conversion ledger failed for %s (non-fatal)", event)

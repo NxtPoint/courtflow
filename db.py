@@ -90,6 +90,7 @@ BOOT_MODULES = [
     "club.schema",
     "iam.schema",
     "core.schema",
+    "offline_conversions.schema",  # core.offline_conversion (Google Ads offline-conversion feed)
     "billing.schema",  # Agent C — products/prices/orders/payments/ledger
     "diary.schema",    # Agent B — resources/bookings (GiST exclusion)/classes; reads billing.price
     "admin.schema",    # Admin — club.onboarding_completed + iam.coach_invite (after club/iam/billing/diary)

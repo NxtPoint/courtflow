@@ -84,6 +84,7 @@ def create_app():
     _try_register(app, "yoco_billing.routes", "yoco_bp")    # C: /api/billing/yoco/* (checkout/webhook/refund)
     _try_register(app, "analytics.routes", "analytics_bp")  # Analytics: /api/analytics/* (business overview)
     _try_register(app, "marketing_crm.tracking", "page_bp")            # D: POST /api/track/page
+    _try_register(app, "offline_conversions.blueprint", "offline_conv_bp")  # Google Ads offline-conversion CSV feed
     _try_register(app, "marketing_crm.consent.blueprint", "consent_bp")    # D: /api/consent/*
     _try_register(app, "marketing_crm.backoffice.blueprint", "cockpit_bp")  # D: /api/admin/cockpit/*
     _try_register(app, "admin.routes", "admin_bp")          # Admin: /api/admin/* (onboarding + settings)
