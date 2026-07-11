@@ -36,6 +36,22 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 >   backfill's "AMBIGUOUS → assign in the editor" resolution now actually exists. Gated green: **booking 98 /
 >   billing 239 / statement 47**.
 
+> **BUILT 2026-07-11 on branch `feat/equipment-and-constraints` (gated, NOT yet merged to `master` —
+> awaits Tomo's browser review since master auto-deploys to prod). Spec:
+> [EQUIPMENT-AND-CONSTRAINTS.md](EQUIPMENT-AND-CONSTRAINTS.md).** Four owner-approved capabilities:
+> **(1) Equipment hire** — a ball machine / racquets / balls as a flat-fee add-on on a court booking
+> (`diary/equipment.py`; new `diary.resource(kind='equipment')` + `quantity` + `diary.booking_equipment`),
+> one order/one payment (no double-bill), TIME-based availability (a single ball machine can't double-book),
+> Setup → Equipment hire. **(2) Peak PAYG court pricing** — a club peak window (`club.policy.peak_*`) + an
+> explicit per-duration `billing.price.peak_amount_minor`, shown==charged, coverage still wins.
+> **(3) Silent membership entitlement caps** — ONE `diary/entitlement.py` resolver read by availability AND
+> `create_booking`: `max_covered_minutes` (over-length durations HIDDEN for members), `max_covered_per_day`,
+> `max_courts_per_day`, + a court-service `members_covered=false` (clay = PAYG-only); every cap DOWNGRADES to
+> PAYG, never blocks. **(4) Configurable trial** — a tier flagged `is_trial`/`trial_days` IS the signup
+> trial and inherits its window + caps (backward-compatible with the legacy NULL-price trial). Gates:
+> **booking 131 / billing 267 / statement 47**. Deferred polish: a client-Home hero tile for a featured
+> equipment item (the `feature_on_home` flag is in). Docs (SYSTEM/BUSINESS-RULES/INVENTORY) reconcile on merge.
+>
 > **Recently shipped (2026-07-10/11 — NOT outstanding): CLASSES-ONLINE + CLIENT-360 hardening + the
 > TRANSACTIONAL-EMAIL AUDIT (notifications SIGNED OFF).**
 > - **Classes online:** class enrolment now goes through the **Yoco paywall** (was silently confirmed unpaid
