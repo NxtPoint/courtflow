@@ -240,6 +240,11 @@ def _inject_head(html: str, b: Branding) -> str:
         "window.cfConversion=window.cfConversion||function(n,p){if(window.cfTrack)window.cfTrack(n,p);"
         "var m=(window.__CF&&window.__CF.gtag&&window.__CF.gtag.adsConversions)||{};"
         "if(window.gtag&&m[n]){gtag('event','conversion',Object.assign({send_to:m[n]},p||{}));}};"
+        # Site-wide: fire a conversion when a sign-up / 'Start your free week' CTA is clicked. A link
+        # can override the name with data-conv="…". One place, every served page, no per-file edits.
+        "document.addEventListener('click',function(e){var a=e.target&&e.target.closest&&"
+        "e.target.closest('a[data-conv],a[href*=\"/login#/sign-up\"]');"
+        "if(a){var n=a.getAttribute('data-conv')||'start_free_week';if(window.cfConversion)window.cfConversion(n);}},true);"
         "</script>\n"
         # First-party page-view beacon (powers the Business Overview dashboard). Loaded on every
         # served page; reads window.__API_BASE set just above. Privacy-first, no third parties.
