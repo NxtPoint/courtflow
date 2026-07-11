@@ -131,6 +131,32 @@ def _pay_status(settlement_mode, charge):
 _TYPE_LABEL = {"court": "Court booking", "lesson": "Private lesson", "class": "Class"}
 
 
+def _clean_service(raw, booking_type=None):
+    """A human service label. Prefer the real product/service name; if all we have is the raw
+    booking-type word ('court'/'lesson'/'class') — which is what order_line.description stores for a
+    booking — map it to a clean label so an email never shows a bare lowercase 'court'."""
+    if raw:
+        return _TYPE_LABEL.get(str(raw).strip().lower(), raw)
+    return _TYPE_LABEL.get(booking_type, "Booking")
+
+
+def _fmt_day(d):
+    """'11 Jul 2026' from a date / datetime / ISO string (day only, no time). None → None."""
+    dd = _as_dt(d)
+    return ("%d %s" % (dd.day, dd.strftime("%b %Y"))) if dd is not None else None
+
+
+def _fmt_period(start, end):
+    """A membership/pack validity window: '11 Jul 2026 – 11 Jul 2027'. Degrades gracefully to
+    'Until <end>' or just the start when only one side is known."""
+    a, b = _fmt_day(start), _fmt_day(end)
+    if a and b:
+        return "%s – %s" % (a, b)
+    if b:
+        return "Until %s" % b
+    return a
+
+
 # ---------------------------------------------------------------------------
 # loaders — return a normalized detail dict, or None (guarded)
 # ---------------------------------------------------------------------------
@@ -182,7 +208,10 @@ def _load_booking(session, club_id, ctx):
                      WHERE cb.club_id = b.club_id AND cb.order_id = b.order_id
                        AND cb.booking_type = 'court' AND b.order_id IS NOT NULL
                        AND b.booking_type = 'lesson' LIMIT 1) AS held_court,
-                   (SELECT COALESCE(NULLIF(ol.description,''), p.name)
+                   -- Prefer the real service/product NAME (e.g. "Hardcourt Hire", "Private Lesson");
+                   -- the order-line description is only the raw booking_type ("court") so it's the
+                   -- fallback, cleaned to a label below. Never surfaces a bare lowercase "court".
+                   (SELECT COALESCE(p.name, NULLIF(ol.description,''))
                       FROM billing.order_line ol
                       LEFT JOIN billing.price pr ON pr.id = ol.price_id
                       LEFT JOIN billing.product p ON p.id = pr.product_id
@@ -202,7 +231,7 @@ def _load_booking(session, club_id, ctx):
     charge = _charge(session, club_id, b["order_id"], b["settlement_mode"])
     is_lesson = b["booking_type"] == "lesson"
     court = b["held_court"] if is_lesson else b["resource_name"]
-    service = b["service_name"] or _TYPE_LABEL.get(b["booking_type"], "Booking")
+    service = _clean_service(b["service_name"], b["booking_type"])
     tzname = _club_tzname(session, club_id)
     return _normalize(
         service=service, booking_type=b["booking_type"],
@@ -276,7 +305,7 @@ def _load_order(session, club_id, order_id):
     from sqlalchemy import text
     o = session.execute(
         text('''
-            SELECT o.id, o.settlement_mode,
+            SELECT o.id, o.settlement_mode, o.created_at,
                    cl.first_name AS cl_first, cl.surname AS cl_surname,
                    cl.email AS cl_email, cl.phone AS cl_phone
             FROM billing."order" o
@@ -287,28 +316,71 @@ def _load_order(session, club_id, order_id):
     ).mappings().first()
     if not o:
         return None
-    # The exact item(s): the order-line description (e.g. "Membership — Unlimited Courts (Adult
-    # Anytime)", "Session pack — 10 sessions"), else the product name. A bare booking-type word
-    # ("court"/"lesson"/"class") is prettified to its label so a paid-booking receipt reads cleanly.
-    rows = session.execute(
-        text('''
-            SELECT COALESCE(NULLIF(ol.description,''), p.name) AS item
-            FROM billing.order_line ol
-            LEFT JOIN billing.price pr ON pr.id = ol.price_id
-            LEFT JOIN billing.product p ON p.id = pr.product_id
-            WHERE ol.order_id = :o ORDER BY ol.created_at
-        '''),
-        {"o": str(order_id)},
-    ).scalars().all()
-    items = []
-    for it in rows:
-        if not it:
-            continue
-        items.append(_TYPE_LABEL.get(str(it).lower(), it))
-    # Dedupe while preserving order (a settlement 'pay all' order can repeat a type).
-    service = ", ".join(dict.fromkeys(items)) or None
+    tzname = _club_tzname(session, club_id)
     charge = _charge(session, club_id, str(order_id), o["settlement_mode"])
-    name = " ".join(x for x in [o["cl_first"], o["cl_surname"] if o["cl_surname"] else ""] if x).strip() or None
+    service = when = None
+    when_label = "When"
+
+    # WHAT KIND of purchase is this? billing."order" has no type column, so infer from the linked row
+    # — the same dispatch order the Yoco webhook uses: membership, else pack, else a booking/class.
+    mem = session.execute(
+        text('''SELECT ms.period_start, ms.current_period_end, ms.provider,
+                       pr.membership_tier, pr.label AS price_label, pr.term_months
+                FROM billing.membership_subscription ms
+                LEFT JOIN billing.price pr ON pr.id = ms.price_id
+                WHERE ms.order_id = :o ORDER BY ms.created_at LIMIT 1'''),
+        {"o": str(order_id)},
+    ).mappings().first()
+    if mem:
+        # Name the EXACT membership, mirroring billing.membership_status precedence (tier → label →
+        # term → "Membership"); a trial is always the "7 Day Trial Period".
+        if (mem["provider"] or "") == "trial":
+            service = "7 Day Trial Period"
+        else:
+            tier = (mem["membership_tier"] or mem["price_label"]
+                    or (("%d-month" % mem["term_months"]) if mem["term_months"] else None))
+            service = ("%s Membership" % tier) if (tier and "member" not in tier.lower()) \
+                else (tier or "Membership")
+        when_label, when = "Period", _fmt_period(mem["period_start"], mem["current_period_end"])
+    else:
+        pack = session.execute(
+            text('''SELECT purchased_at, expires_at FROM billing.token_wallet
+                    WHERE order_id = :o ORDER BY created_at LIMIT 1'''),
+            {"o": str(order_id)},
+        ).mappings().first()
+        # The item(s): line description(s), preferring the real product name; a bare booking-type
+        # word ("court") is cleaned to a label. Dedupe (a 'pay all' order can repeat a type).
+        rows = session.execute(
+            text('''SELECT COALESCE(p.name, NULLIF(ol.description,'')) AS item
+                    FROM billing.order_line ol
+                    LEFT JOIN billing.price pr ON pr.id = ol.price_id
+                    LEFT JOIN billing.product p ON p.id = pr.product_id
+                    WHERE ol.order_id = :o ORDER BY ol.created_at'''),
+            {"o": str(order_id)},
+        ).scalars().all()
+        service = ", ".join(dict.fromkeys(_clean_service(it) for it in rows if it)) or None
+        if pack:
+            when_label = "Validity"
+            when = _fmt_period(pack["purchased_at"], pack["expires_at"]) if pack["expires_at"] else "No expiry"
+        else:
+            # A paid booking/class receipt → show WHEN the session is (order → booking, else enrolment).
+            t = session.execute(
+                text('''SELECT b.starts_at, b.ends_at FROM billing.order_line ol
+                        JOIN diary.booking b ON b.id = ol.booking_id
+                        WHERE ol.order_id = :o ORDER BY ol.created_at LIMIT 1'''),
+                {"o": str(order_id)},
+            ).first()
+            if not t:
+                t = session.execute(
+                    text('''SELECT cs.starts_at, cs.ends_at FROM diary.enrolment e
+                            JOIN diary.class_session cs ON cs.id = e.class_session_id
+                            WHERE e.order_id = :o ORDER BY e.enrolled_at LIMIT 1'''),
+                    {"o": str(order_id)},
+                ).first()
+            if t:
+                when = fmt_when(t[0], t[1], tzname)
+
+    name = " ".join(x for x in [o["cl_first"], o["cl_surname"]] if x).strip() or None
     price = None
     if charge and charge.get("amount_minor"):
         price = _money(charge.get("amount_minor"), charge.get("currency"))
@@ -316,7 +388,7 @@ def _load_order(session, club_id, order_id):
         "is_purchase": True,
         "booking_type": "purchase",
         "service": service,
-        "when": None, "duration_minutes": None, "court": None,
+        "when": when, "when_label": when_label, "duration_minutes": None, "court": None,
         "coach": {"name": None, "email": None},
         "client": {"first": o["cl_first"], "surname": o["cl_surname"], "name": name,
                    "email": o["cl_email"], "phone": o["cl_phone"]},
@@ -405,6 +477,7 @@ def html_block(d):
     if d.get("is_purchase"):
         purchase_rows = _rows_html([
             ("Item", d.get("service")),
+            (d.get("when_label") or "When", d.get("when")),
             ("Amount", d.get("price")),
             ("Payment", d.get("pay_status")),
         ])
@@ -435,8 +508,8 @@ def text_block(d):
     lines.append("")
     if d.get("is_purchase"):
         lines.append("PURCHASE DETAILS")
-        for label, value in [("Item", d.get("service")), ("Amount", d.get("price")),
-                             ("Payment", d.get("pay_status"))]:
+        for label, value in [("Item", d.get("service")), (d.get("when_label") or "When", d.get("when")),
+                             ("Amount", d.get("price")), ("Payment", d.get("pay_status"))]:
             if value:
                 lines.append("  %s: %s" % (label, value))
         return "\n".join(lines)
