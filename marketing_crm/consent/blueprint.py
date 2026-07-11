@@ -101,6 +101,14 @@ def record():
 
     # Emit consent_recorded (keyed by the ADULT email — never minor PII). System event: sets state.
     _emit_consent(ctype, email, club_id, marketing_flag)
+    # Growth loop: marketing consent GRANTED → sync + subscribe to the Klaviyo marketing list, so
+    # flows trigger on the subscription. Fire-and-forget; never affects the consent response.
+    if marketing_flag:
+        try:
+            from marketing_crm.crm_sync import sync as _crm
+            _crm.subscribe_member(email, club_id=club_id)
+        except Exception:
+            log.exception("consent: subscribe_member failed")
     return jsonify({"ok": True, "consent_type": ctype})
 
 
@@ -129,6 +137,14 @@ def withdraw():
                                   granted_by_user_id=(owner.id if owner else None), club_id=club_id)
         if ctype == "marketing_email" and owner:
             accounts.set_marketing_opt_in(s, owner.id, False)
+    # Reflect the withdrawal in Klaviyo: re-sync so marketing_opt_in=false lands on the profile
+    # trait — segments/campaigns filter on it, so a withdrawn member is excluded. Fire-and-forget.
+    if ctype == "marketing_email":
+        try:
+            from marketing_crm.crm_sync import sync as _crm
+            _crm.sync_profile(email, club_id=club_id)
+        except Exception:
+            log.exception("consent: withdraw sync failed")
     return jsonify({"ok": True, "consent_type": ctype, "status": "withdrawn"})
 
 
@@ -157,6 +173,25 @@ def state():
                 row = cons.latest_consent(s, primary.id, ct)
                 out["consents"][ct] = (row.status if row else None)
     return jsonify(out)
+
+
+def grant_marketing_consent(session, *, email, club_id=None, source="portal", evidence=None):
+    """Record marketing_email consent for `email` within an OPEN session: ensure the core identity,
+    write core.consent (granted), flip marketing_opt_in. Returns True on success. Does NOT
+    subscribe/emit — the caller does that AFTER commit (subscribe_member is fire-and-forget).
+    Reusable by any capture point (portal preferences toggle, first-booking checkbox, …)."""
+    email = norm_email(email)
+    if not email:
+        return False
+    acct, owner, primary = accounts.ensure_identity(session, email=email, club_id=club_id)
+    cons.record_consent(
+        session, subject_person_id=primary.id, consent_type="marketing_email",
+        granted_by_user_id=owner.id, status="granted",
+        policy_version=cons.CURRENT_POLICY_VERSION, source=source,
+        evidence=evidence or {}, club_id=club_id,
+    )
+    accounts.set_marketing_opt_in(session, owner.id, True)
+    return True
 
 
 def _parse_date(v):

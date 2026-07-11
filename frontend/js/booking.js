@@ -772,6 +772,7 @@
     ["first_name", "surname", "phone"].forEach(function (k) {
       if (st.profileFields[k]) o[k] = st.profileFields[k];
     });
+    if (st.profileFields.marketing_opt_in != null) o.marketing_opt_in = st.profileFields.marketing_opt_in;
     return o;
   }
 
@@ -794,6 +795,10 @@
       inputs[n.field] = inp;
       m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: n.label }), inp]));
     });
+    var optin = el("input", { type: "checkbox" });
+    m.body.appendChild(el("label", { class: "cf-row", style: "gap:8px;align-items:center;margin-top:12px;font-size:.85rem;cursor:pointer" }, [
+      optin, el("span", { text: "Keep me posted about club news, offers & events" }),
+    ]));
     var go = el("button", { class: "cf-btn cf-btn-primary", text: "Save & continue" });
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
       el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), go,
@@ -804,6 +809,7 @@
         var v = (inputs[k].value || "").trim(); if (!v) ok = false; vals[k] = v;
       });
       if (!ok) { UI.toast("Please fill in all the fields.", "warn"); return; }
+      vals.marketing_opt_in = optin.checked;   // explicit opt-in (unticked by default — POPIA)
       st.profileFields = Object.assign(st.profileFields || {}, vals);
       m.close();
       submit(btn);   // re-submit; mergeProfileFields now attaches the captured fields

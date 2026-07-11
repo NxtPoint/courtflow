@@ -120,6 +120,32 @@ def sync_profile(email, club_id=None):
         log.exception("sync_profile: thread spawn failed")
 
 
+def subscribe_member(email, club_id=None, list_name=None):
+    """Going-forward growth loop: sync one member's FULL profile to Klaviyo AND subscribe them to
+    the marketing list WITH consent (we hold marketing_opt_in). Fire-and-forget; safe from a request
+    handler. Call when marketing consent is GRANTED — this is what makes a new opted-in member
+    marketable (flows trigger on the list subscription). No-op without a key."""
+    if not enabled():
+        return
+    lst = list_name or os.getenv("KLAVIYO_MARKETING_LIST", "NextPoint Members")
+
+    def _run():
+        try:
+            with session_scope() as s:
+                traits = build_traits(s, email, club_id=club_id)
+            _push(traits)  # full profile upsert (name + club + never_logged_in + member_status)
+            list_id = klaviyo.get_or_create_list(lst)
+            if list_id:
+                klaviyo.subscribe_emails(list_id, [norm_email(email)])
+        except Exception:
+            log.exception("subscribe_member failed for %s", email)
+
+    try:
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception:
+        log.exception("subscribe_member: thread spawn failed")
+
+
 def forward_event(event_type, email, club_id=None, properties=None):
     """Forward a product event to Klaviyo (flow trigger). Enforces the send rule (docs/06 §4):
       - transactional events ALWAYS send (legitimate booking comms);
@@ -137,9 +163,11 @@ def forward_event(event_type, email, club_id=None, properties=None):
         props = dict(properties or {})
         if club_id is not None:
             props.setdefault("club", str(club_id))
-        # Keep the profile's club trait fresh so segmentation works on first touch.
+        # Keep the profile fresh + segmentable on first touch (FULL traits, not just club).
         try:
-            klaviyo.upsert_profile({"email": email, "club": (str(club_id) if club_id else None)})
+            with session_scope() as s:
+                traits = build_traits(s, email, club_id=club_id)
+            klaviyo.upsert_profile(traits or {"email": email, "club": (str(club_id) if club_id else None)})
         except Exception:
             log.exception("forward_event: profile upsert failed for %s", email)
         return klaviyo.track_event(email, event_type, props)

@@ -180,6 +180,16 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
 
     club_id, role = _resolve_active_club(memberships, host_club_id, x_club)
 
+    # Going-forward CRM: a genuinely-new member → emit account_created (lifecycle data + 360 timeline).
+    # We do NOT sync the Klaviyo profile here — it's created on marketing-consent subscribe or on the
+    # first transactional event, keeping the Klaviyo profile count (and bill) to opted-in/active members.
+    if user.get("_created") and resolved_email:
+        try:
+            from marketing_crm.tracking import emit
+            emit("account_created", {"club_id": club_id, "email": resolved_email, "user_id": user_id})
+        except Exception:
+            log.debug("account_created emit skipped (benign)", exc_info=False)
+
     return Principal(
         user_id=user_id,
         club_id=str(club_id) if club_id else None,

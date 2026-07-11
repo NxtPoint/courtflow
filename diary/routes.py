@@ -74,6 +74,7 @@ def _min_profile_gate(p, b):
         return None
     supplied = {k: (b.get(k) or "").strip() for k in ("first_name", "surname", "phone")}
     supplied = {k: v for k, v in supplied.items() if v}
+    opted_in = str(b.get("marketing_opt_in")).lower() in ("1", "true", "yes", "on")
     with session_scope() as s:
         if supplied:
             iam_repo.patch_profile(s, user_id=p.user_id, fields=supplied)
@@ -86,7 +87,19 @@ def _min_profile_gate(p, b):
                     phone=prof.get("phone"))
             except Exception:
                 log.debug("satellite sync at booking skipped (benign)", exc_info=False)
+        if opted_in and p.email:  # marketing opt-in ticked in the "confirm your details" modal
+            try:
+                from marketing_crm.consent.blueprint import grant_marketing_consent
+                grant_marketing_consent(s, email=p.email, club_id=p.club_id, source="first_booking")
+            except Exception:
+                log.debug("marketing consent record skipped (benign)", exc_info=False)
         prof = iam_repo.get_profile(s, user_id=p.user_id)
+    if opted_in and p.email:  # after commit: sync + subscribe to the Klaviyo marketing list
+        try:
+            from marketing_crm.crm_sync import sync as _crm
+            _crm.subscribe_member(p.email, club_id=p.club_id)
+        except Exception:
+            log.debug("subscribe_member skipped (benign)", exc_info=False)
     missing = missing_min_fields(prof or {})
     if missing:
         return jsonify(error="profile_incomplete", needs_profile=missing), 422
