@@ -111,6 +111,7 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
 
     host = _request_host(request)
     x_club = (request.headers.get("X-Club") or "").strip() or None
+    trial_ends = None  # set if a signup free-week is granted → drives the trial_started event
 
     # Capture primitives inside the txn (DB rows expire after commit).
     with session_scope() as s:
@@ -156,7 +157,9 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
                     from billing.membership import grant_signup_trial
                     days = int(os.getenv("SIGNUP_TRIAL_DAYS", "7") or 0)
                     if days > 0 and user.get("_created"):
-                        grant_signup_trial(s, club_id=default_club, user_id=user["id"], days=days)
+                        _tr = grant_signup_trial(s, club_id=default_club, user_id=user["id"], days=days)
+                        if _tr and _tr.get("granted"):
+                            trial_ends = _tr.get("current_period_end")
                 except Exception:
                     log.debug("signup trial grant skipped (billing absent/benign)", exc_info=False)
 
@@ -187,8 +190,11 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
         try:
             from marketing_crm.tracking import emit
             emit("account_created", {"club_id": club_id, "email": resolved_email, "user_id": user_id})
+            if trial_ends:  # 7-day free-week granted → trigger the trial-conversion flow
+                emit("trial_started", {"club_id": club_id, "email": resolved_email,
+                                       "user_id": user_id, "trial_ends_at": trial_ends})
         except Exception:
-            log.debug("account_created emit skipped (benign)", exc_info=False)
+            log.debug("account_created/trial_started emit skipped (benign)", exc_info=False)
 
     return Principal(
         user_id=user_id,

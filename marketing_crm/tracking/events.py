@@ -6,6 +6,7 @@
 # Lifecycle / identity
 ACCOUNT_CREATED = "account_created"
 CONSENT_RECORDED = "consent_recorded"
+TRIAL_STARTED = "trial_started"   # 7-day free-week granted → drives the trial-conversion flow
 
 # Bookings (court / lesson)
 BOOKING_CONFIRMED = "booking_confirmed"
@@ -39,7 +40,7 @@ PAGE_VIEW = "page_view"
 # lifecycle event). emit() does NOT reject unknown names (forward-compat: a new producer can add
 # one), but EVENTS is the authoritative list and contracts/events.md must be updated in lockstep.
 EVENTS = {
-    ACCOUNT_CREATED, CONSENT_RECORDED,
+    ACCOUNT_CREATED, CONSENT_RECORDED, TRIAL_STARTED,
     BOOKING_CONFIRMED, BOOKING_CANCELLED, BOOKING_RESCHEDULED, BOOKING_REMINDER,
     CLASS_ENROLLED, CLASS_WAITLISTED, WAITLIST_SLOT_OPEN,
     LESSON_COMPLETED,
@@ -54,6 +55,9 @@ TRANSACTIONAL_EVENTS = {
     BOOKING_CONFIRMED, BOOKING_CANCELLED, BOOKING_RESCHEDULED, BOOKING_REMINDER,
     CLASS_ENROLLED, CLASS_WAITLISTED, WAITLIST_SLOT_OPEN,
     PAYMENT_SUCCEEDED, MONTHLY_STATEMENT_READY,
+    # trial follow-ups are SERVICE comms about the member's own trial (status/ending/how-was-it +
+    # soft "continue" CTA) — legitimate account communication, so always deliver.
+    TRIAL_STARTED,
 }
 
 

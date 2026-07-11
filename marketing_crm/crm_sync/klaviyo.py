@@ -48,6 +48,9 @@ def upsert_profile(traits):
         # Segmentation extras (for reactivation + lifecycle): member state + dormancy signal.
         "member_status": traits.get("member_status"),
         "never_logged_in": traits.get("never_logged_in"),
+        # Trial cohort (drives the trial-conversion flow / segment).
+        "on_trial": traits.get("on_trial"),
+        "trial_ends_at": traits.get("trial_ends_at"),
     }
     props = {k: v for k, v in props.items() if v is not None}
     attrs = {"email": email, "properties": props}

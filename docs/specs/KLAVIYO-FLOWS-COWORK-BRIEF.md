@@ -32,6 +32,38 @@ Reactivation cohort is a separate list `NextPoint Reactivation` (the 391 one-off
 | `account_created` | new signup | data only (not a send trigger) |
 | **"Subscribed to `NextPoint Members`"** | member grants marketing consent | **the Welcome-flow trigger** |
 
+## ⭐ PRIORITY — Trial Conversion flow (31 people on the 7-day trial this week)
+
+**Goal:** convert 7-day free-trial members → a paid membership or pack before/after their trial ends.
+
+**Trigger:** the **`trial_started`** metric. It carries a **`trial_ends_at`** date property — time the flow
+off that (Klaviyo can delay "until/relative to" a date property), so it works whether the trial has days
+left or just ended. Mark the flow **transactional** (it's service comms about their own trial → always delivers,
+no marketing consent needed).
+
+**Existing 31:** engineering will run `scripts/klaviyo_trial_cohort.py --commit` to fire `trial_started` for
+everyone currently on trial, so this flow reaches them too. Going forward it fires automatically at signup.
+
+**Sequence (suggested — Cowork writes the copy):**
+1. **Day 0 (trial start):** "Welcome — your 7-day trial is live. Here's how to book your first court." → `/login`.
+2. **~2 days before `trial_ends_at`:** "2 days left — make the most of it" (nudge to book again).
+3. **At `trial_ends_at`:** *"Thanks for trying NextPoint — your 7-day trial is over, we hope you enjoyed it.
+   How was it? [feedback/NPS link]. And let's tailor a pack to how you play — [tell us about your game]."*
+4. **+2 days:** the offer — a membership/pack recommendation + a gentle deadline/incentive.
+5. **+5 days:** last nudge / win-back.
+
+**Conditional exit:** add a flow filter **"has NOT started a membership"** — if a `membership_activated` /
+`membership_started` event fires (or `member_status` becomes a paid tier), **exit the flow** (stop nudging a
+converter). This is the single most important guardrail on this flow.
+
+**Feedback / NPS:** for step 3, either use Klaviyo's built-in **survey/rating block** now, OR link to the
+NextPoint feedback page (`/feedback`, coming — engineering fast-follow) so the score lands in our own
+`core.nps_response` + the client 360. Ask for `NPS` and a one-line "what could we improve".
+
+**Segment to build:** `on_trial = true` (profile trait, set by the sync) — a live view of who's on trial.
+
+---
+
 ## Flows to build (in Flow Builder)
 
 ### Transactional (mark the flow "transactional" so it sends regardless of consent)
