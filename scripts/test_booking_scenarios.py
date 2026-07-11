@@ -101,6 +101,32 @@ def setup(s):
             {"c": fx.club_id, "n": f"Court {i}", "r": i},
         ).scalar_one()
         fx.courts.append(cid)
+    # Default PAYG prices so the fixture's court + lesson services are BILLABLE (a realistic club
+    # prices its services; A5 refuses an unpriced billable booking). Court R150/60min on the club's
+    # default court product (courts carry product_id=NULL → resolve to this); lesson R400/60min on a
+    # shared (coach-agnostic) lesson product. Duration ranking makes any booked length resolve here.
+    court_prod = s.execute(
+        text("INSERT INTO billing.product (club_id, kind, name, active) "
+             "VALUES (:c, 'court_booking', 'Court Hire', true) RETURNING id"),
+        {"c": fx.club_id},
+    ).scalar_one()
+    s.execute(
+        text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+             "currency_code, duration_minutes, active) "
+             "VALUES (:c, :p, 'any', 15000, 'ZAR', 60, true)"),
+        {"c": fx.club_id, "p": court_prod},
+    )
+    lesson_prod = s.execute(
+        text("INSERT INTO billing.product (club_id, kind, name, active) "
+             "VALUES (:c, 'lesson', 'Private lesson', true) RETURNING id"),
+        {"c": fx.club_id},
+    ).scalar_one()
+    s.execute(
+        text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+             "currency_code, duration_minutes, active) "
+             "VALUES (:c, :p, 'any', 40000, 'ZAR', 60, true)"),
+        {"c": fx.club_id, "p": lesson_prod},
+    )
     # Members.
     for i in (1, 2, 3):
         fx.members.append(_mk_user(s, f"member{i}@scratch.test", f"Member{i}"))
@@ -751,7 +777,52 @@ def sc_class_courts(s, fx):
     check("court3 bookable after the class session is cancelled", reuse.get("ok"), str(reuse))
 
 
+def sc_cancel_after_start_guard(s, fx):
+    """A1: a member/guest may NOT cancel a booking that has already STARTED — otherwise a
+    delivered-but-owed booking could be cancelled after the fact, voiding its order and erasing the
+    debt. Admins/coaches still may."""
+    print("\n# A started booking can't be cancelled by the member (debt can't vanish after delivery)")
+    m = fx.members[0]; court = fx.courts[0]
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                         booking_type="court", resource_id=court,
+                         starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                         settlement_mode="at_court")
+    bid = r["booking"]["id"]
+    # Force the booking into the PAST (it has been delivered) — create_booking refuses a past start.
+    s.execute(text("UPDATE diary.booking SET starts_at=:s, ends_at=:e WHERE id=:id"),
+              {"s": datetime.now(timezone.utc) - timedelta(hours=2),
+               "e": datetime.now(timezone.utc) - timedelta(hours=1), "id": bid})
+    rc = B.cancel_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=m, role="member")
+    check("member cancel of a started booking is refused (CANNOT_CANCEL_STARTED)",
+          rc.get("error") == "CANNOT_CANCEL_STARTED", str(rc))
+    check("the started booking is still confirmed (debt intact)",
+          B.get_booking(s, club_id=fx.club_id, booking_id=bid)["status"] == "confirmed")
+    ra = B.cancel_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=fx.coach_uid,
+                          role="club_admin")
+    check("an admin may still cancel a started booking", ra.get("ok"), str(ra))
+
+
+def sc_unpriced_booking_refused(s, fx):
+    """A5: a BILLABLE booking with no configured price is refused up-front (would otherwise be a
+    silent R0 order — a delivered service that's never owed). Nothing persists."""
+    print("\n# A billable booking with no configured price is refused (no silent R0 order)")
+    m = fx.members[0]; court = fx.courts[0]
+    # Deactivate the court price for THIS savepoint only → the court service is now unpriced.
+    s.execute(text("UPDATE billing.price p SET active=false FROM billing.product pr "
+                   "WHERE p.product_id=pr.id AND pr.club_id=:c AND pr.kind='court_booking'"),
+              {"c": fx.club_id})
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                         booking_type="court", resource_id=court,
+                         starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                         settlement_mode="at_court")
+    check("an unpriced court booking is refused (PRICE_NOT_CONFIGURED)",
+          r.get("error") == "PRICE_NOT_CONFIGURED", str(r))
+    check("nothing persisted — the slot is still free", has_slot(court_slots(s, fx, court), at(fx, 9)))
+
+
 SCENARIOS = [
+    sc_cancel_after_start_guard,
+    sc_unpriced_booking_refused,
     sc_court_book_cancel,
     sc_court_reschedule,
     sc_lesson_two_rows,

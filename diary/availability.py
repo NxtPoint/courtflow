@@ -150,6 +150,36 @@ def _combine(d, t, tz):
     return datetime(d.year, d.month, d.day, t.hour, t.minute, t.second, tzinfo=tz)
 
 
+def resource_hours_cover(session, *, club_id, resource_id, starts_at, ends_at):
+    """True if the resource's published availability_rule covers the WHOLE [starts_at, ends_at]
+    window (weekday + local time window + valid_from/valid_to). `starts_at`/`ends_at` are tz-aware
+    datetimes. Used to keep a member reschedule inside the coach's published hours (the picker
+    already enforces this on create). No matching rule -> NOT covered (a coach with zero hours for
+    that day can't be booked there). Busy/conflict checks live elsewhere (GiST + court/class guards);
+    this only asks 'does the coach OFFER this window'."""
+    if starts_at.tzinfo is None:
+        starts_at = starts_at.replace(tzinfo=timezone.utc)
+    if ends_at.tzinfo is None:
+        ends_at = ends_at.replace(tzinfo=timezone.utc)
+    tz = _club_tz(session, club_id)
+    s_loc = starts_at.astimezone(tz)
+    e_loc = ends_at.astimezone(tz)
+    day = s_loc.date()
+    rules = session.execute(
+        text("SELECT start_time, end_time, valid_from, valid_to FROM diary.availability_rule "
+             "WHERE club_id=:c AND resource_id=:r AND weekday=:w"),
+        {"c": club_id, "r": resource_id, "w": day.weekday()},
+    ).mappings().all()
+    for r in rules:
+        if r["valid_from"] and day < r["valid_from"]:
+            continue
+        if r["valid_to"] and day > r["valid_to"]:
+            continue
+        if s_loc >= _combine(day, r["start_time"], tz) and e_loc <= _combine(day, r["end_time"], tz):
+            return True
+    return False
+
+
 def _busy_ranges(session, *, club_id, resource_id, range_start, range_end, coach_user_id=None):
     """All held/confirmed bookings + scheduled class_sessions + time_off for the resource
     in the window — as (start,end) UTC tuples to subtract from candidates.

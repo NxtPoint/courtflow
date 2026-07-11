@@ -18,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from diary import events
-from diary.bookings import _create_order_guarded
+from diary.bookings import _create_order_guarded, _parse_dt
 
 log = logging.getLogger("diary.classes")
 
@@ -177,7 +177,8 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
     return resp
 
 
-def cancel_enrolment(session, *, club_id, class_session_id, user_id, actor_user_id=None):
+def cancel_enrolment(session, *, club_id, class_session_id, user_id, actor_user_id=None,
+                     role=None):
     """Cancel an enrolment and auto-promote the earliest waitlisted player (FIFO). Never
     exceeds capacity (we only promote when a confirmed seat actually frees)."""
     cs = _session_row(session, club_id, class_session_id, lock=True)
@@ -190,6 +191,14 @@ def cancel_enrolment(session, *, club_id, class_session_id, user_id, actor_user_
     ).mappings().first()
     if not row or row["status"] in ("cancelled",):
         return _err("ENROLMENT_NOT_FOUND", 404)
+
+    # A member/guest may NOT cancel a seat once the class has STARTED — mirrors cancel_booking:
+    # otherwise a delivered-but-owed seat could be cancelled after the fact, voiding its owed order
+    # and erasing the debt. Admins/coaches may still cancel a started seat (paid orders keep the
+    # separate-refund prompt). Waitlisted seats hold no debt, so this only guards a live seat.
+    if (role in ("member", "guest") and row["status"] in ("enrolled", "held")
+            and _parse_dt(cs["starts_at"]) <= datetime.now(timezone.utc)):
+        return _err("CANNOT_CANCEL_STARTED", 409)
 
     was_enrolled = row["status"] == "enrolled"
     session.execute(

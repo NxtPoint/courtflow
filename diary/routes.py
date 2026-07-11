@@ -624,7 +624,7 @@ def cancel_enrolment(class_session_id):
             target_user = p.user_id
         res = classes_mod.cancel_enrolment(
             s, club_id=p.club_id, class_session_id=class_session_id, user_id=target_user,
-            actor_user_id=p.user_id)
+            actor_user_id=p.user_id, role=p.role)
     return _result(res)
 
 

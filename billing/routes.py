@@ -135,7 +135,11 @@ def desk_payment():
             currency_code=body.get("currency_code") or order["currency_code"],
             provider_payment_id=body.get("provider_payment_id"),
             user_id=order["user_id"],
+            recorded_by=p.user_id,                       # cash-audit: WHO took the money (not the payer)
+            allow_partial=bool(body.get("allow_partial")),
         )
+        if isinstance(result, dict) and result.get("error"):
+            return jsonify(result), 422               # amount mismatch / order not owed (A2 guard)
     return jsonify(result), 200
 
 

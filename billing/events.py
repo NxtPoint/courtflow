@@ -176,7 +176,28 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
         refund_pay_id = _record_payment(session, event, order, club_id,
                                         direction="refund", status="refunded")
         if order_id:
-            _mark_order(session, order_id, "refunded")
+            # A PARTIAL refund must NOT flip the whole order to 'refunded' — that overstates the
+            # reversal (the order reads fully refunded while only part of the money moved back, and it
+            # loses the net-kept + 'can refund the rest' truth). Only mark 'refunded' once the
+            # cumulative refunds have returned the whole net charge; otherwise leave it 'paid' and the
+            # sum-derived state reports 'part_refunded' (_booking_charge / statement). The just-recorded
+            # refund is already in these sums. (A6 / TRANSACTION-RECORD §2.)
+            sums = session.execute(
+                text("SELECT "
+                     "COALESCE(SUM(CASE WHEN direction='charge' AND status='succeeded' THEN amount_minor END),0) AS paid, "
+                     "COALESCE(SUM(CASE WHEN direction='refund' AND status IN ('refunded','succeeded') THEN amount_minor END),0) AS refunded "
+                     "FROM billing.payment WHERE order_id=:o"),
+                {"o": str(order_id)},
+            ).mappings().first()
+            paid_sum = int(sums["paid"] or 0)
+            refunded_sum = int(sums["refunded"] or 0)
+            # A Yoco FULL refund carries no amount (0/None) — treat it as full, exactly like the
+            # clawback does. An explicit partial amount only flips the order once cumulative refunds
+            # have covered the whole net charge; otherwise the order stays 'paid' (→ part_refunded).
+            refund_amt = int(event.amount_minor or 0)
+            is_full = (refund_amt <= 0) or (paid_sum > 0 and refunded_sum >= paid_sum)
+            if is_full:
+                _mark_order(session, order_id, "refunded")
             # Reverse the coach's commission PROPORTIONALLY so the club doesn't eat the coach's
             # share of a refunded lesson (and the coach sees the refund). Savepoint-guarded +
             # idempotent, exactly like the charge fan-out — never blocks the refund record.
@@ -225,8 +246,9 @@ def _record_payment(session, event: NormalizedPaymentEvent, order, club_id, *,
         text("""
             INSERT INTO billing.payment
                 (club_id, order_id, provider, provider_payment_id, amount_minor,
-                 currency_code, direction, status)
-            VALUES (:club_id, :order_id, :provider, :ppid, :amount, :currency, :direction, :status)
+                 currency_code, direction, status, recorded_by_user_id)
+            VALUES (:club_id, :order_id, :provider, :ppid, :amount, :currency, :direction, :status,
+                    :recorded_by)
             ON CONFLICT (provider, provider_payment_id)
                 WHERE provider_payment_id IS NOT NULL
             DO NOTHING
@@ -241,6 +263,7 @@ def _record_payment(session, event: NormalizedPaymentEvent, order, club_id, *,
             "currency": currency,
             "direction": direction,
             "status": status,
+            "recorded_by": str(event.recorded_by) if event.recorded_by else None,
         },
     ).mappings().first()
     return str(row["id"]) if row else None

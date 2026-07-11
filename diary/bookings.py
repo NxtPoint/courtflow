@@ -592,6 +592,25 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
             return _err("NO_TOKEN", 422,
                         message="no matching prepaid token — choose another way to pay")
 
+    # A BILLABLE booking must have a CONFIGURED price for its service + duration — otherwise
+    # _create_order_guarded would silently write an R0 line and a delivered lesson/court would never
+    # be owed (a revenue leak). Refuse UP-FRONT (before any insert, like NO_TOKEN above) so nothing
+    # persists. Covered/token/free bookings are legitimately R0 and skip this. The picker only offers
+    # configured durations, so this only bites a crafted or mis-seeded request. (A5.)
+    if settlement_mode not in ("membership_covered", "token", "free"):
+        from diary.pricing import price_for as _price_for
+        _dur = int((ends - starts).total_seconds() // 60)
+        _kind = _KIND_BY_BOOKING_TYPE.get(booking_type, "court_booking")
+        def _priced(aud):
+            if product_id:
+                return _price_for(session, club_id=club_id, audience=aud, product_id=product_id,
+                                  duration_minutes=_dur) or {}
+            return _price_for(session, club_id=club_id, audience=aud, kind=_kind,
+                              duration_minutes=_dur, coach_user_id=coach_uid) or {}
+        if not (_priced(audience).get("price_id") or _priced("member").get("price_id")):
+            return _err("PRICE_NOT_CONFIGURED", 422,
+                        message="this service has no configured price for that duration")
+
     # --- the concurrency-safe insert(s) inside one transaction ----------
     try:
         with session.begin_nested():  # SAVEPOINT — lets us catch the overlap cleanly
@@ -748,6 +767,15 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
         if _parse_dt(bk["starts_at"]) - now < timedelta(hours=cutoff_h):
             return _err("PAST_CUTOFF", 422,
                         message=f"reschedule not allowed within {cutoff_h}h of start")
+        # Keep a member/guest LESSON move inside the coach's PUBLISHED hours — the picker enforces
+        # this on create, so reschedule must too, else a member could move a lesson to a time the
+        # coach never offered. Admins/coaches move freely (they already override the cutoff above).
+        if bk.get("booking_type") == "lesson":
+            from diary.availability import resource_hours_cover
+            if not resource_hours_cover(session, club_id=club_id, resource_id=bk["resource_id"],
+                                        starts_at=new_s, ends_at=new_e):
+                return _err("OUTSIDE_COACH_HOURS", 422,
+                            message="the coach isn't available at that time — pick an offered slot")
 
     # Can't stretch a PAID booking into a LONGER (pricier) slot — that would under-bill (the order is
     # already settled and we don't silently re-charge). Cancel & rebook to change a paid booking's
@@ -866,10 +894,19 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
     if bk["status"] in ("cancelled", "completed", "no_show"):
         return _err("ALREADY_CLOSED", 409, status_value=bk["status"])
 
+    member_initiated = role in ("member", "guest")
+    # A member/guest may NOT cancel a lesson/court that has already STARTED: otherwise a
+    # delivered-but-owed booking could be cancelled after the fact, voiding its owed order and
+    # erasing the debt (a real leak on clubs with no late-cancel fee). Admins/coaches may still
+    # cancel a started booking (a PAID order keeps the usual separate-refund prompt). A still-pending
+    # requested/proposed booking holds no slot or debt, so withdrawing it stays allowed.
+    if (member_initiated and bk["status"] in ("held", "confirmed")
+            and _parse_dt(bk["starts_at"]) <= now):
+        return _err("CANNOT_CANCEL_STARTED", 409)
+
     policy = _policy(session, club_id)
     cutoff_h = policy.get("cancellation_cutoff_hours") or 0
     within_cutoff = (_parse_dt(bk["starts_at"]) - now) < timedelta(hours=cutoff_h)
-    member_initiated = role in ("member", "guest")
     # A still-pending request/proposal was never confirmed, so withdrawing it never incurs a fee.
     fee_applies = bool(member_initiated and within_cutoff and policy.get("no_show_fee_minor")
                        and bk["status"] in ("held", "confirmed"))
@@ -992,6 +1029,11 @@ def set_status(session, *, club_id, booking_id, new_status, actor_user_id, role)
         return _err("NOT_FOUND", 404)
     if bk["status"] not in ("confirmed", "held"):
         return _err("BAD_STATE", 409, status_value=bk["status"])
+    # Can't complete / no-show a booking that hasn't STARTED yet — the event story's
+    # can.mark_completed already requires `started`; this closes the raw API so a coach can't mark a
+    # FUTURE lesson done (which would corrupt attendance + feedback/NPS signals).
+    if _parse_dt(bk["starts_at"]) > datetime.now(timezone.utc):
+        return _err("CANNOT_COMPLETE_FUTURE", 409)
     session.execute(
         text("UPDATE diary.booking SET status=:st, updated_at=now() WHERE id=:id"),
         {"st": new_status, "id": booking_id},

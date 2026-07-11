@@ -139,14 +139,30 @@ def create_order_for_booking(session, *, club_id, user_id, lines: List[Dict[str,
 
 def record_desk_payment(session, *, club_id, order_id, amount_minor, provider="cash",
                         currency_code=None, provider_payment_id=None,
-                        user_id=None) -> Dict[str, Any]:
-    """Admin records money taken at the desk (cash / card_at_desk / eft) — the at_court
+                        user_id=None, recorded_by=None, allow_partial=False) -> Dict[str, Any]:
+    """Admin/coach records money taken at the desk/court (cash / card_at_desk / eft) — the at_court
     settlement close-out. Routes through the SAME apply_payment_event core (via a manual
     charge_succeeded event) so the order flips to 'paid' and any held booking confirms,
     exactly like a gateway charge. Writes billing.payment with provider=cash/card_at_desk/eft.
 
+    `recorded_by` stamps the acting admin/coach on billing.payment for the cash audit trail (distinct
+    from `user_id`, the PAYER). A desk payment CLOSES the order (flips it fully 'paid'), so the amount
+    MUST equal the order's outstanding balance — otherwise a short amount would mark a bill fully
+    settled while under-collecting. Pass allow_partial=True to override (a deliberate future
+    part-payment path). Returns {"error": ...} on a guard failure (the caller maps it to a 4xx). (A2.)
+
     Idempotent: pass a provider_payment_id (e.g. a receipt number) to dedupe re-submits;
     the apply_payment_event hash + the payment unique index both guard double-recording."""
+    order = get_order(session, order_id=order_id)
+    if order is None:
+        return {"error": "ORDER_NOT_FOUND"}
+    if order["status"] not in ("open", "awaiting_payment"):
+        return {"error": "ORDER_NOT_OWED", "status": order["status"]}
+    outstanding = int(order["amount_minor"] or 0)
+    amt = int(amount_minor or 0)
+    if not allow_partial and amt != outstanding:
+        return {"error": "AMOUNT_MISMATCH", "expected_minor": outstanding, "got_minor": amt}
+
     provider = (provider or "cash").strip().lower()
     if provider not in MANUAL_PROVIDERS:
         provider = "cash"
@@ -157,12 +173,13 @@ def record_desk_payment(session, *, club_id, order_id, amount_minor, provider="c
         kind="charge_succeeded",
         order_ref=str(order_id),
         provider_payment_id=provider_payment_id,
-        amount_minor=int(amount_minor or 0),
+        amount_minor=amt,
         currency=currency,
         status="succeeded",
         direction="charge",
         club_id=str(club_id),
         user_id=str(user_id) if user_id else None,
+        recorded_by=str(recorded_by) if recorded_by else None,
         raw={"source": "desk", "provider": provider},
     )
     # Join the caller's transaction (do not open a second one).

@@ -66,6 +66,7 @@ class NormalizedPaymentEvent:
     price_id: Optional[str] = None
     current_period_end: Optional[str] = None   # ISO date string
     club_id: Optional[str] = None
+    recorded_by: Optional[str] = None       # desk/court cash-audit: the acting admin/coach (not the payer)
     raw: Dict[str, Any] = field(default_factory=dict)
 
     def event_hash(self) -> str:

@@ -1810,7 +1810,59 @@ def sc_trial_guard(s, fx):
     check("never double-grants a trial", again.get("granted") is False, str(again))
 
 
+def sc_desk_amount_guard(s, fx):
+    """A2: a desk payment must equal the order's outstanding balance — a short amount can't mark a
+    bill fully 'paid'. The acting cashier is stamped on billing.payment.recorded_by_user_id."""
+    print("\n# A desk payment must match the order balance (no silent under-collection) + cash audit")
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    oid = r["booking"]["order_id"]
+    gross = int(_order(s, oid)["amount_minor"])
+    short = O.record_desk_payment(s, club_id=fx.club_id, order_id=oid, amount_minor=gross - 5000,
+                                  provider="cash", user_id=fx.member, recorded_by=fx.coach_uid)
+    check("a short desk amount is refused (AMOUNT_MISMATCH)", short.get("error") == "AMOUNT_MISMATCH",
+          str(short))
+    check("the order is still owed after a refused short payment", _order(s, oid)["status"] == "open")
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=oid, amount_minor=gross,
+                          provider="cash", user_id=fx.member, recorded_by=fx.coach_uid)
+    check("the exact desk amount settles the order", _order(s, oid)["status"] == "paid")
+    rb = s.execute(text("SELECT recorded_by_user_id FROM billing.payment "
+                        "WHERE order_id=:o AND direction='charge'"), {"o": oid}).scalar()
+    check("the cashier is stamped on the payment (cash audit)", str(rb) == str(fx.coach_uid), str(rb))
+
+
+def sc_partial_refund_state(s, fx):
+    """A6: a PARTIAL refund keeps the order 'paid' (the net kept is real) — only a full refund flips
+    it to 'refunded'. The order must never overstate the reversal."""
+    print("\n# A partial refund keeps the order 'paid' (part_refunded), not fully 'refunded'")
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 11)), ends_at=iso(at(fx, 12)), settlement_mode="online")
+    oid = r["booking"]["order_id"]
+    gross = int(_order(s, oid)["amount_minor"])
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="yoco", kind="charge_succeeded", order_ref=oid, provider_payment_id="p_pr_1",
+        amount_minor=gross, currency="ZAR", status="succeeded", direction="charge",
+        club_id=str(fx.club_id), user_id=str(fx.member)), session=s)
+    check("order paid before any refund", _order(s, oid)["status"] == "paid")
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="yoco", kind="refunded", order_ref=oid, provider_payment_id="rf_pr_1",
+        amount_minor=gross // 2, currency="ZAR", status="refunded", direction="refund",
+        club_id=str(fx.club_id), user_id=str(fx.member)), session=s)
+    check("a PARTIAL refund leaves the order 'paid' (not fully 'refunded')",
+          _order(s, oid)["status"] == "paid", _order(s, oid)["status"])
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="yoco", kind="refunded", order_ref=oid, provider_payment_id="rf_pr_2",
+        amount_minor=gross - gross // 2, currency="ZAR", status="refunded", direction="refund",
+        club_id=str(fx.club_id), user_id=str(fx.member)), session=s)
+    check("refunding the remainder flips the order to 'refunded'",
+          _order(s, oid)["status"] == "refunded", _order(s, oid)["status"])
+
+
 SCENARIOS = [
+    sc_desk_amount_guard,
+    sc_partial_refund_state,
     sc_coach_scoped_pricing,
     sc_service_selection,
     sc_pack_credits_coach,

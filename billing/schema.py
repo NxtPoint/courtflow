@@ -206,6 +206,10 @@ _DDL = [
         created_at          timestamptz NOT NULL DEFAULT now()
     );
     """,
+    # Cash-audit: WHO recorded this money (the acting admin/coach at the desk/court), distinct from
+    # order.user_id (the PAYER). Null for gateway (Yoco) charges — those have no human cashier. The
+    # METHOD is already the `provider` column (cash|card_at_desk|eft). (A2 — desk-payment audit trail.)
+    f"ALTER TABLE {SCHEMA}.payment ADD COLUMN IF NOT EXISTS recorded_by_user_id uuid;",
     f"CREATE INDEX IF NOT EXISTS ix_payment_club ON {SCHEMA}.payment (club_id);",
     f"CREATE INDEX IF NOT EXISTS ix_payment_order ON {SCHEMA}.payment (order_id);",
     # The idempotency guard (1050 pattern). Partial: desk payments may carry no provider id.
