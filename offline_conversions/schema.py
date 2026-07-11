@@ -1,8 +1,7 @@
 # offline_conversions/schema.py — core.offline_conversion table.
 #
 # SHARED, PORTABLE (see package docstring). Raw DDL, no ORM, so it drops into either repo's boot with
-# zero model coupling. Registered in db.BOOT_MODULES right after core.schema (it references nothing
-# but its own schema; core.acquisition/person/app_user only matter at READ time in the recorder).
+# zero model coupling. init(engine) is called explicitly on boot after the core.* schema exists.
 
 from sqlalchemy import text
 
@@ -16,7 +15,7 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.offline_conversion (
     occurred_at   timestamptz NOT NULL,       -- when the purchase happened (always after the click)
     value_minor   bigint      NOT NULL DEFAULT 0,
     currency      text        NOT NULL DEFAULT 'ZAR',
-    source_event  text,                       -- the emit() event that produced it (e.g. payment_succeeded)
+    source_event  text,                       -- the emit event that produced it (e.g. payment_succeeded)
     source_ref    text,                       -- the order/subscription id (dedup key)
     account_id    bigint,
     uploaded_at   timestamptz,                -- optional bookkeeping; Google itself dedupes on re-serve
@@ -36,11 +35,25 @@ _SUPPLEMENTAL = [
 ]
 
 
-def init(engine=None):
-    """Create core.offline_conversion idempotently. Registered in db.BOOT_MODULES after core.schema."""
-    if engine is None:
+def _engine():
+    """Portable engine resolve — nextpoint exposes db.get_engine; ten-fifty5 exposes core_db.db."""
+    try:
         from db import get_engine
-        engine = get_engine()
+        return get_engine()
+    except Exception:
+        pass
+    try:
+        from core_db.db import get_engine
+        return get_engine()
+    except Exception:
+        from core_db.db import engine
+        return engine
+
+
+def init(engine=None):
+    """Create core.offline_conversion idempotently. Pass the engine, or let it auto-resolve."""
+    if engine is None:
+        engine = _engine()
     with engine.begin() as conn:
         conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}"))
         conn.execute(text(_DDL))

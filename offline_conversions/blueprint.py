@@ -20,6 +20,15 @@ offline_conv_bp = Blueprint("offline_conversions", __name__)
 _WINDOW_DAYS = int(os.environ.get("GOOGLE_ADS_FEED_WINDOW_DAYS", "90") or 90)
 
 
+def _session_scope():
+    """Portable session — nextpoint exposes db.session_scope; ten-fifty5 exposes core_db.db."""
+    try:
+        from db import session_scope
+    except ImportError:
+        from core_db.db import session_scope
+    return session_scope()
+
+
 def _auth_state():
     """None = feature dark (no creds set). True/False = Basic creds present + (mis)match."""
     user = os.environ.get("GOOGLE_ADS_FEED_USER", "").strip()
@@ -45,11 +54,10 @@ def offline_conversions_csv():
     if not state:
         return Response("unauthorized", status=401,
                         headers={"WWW-Authenticate": 'Basic realm="ads-feed"'})
-    from db import session_scope
     from offline_conversions.feed import build_csv
     rows = []
     try:
-        with session_scope() as s:
+        with _session_scope() as s:
             rows = [dict(r) for r in s.execute(text(f"""
                 SELECT gclid, action_name, occurred_at, value_minor, currency
                 FROM core.offline_conversion
