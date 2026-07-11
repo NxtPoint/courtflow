@@ -15,6 +15,35 @@ see [BUSINESS-RULES.md](BUSINESS-RULES.md) / [INVENTORY.md](INVENTORY.md).)
 > end was then **standardised onto ONE widget per capability** — the enshrined golden rule in
 > **[FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)**. Design record: **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)**.
 
+> **Recently shipped (2026-07-10/11 — NOT outstanding): CLASSES-ONLINE + CLIENT-360 hardening + the
+> TRANSACTIONAL-EMAIL AUDIT (notifications SIGNED OFF).**
+> - **Classes online:** class enrolment now goes through the **Yoco paywall** (was silently confirmed unpaid
+>   — the frontend jumped straight to success); the backend `enrol` surfaces the awaiting_payment order and
+>   `booking.js` drives `Pay.startYocoCheckout`. An unpaid online seat is **held then lazily released** like a
+>   court hold — new `diary.enrolment.held_until` + `release_expired_enrolments` (runs at the top of
+>   `list_sessions` + `enrol`); a paid seat is never expired, the waitlist is promoted into the freed seat.
+> - **Client 360 hardening:** every composer block runs inside a **SAVEPOINT** (`_guard` → `begin_nested`),
+>   not a bare `session.rollback()` — a failing block no longer rolls back the CALLER's transaction (fixed a
+>   real latent write-then-reread bug + the red `sc_person_360` gate). Booking rows now carry **service +
+>   payment status** so the record answers "what was it / is it paid?".
+> - **ONE canonical payment-status vocabulary** — `billing.statement.settlement_status_label(state, mode)`;
+>   the email layer + Client 360 both delegate to it (no wording drift). The email data reuses the same
+>   canonical readers as the record (`_booking_charge`, tier precedence) — deliberately NOT a mega
+>   `transaction_detail` reader (the surfaces are UI-shaped with different needs).
+> - **Transactional-email audit (all 21 kinds) — SIGNED OFF:** ONE confirm+receipt email per purchase (online
+>   booking payment → rich block, retitled "Booking confirmed"; pack/class payment emails suppressed for
+>   their own "Pack activated"/"enrolment confirmed"); offline self-serve pack now emails (was silent);
+>   membership names the exact tier, pack shows "Session pack — N"; **times on every receipt**
+>   (booking/class → session time, membership → term Period, pack → Validity); Name row never shows the
+>   email; **class payment now labelled from the real settlement mode**; aligned 132px label column;
+>   Outlook-safe HTML shell (doctype + viewport + table); `/portal` links (coach `/coach`); coach BCC only on
+>   his own lesson/class. Fixed a latent `NameError` in `booking_detail.load` that would have blanked every
+>   order-keyed email's block. New helper `scripts/cleanup_coachless_classes.py` (soft-retire legacy empty
+>   coachless classes). Also fixed: People roster no longer shows "Member" twice, Clerk sign-up "Continue"
+>   no longer resets the form (hash-routing collision), class coach lockstep to `billing.product` is
+>   resilient. Gated green: **booking 98 / billing 239 / statement 47**. Known minor: an online class's
+>   `class_enrolled` email reads "Awaiting online payment" (fires at enrol, before the Yoco redirect).
+
 > **Recently shipped (2026-07-09 — NOT outstanding): the CLIENT 360 CONSOLIDATION.** A new `client360/`
 > lane composes the existing lane readers into ONE client read model (`get_client_360`, scoped
 > admin/coach/client) — identity + membership(+status) + packages{active,history} + statement/owed +

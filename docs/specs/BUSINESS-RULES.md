@@ -202,6 +202,15 @@ show active items — dormant/retired vanish for customers but stay visible to t
   Apple/Google/Samsung Pay) → verified webhook → `apply_payment_event` → order `paid` + booking
   `confirmed`. **Gotcha:** the booking API returns `{booking:{order_id,status}, checkout}` — read
   `res.booking.order_id`.
+- **Classes obey the same paywall:** an `online` class enrolment creates an `awaiting_payment` order and
+  the frontend drives Yoco (fixed 2026-07-10 — it previously confirmed the seat unpaid). The unpaid seat is
+  **held then lazily released** (`diary.enrolment.held_until` → `release_expired_enrolments`) like a court
+  hold; a paid seat is never released, and the waitlist is promoted into a freed seat. If an unpaid client
+  turns up, a coach/admin **books them in on-behalf** (owed, collect at the desk).
+- **Confirmation email = the receipt (audited + signed off 2026-07-11):** an online booking gets ONE
+  "Booking confirmed" email showing the rich booking block incl. its **Paid online** status; a membership /
+  pack gets ONE "Membership confirmed" / "Pack activated" email (the redundant "Payment received" is
+  suppressed for those). See [SYSTEM.md](SYSTEM.md) "Events, CRM & notifications".
 - **Two gates** for online pay: global `PAYMENTS_ENABLED=1` + per-club `club.policy.allow_online_payment`
   (Settings → Payments toggle; the policy upsert is INSERT-ONLY so the boot re-seed can't reset it).
 - **At-court / monthly account** settlement modes for desk/credit flows.

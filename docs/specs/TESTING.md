@@ -11,9 +11,12 @@ the coach sets up services, then the client books against them. Expected results
 > **Automated gate (separate from this manual plan):** the backend money/booking invariants are also
 > proven by scratch-DB scenario harnesses — **`python -m scripts.test_all`** runs **THREE** (each in its
 > own scratch club, always rolled back, never persisted):
-> - **booking** (`test_booking_scenarios`, **43** checks) — double-book refusal, coach∩court integrity,
->   recurrence/waitlist, lazy hold-expiry.
-> - **billing / commercial** (`test_billing_scenarios`, **176** checks) — PAYG/membership/bundle settlement,
+> - **booking** (`test_booking_scenarios`, **98** checks) — double-book refusal, coach∩court integrity,
+>   recurrence/waitlist, lazy hold-expiry, off-peak per-slot pricing, court→service allocation (per-service
+>   courts + pricing), **classes reserve N courts** (held + conflict guard + auto-repick) + editable, and the
+>   **online class seat held → lazy-expired on abandonment → waitlister promoted** (a paid seat is never
+>   expired).
+> - **billing / commercial** (`test_billing_scenarios`, **239** checks) — PAYG/membership/bundle settlement,
 >   desk-payment idempotency, refunds, commission, refund clawback, membership-cancel-voids-order, the
 >   transaction log, dispute routing, client month-end, void clears arrears, abandoned reclaim on read, the
 >   booking + coach event stories, cancel-voids-order + phantom cleanup, the **client by-service breakdown**
@@ -24,7 +27,7 @@ the coach sets up services, then the client books against them. Expected results
 >   auto-reassign**, **membership-covered reschedule guard** (`NOT_COVERED_AT_NEW_TIME`), **settlement/
 >   approval-gate whitelist** (no client `free`; accept coerces covered/free → at-court), **online-only**
 >   and **off-platform reconcile** paths, and **on-behalf token/pack draw-down**.
-> - **statement reconciliation** (`test_statement_reconciliation`, **40** checks) — the unified-statement
+> - **statement reconciliation** (`test_statement_reconciliation`, **47** checks) — the unified-statement
 >   money invariant: a client owes the SUM of unpaid orders with **no double-count** (ledger/arrears never
 >   added in), **pay-all** settles every debt **once + idempotent** (replay = no re-charge, no double
 >   commission), **partial settle** pays a ticked subset, an **abandoned settlement is reclaimed** (never
@@ -34,7 +37,12 @@ the coach sets up services, then the client books against them. Expected results
 >
 > **Transactional email** is now **LIVE** (interim via the Ten-Fifty5 AWS account, `eu-north-1`,
 > `SES_SENDER=noreply@ten-fifty5.com`): invites + booking/statement confirmations send from the club's
-> From-name + Reply-To. The booking **`.ics` attachment is OFF** (`EMAIL_ICS_ENABLED=0` — the interim key
+> From-name + Reply-To. **All 21 email kinds AUDITED + signed off 2026-07-11** — one confirm+receipt email
+> per purchase (an online booking's payment email shows the rich booking block, retitled "Booking confirmed";
+> pack/class payment emails suppressed for their own), exact tier/pack names, times on every receipt, aligned
+> layout, Outlook-safe HTML shell, `/portal` links, coach BCC only on his own lesson/class; one canonical
+> status vocabulary shared with Client 360 ([SES-SETUP.md](SES-SETUP.md) has the delivery detail). The
+> booking **`.ics` attachment is OFF** (`EMAIL_ICS_ENABLED=0` — the interim key
 > lacks `ses:SendRawEmail`; add-to-calendar still works in-app). Long-term CourtFlow-domain setup:
 > [SES-SETUP.md](SES-SETUP.md).
 >

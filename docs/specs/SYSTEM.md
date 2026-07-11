@@ -92,11 +92,18 @@ a free court and refuses without a free coach AND court. **Lesson approval lifec
 that reserves NOTHING until the coach **accepts** (auto-assign court + settle → `confirmed`), **proposes**
 a new time (→ **`proposed`**, awaiting the client), or **declines** (→ `cancelled`); on-behalf bookings
 always auto-confirm. `requested`/`proposed` are outside the GiST exclusion (they hold no slot). Classes
-have capacity + waitlist (auto-promote on cancel) and can **optionally reserve a court**
-(`class_session.court_resource_id`/`court_booking_id` — a GiST-blocking booking, freed on cancel).
+have capacity + waitlist (auto-promote on cancel) and can reserve **one or more courts**
+(`diary.class_session_court` link table + the scalar `class_session.court_resource_id`/`court_booking_id`
+for legacy readers — each a GiST-blocking `diary.booking(booking_type='class')`, auto-repicked if busy,
+freed on cancel). A class **enrolment goes through the same money path as a booking**: an `online`
+enrolment creates an `awaiting_payment` order and the frontend drives Yoco (was previously confirmed
+unpaid — the paywall bypass, fixed 2026-07-10).
 **Lazy expiry replaces the capacity-sweep cron:**
 `release_expired_holds` runs at the top of availability + booking, cancelling `held` rows past
-`held_until` — no paid cron needed.
+`held_until` — no paid cron needed. **Classes have the same seam:** an unpaid `online` enrolment holds its
+seat (`diary.enrolment.held_until`); `release_expired_enrolments` (top of `list_sessions` + `enrol`)
+cancels the lapsed seat, voids its still-`awaiting_payment` order and promotes the waitlist — a paid seat
+is never touched.
 
 **Coach/product-scoped pricing is STRICT TWO-TIER.** `diary/pricing.py` resolves a service's rate card
 against the coach's **own** active product if they have one (`_coach_has_own_product`), **else** the
@@ -202,8 +209,18 @@ block** (`marketing_crm/email/booking_detail.py`, `DETAIL_KINDS`) — a guarded,
 (`load` → `html_block`/`text_block`) that renders the full booking under the green banner: client
 name+surname · email · cell · service (via `order_line→price→product`) · date & time in the club's
 timezone (**SAST**/`Africa/Johannesburg`, fixed +02:00 fallback where no zoneinfo) · court · coach ·
-duration · price + payment status. On a **lesson** the coach is **BCC'd** (`booking_detail.coach_email`
-adds to the `bcc` list in `notifications.py`). Every booking has a downloadable **`.ics`**
+duration · price + payment status. On a **lesson/class** the coach is **BCC'd** (`booking_detail.coach_email`
+adds to the `bcc` list in `notifications.py`) — never on court bookings or purchases.
+**ONE confirm+receipt email per purchase (audited + signed off 2026-07-11):** `load` resolves an
+order-keyed event (`payment_succeeded` etc.) to its booking (`order_line.booking_id`) or class
+(`enrolment.order_id`) and shows the SAME rich block, else a **purchase block** for a membership/pack
+(`_load_order`, tagged `order_kind`; Item · Period/Validity · Amount · Payment). `deliver()` then makes an
+online booking's payment email the single confirmation (retitled **"Booking confirmed"**) and **suppresses**
+the redundant `payment_succeeded` email for pack + class orders (their own "Pack activated"/"enrolment
+confirmed" email is the one). The **payment-status wording is single-sourced** in
+`billing.statement.settlement_status_label(state, mode)` — email + Client 360 both delegate, so a receipt,
+an email and a client-record row never disagree. Shell = full doctype + viewport + table (Outlook-safe);
+client links → `/portal`. Every booking has a downloadable **`.ics`**
 (`diary/calendar.py` → `GET /api/diary/bookings/<id>/calendar.ics`; `ics_url` on the confirmation
 payload) — in-app "Add to calendar" works now; the email *attachment* is gated OFF (`EMAIL_ICS_ENABLED=0`).
 

@@ -36,11 +36,11 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `coach/` | routes, repositories, schema | `/api/coach/*` coach self-service + cockpit |
 | `services/` | routes, repositories | `/api/services/*` — the ONE unified service-edit surface for owner + coach (owner can create a lesson per coach via `POST /api/services`); delegates to `coach/`/`billing/` repos |
 | `me/` | routes | `/api/me/*` client self-service (profile, dependents, financials, refund-requests, notifications) |
-| `client360/` | `get_client_360` | the ONE cross-lane **client read model** (identity + membership(+status) + packages{active,history} + statement/owed + payments + bookings + dependents + refunds + coaching + activity + notifications-unread + a per-scope `can{}` map). Read-only, reuse-first — composes the existing lane readers (`billing.statement`/`membership`/`bundles`/`commission`/`refunds`/`activity`, core notifications, diary bookings/enrolments, `iam.dependent`), every block guarded, club_id-scoped. Scoped `admin`/`coach`/`client`; a SUPERSET of the old admin person-360, so `admin.repositories.get_person` **delegates** to it (`scope='admin'`). Returns None if the user has no `iam.membership` in the club. |
+| `client360/` | `get_client_360` | the ONE cross-lane **client read model** (identity + membership(+status) + packages{active,history} + statement/owed + payments + bookings + dependents + refunds + coaching + activity + notifications-unread + a per-scope `can{}` map). Read-only, reuse-first — composes the existing lane readers (`billing.statement`/`membership`/`bundles`/`commission`/`refunds`/`activity`, core notifications, diary bookings/enrolments, `iam.dependent`), club_id-scoped. **Each block runs inside a SAVEPOINT** (`_guard` → `session.begin_nested()`) so a failing block degrades to empty/None and **never rolls back the caller's transaction** (fixed 2026-07-11 — a bare `session.rollback()` was discarding the caller's writes + the harness fixture). Booking rows carry **service + payment status** (same vocabulary as the receipts). Scoped `admin`/`coach`/`client`; a SUPERSET of the old admin person-360, so `admin.repositories.get_person` **delegates** to it (`scope='admin'`). Returns None if the user has no `iam.membership` in the club. |
 | `analytics/` | repositories, routes | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`); `/api/analytics/*`; the standalone `/overview.html` (rolling `?days=` window). The admin **native Overview tab** now uses the `insights/` lane instead (the old iframe embed was retired 2026-07-05). |
 | `insights/` | repositories, routes | **Phase-2 P1 read-layer** (guarded aggregations, no new tables): court-utilisation heatmap · **sales-by-day** · **bookings-by-day** · **overview** (month-scoped daily composer powering the native admin Overview tab — traffic incl. public-vs-member + logged-in split, bookings, revenue, members, NPS; reconciles with the Money lists by construction); `/api/insights/*` |
 | `crons/` | trigger | thin dispatcher → `/api/cron/*` |
-| `scripts/` | seed_nextpoint, provision_club, **backfill_pack_products** (map legacy NULL-product packs to their service — preview + `--commit`), **audit_class_packs** (report class packs vs their session `price_id`) | seed/provision tenants + data maintenance |
+| `scripts/` | seed_nextpoint, provision_club, **backfill_pack_products** (map legacy NULL-product packs to their service — preview + `--commit`), **audit_class_packs** (report class packs vs their session `price_id`), **audit_trials** (7-day-trial grant audit/cleanup), **cleanup_coachless_classes** (soft-retire legacy empty coachless classes — dry-run + `--commit`) | seed/provision tenants + data maintenance |
 | `web_app.py`, `frontend/` | host-switch + SPA shells + marketing | The web service |
 | `migration/` | Wix→Render URL/301 helper | SEO migration |
 
@@ -211,6 +211,15 @@ is used) — the in-app `.ics` download still works. **Multi-tenant identity:** 
 with its own From display name (`club.club.name`) + Reply-To (its first `club.location.email`), resolved in
 `notifications.py::_club_identity`. Long-term (verify `nextpointtennis.com`/`courtflow.app` DKIM once the
 CourtFlow AWS account is back): **`docs/specs/SES-SETUP.md`**. No schema change.
+**AUDITED + signed off 2026-07-11 (all 21 `KIND_MAP` kinds):** the rich block builder
+`marketing_crm/email/booking_detail.py` (`load`/`_load_booking`/`_load_class`/`_load_order` +
+`html_block`/`text_block`) resolves an order-keyed event to its booking/class (rich block) else a purchase
+block tagged `order_kind`; `notifications.deliver` makes `payment_succeeded` the SINGLE confirm+receipt
+email (retitle "Booking confirmed"/"Membership confirmed", suppress for pack + class orders). Payment-status
+wording is single-sourced in **`billing.statement.settlement_status_label(state, mode)`** (email + `client360`
+both delegate). `html_wrap` is a full doctype + viewport + table (Outlook-safe); client links → `/portal`;
+coach BCC only on his own lesson/class. (`send_booking_confirmation` is legacy; live sends go through
+`notifications.deliver`.)
 
 ## 4. Database — 5 schemas (idempotent boot DDL)
 - **`club`**: `club`, `branding`, `location`, `policy`

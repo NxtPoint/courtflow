@@ -75,7 +75,7 @@ Touch only your lane; coordinate on shared interface files (`contracts/events.md
 | **Diary** | `diary/` | Court/lesson/class lifecycle, GiST constraint, availability, classes, recurrence, book-on-behalf, `/api/diary/*`. |
 | **Billing** | `billing/`, `yoco_billing/` | orders/ledger, `apply_payment_event` (idempotent), membership/bundles/commission/refunds/statement engines, Yoco adapter, `/api/billing/*`. |
 | **CRM** | `core/`, `marketing_crm/` | `emit()`→`core.usage_event`, notifications (in-app inbox + transactional email), Klaviyo sync, consent. |
-| **Client 360** | `client360/` | The ONE cross-lane read-model — `get_client_360(scope)` composes existing lane readers into a single client payload (identity/memberships/packages/statement/payments/bookings/refunds/coaching/activity + `can{}`). Read-only, reuse-first, guarded. `admin.get_person` delegates here; coach `/clients/<id>/360` + client `/me/360` call it. **The single source of truth every client view is a view off.** |
+| **Client 360** | `client360/` | The ONE cross-lane read-model — `get_client_360(scope)` composes existing lane readers into a single client payload (identity/memberships/packages/statement/payments/bookings/refunds/coaching/activity + `can{}`; booking rows carry service + pay-status). Read-only, reuse-first. **Each block runs in a SAVEPOINT (`_guard`→`begin_nested`), NEVER a bare `session.rollback()`** — the composer runs inside the caller's `session_scope`, so a full rollback would discard the caller's writes. `admin.get_person` delegates here; coach `/clients/<id>/360` + client `/me/360` call it. **The single source of truth every client view is a view off.** |
 | **Admin** | `admin/`, `services/`, `insights/` | Owner write APIs + onboarding, per-service commission editor, financial cockpit, person-360, the insights composer, **general order discount + pack-wallet adjust/expire**. |
 | **Coach / Client** | `coach/`, `me/` | Coach self-service (onboarding, approval queue, clients-360, statement, cockpit) + client self-service (profile, dependents, statement, refund requests). |
 | **Analytics** | `analytics/` | Read-only guarded aggregations → `/api/analytics/*` (the standalone `/overview.html`); first-party beacon in `beacon.py`. |
@@ -246,6 +246,13 @@ else `sole_club_id`) because the DB-less web can't emit the UUID, and stores a n
   (`diary.enrolment.held_until`) pending the Yoco payment; `release_expired_enrolments` (top of
   `list_sessions` + `enrol`) cancels the lapsed-unpaid seat, voids its `awaiting_payment` order, and promotes
   the waitlist — a **paid** seat (order no longer `awaiting_payment`) is never touched.
+- **Transactional email = ONE confirm+receipt per purchase** (`marketing_crm/notifications.py::deliver`):
+  `booking_detail.load` resolves an order-keyed event (`payment_succeeded`) to its booking/class → the RICH
+  block (retitled "Booking confirmed"), else a purchase block for membership/pack; `deliver` SUPPRESSES the
+  `payment_succeeded` email for pack + class orders (their own email is the one). **Payment-status wording is
+  single-sourced** in `billing.statement.settlement_status_label(state, mode)` — email AND `client360` both
+  delegate, so a receipt/email/client-record never disagree. **Coach BCC only on his own lesson/class.** Every
+  order-keyed email needs `booking_detail.load` to import `text` (a missing import silently blanks the block).
 
 ## Still needs Tomo (config, not code)
 - **S3** (`S3_BUCKET` + AWS keys) for coach photo uploads — until set, coaches paste a photo URL.

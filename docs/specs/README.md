@@ -104,6 +104,19 @@ operating guide; **this folder is the detail.**
 > kept for the offline "issue a pack" picker; write goes through `/api/services/<product_id>/packages`. Live
 > packs keep working (`product_id` NULL = legacy) until `scripts/backfill_pack_products.py` maps them. Gated
 > green: **booking 61 / billing 239 / statement 47**.
+> **2026-07-09/11 — classes reserve courts, the CLIENT-360 finishing pass + the transactional-email audit.**
+> **Classes** now hold MULTIPLE real courts (GiST-blocking, auto-repick), show under their court column in the
+> diary, and are editable; **online class enrolment goes through the Yoco paywall** (was silently confirmed
+> unpaid) and an unpaid online seat is **lazily released** like a court hold (`diary.enrolment.held_until` →
+> `release_expired_enrolments`). **Client 360** is complete + hardened: each block runs inside a **SAVEPOINT**
+> (a failing block never rolls back the caller's transaction — fixed a real latent bug + the `sc_person_360`
+> gate), and booking rows now carry the **service + payment status**. **Transactional email** was fully
+> audited (all 21 kinds): **ONE confirm+receipt email per purchase** (an online booking's payment email shows
+> the rich booking block, retitled "Booking confirmed"; pack/class payment emails suppressed for their own),
+> exact membership-tier + pack names, **times on every receipt**, aligned layout, an Outlook-safe HTML shell,
+> `/portal` links, coach BCC only on his own lesson/class, and ONE canonical payment-status vocabulary
+> (`billing.statement.settlement_status_label`, shared by email + Client 360 so wording never drifts). Gated
+> green: **booking 98 / billing 239 / statement 47**.
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,
