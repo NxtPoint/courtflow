@@ -529,14 +529,20 @@ def sc_client_month_end(s, fx):
                                   client_user_id=fx.member, month=ym)
     check("issue-invoice reports owed + notifies", res["owed_minor"] == 40000 and res["notified"], str(res))
 
-    c = CR.get_client(s, club_id=fx.club_id, user_id=fx.coach_uid, client_user_id=fx.member, month=ym)
+    # The coach's per-client month view is now a view off the ONE composer (scope='coach', month=ym):
+    # coaching totals + arrears + the per-service breakdown (month → client → service → transaction).
+    from client360 import get_client_360
+    c = get_client_360(s, club_id=fx.club_id, user_id=fx.member, scope="coach",
+                       coach_user_id=fx.coach_uid, month=ym)
+    tot = (c or {}).get("coaching", {}).get("totals", {})
     check("coach 360 merges month money (paid + owed)",
-          c and c.get("money") and c["money"]["owed_minor"] == 40000 and c["money"]["paid_minor"] > 0,
-          str(c and c.get("money")))
+          bool(c) and tot.get("owed_minor") == 40000 and tot.get("paid_minor") > 0, str(tot))
     check("coach 360 lists this client's owed arrears line",
-          any(a.get("status") == "owed" for a in (c.get("arrears") or [])), str(len(c.get("arrears") or [])))
-    check("coach 360 history carries booking_id (for reschedule/cancel)",
-          any(h.get("booking_id") for h in (c.get("history") or [])), "no booking_id surfaced")
+          any(a.get("status") == "owed" for a in c.get("coaching", {}).get("arrears_items", [])),
+          str(len(c.get("coaching", {}).get("arrears_items", []))))
+    check("coach 360 carries a per-service breakdown (month→client→service tier)",
+          isinstance(c.get("service_breakdown", {}).get("services"), list),
+          str(c.get("service_breakdown")))
     # A coach can only invoice THEIR OWN client — an unrelated user yields an empty invoice.
     other = _mk_user(s, "stranger@bill.test", "Stranger")
     empty = CM.client_invoice_data(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,

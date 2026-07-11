@@ -112,6 +112,8 @@
 
       // ---- Coaching (coach + admin scopes) ----
       if (fields.showCoaching !== false && pn.coaching && pn.coaching.totals) wrap.appendChild(coachingCard(pn));
+      // The month → client → SERVICE → transaction middle tier (coach scope, when month-scoped).
+      if (fields.showCoaching !== false && pn.service_breakdown && (pn.service_breakdown.services || []).length) wrap.appendChild(serviceBreakdownCard(pn));
 
       // ---- Bookings: upcoming + history → the event story ----
       if (fields.showBookings !== false) {
@@ -260,6 +262,43 @@
           actions: rowActs,
         }));
       }
+      return card;
+    }
+
+    function serviceBreakdownCard(pn) {
+      // Coaching grouped BY SERVICE for the month: each service expands to its sessions, each session
+      // drills into the ONE shared TransactionDetail (golden rule) via cfg.onNavigate. Config, not fork.
+      var sb = pn.service_breakdown || {}, svcs = sb.services || [];
+      var c = (pn.coaching && pn.coaching.currency) || pn.currency || "ZAR";
+      var card = UI.card([CRMUI.sectionHead("Coaching by service" + (pn.month ? " · " + pn.month : ""))], "cf-mt");
+      var list = el("div", { class: "cf-list" });
+      svcs.forEach(function (svc) {
+        var sub = el("div", { style: "display:none" });
+        (svc.items || []).forEach(function (it) {
+          var tap = !!(it.booking_id || it.enrolment_id) && cfg.onNavigate;
+          var row = el("div", { class: "cf-item" + (tap ? " cf-item-tap" : ""), style: "padding-left:16px" }, [
+            el("div", { class: "cf-item-main" }, [
+              el("div", { class: "cf-item-t", text: fDT(it.starts_at) }),
+              el("div", { class: "cf-item-s", text: it.status || "" }),
+            ]),
+            el("span", { class: "cf-chip", text: money(it.amount_minor, c) }),
+            tap ? el("span", { class: "cf-muted", text: "›" }) : null,
+          ].filter(Boolean));
+          if (tap) row.addEventListener("click", function () { cfg.onNavigate({ kind: it.booking_id ? "event" : "class", id: it.booking_id || it.enrolment_id }); });
+          sub.appendChild(row);
+        });
+        var head = el("div", { class: "cf-item cf-item-tap" }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: svc.label || "Service" }),
+            el("div", { class: "cf-item-s", text: (svc.count || 0) + " session" + (svc.count === 1 ? "" : "s") }),
+          ]),
+          el("span", { class: "cf-chip", text: money(svc.total_minor, c) }),
+          el("span", { class: "cf-muted", text: "⌄" }),
+        ]);
+        head.addEventListener("click", function () { sub.style.display = (sub.style.display === "none") ? "" : "none"; });
+        list.appendChild(head); list.appendChild(sub);
+      });
+      card.appendChild(list);
       return card;
     }
 

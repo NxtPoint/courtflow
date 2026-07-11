@@ -100,17 +100,12 @@
     //   email,phone,first_seen,last_seen,lessons_count,classes_count,no_show_count,
     //   upcoming_count,lifetime_spend_minor}], count}
     clients: function (opts) { return A().apiJSON("/api/coach/clients" + _qs(opts)); },
-    // GET /api/coach/clients/:user_id[?month=YYYY-MM] -> {client:{...headline,
-    //   history:[{kind,starts_at,status,order_id,booking_id}], upcoming:[…],
-    //   money?:{paid_minor,owed_minor,net_minor,written_off_minor,currency},
-    //   arrears?:[{id,gross_minor,status,note,starts_at,client_user_id}]}}
-    client: function (userId, month) {
-      return A().apiJSON("/api/coach/clients/" + enc(userId) + (month ? ("?month=" + enc(month)) : ""));
+    // GET /api/coach/clients/:id/360[?month=YYYY-MM] -> {person:{...}} — the ONE client-360 composer
+    //   payload (scope='coach': coaching + packages filtered to THIS coach; can:{discount,collect};
+    //   month scopes coaching + adds service_breakdown). Feeds Widgets.ClientRecord (golden rule).
+    client360: function (userId, month) {
+      return A().apiJSON("/api/coach/clients/" + enc(userId) + "/360" + (month ? ("?month=" + enc(month)) : ""));
     },
-    // GET /api/coach/clients/:id/360 -> {person:{...}} — the ONE client-360 composer payload
-    //   (scope='coach': coaching + packages filtered to THIS coach; can:{discount,collect}).
-    //   Feeds Widgets.ClientRecord, the shared client-record widget (golden rule).
-    client360: function (userId) { return A().apiJSON("/api/coach/clients/" + enc(userId) + "/360"); },
     // GET /api/coach/bookings/:id -> {booking:{id,booking_type,status,starts_at,ends_at,
     //   duration_minutes,is_future,court_name,client:{name,email,phone,user_id},venue:{club_name,address},
     //   players:[{name,kind,attended}],charge:{amount_minor,currency,status,settlement_mode,order_id,...},

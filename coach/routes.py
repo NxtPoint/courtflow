@@ -530,32 +530,20 @@ def coach_client_packages(client_user_id):
     return jsonify(packages=mine), 200
 
 
-@coach_bp.get("/clients/<client_user_id>")
-def get_client(client_user_id):
-    p, err = _coach()
-    if err:
-        return err
-    month = (request.args.get("month") or "").strip() or None
-    with session_scope() as s:
-        client = repo.get_client(s, club_id=p.club_id, user_id=p.user_id,
-                                 client_user_id=client_user_id, month=month)
-    if client is None:
-        return jsonify(error="NOT_FOUND"), 404
-    return jsonify(client=client), 200
-
-
 @coach_bp.get("/clients/<client_user_id>/360")
 def coach_client_360(client_user_id):
     """The unified Client 360 record, coach scope — the SAME cross-lane composer the admin person-360
     and the client's own account derive from (golden rule: one data layer, views off it). Coaching +
-    packages are filtered to THIS coach's relevance."""
+    packages are filtered to THIS coach's relevance; `?month=YYYY-MM` scopes the coaching figures and
+    adds the per-SERVICE breakdown (the month → client → service → transaction drill)."""
     p, err = _coach()
     if err:
         return err
+    month = (request.args.get("month") or "").strip() or None
     from client360 import get_client_360
     with session_scope() as s:
         data = get_client_360(s, club_id=p.club_id, user_id=client_user_id,
-                              scope="coach", coach_user_id=p.user_id)
+                              scope="coach", coach_user_id=p.user_id, month=month)
     if data is None:
         return jsonify(error="NOT_FOUND"), 404
     return jsonify(person=data), 200

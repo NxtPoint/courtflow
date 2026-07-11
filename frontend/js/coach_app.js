@@ -440,13 +440,14 @@
   // GET /api/coach/clients/:id/360, scope='coach'); role differences are the fields + actions below,
   // never a fork in the render code. The coach payload's `can` = {collect, discount} (coaching arrears).
   function renderClient(userId) {
+    ensureMonth();   // month-scope the coaching + per-service breakdown (month → client → service → txn)
     var host = el("div", {});
     set(host);
     window.Widgets.ClientRecord.mount(host, {
       scope: { id: userId, role: "coach" },
       back: { label: "Clients", hash: "#/clients" },
       fields: { showActivity: false, showDependents: false, showPackages: true, showCoaching: true },
-      data: { get: function (i) { return window.CoachAPI.client360(i).then(function (r) { return r.person; }); } },
+      data: { get: function (i) { return window.CoachAPI.client360(i, MONTH).then(function (r) { return r.person; }); } },
       onNavigate: function (t) {
         if (!t || !t.id) return;
         if (t.kind === "person") go("#/client/" + t.id);

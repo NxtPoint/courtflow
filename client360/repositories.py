@@ -353,15 +353,17 @@ def _refunds(session, *, club_id, user_id):
     return _guard(session, _run, [])
 
 
-def _coaching(session, *, club_id, user_id, coach_user_id=None):
+def _coaching(session, *, club_id, user_id, coach_user_id=None, month=None):
     """The client's coaching statement (per-coach paid/owed/net + arrears items). Reuses
-    billing.commission.client_statement. For coach scope, filter to just that coach."""
-    default = {"month": None, "currency": None, "coaches": [], "arrears_items": [],
+    billing.commission.client_statement. For coach scope, filter to just that coach. `month`
+    (YYYY-MM) scopes the paid/collected figures to that month (owed is always current); None =
+    all-time (the default, backward-compatible)."""
+    default = {"month": month, "currency": None, "coaches": [], "arrears_items": [],
                "totals": {"paid_minor": 0, "owed_minor": 0, "written_off_minor": 0, "net_minor": 0}}
 
     def _run():
         from billing import commission as CM
-        return CM.client_statement(session, club_id=club_id, user_id=user_id, month=None)
+        return CM.client_statement(session, club_id=club_id, user_id=user_id, month=month)
     cs = _guard(session, _run, default)
     if coach_user_id is not None:
         cid = str(coach_user_id)
@@ -376,6 +378,19 @@ def _coaching(session, *, club_id, user_id, coach_user_id=None):
         totals["net_minor"] = totals["paid_minor"] + totals["owed_minor"]
         cs = {**cs, "coaches": coaches, "arrears_items": arrears, "totals": totals}
     return cs
+
+
+def _service_breakdown(session, *, club_id, coach_user_id, user_id, month=None):
+    """One client's coaching grouped BY SERVICE (product + duration) for a coach — the middle tier of
+    the coach's month → client → SERVICE → transaction drill. Reuses
+    billing.commission.client_service_breakdown (product-aware, month-scoped). Guarded → empty."""
+    default = {"month": month, "services": [], "currency": None}
+
+    def _run():
+        from billing import commission as CM
+        return CM.client_service_breakdown(session, club_id=club_id, coach_user_id=coach_user_id,
+                                           client_user_id=user_id, month=month)
+    return _guard(session, _run, default)
 
 
 def _activity(session, *, club_id, user_id):
@@ -486,15 +501,17 @@ def _can(scope):
 # the composer
 # ---------------------------------------------------------------------------
 
-def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=None):
+def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=None, month=None):
     """The SINGLE cross-lane Client-360 read every client view derives from. Returns a dict, or None
     when the user has no iam.membership row in this club (scoping guard).
 
     scope in {'admin','coach','client'} governs which optional blocks are included and the `can`
     capability map. For scope='coach', pass coach_user_id — the coaching statement + packages are
-    filtered to that coach's relevance. Every optional block runs inside its own SAVEPOINT (_guard),
-    so a partial DB degrades block-by-block rather than 500-ing OR rolling back the caller's
-    transaction. club_id-scoped throughout.
+    filtered to that coach's relevance, and a per-SERVICE breakdown is added (the month → client →
+    service → transaction drill). `month` (YYYY-MM) scopes the coaching paid/collected figures to
+    that month (owed is always current); None = all-time (backward-compatible). Every optional block
+    runs inside its own SAVEPOINT (_guard), so a partial DB degrades block-by-block rather than
+    500-ing OR rolling back the caller's transaction. club_id-scoped throughout.
 
     The payload is a SUPERSET of the legacy admin get_person shape (which delegates here), so
     existing consumers keep working."""
@@ -543,8 +560,14 @@ def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=No
     # Coaching statement — coach + admin scopes only (the coach's per-client coaching view).
     if scope in ("coach", "admin"):
         out["coaching"] = _coaching(session, club_id=club_id, user_id=user_id,
-                                    coach_user_id=(coach_user_id if scope == "coach" else None))
+                                    coach_user_id=(coach_user_id if scope == "coach" else None),
+                                    month=month)
+        # The month → client → SERVICE → transaction middle tier (coach scope: their own services).
+        if scope == "coach" and coach_user_id is not None:
+            out["service_breakdown"] = _service_breakdown(
+                session, club_id=club_id, coach_user_id=coach_user_id, user_id=user_id, month=month)
 
+    out["month"] = month
     out["scope"] = scope
     out["can"] = _can(scope)
     return out

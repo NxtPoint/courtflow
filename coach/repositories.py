@@ -748,95 +748,10 @@ def list_clients(session, *, club_id, user_id, search=None, limit=200):
     return _rows(rows)
 
 
-def get_client(session, *, club_id, user_id, client_user_id, month=None):
-    """A single client's 360 WITH THIS COACH only: the same headline counts as the list row
-    plus the full session history (lessons + classes, with booking_id so the coach can
-    reschedule/cancel a lesson). Returns None if the user has no coaching relationship with
-    this coach (privacy: can't probe arbitrary users — they must appear in this coach's activity).
-
-    When `month` (YYYY-MM) is given, also returns the per-client MONEY for that month
-    (paid/owed/net/written-off) + this client's owed/written-off arrears line items (each with
-    collect/discount/write-off affordances) — the single client-centric statement the coach
-    reviews at month-end. Reuses billing.commission.coach_statement so the figures never drift."""
-    with_spend = _billing_present(session)
-    params = {"c": club_id, "u": user_id, "cu": client_user_id}
-
-    # Headline (same shape as a list row, filtered to the one client).
-    spend_select = "COALESCE(s.paid_minor,0) AS lifetime_spend_minor" if with_spend else \
-        "0 AS lifetime_spend_minor"
-    spend_join = "LEFT JOIN spend s ON s.user_id = a.user_id" if with_spend else ""
-    head_sql = _COACH_ACTIVITY_CTE + f"""
-        SELECT u.id AS user_id, u.first_name, u.surname, u.email, u.phone,
-               MIN(a.starts_at) AS first_seen, MAX(a.starts_at) AS last_seen,
-               COUNT(*) FILTER (WHERE a.kind='lesson') AS lessons_count,
-               COUNT(*) FILTER (WHERE a.kind='class')  AS classes_count,
-               COUNT(*) FILTER (WHERE a.status='no_show') AS no_show_count,
-               COUNT(*) FILTER (WHERE a.starts_at >= now()) AS upcoming_count,
-               {spend_select}
-        FROM activity a
-        JOIN iam.user u ON u.id = a.user_id
-        {spend_join}
-        WHERE a.user_id = :cu
-        GROUP BY u.id, u.first_name, u.surname, u.email, u.phone{', s.paid_minor' if with_spend else ''}
-    """
-    head = _row(session.execute(text(head_sql), params).mappings().first())
-    if head is None:
-        return None
-
-    # Full per-session history (most recent first), scoped to this coach + this client.
-    # booking_id lets the client view wire reschedule/cancel to a lesson (classes carry none).
-    hist_sql = _COACH_ACTIVITY_CTE + """
-        SELECT a.kind, a.starts_at, a.status, a.order_id, a.booking_id
-        FROM activity a
-        WHERE a.user_id = :cu
-        ORDER BY a.starts_at DESC
-        LIMIT 200
-    """
-    head["history"] = _rows(session.execute(text(hist_sql), params).mappings().all())
-
-    # Upcoming sessions (future, soonest first) — with booking_id for reschedule/cancel.
-    upcoming_sql = _COACH_ACTIVITY_CTE + """
-        SELECT a.kind, a.starts_at, a.status, a.booking_id
-        FROM activity a
-        WHERE a.user_id = :cu AND a.starts_at >= now()
-        ORDER BY a.starts_at ASC
-        LIMIT 20
-    """
-    head["upcoming"] = _rows(session.execute(text(upcoming_sql), params).mappings().all())
-
-    # Month-end money for THIS client (reuse the coach statement so figures never drift).
-    if month:
-        head["month"] = month
-        try:
-            from billing import commission as _comm
-            stmt = _comm.coach_statement(session, club_id=club_id, coach_user_id=user_id, month=month)
-            cid = str(client_user_id)
-            row = next((c for c in (stmt.get("clients") or [])
-                        if str(c.get("client_user_id")) == cid), None)
-            head["money"] = {
-                "currency": stmt.get("currency", "ZAR"),
-                "paid_minor": int((row or {}).get("paid_minor") or 0),
-                "owed_minor": int((row or {}).get("owed_minor") or 0),
-                "net_minor": int((row or {}).get("net_minor") or 0),
-                "written_off_minor": sum(int(a.get("gross_minor") or 0)
-                    for a in (stmt.get("arrears_items") or [])
-                    if str(a.get("client_user_id")) == cid and a.get("status") == "written_off"),
-            }
-            head["arrears"] = [a for a in (stmt.get("arrears_items") or [])
-                               if str(a.get("client_user_id")) == cid]
-            # By-service breakdown (client → services → sessions → event story) — same drill as the
-            # client billing pattern.
-            bd = _comm.client_service_breakdown(session, club_id=club_id, coach_user_id=user_id,
-                                                client_user_id=client_user_id, month=month)
-            head["services"] = bd["services"]
-            head["services_total_minor"] = bd["total_minor"]
-            head["services_billed_minor"] = bd["billed_minor"]
-        except Exception:
-            log.info("get_client: month money skipped (commission unavailable) client=%s", client_user_id)
-            head["money"] = None
-            head["arrears"] = []
-            head["services"] = []
-    return head
+# NOTE: the per-client coach reader `get_client` was RETIRED (2026-07-11) — it was a parallel
+# month-aware client-360 that bypassed the single-source composer. Every coach client view is now a
+# view off `client360.get_client_360(scope="coach", month=…)` (GET /clients/<id>/360?month=), which
+# carries the same month money + per-service breakdown. `_COACH_ACTIVITY_CTE` remains (list_clients).
 
 
 # ---------------------------------------------------------------------------
