@@ -1,40 +1,45 @@
 # Google Ads / Analytics — Plan & Console Steps
 
-> The R2k/month Search campaign is well-built, but it was optimising toward **"Calls from ads"** because
-> real conversions weren't wired. Engineering has now wired the **real conversions**; the remaining work
-> is (a) console config you do in Google Ads, and (b) the deeper attribution loop (offline + audiences).
+> The R2k/month Search campaign is well-built, but the account had **no real conversions** — so it was
+> flying blind. A live audit + build was done in the account on **2026-07-11** (account `704-275-3564`,
+> `AW-17077631191`, owned by `info@nextpointtennis.com` ✓). Two real conversion actions were created and the
+> broken bidding was fixed. **One thing remains: set the env on `courtflow-web` so the tag actually fires.**
 
-## What's live (GA4 + Ads)
-- **GA4** `G-EKQP47P8M9` + **Google Ads** `AW-17077631191`, injected on every served page (`web_app._google_tag_head`).
-- **Search campaign** (2026-06-20): PMax paused, 4 ad groups / 38 keywords / 28 negatives, geo-tight to the 10
-  northern suburbs, ~R66/day.
-- Conversion plumbing: `window.cfConversion(name, props)` fires the Ads conversion mapped in
-  `GOOGLE_ADS_CONVERSIONS`; `cfTrack(name, props)` fires the GA4 event.
+## Live audit (2026-07-11) — what was found
+- **0 conversions recorded.** The only goal was a vanity **"Page views"** action with **no primary
+  conversion** — Google itself flagged it "cannot be used for optimization."
+- **Bidding was broken:** the live **NextPoint – Search – JHB** campaign (R66/day) was on **"Maximize
+  Conversions" with 0 conversions** → bidding blind, wasting spend.
+- **Google tag not firing:** Google reports **"No tag found for this account"** → `GOOGLE_ADS_ID` is almost
+  certainly **not set on `courtflow-web`**, so the gtag isn't on the live site and nothing is measured.
+- Agency **Performance Max** ("Aug - Cyborg Digital 2025") is **paused** — leave it paused.
+- **Advertiser verification** was pending — Tomo updated business details 2026-07-11; verification in progress.
 
-## What engineering just wired (fires automatically once you map it)
-| Conversion name | Fires when | Where |
-|---|---|---|
-| `booking` | a member completes a self-booking (not held/awaiting-payment, not staff on-behalf) | booking success screen |
-| `start_free_week` | anyone clicks a "Start your free week" / sign-up CTA (`/login#/sign-up`, or any `a[data-conv]`) | site-wide |
+## What was DONE in the account (2026-07-11)
+- ✅ Created **"Free week started"** (Sign-up category, **Primary**, manual event) → `start_free_week`.
+- ✅ Created **"Booking completed"** (Purchase category, **Primary**, manual event) → `booking`.
+- ✅ Switched **NextPoint – Search – JHB** bidding **Maximize Conversions → Maximize Clicks, max CPC R15**
+  (predictable traffic while conversions accrue; revert once ~15–30 conversions land — see below).
+- Code (already shipped): `cfConversion('booking')` on the booking success screen; `cfConversion('start_free_week')`
+  site-wide on any `/login#/sign-up` (or `a[data-conv]`) CTA click. Both no-op until the env below is set.
 
-Both are **no-ops until you map them** in `GOOGLE_ADS_CONVERSIONS` — so nothing double-fires by accident.
+## ⭐ YOUR remaining step — set the env on `courtflow-web` (Render → Environment)
+This makes the Google tag fire on the live site (fixing "No tag found") AND maps the conversions:
+```
+GA4_MEASUREMENT_ID     = G-EKQP47P8M9
+GOOGLE_ADS_ID          = AW-17077631191
+GOOGLE_ADS_CONVERSIONS = {"start_free_week":"AW-17077631191/rEy7CNKNsc4cENfxn88_","booking":"AW-17077631191/tu5JCNWNsc4cENfxn88_"}
+```
+(Valid JSON on one line; redeploy.) Within a few hours Google detects the tag and starts recording real
+sign-ups + bookings.
 
-## YOUR steps in Google Ads (this activates it)
-1. **Create two conversion actions** — Ads → Goals → Conversions → **+ New** → Website → *set up manually with
-   code / gtag*. Name them e.g. **"Free week started"** and **"Booking completed"**. For each, copy its
-   **send_to label** (looks like `AW-17077631191/AbCdEfG…`). Category: "Sign-up" and "Purchase"/"Submit lead".
-2. **Set the env** on `courtflow-web` (Render → Environment):
-   ```
-   GOOGLE_ADS_CONVERSIONS = {"start_free_week":"AW-17077631191/AAA…","booking":"AW-17077631191/BBB…"}
-   ```
-   (valid JSON; redeploy.)
-3. **Make them PRIMARY**, demote "Calls from ads" to secondary (keep it, don't delete). Set **"Free week
-   started"** as the main optimisation goal to start (higher volume → the algorithm learns faster); "Booking
-   completed" is the deeper-value secondary.
-4. **Bidding** — keep **Maximize Clicks (max CPC ~R8)** until **~15–30** "Free week started" conversions accrue,
-   then switch to **Maximize Conversions → Target CPA**. Don't switch early (not enough data = erratic bidding).
-5. **Verify** — Ads → Conversions should show "Recording conversions" within a day; use Google **Tag Assistant**
-   on the live site to confirm the tags fire on a sign-up-CTA click + a booking.
+## Then (Tomo, no rush)
+- **Complete advertiser verification** (in progress) — or ads can pause.
+- **After ~15–30 conversions accrue** (a week or two), switch **NextPoint – Search – JHB** bidding back
+  **Maximize Clicks → Maximize Conversions → Target CPA** — now it optimises toward real members.
+- **Verify** with Google **Tag Assistant** on the live site: click a "Start your free week" CTA + complete a
+  booking, confirm the two conversions fire.
+- (Optional) demote the vanity **"Page views"** action to secondary; leave "Calls from ads" as secondary.
 
 ## Deeper loop — next builds (engineering; say the word)
 These close "Google ↔ site, both directions" and are the real ROI compounders:
