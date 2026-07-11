@@ -151,14 +151,34 @@ def load(session, club_id, ctx):
     ctx = ctx or {}
     if not club_id:
         return None
+    from sqlalchemy import text
     try:
         if ctx.get("booking_id"):
             return _load_booking(session, club_id, ctx)
         if ctx.get("class_session_id"):
             return _load_class(session, club_id, ctx)
-        # A PURCHASE (membership / pack / paid booking receipt) carries an order but no booking id.
+        # An order-keyed event (payment_succeeded / refunded / membership / pack). If the order links to
+        # a BOOKING or CLASS, show the SAME rich block as the confirmation (Service · When · Duration ·
+        # Court · Coach · Payment) so an online booking's payment email IS its confirmation. Only a true
+        # PURCHASE (membership / pack) falls through to the flat purchase block.
         oid = ctx.get("order_id") or (ctx.get("ref_id") if ctx.get("ref_type") == "order" else None)
         if oid:
+            bk = session.execute(
+                text("SELECT booking_id FROM billing.order_line "
+                     "WHERE order_id = :o AND booking_id IS NOT NULL ORDER BY created_at LIMIT 1"),
+                {"o": str(oid)},
+            ).scalar()
+            if bk:
+                return _load_booking(session, club_id, {"booking_id": str(bk)})
+            en = session.execute(
+                text("SELECT id, class_session_id, user_id FROM diary.enrolment "
+                     "WHERE order_id = :o ORDER BY enrolled_at LIMIT 1"),
+                {"o": str(oid)},
+            ).mappings().first()
+            if en:
+                return _load_class(session, club_id, {
+                    "class_session_id": str(en["class_session_id"]),
+                    "user_id": str(en["user_id"]) if en["user_id"] else None})
             return _load_order(session, club_id, oid)
     except Exception:
         log.debug("booking_detail.load failed", exc_info=False)
@@ -308,6 +328,7 @@ def _load_order(session, club_id, order_id):
     charge = _charge(session, club_id, str(order_id), o["settlement_mode"])
     service = when = None
     when_label = "When"
+    okind = "purchase"
 
     # WHAT KIND of purchase is this? billing."order" has no type column, so infer from the linked row
     # — the same dispatch order the Yoco webhook uses: membership, else pack, else a booking/class.
@@ -320,6 +341,7 @@ def _load_order(session, club_id, order_id):
         {"o": str(order_id)},
     ).mappings().first()
     if mem:
+        okind = "membership"
         # Name the EXACT membership, mirroring billing.membership_status precedence (tier → label →
         # term → "Membership"); a trial is always the "7 Day Trial Period".
         if (mem["provider"] or "") == "trial":
@@ -355,6 +377,7 @@ def _load_order(session, club_id, order_id):
                 items.append(_clean_service(it))
         service = ", ".join(dict.fromkeys(items)) or None
         if pack:
+            okind = "pack"
             when_label = "Validity"
             when = _fmt_period(pack["purchased_at"], pack["expires_at"]) if pack["expires_at"] else "No expiry"
         else:
@@ -382,6 +405,7 @@ def _load_order(session, club_id, order_id):
     return {
         "is_purchase": True,
         "booking_type": "purchase",
+        "order_kind": okind,
         "service": service,
         "when": when, "when_label": when_label, "duration_minutes": None, "court": None,
         "coach": {"name": None, "email": None},
@@ -439,9 +463,11 @@ def _rows_html(rows):
     for label, value in rows:
         if value in (None, ""):
             continue
+        # Fixed label-column width so the VALUE columns line up across sections (Client details ↔
+        # Booking details) — the owner's alignment ask. width= attribute is email-client-robust.
         out.append(
             '<tr>'
-            '<td style="padding:6px 12px 6px 0;color:#5F7268;font-size:13px;'
+            '<td width="132" style="width:132px;padding:6px 12px 6px 0;color:#5F7268;font-size:13px;'
             'white-space:nowrap;vertical-align:top">%s</td>'
             '<td style="padding:6px 0;color:#10231A;font-size:14px;font-weight:600">%s</td>'
             '</tr>' % (_esc(label), _esc(value)))

@@ -71,7 +71,7 @@ def _booking_noun(ctx, default="your booking"):
 def _t_booking_confirmed(ctx):
     body = f"Your booking for {_booking_noun(ctx)} is confirmed."
     bid = _g(ctx, "ref_id", "booking_id")
-    return ("Booking confirmed", body, "/my.html" if bid else None)
+    return ("Booking confirmed", body, "/portal" if bid else None)
 
 
 def _t_payment_succeeded(ctx):
@@ -89,7 +89,7 @@ def _t_membership_activated(ctx):
     body = (f"Your {plan} is active. Your court bookings are now covered by your membership."
             if plan != "Membership"
             else "Your membership is active. Your court bookings are now covered.")
-    return ("Membership active", body, "/plan")
+    return ("Membership active", body, "/portal")
 
 
 def _t_bundle_activated(ctx):
@@ -98,14 +98,14 @@ def _t_bundle_activated(ctx):
     body = f"Your {label} is ready."
     if n:
         body += f" {n} sessions added to your wallet."
-    return ("Pack activated", body, "/plan")
+    return ("Pack activated", body, "/portal")
 
 
 def _t_refund_requested(ctx):
     amt = _money(_g(ctx, "amount_minor"), _g(ctx, "currency_code", "currency"))
     body = ("We've received your refund request" + (f" for {amt}" if amt else "") +
             ". We'll review it and be in touch.")
-    return ("Refund requested", body, "/account.html")
+    return ("Refund requested", body, "/portal")
 
 
 def _t_refund_decided(ctx):
@@ -124,14 +124,14 @@ def _t_refund_decided(ctx):
     else:
         body = "There's an update on your refund request."
         title = "Refund update"
-    return (title, body, "/account.html")
+    return (title, body, "/portal")
 
 
 def _t_class_enrolled(ctx):
     cls = _g(ctx, "class_name", default="your class")
     when = _when(ctx)
     body = f"You're enrolled in {cls}" + (f" on {when}" if when else "") + "."
-    return ("Class enrolment confirmed", body, "/my.html")
+    return ("Class enrolment confirmed", body, "/portal")
 
 
 def _t_class_waitlisted(ctx):
@@ -139,14 +139,14 @@ def _t_class_waitlisted(ctx):
     pos = ctx.get("position")
     body = f"You're on the waitlist for {cls}" + (f" (position {pos})" if pos else "") + \
            ". We'll let you know if a spot opens."
-    return ("You're on the waitlist", body, "/my.html")
+    return ("You're on the waitlist", body, "/portal")
 
 
 def _t_class_promoted(ctx):
     cls = _g(ctx, "class_name", "resource_name", default="your class")
     when = _when(ctx)
     body = f"A spot opened — you're now enrolled in {cls}" + (f" on {when}" if when else "") + "."
-    return ("A spot opened — you're in!", body, "/my.html")
+    return ("A spot opened — you're in!", body, "/portal")
 
 
 def _t_coach_invited(ctx):
@@ -163,27 +163,27 @@ def _t_statement_ready(ctx):
     else:
         body = ("Your coaching invoice for this month is ready. Pay securely online from your "
                 "dashboard — tap to go straight in.")
-    return ("Your invoice is ready", body, "/account.html")
+    return ("Your invoice is ready", body, "/portal")
 
 
 # Lesson approval lifecycle (recipient is set on the emit payload's user_id by diary.bookings).
 def _t_lesson_requested(ctx):
     return ("New lesson request", "A client has requested a lesson with you — accept, propose a new "
-            "time, or decline.", "/coach.html")
+            "time, or decline.", "/coach")
 
 
 def _t_lesson_proposed(ctx):
     return ("Your coach proposed a time", "Your coach suggested a time for your lesson — accept or "
-            "decline it under “Needs your attention”.", "/portal.html")
+            "decline it under “Needs your attention”.", "/portal")
 
 
 def _t_lesson_accepted(ctx):
-    return ("Lesson confirmed", "Your lesson is confirmed — see it in My Bookings.", "/portal.html")
+    return ("Lesson confirmed", "Your lesson is confirmed — see it in My Bookings.", "/portal")
 
 
 def _t_lesson_declined(ctx):
     return ("Lesson request declined", "Your coach couldn't take that lesson. Try another time or "
-            "coach.", "/book/lesson")
+            "coach.", "/portal")
 
 
 # Booking/money lifecycle — cancellations, edits, refunds, reminders (client-facing, launch-critical).
@@ -194,7 +194,7 @@ def _t_booking_cancelled(ctx):
     fee = _money(_g(ctx, "fee_minor"), _g(ctx, "currency_code", "currency"))
     if fee and _g(ctx, "fee_applied"):
         body += f" A cancellation fee of {fee} applies."
-    return ("Booking cancelled", body, "/app.html")
+    return ("Booking cancelled", body, "/portal")
 
 
 def _t_booking_rescheduled(ctx):
@@ -202,7 +202,7 @@ def _t_booking_rescheduled(ctx):
     when = _when(ctx)
     body = f"Your booking for {res} has been moved" + (f" to {when}" if when else "") + \
            ". If this doesn't suit you, you can reschedule or cancel from My Bookings."
-    return ("Booking updated", body, "/app.html")
+    return ("Booking updated", body, "/portal")
 
 
 def _t_payment_refunded(ctx):
@@ -210,7 +210,7 @@ def _t_payment_refunded(ctx):
     body = ("We've refunded" + (f" {amt}" if amt else " your payment") +
             " to your card. It can take a few business days to appear on your statement.")
     order_id = _g(ctx, "ref_id", "order_id")
-    link = f"/receipt.html?order={order_id}" if order_id else "/account.html"
+    link = f"/receipt.html?order={order_id}" if order_id else "/portal"
     return ("Refund issued", body, link)
 
 
@@ -219,7 +219,7 @@ def _t_class_cancelled(ctx):
     when = _when(ctx)
     body = f"{cls}" + (f" on {when}" if when else "") + \
            " has been cancelled. Any payment for it will be refunded or credited."
-    return ("Class cancelled", body, "/app.html")
+    return ("Class cancelled", body, "/portal")
 
 
 def _t_booking_reminder(ctx):
@@ -230,7 +230,7 @@ def _t_booking_reminder(ctx):
     coach = ctx.get("coach_name")
     if coach:
         body += f" Coach: {coach}."
-    return ("Booking reminder", body, "/app.html")
+    return ("Booking reminder", body, "/portal")
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +310,34 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
         log.exception("notification template failed kind=%s", kind)
         title, body, link = (kind.replace("_", " ").title(), None, None)
 
+    # 2b) Rich detail block (client · service · date+time in club TZ · court · coach · price + payment),
+    # looked up by booking_id/class_session_id/order_id so the lean, non-PII emit payload is untouched.
+    # Loaded NOW (before the in-app row) so payment_succeeded can be the SINGLE confirm+receipt email:
+    # an online booking's payment email shows the SAME rich block as a confirmation, and is SUPPRESSED
+    # for pack/class orders (their own "Pack activated" / "enrolment confirmed" email is the one email)
+    # so one online purchase never sends two emails. Guarded → None → the plain body is used. For a
+    # lesson/class the detail also yields the coach's email, which we BCC so the coach gets a copy.
+    detail = None
+    if kind in booking_detail.DETAIL_KINDS or kind in _PURCHASE_KINDS:
+        try:
+            detail = booking_detail.load(session, club_id, ctx or {})
+        except Exception:
+            detail = None
+
+    if kind == "payment_succeeded" and detail:
+        if detail.get("is_purchase"):
+            ok = detail.get("order_kind")
+            if ok == "pack":
+                return None                    # the pack's "Pack activated" email is the one email
+            if ok == "membership":
+                title = "Membership confirmed"
+                body = "Your membership is active and paid — the details are below."
+        elif detail.get("booking_type") == "class":
+            return None                        # the class's "enrolment confirmed" email is the one
+        else:
+            title = "Booking confirmed"        # court/lesson: this payment email IS the confirmation
+            body = "Your booking is confirmed and paid — the details are below."
+
     # non-PII context for the row's data jsonb (drop control/contact keys).
     _drop = {"email", "user_id", "account_id", "person_id"}
     data = {k: v for k, v in (ctx or {}).items() if k not in _drop}
@@ -324,17 +352,6 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
     #    MULTI-TENANT: the club's name becomes the email's From display name + signature, and the
     #    club's contact email its Reply-To — all riding one verified CourtFlow SES identity.
     ident = _club_identity(session, club_id)
-
-    # Rich booking/class detail (client · service · date+time in club TZ · court · coach · price +
-    # payment status) — looked up by booking_id/class_session_id at SEND time so the lean, non-PII
-    # emit payload is untouched. Guarded → None → the plain body is used. For a lesson/class this
-    # also yields the coach's email, which we BCC so the coach gets a copy of the booking.
-    detail = None
-    if kind in booking_detail.DETAIL_KINDS or kind in _PURCHASE_KINDS:
-        try:
-            detail = booking_detail.load(session, club_id, ctx or {})
-        except Exception:
-            detail = None
     bcc = list(filter(None, [ident.get("bcc"), booking_detail.coach_email(detail)]))
 
     status = _try_email(recipient.get("email"), title, body, recipient.get("name"),
