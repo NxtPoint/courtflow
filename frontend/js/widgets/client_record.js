@@ -90,7 +90,7 @@
       // ---- This month at a glance: the SAME activity + spend rollup as the client Home (golden rule).
       // The full booking + financial DETAIL sits below (money card + bookings) — this is the headline.
       if (pn.activity_summary && pn.activity_summary.counts) {
-        wrap.appendChild(CRMUI.activityBlock(pn.activity_summary, {}));
+        wrap.appendChild(CRMUI.activityBlock(pn.activity_summary, { noChart: true }));   // no graphs on the 360
         wrap.appendChild(CRMUI.spendBlock(pn.activity_summary, cfg.onSettleAll ? { onSettle: cfg.onSettleAll } : {}));
       }
 

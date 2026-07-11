@@ -200,16 +200,8 @@
       wrap.appendChild(ac);
     }
 
-    // ACTIVITIES — first. The month at a glance (counts · total time · weekly chart). Tap → Client 360.
-    if (asum) wrap.appendChild(window.CRMUI.activityBlock(asum, { onOpen: function () { go("#/activity"); } }));
-
-    // FINANCIAL — spend by service · paid vs outstanding · settle. Tap → Client 360 statement.
-    if (asum) wrap.appendChild(window.CRMUI.spendBlock(asum, {
-      onSettle: function () { payOrders(null); },
-      onOpen: function () { go("#/activity"); },
-    }));
-
-    // Book — Court / Lesson / Class, drawn glyphs (no emoji).
+    // BOOK — services FIRST so a member can pick one straight away (Court / Lesson / Class,
+    // drawn glyphs, no emoji).
     var qb = card([el("h2", { style: "margin:0 0 10px", text: "Book a session" })]);
     var tiles = el("div", { class: "cf-qb" });
     ["court", "lesson", "class"].forEach(function (k) {
@@ -219,10 +211,19 @@
     });
     qb.appendChild(tiles); wrap.appendChild(qb);
 
-    // Your sessions (Upcoming / Past).
+    // Your sessions (Upcoming / Past) — what's next, right after choosing a service.
     wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your sessions" }), el("div", { id: "home-sessions" })]));
 
-    // Match analysis & technique — under bookings (the embedded Ten-Fifty5 product).
+    // BILLING — spend by service · paid vs outstanding · settle. Tap → Client 360 statement.
+    if (asum) wrap.appendChild(window.CRMUI.spendBlock(asum, {
+      onSettle: function () { payOrders(null); },
+      onOpen: function () { go("#/activity"); },
+    }));
+
+    // ACTIVITY — the month at a glance (counts · total time · weekly chart). Tap → Client 360.
+    if (asum) wrap.appendChild(window.CRMUI.activityBlock(asum, { onOpen: function () { go("#/activity"); } }));
+
+    // Match analysis & technique — the embedded Ten-Fifty5 product.
     // Allowlisted (private test) → the working embed; everyone else → a "Coming soon" teaser.
     if (TF5_URL) wrap.appendChild(tf5Enabled() ? analysisPromo() : analysisSoon());
 

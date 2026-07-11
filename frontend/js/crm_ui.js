@@ -296,7 +296,7 @@
       el("span", { class: "cf-totline-v num", text: fmtDur(a.minutes) }),
       el("span", { class: "cf-muted", style: "font-size:.88rem", text: "on court · " + (c.total || 0) + " session" + (c.total === 1 ? "" : "s") }),
     ]));
-    if ((a.by_week || []).length) body.appendChild(weekChart(a.by_week));
+    if ((a.by_week || []).length && !opts.noChart) body.appendChild(weekChart(a.by_week));
     return _moduleCard("Activity", a.month, body, opts.onOpen ? { label: "View all activity", onOpen: opts.onOpen } : null);
   }
 
