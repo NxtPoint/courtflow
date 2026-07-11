@@ -472,6 +472,74 @@ def set_members_covered(session, *, club_id, product_id, members_covered):
     )
 
 
+# ---------------------------------------------------------------------------
+# equipment hire (ball machine / racquets / balls) — a flat-fee booking add-on.
+# One item = a billing.product(kind='equipment') + a flat billing.price + a diary.resource(kind='equipment'
+# with a quantity). Created/edited here; the booking flow reads diary.equipment.list_equipment.
+# ---------------------------------------------------------------------------
+
+def _equipment_one(session, *, club_id, resource_id):
+    from diary.equipment import list_equipment as _le
+    for it in _le(session, club_id=club_id, active_only=False):
+        if it["id"] == str(resource_id):
+            return it
+    return None
+
+
+def list_equipment(session, *, club_id):
+    from diary.equipment import list_equipment as _le
+    return _le(session, club_id=club_id, active_only=False)
+
+
+def create_equipment(session, *, club_id, name, amount_minor=0, quantity=1, feature_on_home=False):
+    prod = session.execute(
+        text("INSERT INTO billing.product (club_id, kind, name, active) "
+             "VALUES (:c, 'equipment', :n, true) RETURNING id"),
+        {"c": club_id, "n": (name or "Equipment")},
+    ).scalar()
+    session.execute(
+        text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, currency_code, "
+             "unit, active) VALUES (:c, :p, 'any', :a, :cur, 'per_booking', true)"),
+        {"c": club_id, "p": prod, "a": int(amount_minor or 0),
+         "cur": _club_currency(session, club_id=club_id)},
+    )
+    rid = session.execute(
+        text("INSERT INTO diary.resource (club_id, kind, name, quantity, feature_on_home, product_id, "
+             "is_active) VALUES (:c, 'equipment', :n, :q, :f, :p, true) RETURNING id"),
+        {"c": club_id, "n": (name or "Equipment"), "q": max(1, int(quantity or 1)),
+         "f": bool(feature_on_home), "p": prod},
+    ).scalar()
+    return _equipment_one(session, club_id=club_id, resource_id=rid)
+
+
+def patch_equipment(session, *, club_id, resource_id, name=None, amount_minor=None, quantity=None,
+                    feature_on_home=None, is_active=None):
+    prod = session.execute(
+        text("SELECT product_id FROM diary.resource "
+             "WHERE club_id = :c AND id = :r AND kind = 'equipment'"),
+        {"c": club_id, "r": resource_id},
+    ).scalar()
+    if prod is None:
+        return None
+    session.execute(
+        text("UPDATE diary.resource SET name = COALESCE(:n, name), "
+             "quantity = COALESCE(:q, quantity), feature_on_home = COALESCE(:f, feature_on_home), "
+             "is_active = COALESCE(:a, is_active), updated_at = now() "
+             "WHERE club_id = :c AND id = :r"),
+        {"c": club_id, "r": resource_id, "n": name,
+         "q": (max(1, int(quantity)) if quantity is not None else None),
+         "f": feature_on_home, "a": is_active},
+    )
+    if name is not None:
+        session.execute(text("UPDATE billing.product SET name = :n, updated_at = now() "
+                             "WHERE club_id = :c AND id = :p"), {"c": club_id, "p": prod, "n": name})
+    if amount_minor is not None:
+        session.execute(text("UPDATE billing.price SET amount_minor = :a, updated_at = now() "
+                             "WHERE club_id = :c AND product_id = :p"),
+                        {"c": club_id, "p": prod, "a": int(amount_minor)})
+    return _equipment_one(session, club_id=club_id, resource_id=resource_id)
+
+
 def _get_price(session, *, club_id, price_id):
     return _row(session.execute(
         text("SELECT id, club_id, product_id, audience, amount_minor, peak_amount_minor, currency_code, "

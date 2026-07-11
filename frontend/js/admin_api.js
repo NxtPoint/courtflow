@@ -197,6 +197,12 @@
       return A().apiJSON("/api/admin/membership-plans/" + enc(id), { method: "DELETE" });
     },
 
+    // ---- equipment hire (ball machine / racquets / balls) ----------------
+    equipment: function () { return A().apiJSON("/api/admin/equipment"); },
+    createEquipment: function (body) { return A().apiJSON("/api/admin/equipment", { method: "POST", body: body }); },
+    patchEquipment: function (id, body) { return A().apiJSON("/api/admin/equipment/" + enc(id), { method: "PATCH", body: body }); },
+    deleteEquipment: function (id) { return A().apiJSON("/api/admin/equipment/" + enc(id), { method: "DELETE" }); },
+
     // ---- session-pack (token bundle) plans (docs/specs/02) ---------------
     // GET /api/admin/bundle-plans -> {plans:[...]} — READ ONLY, for the offline "issue a pack" picker.
     // (create/patch/delete removed 2026-07-09 — packs are created/edited ONLY under a service via the
@@ -1655,11 +1661,79 @@
     renderList();
   }
 
+  // EQUIPMENT HIRE — a flat-fee, availability-tracked booking add-on (ball machine / racquets / balls).
+  function equipmentManage(host) {
+    init(); UI.clear(host);
+    host.appendChild(el("div", { class: "cf-card" }, [
+      el("h3", { text: "Equipment hire" }),
+      el("p", { class: "cf-muted", text: "Add-ons clients hire with a court booking. Each has a flat fee and a quantity you own — a single ball machine can't be hired twice for the same time. Feature one on the client Home to promote it." }),
+    ]));
+    var listWrap = el("div", {}); host.appendChild(listWrap);
+    var addBtn = el("button", { class: "cf-btn cf-btn-sm", style: "margin-top:10px", text: "+ Add equipment" });
+    addBtn.addEventListener("click", function () { openItem(null); });
+    host.appendChild(addBtn);
+
+    function reload() {
+      UI.clear(listWrap); listWrap.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+      window.AdminAPI.equipment().then(function (r) {
+        UI.clear(listWrap);
+        var items = r.equipment || [];
+        if (!items.length) { listWrap.appendChild(el("div", { class: "cf-empty", text: "No equipment yet." })); return; }
+        var list = el("div", { class: "cf-list" });
+        items.forEach(function (it) {
+          var price = it.amount_minor != null ? UI.money(it.amount_minor, it.currency_code || "ZAR") : "—";
+          var sub = "Qty " + it.quantity + " · " + price + (it.feature_on_home ? " · featured" : "") + (it.active ? "" : " · hidden");
+          var row = el("div", { class: "cf-item cf-item-tap" }, [
+            el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: it.name }), el("div", { class: "cf-item-s", text: sub })]),
+            el("span", { class: "cf-chip", text: "›" }),
+          ]);
+          row.addEventListener("click", function () { openItem(it); });
+          list.appendChild(row);
+        });
+        listWrap.appendChild(list);
+      }, function (e) { UI.clear(listWrap); listWrap.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+
+    function openItem(it) {
+      UI.clear(host);
+      var m = { name: it ? it.name : "", amount: it ? (it.amount_minor || 0) : 0, quantity: it ? it.quantity : 1, feature: it ? !!it.feature_on_home : false, active: it ? it.active : true };
+      var saveB = el("button", { class: "cf-btn cf-btn-primary", text: "Save & close" });
+      host.appendChild(el("div", { class: "cf-editbar" }, [
+        el("button", { class: "cf-btn", text: "← Cancel", onclick: function () { equipmentManage(host); } }),
+        el("strong", { text: it ? "Edit equipment" : "New equipment" }),
+        el("span", { class: "cf-spacer" }), saveB,
+      ]));
+      var nameI = input({ value: m.name, placeholder: "e.g. Ball machine", style: "max-width:360px;font-weight:700" }); nameI.addEventListener("input", function () { m.name = nameI.value; });
+      var amtI = input({ value: (m.amount / 100).toFixed(2), style: "max-width:120px" }); amtI.addEventListener("input", function () { m.amount = Math.round(parseFloat(amtI.value || "0") * 100); });
+      var qtyI = input({ type: "number", min: 1, value: m.quantity, style: "max-width:100px" }); qtyI.addEventListener("input", function () { m.quantity = parseInt(qtyI.value, 10) || 1; });
+      var featCb = el("input", { type: "checkbox" }); featCb.style.width = "auto"; featCb.checked = m.feature; featCb.addEventListener("change", function () { m.feature = featCb.checked; });
+      host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Details" }),
+        field("Name", nameI), field("Flat fee (R)", amtI), field("Quantity you own", qtyI),
+        el("label", { class: "cf-row", style: "gap:10px;align-items:center;cursor:pointer;margin-top:6px" }, [featCb, el("span", { style: "font-weight:600", text: "Feature on the client Home (a hero tile)" })]),
+      ]));
+      if (it) {
+        var tg = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", style: "margin-top:8px", text: it.active ? "Hide from booking" : "Show in booking" });
+        tg.addEventListener("click", async function () { try { await window.AdminAPI.patchEquipment(it.id, { is_active: !it.active }); UI.toast("Saved.", "info"); equipmentManage(host); } catch (e) { UI.toast(UI.errMsg(e), "error"); } });
+        host.appendChild(tg);
+      }
+      saveB.addEventListener("click", async function () {
+        if (!(m.name || "").trim()) { UI.toast("Name it.", "warn"); return; }
+        saveB.disabled = true;
+        try {
+          if (it) await window.AdminAPI.patchEquipment(it.id, { name: m.name, amount_minor: m.amount, quantity: m.quantity, feature_on_home: m.feature });
+          else await window.AdminAPI.createEquipment({ name: m.name, amount_minor: m.amount, quantity: m.quantity, feature_on_home: m.feature });
+          UI.toast("Saved.", "info"); equipmentManage(host);
+        } catch (e) { saveB.disabled = false; UI.toast(UI.errMsg(e) || "Couldn't save.", "error"); }
+      });
+    }
+    reload();
+  }
+
   window.AdminUI = {
     clubProfile: clubProfile, hours: hours, courts: courts, courtsManage: courtsManage,
     coachManage: coachManage,
     services: services, coaches: coaches, membershipPlans: membershipPlans,
-    membershipServices: membershipServices,
+    membershipServices: membershipServices, equipmentManage: equipmentManage,
     coachAgreements: coachAgreements,
     courtRates: courtRates, pricingHome: pricingHome,
   };

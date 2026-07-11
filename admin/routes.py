@@ -468,6 +468,62 @@ def delete_membership_plan(price_id):
     return jsonify(ok=True), 200
 
 
+# ---- equipment hire (ball machine / racquets / balls) — a flat-fee booking add-on ----
+@admin_bp.get("/equipment")
+def get_equipment():
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        items = repo.list_equipment(s, club_id=p.club_id)
+    return jsonify(equipment=items, count=len(items)), 200
+
+
+@admin_bp.post("/equipment")
+def post_equipment():
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    name = (b.get("name") or "").strip()
+    if not name:
+        return jsonify(error="name required"), 400
+    with session_scope() as s:
+        item = repo.create_equipment(
+            s, club_id=p.club_id, name=name, amount_minor=int(b.get("amount_minor") or 0),
+            quantity=int(b.get("quantity") or 1), feature_on_home=bool(b.get("feature_on_home")))
+    return jsonify(equipment=item), 201
+
+
+@admin_bp.patch("/equipment/<resource_id>")
+def patch_equipment_route(resource_id):
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        item = repo.patch_equipment(
+            s, club_id=p.club_id, resource_id=resource_id, name=b.get("name"),
+            amount_minor=b.get("amount_minor"), quantity=b.get("quantity"),
+            feature_on_home=b.get("feature_on_home"), is_active=b.get("is_active"))
+    if item is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(equipment=item), 200
+
+
+@admin_bp.delete("/equipment/<resource_id>")
+def delete_equipment(resource_id):
+    """Soft-deactivate an equipment item (hidden from booking; kept for history/existing hires)."""
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        item = repo.patch_equipment(s, club_id=p.club_id, resource_id=resource_id, is_active=False)
+    if item is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(ok=True), 200
+
+
 @admin_bp.get("/membership-config")
 def get_membership_config():
     """The membership product's payment preference + the club's enabled methods, for the editor.

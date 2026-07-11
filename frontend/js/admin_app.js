@@ -1233,8 +1233,10 @@
       mount: function (h) { UI.clear(h); window.AdminUI.courtsManage(h); } },
     { key: "services", label: "Services & pricing", desc: "Lessons, classes, court hire — prices, packages, commission",
       mount: function (h) { window.Widgets.ServiceList.mount(h, { role: "admin", kinds: ["lesson", "class", "court"], allowCreate: true, onCreate: adminNewService }); } },
-    { key: "memberships", label: "Memberships", desc: "Membership tiers and term plans",
+    { key: "memberships", label: "Memberships", desc: "Membership tiers, limits, access hours & the signup trial",
       mount: function (h) { UI.clear(h); window.AdminUI.membershipServices(h); } },
+    { key: "equipment", label: "Equipment hire", desc: "Ball machine, racquets, balls — flat-fee booking add-ons",
+      mount: function (h) { UI.clear(h); window.AdminUI.equipmentManage(h); } },
     // (Session packs are no longer a standalone section — a pack belongs to ONE specific service and
     //  is created/edited under it in Services & pricing. See docs/specs/FRONTEND-STANDARDISATION.md.)
     { key: "coaches", label: "Coaches & commission", desc: "Invite, hide or remove coaches · rent + commission",

@@ -709,6 +709,61 @@ def sc_configurable_trial(s, fx):
     check("the trial tier is NOT in the buyable plans list", all(str(pl["price_id"]) != str(tprice) for pl in plans), str(len(plans)))
 
 
+def sc_equipment_hire(s, fx):
+    print("\n# Equipment hire: flat-fee add-on on the court order (no double-bill, time-based availability, no double-book)")
+    from admin import repositories as AR
+    from diary import equipment as EQ
+    member, court, court2 = fx.members[0], fx.courts[0], fx.courts[1]
+    cprod = s.execute(text("INSERT INTO billing.product (club_id, kind, name, active) "
+                           "VALUES (:c,'court_booking','Court Hire',true) RETURNING id"),
+                      {"c": fx.club_id}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, unit, duration_minutes, active) "
+                   "VALUES (:c,:p,'any',15000,'ZAR','per_booking',60,true)"), {"c": fx.club_id, "p": cprod})
+    s.execute(text("UPDATE diary.resource SET product_id=:p WHERE id IN (:a,:b)"),
+              {"p": cprod, "a": court, "b": court2})
+    ball = AR.create_equipment(s, club_id=fx.club_id, name="Ball machine", amount_minor=8000, quantity=1)
+    racquet = AR.create_equipment(s, club_id=fx.club_id, name="Racquet", amount_minor=2000, quantity=10)
+    check("ball machine starts with 1 unit free",
+          EQ.available_units(s, club_id=fx.club_id, resource_id=ball["id"], starts=at(fx, 10), ends=at(fx, 11)) == 1)
+
+    def order_of(bid):
+        return s.execute(text('SELECT o.id, o.amount_minor, o.settlement_mode, '
+                              '(SELECT count(*) FROM billing.order_line ol WHERE ol.order_id=o.id) AS lines '
+                              'FROM billing."order" o JOIN billing.order_line ol2 ON ol2.order_id=o.id '
+                              'WHERE ol2.booking_id=:b LIMIT 1'), {"b": bid}).mappings().first()
+
+    # 1) PAYG court + ball machine + 2 racquets -> ONE order, R150 + R80 + R40 = R270, 3 lines.
+    r1 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=member, role="member",
+                          booking_type="court", resource_id=court, settlement_mode="at_court",
+                          starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)), product_id=cprod,
+                          addons=[{"resource_id": ball["id"], "qty": 1}, {"resource_id": racquet["id"], "qty": 2}])
+    o1 = order_of(r1["booking"]["id"]) if r1.get("ok") else None
+    check("court + equipment on ONE order, total R270", bool(o1) and o1["amount_minor"] == 27000, str(o1 and dict(o1)))
+    check("ONE order, 3 lines (court + machine + racquets) — no double bill", bool(o1) and o1["lines"] == 3, str(o1 and o1["lines"]))
+
+    # 2) the single ball machine is now unavailable for an OVERLAPPING time on ANOTHER court (time-based).
+    check("ball machine 0 free during an overlapping time (court-agnostic)",
+          EQ.available_units(s, club_id=fx.club_id, resource_id=ball["id"], starts=at(fx, 10, 30), ends=at(fx, 11, 30)) == 0)
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[1], role="member",
+                          booking_type="court", resource_id=court2, settlement_mode="at_court",
+                          starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)), product_id=cprod,
+                          addons=[{"resource_id": ball["id"], "qty": 1}])
+    check("2nd overlapping ball-machine hire refused (the 1 unit can't double-book)",
+          r2.get("ok") is False and r2.get("error") == "EQUIPMENT_UNAVAILABLE", str(r2.get("error")))
+    check("racquets still available (qty 10)",
+          EQ.available_units(s, club_id=fx.club_id, resource_id=racquet["id"], starts=at(fx, 10), ends=at(fx, 11)) >= 8)
+    check("ball machine free again at a non-overlapping time",
+          EQ.available_units(s, club_id=fx.club_id, resource_id=ball["id"], starts=at(fx, 14), ends=at(fx, 15)) == 1)
+
+    # 3) cancel voids the WHOLE order (equipment line goes with it) + frees the machine.
+    B.cancel_booking(s, club_id=fx.club_id, booking_id=r1["booking"]["id"], actor_user_id=member, role="member")
+    ost = s.execute(text('SELECT status FROM billing."order" WHERE id=:o'), {"o": o1["id"]}).scalar()
+    check("cancel voids the whole order incl. equipment (no orphan charge)", ost in ("void", "written_off"), str(ost))
+    check("cancelled booking frees the ball machine",
+          EQ.available_units(s, club_id=fx.club_id, resource_id=ball["id"], starts=at(fx, 10), ends=at(fx, 11)) == 1)
+
+
 def sc_court_service_allocation(s, fx):
     print("\n# Court services: distinct products over allocated courts (price + availability isolation)")
     member = fx.members[0]
@@ -1002,6 +1057,7 @@ SCENARIOS = [
     sc_peak_court_pricing,
     sc_membership_entitlement,
     sc_configurable_trial,
+    sc_equipment_hire,
     sc_court_service_allocation,
     sc_class_courts,
 ]

@@ -55,6 +55,45 @@ _DDL = [
     f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS product_id uuid;",
     f"CREATE INDEX IF NOT EXISTS ix_resource_product "
     f"ON {SCHEMA}.resource (club_id, product_id);",
+    # EQUIPMENT (ball machine / racquets / balls) is a resource KIND with a `quantity` (how many exist,
+    # 1 ball machine / 10 racquets) — it rides a court booking as a flat-fee add-on (see booking_equipment)
+    # and is availability-checked by TIME (a single unit can't be hired twice for overlapping times),
+    # never holding a court of its own. `feature_on_home` promotes an item to a hero tile on the client Home.
+    f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS quantity int NOT NULL DEFAULT 1;",
+    f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS feature_on_home boolean NOT NULL DEFAULT false;",
+    # Widen resource.kind to accept 'equipment'. Idempotent drop+re-add of the auto-named CHECK.
+    f"""
+    DO $$
+    BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.constraint_column_usage
+                   WHERE table_schema = '{SCHEMA}' AND table_name = 'resource'
+                     AND constraint_name = 'resource_kind_check') THEN
+            ALTER TABLE {SCHEMA}.resource DROP CONSTRAINT resource_kind_check;
+        END IF;
+        ALTER TABLE {SCHEMA}.resource ADD CONSTRAINT resource_kind_check
+            CHECK (kind IN ('court','coach','class','equipment'));
+    END $$;
+    """,
+    # --- diary.booking_equipment : equipment hired ON a booking (add-on lines + availability count) ---
+    # Each row = N units of an equipment resource hired for a parent court booking's time. Drives BOTH
+    # billing (one billing.order_line per row, on the booking's single order — no double bill) AND the
+    # time-overlap availability count. price_id/amount_minor snapshot the flat fee at booking time.
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.booking_equipment (
+        id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id       uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        booking_id    uuid NOT NULL REFERENCES {SCHEMA}.booking(id) ON DELETE CASCADE,
+        resource_id   uuid NOT NULL REFERENCES {SCHEMA}.resource(id),
+        qty           int NOT NULL DEFAULT 1,
+        price_id      uuid,                            -- billing.price (cross-lane: unconstrained)
+        amount_minor  int NOT NULL DEFAULT 0,          -- flat fee snapshot × qty is the order line
+        created_at    timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_booking_equipment_booking "
+    f"ON {SCHEMA}.booking_equipment (booking_id);",
+    f"CREATE INDEX IF NOT EXISTS ix_booking_equipment_res "
+    f"ON {SCHEMA}.booking_equipment (club_id, resource_id);",
 
     # --- diary.availability_rule : recurring open hours per resource ------
     f"""

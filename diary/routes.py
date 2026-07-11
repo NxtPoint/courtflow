@@ -174,6 +174,19 @@ def availability():
     return jsonify(slots=slots, count=len(slots)), 200
 
 
+@diary_bp.get("/equipment")
+def equipment_list():
+    """Active equipment items (ball machine / racquets / balls) for the booking add-on picker.
+    Each = {id, name, quantity, feature_on_home, price_id, amount_minor, currency_code}."""
+    p = _principal()
+    if not p or not _need_club(p):
+        return jsonify(error="unauthorized"), 401
+    with session_scope() as s:
+        from diary.equipment import list_equipment
+        items = list_equipment(s, club_id=p.club_id, active_only=True)
+    return jsonify(equipment=items, count=len(items)), 200
+
+
 @diary_bp.get("/durations")
 def durations():
     """Priced durations for a service + whether the caller's COURT bookings are membership-
@@ -311,6 +324,7 @@ def create_booking():
             coach_user_id=b.get("coach_user_id"),
             court_resource_id=b.get("court_resource_id"),
             product_id=b.get("product_id"),   # the chosen SERVICE (Private/Semi-private) → price exactly it
+            addons=b.get("addons"),            # equipment hire [{resource_id, qty}] on a court booking
             audience=audience, notes=b.get("notes"),
             recurrence_id=b.get("recurrence_id"),
             booked_for_user_id=booked_for_user_id,

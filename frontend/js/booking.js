@@ -63,6 +63,8 @@
       });
       ctx.courts = rs.filter(function (r) { return r.kind === "court" && r.is_active; });
     } catch (e) {}
+    // Equipment hire (ball machine / racquets / balls) — offered as an add-on on a court booking.
+    try { ctx.equipment = (await window.TFAuth.apiJSON("/api/diary/equipment")).equipment || []; } catch (e) { ctx.equipment = []; }
     ctx.policy = (principal && principal.policy) || null;
     ctx.loaded = true;
   }
@@ -561,6 +563,19 @@
       rows.push(["When", st.selClass ? UI.fmtRange(st.selClass.starts_at, st.selClass.ends_at) : UI.fmtDate(st.day)]);
     }
     rows.push(["Price", priceLabel()]);
+    // Equipment add-ons (court) as their own lines + a Total when any are chosen, so the client sees the
+    // added fees (the court can be covered/free while the equipment is still a flat charge).
+    if (st.type === "court" && st.addonQty) {
+      var equipMinor = 0, courtMinor = (st.slot && st.slot.price != null) ? st.slot.price : (st.selDurationPrice || 0);
+      (ctx.equipment || []).forEach(function (it) {
+        var q = st.addonQty[it.id] || 0;
+        if (q > 0 && it.amount_minor != null) {
+          equipMinor += it.amount_minor * q;
+          rows.push(["+ " + it.name + (q > 1 ? " ×" + q : ""), UI.money(it.amount_minor * q, ctx.billing && ctx.billing.currency)]);
+        }
+      });
+      if (equipMinor > 0) rows.push(["Total", UI.money((courtMinor || 0) + equipMinor, ctx.billing && ctx.billing.currency)]);
+    }
     return rows;
   }
   function summaryBox() {
@@ -576,6 +591,34 @@
   }
 
   // ---- confirm view (full-screen card) --------------------------------------
+  // Equipment add-ons (court bookings only). Qty steppers per item, clamped to what the club owns; the
+  // server re-checks time-based availability (a single ball machine can't double-book) and bills each as a
+  // flat line on THIS booking's order. Selections live in st.addonQty {resource_id -> qty}.
+  function equipmentSection() {
+    var items = (st.type === "court") ? (ctx.equipment || []).filter(function (e) { return e.active !== false; }) : [];
+    if (!items.length) return null;
+    st.addonQty = st.addonQty || {};
+    var sec = el("div", { class: "cf-confirm-sec" }, [
+      el("h3", { text: "Add equipment" }),
+      el("p", { class: "cf-muted cf-tiny", text: "Hire gear with your court — added to this booking." }),
+    ]);
+    items.forEach(function (it) {
+      var priceTxt = it.amount_minor != null ? UI.money(it.amount_minor, ctx.billing && ctx.billing.currency) : "";
+      var qEl = el("span", { style: "min-width:26px;text-align:center;font-weight:700", text: String(st.addonQty[it.id] || 0) });
+      var minus = el("button", { class: "cf-btn cf-btn-sm", type: "button", text: "–" });
+      var plus = el("button", { class: "cf-btn cf-btn-sm", type: "button", text: "+" });
+      function set(n) { st.addonQty[it.id] = Math.max(0, Math.min(n, it.quantity || 1)); renderConfirm(); }
+      minus.addEventListener("click", function () { set((st.addonQty[it.id] || 0) - 1); });
+      plus.addEventListener("click", function () { set((st.addonQty[it.id] || 0) + 1); });
+      sec.appendChild(el("div", { class: "cf-row", style: "gap:10px;align-items:center;justify-content:space-between;margin-top:8px" }, [
+        el("div", {}, [el("div", { style: "font-weight:600", text: it.name }),
+          el("div", { class: "cf-muted cf-tiny", text: priceTxt + (it.feature_on_home ? " · featured" : "") })]),
+        el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [minus, qEl, plus]),
+      ]));
+    });
+    return sec;
+  }
+
   function renderConfirm() {
     var free = courtCovered();
     var modes = payModes();
@@ -609,6 +652,9 @@
         ]),
       ]));
     } else { st._gName = null; st._gEmail = null; }
+
+    var equip = equipmentSection();
+    if (equip) card.appendChild(equip);
 
     if (free) {
       var trial = ctx.plan && ctx.plan.is_trial;
@@ -743,6 +789,12 @@
       } else {
         body.resource_id = st.slot.resource_id;
         if (st.selService && st.selService.product_id) body.product_id = st.selService.product_id;  // the CHOSEN court service → priced exactly
+        // Equipment add-ons (ball machine / racquets) ride this booking's order (one order, one payment).
+        if (st.addonQty) {
+          var addons = Object.keys(st.addonQty).filter(function (id) { return st.addonQty[id] > 0; })
+            .map(function (id) { return { resource_id: id, qty: st.addonQty[id] }; });
+          if (addons.length) body.addons = addons;
+        }
       }
       mergeProfileFields(body);   // Client-360 Step 4: carry captured name/surname/cell
       res = await window.API.createBooking(body);
@@ -888,6 +940,7 @@
     st = {
       type: type, calMonth: startOfMonth(new Date()), day: new Date(),
       durations: [], selDuration: null, selDurationPrice: null, membershipCovered: false,
+      addonQty: {},   // equipment hire selections {resource_id -> qty} (court add-ons)
       selCoach: "ANY", selCourt: "ANY", slot: null, selClass: null, player: null, guest: null,
       settlement: "at_court", tokenWallet: null, showPayOptions: false, slotsCache: {},
       view: "schedule", _gName: null, _gEmail: null,

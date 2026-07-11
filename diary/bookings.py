@@ -29,6 +29,14 @@ from sqlalchemy.exc import IntegrityError
 from diary import events
 from diary.schema import EXCLUSION_CONSTRAINT
 
+# Equipment-hire add-on signal (raised inside the booking savepoint so the whole booking rolls back if an
+# item can't fit). Guarded import keeps this lane importable even if the equipment module is absent.
+try:
+    from diary.equipment import EquipmentUnavailable as _EquipmentUnavailable
+except Exception:  # pragma: no cover
+    class _EquipmentUnavailable(Exception):
+        pass
+
 log = logging.getLogger("diary.bookings")
 
 HOLD_MINUTES_DEFAULT = 30  # online-checkout hold — long enough that a real Yoco payment (incl. a
@@ -307,7 +315,7 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
                           starts_at=None, ends_at=None, linked_booking_id=None,
                           audience="member", enrolment_id=None, duration_minutes=None,
                           token_wallet=None, token_ref=None, coach_user_id=None, product_id=None,
-                          price_id=None):
+                          price_id=None, addon_lines=None):
     """Adapter between the diary and Agent C's billing.orders.create_order_for_booking.
 
     The diary speaks bookings; billing speaks order *lines*. We translate here: price each
@@ -392,10 +400,22 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
         lines.append({"description": booking_type, "price_id": pr.get("price_id"),
                       "qty": 1, "amount_minor": _amount(pr), **ref})
 
+    # EQUIPMENT add-ons ride the SAME order at their REAL flat fee (never zeroed, even on a covered court).
+    addon_lines = addon_lines or []
+    addon_total = sum(int(l.get("amount_minor") or 0) * int(l.get("qty") or 1) for l in addon_lines)
+    lines.extend(addon_lines)
+    # If the COURT base is R0 (membership_covered / token / free) but equipment adds a real charge, the
+    # ORDER must be collectable — make it an owed at-court order so the equipment is billed while the court
+    # stays free (its lines are R0, and the booking row keeps its own settlement_mode). A PAYG court just
+    # adds the equipment to its existing order/payment (one order, one payment).
+    order_settlement = settlement_mode
+    if covered and addon_total > 0:
+        order_settlement = "at_court"
+
     try:
         order_id = create_order_for_booking(
             session, club_id=club_id, user_id=user_id, lines=lines,
-            settlement_mode=settlement_mode)
+            settlement_mode=order_settlement)
         total = sum(int(l["amount_minor"]) * int(l.get("qty") or 1) for l in lines)
         # token settlement: draw ONE token from the locked wallet for THIS booking, in the SAME
         # transaction (so a rollback un-draws it; a committed draw always has a confirmed booking).
@@ -427,7 +447,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                    starts_at, ends_at, settlement_mode="at_court", parties=None,
                    coach_user_id=None, court_resource_id=None, audience="member",
                    notes=None, recurrence_id=None, hold_minutes=HOLD_MINUTES_DEFAULT,
-                   booked_for_user_id=None, propose=False, product_id=None, now=None):
+                   booked_for_user_id=None, propose=False, product_id=None, addons=None, now=None):
     """Create a court/lesson/class booking, concurrency-safe (docs/03 §4).
 
     For a lesson, pass court_resource_id to auto-hold a court in the SAME transaction (two
@@ -641,6 +661,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                         message="this service has no configured price for that duration")
 
     # --- the concurrency-safe insert(s) inside one transaction ----------
+    addon_lines = []
     try:
         with session.begin_nested():  # SAVEPOINT — lets us catch the overlap cleanly
             booking_id = _insert_booking(
@@ -663,6 +684,15 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                 )
             for p in parties:
                 _insert_party(session, booking_id=booking_id, club_id=club_id, party=p)
+            # EQUIPMENT add-ons (court bookings only): lock each item, re-check availability by TIME,
+            # insert booking_equipment rows, and collect their billing lines — all inside THIS savepoint,
+            # so an unavailable item (or a race for the last unit) rolls the whole booking back cleanly.
+            if addons and booking_type == "court":
+                from diary.equipment import reserve_equipment
+                addon_lines = reserve_equipment(session, club_id=club_id, booking_id=booking_id,
+                                                addons=addons, starts=starts, ends=ends)
+    except _EquipmentUnavailable as e:
+        return _err("EQUIPMENT_UNAVAILABLE", 409, message=str(e) or "that equipment isn't available")
     except IntegrityError as e:
         # The overlap (or the linked court's overlap) — nothing persisted past the savepoint.
         if _is_slot_taken(e):
@@ -680,6 +710,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         duration_minutes=duration_minutes, token_wallet=token_wallet,
         coach_user_id=coach_uid,   # price a lesson on THIS coach's own rate card (not the cheapest coach's)
         product_id=product_id,     # …and on the CHOSEN service (Private vs Semi-private) when given
+        addon_lines=addon_lines,   # equipment hire → extra order lines on the SAME order (no double bill)
     )
     order_id = order.get("order_id")
     if order_id:

@@ -105,6 +105,21 @@ _DDL = [
     # member (e.g. a clay court sold as a PAYG-only premium surface) — every booking of it is PAYG for all.
     # Only meaningful for kind='court_booking'. Default true = unchanged (a member's court is covered).
     f"ALTER TABLE {SCHEMA}.product ADD COLUMN IF NOT EXISTS members_covered boolean NOT NULL DEFAULT true;",
+    # Widen product.kind to accept 'equipment' (ball machine / racquets / balls — a flat-fee booking add-on).
+    # A plain CREATE TABLE IF NOT EXISTS never re-applies the inline CHECK, so migrate it on an existing db.
+    # Idempotent: drop the auto-named CHECK if present, re-add the full set (a second boot = same end state).
+    f"""
+    DO $$
+    BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.constraint_column_usage
+                   WHERE table_schema = '{SCHEMA}' AND table_name = 'product'
+                     AND constraint_name = 'product_kind_check') THEN
+            ALTER TABLE {SCHEMA}.product DROP CONSTRAINT product_kind_check;
+        END IF;
+        ALTER TABLE {SCHEMA}.product ADD CONSTRAINT product_kind_check
+            CHECK (kind IN ('court_booking','lesson','class','membership','guest_booking','equipment'));
+    END $$;
+    """,
     # Unified statement: a child unpaid order, once cleared by a 'pay all' settlement order, points at
     # that settlement order. The settlement order pays the SUM of its children; on its charge_succeeded
     # we mark each child paid + fan out its consequence (commission split). NULL = a standalone order.
