@@ -65,6 +65,40 @@ def _club_currency(session, *, club_id):
     return cur or "ZAR"
 
 
+_KIND_LABEL = {"court": "Court booking", "lesson": "Private lesson", "class": "Class"}
+
+
+def _service_label(raw, kind):
+    """A clean per-booking service label: the real product/service name, else the booking-type label
+    (never a bare lowercase 'court')."""
+    if raw:
+        return _KIND_LABEL.get(str(raw).strip().lower(), raw)
+    return _KIND_LABEL.get(kind, kind)
+
+
+def _pay_label(order_status, settlement_mode):
+    """A booking's payment status in the SAME words the client sees on their statement/receipt/email,
+    derived from its order. None when the booking raised no order (e.g. a membership-free court)."""
+    sm = settlement_mode or ""
+    if sm == "membership_covered":
+        return "Covered by membership"
+    if sm == "token":
+        return "Covered by pack"
+    st = order_status or ""
+    if st == "paid":
+        return {"online": "Paid online", "at_court": "Paid at court"}.get(sm, "Paid")
+    if st in ("open", "awaiting_payment"):
+        return {"online": "Awaiting payment", "at_court": "Pay at court",
+                "monthly_account": "On monthly account"}.get(sm, "Unpaid")
+    if st == "refunded":
+        return "Refunded"
+    if st == "void":
+        return "Cancelled"
+    if st == "written_off":
+        return "Written off"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # identity (scoping guard — no membership row ⇒ not a client of this club ⇒ None)
 # ---------------------------------------------------------------------------
@@ -172,11 +206,18 @@ def _bookings(session, *, club_id, user_id):
                        bk.status, (bk.starts_at >= now()) AS is_upcoming, r.name AS resource_name,
                        COALESCE(cp.display_name,
                                 NULLIF(TRIM(CONCAT_WS(' ', cu.first_name, cu.surname)), ''),
-                                cu.email) AS coach_name
+                                cu.email) AS coach_name,
+                       (SELECT COALESCE(p.name, NULLIF(ol.description,''))
+                          FROM billing.order_line ol
+                          LEFT JOIN billing.price prc ON prc.id = ol.price_id
+                          LEFT JOIN billing.product p ON p.id = prc.product_id
+                          WHERE ol.booking_id = bk.id ORDER BY ol.created_at LIMIT 1) AS service_raw,
+                       ob.status AS order_status, ob.settlement_mode AS settlement_mode
                 FROM diary.booking bk
                 LEFT JOIN diary.resource r ON r.id = bk.resource_id
                 LEFT JOIN iam.user cu ON cu.id = bk.coach_user_id
                 LEFT JOIN iam.coach_profile cp ON cp.user_id = bk.coach_user_id AND cp.club_id = bk.club_id
+                LEFT JOIN billing."order" ob ON ob.id = bk.order_id
                 WHERE bk.club_id = :c AND bk.booked_by_user_id = :u
                   AND bk.status <> 'cancelled'
                   AND (bk.booking_type <> 'court' OR bk.notes IS DISTINCT FROM '(court held for lesson)')
@@ -185,12 +226,19 @@ def _bookings(session, *, club_id, user_id):
                        e.status, (cs.starts_at >= now()) AS is_upcoming, r.name AS resource_name,
                        COALESCE(cp.display_name,
                                 NULLIF(TRIM(CONCAT_WS(' ', cu.first_name, cu.surname)), ''),
-                                cu.email) AS coach_name
+                                cu.email) AS coach_name,
+                       (SELECT COALESCE(p.name, NULLIF(ol.description,''))
+                          FROM billing.order_line ol
+                          LEFT JOIN billing.price prc ON prc.id = ol.price_id
+                          LEFT JOIN billing.product p ON p.id = prc.product_id
+                          WHERE ol.enrolment_id = e.id ORDER BY ol.created_at LIMIT 1) AS service_raw,
+                       oe.status AS order_status, oe.settlement_mode AS settlement_mode
                 FROM diary.enrolment e
                 JOIN diary.class_session cs ON cs.id = e.class_session_id AND cs.club_id = e.club_id
                 LEFT JOIN diary.resource r ON r.id = cs.resource_id
                 LEFT JOIN iam.user cu ON cu.id = cs.coach_user_id
                 LEFT JOIN iam.coach_profile cp ON cp.user_id = cs.coach_user_id AND cp.club_id = cs.club_id
+                LEFT JOIN billing."order" oe ON oe.id = e.order_id
                 WHERE e.club_id = :c AND e.user_id = :u AND e.status <> 'cancelled'
                 ORDER BY starts_at DESC LIMIT 100
             """),
@@ -198,6 +246,11 @@ def _bookings(session, *, club_id, user_id):
         ).mappings().all()
         return _rows(rows)
     allb = _guard(session, _run, [])
+    # Complete the record: each booking row now carries WHAT it was (service) + whether it's PAID —
+    # the same vocabulary the receipt/email uses — so the client record answers "is this paid?" too.
+    for b in allb:
+        b["service"] = _service_label(b.pop("service_raw", None), b.get("kind"))
+        b["pay_status"] = _pay_label(b.pop("order_status", None), b.pop("settlement_mode", None))
     upcoming = [b for b in allb if b.get("is_upcoming")]
     upcoming.reverse()  # soonest-first
     return upcoming, [b for b in allb if not b.get("is_upcoming")], len(allb)

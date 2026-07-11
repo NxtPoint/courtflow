@@ -274,8 +274,9 @@
           el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(k) >= 0 ? k : "court"), text: k }),
           el("div", { class: "cf-item-main" }, [
             el("div", { class: "cf-item-t", text: fDT(b.starts_at) }),
-            el("div", { class: "cf-item-s", text: [b.resource_name, b.coach_name].filter(Boolean).join(" · ") || "" }),
+            el("div", { class: "cf-item-s", text: [b.service, b.resource_name, b.coach_name].filter(Boolean).join(" · ") || "" }),
           ]),
+          b.pay_status ? el("span", { class: "cf-chip", text: b.pay_status }) : null,
           el("span", { class: "cf-chip " + (b.status === "confirmed" ? "confirmed" : "held"), text: b.status }),
           tap ? el("span", { class: "cf-muted", text: "›" }) : null,
         ].filter(Boolean));
