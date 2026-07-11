@@ -1922,7 +1922,31 @@ def sc_month_end_sweep(s, fx):
           r2["notified"] == 0 and r2["already"] >= 1, str(r2))
 
 
+def sc_pack_service_isolation(s, fx):
+    """A LEGACY unscoped pack (product_id NULL) cross-shows under every same-kind service of a coach;
+    the service editor can ASSIGN it to ONE service, after which it stops polluting the others — and
+    assign never re-homes a pack that already belongs elsewhere. (Allon's Private vs Semi-private bug.)"""
+    print("\n# Pack isolation: a legacy pack cross-shows, then 'assign to this service' scopes it")
+    from services import repositories as SR
+    priv = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id, active) "
+                          "VALUES (:c,'lesson','Private',:u,true) RETURNING id"), {"c": fx.club_id, "u": fx.coach_uid}).scalar()
+    semi = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id, active) "
+                          "VALUES (:c,'lesson','Semi-private',:u,true) RETURNING id"), {"c": fx.club_id, "u": fx.coach_uid}).scalar()
+    legacy = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", coach_user_id=str(fx.coach_uid),
+                            sessions_count=10, price_minor=300000, label="10 legacy")
+    def has_pack(pid):
+        return [p for p in SR.get_service(s, club_id=fx.club_id, product_id=pid)["packages"] if p["id"] == legacy["id"]]
+    check("legacy pack cross-shows under BOTH services", bool(has_pack(priv)) and bool(has_pack(semi)))
+    check("flagged assigned=False (not owned by either)", has_pack(priv)[0]["assigned"] is False)
+    BN.assign_plan_product(s, club_id=fx.club_id, plan_id=legacy["id"], product_id=priv)
+    check("after assign: on PRIVATE (assigned=True)", bool(has_pack(priv)) and has_pack(priv)[0]["assigned"] is True)
+    check("after assign: GONE from SEMI-PRIVATE", not has_pack(semi))
+    BN.assign_plan_product(s, club_id=fx.club_id, plan_id=legacy["id"], product_id=semi)
+    check("assign never steals an already-scoped pack (still only PRIVATE)", bool(has_pack(priv)) and not has_pack(semi))
+
+
 SCENARIOS = [
+    sc_pack_service_isolation,
     sc_coach_payout,
     sc_month_end_sweep,
     sc_desk_amount_guard,

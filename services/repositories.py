@@ -132,9 +132,13 @@ def get_service(session, *, club_id, product_id):
              "ORDER BY sessions_count"),
         {"c": club_id, "pid": str(product_id), "sk": service_kind, "coach": prod["coach_user_id"]},
     ).mappings().all()
+    # `assigned` = this pack is scoped to THIS service (product_id set). False = a legacy unscoped pack
+    # (product_id NULL) cross-shown here by kind+coach — the editor offers to assign it to this service
+    # (the manual fix for a coach with >1 same-kind service, where a pack shows under each of them).
     packages = [{"id": str(r["id"]), "label": r["label"], "sessions_count": r["sessions_count"],
                  "duration_minutes": r["duration_minutes"], "price_minor": int(r["price_minor"] or 0),
-                 "validity_days": r["validity_days"], "status": r["status"]} for r in pkg_rows]
+                 "validity_days": r["validity_days"], "status": r["status"],
+                 "assigned": r["product_id"] is not None} for r in pkg_rows]
 
     # commission — meaningful for lessons/classes (court has none).
     commission = {"applies": kind in ("lesson", "class"), "club_default_pct": 0.0, "effective_pct": 0.0}

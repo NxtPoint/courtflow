@@ -224,6 +224,27 @@ def set_plan_status(session, *, club_id, plan_id, status) -> Optional[Dict[str, 
     return update_plan(session, club_id=club_id, plan_id=plan_id, status=status)
 
 
+def assign_plan_product(session, *, club_id, plan_id, product_id) -> Optional[Dict[str, Any]]:
+    """Attach a LEGACY unscoped pack (product_id IS NULL) to a specific service, and let its wallets
+    inherit it — the manual resolution for an AMBIGUOUS pack (a coach with >1 same-kind service, where
+    the backfill can't auto-decide). Only ever scopes a currently-UNSCOPED plan (guard: WHERE
+    product_id IS NULL), so it can never re-home a pack that already belongs to another service. The
+    product's kind/coach are already the pack's (same kind+coach match is how it cross-showed). Idempotent."""
+    res = session.execute(
+        text("UPDATE billing.bundle_plan SET product_id = :pid, updated_at = now() "
+             "WHERE club_id = :c AND id = :id AND product_id IS NULL RETURNING id"),
+        {"pid": str(product_id), "c": str(club_id), "id": str(plan_id)},
+    ).first()
+    if res:
+        # The pack's existing wallets inherit the same service (product-aware draw stays correct).
+        session.execute(
+            text("UPDATE billing.token_wallet SET product_id = :pid "
+                 "WHERE bundle_plan_id = :id AND product_id IS NULL"),
+            {"pid": str(product_id), "id": str(plan_id)},
+        )
+    return get_plan(session, club_id=club_id, plan_id=plan_id)
+
+
 def deactivate_plan(session, *, club_id, plan_id) -> bool:
     """Soft-delete = retire: stop offering the plan (hidden from customers). Past wallets stand."""
     return set_plan_status(session, club_id=club_id, plan_id=plan_id, status="retired") is not None

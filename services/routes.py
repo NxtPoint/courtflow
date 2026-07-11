@@ -248,9 +248,14 @@ def patch_package(product_id, plan_id):
         if err:
             return err
         from billing import bundles
+        # Explicit "assign this legacy pack to THIS service" — scopes an unscoped (product_id NULL)
+        # pack to `svc` so it stops cross-showing under the coach's other same-kind services. Guarded
+        # to product_id IS NULL, so it can never steal a pack that already belongs elsewhere.
+        if b.get("adopt"):
+            bundles.assign_plan_product(s, club_id=p.club_id, plan_id=plan_id, product_id=svc["id"])
         if "status" in b:
             bundles.set_plan_status(s, club_id=p.club_id, plan_id=plan_id, status=b.get("status"))
-        else:
+        elif any(k in b for k in ("label", "sessions_count", "duration_minutes", "price_minor", "validity_days")):
             bundles.update_plan(s, club_id=p.club_id, plan_id=plan_id, label=b.get("label"),
                                 sessions_count=b.get("sessions_count"),
                                 duration_minutes=b.get("duration_minutes"),

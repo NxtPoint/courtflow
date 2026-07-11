@@ -37,7 +37,7 @@
       payment_modes: (s.payment_modes ? s.payment_modes.slice() : (s.club_payment_methods || []).slice()),
       commission_pct: (s.commission && s.commission.effective_pct) || 0,
       variations: (s.variations || []).map(function (v) { return { price_id: v.price_id, duration_minutes: v.duration_minutes, amount_minor: v.amount_minor }; }),
-      packages: (s.packages || []).map(function (p) { return { id: p.id, label: p.label, sessions_count: p.sessions_count, duration_minutes: p.duration_minutes, price_minor: p.price_minor }; }),
+      packages: (s.packages || []).map(function (p) { return { id: p.id, label: p.label, sessions_count: p.sessions_count, duration_minutes: p.duration_minutes, price_minor: p.price_minor, assigned: p.assigned !== false, adopt: false }; }),
     };
     st.del = { variations: [], packages: [] };
   }
@@ -104,6 +104,24 @@
     var c = card("Packages", "Prepaid bundles for THIS service only — buy several upfront and draw them down. A pack belongs to this service and its owner.");
     var list = el("div", { class: "cf-list" });
     st.m.packages.forEach(function (p) {
+      // A LEGACY pack (no product_id) cross-shown from another same-kind service of this coach — it
+      // isn't part of THIS service. Show it plainly with an explicit "Assign to this service" toggle,
+      // never an editable row, so it can't be silently claimed on save. (Fixes packs bleeding across
+      // a coach's Private + Semi-private services.)
+      if (p.id && p.assigned === false) {
+        var desc = (p.label || (p.sessions_count + " sessions")) + " · R" + ((p.price_minor || 0) / 100).toFixed(2);
+        var assignBtn = el("button", { class: "cf-btn cf-btn-sm" + (p.adopt ? " cf-btn-primary" : ""), text: p.adopt ? "Will be assigned ✓" : "Assign to this service" });
+        assignBtn.addEventListener("click", function () { p.adopt = !p.adopt; render(); });
+        list.appendChild(el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:6px;opacity:" + (p.adopt ? "1" : ".7") }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: desc }),
+            el("div", { class: "cf-item-s", text: p.adopt ? "Will move to this service when you save." : "Shared from your other service — not part of this one." }),
+          ]),
+          el("span", { class: "cf-chip", text: "legacy" }),
+          assignBtn,
+        ]));
+        return;
+      }
       var lI = inp(p.label || "", { placeholder: "Label (optional)", style: "max-width:150px" }); lI.addEventListener("input", function () { p.label = lI.value; });
       var nI = inp(p.sessions_count, { type: "number", min: 1, style: "max-width:80px" }); nI.addEventListener("input", function () { p.sessions_count = parseInt(nI.value, 10) || null; });
       var dI = inp(p.duration_minutes, { type: "number", min: 1, placeholder: "mins", style: "max-width:80px" }); dI.addEventListener("input", function () { p.duration_minutes = parseInt(dI.value, 10) || null; });
@@ -148,8 +166,12 @@
       for (var d = 0; d < del.variations.length; d++) await api("/variations/" + del.variations[d], { method: "DELETE" });
       for (var j = 0; j < m.packages.length; j++) {
         var pk = m.packages[j]; if (!pk.sessions_count) continue;
-        if (pk.id) await api("/packages/" + pk.id, { method: "PATCH", body: { label: pk.label, sessions_count: pk.sessions_count, duration_minutes: pk.duration_minutes, price_minor: pk.price_minor || 0, validity_days: pk.validity_days || null } });
-        else await api("/packages", { method: "POST", body: { label: pk.label || null, sessions_count: pk.sessions_count, duration_minutes: pk.duration_minutes, price_minor: pk.price_minor || 0, validity_days: pk.validity_days || null } });
+        if (pk.id) {
+          // A legacy pack cross-shown from another service that the coach did NOT claim — leave it
+          // exactly as-is (never touch a pack that isn't this service's unless explicitly assigned).
+          if (pk.assigned === false && !pk.adopt) continue;
+          await api("/packages/" + pk.id, { method: "PATCH", body: { adopt: pk.adopt ? true : undefined, label: pk.label, sessions_count: pk.sessions_count, duration_minutes: pk.duration_minutes, price_minor: pk.price_minor || 0, validity_days: pk.validity_days || null } });
+        } else await api("/packages", { method: "POST", body: { label: pk.label || null, sessions_count: pk.sessions_count, duration_minutes: pk.duration_minutes, price_minor: pk.price_minor || 0, validity_days: pk.validity_days || null } });
       }
       for (var pd = 0; pd < del.packages.length; pd++) await api("/packages/" + del.packages[pd], { method: "PATCH", body: { status: "retired" } });
       UI.toast("Saved.", "info"); close();
