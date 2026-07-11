@@ -101,31 +101,15 @@ def _money(minor, currency=None):
 
 
 def _pay_status(settlement_mode, charge):
-    """The human payment status — the SAME language the client sees on their profile/statement.
-    Combines the settlement mode (how they chose to pay) with the money that actually moved."""
-    sm = settlement_mode or ""
+    """The human payment status — delegates to the ONE canonical vocabulary (billing.statement.
+    settlement_status_label) so the email, the receipt, and the client record always say the same
+    thing. Resolves the settled `state` from the shared charge reader, then labels it."""
     state = (charge or {}).get("state") or (charge or {}).get("status")
-    if state == "covered":
-        if sm == "token":
-            return "Covered by session pack"
-        if sm in ("free",):
-            return "Free"
-        return "Covered by membership"
-    if state in ("refunded",):
-        return "Refunded"
-    if state in ("part_refunded",):
-        return "Partially refunded"
-    if state in ("written_off",):
-        return "Written off"
-    if state in ("void", "cancelled"):
-        return "Cancelled"
-    if state == "paid":
-        return {"online": "Paid online", "at_court": "Paid at court",
-                "monthly_account": "Paid"}.get(sm, "Paid")
-    if state in ("owed", "pending", "none", "unknown", None):
-        return {"online": "Awaiting online payment", "at_court": "Pay at court",
-                "monthly_account": "On monthly account (settled month-end)"}.get(sm, "Unpaid")
-    return str(state).replace("_", " ").title()
+    try:
+        from billing.statement import settlement_status_label
+        return settlement_status_label(state, settlement_mode)
+    except Exception:
+        return None
 
 
 _TYPE_LABEL = {"court": "Court booking", "lesson": "Private lesson", "class": "Class"}

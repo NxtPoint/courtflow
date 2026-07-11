@@ -38,6 +38,37 @@ _PAY_LABEL = {
 }
 
 
+def settlement_status_label(state, settlement_mode=None):
+    """THE canonical human 'payment status' vocabulary — the SAME words a client sees on a receipt,
+    a confirmation email, and their client-record booking rows, so wording never drifts between
+    surfaces. `state` is the settled state (as produced by diary.bookings._booking_charge: covered /
+    owed / pending / paid / refunded / part_refunded / written_off / void / none); `settlement_mode`
+    is how they chose to pay. Pure (no DB). Both marketing_crm email and client360 delegate here."""
+    sm = settlement_mode or ""
+    st = state or ""
+    if st == "covered":
+        if sm == "token":
+            return "Covered by session pack"
+        if sm == "free":
+            return "Free"
+        return "Covered by membership"
+    if st == "refunded":
+        return "Refunded"
+    if st == "part_refunded":
+        return "Partially refunded"
+    if st == "written_off":
+        return "Written off"
+    if st in ("void", "cancelled"):
+        return "Cancelled"
+    if st == "paid":
+        return {"online": "Paid online", "at_court": "Paid at court",
+                "monthly_account": "Paid"}.get(sm, "Paid")
+    if st in ("owed", "pending", "none", "unknown", ""):
+        return {"online": "Awaiting online payment", "at_court": "Pay at court",
+                "monthly_account": "On monthly account (settled month-end)"}.get(sm, "Unpaid")
+    return str(st).replace("_", " ").title()
+
+
 def _club_currency(session, club_id) -> str:
     return session.execute(
         text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": str(club_id)}).scalar() or "ZAR"

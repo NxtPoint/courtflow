@@ -77,26 +77,24 @@ def _service_label(raw, kind):
 
 
 def _pay_label(order_status, settlement_mode):
-    """A booking's payment status in the SAME words the client sees on their statement/receipt/email,
-    derived from its order. None when the booking raised no order (e.g. a membership-free court)."""
+    """A booking's payment status via the ONE canonical vocabulary (billing.statement.
+    settlement_status_label), so a booking row on the client record says exactly what the receipt/email
+    says. Maps the booking's order.status → the settled `state`, then labels it. None when the booking
+    raised no order at all (e.g. a membership-free court with no debt)."""
     sm = settlement_mode or ""
-    if sm == "membership_covered":
-        return "Covered by membership"
-    if sm == "token":
-        return "Covered by pack"
-    st = order_status or ""
-    if st == "paid":
-        return {"online": "Paid online", "at_court": "Paid at court"}.get(sm, "Paid")
-    if st in ("open", "awaiting_payment"):
-        return {"online": "Awaiting payment", "at_court": "Pay at court",
-                "monthly_account": "On monthly account"}.get(sm, "Unpaid")
-    if st == "refunded":
-        return "Refunded"
-    if st == "void":
-        return "Cancelled"
-    if st == "written_off":
-        return "Written off"
-    return None
+    if not (order_status or sm):
+        return None
+    if sm in ("membership_covered", "token"):
+        state = "covered"
+    else:
+        state = {"paid": "paid", "open": "owed", "awaiting_payment": "pending",
+                 "refunded": "refunded", "void": "void",
+                 "written_off": "written_off"}.get(order_status or "", "owed")
+    try:
+        from billing.statement import settlement_status_label
+        return settlement_status_label(state, settlement_mode)
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
