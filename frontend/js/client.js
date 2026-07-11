@@ -7,6 +7,21 @@
   var view;                       // #cf-main (the routed content area)
   var DATA = {};                  // small cache; refreshed after actions
   var NAME = "";
+  // Ten-Fifty5 (AI match analysis / technique) embed URL, injected server-side (web_app.py).
+  // Empty -> the members-area entry + route stay hidden. The member is signed in inside the
+  // iframe via the auth_client.js token relay (no second login).
+  var TF5_URL = (window.__CF && window.__CF.__TF5_EMBED_URL) || "";
+  // Optional email allowlist for a PRIVATE prod test before community launch. Injected from
+  // env (TF5_EMBED_ALLOW_EMAILS). EMPTY => every member sees it (launch); set => only these
+  // emails. Widening to everyone is a one-line env change, no code redeploy.
+  var TF5_ALLOW = ((window.__CF && window.__CF.__TF5_EMBED_ALLOW) || "")
+    .split(",").map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean);
+  function tf5Enabled() {
+    if (!TF5_URL) return false;
+    if (!TF5_ALLOW.length) return true;   // no allowlist => open to all members
+    var e = ((principal && principal.email) || (DATA.profile && DATA.profile.email) || "").toLowerCase();
+    return TF5_ALLOW.indexOf(e) >= 0;
+  }
 
   function money(m, c) { return UI.money(m || 0, c || "ZAR"); }
   function go(hash) { location.hash = hash; }
@@ -114,6 +129,7 @@
       return renderHome();
     }
     if (top === "activity") return renderRecord();   // "Full activity ›" now opens the ONE Client-360 record
+    if (top === "analysis") return renderAnalysis();  // embedded Ten-Fifty5 match analysis / technique
     if (top === "plan") return renderPlan();
     if (top === "profile") return parts[1] === "child" ? renderChildEdit(parts[2]) : renderProfile();  // /profile/edit → the same one screen
     return renderHome();                            // home / bookings / anything else
@@ -198,6 +214,9 @@
     // Your sessions (Upcoming / Past) — the Bookings function, now on Home.
     wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your sessions" }), el("div", { id: "home-sessions" })]));
 
+    // Match analysis & technique — the embedded Ten-Fifty5 product (opens in-app, signed in).
+    if (tf5Enabled()) wrap.appendChild(analysisPromo());
+
     // Billing — what you owe + a monthly breakdown by category.
     var owe = (fin.account && fin.account.balance_minor) || 0;
     var bc = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [
@@ -232,6 +251,48 @@
       ]),
     ]);
     return c;
+  }
+
+  // ---- Match analysis & technique (embedded Ten-Fifty5) ---------------------
+  // A Home card that drills into the embedded product. Inside the iframe the member is
+  // signed in with their own Clerk token (relayed by auth_client.js) — no second login.
+  function analysisPromo() {
+    return card([
+      el("div", { class: "cf-row", style: "gap:12px;align-items:flex-start" }, [
+        el("div", { style: "font-size:1.8rem;line-height:1", text: "🎥" }),
+        el("div", { style: "flex:1" }, [
+          el("h2", { style: "margin:0 0 2px", text: "Match analysis & technique" }),
+          el("p", { class: "cf-muted", style: "margin:0", text: "AI-powered match stats and technique analysis, powered by Ten-Fifty5 — opens right here, already signed in." }),
+        ]),
+      ]),
+      el("div", { class: "cf-row", style: "margin-top:12px" }, [
+        el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Open ›", onclick: function () { go("#/analysis"); } }),
+      ]),
+    ]);
+  }
+
+  function renderAnalysis() {
+    if (!tf5Enabled()) { go("#/"); return; }   // gated to the test allowlist until launch
+    var wrap = el("div", {});
+    wrap.appendChild(pageHeader("Match analysis & technique", "Home", "#/"));
+    var frameWrap = el("div", { style: "position:relative;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08)" });
+    var frame = el("iframe", {
+      src: TF5_URL,
+      title: "Ten-Fifty5 match analysis",
+      style: "display:block;width:100%;height:calc(100vh - 170px);min-height:420px;border:0",
+      allow: "fullscreen; encrypted-media; clipboard-write",
+    });
+    frame.setAttribute("allowfullscreen", "");
+    var fsBtn = el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", style: "position:absolute;top:10px;right:10px;z-index:2",
+      text: "⤢ Fullscreen", onclick: function () {
+        var fn = frameWrap.requestFullscreen || frameWrap.webkitRequestFullscreen;
+        if (fn) { try { fn.call(frameWrap); } catch (e) {} }
+      } });
+    frameWrap.appendChild(frame);
+    frameWrap.appendChild(fsBtn);
+    wrap.appendChild(frameWrap);
+    wrap.appendChild(el("p", { class: "cf-muted", style: "margin:10px 2px 0;font-size:.78rem", text: "Powered by Ten-Fifty5 — you're signed in automatically." }));
+    set(wrap);
   }
 
   // sessions: a Current / Past toggle (default Current) on the shared cf-segment filter look — Home

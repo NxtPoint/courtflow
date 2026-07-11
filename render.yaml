@@ -147,6 +147,18 @@ services:
       # Backend that verifies the Clerk token from /login (the whoami check).
       - key: AUTH_API_BASE
         value: "https://courtflow-api.onrender.com"
+      # Ten-Fifty5 (AI match analysis / technique) embedded in the members area, signed in
+      # with the member's own Clerk token via the postMessage relay (no 2nd login). Both
+      # values are PUBLIC. TF5_EMBED_URL = the iframe src (its portal); TF5_EMBED_ORIGINS =
+      # the origin(s) we relay a token to. Clear TF5_EMBED_URL to hide the members-area entry.
+      - key: TF5_EMBED_URL
+        value: "https://www.ten-fifty5.com/portal?embed=1"
+      - key: TF5_EMBED_ORIGINS
+        value: "https://www.ten-fifty5.com"
+      # PRIVATE PROD TEST: the members-area embed is shown ONLY to these emails until we
+      # launch to the whole community. Clear this value (empty) to enable it for ALL members.
+      - key: TF5_EMBED_ALLOW_EMAILS
+        value: "tomos@gmail.com"
       # Marketing hosts → these serve the public site at "/" (app stays at /portal).
       # Includes the onrender URL so the public site is viewable before DNS cutover;
       # the real domains are here too (also in branding.py registry) for go-live.

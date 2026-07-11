@@ -24,6 +24,7 @@
     enabled: "__AUTH_ENABLED__" === "1",
     pk: "__CLERK_PUBLISHABLE_KEY__",
     tmpl: "__CLERK_JWT_TEMPLATE__",
+    embedOrigins: "__TF5_EMBED_ORIGINS__",
   };
   var P = new URLSearchParams(location.search);
   // API base: explicit window global wins, then ?api=, then the production default.
@@ -33,6 +34,13 @@
   window.__API_BASE = apiBase;
 
   var inIframe = (window.self !== window.top);
+
+  // Cross-origin children this portal will PROVIDE a Clerk token to via postMessage —
+  // e.g. the embedded Ten-Fifty5 members feature, which signs the member in with our
+  // token (no second login). Same-origin is always allowed; unset -> same-origin only.
+  var embedChildOrigins = (CFG.embedOrigins && CFG.embedOrigins.indexOf("__") !== 0)
+    ? CFG.embedOrigins.split(",").map(function (s) { return s.trim(); }).filter(Boolean) : [];
+  function childAllowed(origin) { return origin === location.origin || embedChildOrigins.indexOf(origin) >= 0; }
   var clerk = null;       // top-frame Clerk instance (provider)
   var relayEmail = null;  // email learned from the parent in relay mode
   var authed = false;     // resolved authentication state
@@ -77,22 +85,25 @@
       var r = _pending[d.id]; delete _pending[d.id]; r(d.payload); return;
     }
     if (d.dir === "req" && !inIframe) {
-      if (e.origin !== location.origin) return;   // never serve a token cross-origin
-      serveChild(d, e.source);
+      if (!childAllowed(e.origin)) return;   // serve a token only to same-origin or an allowlisted embed child
+      serveChild(d, e.source, e.origin);
     }
   });
 
-  async function serveChild(d, src) {
+  async function serveChild(d, src, origin) {
     await ready();
     var payload = null;
     if (d.kind === "status") {
-      payload = { authed: authed, email: email() };
+      // `mode` is included for the Ten-Fifty5 embed child (its relay reads status.mode);
+      // NextPoint children read status.authed. Both shapes satisfied.
+      payload = { authed: authed, mode: authed ? "clerk" : "legacy", email: email() };
     } else if (d.kind === "token") {
       if (clerk && clerk.session) {
         try { payload = await clerk.session.getToken(tmplOpts()); } catch (e2) { payload = null; }
       }
     }
-    try { src.postMessage({ __tfauth: 1, dir: "res", id: d.id, payload: payload }, "*"); } catch (e3) {}
+    // Post the (token-bearing) reply back to the requester's exact origin, not "*".
+    try { src.postMessage({ __tfauth: 1, dir: "res", id: d.id, payload: payload }, origin || "*"); } catch (e3) {}
   }
 
   // Reject after `ms` so a hung Clerk/network call can never block the UI forever

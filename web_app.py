@@ -94,6 +94,16 @@ CLERK_PUBLISHABLE_KEY = os.environ.get("CLERK_PUBLISHABLE_KEY", "").strip()
 AUTH_ENABLED = os.environ.get("AUTH_ENABLED", "0").strip()
 AFTER_LOGIN_URL = os.environ.get("AUTH_AFTER_LOGIN_URL", "/portal").strip()
 
+# Ten-Fifty5 (AI match analysis / technique) embedded in the members area. TF5_EMBED_URL
+# is the iframe src (its portal); TF5_EMBED_ORIGINS is the origin allowlist we relay a
+# Clerk token to (auth_client.js serveChild) so the member is signed in with no 2nd login.
+# Both public, non-secret. Empty TF5_EMBED_URL -> the members-area entry stays hidden.
+TF5_EMBED_URL = os.environ.get("TF5_EMBED_URL", "https://www.ten-fifty5.com/portal?embed=1").strip()
+TF5_EMBED_ORIGINS = os.environ.get("TF5_EMBED_ORIGINS", "https://www.ten-fifty5.com").strip()
+# Email allowlist for a PRIVATE prod test of the members-area embed before community launch.
+# Empty -> every member sees it (launch); comma-separated emails -> only those members.
+TF5_EMBED_ALLOW = os.environ.get("TF5_EMBED_ALLOW_EMAILS", "").strip()
+
 
 def _clerk_host():
     """The Clerk Frontend API host encoded inside the publishable key (…the same decode
@@ -221,6 +231,8 @@ def _inject_head(html: str, b: Branding) -> str:
         "__CLUB_SLUG": b.slug,
         "__CLUB_NAME": b.name,
         "__SITE_BASE": site_base,
+        "__TF5_EMBED_URL": TF5_EMBED_URL,   # members-area Ten-Fifty5 embed (client.js reads this)
+        "__TF5_EMBED_ALLOW": TF5_EMBED_ALLOW,   # private-test email allowlist (empty = all members)
     }
     head = (
         # Preconnect the API + Clerk origins FIRST so their DNS/TCP/TLS warms during parse
@@ -602,7 +614,8 @@ def js_asset(filename: str):
     js = (js.replace("__CLERK_PUBLISHABLE_KEY__", CLERK_PUBLISHABLE_KEY)
             .replace("__AUTH_ENABLED__", AUTH_ENABLED)
             .replace("__AUTH_API_BASE__", API_BASE)
-            .replace("__AUTH_AFTER_LOGIN__", AFTER_LOGIN_URL))
+            .replace("__AUTH_AFTER_LOGIN__", AFTER_LOGIN_URL)
+            .replace("__TF5_EMBED_ORIGINS__", TF5_EMBED_ORIGINS))
     return Response(js, mimetype="application/javascript")
 
 
@@ -628,7 +641,8 @@ def auth_client_js():
               .replace("__CLERK_PUBLISHABLE_KEY__", CLERK_PUBLISHABLE_KEY)
               .replace("__AUTH_ENABLED__", AUTH_ENABLED)
               .replace("__AUTH_API_BASE__", API_BASE)
-              .replace("__AUTH_AFTER_LOGIN__", AFTER_LOGIN_URL))
+              .replace("__AUTH_AFTER_LOGIN__", AFTER_LOGIN_URL)
+              .replace("__TF5_EMBED_ORIGINS__", TF5_EMBED_ORIGINS))
         return Response(js, mimetype="application/javascript")
     stub = (
         "/* courtflow auth_client stub — Agent E ships the real one in frontend/js. */\n"
