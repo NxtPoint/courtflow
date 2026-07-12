@@ -91,7 +91,11 @@
       // The full booking + financial DETAIL sits below (money card + bookings) — this is the headline.
       if (pn.activity_summary && pn.activity_summary.counts) {
         wrap.appendChild(CRMUI.activityBlock(pn.activity_summary, { noChart: true }));   // no graphs on the 360
-        wrap.appendChild(CRMUI.spendBlock(pn.activity_summary, cfg.onSettleAll ? { onSettle: cfg.onSettleAll } : {}));
+        // When the reconciling fold is present, spendBlock stays as the by-SERVICE breakdown only (no
+        // paybar) so there's ONE authoritative paid/outstanding — the statementFold in the Money card.
+        var spendOpts = pn.statement_fold ? { noPaybar: true } : {};
+        if (cfg.onSettleAll) spendOpts.onSettle = cfg.onSettleAll;
+        wrap.appendChild(CRMUI.spendBlock(pn.activity_summary, spendOpts));
       }
 
       // ---- Details (demographics) + consent — Mission 1.2. Not shown to a COACH (client PII:
@@ -211,12 +215,21 @@
 
     function moneyCard(pn, c) {
       var card = UI.card([CRMUI.sectionHead("Money")], "cf-mt");
-      card.appendChild(el("div", { class: "cf-row", style: "margin:2px 0 10px" }, [
-        el("div", {}, [
-          el("div", { style: "font-size:1.25rem;font-weight:800;color:" + (pn.owed_minor > 0 ? "var(--danger,#c0392b)" : "inherit"), text: money(pn.owed_minor, c) }),
-          el("div", { class: "cf-muted", style: "font-size:.8rem", text: "Owed to the club" }),
-        ]),
-      ]));
+      // The reconciling fold headline — the SAME standard as the coach + admin Money (golden rule):
+      // Billed − Discount − Written-off = Invoiced ; Invoiced = Paid + Outstanding. Falls back to the
+      // bare "Owed to the club" figure if the fold isn't in the payload (older API).
+      var fold = pn.statement_fold;
+      if (fold && CRMUI.statementFold && (fold.billed_minor || fold.invoiced_minor || pn.owed_minor)) {
+        card.appendChild(CRMUI.statementFold({ currency: c, month: pn.month, totals: fold }));
+        card.appendChild(el("div", { style: "height:8px" }));
+      } else {
+        card.appendChild(el("div", { class: "cf-row", style: "margin:2px 0 10px" }, [
+          el("div", {}, [
+            el("div", { style: "font-size:1.25rem;font-weight:800;color:" + (pn.owed_minor > 0 ? "var(--danger,#c0392b)" : "inherit"), text: money(pn.owed_minor, c) }),
+            el("div", { class: "cf-muted", style: "font-size:.8rem", text: "Owed to the club" }),
+          ]),
+        ]));
+      }
       // Per-row actions on owed lines — role-gated (admin: void/write-off/discount; client: pay).
       var rowActs = [];
       if (has("discount")) rowActs.push({ label: cfg.actions.discount.label || "Discount", onClick: function (it) { runAct(cfg.actions.discount, it); } });

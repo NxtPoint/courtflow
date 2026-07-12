@@ -408,6 +408,55 @@ def _activity_summary(session, *, club_id, user_id, month=None):
     return _guard(session, _run, default)
 
 
+def _statement_fold(session, *, club_id, user_id, month=None):
+    """The client's money as an OUTCOME of their bookings — the SAME reconciling fold the coach + admin
+    Money views use (CRMUI.statementFold): Billed − Discount − Written-off = Invoiced ; Invoiced = Paid
+    + Outstanding. ORDER-status-driven over THIS month's orders (session date, else raised date), so it
+    reconciles by construction. Excludes settlement WRAPPERS + void (cancelled = R0). Guarded → zeros."""
+    default = {"billed_minor": 0, "discount_minor": 0, "written_off_minor": 0, "invoiced_minor": 0,
+               "paid_minor": 0, "outstanding_minor": 0, "refunded_minor": 0}
+
+    def _run():
+        ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+        r = session.execute(
+            text("""
+                WITH o AS (
+                    SELECT ord.id, ord.status, ord.amount_minor AS current_amt,
+                           (SELECT COALESCE(SUM(COALESCE(ol.original_amount_minor, ol.amount_minor)),0)
+                              FROM billing.order_line ol WHERE ol.order_id = ord.id) AS billed
+                    FROM billing."order" ord
+                    LEFT JOIN LATERAL (SELECT booking_id FROM billing.order_line
+                                       WHERE order_id = ord.id ORDER BY created_at LIMIT 1) fl ON true
+                    LEFT JOIN diary.booking b ON b.id = fl.booking_id
+                    WHERE ord.club_id = :c AND ord.user_id = :u AND ord.settled_by_order_id IS NULL
+                      AND ord.status IN ('open','paid','refunded','written_off')
+                      AND to_char(COALESCE(b.starts_at, ord.created_at),'YYYY-MM') = :ym
+                )
+                SELECT COALESCE(SUM(billed),0) AS billed,
+                       COALESCE(SUM(GREATEST(billed - current_amt, 0)),0) AS discount,
+                       COALESCE(SUM(current_amt) FILTER (WHERE status='written_off'),0) AS written_off,
+                       COALESCE(SUM(current_amt) FILTER (WHERE status='paid'),0) AS paid,
+                       COALESCE(SUM(current_amt) FILTER (WHERE status='open'),0) AS outstanding,
+                       COALESCE(SUM(current_amt) FILTER (WHERE status='refunded'),0) AS refunded
+                FROM o
+            """),
+            {"c": str(club_id), "u": str(user_id), "ym": ym},
+        ).mappings().first()
+        billed = int(r["billed"] or 0)
+        discount = int(r["discount"] or 0)
+        written_off = int(r["written_off"] or 0)
+        return {
+            "billed_minor": billed,
+            "discount_minor": discount,
+            "written_off_minor": written_off,
+            "invoiced_minor": billed - discount - written_off,
+            "paid_minor": int(r["paid"] or 0),
+            "outstanding_minor": int(r["outstanding"] or 0),
+            "refunded_minor": int(r["refunded"] or 0),
+        }
+    return _guard(session, _run, default)
+
+
 def _activity(session, *, club_id, user_id):
     """The client's chronological transaction log. Reuses billing.activity.transaction_log. Heavily
     guarded (composes several lanes)."""
@@ -574,6 +623,9 @@ def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=No
     # Month-at-a-glance summary (sessions played + billed/paid/outstanding) — the clean headline every
     # scope can show; for the client it replaces the raw transaction firehose. month=None → this month.
     out["activity_summary"] = _activity_summary(session, club_id=club_id, user_id=user_id, month=month)
+    # The reconciling money fold (Billed − Discount − Written-off = Invoiced = Paid + Outstanding) — the
+    # SAME standard the coach + admin Money use, rendered by CRMUI.statementFold across all three apps.
+    out["statement_fold"] = _statement_fold(session, club_id=club_id, user_id=user_id, month=month)
     out["notifications_unread"] = _notifications_unread(session, club_id=club_id, user_id=user_id)
     # Mission 1.2 — surface the now-linked data on the 360 (via the iam.user<->core.person bridge):
     # full demographics, consent state, and the CRM/behavioural event stream.
