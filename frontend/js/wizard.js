@@ -12,7 +12,10 @@
 (function () {
   var UI = window.UI, el = function () { return UI.el.apply(UI, arguments); };
   var data = { mem: {}, bundles: {}, plan: null, wallets: [] };
-  var ui = { mode: "payg", paygDur: null, selPackId: null, memTier: null, selPriceId: null, bg: null, loaded: false };
+  // forKind scopes the wizard to a service (court|lesson|class): packs are filtered to that kind, and the
+  // Membership tab shows ONLY for courts (membership coverage is court-only). Default 'court' — the
+  // manage-plan / out-of-sessions entry points are court-centric and unchanged.
+  var ui = { mode: "payg", forKind: "court", paygDur: null, selPackId: null, memTier: null, selPriceId: null, bg: null, loaded: false };
 
   // ---- formatting ------------------------------------------------------------
   function money(minor, ccy) { return UI.money(minor, ccy || "ZAR"); }
@@ -21,13 +24,13 @@
   function durLabel(d) { return d ? (d + " min") : "Any length"; }
 
   // ---- catalogue (ONLY what's configured) ------------------------------------
-  function courtPacks() { return (data.bundles.plans || []).filter(function (p) { return p.service_kind === "court" && p.active !== false; }); }
+  function svcPacks() { return (data.bundles.plans || []).filter(function (p) { return p.service_kind === (ui.forKind || "court") && p.active !== false; }); }
   function memPlans() { return (data.mem.plans || []).filter(function (p) { return p.active !== false; }); }
   function paygDurations() {
-    var durs = []; courtPacks().forEach(function (p) { var d = p.duration_minutes || 0; if (durs.indexOf(d) < 0) durs.push(d); });
+    var durs = []; svcPacks().forEach(function (p) { var d = p.duration_minutes || 0; if (durs.indexOf(d) < 0) durs.push(d); });
     return durs.sort(function (a, b) { return a - b; });
   }
-  function packsForDur(d) { return courtPacks().filter(function (p) { return (p.duration_minutes || 0) === d; }).sort(function (a, b) { return a.sessions_count - b.sessions_count; }); }
+  function packsForDur(d) { return svcPacks().filter(function (p) { return (p.duration_minutes || 0) === d; }).sort(function (a, b) { return a.sessions_count - b.sessions_count; }); }
   // tier = the explicit membership_tier (admin field); falls back to the label when unset.
   function tierOf(p) { return p.tier || p.label || termLabel(p.term_months); }
   function memTiers() {
@@ -39,7 +42,7 @@
   // catalogue (Adult Anytime / Off-peak / Junior / Family), then the period. Only fall back to a flat
   // plan list when no plan carries an explicit tier (legacy term-labelled defaults).
   function memMultiTier() { return memPlans().some(function (p) { return !!p.tier; }); }
-  function selectedPack() { return courtPacks().filter(function (p) { return p.id === ui.selPackId; })[0] || null; }
+  function selectedPack() { return svcPacks().filter(function (p) { return p.id === ui.selPackId; })[0] || null; }
   function selectedPlan() { return memPlans().filter(function (p) { return p.price_id === ui.selPriceId; })[0] || null; }
 
   // pre-select sensible defaults (first type, first option) so the quote shows immediately
@@ -75,7 +78,9 @@
   }
 
   // ---- shell -----------------------------------------------------------------
-  function open() {
+  function open(opts) {
+    opts = opts || {};
+    ui.forKind = (opts.forKind === "lesson" || opts.forKind === "class") ? opts.forKind : "court";
     ui.mode = "payg"; ui.paygDur = null; ui.selPackId = null; ui.memTier = null; ui.selPriceId = null;
     if (ui.bg) _close();
     var bg = el("div", { class: "cf-modal-bg" });
@@ -90,17 +95,25 @@
   function _close() { if (ui.bg && ui.bg.parentNode) document.body.removeChild(ui.bg); ui.bg = null; }
   function close() { try { sessionStorage.setItem("cf_wizard_dismissed", "1"); } catch (e) {} _close(); }
 
+  function kindNoun() { return { court: "court", lesson: "lesson", class: "class" }[ui.forKind] || "session"; }
+
   function header() {
+    var title = (ui.forKind === "court") ? "Choose how you'd like to pay"
+      : ("Save on your " + kindNoun() + "s");
+    var sub = (ui.forKind === "court") ? "Pick what fits — your price updates as you go."
+      : ("Grab a " + kindNoun() + " pack — pay once, then just book.");
     return el("div", { class: "cf-row", style: "justify-content:space-between;align-items:flex-start" }, [
       el("div", {}, [
-        el("h2", { text: "Choose how you'd like to pay" }),
-        el("p", { class: "cf-muted", style: "margin-top:2px", text: "Pick what fits — your price updates as you go." }),
+        el("h2", { text: title }),
+        el("p", { class: "cf-muted", style: "margin-top:2px", text: sub }),
       ]),
       el("button", { class: "cf-btn cf-btn-sm", text: "✕", title: "Close", onclick: close }),
     ]);
   }
 
   function modeSegment() {
+    // Membership coverage is court-only — for a lesson/class the wizard shows PACKS only (no segment).
+    if (ui.forKind !== "court") return null;
     var seg = el("div", { class: "cf-segment", style: "margin-top:14px" });
     [["payg", "Pay as you go"], ["membership", "Membership"]].forEach(function (m) {
       seg.appendChild(el("button", { type: "button", class: ui.mode === m[0] ? "on" : "", text: m[1],
@@ -131,11 +144,11 @@
 
   // ---- PAYG: session length (type) → #sessions (number) ----------------------
   function renderPayg(body) {
-    var packs = courtPacks();
+    var packs = svcPacks();
     if (!packs.length) {
-      body.appendChild(el("div", { class: "cf-empty", text: "No session packs are set up by your club yet." }));
+      body.appendChild(el("div", { class: "cf-empty", text: "No " + kindNoun() + " packs are set up by your club yet." }));
       body.appendChild(el("p", { class: "cf-muted cf-tiny", style: "text-align:center;margin-top:8px" }, [
-        el("a", { href: "#", text: "Just pay each time you book →", onclick: function (ev) { ev.preventDefault(); close(); window.location.href = "/book/court"; } })]));
+        el("a", { href: "#", text: "Just pay each time you book →", onclick: function (ev) { ev.preventDefault(); close(); window.location.href = "/book/" + (ui.forKind || "court"); } })]));
       return;
     }
     var durs = paygDurations();
@@ -263,10 +276,11 @@
 
   function render() {
     var modal = document.getElementById("cf-wiz"); if (!modal) return;
+    if (ui.forKind !== "court") ui.mode = "payg";   // lesson/class = packs only (no membership)
     ensureDefaults();
     modal.innerHTML = "";
     modal.appendChild(header());
-    modal.appendChild(modeSegment());
+    var seg = modeSegment(); if (seg) modal.appendChild(seg);
     var body = el("div", { style: "margin-top:16px" });
     if (ui.mode === "payg") renderPayg(body); else renderMembership(body);
     modal.appendChild(body);

@@ -131,7 +131,7 @@
     }
     if (top === "activity") return renderRecord();   // "Full activity ›" now opens the ONE Client-360 record
     if (top === "analysis") return renderAnalysis();  // embedded Ten-Fifty5 match analysis / technique
-    if (top === "plan") return renderPlan();
+    if (top === "plan") return renderPlan(parts[1]);
     if (top === "profile") return parts[1] === "child" ? renderChildEdit(parts[2]) : renderProfile();  // /profile/edit → the same one screen
     return renderHome();                            // home / bookings / anything else
   }
@@ -740,11 +740,14 @@
   }
 
   // ---- PLAN (reuse the existing 3-purchasing-models wizard as an overlay) --
-  function openPlan() {
-    if (window.PlanWizard && window.PlanWizard.open) window.PlanWizard.open();
+  function openPlan(kind) {
+    // Scope the wizard to the service the member came from (court/lesson/class) so it only offers THAT
+    // service's plans — a class shows class packs, a lesson lesson packs, a court packs + membership.
+    var opts = (kind === "court" || kind === "lesson" || kind === "class") ? { forKind: kind } : {};
+    if (window.PlanWizard && window.PlanWizard.open) window.PlanWizard.open(opts);
     else location.href = "/plan";
   }
-  function renderPlan() { renderHome(); openPlan(); }
+  function renderPlan(kind) { renderHome(); openPlan(kind); }
 
   // ---- PROFILE (ONE screen: your details + family, editable inline) --------
   var FIELDS = [

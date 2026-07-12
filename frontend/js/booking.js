@@ -737,7 +737,7 @@
           el("div", { style: "font-weight:700", text: "Save with a plan" }),
           el("div", { class: "cf-muted cf-tiny", text: msg }),
         ]),
-        el("a", { class: "cf-btn cf-btn-sm", href: st.plansHref, text: "See plans" }),
+        el("a", { class: "cf-btn cf-btn-sm", href: st.plansHref + "/" + st.type, text: "See plans" }),
       ]),
     ]);
   }

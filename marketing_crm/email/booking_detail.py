@@ -219,7 +219,12 @@ def _load_booking(session, club_id, ctx):
                       FROM billing.order_line ol
                       LEFT JOIN billing.price pr ON pr.id = ol.price_id
                       LEFT JOIN billing.product p ON p.id = pr.product_id
-                      WHERE ol.booking_id = b.id ORDER BY ol.created_at LIMIT 1) AS service_name
+                      WHERE ol.booking_id = b.id ORDER BY ol.created_at LIMIT 1) AS service_name,
+                   -- Equipment hired on this booking (ball machine / racquets), so the confirmation
+                   -- lists it. NULL when none.
+                   (SELECT string_agg(er.name || (CASE WHEN be.qty > 1 THEN ' x' || be.qty ELSE '' END), ', ')
+                      FROM diary.booking_equipment be JOIN diary.resource er ON er.id = be.resource_id
+                      WHERE be.booking_id = b.id) AS equipment
             FROM diary.booking b
             LEFT JOIN diary.resource r ON r.id = b.resource_id
             LEFT JOIN iam."user" cl ON cl.id = b.booked_by_user_id
@@ -245,6 +250,7 @@ def _load_booking(session, club_id, ctx):
         cl_first=b["cl_first"], cl_surname=b["cl_surname"],
         cl_email=b["cl_email"], cl_phone=b["cl_phone"],
         settlement_mode=b["settlement_mode"], charge=charge,
+        equipment=b.get("equipment"),
     )
 
 
@@ -426,7 +432,7 @@ def _charge(session, club_id, order_id, settlement_mode):
 
 
 def _normalize(*, service, booking_type, starts, ends, tzname, court, coach_name, coach_email,
-               cl_first, cl_surname, cl_email, cl_phone, settlement_mode, charge):
+               cl_first, cl_surname, cl_email, cl_phone, settlement_mode, charge, equipment=None):
     s, e = _as_dt(starts), _as_dt(ends)
     dur = int((e - s).total_seconds() // 60) if (s and e) else None
     # Name is the real name ONLY — never the email as a fallback (that duplicated the email into the
@@ -441,6 +447,7 @@ def _normalize(*, service, booking_type, starts, ends, tzname, court, coach_name
         "when": fmt_when(starts, ends, tzname),
         "duration_minutes": dur,
         "court": court,
+        "equipment": (equipment or None),
         "coach": {"name": coach_name, "email": (coach_email or None)},
         "client": {"first": cl_first, "surname": cl_surname, "name": name,
                    "email": cl_email, "phone": cl_phone},
@@ -509,6 +516,7 @@ def html_block(d):
         ("When", d.get("when")),
         ("Duration", dur),
         ("Court", d.get("court")),
+        ("Equipment", d.get("equipment")),
         ("Coach", (d.get("coach") or {}).get("name")),
         ("Price", d.get("price")),
         ("Payment", d.get("pay_status")),
@@ -538,6 +546,7 @@ def text_block(d):
     dur = ("%d min" % d["duration_minutes"]) if d.get("duration_minutes") else None
     for label, value in [("Service", d.get("service")), ("When", d.get("when")),
                          ("Duration", dur), ("Court", d.get("court")),
+                         ("Equipment", d.get("equipment")),
                          ("Coach", (d.get("coach") or {}).get("name")),
                          ("Price", d.get("price")), ("Payment", d.get("pay_status"))]:
         if value:
