@@ -66,7 +66,11 @@ with its own price + allocated courts, so the client picks a court service like 
 is priced exactly, passing `coach_user_id`+`product_id` into the order; pricing/availability/`create_booking`
 are **court-service-aware** — a court's service resolves via `diary.pricing.court_service_for_resource`
 [the court's own `product_id`, else the club default court product, else unscoped], and a court booked under
-the wrong service is rejected **`COURT_NOT_IN_SERVICE`**; single-court-service clubs unchanged) ·
+the wrong service is rejected **`COURT_NOT_IN_SERVICE`**; single-court-service clubs unchanged. **POST also
+accepts `allow_past`** — staff BACK-CAPTURE of a lesson/class that already happened: role-gated + ANDed with
+on-behalf [`booked_for_user_id`], it bypasses the `IN_THE_PAST` guard, resolves the coach's resource from
+`coach_user_id` when no slot carries it, bills the client + credits the coach, holds no calendar slot; a member
+can never back-date) ·
 `GET bookings/<id>` · `PATCH bookings/<id>` (reschedule — auto-reassigns the held court for a lesson;
 re-prices unpaid order lines + `coach_arrears` from the same product on a duration change via
 `billing.orders.reprice_booking_order`; **`PAID_CANNOT_EXTEND` (422)** extending a PAID booking,
@@ -110,6 +114,11 @@ class/court always included) ·
 **`POST members/<id>/issue`** (issue a **membership OR token pack** offline — `{kind, price_id?|bundle_plan_id?,
 start_date?, mark_paid?, pay_provider?}`; reuses the offline-purchase engine → owed order activated now,
 `mark_paid` settles immediately) ·
+**`POST clients/<client_id>/invoice`** (ad-hoc invoice — `{lines:[{price_id?|amount_minor, description?, qty}],
+discount_minor?, reason?}` → ONE owed `billing.order` [monthly_account, on the unified statement, settleable
+online] + emails a `/portal` pay link; a service line re-derives its price server-side [tamper-proof], a custom
+fee uses the body amount; `admin.repositories.create_invoice`) ·
+**`POST clients`** (walk-up client — **requires a name + valid email**, `_EMAIL_RE`-guarded; idempotent on email) ·
 **`GET members/<id>/statement`** · **`POST orders/<id>/void`** (`{write_off}` — void/write-off an owed order) ·
 **`POST orders/<order_id>/discount`** (`{discount_minor|new_amount_minor, reason}` — reprice ANY OPEN/awaiting
 order [court/lesson/class/pack/membership]; multi-line orders split the discount pro-rata [remainder on the
@@ -451,7 +460,7 @@ dashboard (`sync:false`).
 - Compile: `python -m py_compile $(git ls-files '*.py')`.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 131 / billing 267 / statement 47** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 139 / billing 277 / statement 47** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
   on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +

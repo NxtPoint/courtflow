@@ -1,11 +1,11 @@
 # EQUIPMENT & CONSTRAINTS — equipment hire · peak pricing · membership entitlements · configurable trial
 
-Status: **BUILT + GATED on branch `feat/equipment-and-constraints` (2026-07-11) — awaiting Tomo's browser
-review before merge to `master`.** All four capabilities shipped reuse-first on the existing engines. Every
-value is owner-configured data (white-label); every new row is `club_id`-scoped; all boot DDL is idempotent
-(`python -m db` twice = no-op). Gates green: **py_compile · db twice · `python -m scripts.test_all` =
-booking 131 / billing 267 / statement 47** (+29 new assertions: peak shown==charged, silent entitlement
-caps → PAYG, clay never covered, trial inherits caps, equipment one-order/no-double-bill + no-double-book).
+Status: **SHIPPED + LIVE on `master` / prod (merged 2026-07-12).** All four capabilities shipped reuse-first
+on the existing engines. Every value is owner-configured data (white-label); every new row is `club_id`-scoped;
+all boot DDL is idempotent (`python -m db` twice = no-op). Gates green: **py_compile · db twice ·
+`python -m scripts.test_all` = booking 139 / billing 277 / statement 47** (equipment/peak/caps/trial assertions:
+peak shown==charged, silent entitlement caps → PAYG, clay never covered, trial inherits caps, equipment
+one-order/no-double-bill + no-double-book).
 Commits: peak `9703ee2` · membership+trial `08c9820` · equipment `db24db9` (spec `36450d6`).
 
 The client-Home **hero tile** for a `feature_on_home` equipment item is now in (`client.js` → a Home "Book a

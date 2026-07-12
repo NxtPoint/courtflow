@@ -45,13 +45,21 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 - **A coach's class blocks their lessons** — a class the coach runs makes them unavailable for a
   lesson at that time (read + write guarded). A class can **optionally reserve a court** too
   (`class_session.court_resource_id` → a court-blocking booking, freed on cancel). ✅
-- **Admin can create a walk-up client + issue a membership/pack offline** — People → New client +
-  Issue package (membership OR pack, owed/PAYG or mark-paid, start date); reuses the offline-purchase
+- **Admin can create a walk-up client + issue a membership/pack offline** — People → New client
+  (**a name + a valid email are required** — the email is the identity key + pay-link/receipt address)
+  + Issue package (membership OR pack, owed/PAYG or mark-paid, start date); reuses the offline-purchase
   engine (no parallel money logic). ✅
+- **Admin ad-hoc invoice builder** — Money → New invoice: bill a client for a configured **service ×
+  how-many** (price re-derived server-side, tamper-proof) and/or a **custom fee**, less an optional
+  rand discount → ONE owed `billing.order` on their unified statement (settleable online), and the
+  client is emailed a `/portal` pay link. Not booked to the calendar (`POST /api/admin/clients/<id>/invoice`). ✅
+- **Coach/admin back-capture of a PAST session** — the SAME on-behalf booking flow, opened for a past
+  date ("Log a past session"): a lesson/class that already happened is billed to the client + credits
+  the coach, with no calendar hold. Staff-only (`allow_past`, role-gated); a member can never back-date. ✅
 - **Client monthly Activity view** — one screen: the month's bookings, spend by category, and the
   outstanding balance to settle (`GET /api/me/activity`). ✅
-- **30-minute start cadence** — bookings can start on the hour or half-hour (configurable finer per
-  club); duration sets the length. ✅
+- **15-minute start cadence** — bookings can start on any quarter-hour (`BOOKING_GRANULARITY_MIN=15`,
+  configurable per club); duration sets the length. ✅
 - **Reschedule** — atomic move, conflict-checked; a failed move preserves the original slot; a
   lesson's held court is **auto-reassigned** to a free court at the new time; you can't extend a
   **paid** booking (`PAID_CANNOT_EXTEND`), and moving a **membership-covered** booking to a time the
@@ -101,12 +109,26 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
     lapses); their **plan + access window + renew date** show on the profile ("Your plan"). 🔭
   - **Free week** — new members auto-granted a 7-day courts-free trial (one-shot, idempotent,
     auto-lapses). ✅
+  - **Configurable trial-as-a-tier** — the signup trial can be a membership tier flagged `is_trial` /
+    `trial_days` (inherits its window + caps); backward-compatible with the legacy NULL-price trial. ✅
+- **Peak PAYG court pricing** — a club **peak window** (`club.policy.peak_*`) + an explicit per-duration
+  `billing.price.peak_amount_minor`; shown == charged, and membership coverage still wins. ✅
+- **Silent membership entitlement caps** — ONE `diary/entitlement.py` resolver (read by availability
+  AND booking): `max_covered_minutes` (over-length durations hidden for members), `max_covered_per_day`,
+  `max_courts_per_day`, and a court-service `members_covered=false` (e.g. **clay = PAYG-only**). Every
+  cap **downgrades to PAYG, never blocks** — shown == charged == allowed. ✅ (spec:
+  [EQUIPMENT-AND-CONSTRAINTS.md](EQUIPMENT-AND-CONSTRAINTS.md))
+- **Equipment hire** — a ball machine / racquets / balls as a **flat-fee add-on** on a court booking
+  (`diary.resource(kind='equipment')` + `quantity`); **time-based availability** (a single ball machine
+  can't double-book), one order / one payment (no double-bill), cancel voids the add-on. ✅
 - **Tokens / bundles (unit/minute packs)** — prepaid packs across court/lesson/class; balance held in
   **minutes** so one pack covers any length (a 90-min booking off a 60-min unit = 1.5 sessions);
   **atomic draw-down**, **idempotent credit-back** on cancel, expiry/use-it-or-lose-it; coaches
   configure their own lesson packs. ✅
-  - **Pack service isolation** — a legacy **unscoped** pack can be pinned to a **specific service** in
-    the service editor, so it stops cross-showing under a coach's other same-kind services. 🔭
+  - **Per-service, coach-scoped packs** — a pack + wallet carry `product_id` = the SPECIFIC service they
+    draw for; scoped by **coach + service** at BOTH the checkout draw AND the buy-wizard ("Save on your
+    lessons" shows only that coach/service's packs). A legacy **unscoped** pack can be pinned to a
+    specific service in the service editor ("Assign to this service"). ✅
 - **Catalogue lifecycle** — every price/pack/plan carries a status: **active / dormant** (hidden but
   kept) **/ retired** (soft-deleted); customers only ever see active. 🔭
 - **Unified lifecycle (Active / Deactivated / Terminated)** — services, memberships and coaches share
@@ -273,13 +295,15 @@ Three rollback-only scratch-DB harnesses drive the **real** engine code and asse
 **`python -m scripts.test_all`** (or each: `test_booking_scenarios`, `test_billing_scenarios`,
 `test_statement_reconciliation`).
 
-**Booking engine — `scripts/test_booking_scenarios.py` (43 checks):** court book/cancel/double-book/
+**Booking engine — `scripts/test_booking_scenarios.py` (139 checks):** court book/cancel/double-book/
 reschedule (+ conflict preserves original) · lesson = coach + court rows, collapsed to one line ·
-lesson needs a free court · **coach∩class conflict** (read + write) · 30-min slot granularity ·
+lesson needs a free court · **coach∩class conflict** (read + write) · 15-min slot granularity ·
 class enrol/capacity/waitlist/promote · lesson approval lifecycle (request → accept/decline/propose →
-client accept).
+client accept) · court→service allocation · classes reserve N courts (+ auto-repick) · online class seat
+lazy-expiry · peak court pricing · membership entitlement caps → PAYG · configurable trial · equipment
+hire · **coach back-capture of a past lesson** (staff-only allow_past, resource from coach_user_id).
 
-**Commercial engines — `scripts/test_billing_scenarios.py` (176 checks):** settlement per mode
+**Commercial engines — `scripts/test_billing_scenarios.py` (277 checks):** settlement per mode
 (at-court desk, online held→paid, monthly-account ledger) · **idempotent payment replay** · commission
 30%/40% scoping + accrual + idempotency · token pack buy→activate→**unit/minute draw-down**→credit-back
 + NO_TOKEN · membership coverage (R0) + **access window** inside/outside + trial idempotency · refund-
@@ -297,7 +321,7 @@ fix** (each class bills its own price) · **cancel late-fee + paid-booking resiz
 (`NOT_COVERED_AT_NEW_TIME`) · **settlement/approval-gate whitelist** (no client `free`; accept coerces
 covered/free → at-court) · **online-only** + **off-platform reconcile** · **on-behalf token/pack draw-down**.
 
-**Unified statement — `scripts/test_statement_reconciliation.py` (40 checks):** no double-count
+**Unified statement — `scripts/test_statement_reconciliation.py` (47 checks):** no double-count
 (orders only, never ledger + arrears too) · pay-all-once · **partial settle** (selected lines only) ·
 reclaim of an abandoned settlement · membership-covered R0 never owed · **void / write-off** · arrears
 ↔ orders lockstep (commission once) · pack-offline owed · category + coach-name grouping.

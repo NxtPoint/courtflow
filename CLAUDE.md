@@ -19,20 +19,22 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 134 / billing 267 / statement 47**. Each uses its own scratch club and always rolls back.
-   - `test_booking_scenarios` (134) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   **booking 139 / billing 277 / statement 47**. Each uses its own scratch club and always rolls back.
+   - `test_booking_scenarios` (139) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
      waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused,
      PEAK court pricing (shown==charged), membership entitlement caps (duration/courts-per-day → PAYG) +
      clay-court exclusion, configurable trial inherits its tier's caps, equipment hire (one order/no
-     double-bill + time-based availability, single ball machine can't double-book, cancel voids the add-on)**.
-   - `test_billing_scenarios` (267) — settlement modes, commission, tokens, membership (offline + per-tier),
+     double-bill + time-based availability, single ball machine can't double-book, cancel voids the add-on),
+     coach back-capture of a PAST lesson (staff-only allow_past, resource resolved from coach_user_id)**.
+   - `test_billing_scenarios` (277) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
      class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
      partial-refund state, coach payout nets the ledger, month-end sweep idempotent, pack service-isolation
-     (assign), client activity-summary (counts/minutes/by-service/by-week)**.
+     (assign + buy-wizard coach/product scoping), admin ad-hoc invoice (service×qty + fee − discount,
+     tamper-proof), client activity-summary (counts/minutes/by-service/by-week)**.
    - `test_statement_reconciliation` (47) — no double-count, pay-all-once, part-settle, reclaim,
      membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
 
@@ -285,7 +287,8 @@ member by email on the first authenticated hit.
 - **Wix→Render cutover (SUPERVISED — runbook `migration/CUTOVER_RUNBOOK.md`):** take-on scripts default to
   `--dry-run` (print counts, ROLLBACK), are idempotent, and only an explicit `--commit`/typed `YES` writes.
   Wrappers: `scripts/import_members.py`, `import_subscriptions.py` (matched to plans BY LABEL), `import_lessons.py`.
-  The 301 redirect engine (`migration/redirects.py`) is scaffolding, NOT yet wired into `web_app`.
+  The 301 redirect engine (`migration/redirects.py`) IS wired into `web_app` (`register_redirects(app)` at
+  boot, before the catch-all) — it loads `migration/redirects.csv` (48-rule Wix→Render map, live since cutover).
   **Never let an agent change DNS or flip the SEO cutover — Tomo does this.**
 
 ## Tech defaults (match 1050 so reuse is clean)

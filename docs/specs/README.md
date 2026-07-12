@@ -141,6 +141,21 @@ operating guide; **this folder is the detail.**
 > the `TF5_EMBED_*` config. **Gated to a private test** (`TF5_EMBED_ALLOW_EMAILS`; launch = clear it) + a public
 > "Match analysis" marketing CTA → ten-fifty5.com. The 1050 repo was modified (additive/flag-guarded) — the ONE
 > exception to "read-only reference." Full write-up: root `CLAUDE.md` → "Ten-Fifty5 embed"; env: `ENV-STATUS.md`.
+>
+> **2026-07-12 — EQUIPMENT+CONSTRAINTS MERGED + a coach-feedback batch + the CLOSE-OUT.** The
+> `feat/equipment-and-constraints` work is **merged + live on prod** (equipment hire · peak PAYG court pricing
+> · silent membership entitlement caps `diary/entitlement.py` · configurable trial-as-a-tier —
+> [EQUIPMENT-AND-CONSTRAINTS.md](EQUIPMENT-AND-CONSTRAINTS.md)). Then a batch off owner feedback: class fixes
+> (payment-modes respected, class packs present, hung-online-seat clears) + **15-minute** booking grid;
+> **admin ad-hoc invoice builder** (Money → New invoice: service×qty and/or custom fee − rand discount → one
+> owed order + emailed `/portal` paylink); **coach/admin back-capture of a PAST lesson/class** (same on-behalf
+> flow, `allow_past`, no calendar hold); **creating a client now requires a name + valid email**; **per-service
+> packs are coach+service-scoped at BOTH the draw (checkout) AND the buy-wizard** ("Save on your lessons" no
+> longer shows every coach's packs), retired packs stay deleted; the **lesson↔court collapse rule** (a lesson's
+> auto-held court is ONE row in every agenda/list view, never two); and class-pick UX polish. **This was also
+> the full close-out sweep** — docs reconciled to as-built, `OUTSTANDING.md` rewritten as one clean backlog,
+> and a new **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** capturing every built-but-dark capability + how to switch
+> it on. **Current gate baseline: `python -m scripts.test_all` → booking 139 / billing 277 / statement 47.**
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,
@@ -152,6 +167,8 @@ operating guide; **this folder is the detail.**
    **every DB table**, every frontend page/JS module, env vars. *"What exists."*
 4. **[OUTSTANDING.md](OUTSTANDING.md)** — everything still to do: build items, config (needs Tomo),
    and consciously-deferred pieces. *"What's left."*
+4b. **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** — every capability that is **built but currently dark**
+   (env-gated / unwired / commented-out) and exactly how to switch it on. *"What we can turn on."*
 5. **[TESTING.md](TESTING.md)** — the **end-to-end test plan** (3 profiles, role-by-role, with expected
    results). *"How to verify it all."*
 6. **[FEATURES.md](FEATURES.md)** — the **white-label feature & function catalogue** (plain-language,
@@ -182,18 +199,23 @@ operating guide; **this folder is the detail.**
     account is back). *"Email: live now, the clean setup later."*
 
 ## The build-era spec docs (design intent, still useful)
-- [00-roadmap.md](00-roadmap.md) — the phased self-service/CRM roadmap (most phases now built).
 - [01-commission-and-coaching-decisions.md](01-commission-and-coaching-decisions.md) — the owner's
   LOCKED commercial decisions (ex-VAT, rent +/or %, PAYG/bundle/arrears, commission-on-collection,
   nothing-hardcoded). **Authoritative for the commission engine.**
 - [02-token-bundle-engine.md](02-token-bundle-engine.md) — the generic token/bundle design.
-- `client-self-service-spec.md`, `coach-self-service-spec.md`, `owner-self-service-spec.md`,
-  `crm-and-foundations-spec.md` — the deep role specs (built from these).
+
+### Archived (`_archive/`) — superseded by the as-built docs, kept for provenance
+Moved out of the authoritative set in the 2026-07-12 close-out (all were AS-BUILT-superseded): the phased
+roadmap `00-roadmap.md` (phases all shipped → see FEATURES/OUTSTANDING), the four deep role specs
+`client-/coach-/owner-self-service-spec.md` + `crm-and-foundations-spec.md` (the SPAs + `client360/` composer
+replaced them → see ADMIN-REDESIGN/FRONTEND-STANDARDISATION/BUSINESS-RULES), and `12-tenfifty5-bridge.md`
+(self-deprecated 2026-06-21; the analytics bridge was removed — unrelated to the live members-area TF5 embed).
 
 ## The original pre-build design docs
-`docs/00`→`docs/12` (one level up) are the original architecture/decision docs written before the
+`docs/00`→`docs/11` (one level up) are the original architecture/decision docs written before the
 build. They remain the source of the big-picture design and the Ten-Fifty5 (1050) reuse map
 (`docs/10`, `docs/11`). Where they and the `specs/` docs differ, **`specs/` reflects as-built reality.**
+(`docs/12-tenfifty5-bridge.md` was the deprecated cross-business analytics bridge — now in `specs/_archive/`.)
 
 ## Ground rules that still hold (see SYSTEM.md for detail)
 - **Multi-tenant:** every domain row carries `club_id`; every query is club-scoped.

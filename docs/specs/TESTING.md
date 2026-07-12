@@ -11,12 +11,12 @@ the coach sets up services, then the client books against them. Expected results
 > **Automated gate (separate from this manual plan):** the backend money/booking invariants are also
 > proven by scratch-DB scenario harnesses — **`python -m scripts.test_all`** runs **THREE** (each in its
 > own scratch club, always rolled back, never persisted):
-> - **booking** (`test_booking_scenarios`, **98** checks) — double-book refusal, coach∩court integrity,
+> - **booking** (`test_booking_scenarios`, **139** checks) — double-book refusal, coach∩court integrity,
 >   recurrence/waitlist, lazy hold-expiry, off-peak per-slot pricing, court→service allocation (per-service
 >   courts + pricing), **classes reserve N courts** (held + conflict guard + auto-repick) + editable, and the
 >   **online class seat held → lazy-expired on abandonment → waitlister promoted** (a paid seat is never
 >   expired).
-> - **billing / commercial** (`test_billing_scenarios`, **239** checks) — PAYG/membership/bundle settlement,
+> - **billing / commercial** (`test_billing_scenarios`, **277** checks) — PAYG/membership/bundle settlement,
 >   desk-payment idempotency, refunds, commission, refund clawback, membership-cancel-voids-order, the
 >   transaction log, dispute routing, client month-end, void clears arrears, abandoned reclaim on read, the
 >   booking + coach event stories, cancel-voids-order + phantom cleanup, the **client by-service breakdown**
