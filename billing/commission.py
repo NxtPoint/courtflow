@@ -1388,18 +1388,75 @@ def coach_statement(session, *, club_id, coach_user_id, month=None) -> Dict[str,
         {"club": club_id, "coach": str(coach_user_id), "ym": ym},
     ).scalar() or 0)
 
+    # --- The money triad for the coach summary band (billed → collected → outstanding) ----------
+    # BILLED (gross) = the value of the coaching DELIVERED/SOLD this month, before any (non-)
+    # collection — lessons + class seats, using the ORIGINAL amount so a discount doesn't shrink
+    # "billed". Excludes 'held' (an abandoned online hold isn't real business). Mirrors the client
+    # record's "billed" so coach and client never disagree.
+    billed_minor = _coach_billed_month(session, club_id=club_id, coach_user_id=coach_user_id, ym=ym)
+    # COMMISSION to the club = the owner's cut accrued this month (on what was collected). NET to the
+    # coach is the coach party (already summed into paid_minor per client). COLLECTED (gross) is the
+    # two put back together = what the client actually paid on this coach's sessions this month.
+    commission_minor = int(session.execute(
+        text("""
+            SELECT COALESCE(SUM(amount_minor),0)
+            FROM billing.commission_split
+            WHERE club_id = :club AND coach_user_id = :coach AND party_type = 'owner'
+              AND basis IN ('lesson_commission','class_commission','arrears_commission','refund_clawback')
+              AND to_char(occurred_at,'YYYY-MM') = :ym
+        """),
+        {"club": club_id, "coach": str(coach_user_id), "ym": ym},
+    ).scalar() or 0)
+
     clients = sorted(by_client.values(), key=lambda r: -r["net_minor"])
+    net_collected = sum(c["paid_minor"] for c in clients)   # coach net collected this month
+    owed_total = sum(c["owed_minor"] for c in clients)
     return {
         "month": ym,
         "currency": currency,
         "clients": clients,
         "arrears_items": arrears_items,
         "totals": {
-            "paid_minor": sum(c["paid_minor"] for c in clients),
-            "owed_minor": sum(c["owed_minor"] for c in clients),
+            "paid_minor": net_collected,
+            "owed_minor": owed_total,
             "net_minor": sum(c["net_minor"] for c in clients),
             "written_off_minor": written_off_minor,     # forgiven — informational, NOT in net
             "rent_minor": period_rent,
             "balance_minor": coach_balance(session, club_id=club_id, coach_user_id=coach_user_id),
+            # The reconciling triad (all GROSS, this month's coaching):
+            "billed_minor": billed_minor,                        # value of coaching delivered/sold
+            "commission_minor": commission_minor,                # the club's cut (on collected)
+            "collected_minor": net_collected + commission_minor,  # gross the client actually paid
         },
     }
+
+
+def _coach_billed_month(session, *, club_id, coach_user_id, ym) -> int:
+    """GROSS coaching billed in month `ym` (YYYY-MM) for this coach — lessons + class seats, at each
+    line's ORIGINAL amount (pre-discount). Excludes 'held' (unpaid online holds). Guarded → 0. Kept
+    here (not imported from coach.repositories) to avoid a lane import cycle; mirrors `_coach_billed`."""
+    try:
+        v = session.execute(
+            text("""
+                SELECT COALESCE(SUM(billed), 0) FROM (
+                    SELECT COALESCE(ol.original_amount_minor, ol.amount_minor) AS billed
+                    FROM diary.booking b
+                    JOIN billing.order_line ol ON ol.booking_id = b.id AND ol.club_id = b.club_id
+                    WHERE b.club_id = :c AND b.coach_user_id = :u AND b.booking_type = 'lesson'
+                      AND to_char(b.starts_at,'YYYY-MM') = :ym
+                      AND b.status IN ('confirmed','completed','no_show')
+                    UNION ALL
+                    SELECT COALESCE(ol.original_amount_minor, ol.amount_minor) AS billed
+                    FROM diary.class_session cs
+                    JOIN diary.enrolment e ON e.class_session_id = cs.id AND e.club_id = cs.club_id
+                    JOIN billing.order_line ol ON ol.enrolment_id = e.id AND ol.club_id = cs.club_id
+                    WHERE cs.club_id = :c AND cs.coach_user_id = :u
+                      AND to_char(cs.starts_at,'YYYY-MM') = :ym
+                      AND e.status IN ('enrolled','attended','no_show')
+                ) x
+            """),
+            {"c": club_id, "u": str(coach_user_id), "ym": ym},
+        ).scalar()
+        return int(v or 0)
+    except Exception:
+        return 0

@@ -541,23 +541,31 @@
     var wrap = el("div", {});
     wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [el("h1", { style: "margin:0", text: "Money" }), monthNav(renderMoney)]));
 
-    // My account
-    var acct = card([window.CRMUI.stats([
-      { value: money(t.paid_minor, cur), label: "Collected (net)" },
-      { value: money(t.owed_minor, cur), label: "Outstanding" },
-      { value: money(t.rent_minor, cur), label: "Rent" },
-      { value: money(t.balance_minor, cur), label: "Balance" },
-    ])]);
-    if (t.written_off_minor) acct.appendChild(el("div", { class: "cf-muted", style: "margin-top:6px;font-size:.85rem", text: "Written off this month: " + money(t.written_off_minor, cur) }));
-    wrap.appendChild(acct);
+    // My money this month — the reconciling triad (billed → collected → owed) + how collected splits
+    // between what YOU keep and the CLUB's commission, plus rent and your running net balance. ONE
+    // shared band (CRMUI.moneySummary), same one the owner's Money uses (golden rule).
+    var bal = t.balance_minor || 0;
+    var breakdown = [
+      { label: "You keep", value_minor: t.paid_minor, tone: "good" },
+      { label: "Club commission", value_minor: t.commission_minor },
+    ];
+    if (t.rent_minor) breakdown.push({ label: "Court rent", value_minor: t.rent_minor });
+    breakdown.push({ label: "Net balance with club", value_minor: bal,
+      tone: bal < 0 ? "bad" : "good", sub: bal > 0 ? "club owes you" : (bal < 0 ? "you owe the club" : "settled") });
+    wrap.appendChild(card([window.CRMUI.moneySummary({
+      currency: cur, month: MONTH,
+      billed_minor: t.billed_minor, collected_minor: t.collected_minor, outstanding_minor: t.owed_minor,
+      breakdown: breakdown,
+      footnote: t.written_off_minor ? ("Written off this month: " + money(t.written_off_minor, cur) + " (forgiven — not owed)") : null,
+    })]));
 
     // Month-end reconciliation — the "finalise this month" ritual (C2): clients who STILL owe.
     // Reuses the same statement rollup, filtered to owed>0; tap → client record to collect / issue.
     var owing = (st.clients || []).filter(function (r) { return (r.owed_minor || 0) > 0; });
-    var recCard = card([window.CRMUI.sectionHead("To finalise" + (owing.length ? " · " + owing.length : ""))]);
+    var recCard = card([window.CRMUI.sectionHead("Close out " + monthLabel(MONTH) + (owing.length ? " · " + owing.length + " to settle" : ""))]);
     if (!owing.length) recCard.appendChild(el("div", { class: "cf-empty", text: "All settled for " + monthLabel(MONTH) + " — nothing to finalise. 🎉" }));
     else {
-      recCard.appendChild(el("p", { class: "cf-muted", style: "margin:-6px 0 8px;font-size:.85rem", text: "These clients still owe this month. Tap to collect (mark paid at court / off-platform) or issue their statement." }));
+      recCard.appendChild(el("p", { class: "cf-muted", style: "margin:-6px 0 8px;font-size:.85rem", text: "Before month-end, clear these tabs so the books are accurate. Tap a client to review their sessions, then collect (mark paid at court / off-platform), discount, or write off." }));
       recCard.appendChild(window.CRMUI.statementTable(owing, { nameKey: "client_name", nameLabel: "Client", currency: cur, onRow: function (r) { if (r.client_user_id) go("#/client/" + r.client_user_id); } }));
     }
     wrap.appendChild(recCard);

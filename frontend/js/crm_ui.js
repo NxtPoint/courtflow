@@ -346,9 +346,53 @@
     return _moduleCard("Billing", a.month, body, opts.onOpen ? { label: "View statement & history", onOpen: opts.onOpen } : null);
   }
 
+  // ---- money summary band (the reconciling triad, shared coach + owner) -------
+  // The ONE money-at-a-glance for a month: Billed → Collected → Outstanding, then a config-driven
+  // breakdown line (coach: you keep / club commission / rent; owner: club keeps / coach payouts due).
+  // Golden rule: ONE presenter, role differences are the cfg passed in. Caller wraps it in a card().
+  //   cfg: {currency, month:'YYYY-MM', billed_minor, collected_minor, outstanding_minor,
+  //         breakdown:[{label, value_minor, tone?('bad'|'good'), sub?}], footnote?}
+  function moneySummary(cfg) {
+    cfg = cfg || {};
+    var cur = cfg.currency || "ZAR";
+    var billed = cfg.billed_minor || 0, coll = cfg.collected_minor || 0, out = cfg.outstanding_minor || 0;
+    var wrap = el("div", { class: "cf-moneysum" });
+    if (cfg.month) wrap.appendChild(el("div", { class: "cf-muted", style: "font-size:.8rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px", text: "This month · " + monthLabel(cfg.month) }));
+    // The triad — three cells; Outstanding tinted when there's money still owed.
+    function cell(label, val, cls) {
+      return el("div", { class: "cf-paycell " + (cls || "") }, [
+        el("div", { class: "cf-payk", text: label }),
+        el("div", { class: "cf-payv num", text: money(val, cur) }),
+      ]);
+    }
+    wrap.appendChild(el("div", { class: "cf-paybar" }, [
+      cell("Billed", billed, ""),
+      cell("Collected", coll, "owe-ok"),
+      cell("Outstanding", out, out > 0 ? "owe-bad" : ""),
+    ]));
+    // Breakdown line (label … amount), each on its own row.
+    var rows = (cfg.breakdown || []).filter(Boolean);
+    if (rows.length) {
+      var box = el("div", { style: "margin-top:12px;border-top:1px solid var(--border);padding-top:10px" });
+      rows.forEach(function (r) {
+        box.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:baseline;margin:5px 0" }, [
+          el("div", {}, [
+            el("span", { class: (r.tone === "bad" ? "" : "cf-muted"), style: "font-size:.9rem", text: r.label }),
+            r.sub ? el("span", { class: "cf-muted", style: "font-size:.78rem;margin-left:6px", text: r.sub }) : null,
+          ].filter(Boolean)),
+          el("span", { class: "num", style: "font-weight:700" + (r.tone === "bad" ? ";color:var(--danger)" : (r.tone === "good" ? ";color:var(--success)" : "")), text: money(r.value_minor || 0, cur) }),
+        ]));
+      });
+      wrap.appendChild(box);
+    }
+    if (cfg.footnote) wrap.appendChild(el("div", { class: "cf-muted", style: "margin-top:8px;font-size:.82rem", text: cfg.footnote }));
+    return wrap;
+  }
+
   window.CRMUI = {
     money: money,
     stats: stats,
+    moneySummary: moneySummary,
     bars: bars,
     weekChart: weekChart,
     activityBlock: activityBlock,
