@@ -1271,7 +1271,23 @@ def list_people(session, *, club_id):
                       AND ms2.status = 'active' AND ms2.provider <> 'trial'
                       AND (ms2.current_period_end IS NULL
                            OR ms2.current_period_end >= CURRENT_DATE)
-                    ORDER BY ms2.current_period_end DESC NULLS LAST LIMIT 1) AS membership_tier
+                    ORDER BY ms2.current_period_end DESC NULLS LAST LIMIT 1) AS membership_tier,
+                   -- Money + recency for the roster row + the smart filters (owes / at-risk / recent).
+                   (SELECT COALESCE(SUM(o.amount_minor), 0) FROM billing."order" o
+                     WHERE o.club_id = :c AND o.user_id = u.id
+                       AND o.status = 'open' AND o.settled_by_order_id IS NULL) AS owed_minor,
+                   (SELECT MAX(x.at) FROM (
+                       SELECT b.starts_at AS at FROM diary.booking b
+                        WHERE b.club_id = :c AND b.booked_by_user_id = u.id AND b.status <> 'cancelled'
+                       UNION ALL
+                       SELECT cs.starts_at FROM diary.enrolment e
+                        JOIN diary.class_session cs ON cs.id = e.class_session_id
+                        WHERE e.club_id = :c AND e.user_id = u.id AND e.status <> 'cancelled'
+                     ) x) AS last_seen,
+                   (SELECT b.booking_type FROM diary.booking b
+                     WHERE b.club_id = :c AND b.booked_by_user_id = u.id AND b.status <> 'cancelled'
+                     ORDER BY b.starts_at DESC LIMIT 1) AS last_kind,
+                   u.created_at AS joined_at
             FROM iam.membership m
             JOIN iam.user u ON u.id = m.user_id
             LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id AND cp.club_id = :c
@@ -1292,6 +1308,7 @@ def list_people(session, *, club_id):
         d["member_status"] = "active" if r["any_active"] else "none"
         d["coach_ids"] = [str(x) for x in (r["coach_ids"] or [])]
         d["service_ids"] = [str(x) for x in (r["service_ids"] or [])]
+        d["owed_minor"] = int(r["owed_minor"] or 0)
         d.pop("any_active", None)
         out.append(d)
     return out

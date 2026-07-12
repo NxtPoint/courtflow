@@ -245,13 +245,27 @@
   }
 
   // ---- PEOPLE (roster + slicer + search → the unified person 360) -----------
-  var PEOPLE = { rows: [], slice: "all", q: "" };
+  var PEOPLE = { rows: [], slice: "all", q: "", sort: "name" };
+  // Roster row helpers: a single STATUS label (no "Membership Member" dupe) + compact recency.
+  function pStatus(r) {
+    if (r.role === "coach") return "Coach";
+    if (r.role === "guest") return "Guest";
+    if (r.role === "club_admin" || r.role === "platform_admin") return "Admin";
+    if (r.has_paid_membership) return "Membership";
+    if (r.on_trial) return "Trial";
+    return "PAYG";
+  }
+  function shortDate(iso) { try { var d = new Date(iso); return d.getDate() + " " + d.toLocaleDateString("en-ZA", { month: "short" }); } catch (e) { return ""; } }
+  function daysSince(iso) { try { return (Date.now() - new Date(iso).getTime()) / 86400000; } catch (e) { return Infinity; } }
+  function atRisk(r) { return !!r.last_seen && daysSince(r.last_seen) > 60; }               // was active, now lapsing
+  function recentJoin(r) { return !!r.joined_at && daysSince(r.joined_at) <= 30; }
   // People segmentation — TWO groups (each a single-select filter; drill a row to the 360):
   //   STATUS  (mutually exclusive over members): Members = PAYG + Memberships + Trial. Plus the
   //           role views (Coaches/Guests/Admins) and All.
   //   HOLDINGS (overlapping): who holds an active prepaid pack, split by service kind.
   var STATUS_SLICES = [
-    ["all", "All"], ["members", "Members"], ["payg", "PAYG"], ["membership", "Memberships"],
+    ["all", "All"], ["owes", "Owes money"], ["at_risk", "At risk"], ["recent", "New (30d)"],
+    ["members", "Members"], ["payg", "PAYG"], ["membership", "Memberships"],
     ["trial", "Trial"], ["coaches", "Coaches"], ["guests", "Guests"], ["admins", "Admins"],
   ];
   // Services the client uses — the 3 booking types (court/lesson/class), by real activity (overlapping).
@@ -305,6 +319,9 @@
     if (slice.indexOf("svc:") === 0) return (r.service_ids || []).indexOf(slice.slice(4)) >= 0;
     switch (slice) {
       case "all": return true;
+      case "owes": return (r.owed_minor || 0) > 0;                                           // open balance
+      case "at_risk": return isMember(r) && atRisk(r);                                        // lapsing (no visit 60d)
+      case "recent": return isMember(r) && recentJoin(r);                                     // joined ≤ 30d
       case "members": return isMember(r);
       case "coaches": case "guests": case "admins": return pSlice(r) === slice;
       case "membership": return isMember(r) && !!r.has_paid_membership;                       // active PAID plan
@@ -325,6 +342,9 @@
       if (seen[r.user_id]) return; seen[r.user_id] = 1;   // one row per person across role dupes
       out.push(r);
     });
+    if (PEOPLE.sort === "owed") out.sort(function (a, b) { return (b.owed_minor || 0) - (a.owed_minor || 0); });
+    else if (PEOPLE.sort === "recent") out.sort(function (a, b) { return new Date(b.last_seen || 0) - new Date(a.last_seen || 0); });
+    // else "name" — the backend already returns surname/first-name order.
     return out;
   }
   function sliceCount(k) {
@@ -395,6 +415,14 @@
     if (servicesRow) wrap.appendChild(servicesRow);
     if (svcRow) wrap.appendChild(svcRow);   // service-type drill (shows when a category is active)
     if (coachRow) wrap.appendChild(coachRow);
+    // Sort toggle — Name (default) · Owed (chase-up) · Recent (last active first).
+    var sortSeg = el("div", { class: "cf-row", style: "gap:6px;align-items:center;margin:4px 0 10px" }, [
+      el("span", { class: "cf-muted", style: "font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em", text: "Sort" }),
+    ]);
+    [["name", "Name"], ["owed", "Owed"], ["recent", "Recent"]].forEach(function (s) {
+      sortSeg.appendChild(el("button", { class: "cf-btn cf-btn-sm" + (PEOPLE.sort === s[0] ? " cf-btn-primary" : " cf-btn-ghost"), text: s[1], onclick: function () { PEOPLE.sort = s[0]; paintPeople(); } }));
+    });
+    wrap.appendChild(sortSeg);
     wrap.appendChild(listBox);
     paintPeopleList(listBox);
     set(wrap);
@@ -405,19 +433,21 @@
     if (!rows.length) { box.appendChild(el("div", { class: "cf-empty", text: "No one here yet." })); return; }
     var c = card([]), l = el("div", { class: "cf-list" });
     rows.forEach(function (r) {
+      // Row = name · status (one label, no "Membership Member" dupe), recency underneath, and the money
+      // that matters at a glance: a red "R450 owed" chip when they have an open balance. No-name Wix
+      // imports show the email ONCE as the title (not repeated below).
+      var owed = r.owed_minor || 0;
+      var seen = r.last_seen ? ("Last seen " + shortDate(r.last_seen) + (r.last_kind ? " · " + r.last_kind : "")) : "No visits yet";
       l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/person/" + r.user_id); } }, [
         el("div", { class: "cf-avatar", style: "width:34px;height:34px;font-size:.8rem", text: pInit(r) }),
         el("div", { class: "cf-item-main" }, [
-          el("div", { class: "cf-item-t", text: pName(r) }),
-          el("div", { class: "cf-item-s", text: r.email || "—" }),
+          el("div", { class: "cf-item-t" }, [
+            el("span", { text: pName(r) }),
+            el("span", { class: "cf-muted", style: "font-weight:400;font-size:.85rem", text: " · " + pStatus(r) }),
+          ]),
+          el("div", { class: "cf-item-s", text: seen }),
         ]),
-        // Membership STATUS chip — what they HOLD (never the word "Member", which is the role chip
-        // below; showing both read as a duplicate "Member Member"). Trial and paid are distinct.
-        r.has_membership
-          ? el("span", { class: "cf-chip member",
-                text: (r.on_trial && !r.has_paid_membership) ? "Trial" : "Membership" })
-          : null,
-        el("span", { class: "cf-chip", text: pRoleLabel(r) }),
+        (owed > 0 ? el("span", { class: "cf-chip cf-chip-bad", text: money(owed, clubCur()) + " owed" }) : null),
         el("span", { class: "cf-muted", text: "›" }),
       ].filter(Boolean)));
     });
