@@ -700,24 +700,21 @@
     if (section === "activity") return moneyActivity();
     return moneyMenu();
   }
-  // The month-scoped money band shared by the Money menu + "Earnings by service" — the reconciling
-  // triad (Billed→Collected→Outstanding) + what the club keeps / owes, via CRMUI.moneySummary (the
-  // SAME band the coach sees). Fed by earningsByService(MONEY_MONTH).
+  // The month-scoped money band shared by the Money menu + "Earnings by service" — the SAME reconciling
+  // fold the coach/client/person-360 use (CRMUI.statementFold): Billed − Discount − Written-off =
+  // Invoiced ; Invoiced = Paid + Outstanding, then what the club keeps / owes. Fed by earningsByService.
   function clubMoneyBand(data) {
     var cur = data.currency || clubCur(), s = data.summary || {};
     var owedNow = s.total_owed_now_minor || 0, payouts = s.coach_payouts_due_minor || 0;
-    var breakdown = [
+    var extra = [
       { label: "Club keeps", sub: "est. after coach pay", value_minor: s.club_keeps_minor, tone: "good" },
     ];
-    if (payouts > 0) breakdown.push({ label: "Coach payouts due", sub: "to coaches now", value_minor: payouts });
-    breakdown.push({ label: "Owed to the club", sub: "all unpaid, now", value_minor: owedNow, tone: owedNow > 0 ? "bad" : undefined });
+    if (payouts > 0) extra.push({ label: "Coach payouts due", sub: "to coaches now", value_minor: payouts });
+    extra.push({ label: "Owed to the club", sub: "all unpaid, now", value_minor: owedNow, tone: owedNow > 0 ? "bad" : undefined });
     var mrr = s.mrr_minor || 0;
-    return window.CRMUI.moneySummary({
-      currency: cur, month: data.month,
-      billed_minor: s.billed_minor, collected_minor: s.collected_minor, outstanding_minor: s.outstanding_minor,
-      breakdown: breakdown,
-      footnote: (s.active_members || 0) + " active member" + (s.active_members === 1 ? "" : "s") + (mrr ? " · " + money(mrr, cur) + " membership value" : ""),
-    });
+    var wrap = el("div", {}, [window.CRMUI.statementFold({ currency: cur, month: data.month, totals: s, extra: extra })]);
+    wrap.appendChild(el("div", { class: "cf-muted", style: "margin-top:10px;font-size:.82rem", text: (s.active_members || 0) + " active member" + (s.active_members === 1 ? "" : "s") + (mrr ? " · " + money(mrr, cur) + " membership value" : "") }));
+    return wrap;
   }
   function moneyMonthPager(onShift) {
     return el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
@@ -1072,10 +1069,7 @@
       el("h1", { style: "margin:0", text: data.label || "Service" }),
       moneyMonthPager(function (n) { MONEY_MONTH = addMonth(MONEY_MONTH, n); moneyServiceClients(category); }),
     ]));
-    wrap.appendChild(card([window.CRMUI.moneySummary({
-      currency: cur, month: data.month,
-      billed_minor: t.billed_minor, collected_minor: t.collected_minor, outstanding_minor: t.outstanding_minor,
-    })]));
+    wrap.appendChild(card([window.CRMUI.statementFold({ currency: cur, month: data.month, totals: t })]));
     var clients = data.clients || [];
     var sc = card([window.CRMUI.sectionHead("By client · " + clients.length)]);
     if (!clients.length) sc.appendChild(el("div", { class: "cf-empty", text: "No " + (data.label || "service").toLowerCase() + " billed this month." }));

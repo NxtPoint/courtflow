@@ -1856,12 +1856,15 @@ _SVC_LABELS = {"lesson": "Coaching", "court": "Court hire", "class": "Classes",
 _SVC_ORDER = ["lesson", "court", "class", "membership", "pack", "other"]
 
 # The ONE order-selection + category CTE both earnings readers use, so the per-client drill can NEVER
-# drift from the by-service totals. Month-scoped ('open'/'paid' orders created in [:s,:e)), settlement-
-# WRAPPER excluded (a 'Pay all' order that just pays others). Exposes: id, user_id, status,
-# amount_minor, category. Callers add their own SELECT … FROM cat.
+# drift from the by-service totals. Month-scoped orders created in [:s,:e), settlement-WRAPPER excluded
+# (a 'Pay all' order that just pays others). Includes open/paid/written_off/refunded (void = cancelled,
+# excluded → R0) so the FULL fold is computable. Exposes: id, user_id, status, amount_minor (current),
+# billed_orig (pre-discount line total), category. Callers add their own SELECT … FROM cat.
 _EARNINGS_CAT_CTE = """
     WITH o AS (
         SELECT ord.id, ord.user_id, ord.status, ord.amount_minor,
+               (SELECT COALESCE(SUM(COALESCE(ol.original_amount_minor, ol.amount_minor)),0)
+                  FROM billing.order_line ol WHERE ol.order_id = ord.id) AS billed_orig,
                (SELECT COALESCE(b.booking_type, pr.kind) FROM billing.order_line ol
                   LEFT JOIN diary.booking b  ON b.id = ol.booking_id
                   LEFT JOIN billing.price   p  ON p.id = ol.price_id
@@ -1873,12 +1876,12 @@ _EARNINGS_CAT_CTE = """
         FROM billing."order" ord
         WHERE ord.club_id = :c
           AND ord.created_at >= :s AND ord.created_at < :e
-          AND ord.status IN ('open','paid')
+          AND ord.status IN ('open','paid','written_off','refunded')
           AND ord.settled_by_order_id IS NULL
           AND NOT EXISTS (SELECT 1 FROM billing."order" ch WHERE ch.settled_by_order_id = ord.id)
     ),
     cat AS (
-        SELECT id, user_id, status, amount_minor,
+        SELECT id, user_id, status, amount_minor, billed_orig,
                CASE WHEN is_pack THEN 'pack'
                     WHEN is_membership THEN 'membership'
                     WHEN kind = 'lesson' THEN 'lesson'
@@ -1888,6 +1891,40 @@ _EARNINGS_CAT_CTE = """
         FROM o
     )
 """
+
+
+# The reconciling FOLD, computed off the cat CTE the same way everywhere (coach / client / admin):
+#   Billed − Discount − Written-off = Invoiced ; Invoiced = Paid + Outstanding.
+# billed = each order's ORIGINAL line total (pre-discount); discount = original − current; written_off /
+# refunded / paid / outstanding are the current amount bucketed by order status. Callers SELECT this.
+_EARNINGS_FOLD_COLS = """
+    COALESCE(SUM(billed_orig),0) AS billed,
+    COALESCE(SUM(GREATEST(billed_orig - amount_minor, 0)),0) AS discount,
+    COALESCE(SUM(amount_minor) FILTER (WHERE status='written_off'),0) AS written_off,
+    COALESCE(SUM(amount_minor) FILTER (WHERE status='paid'),0) AS collected,
+    COALESCE(SUM(amount_minor) FILTER (WHERE status='open'),0) AS outstanding,
+    COALESCE(SUM(amount_minor) FILTER (WHERE status='refunded'),0) AS refunded,
+    COUNT(*) AS n
+"""
+
+
+def _fold_from_row(r):
+    """A cat-CTE aggregate row (carrying the _EARNINGS_FOLD_COLS) → the fold dict. invoiced = billed −
+    discount − written_off (so it reconciles: invoiced == paid + outstanding, modulo refunds)."""
+    billed = int(r["billed"] or 0)
+    discount = int(r["discount"] or 0)
+    written_off = int(r["written_off"] or 0)
+    return {
+        "billed_minor": billed,
+        "discount_minor": discount,
+        "written_off_minor": written_off,
+        "invoiced_minor": billed - discount - written_off,
+        "collected_minor": int(r["collected"] or 0),      # = paid
+        "paid_minor": int(r["collected"] or 0),
+        "outstanding_minor": int(r["outstanding"] or 0),
+        "refunded_minor": int(r["refunded"] or 0),
+        "count": int(r["n"] or 0),
+    }
 
 
 def _earnings_month_bounds(session, month):
@@ -1922,14 +1959,7 @@ def earnings_by_service(session, *, club_id, month=None):
     rows = []
     try:
         rows = session.execute(
-            text(_EARNINGS_CAT_CTE + """
-                SELECT category,
-                       COALESCE(SUM(amount_minor),0) AS billed,
-                       COALESCE(SUM(amount_minor) FILTER (WHERE status='paid'),0) AS collected,
-                       COALESCE(SUM(amount_minor) FILTER (WHERE status='open'),0) AS outstanding,
-                       COUNT(*) AS n
-                FROM cat GROUP BY category
-            """),
+            text(_EARNINGS_CAT_CTE + "SELECT category, " + _EARNINGS_FOLD_COLS + " FROM cat GROUP BY category"),
             {"c": club_id, "s": s_dt, "e": e_dt},
         ).mappings().all()
     except Exception:
@@ -1942,16 +1972,17 @@ def earnings_by_service(session, *, club_id, month=None):
         r = by_cat.get(k)
         if not r or int(r["billed"] or 0) <= 0:
             continue
-        services.append({
-            "key": k, "label": _SVC_LABELS[k],
-            "billed_minor": int(r["billed"] or 0),
-            "collected_minor": int(r["collected"] or 0),
-            "outstanding_minor": int(r["outstanding"] or 0),
-            "count": int(r["n"] or 0),
-        })
+        f = _fold_from_row(r)
+        f["key"] = k
+        f["label"] = _SVC_LABELS[k]
+        services.append(f)
     billed = sum(x["billed_minor"] for x in services)
     collected = sum(x["collected_minor"] for x in services)
     outstanding = sum(x["outstanding_minor"] for x in services)
+    discount = sum(x["discount_minor"] for x in services)
+    written_off = sum(x["written_off_minor"] for x in services)
+    invoiced = sum(x["invoiced_minor"] for x in services)
+    refunded = sum(x["refunded_minor"] for x in services)
 
     # Club keeps = collected − what the coaches earned this month (their share of coaching/classes);
     # everything else (court/membership/packs) the club keeps in full. Payment-date-based earnings vs
@@ -1981,8 +2012,13 @@ def earnings_by_service(session, *, club_id, month=None):
         "currency": cur,
         "summary": {
             "billed_minor": billed,
+            "discount_minor": discount,
+            "written_off_minor": written_off,
+            "invoiced_minor": invoiced,
             "collected_minor": collected,
+            "paid_minor": collected,
             "outstanding_minor": outstanding,
+            "refunded_minor": refunded,
             "club_keeps_minor": max(0, collected - coach_earn),
             "coach_payouts_due_minor": payouts_due,
             "total_owed_now_minor": total_owed_now,
@@ -2011,10 +2047,9 @@ def earnings_service_clients(session, *, club_id, category, month=None):
                        COALESCE(cp.display_name,
                                 NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)), ''),
                                 u.email, 'Walk-in / unknown') AS name,
-                       COALESCE(SUM(c.amount_minor),0) AS billed,
-                       COALESCE(SUM(c.amount_minor) FILTER (WHERE c.status='paid'),0) AS collected,
-                       COALESCE(SUM(c.amount_minor) FILTER (WHERE c.status='open'),0) AS outstanding,
-                       COUNT(*) AS n
+            """ + _EARNINGS_FOLD_COLS.replace("billed_orig", "c.billed_orig")
+                                     .replace("amount_minor", "c.amount_minor")
+                                     .replace("status", "c.status") + """
                 FROM cat c
                 LEFT JOIN iam."user" u ON u.id = c.user_id
                 LEFT JOIN iam.coach_profile cp ON cp.user_id = c.user_id AND cp.club_id = :c
@@ -2027,14 +2062,15 @@ def earnings_service_clients(session, *, club_id, category, month=None):
     except Exception:
         session.rollback()
         rows = []
-    clients = [{
-        "user_id": str(r["user_id"]) if r["user_id"] else None,
-        "name": r["name"] or "Walk-in / unknown",
-        "billed_minor": int(r["billed"] or 0),
-        "collected_minor": int(r["collected"] or 0),
-        "outstanding_minor": int(r["outstanding"] or 0),
-        "count": int(r["n"] or 0),
-    } for r in rows]
+    clients = []
+    for r in rows:
+        f = _fold_from_row(r)
+        f["user_id"] = str(r["user_id"]) if r["user_id"] else None
+        f["name"] = r["name"] or "Walk-in / unknown"
+        clients.append(f)
+
+    def _sum(k):
+        return sum(int(c[k] or 0) for c in clients)
     return {
         "month": ym,
         "currency": cur,
@@ -2042,9 +2078,10 @@ def earnings_service_clients(session, *, club_id, category, month=None):
         "label": _SVC_LABELS[cat],
         "clients": clients,
         "totals": {
-            "billed_minor": sum(c["billed_minor"] for c in clients),
-            "collected_minor": sum(c["collected_minor"] for c in clients),
-            "outstanding_minor": sum(c["outstanding_minor"] for c in clients),
+            "billed_minor": _sum("billed_minor"), "discount_minor": _sum("discount_minor"),
+            "written_off_minor": _sum("written_off_minor"), "invoiced_minor": _sum("invoiced_minor"),
+            "collected_minor": _sum("collected_minor"), "paid_minor": _sum("paid_minor"),
+            "outstanding_minor": _sum("outstanding_minor"), "refunded_minor": _sum("refunded_minor"),
         },
     }
 
