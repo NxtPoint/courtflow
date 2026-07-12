@@ -1208,6 +1208,20 @@ def get_cockpit_coach_earnings():
     return jsonify(coaches=rows, count=len(rows)), 200
 
 
+@admin_bp.get("/financials/earnings-by-service")
+def get_earnings_by_service():
+    """Month-scoped club money by service: the Billed→Collected→Outstanding triad + a summary band
+    (club-keeps / coach payouts due / standing debt / members) + per-service rows. `?month=YYYY-MM`
+    (default current). The ONE 'how is the club earning, by service, by month' surface."""
+    p, err = _admin()
+    if err:
+        return err
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = repo.earnings_by_service(s, club_id=p.club_id, month=month)
+    return jsonify(data), 200
+
+
 @admin_bp.get("/financials/memberships")
 def get_cockpit_memberships():
     p, err = _admin()

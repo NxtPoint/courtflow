@@ -677,7 +677,7 @@
     ["invoice", "New invoice", "Bill a client for a service (× times) or a custom fee — emailed to pay online"],
     ["sales", "Sales by day", "Daily takings — client, service and amount"],
     ["bookings", "Bookings by day", "Every booking — client, service and coach"],
-    ["revenue", "Revenue by service", "Net revenue split by service line"],
+    ["revenue", "Earnings by service", "Billed, collected & outstanding per service, by month"],
     ["settlement", "Coach settlement", "What each coach is owed · the club's cut"],
     ["approvals", "Approvals", "Refund requests awaiting your decision"],
     ["payments", "Online payments", "Recent card payments · refund"],
@@ -695,21 +695,44 @@
     if (section === "activity") return moneyActivity();
     return moneyMenu();
   }
+  // The month-scoped money band shared by the Money menu + "Earnings by service" — the reconciling
+  // triad (Billed→Collected→Outstanding) + what the club keeps / owes, via CRMUI.moneySummary (the
+  // SAME band the coach sees). Fed by earningsByService(MONEY_MONTH).
+  function clubMoneyBand(data) {
+    var cur = data.currency || clubCur(), s = data.summary || {};
+    var owedNow = s.total_owed_now_minor || 0, payouts = s.coach_payouts_due_minor || 0;
+    var breakdown = [
+      { label: "Club keeps", sub: "est. after coach pay", value_minor: s.club_keeps_minor, tone: "good" },
+    ];
+    if (payouts > 0) breakdown.push({ label: "Coach payouts due", sub: "to coaches now", value_minor: payouts });
+    breakdown.push({ label: "Owed to the club", sub: "all unpaid, now", value_minor: owedNow, tone: owedNow > 0 ? "bad" : undefined });
+    var mrr = s.mrr_minor || 0;
+    return window.CRMUI.moneySummary({
+      currency: cur, month: data.month,
+      billed_minor: s.billed_minor, collected_minor: s.collected_minor, outstanding_minor: s.outstanding_minor,
+      breakdown: breakdown,
+      footnote: (s.active_members || 0) + " active member" + (s.active_members === 1 ? "" : "s") + (mrr ? " · " + money(mrr, cur) + " membership value" : ""),
+    });
+  }
+  function moneyMonthPager(onShift) {
+    return el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹", onclick: function () { onShift(-1); } }),
+      el("span", { style: "font-weight:600;min-width:104px;text-align:center", text: monthLabel(MONEY_MONTH || "") }),
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { onShift(1); } }),
+    ]);
+  }
   async function moneyMenu() {
     loading();
-    var summary = {}, pending = 0;
-    try { summary = await window.AdminAPI.cockpitSummary(); } catch (e) {}
+    var data = { summary: {}, services: [] }, pending = 0;
+    try { data = await window.AdminAPI.earningsByService(MONEY_MONTH); } catch (e) {}
     try { pending = ((await window.AdminAPI.refundRequests({ status: "pending" })).requests || []).length; } catch (e) {}
-    var cur = summary.currency || clubCur();
+    MONEY_MONTH = data.month || MONEY_MONTH;
     var wrap = el("div", {});
-    wrap.appendChild(el("h1", { style: "margin:0 0 12px", text: "Money" }));
-    wrap.appendChild(card([window.CRMUI.stats([
-      { value: money(summary.net_revenue_minor, cur), label: "Net revenue" },
-      { value: money(summary.commission_earned_minor, cur), label: "Commission kept" },
-      { value: money(summary.rent_due_minor, cur), label: "Rent due" },
-      { value: money(summary.mrr_minor, cur), label: "MRR" },
-      { value: (summary.active_members || 0), label: "Active members" },
-    ])]));
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:10px" }, [
+      el("h1", { style: "margin:0", text: "Money" }),
+      moneyMonthPager(function (n) { MONEY_MONTH = addMonth(MONEY_MONTH, n); moneyMenu(); }),
+    ]));
+    wrap.appendChild(card([clubMoneyBand(data)]));
     var c = card([]), l = el("div", { class: "cf-list" });
     MONEY_SECTIONS.forEach(function (s) {
       var badge = (s[0] === "approvals" && pending) ? el("span", { class: "cf-chip held", text: pending })
@@ -989,26 +1012,42 @@
   function monthLabel(ym) { try { var p = ym.split("-"); return new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, 1).toLocaleDateString("en-ZA", { month: "long", year: "numeric" }); } catch (e) { return ym; } }
   function dayLabel(iso) { try { return new Date(iso + "T12:00:00").toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }); } catch (e) { return iso; } }
 
+  // Earnings by service, one month at a time — the reconciling band + a per-service split showing
+  // each line's Billed (headline), Collected and Outstanding. Order-based + settlement-safe (the
+  // earnings_by_service reader); the "how is the club earning, by service, by month" surface.
   async function moneyRevenue() {
     loading();
-    var revenue = [];
-    try { revenue = (await window.AdminAPI.cockpitRevenue()).revenue || []; } catch (e) {}
-    var cur = clubCur();
-    var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Revenue by service" })]);
-    var byKind = {};
-    revenue.forEach(function (x) { byKind[x.service_kind] = (byKind[x.service_kind] || 0) + (x.net_minor || 0); });
-    var keys = Object.keys(byKind).sort(function (a, b) { return byKind[b] - byKind[a]; });
-    if (!keys.length) wrap.appendChild(el("div", { class: "cf-empty", text: "No revenue yet." }));
+    var data;
+    try { data = await window.AdminAPI.earningsByService(MONEY_MONTH); }
+    catch (e) { set(el("div", {}, [backBar("Money", "#/money"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    MONEY_MONTH = data.month;
+    var cur = data.currency || clubCur();
+    var wrap = el("div", {}, [backBar("Money", "#/money")]);
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
+      el("h1", { style: "margin:0", text: "Earnings by service" }),
+      moneyMonthPager(function (n) { MONEY_MONTH = addMonth(MONEY_MONTH, n); moneyRevenue(); }),
+    ]));
+    wrap.appendChild(card([clubMoneyBand(data)]));
+    var svc = data.services || [];
+    var sc = card([window.CRMUI.sectionHead("By service")]);
+    if (!svc.length) sc.appendChild(el("div", { class: "cf-empty", text: "No billed activity this month." }));
     else {
-      var c = card([]), l = el("div", { class: "cf-list" });
-      keys.forEach(function (k) {
+      var l = el("div", { class: "cf-list" });
+      svc.forEach(function (x) {
+        var chipKind = (["court", "lesson", "class"].indexOf(x.key) >= 0) ? x.key : "";
+        var sub = money(x.collected_minor, cur) + " collected" + (x.outstanding_minor > 0 ? " · " + money(x.outstanding_minor, cur) + " owed" : "");
         l.appendChild(el("div", { class: "cf-item" }, [
-          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: k })]),
-          el("span", { style: "font-weight:700", text: money(byKind[k], cur) }),
+          el("span", { class: "cf-chip " + chipKind, text: x.key }),
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: x.label + "  ·  " + x.count }),
+            el("div", { class: "cf-item-s", text: sub }),
+          ]),
+          el("span", { style: "font-weight:700", text: money(x.billed_minor, cur) }),
         ]));
       });
-      c.appendChild(l); wrap.appendChild(c);
+      sc.appendChild(l);
     }
+    wrap.appendChild(sc);
     set(wrap);
   }
 

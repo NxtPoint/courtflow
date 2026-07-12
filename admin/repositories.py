@@ -1850,6 +1850,130 @@ def cockpit_summary(session, *, club_id, dt_from=None, dt_to=None):
     }
 
 
+def earnings_by_service(session, *, club_id, month=None):
+    """The ONE 'how is the club earning — by service, by month' reader. Month-scoped and ORDER-based
+    (what was billed this month, by order.created_at), so it reconciles cleanly: per service category
+    Billed = Collected + Outstanding. Excludes settlement WRAPPER orders (a 'Pay all' order that just
+    pays other orders) so nothing double-counts, and only counts committed statuses ('paid'=collected,
+    'open'=outstanding) — an in-flight online checkout ('awaiting_payment') isn't billed yet.
+
+    Category = the SAME grouping as the unified statement (billing.statement.unpaid_orders):
+    Coaching / Court hire / Classes / Membership / Session packs / Other. Returns a club summary band
+    (the triad + club-keeps-after-coach-pay + coach payouts due + standing debt + members/MRR) plus the
+    per-service rows. All guarded → zeros so it never 500s. Reuse-first: composes the existing
+    cockpit_coach_earnings / cockpit_memberships / commission.settlement_overview readers."""
+    cur = _club_currency(session, club_id=club_id)
+    mb = session.execute(
+        text("""
+            SELECT to_char(COALESCE(to_date(:m,'YYYY-MM'), date_trunc('month', now())),'YYYY-MM') AS ym,
+                   date_trunc('month', COALESCE(to_date(:m,'YYYY-MM'), now()))::timestamptz AS s,
+                   (date_trunc('month', COALESCE(to_date(:m,'YYYY-MM'), now()))
+                    + interval '1 month')::timestamptz AS e
+        """),
+        {"m": month},
+    ).mappings().first()
+    ym, s_dt, e_dt = mb["ym"], mb["s"], mb["e"]
+
+    rows = []
+    try:
+        rows = session.execute(
+            text("""
+                WITH o AS (
+                    SELECT ord.id, ord.status, ord.amount_minor,
+                           (SELECT COALESCE(b.booking_type, pr.kind) FROM billing.order_line ol
+                              LEFT JOIN diary.booking b  ON b.id = ol.booking_id
+                              LEFT JOIN billing.price   p  ON p.id = ol.price_id
+                              LEFT JOIN billing.product pr ON pr.id = p.product_id
+                             WHERE ol.order_id = ord.id ORDER BY ol.created_at LIMIT 1) AS kind,
+                           EXISTS(SELECT 1 FROM billing.token_wallet w WHERE w.order_id = ord.id) AS is_pack,
+                           EXISTS(SELECT 1 FROM billing.membership_subscription ms
+                                   WHERE ms.order_id = ord.id) AS is_membership
+                    FROM billing."order" ord
+                    WHERE ord.club_id = :c
+                      AND ord.created_at >= :s AND ord.created_at < :e
+                      AND ord.status IN ('open','paid')
+                      AND ord.settled_by_order_id IS NULL
+                      AND NOT EXISTS (SELECT 1 FROM billing."order" ch
+                                       WHERE ch.settled_by_order_id = ord.id)
+                )
+                SELECT CASE WHEN is_pack THEN 'pack'
+                            WHEN is_membership THEN 'membership'
+                            WHEN kind = 'lesson' THEN 'lesson'
+                            WHEN kind = 'court' THEN 'court'
+                            WHEN kind = 'class' THEN 'class'
+                            ELSE 'other' END AS category,
+                       COALESCE(SUM(amount_minor),0) AS billed,
+                       COALESCE(SUM(amount_minor) FILTER (WHERE status='paid'),0) AS collected,
+                       COALESCE(SUM(amount_minor) FILTER (WHERE status='open'),0) AS outstanding,
+                       COUNT(*) AS n
+                FROM o GROUP BY 1
+            """),
+            {"c": club_id, "s": s_dt, "e": e_dt},
+        ).mappings().all()
+    except Exception:
+        session.rollback()
+        rows = []
+
+    _LBL = {"lesson": "Coaching", "court": "Court hire", "class": "Classes",
+            "membership": "Membership", "pack": "Session packs", "other": "Other"}
+    _ORDER = ["lesson", "court", "class", "membership", "pack", "other"]
+    by_cat = {r["category"]: r for r in rows}
+    services = []
+    for k in _ORDER:
+        r = by_cat.get(k)
+        if not r or int(r["billed"] or 0) <= 0:
+            continue
+        services.append({
+            "key": k, "label": _LBL[k],
+            "billed_minor": int(r["billed"] or 0),
+            "collected_minor": int(r["collected"] or 0),
+            "outstanding_minor": int(r["outstanding"] or 0),
+            "count": int(r["n"] or 0),
+        })
+    billed = sum(x["billed_minor"] for x in services)
+    collected = sum(x["collected_minor"] for x in services)
+    outstanding = sum(x["outstanding_minor"] for x in services)
+
+    # Club keeps = collected − what the coaches earned this month (their share of coaching/classes);
+    # everything else (court/membership/packs) the club keeps in full. Payment-date-based earnings vs
+    # order-date collected differ slightly at month edges — labelled 'est.' in the UI. Guarded.
+    coach_earn = 0
+    try:
+        for e in cockpit_coach_earnings(session, club_id=club_id, dt_from=s_dt, dt_to=e_dt):
+            coach_earn += int(e.get("coach_earning_minor") or 0)
+    except Exception:
+        coach_earn = 0
+    payouts_due = 0
+    total_owed_now = 0
+    try:
+        from billing.commission import settlement_overview
+        ov = settlement_overview(session, club_id=club_id)
+        payouts_due = sum(max(0, int(co.get("balance_minor") or 0)) for co in ov.get("coaches", []))
+        total_owed_now = int(ov.get("total_owed_minor") or 0)
+    except Exception:
+        pass
+    try:
+        mem = cockpit_memberships(session, club_id=club_id)
+    except Exception:
+        mem = {"active_members": 0, "mrr_minor": 0}
+
+    return {
+        "month": ym,
+        "currency": cur,
+        "summary": {
+            "billed_minor": billed,
+            "collected_minor": collected,
+            "outstanding_minor": outstanding,
+            "club_keeps_minor": max(0, collected - coach_earn),
+            "coach_payouts_due_minor": payouts_due,
+            "total_owed_now_minor": total_owed_now,
+            "active_members": mem["active_members"],
+            "mrr_minor": mem["mrr_minor"],
+        },
+        "services": services,
+    }
+
+
 def admin_home(session, *, club_id):
     """The owner Home command-center payload — money · people-attention · approvals. Every block is
     guarded (missing/empty table -> zeros) so Home never 500s. 'Today at the club' is composed on the

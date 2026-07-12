@@ -313,6 +313,11 @@
       return A().apiJSON("/api/admin/financials/coach-earnings" + qs(opts));
     },
     cockpitMemberships: function () { return A().apiJSON("/api/admin/financials/memberships"); },
+    // GET /api/admin/financials/earnings-by-service?month=YYYY-MM -> {month, currency,
+    //   summary:{billed_minor,collected_minor,outstanding_minor,club_keeps_minor,
+    //            coach_payouts_due_minor,total_owed_now_minor,active_members,mrr_minor},
+    //   services:[{key,label,billed_minor,collected_minor,outstanding_minor,count}]}
+    earningsByService: function (month) { return A().apiJSON("/api/admin/financials/earnings-by-service" + (month ? ("?month=" + month) : "")); },
 
     // ---- club <-> coach settlement (payouts + aging) ---------------------
     // GET /api/admin/financials/settlement -> {clients:[{user_id,name,owed_minor,age_days,bucket}],
