@@ -1294,3 +1294,207 @@ def coach_commission_overview(session, *, club_id, user_id):
     except Exception:
         session.rollback()
     return out
+
+
+# ---------------------------------------------------------------------------
+# MONEY AS AN OUTCOME OF BOOKINGS (2026-07 redesign — coach flow).
+# The owner's model: an EVENT (a lesson/class) has a deterministic money state that is the FOLD of
+# its transactions. Per event, driven by the ORDER's status (the authoritative money state — not the
+# session status, and not where a settlement payment happened to land):
+#     billed − discount − written_off = INVOICED ;  invoiced = PAID + OUTSTANDING
+# Everything on the coach's month view folds from THIS MONTH's sessions (by session date), so it
+# ALWAYS reconciles — no mixing month-billed with all-time-owed. Gross (client-statement) figures;
+# the coach's own cut (commission / net) is layered on the PAID total at the summary only.
+# Read-only, coach-scoped (coach_user_id = the principal). No engine / edit changes.
+# ---------------------------------------------------------------------------
+
+def _fold_event(row):
+    """Reduce one raw event row → its money fold + display state. Order status is the money authority;
+    a cancelled session (or a void order) is R0 (its debt was voided / a late fee is a separate order)."""
+    billed = int(row["billed"] or 0)
+    current = int(row["current_amt"] or 0)          # billed − discount (the invoiced-before-writeoff)
+    discount = max(0, billed - current)
+    sstatus = (row["session_status"] or "").lower()
+    ostatus = (row["order_status"] or "").lower()
+    wo = paid = outstanding = refunded = 0
+    invoiced = current
+    if sstatus == "cancelled" or ostatus == "void":
+        invoiced = 0
+        state = "cancelled"
+    elif ostatus == "written_off":
+        wo = current
+        invoiced = 0
+        state = "written_off"
+    elif ostatus == "refunded":
+        refunded = current
+        state = "refunded"
+    elif ostatus == "paid":
+        paid = current
+        state = "paid"
+    elif ostatus == "open":
+        outstanding = current
+        state = "owed"
+    elif ostatus == "awaiting_payment":
+        outstanding = 0                             # in-flight online checkout — not yet owed/paid
+        state = "pending"
+    else:
+        state = sstatus or "—"
+    name = " ".join(x for x in [row.get("first_name"), row.get("surname")] if x).strip()
+    return {
+        "id": str(row["event_id"]),
+        "kind": row["kind"],
+        "client_user_id": str(row["client_user_id"]) if row["client_user_id"] else None,
+        "client_name": name or row.get("email") or "Client",
+        "starts_at": row["starts_at"].isoformat() if row["starts_at"] else None,
+        "ends_at": row["ends_at"].isoformat() if row["ends_at"] else None,
+        "session_status": sstatus,
+        "state": state,                              # paid | owed | written_off | refunded | cancelled | pending
+        "billed_minor": billed,
+        "discount_minor": discount,
+        "written_off_minor": wo,
+        "invoiced_minor": invoiced,
+        "paid_minor": paid,
+        "outstanding_minor": outstanding,
+        "refunded_minor": refunded,
+        "order_id": str(row["order_id"]) if row["order_id"] else None,
+    }
+
+
+_COACH_EVENTS_SQL = """
+    SELECT b.id AS event_id, 'lesson' AS kind, b.starts_at, b.ends_at,
+           b.status AS session_status, b.booked_by_user_id AS client_user_id,
+           b.order_id, o.status AS order_status,
+           COALESCE(ol.original_amount_minor, ol.amount_minor) AS billed,
+           ol.amount_minor AS current_amt,
+           u.first_name, u.surname, u.email, u.phone
+    FROM diary.booking b
+    JOIN billing.order_line ol ON ol.booking_id = b.id AND ol.club_id = b.club_id
+    LEFT JOIN billing."order" o ON o.id = b.order_id
+    LEFT JOIN iam."user" u ON u.id = b.booked_by_user_id
+    WHERE b.club_id = :c AND b.coach_user_id = :u AND b.booking_type = 'lesson'
+      AND b.order_id IS NOT NULL AND b.status NOT IN ('requested','proposed')
+      AND to_char(b.starts_at, 'YYYY-MM') = :ym
+      {lesson_client}
+    UNION ALL
+    SELECT e.id AS event_id, 'class' AS kind, cs.starts_at, cs.ends_at,
+           e.status AS session_status, e.user_id AS client_user_id,
+           e.order_id, o.status AS order_status,
+           COALESCE(ol.original_amount_minor, ol.amount_minor) AS billed,
+           ol.amount_minor AS current_amt,
+           u.first_name, u.surname, u.email, u.phone
+    FROM diary.class_session cs
+    JOIN diary.enrolment e ON e.class_session_id = cs.id AND e.club_id = cs.club_id
+    JOIN billing.order_line ol ON ol.enrolment_id = e.id AND ol.club_id = cs.club_id
+    LEFT JOIN billing."order" o ON o.id = e.order_id
+    LEFT JOIN iam."user" u ON u.id = e.user_id
+    WHERE cs.club_id = :c AND cs.coach_user_id = :u
+      AND e.order_id IS NOT NULL
+      AND to_char(cs.starts_at, 'YYYY-MM') = :ym
+      {class_client}
+    ORDER BY starts_at
+"""
+
+
+def _coach_month_events(session, *, club_id, coach_user_id, ym, client_user_id=None):
+    """Every lesson + class seat THIS coach ran in month `ym`, each folded to its money state. Optional
+    single-client filter. Guarded → []."""
+    params = {"c": str(club_id), "u": str(coach_user_id), "ym": ym}
+    lesson_client = class_client = ""
+    if client_user_id:
+        lesson_client = "AND b.booked_by_user_id = :cl"
+        class_client = "AND e.user_id = :cl"
+        params["cl"] = str(client_user_id)
+    sql = _COACH_EVENTS_SQL.format(lesson_client=lesson_client, class_client=class_client)
+    try:
+        rows = session.execute(text(sql), params).mappings().all()
+    except Exception:
+        session.rollback()
+        return []
+    return [_fold_event(r) for r in rows]
+
+
+def _empty_totals():
+    return {"billed_minor": 0, "discount_minor": 0, "written_off_minor": 0,
+            "invoiced_minor": 0, "paid_minor": 0, "outstanding_minor": 0, "refunded_minor": 0}
+
+
+def _sum_totals(events):
+    t = _empty_totals()
+    for e in events:
+        for k in t:
+            t[k] += int(e.get(k) or 0)
+    return t
+
+
+def coach_month_money(session, *, club_id, coach_user_id, month=None):
+    """The coach Money tab as an OUTCOME of bookings. For `month` (YYYY-MM, default current):
+    the folded statement (Billed − Discount − Written-off = Invoiced ; Invoiced = Paid + Outstanding)
+    for THIS coach's sessions that month, per client + a grand total, plus the coach's own cut on the
+    PAID total (you-keep / club-commission via the coach's effective rate) and the running ledger
+    balance. Reconciles by construction — no all-time / payment-date mixing."""
+    ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    cur = _club_currency(session, club_id=club_id)
+    events = _coach_month_events(session, club_id=club_id, coach_user_id=coach_user_id, ym=ym)
+
+    by_client = {}
+    for e in events:
+        key = e["client_user_id"] or "_unknown"
+        slot = by_client.get(key)
+        if not slot:
+            slot = {"client_user_id": e["client_user_id"], "client_name": e["client_name"],
+                    "count": 0, **_empty_totals()}
+            by_client[key] = slot
+        slot["count"] += 1
+        for k in _empty_totals():
+            slot[k] += int(e.get(k) or 0)
+
+    totals = _sum_totals(events)
+
+    # The coach's own cut on what was PAID this month, at their effective rate (net + commission = paid,
+    # so it reconciles). Ledger balance is the authoritative running club↔coach figure (separate).
+    pct = 0.0
+    try:
+        from billing.commission import resolve_commission_pct
+        pct = float(resolve_commission_pct(session, club_id=club_id, coach_user_id=coach_user_id))
+    except Exception:
+        pct = 0.0
+    commission = int(round(totals["paid_minor"] * pct / 100.0))
+    net = totals["paid_minor"] - commission
+    totals["commission_minor"] = commission
+    totals["net_minor"] = net
+    try:
+        from billing.commission import coach_balance
+        totals["balance_minor"] = int(coach_balance(session, club_id=club_id, coach_user_id=coach_user_id))
+    except Exception:
+        totals["balance_minor"] = 0
+
+    clients = sorted(by_client.values(),
+                     key=lambda r: (-(r["outstanding_minor"]), -(r["billed_minor"])))
+    return {"month": ym, "currency": cur, "commission_pct": pct,
+            "totals": totals, "clients": clients}
+
+
+def coach_client_detail(session, *, club_id, coach_user_id, client_user_id, month=None):
+    """The lean, coach-scoped CLIENT view (deliberately NOT the Client 360 — privacy). Contact details
+    + every booking THIS coach had with the client this month (each folded to its money state) + the
+    client's folded statement for the coach. Never exposes other coaches / memberships / cross-coach
+    money. Returns None if the client isn't one of this coach's clients this month."""
+    ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    cur = _club_currency(session, club_id=club_id)
+    events = _coach_month_events(session, club_id=club_id, coach_user_id=coach_user_id,
+                                 ym=ym, client_user_id=client_user_id)
+    # Contact from iam.user — always resolvable even in a month with no sessions (so the header shows).
+    u = session.execute(
+        text('SELECT id, first_name, surname, email, phone FROM iam."user" WHERE id = :id'),
+        {"id": str(client_user_id)},
+    ).mappings().first()
+    if not u:
+        return None
+    name = " ".join(x for x in [u["first_name"], u["surname"]] if x).strip() or u["email"] or "Client"
+    return {
+        "month": ym,
+        "currency": cur,
+        "client": {"user_id": str(u["id"]), "name": name, "email": u["email"], "phone": u["phone"]},
+        "totals": _sum_totals(events),
+        "events": events,
+    }

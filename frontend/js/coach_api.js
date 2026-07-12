@@ -106,6 +106,19 @@
     client360: function (userId, month) {
       return A().apiJSON("/api/coach/clients/" + enc(userId) + "/360" + (month ? ("?month=" + enc(month)) : ""));
     },
+    // GET /api/coach/money[?month=YYYY-MM] — the coach Money tab as an OUTCOME of bookings:
+    //   {month,currency,commission_pct, totals:{billed_minor,discount_minor,written_off_minor,
+    //    invoiced_minor,paid_minor,outstanding_minor,refunded_minor,commission_minor,net_minor,
+    //    balance_minor}, clients:[{client_user_id,client_name,count,...same fold fields}]}
+    //   Everything folds from THIS month's sessions, so it reconciles: billed−disc−wo=invoiced=paid+out.
+    money: function (month) { return A().apiJSON("/api/coach/money" + (month ? ("?month=" + enc(month)) : "")); },
+    // GET /api/coach/clients/:id/detail[?month=] — the LEAN coach-scoped client view (NOT Client 360):
+    //   {month,currency, client:{user_id,name,email,phone}, totals:{...fold}, events:[{id,kind,starts_at,
+    //    ends_at,state,billed_minor,discount_minor,written_off_minor,invoiced_minor,paid_minor,
+    //    outstanding_minor,order_id}]} — contact + THIS coach's bookings with them + folded money only.
+    clientDetail: function (userId, month) {
+      return A().apiJSON("/api/coach/clients/" + enc(userId) + "/detail" + (month ? ("?month=" + enc(month)) : ""));
+    },
     // GET /api/coach/bookings/:id -> {booking:{id,booking_type,status,starts_at,ends_at,
     //   duration_minutes,is_future,court_name,client:{name,email,phone,user_id},venue:{club_name,address},
     //   players:[{name,kind,attended}],charge:{amount_minor,currency,status,settlement_mode,order_id,...},

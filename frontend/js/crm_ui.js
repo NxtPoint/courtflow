@@ -389,10 +389,58 @@
     return wrap;
   }
 
+  // ---- statement fold (the money as an OUTCOME of bookings) -------------------
+  // The owner's model, ONE presenter (shared coach → admin → client later): a booking/statement folds
+  //   Billed − Discount − Written-off = Invoiced ;  Invoiced = Paid + Outstanding
+  // so it ALWAYS reconciles. Caller wraps it in a card().
+  //   cfg: {currency, month?, totals:{billed_minor,discount_minor,written_off_minor,invoiced_minor,
+  //         paid_minor,outstanding_minor,refunded_minor?}, extra:[{label,value_minor,tone?,sub?}], compact?}
+  function statementFold(cfg) {
+    cfg = cfg || {};
+    var cur = cfg.currency || "ZAR", t = cfg.totals || {};
+    var wrap = el("div", { class: "cf-fold" });
+    if (cfg.month) wrap.appendChild(el("div", { class: "cf-muted", style: "font-size:.8rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px", text: "This month · " + monthLabel(cfg.month) }));
+    function line(label, val, opt) {
+      opt = opt || {};
+      return el("div", { class: "cf-row", style: "justify-content:space-between;align-items:baseline;margin:" + (opt.tight ? "3px" : "5px") + " 0" }, [
+        el("span", { class: opt.strong ? "" : "cf-muted", style: "font-size:" + (opt.strong ? ".95rem;font-weight:700" : ".9rem"), text: label }),
+        el("span", { class: "num", style: "font-weight:" + (opt.strong ? "800" : "600") + (opt.tone === "bad" ? ";color:var(--danger)" : ""), text: (opt.minus ? "− " : "") + money(val || 0, cur) }),
+      ]);
+    }
+    wrap.appendChild(line("Billed", t.billed_minor, {}));
+    if ((t.discount_minor || 0) > 0) wrap.appendChild(line("Discount", t.discount_minor, { minus: true, tight: true }));
+    if ((t.written_off_minor || 0) > 0) wrap.appendChild(line("Written off", t.written_off_minor, { minus: true, tight: true }));
+    wrap.appendChild(el("div", { style: "border-top:1px solid var(--border);margin:6px 0 2px" }));
+    wrap.appendChild(line("Invoiced", t.invoiced_minor, { strong: true }));
+    // Paid vs Outstanding split.
+    var out = t.outstanding_minor || 0;
+    wrap.appendChild(el("div", { class: "cf-paybar", style: "margin-top:10px" }, [
+      el("div", { class: "cf-paycell owe-ok" }, [el("div", { class: "cf-payk", text: "Paid" }), el("div", { class: "cf-payv num", text: money(t.paid_minor, cur) })]),
+      el("div", { class: "cf-paycell " + (out > 0 ? "owe-bad" : "") }, [el("div", { class: "cf-payk", text: "Outstanding" }), el("div", { class: "cf-payv num", text: money(out, cur) })]),
+    ]));
+    if ((t.refunded_minor || 0) > 0) wrap.appendChild(el("div", { class: "cf-muted", style: "margin-top:8px;font-size:.82rem", text: money(t.refunded_minor, cur) + " refunded this month" }));
+    var extra = (cfg.extra || []).filter(Boolean);
+    if (extra.length) {
+      var box = el("div", { style: "margin-top:12px;border-top:1px solid var(--border);padding-top:10px" });
+      extra.forEach(function (r) {
+        box.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:baseline;margin:5px 0" }, [
+          el("div", {}, [
+            el("span", { class: (r.tone === "bad" ? "" : "cf-muted"), style: "font-size:.9rem", text: r.label }),
+            r.sub ? el("span", { class: "cf-muted", style: "font-size:.78rem;margin-left:6px", text: r.sub }) : null,
+          ].filter(Boolean)),
+          el("span", { class: "num", style: "font-weight:700" + (r.tone === "bad" ? ";color:var(--danger)" : (r.tone === "good" ? ";color:var(--success)" : "")), text: money(r.value_minor || 0, cur) }),
+        ]));
+      });
+      wrap.appendChild(box);
+    }
+    return wrap;
+  }
+
   window.CRMUI = {
     money: money,
     stats: stats,
     moneySummary: moneySummary,
+    statementFold: statementFold,
     bars: bars,
     weekChart: weekChart,
     activityBlock: activityBlock,

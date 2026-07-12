@@ -388,7 +388,7 @@
     try {
       var pair = await Promise.all([
         window.CoachAPI.clients({}),
-        window.CoachAPI.statement(MONTH).catch(function () { return { clients: [] }; }),
+        window.CoachAPI.money(MONTH).catch(function () { return { clients: [] }; }),   // same fold as Money tab
         (window.CoachAPI.packages ? window.CoachAPI.packages() : Promise.resolve({ packages: [] })).catch(function () { return { packages: [] }; }),
       ]);
       clients = pair[0].clients || [];
@@ -430,7 +430,7 @@
             el("div", { class: "cf-item-t", text: clName(cl) }),
             el("div", { class: "cf-item-s", text: (cl.lessons_count || 0) + " lessons · paid " + money2(m.paid_minor) }),
           ]),
-          (m.owed_minor ? el("span", { class: "cf-chip held", text: money2(m.owed_minor) }) : el("span", { class: "cf-muted", text: "›" })),
+          (m.outstanding_minor ? el("span", { class: "cf-chip held", text: money2(m.outstanding_minor) }) : el("span", { class: "cf-muted", text: "›" })),
         ]));
       });
       c.appendChild(l); wrap.appendChild(c);
@@ -440,32 +440,64 @@
   function clName(c) { return [c.first_name, c.surname].filter(Boolean).join(" ").trim() || c.email || "Client"; }
   function clInitials(c) { var n = clName(c).split(/\s+/); return ((n[0] || "C")[0] + (n.length > 1 ? n[n.length - 1][0] : "")).toUpperCase(); }
 
-  // The FULL client record — the heart of the coach app. ONE shared widget (Widgets.ClientRecord),
-  // config only (the golden rule): data comes from the one client-360 composer (CoachAPI.client360 →
-  // GET /api/coach/clients/:id/360, scope='coach'); role differences are the fields + actions below,
-  // never a fork in the render code. The coach payload's `can` = {collect, discount} (coaching arrears).
-  function renderClient(userId) {
-    ensureMonth();   // month-scope the coaching + per-service breakdown (month → client → service → txn)
-    var host = el("div", {});
-    set(host);
-    window.Widgets.ClientRecord.mount(host, {
-      scope: { id: userId, role: "coach" },
-      back: { label: "Clients", hash: "#/clients" },
-      fields: { showActivity: false, showDependents: false, showPackages: true, showCoaching: true },
-      data: { get: function (i) { return window.CoachAPI.client360(i, MONTH).then(function (r) { return r.person; }); } },
-      onNavigate: function (t) {
-        if (!t || !t.id) return;
-        if (t.kind === "person") go("#/client/" + t.id);
-        else go("#/event/" + t.id);   // event/class → the coach's ONE event story (renderEvent)
-      },
-      actions: {
-        // Coaching arrears money — collect / discount (ctx = an owed coaching line with an `id`).
-        // Reuse the coach's existing `arr` handler (arrearsCollected / arrearsAdjust{gross_minor}),
-        // the same one renderEvent's coaching actions call.
-        collect: { manual: true, run: function (it) { arr(it.id, "collect", function () { renderClient(userId); }); } },
-        discount: { manual: true, run: function (it) { arr(it.id, "discount", function () { renderClient(userId); }, it); } },
-      },
-    });
+  // The LEAN, coach-scoped client view (deliberately NOT Client 360 — a coach must not see a client's
+  // dealings with other coaches / memberships / cross-coach money). Just: contact, the client's folded
+  // statement WITH THIS COACH for the month, and every booking (event) — each tapping into the event
+  // story where the coach reviews + edits it within the rules. Data: CoachAPI.clientDetail.
+  async function renderClient(userId) {
+    ensureMonth(); loading();
+    var d = null;
+    try { d = await window.CoachAPI.clientDetail(userId, MONTH); } catch (e) {}
+    if (!d) { set(el("div", {}, [backBar("Clients", "#/clients"), el("div", { class: "cf-empty", text: "Client not found." })])); return; }
+    var cur = d.currency || "ZAR", cl = d.client || {};
+    var wrap = el("div", {});
+    wrap.appendChild(backBar("Clients", "#/clients"));
+    // Contact header — name + email + cell (the details a coach legitimately needs).
+    wrap.appendChild(card([el("div", { class: "cf-row", style: "align-items:center;gap:12px" }, [
+      el("div", { class: "cf-avatar", style: "width:46px;height:46px;font-size:1.1rem", text: (cl.name || "?").slice(0, 1).toUpperCase() }),
+      el("div", { class: "cf-item-main" }, [
+        el("div", { style: "font-weight:700;font-size:1.12rem", text: cl.name || "Client" }),
+        el("div", { class: "cf-muted", style: "font-size:.86rem", text: [cl.email, cl.phone].filter(Boolean).join(" · ") || "No contact on file" }),
+      ]),
+    ])]));
+    // Folded statement for the month (with you).
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:8px 0 6px" }, [
+      el("h2", { style: "margin:0;font-size:1rem", text: "Statement" }), monthNav(function () { renderClient(userId); }),
+    ]));
+    wrap.appendChild(card([window.CRMUI.statementFold({ currency: cur, month: MONTH, totals: d.totals || {} })]));
+    // Bookings (events) — each drills to the event story to review/edit.
+    var evs = d.events || [];
+    var evCard = card([window.CRMUI.sectionHead("Your bookings" + (evs.length ? " · " + evs.length : ""))]);
+    if (!evs.length) evCard.appendChild(el("div", { class: "cf-empty", text: "No bookings with you in " + monthLabel(MONTH) + "." }));
+    else { var l = el("div", { class: "cf-list" }); evs.forEach(function (e) { l.appendChild(eventMoneyRow(e, cur)); }); evCard.appendChild(l); }
+    wrap.appendChild(evCard);
+    set(wrap);
+  }
+  // ONE booking (event) row inside the client view: type · when · money state → the event story.
+  var STATE_LABEL = { paid: "Paid", owed: "Owed", written_off: "Written off", refunded: "Refunded", cancelled: "Cancelled", pending: "Awaiting payment" };
+  function eventMoneyRow(e, cur) {
+    var when = ""; try { when = UI.fmtDate(e.starts_at) + " · " + UI.fmtTime(e.starts_at); } catch (x) {}
+    var tappable = e.kind === "lesson" && e.id;   // class-event drill lands with the event-ledger widget
+    var row = el("div", { class: "cf-item" + (tappable ? " cf-item-tap" : "") }, [
+      el("span", { class: "cf-chip " + e.kind, text: typeLabel(e.kind) }),
+      el("div", { class: "cf-item-main" }, [
+        el("div", { class: "cf-item-t", text: when }),
+        el("div", { class: "cf-item-s", text: (STATE_LABEL[e.state] || e.state) + " · " + money(e.invoiced_minor, cur) }),
+      ]),
+      statusChip(e.state === "owed" ? "held" : (e.state === "paid" ? "confirmed" : (e.state === "cancelled" ? "cancelled" : e.state))),
+      (tappable ? el("span", { class: "cf-muted", text: "›" }) : null),
+    ].filter(Boolean));
+    if (tappable) row.addEventListener("click", function () { go("#/event/" + e.id); });
+    return row;
+  }
+  async function arr(id, action, then, it) {
+    try {
+      if (!id) { UI.toast("No coaching charge to act on.", "warn"); return; }
+      if (action === "collect") { await window.CoachAPI.arrearsCollected(id); UI.toast("Marked collected.", "info"); }
+      else if (action === "discount") { var v = window.prompt("New amount (e.g. 250.00):", (((it && it.gross_minor) || 0) / 100).toFixed(2)); if (v === null) return; var f = parseFloat(v); if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; } await window.CoachAPI.arrearsAdjust(id, { gross_minor: Math.round(f * 100) }); UI.toast("Discounted.", "info"); }
+      else { var r = window.prompt("Write off this lesson? Reason (shown to the client & club):", ""); if (r === null) return; await window.CoachAPI.arrearsAdjust(id, { status: "written_off", reason: r }); UI.toast("Written off.", "info"); }
+      if (then) then();
+    } catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
   async function arr(id, action, then, it) {
     try {
@@ -530,47 +562,43 @@
     ]));
   }
 
-  // ---- MONEY (statement rollup + disputes + activity + my account) --------
+  // ---- MONEY (the OUTCOME of this month's bookings — no transaction ream) --------
+  // Money is derived entirely from the bookings: Billed − Discount − Written-off = Invoiced ; Invoiced
+  // = Paid + Outstanding (CRMUI.statementFold). Then the coach's own cut on the paid, and the running
+  // ledger balance. Per client, tap → the lean client view. The old activity ledger is GONE (the event
+  // record is the truth); disputes stay (an action, not a log).
   async function renderMoney() {
     ensureMonth(); loading();
-    var st = {}, disputes = [], activity = [];
-    try { st = await window.CoachAPI.statement(MONTH); } catch (e) {}
+    var m = {}, disputes = [];
+    try { m = await window.CoachAPI.money(MONTH); } catch (e) {}
     try { disputes = (await window.CoachAPI.refundRequests("pending")).requests || []; } catch (e) {}
-    try { activity = (await window.CoachAPI.activity()).activity || []; } catch (e) {}
-    var t = st.totals || {}, cur = st.currency || "ZAR";
+    var t = m.totals || {}, cur = m.currency || "ZAR";
     var wrap = el("div", {});
     wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [el("h1", { style: "margin:0", text: "Money" }), monthNav(renderMoney)]));
 
-    // My money this month — the reconciling triad (billed → collected → owed) + how collected splits
-    // between what YOU keep and the CLUB's commission, plus rent and your running net balance. ONE
-    // shared band (CRMUI.moneySummary), same one the owner's Money uses (golden rule).
+    // The folded statement for the month + the coach's cut on what was PAID + net balance with the club.
     var bal = t.balance_minor || 0;
-    var breakdown = [
-      { label: "You keep", value_minor: t.paid_minor, tone: "good" },
-      { label: "Club commission", value_minor: t.commission_minor },
+    var extra = [
+      { label: "You keep", sub: "on paid", value_minor: t.net_minor, tone: "good" },
+      { label: "Club commission", sub: (m.commission_pct ? m.commission_pct + "% on paid" : "on paid"), value_minor: t.commission_minor },
+      { label: "Net balance with club", value_minor: bal, tone: bal < 0 ? "bad" : "good",
+        sub: bal > 0 ? "club owes you" : (bal < 0 ? "you owe the club" : "settled") },
     ];
-    if (t.rent_minor) breakdown.push({ label: "Court rent", value_minor: t.rent_minor });
-    breakdown.push({ label: "Net balance with club", value_minor: bal,
-      tone: bal < 0 ? "bad" : "good", sub: bal > 0 ? "club owes you" : (bal < 0 ? "you owe the club" : "settled") });
-    wrap.appendChild(card([window.CRMUI.moneySummary({
-      currency: cur, month: MONTH,
-      billed_minor: t.billed_minor, collected_minor: t.collected_minor, outstanding_minor: t.owed_minor,
-      breakdown: breakdown,
-      footnote: t.written_off_minor ? ("Written off this month: " + money(t.written_off_minor, cur) + " (forgiven — not owed)") : null,
-    })]));
+    wrap.appendChild(card([window.CRMUI.statementFold({ currency: cur, month: MONTH, totals: t, extra: extra })]));
 
-    // Month-end reconciliation — the "finalise this month" ritual (C2): clients who STILL owe.
-    // Reuses the same statement rollup, filtered to owed>0; tap → client record to collect / issue.
-    var owing = (st.clients || []).filter(function (r) { return (r.owed_minor || 0) > 0; });
+    // Close out — the clients still owing this month (from the SAME fold, so it always agrees).
+    var owing = (m.clients || []).filter(function (r) { return (r.outstanding_minor || 0) > 0; });
     var recCard = card([window.CRMUI.sectionHead("Close out " + monthLabel(MONTH) + (owing.length ? " · " + owing.length + " to settle" : ""))]);
     if (!owing.length) recCard.appendChild(el("div", { class: "cf-empty", text: "All settled for " + monthLabel(MONTH) + " — nothing to finalise. 🎉" }));
     else {
-      recCard.appendChild(el("p", { class: "cf-muted", style: "margin:-6px 0 8px;font-size:.85rem", text: "Before month-end, clear these tabs so the books are accurate. Tap a client to review their sessions, then collect (mark paid at court / off-platform), discount, or write off." }));
-      recCard.appendChild(window.CRMUI.statementTable(owing, { nameKey: "client_name", nameLabel: "Client", currency: cur, onRow: function (r) { if (r.client_user_id) go("#/client/" + r.client_user_id); } }));
+      recCard.appendChild(el("p", { class: "cf-muted", style: "margin:-6px 0 8px;font-size:.85rem", text: "Before month-end, clear these tabs so the books are accurate. Tap a client to review each booking, then collect (mark paid at court / off-platform), discount, or write off." }));
+      var ol = el("div", { class: "cf-list" });
+      owing.forEach(function (r) { ol.appendChild(clientMoneyRow(r, cur)); });
+      recCard.appendChild(ol);
     }
     wrap.appendChild(recCard);
 
-    // Disputes
+    // Disputes (an action queue, not a log — kept).
     if (disputes.length) {
       var dc = card([el("h2", { style: "margin:0 0 6px", text: "Refund requests" }), el("p", { class: "cf-muted", style: "margin:-2px 0 8px;font-size:.85rem", text: "A client asked for a refund on your lesson — you decide." })]);
       dc.appendChild(window.CRMUI.lineItems(disputes.map(function (r) { return { id: r.id, gross_minor: (r.amount_minor != null ? r.amount_minor : r.order_amount_minor), currency: r.currency_code, _n: r.requester_name || "A client", _s: [r.item_description || "Lesson", r.reason ? "“" + r.reason + "”" : ""].filter(Boolean).join(" · ") }; }), {
@@ -580,17 +608,30 @@
       wrap.appendChild(dc);
     }
 
-    // Per-client rollup (tap → client record)
+    // Every client this month (from the fold) → tap to their lean record.
     var byClient = card([window.CRMUI.sectionHead("By client")]);
-    byClient.appendChild(el("p", { class: "cf-muted", style: "margin:-6px 0 8px;font-size:.85rem", text: "Tap a client to manage or invoice them." }));
-    byClient.appendChild(window.CRMUI.statementTable(st.clients, { nameKey: "client_name", nameLabel: "Client", currency: cur, onRow: function (r) { if (r.client_user_id) go("#/client/" + r.client_user_id); } }));
+    if (!(m.clients || []).length) byClient.appendChild(el("div", { class: "cf-empty", text: "No sessions this month." }));
+    else {
+      byClient.appendChild(el("p", { class: "cf-muted", style: "margin:-6px 0 8px;font-size:.85rem", text: "Tap a client to review their bookings and settle." }));
+      var cl = el("div", { class: "cf-list" });
+      m.clients.forEach(function (r) { cl.appendChild(clientMoneyRow(r, cur)); });
+      byClient.appendChild(cl);
+    }
     wrap.appendChild(byClient);
-
-    // Activity
-    var ac = card([el("h2", { style: "margin:0 0 6px", text: "Activity" }), el("p", { class: "cf-muted", style: "margin:-2px 0 10px;font-size:.85rem", text: "Every lesson, collection, refund and adjustment." })]);
-    ac.appendChild(window.CRMUI.activityFeed(activity, { empty: "No activity yet." }));
-    wrap.appendChild(ac);
     set(wrap);
+  }
+  // ONE per-client money row (Close out + By client) — billed headline + paid/owed sub, tap → detail.
+  function clientMoneyRow(r, cur) {
+    var sub = money(r.paid_minor, cur) + " paid" + ((r.outstanding_minor || 0) > 0 ? " · " + money(r.outstanding_minor, cur) + " owed" : "");
+    return el("div", { class: "cf-item cf-item-tap", onclick: function () { if (r.client_user_id) go("#/client/" + r.client_user_id); } }, [
+      el("div", { class: "cf-avatar", style: "width:34px;height:34px;font-size:.8rem", text: (r.client_name || "?").slice(0, 1).toUpperCase() }),
+      el("div", { class: "cf-item-main" }, [
+        el("div", { class: "cf-item-t", text: r.client_name + "  ·  " + (r.count || 0) }),
+        el("div", { class: "cf-item-s", text: sub }),
+      ]),
+      el("span", { style: "font-weight:700", text: money(r.invoiced_minor, cur) }),
+      ((r.outstanding_minor || 0) > 0 ? el("span", { class: "cf-chip held", text: "owed" }) : el("span", { class: "cf-muted", text: "›" })),
+    ]);
   }
   async function decideDispute(id, action) {
     var isA = action === "approve";

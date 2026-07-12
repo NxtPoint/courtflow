@@ -580,6 +580,37 @@ def get_class_story(enrolment_id):
     return jsonify(booking=story), 200
 
 
+@coach_bp.get("/money")
+def get_coach_money():
+    """The coach Money tab as an OUTCOME of bookings: the folded statement (Billed − Discount −
+    Written-off = Invoiced ; Invoiced = Paid + Outstanding) for this coach's sessions in `?month=`
+    (default current), per client + grand total + the coach's cut on paid + ledger balance."""
+    p, err = _coach()
+    if err:
+        return err
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = repo.coach_month_money(s, club_id=p.club_id, coach_user_id=p.user_id, month=month)
+    return jsonify(data), 200
+
+
+@coach_bp.get("/clients/<client_user_id>/detail")
+def get_coach_client_detail(client_user_id):
+    """The LEAN, coach-scoped client view (deliberately NOT Client 360 — privacy): contact details +
+    every booking THIS coach had with the client in `?month=` (each folded to its money state) + the
+    client's folded statement. Never exposes other coaches / memberships / cross-coach money."""
+    p, err = _coach()
+    if err:
+        return err
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = repo.coach_client_detail(s, club_id=p.club_id, coach_user_id=p.user_id,
+                                        client_user_id=client_user_id, month=month)
+    if data is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(data), 200
+
+
 @coach_bp.get("/clients/<client_user_id>/invoice")
 def get_client_invoice(client_user_id):
     """The printable coaching invoice for one client + month (paid/owed/written-off lines + totals).
