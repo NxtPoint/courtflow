@@ -492,6 +492,10 @@ p{margin:0 0 10px}
   display:flex;align-items:center;justify-content:center;font-size:1.5rem}
 .cf-qb-t{font-weight:700;font-size:1.02rem}
 .cf-qb-s{color:var(--muted);font-size:.83rem}
+/* Booking tiles reuse .cf-gtile as a LEFT icon — cancel its centered (margin:0 auto) layout used elsewhere,
+   and stack the name + grey sub-line so Court/Lesson/Class/Equipment all read identically, left-aligned. */
+.cf-qb-btn .cf-gtile{margin:0}
+.cf-qb-main{display:flex;flex-direction:column;gap:2px;min-width:0;text-align:left}
 
 /* KPI stat tiles (usage this month). */
 .cf-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}

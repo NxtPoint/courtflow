@@ -1366,11 +1366,15 @@
       el("h3", { text: "Peak court hours" }),
       el("p", { class: "cf-muted", text: "During these hours, court hire is charged the PEAK price you set per duration (Setup → Services → a court). Members covered by their plan stay free. Leave empty for no peak pricing." }),
     ]);
+    // peak is "on" when a window is set; peak_days=null means EVERY day (like the access window), so when
+    // peak is on with null days we must show ALL chips ticked — otherwise re-opening a daily peak looks
+    // blank and a blind re-save would switch it off.
+    var peakOn = (policy.peak_start_min != null || policy.peak_end_min != null);
     var curDays = (policy.peak_days != null && policy.peak_days !== "") ? String(policy.peak_days).split(",").map(function (x) { return x.trim(); }).filter(Boolean) : null;
     var sel = {};
     var chips = el("div", { class: "cf-row", style: "gap:4px;flex-wrap:wrap;margin-top:6px" });
     DOW.forEach(function (o) {
-      var on = curDays ? curDays.indexOf(o[0]) >= 0 : false;   // default none selected = peak off
+      var on = curDays ? curDays.indexOf(o[0]) >= 0 : peakOn;   // null days + peak on = every day
       sel[o[0]] = on;
       var b = el("button", { class: "cf-chip" + (on ? " class" : ""), text: o[1], type: "button" });
       b.addEventListener("click", function () { sel[o[0]] = !sel[o[0]]; b.className = "cf-chip" + (sel[o[0]] ? " class" : ""); });

@@ -205,17 +205,25 @@
     // drawn glyphs, no emoji).
     var qb = card([el("h2", { style: "margin:0 0 10px", text: "Book a session" })]);
     var tiles = el("div", { class: "cf-qb" });
+    // ONE tile shape for every service: [icon] [name / grey sub-line], left-aligned. Court/Lesson/Class
+    // and the featured equipment (ball machine) all read identically.
+    function bookTile(glyphKind, name, sub, onClick) {
+      return el("button", { class: "cf-qb-btn", onclick: onClick }, [
+        svcGlyph(glyphKind),
+        el("div", { class: "cf-qb-main" }, [
+          el("div", { class: "cf-qb-t", text: name }),
+          sub ? el("div", { class: "cf-qb-s", text: sub }) : null,
+        ].filter(Boolean)),
+      ]);
+    }
+    var TILE_SUB = { court: "Book a court", lesson: "With a coach", class: "Group session" };
     ["court", "lesson", "class"].forEach(function (k) {
-      tiles.appendChild(el("button", { class: "cf-qb-btn", onclick: function () { go("#/book/" + k); } }, [
-        svcGlyph(k), el("span", { class: "cf-qb-t", text: TYPE_LABEL[k] }),
-      ]));
+      tiles.appendChild(bookTile(k, TYPE_LABEL[k], TILE_SUB[k], function () { go("#/book/" + k); }));
     });
-    // Featured equipment hero tiles (e.g. the ball machine) — tapping starts a court booking with it pre-added.
+    // Featured equipment (e.g. the ball machine) — same tile; tapping starts a court booking with it pre-added.
     (DATA.equipment || []).forEach(function (eq) {
-      tiles.appendChild(el("button", { class: "cf-qb-btn", onclick: function () { PENDING_EQUIP = eq.id; go("#/book/court"); } }, [
-        svcGlyph("court"), el("span", { class: "cf-qb-t", text: eq.name }),
-        eq.amount_minor != null ? el("span", { class: "cf-qb-s", style: "font-size:.72rem;opacity:.7", text: "on a court · from " + UI.money(eq.amount_minor, cur) }) : null,
-      ].filter(Boolean)));
+      var sub = "On a court" + (eq.amount_minor != null ? " · from " + UI.money(eq.amount_minor, cur) : "");
+      tiles.appendChild(bookTile("court", eq.name, sub, function () { PENDING_EQUIP = eq.id; go("#/book/court"); }));
     });
     qb.appendChild(tiles); wrap.appendChild(qb);
 
