@@ -55,6 +55,20 @@
     }
     function pInit(pn) { var n = (pn.name || pn.email || "?").trim(); return (n[0] || "?").toUpperCase(); }
 
+    // A collapsed expander for lower-priority reference sections — a ghost toggle that reveals the
+    // given cards. Keeps the person-360 focused on money + bookings by default.
+    function collapsible(title, kids) {
+      var open = false;
+      var body = el("div", { style: "display:none;margin-top:6px" });
+      kids.forEach(function (k) { body.appendChild(k); });
+      var toggle = el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", style: "margin-top:14px",
+        text: "▸ " + title });
+      toggle.addEventListener("click", function () {
+        open = !open; body.style.display = open ? "" : "none"; toggle.textContent = (open ? "▾ " : "▸ ") + title;
+      });
+      return el("div", {}, [toggle, body]);
+    }
+
     function render(pn) {
       _pn = pn;
       var c = pn.currency || "ZAR";
@@ -88,27 +102,23 @@
         ]));
       }
       wrap.appendChild(head);
-
-      // ---- This month at a glance: the SAME activity + spend rollup as the client Home (golden rule).
-      // The full booking + financial DETAIL sits below (money card + bookings) — this is the headline.
-      if (pn.activity_summary && pn.activity_summary.counts) {
-        wrap.appendChild(CRMUI.activityBlock(pn.activity_summary, { noChart: true }));   // no graphs on the 360
-        // When the reconciling fold is present, spendBlock stays as the by-SERVICE breakdown only (no
-        // paybar) so there's ONE authoritative paid/outstanding — the statementFold in the Money card.
-        var spendOpts = pn.statement_fold ? { noPaybar: true } : {};
-        if (cfg.onSettleAll) spendOpts.onSettle = cfg.onSettleAll;
-        wrap.appendChild(CRMUI.spendBlock(pn.activity_summary, spendOpts));
-      }
-
-      // ---- Details (demographics) + consent — Mission 1.2. Not shown to a COACH (client PII:
-      // home address / DOB / emergency contact); admin + the client themselves see it. ----
       var _role = (cfg.scope && cfg.scope.role) || "";
-      if (fields.showDetails !== false && _role !== "coach") {
-        wrap.appendChild(detailsCard(pn));
-        if ((pn.consent || []).length) wrap.appendChild(consentCard(pn));
+
+      // ---- 1) MONEY — the headline. The reconciling fold + a consolidated sessions/by-service line +
+      // owed items + payments, ALL in ONE section right under the header (redesign 2026-07: was three
+      // scattered blocks — ACTIVITY counts + BILLING by-service + Money). ----
+      wrap.appendChild(moneyCard(pn, c));
+
+      // ---- 2) BOOKINGS — the record. Upcoming + history as events → each drills to the fold +
+      // Transactions (the ONE event story). ----
+      if (fields.showBookings !== false) {
+        wrap.appendChild(bookingsCard("Upcoming", pn.upcoming || [], "Nothing upcoming."));
+        wrap.appendChild(bookingsCard("History", pn.history || [], "No past bookings."));
       }
 
-      // ---- Coach settlement (if they coach here) ----
+      // ---- 3) COACHING (coach + admin scopes) + the month→service drill + settlement if they coach here ----
+      if (fields.showCoaching !== false && pn.coaching && pn.coaching.totals) wrap.appendChild(coachingCard(pn));
+      if (fields.showCoaching !== false && pn.service_breakdown && (pn.service_breakdown.services || []).length) wrap.appendChild(serviceBreakdownCard(pn));
       if (pn.is_coach && pn.settlement) {
         var st = pn.settlement;
         wrap.appendChild(UI.card([
@@ -123,38 +133,21 @@
         ], "cf-mt"));
       }
 
-      // ---- Packages / wallets (sessions left · expiry · coach) + adjust/expire ----
+      // ---- 4) PACKAGES + REFUND REQUESTS (the action queue) ----
       if (fields.showPackages !== false && pn.packages) wrap.appendChild(packagesCard(pn, c));
-
-      // ---- Money: owed statement (void/write-off/discount/pay) + online payments ----
-      wrap.appendChild(moneyCard(pn, c));
-
-      // ---- Coaching (coach + admin scopes) ----
-      if (fields.showCoaching !== false && pn.coaching && pn.coaching.totals) wrap.appendChild(coachingCard(pn));
-      // The month → client → SERVICE → transaction middle tier (coach scope, when month-scoped).
-      if (fields.showCoaching !== false && pn.service_breakdown && (pn.service_breakdown.services || []).length) wrap.appendChild(serviceBreakdownCard(pn));
-
-      // ---- Bookings: upcoming + history → the event story ----
-      if (fields.showBookings !== false) {
-        wrap.appendChild(bookingsCard("Upcoming", pn.upcoming || [], "Nothing upcoming."));
-        wrap.appendChild(bookingsCard("History", pn.history || [], "No past bookings."));
-      }
-
-      // ---- Refund requests ----
       if ((pn.refunds || []).length) wrap.appendChild(refundsCard(pn, c));
 
-      // ---- Dependents (children who can be booked for) ----
-      if (fields.showDependents !== false && (pn.dependents || []).length) wrap.appendChild(dependentsCard(pn));
-
-      // ---- Activity feed (money) ----
-      if (fields.showActivity && (pn.activity || []).length) {
-        wrap.appendChild(UI.card([CRMUI.sectionHead("Activity"), CRMUI.activityFeed(pn.activity)], "cf-mt"));
+      // ---- 5) ▸ More details — reference info tucked away (collapsed by default): demographics/PII +
+      // consent + dependents + the behavioural event stream. Keeps the default view focused on money +
+      // bookings. Not shown to a coach (PII omitted server-side anyway). ----
+      var moreKids = [];
+      if (fields.showDetails !== false && _role !== "coach") {
+        moreKids.push(detailsCard(pn));
+        if ((pn.consent || []).length) moreKids.push(consentCard(pn));
       }
-
-      // ---- CRM / behavioural event stream — Mission 1.2 (the timeline's non-money half) ----
-      if (fields.showEvents !== false && (pn.events || []).length) {
-        wrap.appendChild(eventsCard(pn));
-      }
+      if (fields.showDependents !== false && (pn.dependents || []).length) moreKids.push(dependentsCard(pn));
+      if (fields.showEvents !== false && (pn.events || []).length) moreKids.push(eventsCard(pn));
+      if (moreKids.length) wrap.appendChild(collapsible("More details", moreKids));
 
       UI.clear(host); host.appendChild(wrap);
     }
@@ -223,6 +216,20 @@
       var fold = pn.statement_fold;
       if (fold && CRMUI.statementFold && (fold.billed_minor || fold.invoiced_minor || pn.owed_minor)) {
         card.appendChild(CRMUI.statementFold({ currency: c, month: pn.month, totals: fold }));
+        // Consolidated context line (was the separate ACTIVITY + BILLING blocks): sessions + minutes +
+        // where the money went, by service — one muted line under the fold instead of two more cards.
+        var a = pn.activity_summary;
+        if (a && (a.counts || a.by_service)) {
+          var bits = [];
+          var tot = a.counts && a.counts.total;
+          if (tot) bits.push(tot + " session" + (tot === 1 ? "" : "s"));
+          if (a.minutes) { var h = Math.floor(a.minutes / 60), m = a.minutes % 60; bits.push((h ? h + "h " : "") + (m ? m + "m" : (h ? "" : "0m")).trim()); }
+          var svc = (a.by_service || []).filter(function (x) { return x.billed_minor > 0; })
+            .map(function (x) { return x.label + " " + money(x.billed_minor, c); });
+          var line = bits.filter(Boolean).join(" · ");
+          if (svc.length) line += (line ? "  ·  " : "") + svc.join(" · ");
+          if (line) card.appendChild(el("div", { class: "cf-muted", style: "margin-top:9px;font-size:.82rem", text: line }));
+        }
         card.appendChild(el("div", { style: "height:8px" }));
       } else {
         card.appendChild(el("div", { class: "cf-row", style: "margin:2px 0 10px" }, [
