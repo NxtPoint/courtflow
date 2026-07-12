@@ -258,7 +258,7 @@
   function shortDate(iso) { try { var d = new Date(iso); return d.getDate() + " " + d.toLocaleDateString("en-ZA", { month: "short" }); } catch (e) { return ""; } }
   function daysSince(iso) { try { return (Date.now() - new Date(iso).getTime()) / 86400000; } catch (e) { return Infinity; } }
   function atRisk(r) { return !!r.last_seen && daysSince(r.last_seen) > 60; }               // was active, now lapsing
-  function recentJoin(r) { return !!r.joined_at && daysSince(r.joined_at) <= 30; }
+  function recentJoin(r) { return !!r.first_seen && daysSince(r.first_seen) <= 30; }        // first session ≤ 30d
   // People segmentation — TWO groups (each a single-select filter; drill a row to the 360):
   //   STATUS  (mutually exclusive over members): Members = PAYG + Memberships + Trial. Plus the
   //           role views (Coaches/Guests/Admins) and All.

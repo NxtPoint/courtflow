@@ -1287,7 +1287,16 @@ def list_people(session, *, club_id):
                    (SELECT b.booking_type FROM diary.booking b
                      WHERE b.club_id = :c AND b.booked_by_user_id = u.id AND b.status <> 'cancelled'
                      ORDER BY b.starts_at DESC LIMIT 1) AS last_kind,
-                   u.created_at AS joined_at
+                   -- FIRST session (not account-created — which a bulk import stamps all at once, so
+                   -- 'New' would show the whole import). first_seen = genuinely-new engagement.
+                   (SELECT MIN(x.at) FROM (
+                       SELECT b.starts_at AS at FROM diary.booking b
+                        WHERE b.club_id = :c AND b.booked_by_user_id = u.id AND b.status <> 'cancelled'
+                       UNION ALL
+                       SELECT cs.starts_at FROM diary.enrolment e
+                        JOIN diary.class_session cs ON cs.id = e.class_session_id
+                        WHERE e.club_id = :c AND e.user_id = u.id AND e.status <> 'cancelled'
+                     ) x) AS first_seen
             FROM iam.membership m
             JOIN iam.user u ON u.id = m.user_id
             LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id AND cp.club_id = :c
