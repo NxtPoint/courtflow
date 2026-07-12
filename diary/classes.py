@@ -1372,11 +1372,14 @@ def master_class_events(session, *, club_id, date_from=None, date_to=None):
                    cs.starts_at, cs.ends_at, cs.status, cs.capacity,
                    cs.court_resource_id AS scalar_court,
                    csc.court_resource_id AS link_court,
+                   cu.first_name AS coach_first, cu.surname AS coach_surname, cp.display_name AS coach_display,
                    (SELECT count(*) FROM diary.enrolment e
                       WHERE e.class_session_id = cs.id AND e.status = 'enrolled') AS enrolled
             FROM diary.class_session cs
             LEFT JOIN diary.resource r ON r.id = cs.resource_id
             LEFT JOIN diary.class_session_court csc ON csc.class_session_id = cs.id
+            LEFT JOIN iam.user cu ON cu.id = cs.coach_user_id
+            LEFT JOIN iam.coach_profile cp ON cp.user_id = cs.coach_user_id AND cp.club_id = cs.club_id
             WHERE cs.club_id = :c AND cs.status IN ('scheduled','completed')
               AND (CAST(:df AS timestamptz) IS NULL OR cs.starts_at >= CAST(:df AS timestamptz))
               AND (CAST(:dt AS timestamptz) IS NULL OR cs.starts_at <= CAST(:dt AS timestamptz))
@@ -1392,6 +1395,9 @@ def master_class_events(session, *, club_id, date_from=None, date_to=None):
         d["court_resource_id"] = str(court) if court else None
         d["booking_type"] = "class"
         d["kind"] = "class"
+        d["coach_name"] = (d.pop("coach_display", None)
+                           or " ".join(x for x in (d.pop("coach_first", None),
+                                                   d.pop("coach_surname", None)) if x).strip() or None)
         for k in ("id", "resource_id", "coach_user_id"):
             if d.get(k) is not None:
                 d[k] = str(d[k])

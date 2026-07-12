@@ -65,9 +65,12 @@
 
   // ---- segmented tabs --------------------------------------------------------
   function segment() {
+    // Packs listed FIRST — a slight, deliberate lead for PAYG packs over memberships (packs are our
+    // priority), while still offering memberships. The default tab is set on load (packs for a PAYG member,
+    // membership for an active member so they see their standing).
     var tabs = [
-      { k: "membership", t: "Membership" },
       { k: "packs", t: "Packs" },
+      { k: "membership", t: "Membership" },
       { k: "payg", t: "Pay as you go" },
     ];
     var seg = el("div", { class: "cf-segment" });
@@ -272,6 +275,9 @@
       ]).then(function (out) {
         state.mem = out[0] || {}; state.bundles = out[1] || {};
         state.wallets = (out[2] && out[2].wallets) || []; state.plan = out[3];
+        // Default tab: an active member lands on Membership (their standing); everyone else (the PAYG upsell
+        // target) lands on Packs — the slight priority. Only sets the initial view; the member can switch.
+        state.tab = isRealMember() ? "membership" : "packs";
         if (h) h.className = "";
         render();
       }).catch(function (e) {

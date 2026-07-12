@@ -49,11 +49,21 @@
 
     function eventRow(ev) {
       var t = evKind(ev), tappable = !!(ev.id && cfg.onNavigate);
+      // Same per-type rules as the grid: class = class name + coach; lesson = coach only (never the client);
+      // standalone court = booker + payment + equipment.
+      var title, sub;
+      if (t === "class") { title = ev.resource_name || "Class"; sub = ev.coach_name || ""; }
+      else if (ev.booking_type === "lesson" || ev.held_for_lesson) { title = ev.coach_name || ev.resource_name || "Lesson"; sub = ""; }
+      else {
+        title = ev.booked_by_name || ev.resource_name || typeLabel(t);
+        var bits = []; if (ev.pay_label) bits.push(ev.pay_label); if (ev.equipment) bits.push("＋ " + ev.equipment);
+        sub = bits.join(" · ");
+      }
       return el("div", { class: "cf-item" + (tappable ? " cf-item-tap" : ""), onclick: function () { if (tappable) cfg.onNavigate(ev); } }, [
         el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(t) >= 0 ? t : "court"), text: (function () { try { return UI.fmtTime(ev.starts_at); } catch (e) { return t; } })() }),
         el("div", { class: "cf-item-main" }, [
-          el("div", { class: "cf-item-t", text: ev.resource_name || typeLabel(t) }),
-          el("div", { class: "cf-item-s", text: [ev.booked_by_name, ev.coach_name].filter(Boolean).join(" · ") || t }),
+          el("div", { class: "cf-item-t", text: title }),
+          el("div", { class: "cf-item-s", text: sub || (ev.resource_name || t) }),
         ]),
         UI.statusChip(ev.status),
       ]);
@@ -130,13 +140,30 @@
         var top = Math.max(0, startMin) / SLOT_MIN * ROW_H;
         var height = Math.max(18, (Math.min(endMin, (DAY_END - DAY_START) * 60) - Math.max(0, startMin)) / SLOT_MIN * ROW_H - 2);
         var t = evKind(ev), klass = ["court", "lesson", "class"].indexOf(t) >= 0 ? t : "court", tappable = !!(ev.id && cfg.onNavigate);
-        var who = ev.booked_by_name || ev.resource_name || typeLabel(t);
+        // Block label per the owner's rules: a CLASS shows the class name + coach; a LESSON (its auto-held
+        // court row carries the coach) shows the COACH only; a standalone COURT shows the primary booker's
+        // name + payment status + any equipment (never a guest — the feed sends only booked_by_name).
+        var who, sub = "";
+        if (t === "class") {
+          who = ev.resource_name || "Class"; sub = ev.coach_name || "";
+        } else if (ev.booking_type === "lesson" || ev.held_for_lesson) {
+          who = ev.coach_name || ev.resource_name || "Lesson";
+        } else {
+          who = ev.booked_by_name || ev.resource_name || typeLabel(t);
+          var bits = [];
+          if (ev.pay_label) bits.push(ev.pay_label);
+          if (ev.equipment) bits.push("＋ " + ev.equipment);
+          sub = bits.join(" · ");
+        }
+        var timeTxt = (function () { try { return UI.fmtTime(ev.starts_at); } catch (e) { return ""; } })();
+        var kids = [el("div", { text: timeTxt + " · " + who })];
+        if (sub) kids.push(el("div", { style: "font-size:.72em;opacity:.78;white-space:nowrap;overflow:hidden;text-overflow:ellipsis", text: sub }));
         var block = el("div", {
           class: "cf-ev " + klass + (tappable ? " cf-item-tap" : ""),
           style: "top:" + top + "px;height:" + height + "px" + (tappable ? ";cursor:pointer" : ""),
-          title: who + " · " + (function () { try { return UI.fmtRange(ev.starts_at, ev.ends_at); } catch (e) { return ""; } })() + (ev.status ? " · " + ev.status : ""),
+          title: who + (sub ? " · " + sub : "") + " · " + (function () { try { return UI.fmtRange(ev.starts_at, ev.ends_at); } catch (e) { return ""; } })() + (ev.status ? " · " + ev.status : ""),
           onclick: function (e) { e.stopPropagation(); if (tappable) cfg.onNavigate(ev); },
-        }, [el("div", { text: (function () { try { return UI.fmtTime(ev.starts_at); } catch (e) { return ""; } })() + " · " + who })]);
+        }, kids);
         anchor.appendChild(block);
       });
       wrap.appendChild(grid); return wrap;

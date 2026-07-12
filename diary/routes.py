@@ -681,12 +681,33 @@ def time_off():
 # master diary (admin)
 # ---------------------------------------------------------------------------
 
+def _pay_label(settlement_mode, order_status):
+    """A short payment-status word for a diary block (staff glance). Derived from the settlement mode +
+    order status — consistent with the canonical vocabulary but compressed for grid density. None = no
+    order / nothing to show."""
+    if settlement_mode == "membership_covered":
+        return "Covered"
+    if settlement_mode == "free":
+        return "Free"
+    if settlement_mode == "token":
+        return "Pack"
+    if order_status == "paid":
+        return "Paid"
+    if order_status == "awaiting_payment":
+        return "Awaiting"
+    if order_status == "open":
+        return "Owed"
+    return None
+
+
 @diary_bp.get("/master")
 def master_diary():
     p = _principal()
     if not p or not _need_club(p):
         return jsonify(error="unauthorized"), 401
-    # Whole-club diary READ (occupancy/gaps). Admins + coaches; the feed carries no client PII.
+    # Whole-club diary READ (occupancy/gaps). Admins + coaches. Staff-only, so it now carries WHO booked
+    # (primary booker name — never a guest), the payment status, coach + equipment, so the owner can see
+    # at a glance who has a court and whether it's paid. `view_club_diary` gates it to staff.
     if not can(p, "view_club_diary", {"club_id": p.club_id}):
         return jsonify(error="forbidden"), 403
     q = request.args
@@ -697,8 +718,20 @@ def master_diary():
             rows = s.execute(
                 text("SELECT b.id, b.booking_type, b.resource_id, r.name AS resource_name, "
                      "       r.kind, b.coach_user_id, b.starts_at, b.ends_at, b.status, "
-                     "       b.booked_by_user_id, b.order_id, b.settlement_mode "
-                     "FROM diary.booking b LEFT JOIN diary.resource r ON r.id=b.resource_id "
+                     "       b.booked_by_user_id, b.order_id, b.settlement_mode, b.notes, "
+                     "       ub.first_name AS booker_first, ub.surname AS booker_surname, "
+                     "       cu.first_name AS coach_first, cu.surname AS coach_surname, "
+                     "       cp.display_name AS coach_display, o.status AS order_status, eq.equipment "
+                     "FROM diary.booking b "
+                     "LEFT JOIN diary.resource r ON r.id=b.resource_id "
+                     "LEFT JOIN iam.user ub ON ub.id = b.booked_by_user_id "
+                     "LEFT JOIN iam.user cu ON cu.id = b.coach_user_id "
+                     "LEFT JOIN iam.coach_profile cp ON cp.user_id = b.coach_user_id AND cp.club_id = b.club_id "
+                     "LEFT JOIN billing.\"order\" o ON o.id = b.order_id "
+                     "LEFT JOIN LATERAL ("
+                     "   SELECT string_agg(er.name || (CASE WHEN be.qty>1 THEN ' x'||be.qty ELSE '' END), ', ') AS equipment "
+                     "   FROM diary.booking_equipment be JOIN diary.resource er ON er.id = be.resource_id "
+                     "   WHERE be.booking_id = b.id) eq ON true "
                      "WHERE b.club_id=:c AND b.status IN ('held','confirmed','completed','no_show') "
                      # Exclude the class court-HOLD rows (booking_type='class'): the class is rendered
                      # per court via master_class_events, so feeding these too would double-render it.
@@ -711,6 +744,16 @@ def master_diary():
             ).mappings().all()
             for r in rows:
                 d = dict(r)
+                # The primary booker's name (staff diary shows who has the court); a lesson's auto-held
+                # court row is labelled by COACH instead (below), never by client/payment/equipment.
+                d["booked_by_name"] = " ".join(x for x in (d.pop("booker_first", None),
+                                                           d.pop("booker_surname", None)) if x).strip() or None
+                d["coach_name"] = (d.pop("coach_display", None)
+                                   or " ".join(x for x in (d.pop("coach_first", None),
+                                                           d.pop("coach_surname", None)) if x).strip() or None)
+                d["held_for_lesson"] = (d.get("notes") == "(court held for lesson)")
+                d.pop("notes", None)
+                d["pay_label"] = _pay_label(d.get("settlement_mode"), d.pop("order_status", None))
                 for k in ("id", "resource_id", "coach_user_id", "booked_by_user_id", "order_id"):
                     if d.get(k) is not None:
                         d[k] = str(d[k])

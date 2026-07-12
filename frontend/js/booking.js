@@ -724,11 +724,13 @@
     if (st.onBehalf || !st.plansHref) return null;
     if (courtCovered() || st.settlement === "token") return null;   // already free / drawing a pack
     if (["online", "at_court", "monthly_account"].indexOf(st.settlement) < 0) return null;
+    // Offer PAYG session packs FIRST (they're the priority), then memberships — a slight, deliberate bias
+    // toward packs. Lessons/classes are pack-only (membership coverage is court-only, so we don't dangle one).
     var msg = st.type === "court"
-      ? "Play often? A membership makes court hire free — buy once, skip paying each time."
+      ? "Play often? Grab a court pack — pay once, then just book. Or go free on the courts with a membership."
       : (st.type === "class"
         ? "Coming back? A class pack saves paying for every session."
-        : "Regular lessons? A lesson pack saves paying each time.");
+        : "Regular lessons? A lesson pack saves paying for every session.");
     return el("div", { class: "cf-confirm-sec", style: "background:var(--green-050,#eef7f1);border:1px solid #cfe4d8;border-radius:12px;padding:12px 14px" }, [
       el("div", { class: "cf-row", style: "gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap" }, [
         el("div", { style: "flex:1;min-width:170px" }, [
