@@ -1502,6 +1502,32 @@ def discount_order_route(order_id):
     return jsonify(res), 200
 
 
+@admin_bp.post("/clients/<client_user_id>/invoice")
+def create_client_invoice(client_user_id):
+    """Generate an ad-hoc OWED invoice for a client and email them a pay link. Body:
+    {lines:[{price_id?|description, qty, amount_minor}], discount_minor?, reason?}. Creates an 'open'
+    billing.order (shows on the client's unified statement, settleable online via /portal); NOT a
+    calendar booking. Emits `statement_ready` → the 'Your invoice is ready' email with a /portal pay link."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    lines = b.get("lines")
+    if not isinstance(lines, list) or not lines:
+        return jsonify(error="lines_required"), 400
+    with session_scope() as s:
+        inv = repo.create_invoice(
+            s, club_id=p.club_id, user_id=client_user_id, lines=lines,
+            discount_minor=int(b.get("discount_minor") or 0),
+            reason=((b.get("reason") or "").strip() or None), actor_user_id=p.user_id)
+        if not inv:
+            return jsonify(error="no_valid_lines"), 400
+        from marketing_crm.tracking import emit
+        emit("statement_ready", {"club_id": str(p.club_id), "user_id": str(client_user_id),
+                                 "amount_minor": inv.get("amount_minor"), "currency": inv.get("currency")})
+    return jsonify(inv), 201
+
+
 @admin_bp.post("/clients/<client_user_id>/wallets/<wallet_id>/adjust")
 def admin_wallet_adjust(client_user_id, wallet_id):
     """Manually adjust a client's prepaid pack balance (money-adjacent, audited). Body:

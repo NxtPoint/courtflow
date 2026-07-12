@@ -1060,6 +1060,48 @@ def sc_unpriced_booking_refused(s, fx):
     check("nothing persisted — the slot is still free", has_slot(court_slots(s, fx, court), at(fx, 9)))
 
 
+def sc_backcapture_past_lesson(s, fx):
+    print("\n# Back-capture: a coach logs a PAST lesson on-behalf → bills the client, no past-guard, "
+          "resource resolved from coach_user_id")
+    m = fx.members[0]
+    past = datetime.now(JHB) - timedelta(days=2)
+    start = past.replace(hour=15, minute=0, second=0, microsecond=0)
+    end = start + timedelta(hours=1)
+    # A MEMBER may NEVER backdate — the past guard holds even when allow_past is passed.
+    blocked = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                               booking_type="lesson", resource_id=fx.coach_res,
+                               coach_user_id=fx.coach_uid,
+                               starts_at=utc_iso(start), ends_at=utc_iso(end), allow_past=True)
+    check("member self-book cannot backdate (IN_THE_PAST)",
+          blocked.get("error") == "IN_THE_PAST", str(blocked))
+    # Coach ON-BEHALF, resource_id OMITTED → the server resolves the coach's diary resource from
+    # coach_user_id (a past lesson has no availability slot to carry it).
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+                         booking_type="lesson", resource_id=None, coach_user_id=fx.coach_uid,
+                         starts_at=utc_iso(start), ends_at=utc_iso(end),
+                         settlement_mode="monthly_account", booked_for_user_id=m, allow_past=True)
+    ok = r.get("ok")
+    check("coach on-behalf logs a past lesson", ok, str(r))
+    b = r.get("booking") or {}
+    check("coach resource resolved from coach_user_id when omitted",
+          str(b.get("resource_id")) == str(fx.coach_res),
+          f"resource_id={b.get('resource_id')} coach_res={fx.coach_res}")
+    # It BILLS the client — an owed order raised on THEIR account (not the coach's).
+    oid = b.get("order_id")
+    owner = s.execute(text('SELECT user_id FROM billing."order" WHERE id=:o'),
+                      {"o": oid}).scalar() if oid else None
+    check("past lesson raised an order billed to the client", str(owner) == str(m),
+          f"order owner={owner} client={m}")
+    # The lesson also holds a court in the past (harmless — nothing competes for a past slot).
+    rows = _rows_for_order(s, oid) if oid else []
+    kinds = set()
+    for row in rows:
+        kinds.add(s.execute(text("SELECT kind FROM diary.resource WHERE id=:r"),
+                            {"r": row["resource_id"]}).scalar())
+    check("back-captured lesson still made a coach + court row", kinds == {"coach", "court"},
+          f"kinds={kinds}")
+
+
 SCENARIOS = [
     sc_cancel_after_start_guard,
     sc_unpriced_booking_refused,
@@ -1080,6 +1122,7 @@ SCENARIOS = [
     sc_equipment_hire,
     sc_court_service_allocation,
     sc_class_courts,
+    sc_backcapture_past_lesson,
 ]
 
 

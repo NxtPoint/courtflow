@@ -540,6 +540,59 @@ def patch_equipment(session, *, club_id, resource_id, name=None, amount_minor=No
     return _equipment_one(session, club_id=club_id, resource_id=resource_id)
 
 
+# ---------------------------------------------------------------------------
+# ad-hoc client invoice — an OWED charge on a client's account (no calendar booking).
+# Reuses the generic order creator + the rand-discount engine + the unified statement; the client
+# gets a "Your invoice is ready" email with a /portal pay link (emitted by the route).
+# ---------------------------------------------------------------------------
+
+def create_invoice(session, *, club_id, user_id, lines, discount_minor=0, reason=None, actor_user_id=None):
+    """Create an ad-hoc OWED invoice for a client: an 'open' billing.order (settlement 'monthly_account')
+    with arbitrary lines — a configured SERVICE (its price × qty, re-derived server-side) OR a custom fee
+    (description + amount) — optionally reduced by a rand-value discount. It shows on the client's unified
+    statement immediately and is settleable online. Returns {order_id, amount_minor, currency} or None (no
+    valid lines / client). Caller composes the session + emits the invoice email."""
+    from billing.orders import create_order_for_booking
+    norm = []
+    for l in (lines or []):
+        qty = max(1, int(l.get("qty") or 1))
+        pid = l.get("price_id") or None
+        if pid:
+            # Service line: re-derive the amount from the price row (authoritative — never trust the body
+            # amount for a priced service), and carry price_id so the statement categorises it correctly.
+            prow = session.execute(
+                text("SELECT amount_minor FROM billing.price WHERE id = :p AND club_id = :c AND active = true"),
+                {"p": str(pid), "c": club_id},
+            ).mappings().first()
+            if not prow:
+                continue
+            amt = int(prow["amount_minor"] or 0)
+            desc = (l.get("description") or "Service").strip() or "Service"
+        else:
+            amt = int(l.get("amount_minor") or 0)
+            desc = (l.get("description") or "Charge").strip() or "Charge"
+        if amt <= 0:
+            continue
+        norm.append({"description": desc, "price_id": pid, "qty": qty, "amount_minor": amt})
+    if not norm:
+        return None
+    order_id = create_order_for_booking(session, club_id=club_id, user_id=user_id, lines=norm,
+                                        settlement_mode="monthly_account")
+    if not order_id:
+        return None
+    if discount_minor and int(discount_minor) > 0:
+        from billing.statement import discount_order
+        discount_order(session, club_id=club_id, order_id=str(order_id), discount_minor=int(discount_minor),
+                       reason=(reason or "invoice discount"), actor_user_id=actor_user_id)
+    row = session.execute(
+        text('SELECT amount_minor, currency_code FROM billing."order" WHERE id = :o AND club_id = :c'),
+        {"o": str(order_id), "c": club_id},
+    ).mappings().first()
+    return {"order_id": str(order_id),
+            "amount_minor": int(row["amount_minor"]) if row else None,
+            "currency": (row["currency_code"] if row else None)}
+
+
 def _get_price(session, *, club_id, price_id):
     return _row(session.execute(
         text("SELECT id, club_id, product_id, audience, amount_minor, peak_amount_minor, currency_code, "

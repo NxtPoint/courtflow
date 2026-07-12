@@ -51,7 +51,7 @@ def list_services(session, *, club_id, role, user_id):
              "          AND pr.term_months IS NULL AND pr.active = true) AS variation_count, "
              "       (SELECT min(pr.amount_minor) FROM billing.price pr WHERE pr.product_id = p.id "
              "          AND pr.term_months IS NULL AND pr.active = true) AS from_amount_minor, "
-             "       (SELECT json_agg(json_build_object('duration_minutes', pr.duration_minutes, "
+             "       (SELECT json_agg(json_build_object('price_id', pr.id, 'duration_minutes', pr.duration_minutes, "
              "                  'amount_minor', pr.amount_minor) ORDER BY pr.duration_minutes NULLS FIRST, pr.amount_minor) "
              "          FROM billing.price pr WHERE pr.product_id = p.id "
              "          AND pr.term_months IS NULL AND pr.active = true) AS variations "

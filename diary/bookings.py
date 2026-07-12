@@ -447,7 +447,8 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                    starts_at, ends_at, settlement_mode="at_court", parties=None,
                    coach_user_id=None, court_resource_id=None, audience="member",
                    notes=None, recurrence_id=None, hold_minutes=HOLD_MINUTES_DEFAULT,
-                   booked_for_user_id=None, propose=False, product_id=None, addons=None, now=None):
+                   booked_for_user_id=None, propose=False, product_id=None, addons=None,
+                   allow_past=False, now=None):
     """Create a court/lesson/class booking, concurrency-safe (docs/03 §4).
 
     For a lesson, pass court_resource_id to auto-hold a court in the SAME transaction (two
@@ -471,8 +472,24 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     ends = _parse_dt(ends_at)
     if ends <= starts:
         return _err("BAD_RANGE", 400, message="ends_at must be after starts_at")
-    if starts < now:
+    # BACK-CAPTURE: a coach/admin logging a lesson/class that ALREADY happened (an on-behalf booking for a
+    # past date) may bypass the past-slot guard. Gated hard to staff on-behalf — a member self-booking can
+    # NEVER back-date (that would dodge the booking window / late-cancel-fee logic). The route ANDs allow_past
+    # with the staff-role check before it reaches here, but we re-assert booked_for_user_id + role locally.
+    staff_backcapture = bool(allow_past and booked_for_user_id
+                             and role in ("coach", "club_admin", "platform_admin"))
+    if starts < now and not staff_backcapture:
         return _err("IN_THE_PAST", 400, message="cannot book a past slot")
+
+    # BACK-CAPTURE fallback: a PAST lesson has no availability slot to carry the coach's resource id
+    # (compute_availability never emits past slots), so resolve it from coach_user_id here. The normal
+    # path always passes resource_id from the chosen slot, so this only fires for a staff back-capture.
+    if booking_type == "lesson" and not resource_id and coach_user_id:
+        resource_id = session.execute(
+            text("SELECT id FROM diary.resource WHERE club_id = :c AND kind = 'coach' "
+                 "AND coach_user_id = :u AND is_active = true LIMIT 1"),
+            {"c": club_id, "u": str(coach_user_id)},
+        ).scalar()
 
     res = _resource(session, club_id, resource_id)
     if not res or not res["is_active"]:

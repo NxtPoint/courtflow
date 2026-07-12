@@ -262,6 +262,9 @@
   async function loadSlots() {
     var box = document.getElementById("bk-slots"); if (!box) return;
     if (st.type === "class") { loadClasses(); return; }
+    // BACK-CAPTURE (lesson/court): a past day has no availability slots, so let staff TYPE the time the
+    // session took place instead of picking from a grid. Classes fall through (past sessions are listable).
+    if (st.backdate) { renderBackdateTime(); return; }
     if (st.type === "lesson" && !chosenCoachUserId()) { box.className = ""; UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: "Choose a coach to see their available times." })); return; }
     if (!st.durations.length) { box.className = ""; UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: "This service isn't priced yet — please contact the club." })); return; }
     var ck = slotCacheKey();
@@ -310,7 +313,8 @@
     st._monthKey = key;
     var today = new Date(); today.setHours(0, 0, 0, 0);
     var mStart = new Date(m.getFullYear(), m.getMonth(), 1);
-    var from = UI.dateKey(mStart < today ? today : mStart);
+    // Normal flow floors to today (no past sessions); BACK-CAPTURE needs the month's PAST sessions too.
+    var from = UI.dateKey((!st.backdate && mStart < today) ? today : mStart);
     var to = UI.dateKey(new Date(m.getFullYear(), m.getMonth() + 1, 0));
     try { st.monthClasses = (await window.API.classes({ date_from: from, date_to: to })).classes || []; }
     catch (e) { st.monthClasses = []; }
@@ -366,7 +370,11 @@
 
   function serviceSwitch() {
     var seg = el("div", { class: "cf-segment", style: "max-width:420px" });
-    [["court", "Court"], ["lesson", "Lesson"], ["class", "Class"]].forEach(function (s) {
+    // BACK-CAPTURE logs coach time only (lesson/class) — a past court hire has no coach to credit and
+    // "any court" carries no resource to attribute, so the Court tab is hidden while back-dating.
+    var opts = st.backdate ? [["lesson", "Lesson"], ["class", "Class"]]
+                           : [["court", "Court"], ["lesson", "Lesson"], ["class", "Class"]];
+    opts.forEach(function (s) {
       seg.appendChild(el("button", { type: "button", class: st.type === s[0] ? "on" : "", text: s[1],
         onclick: function () { switchService(s[0]); } }));
     });
@@ -402,9 +410,14 @@
     var banner = onBehalfBanner();
     if (banner) container.appendChild(banner);
     container.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:14px" }, [
-      el("h1", { text: st.onBehalf ? "Book a client in" : "Book", style: "margin:0" }),
+      el("h1", { text: st.backdate ? "Log a past session" : (st.onBehalf ? "Book a client in" : "Book"), style: "margin:0" }),
       serviceSwitch(),
     ]));
+    // BACK-CAPTURE: a note so it's unmistakable this bills the client + credits the coach for a session
+    // that ALREADY happened (no calendar hold; a past date is expected).
+    if (st.backdate) container.appendChild(el("div", { class: "cf-note", style: "margin-bottom:14px;background:#fff6e6;border:1px solid #f0d9a8;border-radius:10px;padding:10px 12px;font-size:.85rem" },
+      [el("strong", { text: "Capturing a past session. " }),
+       el("span", { text: "Pick the day it took place — the client is billed and you're credited, but nothing is held on the calendar." })]));
 
     // LESSON: choose the coach (+ service) FIRST — rates are per-coach and the available times depend on the
     // coach, so picking a time then hunting for a coach reads backwards. Full-width card above the calendar.
@@ -564,6 +577,35 @@
     });
     box.appendChild(grid);
   }
+  // BACK-CAPTURE time entry (lesson/court): the coach/admin types the time the session happened, then we
+  // synthesise st.slot (start/end/resource) so the confirm + createBooking path is IDENTICAL to a live book —
+  // just with allow_past. The coach resource id may be null when the coach has no weekly hours; the server
+  // resolves it from coach_user_id (see create_booking's back-capture fallback).
+  function renderBackdateTime() {
+    var box = document.getElementById("bk-slots"); if (!box) return;
+    box.className = ""; UI.clear(box);
+    if (st.type === "lesson" && !chosenCoachUserId()) {
+      box.appendChild(el("div", { class: "cf-empty", text: "Choose a coach to log their lesson." })); return; }
+    if (!st.selDuration) {
+      box.appendChild(el("div", { class: "cf-empty", text: "Pick how long the session was first." })); return; }
+    var timeInp = el("input", { class: "cf-select", type: "time", step: "900", value: st._btime || "17:00",
+      style: "max-width:150px", onchange: function (e) { st._btime = e.target.value; } });
+    var go = el("button", { class: "cf-btn cf-btn-primary", type: "button", text: "Log this time →", onclick: function () {
+      var t = (timeInp.value || st._btime || "17:00"); st._btime = t;
+      var hm = t.split(":"); var start = new Date(st.day);
+      start.setHours(parseInt(hm[0], 10) || 0, parseInt(hm[1], 10) || 0, 0, 0);
+      var end = new Date(start.getTime() + (st.selDuration || 60) * 60000);
+      st.slot = { start: start.toISOString(), end: end.toISOString(),
+        resource_id: (st.selCoach && st.selCoach.id) || null, court_resource_id: null,
+        coach_user_id: chosenCoachUserId(), price: st.selDurationPrice };
+      st.view = "confirm"; render();
+    } });
+    box.appendChild(el("div", { class: "cf-stack", style: "display:flex;flex-direction:column;gap:10px" }, [
+      el("div", { class: "cf-muted cf-tiny", text: "When did it take place on " + UI.fmtDate(st.day) + "?" }),
+      timeInp, go,
+    ]));
+  }
+
   function renderClasses(classes) {
     var box = document.getElementById("bk-slots"); if (!box) return;
     box.className = ""; UI.clear(box);
@@ -609,12 +651,16 @@
       st.calMonth = new Date(m.getFullYear(), m.getMonth() + delta, 1);
       if (st.type === "class") refreshClassMonth(); else renderCalendar();
     }
-    var prevOff = m.getFullYear() === curMonth.getFullYear() && m.getMonth() === curMonth.getMonth();
+    // BACK-CAPTURE walks BACKWARD in time, so the prev arrow is always live and the "next" stops at
+    // the current month (you can't log a FUTURE session). The normal flow is the reverse.
+    var prevOff = !st.backdate && m.getFullYear() === curMonth.getFullYear() && m.getMonth() === curMonth.getMonth();
+    var nextOff = st.backdate && m.getFullYear() === curMonth.getFullYear() && m.getMonth() === curMonth.getMonth();
     var nav = el("div", { class: "cf-cal-nav" }, [
       el("button", { class: "cf-cal-navbtn", type: "button", text: "‹", disabled: prevOff ? "disabled" : null,
         onclick: function () { if (prevOff) return; goMonth(-1); } }),
       el("div", { class: "cf-cal-title", text: m.toLocaleDateString("en-ZA", { month: "long", year: "numeric", timeZone: UI.CLUB_TZ }) }),
-      el("button", { class: "cf-cal-navbtn", type: "button", text: "›", onclick: function () { goMonth(1); } }),
+      el("button", { class: "cf-cal-navbtn", type: "button", text: "›", disabled: nextOff ? "disabled" : null,
+        onclick: function () { if (nextOff) return; goMonth(1); } }),
     ]);
     box.appendChild(nav);
 
@@ -631,7 +677,8 @@
     for (var day = 1; day <= daysIn; day++) {
       (function (dd) {
         dd.setHours(0, 0, 0, 0);
-        var off = dd < today || dd > maxDay;
+        // Normal: today → booking-window. BACK-CAPTURE: any past day up to (and incl.) today, never the future.
+        var off = st.backdate ? (dd > today) : (dd < today || dd > maxDay);
         var sel = UI.dateKey(dd) === UI.dateKey(st.day);
         var hasClass = !!cdays[UI.dateKey(dd)];
         grid.appendChild(el("button", { type: "button", class: "cf-cal-day" + (off ? " off" : "") + (sel ? " sel" : ""),
@@ -907,6 +954,8 @@
       // the booking auto-confirms and no self parties are sent.
       if (st.onBehalf) { body.parties = []; body.for_email = st.onBehalf.email || undefined;
         if (!body.for_email && st.onBehalf.name) body.for_guest_name = st.onBehalf.name; }
+      // BACK-CAPTURE: authorise the past-slot on the server (route re-checks staff role + on-behalf).
+      if (st.backdate) body.allow_past = true;
       if (st.type === "lesson") {
         body.coach_user_id = (st.selCoach !== "ANY" && st.selCoach.coach_user_id) || st.coachLock || null;
         if (st.selService) body.product_id = st.selService.product_id;   // charge the CHOSEN service exactly
@@ -1073,6 +1122,7 @@
       view: "schedule", _gName: null, _gEmail: null,
       services: [], selService: null,
       onBehalf: opts.onBehalf || null, coachLock: opts.coachLock || null,
+      backdate: !!opts.backdate, _btime: null,   // BACK-CAPTURE: log a lesson/class that already happened
       backTo: opts.backTo || null, onDone: opts.onDone || null, skipOnline: !!opts.onBehalf,
       plansHref: opts.plansHref || null,   // client self-book: link the confirm-step "buy a plan" nudge
       clientWallets: [], loadPackagesFn: opts.loadPackages || null,

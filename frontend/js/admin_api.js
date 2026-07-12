@@ -40,6 +40,12 @@
     // POST /api/admin/members/:id/issue  body:{kind:'membership'|'pack', price_id?|bundle_plan_id?,
     //   start_date?, mark_paid?, pay_provider?} -> the purchase (owed order + activated; mark_paid settles).
     issuePackage: function (id, body) { return A().apiJSON("/api/admin/members/" + enc(id) + "/issue", { method: "POST", body: body || {} }); },
+    // GET /api/services -> {services:[{id,name,service_kind,variations:[{price_id,duration_minutes,amount_minor}]}]}
+    //   the configured services (+ their per-duration prices) — the invoice line picker draws from these.
+    servicesList: function () { return A().apiJSON("/api/services"); },
+    // POST /api/admin/clients/:id/invoice  body:{lines:[{price_id?|amount_minor,description?,qty?}], discount_minor?,
+    //   reason?} -> {order_id, amount_minor, currency}. An ad-hoc OWED invoice (settleable online); emails the client.
+    createInvoice: function (id, body) { return A().apiJSON("/api/admin/clients/" + enc(id) + "/invoice", { method: "POST", body: body || {} }); },
     // GET /api/admin/people/:user_id -> {person:{...profile,roles,is_coach,member_status,
     //   membership, statement:{items,total_owed_minor}, owed_minor, payments:[], upcoming:[],
     //   history:[], bookings_count, settlement?}}  — one record, drill-through to the event story.

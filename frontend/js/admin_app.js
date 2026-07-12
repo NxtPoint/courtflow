@@ -670,6 +670,7 @@
   // ---- MONEY (Setup-style: a clean section menu → focused pages) ----------------------------
   var MONEY_MONTH = null; // 'YYYY-MM' for Sales by day (null = current month)
   var MONEY_SECTIONS = [
+    ["invoice", "New invoice", "Bill a client for a service (× times) or a custom fee — emailed to pay online"],
     ["sales", "Sales by day", "Daily takings — client, service and amount"],
     ["bookings", "Bookings by day", "Every booking — client, service and coach"],
     ["revenue", "Revenue by service", "Net revenue split by service line"],
@@ -680,6 +681,7 @@
   ];
   function clubCur() { return (CLUB && CLUB.currency_code) || "ZAR"; }
   function renderMoney(section) {
+    if (section === "invoice") return moneyInvoice();
     if (section === "sales") return moneySales();
     if (section === "bookings") return moneyBookings();
     if (section === "revenue") return moneyRevenue();
@@ -714,6 +716,168 @@
       ]));
     });
     c.appendChild(l); wrap.appendChild(c);
+    set(wrap);
+  }
+
+  // New invoice — an ad-hoc bill for a client: configured service(s) × how many, and/or a custom fee,
+  // less an optional rand discount. Creates ONE owed order (settleable online) + emails the client a
+  // pay link. NOT booked to the calendar; shows on their statement immediately (Widgets.ClientRecord).
+  async function moneyInvoice() {
+    loading();
+    var people = [], services = [];
+    try { people = (await window.AdminAPI.people()).people || []; } catch (e) {}
+    try { services = (await window.AdminAPI.servicesList()).services || []; } catch (e) {}
+    var cur = clubCur();
+    // Flatten services → a flat list of pickable "service · duration · price" options (carry price_id so
+    // the server re-derives the authoritative amount and categorises the statement line).
+    var svcOpts = [];
+    services.forEach(function (sv) {
+      (sv.variations || []).forEach(function (v) {
+        if (!v.price_id) return;
+        var dur = v.duration_minutes ? (v.duration_minutes + " min") : "";
+        svcOpts.push({ price_id: v.price_id, amount_minor: v.amount_minor,
+          name: sv.name, label: sv.name + (dur ? " · " + dur : "") + " · " + money(v.amount_minor, cur) });
+      });
+    });
+
+    function pname(pp) { return [pp.first_name, pp.surname].filter(Boolean).join(" ").trim() || pp.display_name || pp.email || "Client"; }
+    var selectedClient = null;
+    var lines = [];   // [{kind, price_id?, description, amount_minor, qty}]
+
+    var wrap = el("div", {}, [backBar("Money", "#/money")]);
+    wrap.appendChild(el("h1", { style: "margin:0 0 4px", text: "New invoice" }));
+    wrap.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 14px;font-size:.9rem",
+      text: "Bill a client for a configured service (choose how many) or a custom fee, less an optional discount. It emails them a link to pay online and shows on their account right away — nothing is booked to the calendar." }));
+
+    // ---- 1) Client ---------------------------------------------------------
+    var searchInp = el("input", { class: "cf-input", placeholder: "Search client by name or email…" });
+    var resultsBox = el("div", { class: "cf-list", style: "max-height:200px;overflow:auto" });
+    var chosenBox = el("div", {});
+    function renderChosen() {
+      UI.clear(chosenBox);
+      if (selectedClient) {
+        searchInp.style.display = "none"; resultsBox.style.display = "none";
+        chosenBox.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: selectedClient.name }), el("div", { class: "cf-item-s", text: selectedClient.email || "no email — can't be emailed a link" })]),
+          el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Change", onclick: function () { selectedClient = null; searchInp.value = ""; UI.clear(resultsBox); renderChosen(); syncTotal(); searchInp.focus(); } }),
+        ]));
+      } else { searchInp.style.display = ""; resultsBox.style.display = ""; }
+      syncTotal();
+    }
+    searchInp.addEventListener("input", function () {
+      var q = searchInp.value.trim().toLowerCase(); UI.clear(resultsBox);
+      if (q.length < 2) return;
+      people.filter(function (pp) { return (pname(pp) + " " + (pp.email || "")).toLowerCase().indexOf(q) >= 0; }).slice(0, 12)
+        .forEach(function (pp) {
+          resultsBox.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { selectedClient = { user_id: pp.user_id, name: pname(pp), email: pp.email }; renderChosen(); } }, [
+            el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: pname(pp) }), el("div", { class: "cf-item-s", text: pp.email || "" })]),
+          ]));
+        });
+      if (!resultsBox.children.length) resultsBox.appendChild(el("div", { class: "cf-empty", style: "padding:8px", text: "No match." }));
+    });
+    wrap.appendChild(card([
+      el("div", { class: "cf-pref-h", style: "margin-bottom:8px", text: "1 · Client" }),
+      el("div", { class: "cf-field" }, [el("label", { text: "Who is this for?" }), searchInp, resultsBox, chosenBox]),
+    ]));
+
+    // ---- 2) Lines ----------------------------------------------------------
+    var linesBox = el("div", { class: "cf-list" });
+    function renderLines() {
+      UI.clear(linesBox);
+      if (!lines.length) { linesBox.appendChild(el("div", { class: "cf-empty", style: "padding:10px", text: "No items yet — add a service or a custom fee below." })); return; }
+      lines.forEach(function (ln, i) {
+        var lineTotal = (ln.amount_minor || 0) * (ln.qty || 1);
+        linesBox.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: ln.description + (ln.qty > 1 ? "  × " + ln.qty : "") }),
+            el("div", { class: "cf-item-s", text: money(ln.amount_minor, cur) + (ln.qty > 1 ? " each · " + money(lineTotal, cur) + " total" : "") + (ln.kind === "fee" ? " · custom fee" : "") }),
+          ]),
+          el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Remove", onclick: function () { lines.splice(i, 1); renderLines(); syncTotal(); } }),
+        ]));
+      });
+    }
+
+    // service adder
+    var svcSel = el("select", { class: "cf-input" });
+    if (svcOpts.length) svcOpts.forEach(function (o, i) { svcSel.appendChild(el("option", { value: String(i), text: o.label })); });
+    else svcSel.appendChild(el("option", { value: "", text: "No priced services — add one in Setup" }));
+    var svcQty = el("input", { class: "cf-input", type: "number", min: "1", step: "1", value: "1", style: "max-width:90px" });
+    var addSvc = el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Add service", onclick: function () {
+      var o = svcOpts[parseInt(svcSel.value, 10)]; if (!o) { UI.toast("No service to add.", "warn"); return; }
+      lines.push({ kind: "service", price_id: o.price_id, description: o.name, amount_minor: o.amount_minor, qty: Math.max(1, parseInt(svcQty.value, 10) || 1) });
+      svcQty.value = "1"; renderLines(); syncTotal();
+    } });
+
+    // custom fee adder
+    var feeDesc = el("input", { class: "cf-input", placeholder: "e.g. Restring, court light levy" });
+    var feeAmt = el("input", { class: "cf-input", type: "number", min: "0", step: "0.01", placeholder: "0.00", style: "max-width:120px" });
+    var addFee = el("button", { class: "cf-btn cf-btn-sm", text: "Add fee", onclick: function () {
+      var d = (feeDesc.value || "").trim(); var minor = Math.round((parseFloat(feeAmt.value) || 0) * 100);
+      if (!d) { UI.toast("Give the fee a description.", "warn"); return; }
+      if (minor <= 0) { UI.toast("Enter an amount above zero.", "warn"); return; }
+      lines.push({ kind: "fee", description: d, amount_minor: minor, qty: 1 });
+      feeDesc.value = ""; feeAmt.value = ""; renderLines(); syncTotal();
+    } });
+
+    wrap.appendChild(card([
+      el("div", { class: "cf-pref-h", style: "margin-bottom:8px", text: "2 · Items" }),
+      linesBox,
+      el("div", { style: "border-top:1px solid var(--line,#e6e9e2);margin:10px 0" }),
+      el("div", { class: "cf-field" }, [el("label", { text: "Add a service" }),
+        el("div", { class: "cf-row", style: "gap:8px;align-items:flex-end;flex-wrap:wrap" }, [
+          el("div", { style: "flex:1;min-width:180px" }, [svcSel]),
+          el("div", {}, [el("label", { class: "cf-muted cf-tiny", text: "How many" }), svcQty]),
+          addSvc,
+        ])]),
+      el("div", { class: "cf-field", style: "margin-top:8px" }, [el("label", { text: "…or a custom fee" }),
+        el("div", { class: "cf-row", style: "gap:8px;align-items:flex-end;flex-wrap:wrap" }, [
+          el("div", { style: "flex:1;min-width:170px" }, [feeDesc]),
+          el("div", {}, [el("label", { class: "cf-muted cf-tiny", text: "Amount" }), feeAmt]),
+          addFee,
+        ])]),
+    ]));
+
+    // ---- 3) Discount + total + generate -----------------------------------
+    var discInp = el("input", { class: "cf-input", type: "number", min: "0", step: "0.01", placeholder: "0.00", style: "max-width:140px" });
+    discInp.addEventListener("input", syncTotal);
+    var subEl = el("span", { text: money(0, cur) });
+    var totalEl = el("strong", { style: "font-size:1.15rem", text: money(0, cur) });
+    function subtotalMinor() { return lines.reduce(function (a, ln) { return a + (ln.amount_minor || 0) * (ln.qty || 1); }, 0); }
+    function discountMinor() { return Math.max(0, Math.round((parseFloat(discInp.value) || 0) * 100)); }
+    var genBtn = el("button", { class: "cf-btn cf-btn-primary cf-btn-lg", text: "Generate & email invoice" });
+    function syncTotal() {
+      var sub = subtotalMinor(); var disc = Math.min(discountMinor(), sub); var tot = sub - disc;
+      subEl.textContent = money(sub, cur);
+      totalEl.textContent = money(tot, cur);
+      genBtn.disabled = !(selectedClient && lines.length && tot > 0);
+    }
+    wrap.appendChild(card([
+      el("div", { class: "cf-pref-h", style: "margin-bottom:8px", text: "3 · Discount & total" }),
+      el("div", { class: "cf-field" }, [el("label", { text: "Discount (optional, in " + cur + ")" }), discInp]),
+      el("div", { class: "cf-row", style: "justify-content:space-between;margin-top:6px" }, [el("span", { class: "cf-muted", text: "Subtotal" }), subEl]),
+      el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-top:4px" }, [el("span", { style: "font-weight:700", text: "Total to bill" }), totalEl]),
+    ]));
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:14px" }, [genBtn]));
+
+    genBtn.addEventListener("click", async function () {
+      if (!selectedClient) { UI.toast("Pick a client first.", "warn"); return; }
+      if (!lines.length) { UI.toast("Add at least one item.", "warn"); return; }
+      var body = {
+        lines: lines.map(function (ln) { return ln.kind === "service"
+          ? { price_id: ln.price_id, description: ln.description, qty: ln.qty }
+          : { description: ln.description, amount_minor: ln.amount_minor, qty: ln.qty }; }),
+        discount_minor: discountMinor(),
+        reason: "Invoice",
+      };
+      genBtn.disabled = true; genBtn.textContent = "Generating…";
+      try {
+        var res = await window.AdminAPI.createInvoice(selectedClient.user_id, body);
+        UI.toast("Invoice for " + money(res.amount_minor, res.currency || cur) + " sent to " + (selectedClient.email || selectedClient.name) + ".", "info");
+        go("#/person/" + selectedClient.user_id);
+      } catch (e) { genBtn.disabled = false; genBtn.textContent = "Generate & email invoice"; UI.toast(UI.errMsg(e), "error"); }
+    });
+
+    renderLines(); renderChosen(); syncTotal();
     set(wrap);
   }
 
@@ -1027,9 +1191,9 @@
   // Book a client in (owner/admin) — pick the client, then the SAME booking widget (window.BookFlow)
   // in on-behalf mode with NO coach lock, so the owner PICKS which coach the lesson is with (e.g.
   // Allon). Skips Yoco (collect at court / the client's pack / account); auto-routes to their pack.
-  async function adminBookForClient() {
+  async function adminBookForClient(backdate) {
     if (!window.BookFlow) { UI.toast("Booking module still loading — try again in a moment.", "warn"); return; }
-    var m = UI.modal("Book a client in");
+    var m = UI.modal(backdate ? "Log a past session" : "Book a client in");
     var selected = null, people = [];
     try { people = (await window.AdminAPI.people()).people || []; } catch (e) {}
     var searchInp = el("input", { class: "cf-input", placeholder: "Search client by name or email…" });
@@ -1058,7 +1222,9 @@
         ]));
       });
     });
-    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem", text: "Pick the client, then choose the coach, service, time and payment on the next screen — the same booking flow clients use." }));
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem", text: backdate
+      ? "Pick the client, then the coach, lesson/class, the DAY it happened, time and payment — it bills them and credits the coach, without touching the calendar."
+      : "Pick the client, then choose the coach, service, time and payment on the next screen — the same booking flow clients use." }));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Client" }), searchInp, resultsBox, chosenBox]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "…or guest name (walk-in, no account)" }), guest]));
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
@@ -1071,6 +1237,7 @@
         m.close();
         window.BookFlow.start(principal, "lesson", {
           onBehalf: onBehalf,                       // NO coachLock → the owner picks the coach
+          backdate: !!backdate,                     // BACK-CAPTURE: log a lesson/class that already happened
           backTo: "#/diary",
           onDone: function () { location.hash = "#/diary"; route(); },
           loadPackages: function (uid, coachId) { return window.AdminAPI.clientPackages(uid, coachId).then(function (r) { return (r && r.packages) || []; }); },
@@ -1088,7 +1255,10 @@
     var wrap = el("div", {});
     wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:0 0 8px" }, [
       el("h1", { style: "margin:0", text: "Diary" }),
-      el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ Book a client", onclick: adminBookForClient }),
+      el("div", { class: "cf-row", style: "gap:6px" }, [
+        el("button", { class: "cf-btn cf-btn-sm", text: "Log past", onclick: function () { adminBookForClient(true); } }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ Book a client", onclick: function () { adminBookForClient(false); } }),
+      ]),
     ]));
     function seg(k, label) { return el("button", { class: DIARY_TAB === k ? "on" : "", text: label, onclick: function () { DIARY_TAB = k; renderDiary(dateKey); } }); }
     wrap.appendChild(el("div", { class: "cf-segment cf-seg-lg" }, [seg("diary", "Calendar"), seg("classes", "Classes")]));

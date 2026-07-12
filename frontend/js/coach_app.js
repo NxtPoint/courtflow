@@ -184,7 +184,8 @@
 
     // Quick actions
     wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;margin-top:4px" }, [
-      el("button", { class: "cf-btn cf-btn-primary cf-btn-block", text: "+ Book a client in", onclick: bookForClient }),
+      el("button", { class: "cf-btn cf-btn-primary cf-btn-block", text: "+ Book a client in", onclick: function () { bookForClient(false); } }),
+      el("button", { class: "cf-btn cf-btn-block", text: "Log a past session", onclick: function () { bookForClient(true); } }),
     ]));
     set(wrap);
   }
@@ -228,7 +229,8 @@
     wrap.appendChild(el("div", { class: "cf-row", style: "align-items:center;gap:8px;margin-bottom:2px;flex-wrap:wrap" }, [
       el("h1", { style: "margin:0", text: "Schedule" }),
       el("span", { class: "cf-spacer" }),
-      el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ Book a client", onclick: bookForClient }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "Log past", onclick: function () { bookForClient(true); } }),
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ Book a client", onclick: function () { bookForClient(false); } }),
     ]));
     wrap.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 6px;font-size:.85rem", text: "The whole club’s diary — courts, lessons & classes. Filter by court or coach (pick yourself) to spot open gaps to book." }));
     var calHost = el("div", {});
@@ -305,9 +307,9 @@
   // Book a client in = pick the client, then hand off to the ONE booking widget (window.BookFlow) in
   // on-behalf mode — the SAME flow clients use (service · duration · time · payment), coach locked to
   // self, no Yoco (staff collect at court / pack / account). GOLDEN RULE: one booking widget per role.
-  async function bookForClient() {
+  async function bookForClient(backdate) {
     if (!window.BookFlow) { UI.toast("Booking module still loading — try again in a moment.", "warn"); return; }
-    var m = modal("Book a client in");
+    var m = modal(backdate ? "Log a past session" : "Book a client in");
     var selected = null;
     var searchInp = el("input", { class: "cf-input", placeholder: "Search client by name or email…" });
     var resultsBox = el("div", { class: "cf-list", style: "max-height:180px;overflow:auto" });
@@ -351,7 +353,9 @@
       }, 250);
     });
 
-    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem", text: "Pick the client, then choose the service, time and payment on the next screen — the same booking flow clients use." }));
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem", text: backdate
+      ? "Pick the client, then choose the lesson/class, the DAY it happened, time and how they'll pay — it bills them and credits you, without touching the calendar."
+      : "Pick the client, then choose the service, time and payment on the next screen — the same booking flow clients use." }));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Client" }), searchInp, resultsBox, chosenBox]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "…or guest name (walk-in, no account)" }), guest]));
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
@@ -365,6 +369,7 @@
         window.BookFlow.start(principal, "lesson", {
           onBehalf: onBehalf,
           coachLock: principal.user_id,            // the coach books their OWN lessons
+          backdate: !!backdate,                    // BACK-CAPTURE: log a lesson/class that already happened
           backTo: "#/schedule",
           onDone: function () { location.hash = "#/schedule"; route(); },
           // Auto-route to the client's prepaid pack with this coach (draw, not a new charge). The

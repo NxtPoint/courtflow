@@ -328,6 +328,9 @@ def create_booking():
             audience=audience, notes=b.get("notes"),
             recurrence_id=b.get("recurrence_id"),
             booked_for_user_id=booked_for_user_id,
+            # BACK-CAPTURE: allow a PAST date only for a STAFF on-behalf booking (a coach/admin logging a
+            # lesson that already happened). ANDed with the role here — a member self-book can never backdate.
+            allow_past=(bool(b.get("allow_past")) and p.role in _ON_BEHALF_ROLES),
             propose=bool(b.get("propose")),
         )
     return _result(res)
