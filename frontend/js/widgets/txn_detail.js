@@ -80,23 +80,37 @@
               : (b.booking_type === "class" ? (b.class_name || "") : "");
       if (sub) head.appendChild(el("div", { class: "cf-muted", style: "margin-top:2px", text: sub }));
 
-      // money line — the reconciliation headline (paid / owed / covered / refunded) + Settle CTA when owed
+      // Money — the event as the SUM of its transactions: Billed − Discount − Written-off = Invoiced ;
+      // Invoiced = Paid + Outstanding (the shared CRMUI.statementFold). Falls back to a one-line status
+      // for covered / no-charge events (where a fold doesn't apply).
       var ch = b.charge || {}, state = ch.state || ch.status;
       var owedAmt = (ch.owed_minor != null ? ch.owed_minor : ch.amount_minor);
-      var moneyLine =
-        state === "covered" ? "Covered by your membership" :
-        state === "owed" ? "You owe " + money(owedAmt, cur) :
-        state === "pending" ? "Payment pending · " + money(ch.amount_minor, cur) :
-        state === "part_refunded" ? ("Paid " + money(ch.paid_minor, cur) + " · " + money(ch.refunded_minor, cur) + " refunded") :
-        state === "refunded" ? "Refunded " + money(ch.refunded_minor || ch.amount_minor, cur) :
-        state === "written_off" ? "Written off — nothing to pay" :
-        state === "paid" ? "Paid " + money(ch.paid_minor || ch.amount_minor, cur) : null;
-      if (moneyLine) {
-        var settleAct = cfg.actions && (cfg.actions.settle || cfg.actions.pay);
-        head.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)" }, [
-          el("span", { style: "font-weight:700;font-size:1.02rem", text: moneyLine }),
-          (state === "owed" && settleAct) ? el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Settle " + money(owedAmt, cur) + " ›", onclick: function () { run(settleAct, b); } }) : null,
+      var settleAct = cfg.actions && (cfg.actions.settle || cfg.actions.pay);
+      var canFold = ch.billed_minor != null && ["covered", "none", "unknown"].indexOf(state) < 0 && window.CRMUI && window.CRMUI.statementFold;
+      if (canFold) {
+        // A settlement-paid order has its payment on the parent, so ch.paid_minor is 0 though it IS paid.
+        var paidShown = (state === "paid" && !ch.paid_minor) ? ch.invoiced_minor : ch.paid_minor;
+        head.appendChild(el("div", { style: "margin-top:12px;padding-top:12px;border-top:1px solid var(--border)" }, [
+          window.CRMUI.statementFold({ currency: cur, totals: {
+            billed_minor: ch.billed_minor, discount_minor: ch.discount_minor, written_off_minor: ch.written_off_minor,
+            invoiced_minor: ch.invoiced_minor, paid_minor: paidShown, outstanding_minor: ch.owed_minor,
+            refunded_minor: ch.refunded_minor } }),
+          (state === "owed" && settleAct) ? el("div", { style: "margin-top:10px" }, [el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Settle " + money(owedAmt, cur) + " ›", onclick: function () { run(settleAct, b); } })]) : null,
         ].filter(Boolean)));
+      } else {
+        var moneyLine =
+          state === "covered" ? "Covered by your membership" :
+          state === "owed" ? "You owe " + money(owedAmt, cur) :
+          state === "pending" ? "Payment pending · " + money(ch.amount_minor, cur) :
+          state === "refunded" ? "Refunded " + money(ch.refunded_minor || ch.amount_minor, cur) :
+          state === "written_off" ? "Written off — nothing to pay" :
+          state === "paid" ? "Paid " + money(ch.paid_minor || ch.amount_minor, cur) : null;
+        if (moneyLine) {
+          head.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)" }, [
+            el("span", { style: "font-weight:700;font-size:1.02rem", text: moneyLine }),
+            (state === "owed" && settleAct) ? el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Settle " + money(owedAmt, cur) + " ›", onclick: function () { run(settleAct, b); } }) : null,
+          ].filter(Boolean)));
+        }
       }
 
       // last action — the current status in words, from the newest log entry
@@ -163,7 +177,8 @@
           toggleBtn.style.display = (log.length <= 4) ? "none" : "";
         };
         toggleBtn.addEventListener("click", function () { expanded = !expanded; paintHist(); });
-        var histCard = UI.card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [el("h2", { style: "margin:0;font-size:1.05rem", text: "History" }), toggleBtn]), histBox]);
+        var histCard = UI.card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:2px" }, [el("h2", { style: "margin:0;font-size:1.05rem", text: "Transactions" }), toggleBtn]),
+          el("div", { class: "cf-muted", style: "font-size:.8rem;margin-bottom:8px", text: "Everything that happened to this booking — the state above is their sum." }), histBox]);
         paintHist();
         wrap.appendChild(histCard);
       }

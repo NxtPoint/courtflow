@@ -1449,6 +1449,14 @@ def _booking_charge(session, club_id, order_id, settlement_mode):
                   "refunded": "refunded", "void": "cancelled", "written_off": "written_off"}
         amt = int(o["amount_minor"] or 0)
         status = "covered" if (covered and amt == 0) else st_map.get(o["status"], o["status"])
+        # The fold: BILLED (pre-discount, from the order lines' original amount) − DISCOUNT = the
+        # current amount; − WRITTEN-OFF = INVOICED. So the event's money is the sum of its transactions.
+        billed = int(session.execute(
+            text("SELECT COALESCE(SUM(COALESCE(original_amount_minor, amount_minor)),0) "
+                 "FROM billing.order_line WHERE order_id = :o"),
+            {"o": str(order_id)},
+        ).scalar() or 0) or amt
+        discount = max(0, billed - amt)
         openref = session.execute(
             text("SELECT 1 FROM billing.refund_request WHERE order_id = :o AND status = 'pending' LIMIT 1"),
             {"o": str(order_id)},
@@ -1487,7 +1495,10 @@ def _booking_charge(session, club_id, order_id, settlement_mode):
                 "has_open_refund": bool(openref),
                 "gross_minor": amt, "paid_minor": paid, "refunded_minor": refunded,
                 "net_paid_minor": paid - refunded, "owed_minor": owed,
-                "written_off_minor": written_off, "state": state}
+                "written_off_minor": written_off, "state": state,
+                # the fold (billed − discount − written_off = invoiced):
+                "billed_minor": billed, "discount_minor": discount,
+                "invoiced_minor": (0 if o["status"] in ("written_off", "void") else amt)}
     except Exception:
         base["status"] = "unknown"; base["state"] = "unknown"
         return base
