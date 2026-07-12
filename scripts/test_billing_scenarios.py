@@ -1977,7 +1977,42 @@ def sc_activity_summary(s, fx):
           str(a["by_week"]))
 
 
+def sc_admin_invoice(s, fx):
+    print("\n# Admin invoice: service × qty + custom fee − rand discount → ONE owed order on the statement")
+    from admin import repositories as AR
+    pid = s.execute(
+        text("SELECT id FROM billing.price WHERE club_id=:c AND product_id=:p "
+             "AND term_months IS NULL AND active=true LIMIT 1"),
+        {"c": fx.club_id, "p": fx.lesson_product}).scalar()   # R400/60 lesson
+    lines = [{"price_id": str(pid), "description": "Private lesson", "qty": 3},
+             {"description": "Restring", "amount_minor": 15000, "qty": 1}]
+    inv = AR.create_invoice(s, club_id=fx.club_id, user_id=fx.member, lines=lines,
+                            discount_minor=5000, reason="test", actor_user_id=fx.coach_uid)
+    check("invoice created", bool(inv and inv.get("order_id")), str(inv))
+    # 40000×3 + 15000 − 5000 = 130000
+    check("invoice total = service×qty + fee − discount", inv and inv["amount_minor"] == 130000, str(inv))
+    row = s.execute(
+        text('SELECT status, settlement_mode, user_id FROM billing."order" WHERE id=:o'),
+        {"o": inv["order_id"]}).mappings().first()
+    check("invoice order is OWED (open · monthly_account)",
+          row and row["status"] == "open" and row["settlement_mode"] == "monthly_account", str(dict(row) if row else None))
+    check("invoice billed to the client", row and str(row["user_id"]) == str(fx.member), str(row["user_id"] if row else None))
+    owed = ST.unpaid_orders(s, club_id=fx.club_id, user_id=fx.member)
+    hit = [x for x in owed if str(x.get("order_id") or x.get("id")) == inv["order_id"]]
+    check("invoice appears on the client's unified statement", bool(hit), f"owed orders={len(owed)}")
+    # tamper-proof: a service line IGNORES a bogus body amount and re-derives from the price row.
+    inv2 = AR.create_invoice(s, club_id=fx.club_id, user_id=fx.member,
+                             lines=[{"price_id": str(pid), "amount_minor": 999999, "qty": 1}],
+                             actor_user_id=fx.coach_uid)
+    check("service line re-derives its price (ignores body amount)", inv2 and inv2["amount_minor"] == 40000, str(inv2))
+    # a wholly-zero invoice is rejected (no valid lines).
+    inv3 = AR.create_invoice(s, club_id=fx.club_id, user_id=fx.member,
+                             lines=[{"description": "nil", "amount_minor": 0}], actor_user_id=fx.coach_uid)
+    check("all-zero invoice returns None", inv3 is None, str(inv3))
+
+
 SCENARIOS = [
+    sc_admin_invoice,
     sc_activity_summary,
     sc_pack_service_isolation,
     sc_coach_payout,
