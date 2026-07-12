@@ -114,8 +114,26 @@ a membership tier's lifecycle derives from its term plans' status.
   court service via "+ New" in Services.
 - Seeded defaults (editable): Court 30/60/90/120 = R90/150/210/280; Lesson 30/60 = R250/400; classes
   per session. The legacy Wix "member R0 court" tier is gone.
+- **PEAK court pricing (2026-07-12; court hire only).** A club sets ONE peak window (`club.policy.peak_days`
+  / `peak_start_min` / `peak_end_min`, e.g. weekdays 17:00–19:00) and an **explicit peak price per court
+  duration** (`billing.price.peak_amount_minor`). A court booking whose LOCAL start falls in the window is
+  charged its peak price; membership coverage still wins first (a covered member inside their window is free,
+  outside → the peak PAYG price). Resolved once in `diary.pricing.price_for(at_local)` and applied in the two
+  places that must agree — `compute_availability` (shown) and `create_booking` (charged). Owner: Setup → Club
+  profile → "Peak hours" + a "peak R" field per court duration in the service editor. Full spec:
+  [EQUIPMENT-AND-CONSTRAINTS.md](EQUIPMENT-AND-CONSTRAINTS.md).
+- **EQUIPMENT HIRE (2026-07-12).** A ball machine / racquets / balls are owner-configured **flat-fee add-ons**
+  (Setup → Equipment hire) that ride a **court** booking. Each is a `diary.resource(kind='equipment')` with a
+  **`quantity`** you own + a `billing.product(kind='equipment')` flat price. Selecting them on the court
+  confirm step adds `order_line`(s) to the **SAME order** (one payment, no double-bill); availability is by
+  **TIME** (a single ball machine can't be hired twice for overlapping times, regardless of court) and is
+  race-safe (FOR UPDATE, the class-capacity pattern) — a clash is `EQUIPMENT_UNAVAILABLE`. On a covered/free
+  court the equipment still bills (the order becomes an owed at-court charge for just the add-on); cancel voids
+  the whole order incl. the add-on. A `feature_on_home` item gets a client-Home hero tile. `diary/equipment.py`
+  + `diary.booking_equipment`.
 - The booking flow (`booking.js`, full-screen): **Service → Schedule (month calendar with inline
-  per-duration price) → Pay/confirm.** Duration is picked right on the calendar, not a separate screen.
+  per-duration price) → Pay/confirm** (+ an "Add equipment" step for courts). Duration is picked right on the
+  calendar, not a separate screen.
 
 ## 4. The three purchasing models (all configurable)
 1. **PAYG** — pay per booking (online / at-court / monthly account) at the per-duration price.
@@ -137,6 +155,23 @@ a membership tier's lifecycle derives from its term plans' status.
      `create_booking` actually charges. Owner sets it via the **"Access hours"** editor; the purchase page
      shows each tier's summary ("Courts free weekdays 06:00–17:00"). A plan with no window covers any time.
      Tiers (Student / Family / Single) are simply labelled plans, each with its own price.
+   - **SILENT entitlement caps (anti-abuse, 2026-07-12).** Beyond the access window, a tier can carry
+     `max_covered_minutes` (longest covered booking), `max_covered_per_day` and `max_courts_per_day` (the
+     "one member invites friends and grabs several courts" abuse). A court-SERVICE can be excluded from
+     membership entirely (`billing.product.members_covered=false`, e.g. a clay court sold PAYG-only). ALL of
+     these are **silent** — a member only ever sees what their membership covers (over-length durations are
+     **hidden** from the picker; once a daily cap is hit further courts show the PAYG price) — and every cap
+     **DOWNGRADES to PAYG, never blocks** (the same behaviour off-peak already uses). Enforced by ONE resolver,
+     **`diary/entitlement.py`**, read by BOTH `compute_availability` (shape the shown options/prices) AND
+     `create_booking` (enforce) so **shown == charged == allowed**. Owner: the tier editor's "Member limits"
+     card + a "Members covered?" toggle on the court service. (A club-wide "N courts for members at peak"
+     concurrent cap was considered and **dropped** — it charged a well-behaved member for others' timing.)
+   - **CONFIGURABLE TRIAL (2026-07-12) — the signup trial is a real tier.** A membership tier flagged
+     `is_trial` (+ `trial_days`, 0 = off) IS the "7 Day Trial Period" granted to a brand-new member;
+     `grant_signup_trial` links that tier's `price_id` so the trial **inherits its access window + every cap
+     above**. The genuinely-new-member guard (`auth/principal.py`, `_created=True`) is preserved, and it stays
+     backward-compatible — with no trial tier configured the legacy NULL-price, `SIGNUP_TRIAL_DAYS`-length
+     trial (covers any time) is granted exactly as before. The trial tier is excluded from the buyable list.
 3. **Tokens / bundles (UNIT / minute-based)** — a generic engine: an owner-configured **pack** =
    (service_kind court|lesson|class, label, **# sessions**, **base session length**, price, validity,
    optional coach). **Bought online OR offline** (`create_bundle_order(settlement_mode)`): online → paid

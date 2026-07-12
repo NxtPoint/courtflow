@@ -139,6 +139,19 @@ single default court product, else the unscoped product. `price_for` / `duration
 a court booked under the wrong service is rejected (`COURT_NOT_IN_SERVICE`). **Single-court-service clubs
 are unchanged.** The client picks a court service like a lesson service and sees only its courts at its price.
 
+**Membership entitlement + peak pricing + equipment (2026-07-12).** A new **`diary/entitlement.py`** is the
+ONE resolver for "what does this member get at this time" — read by BOTH `compute_availability` (to shape the
+shown options/prices) AND `create_booking` (to enforce), so **shown == charged == allowed**. It layers the
+SILENT anti-abuse caps on top of the access window: `max_covered_minutes` (over-length durations are hidden
+from the member's picker), `max_covered_per_day`, `max_courts_per_day`, and a court-service `members_covered`
+flag (a clay court sold PAYG-only). Every cap **downgrades to PAYG, never blocks**. **PEAK court pricing** is a
+club-wide window (`club.policy.peak_*`) + an explicit per-duration `billing.price.peak_amount_minor`, resolved
+in `diary.pricing.price_for(at_local)` and applied in availability + booking in lockstep (coverage still wins
+first). **EQUIPMENT hire** (`diary/equipment.py`) is a `diary.resource(kind='equipment')` with a `quantity`,
+booked as a flat-fee add-on line on a court booking's order (one payment, no double-bill), availability-checked
+by TIME and race-safe (FOR UPDATE inside the booking savepoint). Full spec:
+[EQUIPMENT-AND-CONSTRAINTS.md](EQUIPMENT-AND-CONSTRAINTS.md).
+
 ## Billing & the commercial engines
 `billing/` core (`orders`, `ledger`, `gateway` registry, `apply_payment_event` — idempotent) is
 provider-agnostic. `billing.orders.reprice_booking_order(club_id, booking_id, duration_minutes)`

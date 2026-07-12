@@ -949,6 +949,8 @@
       backTo: opts.backTo || null, onDone: opts.onDone || null, skipOnline: !!opts.onBehalf,
       clientWallets: [], loadPackagesFn: opts.loadPackages || null,
     };
+    // Featured equipment (a client-Home hero tile): pre-add the item so it's on the booking from the start.
+    if (opts.featureEquipment && type === "court") st.addonQty[opts.featureEquipment] = 1;
     // Coach booking their OWN client: preselect + lock the coach.
     if (st.coachLock && type === "lesson") {
       st.selCoach = ctx.coaches.filter(function (c) {

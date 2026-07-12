@@ -8,10 +8,10 @@ booking 131 / billing 267 / statement 47** (+29 new assertions: peak shown==char
 caps → PAYG, clay never covered, trial inherits caps, equipment one-order/no-double-bill + no-double-book).
 Commits: peak `9703ee2` · membership+trial `08c9820` · equipment `db24db9` (spec `36450d6`).
 
-**Remaining polish (not blocking):** a client-Home **hero tile** for a `feature_on_home` equipment item
-(the flag + featured surfacing in the booking add-on are in; a dedicated Home tile in `client.js` is the one
-piece deferred). Live Clerk-authenticated click-through of all three apps is the recommended acceptance check
-(not possible from the build env).
+The client-Home **hero tile** for a `feature_on_home` equipment item is now in (`client.js` → a Home "Book a
+session" tile that starts a court booking with the item pre-added via `BookFlow.start(..., {featureEquipment})`).
+Live Clerk-authenticated click-through of all three apps is the recommended acceptance check (not possible
+from the build env).
 
 > Read alongside [BUSINESS-RULES.md](BUSINESS-RULES.md) §3–§4 (pricing + purchasing models) and
 > [SYSTEM.md](SYSTEM.md) (the diary + billing engines). This doc is the delta.

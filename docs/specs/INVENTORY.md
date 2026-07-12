@@ -31,7 +31,7 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 | `club/` | `schema.py` | club, branding, location, policy |
 | `core/` | `schema.py`, `repositories/` | core.user/account/person, usage_event, consent, nps, **notification**, **acquisition** (`repositories/acquisition.py` gclid/utm capture; `repositories/persons.py::link_person_for_user` = the iam↔core identity bridge) |
 | `offline_conversions/` | `schema.py`, `recorder.py`, `feed.py`, `blueprint.py` | **Google Ads offline-conversion loop** — SHARED/byte-identical with the 1050 repo. `core.offline_conversion` ledger + `GET /feeds/google-ads/offline-conversions.csv`; `recorder.record_from_emit` is a 4th forward in `marketing_crm/tracking` (event `payment_succeeded` → gclid → row). Only per-repo glue = `CONVERSION_MAP`. |
-| `diary/` | bookings, availability, classes, recurrence, pricing, routes | The booking engine (the heart) |
+| `diary/` | bookings, availability, classes, recurrence, pricing, **entitlement** (member caps/coverage resolver), **equipment** (hire add-on), routes | The booking engine (the heart) |
 | `billing/` | orders, ledger, gateway, membership, bundles, commission, refunds, statement, me, activity, events, routes | Orders/ledger + the commercial engines (`statement.py` = unified client statement; `activity.py::transaction_log` = unified per-client/coach money log; `me.py::billing_summary` = ORDER-based monthly by-category) |
 | `yoco_billing/` | client, adapter, routes, reconcile, receipt | Yoco online payments (adapter behind the gateway registry) |
 | `marketing_crm/` | tracking (`emit`), notifications (+`_club_identity`), email/ses, klaviyo, consent, cockpit | Event feed + **notifications** + CRM + **club-branded transactional email** |
@@ -51,7 +51,11 @@ month-at-a-glance `activity_summary` block (`_activity_summary` → `billing.me.
 
 ## 3. API endpoints (by lane)
 **Diary `/api/diary/*`:** `GET availability` (membership coverage priced PER-SLOT — R0 only inside the
-access window, PAYG outside) · `GET resources` · `GET durations` · **`GET services`** (`?kind=&coach_id=&audience=`
+access window, now also SILENTLY shaped by the member's entitlement caps + court-service eligibility, and
+court PEAK pricing at peak times; `member_user_id` threaded so shown==charged) · **`GET equipment`** (active
+equipment items for the court add-on picker — id · name · quantity · feature_on_home · flat price; POST
+`/bookings` now also accepts **`addons:[{resource_id,qty}]`** → equipment lines on the booking's order) ·
+`GET resources` · `GET durations` · **`GET services`** (`?kind=&coach_id=&audience=`
 — bookable SERVICES for a coach: each product [e.g. Private / Semi-private] with its OWN
 `durations:[{duration_minutes,amount_minor,price_id}]` + `payment_modes` + `currency_code`, so the wizard
 offers the service name before the duration; `diary/pricing.py::services_for`, STRICT TWO-TIER via
@@ -116,7 +120,12 @@ new debt/settlement row — mutates the ONE debt; `billing.statement.discount_or
 add/subtract a client's prepaid token wallet [clamped ≥0, a top-up raises `minutes_total`]; `billing.bundles.adjust_wallet`) ·
 **`POST clients/<client_id>/wallets/<wallet_id>/expire`** (`{reason}` — SOFT-expire a wallet [status='expired',
 balance zeroed, row+ledger kept, never hard-deleted]; `billing.bundles.expire_wallet`) ·
-`GET/POST membership-plans` (+`PATCH/DELETE /<id>`) ·
+`GET/POST membership-plans` (+`PATCH/DELETE /<id>` — POST/PATCH now also carry the silent caps
+`max_covered_minutes`/`max_covered_per_day`/`max_courts_per_day` + the `is_trial`/`trial_days` signup-trial
+config) · **`GET/POST equipment`** (+`PATCH/DELETE /<resource_id>`) — equipment-hire CRUD (name · flat fee ·
+quantity · feature_on_home); `PATCH /policy` now also carries the `peak_days`/`peak_start_min`/`peak_end_min`
+court-peak window; the service editor's `PATCH /api/services/<id>` carries `members_covered` (court service)
+and `POST/PATCH .../variations` carry `peak_amount_minor` ·
 **`GET/PATCH membership-config`** (per-tier payment options) · **`GET bundle-plans`** (kept for the offline
 "issue a pack" picker; the `POST/PATCH/DELETE /api/admin/bundle-plans` **write** routes were REMOVED 2026-07-09
 — packs are created/edited ONLY under a service via `POST/PATCH/DELETE /api/services/<product_id>/packages`) ·
@@ -249,8 +258,13 @@ coach BCC only on his own lesson/class. (`send_booking_confirmation` is legacy; 
 ## 4. Database — 5 schemas (idempotent boot DDL)
 - **`club`**: `club`, `branding`, `location`, `policy`
 - **`iam`**: `user`, `membership`, `coach_profile` (+`review_bookings`), `coach_invite`, `player_profile`, `dependent`
-- **`diary`**: `resource`, `availability_rule`, `booking`, `booking_party`, `time_off`, `class_session`,
-  `enrolment`, `waitlist`, `recurrence`, `reminder_log`
+- **`diary`**: `resource` (+`kind='equipment'`, `quantity`, `feature_on_home`), `availability_rule`,
+  `booking`, `booking_party`, `time_off`, `class_session`, `enrolment`, `waitlist`, `recurrence`,
+  `reminder_log`, **`booking_equipment`**
+  - *New (2026-07-12 — equipment hire):* **`diary.booking_equipment`** (`club_id, booking_id, resource_id,
+    qty, price_id, amount_minor`) — the equipment items hired on a court booking; drives BOTH the billing
+    line(s) on the booking's order AND the TIME-overlap availability count. `diary.resource` gained
+    `kind='equipment'` + `quantity` (how many you own) + `feature_on_home` (a client-Home hero tile).
 - **`billing`**: `product`, `price`, `order`, `order_line`, `payment`, `payment_attempt`,
   `account_ledger`, `membership_subscription`, `refund_request`, `bundle_plan`, `token_wallet`,
   `token_ledger`, `coach_agreement`, `commission_rule`, `commission_split`, `coach_ledger`,
@@ -266,6 +280,15 @@ coach BCC only on his own lesson/class. (`send_booking_confirmation` is legacy; 
     marker for the month-end statement sweep (PK `club_id,user_id,period_label` + `owed_minor`, `sent_at`), so
     a re-run never re-notifies a client. Plus **`billing.payment.recorded_by_user_id`** (cash-audit: who
     recorded a desk / at-court payment).
+  - *New columns (2026-07-12 — peak pricing + membership entitlements + trial + equipment):* on
+    **`club.policy`**: `peak_days` / `peak_start_min` / `peak_end_min` (the club court-peak window). On
+    **`billing.price`**: `peak_amount_minor` (explicit per-duration court peak price), `max_covered_minutes`
+    / `max_covered_per_day` / `max_courts_per_day` (silent membership caps), `is_trial` / `trial_days` (the
+    tier that IS the signup trial). On **`billing.product`**: `members_covered` (a court service =false is
+    PAYG-only for members, e.g. clay). The `kind` CHECKs on `billing.product` (+`'equipment'`) and
+    `diary.resource` (+`'equipment'`) were widened (idempotent drop+re-add). Resolver: **`diary/entitlement.py`**
+    (`court_covered` / `active_caps` / `service_members_covered` / `availability_context` / `slot_covered`) —
+    the single source read by availability AND create_booking. See [EQUIPMENT-AND-CONSTRAINTS.md](EQUIPMENT-AND-CONSTRAINTS.md).
   - *Key recent columns (2026-07-09 — court services + per-service packs):* **`diary.resource.product_id`**
     (the court SERVICE a court belongs to — e.g. Hardcourt Hire vs Clay Hire; resolution = own product → club
     default court product → unscoped, `diary.pricing.court_service_for_resource`); **`billing.bundle_plan.
@@ -346,8 +369,10 @@ hand-built person/client renderers were **deleted**) — plus promoted `window.U
   `cfg.grid`, empty coach columns hidden, courts always shown), **Week/Month stay agenda**; any block drills
   to the shared `Widgets.TransactionDetail` event story. Walk-in / block-time / desk-pay editing were NOT
   ported — they stay in the classic diary at `/admin-classic` · **Setup**
-  = the shared **`Widgets.Setup`** (Club profile+payments · Courts · Services · Memberships · Packs ·
-  Coaches) · **Overview** (`#/overview`, a first-class nav tab as of 2026-07-05; the old `/overview.html`
+  = the shared **`Widgets.Setup`** (Club profile+payments [+ **Peak hours**] · Courts · Services [court
+  services carry a **Members-covered?** toggle + a per-duration **peak price**] · Memberships [+ **Member
+  limits** + **Signup trial** on the tier editor] · **Equipment hire** · Coaches) · **Overview** (`#/overview`,
+  a first-class nav tab as of 2026-07-05; the old `/overview.html`
   iframe retired) = month pager + sub-tabs **Traffic · Bookings · Revenue · Members · NPS · Courts**, all
   **daily** graphs for the month via one shared ECharts seam (`GET /api/insights/overview`); Traffic leads
   with a **public-site vs member-area** split + a **logged-in-visitors** line/tile; Courts = the
@@ -426,7 +451,7 @@ dashboard (`sync:false`).
 - Compile: `python -m py_compile $(git ls-files '*.py')`.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 61 / billing 239 / statement 47** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 131 / billing 267 / statement 47** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
   on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +

@@ -168,6 +168,8 @@
     try { fin = await window.API.financials(); } catch (e) {}
     try { bookings = (await window.API.bookings({ date_from: UI.dateKey(UI.addDays(new Date(), -730)), date_to: UI.dateKey(UI.addDays(new Date(), 365)) })).bookings || []; } catch (e) {}
     try { DATA.enrolments = (await window.API.myEnrolments()).enrolments || []; } catch (e) { DATA.enrolments = []; }
+    // Featured equipment (e.g. the ball machine) → a Home hero tile that starts a court booking with it added.
+    try { DATA.equipment = ((await window.TFAuth.apiJSON("/api/diary/equipment")).equipment || []).filter(function (e) { return e.feature_on_home && e.active !== false; }); } catch (e) { DATA.equipment = []; }
     DATA.fin = fin; DATA.bookings = bookings;
     var plan = fin.plan || {}, cur = fin.currency || "ZAR";
     var wrap = el("div", {});
@@ -207,6 +209,13 @@
       tiles.appendChild(el("button", { class: "cf-qb-btn", onclick: function () { go("#/book/" + k); } }, [
         svcGlyph(k), el("span", { class: "cf-qb-t", text: TYPE_LABEL[k] }),
       ]));
+    });
+    // Featured equipment hero tiles (e.g. the ball machine) — tapping starts a court booking with it pre-added.
+    (DATA.equipment || []).forEach(function (eq) {
+      tiles.appendChild(el("button", { class: "cf-qb-btn", onclick: function () { PENDING_EQUIP = eq.id; go("#/book/court"); } }, [
+        svcGlyph("court"), el("span", { class: "cf-qb-t", text: eq.name }),
+        eq.amount_minor != null ? el("span", { class: "cf-qb-s", style: "font-size:.72rem;opacity:.7", text: "on a court · from " + UI.money(eq.amount_minor, cur) }) : null,
+      ].filter(Boolean)));
     });
     qb.appendChild(tiles); wrap.appendChild(qb);
 
@@ -562,10 +571,14 @@
   function act(fn, okMsg) { fn().then(function () { UI.toast(okMsg, "info"); route(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
 
   // ---- BOOK (mount the existing full-screen flow) --------------------------
+  var PENDING_EQUIP = null;   // a featured-equipment id parked by a Home hero tile → pre-added to the booking
   function renderBook(kind) {
     UI.clear(view);
-    if (window.BookFlow) window.BookFlow.start(principal, kind || "court");
-    else set(el("div", { class: "cf-empty", text: "Booking is unavailable." }));
+    if (window.BookFlow) {
+      var opts = {};
+      if (PENDING_EQUIP) { opts.featureEquipment = PENDING_EQUIP; PENDING_EQUIP = null; }
+      window.BookFlow.start(principal, kind || "court", opts);
+    } else set(el("div", { class: "cf-empty", text: "Booking is unavailable." }));
   }
 
   // ---- BOOKING STORY (the full drill-through) ------------------------------
