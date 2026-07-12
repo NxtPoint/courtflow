@@ -20,6 +20,9 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
    **booking 139 / billing 277 / statement 47**. Each uses its own scratch club and always rolls back.
+   Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
+   `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
+   `python -m scripts.test_statement_reconciliation`.
    - `test_booking_scenarios` (139) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
@@ -279,6 +282,8 @@ member by email on the first authenticated hit.
   `MARKETING_HOSTS=localhost python -c "import web_app; web_app.app.run(port=5061, threaded=True)"`
   (Chrome needs `threaded=True` for parallel assets).
 - **Seed club #1:** `python -m scripts.seed_nextpoint` · **provision a tenant:** `python -m scripts.provision_club`
+- **Operational scripts index:** `scripts/README.md` — the audit/backfill/import/verify one-offs
+  (`audit_trials.py`, `backfill_pack_products.py`, `import_wix.py`, `verify_live.py`, …) with when-to-run notes.
 - **Fire a cron by hand:** `python -m crons.trigger <reminders|capacity-sweep|monthly-invoice|membership-refill>`
   (needs `CRON_API_BASE` + `OPS_KEY`).
 - **Rebuild blog/SEO:** `python build_blog.py`
