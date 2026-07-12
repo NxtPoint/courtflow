@@ -642,23 +642,26 @@
   async function newClient() {
     var m = UI.modal("New client", { lg: true });
     var nm = el("input", { class: "cf-input", placeholder: "Full name" });
-    var em = el("input", { class: "cf-input", type: "email", placeholder: "Email" });
+    var em = el("input", { class: "cf-input", type: "email", placeholder: "name@example.com" });
     var ph = el("input", { class: "cf-input", placeholder: "Contact number (optional)" });
     m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
-      text: "Adds a client to the system now. They link to their login automatically when they first sign in with this email. You can issue their membership on the next screen." }));
+      text: "Adds a client to the system now. A name and a valid email are required — the email is how they link to their login and receive bookings, receipts and pay links. You can issue their membership on the next screen." }));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Name" }), nm]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Email" }), em]));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Contact number" }), ph]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Contact number (optional)" }), ph]));
     var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Create client" });
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
       el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), btn,
     ]));
     btn.addEventListener("click", async function () {
+      var name = nm.value.trim();
       var email = em.value.trim();
-      if (!email) { UI.toast("Email is required.", "warn"); return; }
+      if (!name) { UI.toast("Enter the client's name.", "warn"); return; }
+      // A valid email is a MUST — it's how they link to their login and get pay links / receipts.
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { UI.toast("Enter a valid email address.", "warn"); return; }
       btn.disabled = true;
       try {
-        var res = await window.AdminAPI.createClient({ name: nm.value.trim(), email: email, phone: ph.value.trim() });
+        var res = await window.AdminAPI.createClient({ name: name, email: email, phone: ph.value.trim() });
         UI.toast(res.created === false ? "Client already existed — opening their record." : "Client created.", "info");
         m.close();
         go("#/person/" + res.user_id);   // straight to their record so you can issue the membership

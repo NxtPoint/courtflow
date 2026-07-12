@@ -9,12 +9,18 @@
 # resources CRUD, hours (availability_rule) replace, products+prices CRUD, coaches +
 # coach_invite. Idempotent where the contract says so (location upsert, hours replace).
 
+import re
+
 from sqlalchemy import text
 
 
 # Sentinel for partial-update args where None is a MEANINGFUL value (explicitly clear the field) and must
 # be distinguished from "argument omitted / leave unchanged".
 _UNSET = object()
+
+# A pragmatic email shape check (not RFC-perfect — just "looks like an address"): a client MUST have a
+# real email since it's their identity key + the delivery address for receipts and invoice pay links.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 # ---------------------------------------------------------------------------
@@ -971,9 +977,14 @@ def create_client(session, *, club_id, name, email, phone=None):
     sign-in) + ensures an active 'member' iam.membership. Idempotent on email. Returns
     {user_id, email, name, created}."""
     email = (email or "").strip().lower()
-    if not email:
-        raise ValueError("email required")
+    # A valid client MUST carry a name + a real email — the email is the identity key (links them to
+    # their Clerk login by email) and the delivery address for receipts / invoice pay links. Guard here
+    # (the API is the source of truth, not just the admin form).
+    if not _EMAIL_RE.match(email):
+        raise ValueError("valid email required")
     nm = (name or "").strip()
+    if not nm:
+        raise ValueError("name required")
     first, _sep, surname = nm.partition(" ")
     existed = session.execute(
         text("SELECT 1 FROM iam.user WHERE lower(email) = lower(:e)"), {"e": email},
