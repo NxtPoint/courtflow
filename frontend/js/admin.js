@@ -199,7 +199,8 @@
       el("span", { class: "cf-spacer" }),
       el("button", { class: "cf-btn cf-btn-sm", text: "Open the diary →", onclick: function () { showTab("diary"); } }),
     ]));
-    var live = (events || []).filter(function (e) { return e.status !== "cancelled"; })
+    // A lesson is a coach row + an auto-held court row — drop the held court so it shows as ONE booking.
+    var live = (events || []).filter(function (e) { return e.status !== "cancelled" && !e.held_for_lesson; })
       .sort(function (a, b) { return String(a.starts_at).localeCompare(String(b.starts_at)); });
     if (!live.length) { card.appendChild(el("div", { class: "cf-empty", text: "Nothing booked today yet." })); return card; }
     var list = el("div", { class: "cf-list" });

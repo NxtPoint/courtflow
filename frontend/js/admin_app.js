@@ -176,8 +176,9 @@
         ])]),
     ]));
 
-    // 1) Today at the club
-    var live = (today.events || []).filter(function (e) { return e.status !== "cancelled"; })
+    // 1) Today at the club. A lesson is a coach row + an auto-held court row — collapse to ONE (drop the
+    // held court) so the counts + list never double-count a lesson as a lesson AND a court.
+    var live = (today.events || []).filter(function (e) { return e.status !== "cancelled" && !e.held_for_lesson; })
       .sort(function (a, b) { return String(a.starts_at).localeCompare(String(b.starts_at)); });
     var byType = { court: 0, lesson: 0, class: 0 };
     live.forEach(function (e) { var t = (e.booking_type || "court").toLowerCase(); if (byType[t] != null) byType[t]++; });

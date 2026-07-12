@@ -33,6 +33,26 @@
     function monthLabel(ym) { try { var p = ym.split("-"); return new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, 1).toLocaleDateString("en-ZA", { month: "long", year: "numeric" }); } catch (e) { return ym; } }
     function dayLabel(iso) { try { return new Date(iso + "T12:00:00").toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }); } catch (e) { return iso; } }
     function evKind(ev) { return String(ev.kind || ev.booking_type || "court").toLowerCase(); }
+    // A lesson is TWO diary rows — the coach booking + an auto-held court sharing one order_id. In the
+    // AGENDA views (day list / week / month) we must show ONE row: drop the held-court row and hang its
+    // court name/id on the lesson (so it reads "Coach · Court 3", never two bookings). The resource GRID
+    // keeps both — there each is a legit block under its own resource column.
+    function collapseLessonCourts(events) {
+      var courtByOrder = {};
+      (events || []).forEach(function (ev) {
+        if (ev.held_for_lesson && ev.order_id) courtByOrder[ev.order_id] = ev;
+      });
+      return (events || []).filter(function (ev) { return !ev.held_for_lesson; }).map(function (ev) {
+        if (ev.booking_type === "lesson" && ev.order_id && courtByOrder[ev.order_id]) {
+          var court = courtByOrder[ev.order_id], c = {};
+          for (var k in ev) c[k] = ev[k];
+          c.court_name = court.resource_name || court.court_name || null;
+          c.court_resource_id = court.resource_id || null;   // so a court filter still matches the lesson
+          return c;
+        }
+        return ev;
+      });
+    }
     function evDateKey(ev) { try { return UI.dateKey(new Date(ev.starts_at)); } catch (e) { return (ev.starts_at || "").slice(0, 10); } }
     function typeLabel(t) { return ({ court: "Court", lesson: "Lesson", class: "Class" })[t] || "Session"; }
     // Send FULL-DAY bounds (T00:00:00 → T23:59:59). A bare "YYYY-MM-DD" casts to MIDNIGHT
@@ -53,7 +73,9 @@
       // standalone court = booker + payment + equipment.
       var title, sub;
       if (t === "class") { title = ev.resource_name || "Class"; sub = ev.coach_name || ""; }
-      else if (ev.booking_type === "lesson" || ev.held_for_lesson) { title = ev.coach_name || ev.resource_name || "Lesson"; sub = ""; }
+      // Lesson: coach as the title, the auto-held COURT as the subtitle (attached by collapseLessonCourts)
+      // — one row, "Coach · Court 3", never a second court booking. Falls back to "Lesson" if unknown.
+      else if (ev.booking_type === "lesson" || ev.held_for_lesson) { title = ev.coach_name || ev.resource_name || "Lesson"; sub = ev.court_name || "Lesson"; }
       else {
         title = ev.booked_by_name || ev.resource_name || typeLabel(t);
         var bits = []; if (ev.pay_label) bits.push(ev.pay_label); if (ev.equipment) bits.push("＋ " + ev.equipment);
@@ -251,14 +273,20 @@
       var useGrid = !!cfg.grid && state.view === "day";
       var range = rangeFor();
       Promise.resolve(cfg.data.events(range)).then(function (events) {
-        events = (events || []).filter(function (ev) {
-          if (ev.status === "cancelled") return false;
+        events = (events || []).filter(function (ev) { return ev.status !== "cancelled"; });
+        // AGENDA views (list/week/month) show ONE row per lesson — collapse the held court into it. The
+        // GRID keeps both rows (each is a block under its own resource column).
+        if (!useGrid) events = collapseLessonCourts(events);
+        events = events.filter(function (ev) {
           // Agenda mode filters the events themselves. Grid mode normally lets the COLUMNS carry the
           // court filter — BUT a COACH filter must show ONLY that coach's activity (their lessons +
           // the courts those lessons hold; a held court carries the coach_user_id, a standalone court
           // does not), so we filter events by coach even in grid mode.
           if (!useGrid) {
-            if (state.courtId && String(ev.resource_id) !== String(state.courtId)) return false;
+            // A collapsed lesson carries court_resource_id (its held court), so a court filter still
+            // matches the lesson on that court — not just standalone court hires.
+            if (state.courtId && String(ev.resource_id) !== String(state.courtId)
+                && String(ev.court_resource_id || "") !== String(state.courtId)) return false;
             if (state.coachId && String(ev.coach_user_id) !== String(state.coachId)) return false;
           } else if (state.coachId && String(ev.coach_user_id) !== String(state.coachId)) {
             return false;
