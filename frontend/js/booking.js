@@ -96,14 +96,15 @@
   }
   function walletMinutesLeft(w) { return (w.minutes_remaining != null) ? w.minutes_remaining : (w.tokens_remaining || 0) * 60; }
   function chosenCoachUserId() {
+    // A class carries its OWN coach (class packs are coach-scoped, matching the backend enrol draw) —
+    // resolve it FIRST so a held class pack presents as "token", exactly like a lesson pack. This must
+    // sit ABOVE the lesson guard below (it previously sat under it = dead code, so class packs never showed).
+    if (st.type === "class") return (st.selClass && st.selClass.coach_user_id) || null;
     if (st.type !== "lesson") return null;
     // On-behalf: the coach books their OWN lessons — always price/schedule/book against that coach id,
     // even if they aren't in the bookable-coaches list (so the rate card + times are always theirs).
     if (st.coachLock) return st.coachLock;
     if (st.selCoach !== "ANY" && st.selCoach && st.selCoach.coach_user_id) return st.selCoach.coach_user_id;
-    // A class carries its OWN coach (class packs are coach-scoped) — resolve it so a held class pack
-    // presents as "token", exactly like a lesson pack does. Classes live in st.selClass, not st.slot.
-    if (st.type === "class" && st.selClass && st.selClass.coach_user_id) return st.selClass.coach_user_id;
     return (st.slot && st.slot.coach_user_id) || null;
   }
   function matchTokenWallet() {
@@ -299,6 +300,62 @@
     } catch (e) { box.className = ""; UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
   }
 
+  // ---- class filter (pick a class → see which days it runs) ------------------
+  // Fetch the WHOLE visible month's sessions once so a member can filter by class type and the calendar
+  // can mark the days it's offered — instead of clicking each day to hunt for a class.
+  async function loadMonthClasses() {
+    var m = st.calMonth || startOfMonth(new Date());
+    var key = m.getFullYear() + "-" + m.getMonth();
+    if (st._monthKey === key) return;
+    st._monthKey = key;
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    var mStart = new Date(m.getFullYear(), m.getMonth(), 1);
+    var from = UI.dateKey(mStart < today ? today : mStart);
+    var to = UI.dateKey(new Date(m.getFullYear(), m.getMonth() + 1, 0));
+    try { st.monthClasses = (await window.API.classes({ date_from: from, date_to: to })).classes || []; }
+    catch (e) { st.monthClasses = []; }
+  }
+  function classTypes() {
+    var by = {}, out = [];
+    (st.monthClasses || []).forEach(function (c) {
+      var k = String(c.resource_id || c.class_name);
+      if (!by[k]) { by[k] = 1; out.push({ id: k, name: c.class_name || "Class" }); }
+    });
+    return out.sort(function (a, b) { return (a.name || "").localeCompare(b.name || ""); });
+  }
+  function classDays() {   // dateKeys that have a class matching the current filter
+    var days = {};
+    (st.monthClasses || []).forEach(function (c) {
+      if (st.classFilter && String(c.resource_id) !== String(st.classFilter)) return;
+      days[UI.dateKey(new Date(c.starts_at))] = true;
+    });
+    return days;
+  }
+  function renderClassFilter() {
+    var box = document.getElementById("bk-classfilter"); if (!box) return; UI.clear(box);
+    var types = classTypes();
+    box.appendChild(el("div", { class: "cf-pref-h", style: "margin-bottom:8px", text: "Which class?" }));
+    var sel = el("select", { class: "cf-select", style: "max-width:360px", onchange: function (ev) {
+      st.classFilter = ev.target.value || null;
+      // Jump to the first upcoming day this class runs, so the list isn't empty on the current day.
+      var days = Object.keys(classDays()).sort();
+      if (days.length && days.indexOf(UI.dateKey(st.day)) < 0) st.day = new Date(days[0] + "T00:00:00");
+      st.selClass = null; renderCalendar(); loadClasses(); refreshSummary();
+    } });
+    sel.appendChild(el("option", { value: "", text: "All classes", selected: !st.classFilter ? "selected" : null }));
+    types.forEach(function (t) {
+      sel.appendChild(el("option", { value: t.id, text: t.name, selected: String(st.classFilter) === String(t.id) ? "selected" : null }));
+    });
+    box.appendChild(sel);
+    box.appendChild(el("div", { class: "cf-muted cf-tiny", style: "margin-top:6px",
+      text: types.length ? "Days with your class are dotted on the calendar." : "No classes scheduled this month." }));
+  }
+  async function refreshClassMonth() {   // fetch the month, then paint the filter + calendar markers
+    await loadMonthClasses();
+    renderClassFilter();
+    renderCalendar();
+  }
+
   // ---- schedule render -------------------------------------------------------
   var TITLES = { court: "Book a court", lesson: "Book a lesson", class: "Attend a class" };
 
@@ -349,6 +406,20 @@
       serviceSwitch(),
     ]));
 
+    // LESSON: choose the coach (+ service) FIRST — rates are per-coach and the available times depend on the
+    // coach, so picking a time then hunting for a coach reads backwards. Full-width card above the calendar.
+    if (st.type === "lesson") {
+      container.appendChild(el("div", { class: "cf-card", style: "margin-bottom:14px" }, [
+        el("div", { class: "cf-pref-h", style: "margin-bottom:10px", text: "Choose your coach" }),
+        pickerControl(),
+      ]));
+    }
+    // CLASS: a "Which class?" filter above the calendar — picking one dots the days it runs (below) and
+    // filters the day list, so members don't click every day hunting for a class. Populated by refreshClassMonth().
+    if (st.type === "class") {
+      container.appendChild(el("div", { class: "cf-card", style: "margin-bottom:14px", id: "bk-classfilter" }));
+    }
+
     var cols = [ el("div", { class: "cf-sched-col" }, [ el("div", { class: "cf-sched-h", text: "When" }), el("div", { id: "bk-cal" }) ]) ];
 
     if (st.type === "class") {
@@ -361,18 +432,24 @@
         el("div", { class: "cf-mid-h cf-muted", style: "margin-top:14px", text: "Pick a time" }),
         el("div", { id: "bk-slots", class: "cf-loading", text: "Finding times…" }),
       ]));
-      cols.push(el("div", { class: "cf-sched-col" }, [
-        el("div", { class: "cf-pref-h", text: st.type === "lesson" ? "Coach" : "Court" }),
-        pickerControl(),
-        el("div", { class: "cf-pref-h", style: "margin-top:14px", text: "Your booking" }),
-        summaryBox(),
-      ]));
+      // Column 3: a COURT keeps its court-type/court picker here; the lesson picker moved to the top, so a
+      // lesson's third column is just the running summary.
+      var col3 = [];
+      if (st.type === "court") {
+        col3.push(el("div", { class: "cf-pref-h", text: "Court" }), pickerControl(),
+                  el("div", { class: "cf-pref-h", style: "margin-top:14px", text: "Your booking" }));
+      } else {
+        col3.push(el("div", { class: "cf-pref-h", text: "Your booking" }));
+      }
+      col3.push(summaryBox());
+      cols.push(el("div", { class: "cf-sched-col" }, col3));
     }
 
     container.appendChild(el("div", { class: "cf-card cf-sched-card" }, [ el("div", { class: "cf-sched" }, cols) ]));
     renderCalendar();
     if (st.type !== "class") renderDurations();
     loadSlots();
+    if (st.type === "class") refreshClassMonth();   // paint the filter + calendar dots for the month
   }
 
   function pickerControl() {
@@ -490,6 +567,8 @@
   function renderClasses(classes) {
     var box = document.getElementById("bk-slots"); if (!box) return;
     box.className = ""; UI.clear(box);
+    // Honour the class-type filter (if the member picked one above) so only that class's sessions show.
+    if (st.classFilter) classes = (classes || []).filter(function (c) { return String(c.resource_id) === String(st.classFilter); });
     if (!classes.length) { box.appendChild(el("div", { class: "cf-empty", text: "No classes this day — try another." })); return; }
     var list = el("div", { class: "cf-list" });
     classes.forEach(function (c) {
@@ -525,15 +604,22 @@
     var maxDay = UI.addDays(today, (ctx.policy && ctx.policy.booking_window_days) || 14); maxDay.setHours(0, 0, 0, 0);
     var curMonth = startOfMonth(today);
 
+    // On a class booking the month nav also re-fetches that month's sessions (drives the filter + dots).
+    function goMonth(delta) {
+      st.calMonth = new Date(m.getFullYear(), m.getMonth() + delta, 1);
+      if (st.type === "class") refreshClassMonth(); else renderCalendar();
+    }
     var prevOff = m.getFullYear() === curMonth.getFullYear() && m.getMonth() === curMonth.getMonth();
     var nav = el("div", { class: "cf-cal-nav" }, [
       el("button", { class: "cf-cal-navbtn", type: "button", text: "‹", disabled: prevOff ? "disabled" : null,
-        onclick: function () { if (prevOff) return; st.calMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1); renderCalendar(); } }),
+        onclick: function () { if (prevOff) return; goMonth(-1); } }),
       el("div", { class: "cf-cal-title", text: m.toLocaleDateString("en-ZA", { month: "long", year: "numeric", timeZone: UI.CLUB_TZ }) }),
-      el("button", { class: "cf-cal-navbtn", type: "button", text: "›",
-        onclick: function () { st.calMonth = new Date(m.getFullYear(), m.getMonth() + 1, 1); renderCalendar(); } }),
+      el("button", { class: "cf-cal-navbtn", type: "button", text: "›", onclick: function () { goMonth(1); } }),
     ]);
     box.appendChild(nav);
+
+    // Class bookings: mark the days that have a class (matching the filter) with a dot.
+    var cdays = (st.type === "class") ? classDays() : {};
 
     var dow = el("div", { class: "cf-cal-dow" });
     ["S", "M", "T", "W", "T", "F", "S"].forEach(function (d) { dow.appendChild(el("span", { text: d })); });
@@ -547,11 +633,13 @@
         dd.setHours(0, 0, 0, 0);
         var off = dd < today || dd > maxDay;
         var sel = UI.dateKey(dd) === UI.dateKey(st.day);
+        var hasClass = !!cdays[UI.dateKey(dd)];
         grid.appendChild(el("button", { type: "button", class: "cf-cal-day" + (off ? " off" : "") + (sel ? " sel" : ""),
           disabled: off ? "disabled" : null,
           onclick: function () { if (off) return; st.day = dd; st.slot = null; st.selClass = null; renderCalendar(); loadSlots(); refreshSummary(); } }, [
           el("span", { class: "cf-cal-dnum", text: String(day) }),
-        ]));
+          hasClass ? el("span", { class: "cf-cal-dot" }) : null,
+        ].filter(Boolean)));
       })(new Date(m.getFullYear(), m.getMonth(), day));
     }
     box.appendChild(grid);
@@ -629,6 +717,29 @@
     return sec;
   }
 
+  // "Save with a plan" nudge (client self-book only): when a member is PAYING for a single session and
+  // isn't already covered/on a pack, gently offer the plan page — so they can buy a membership/pack once
+  // instead of entering a card every time. Purely a link; never blocks the booking.
+  function saveWithPlanNudge() {
+    if (st.onBehalf || !st.plansHref) return null;
+    if (courtCovered() || st.settlement === "token") return null;   // already free / drawing a pack
+    if (["online", "at_court", "monthly_account"].indexOf(st.settlement) < 0) return null;
+    var msg = st.type === "court"
+      ? "Play often? A membership makes court hire free — buy once, skip paying each time."
+      : (st.type === "class"
+        ? "Coming back? A class pack saves paying for every session."
+        : "Regular lessons? A lesson pack saves paying each time.");
+    return el("div", { class: "cf-confirm-sec", style: "background:var(--green-050,#eef7f1);border:1px solid #cfe4d8;border-radius:12px;padding:12px 14px" }, [
+      el("div", { class: "cf-row", style: "gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap" }, [
+        el("div", { style: "flex:1;min-width:170px" }, [
+          el("div", { style: "font-weight:700", text: "Save with a plan" }),
+          el("div", { class: "cf-muted cf-tiny", text: msg }),
+        ]),
+        el("a", { class: "cf-btn cf-btn-sm", href: st.plansHref, text: "See plans" }),
+      ]),
+    ]);
+  }
+
   function renderConfirm() {
     var free = courtCovered();
     var modes = payModes();
@@ -691,6 +802,9 @@
     } else {
       card.appendChild(el("div", { class: "cf-confirm-sec" }, [ el("h3", { text: "How would you like to pay?" }), settlementBlocks(modes) ]));
     }
+
+    var nudge = saveWithPlanNudge();
+    if (nudge) card.appendChild(nudge);
 
     var btn = el("button", { class: "cf-btn cf-btn-primary cf-btn-lg cf-btn-block", type: "button", style: "margin-top:16px", text: confirmLabel() });
     btn.addEventListener("click", function () { submit(btn); });
@@ -951,12 +1065,14 @@
       type: type, calMonth: startOfMonth(new Date()), day: new Date(),
       durations: [], selDuration: null, selDurationPrice: null, membershipCovered: false,
       addonQty: {},   // equipment hire selections {resource_id -> qty} (court add-ons)
+      classFilter: null, monthClasses: [], _monthKey: null,   // class-type filter + month-wide sessions
       selCoach: "ANY", selCourt: "ANY", slot: null, selClass: null, player: null, guest: null,
       settlement: "at_court", tokenWallet: null, showPayOptions: false, slotsCache: {},
       view: "schedule", _gName: null, _gEmail: null,
       services: [], selService: null,
       onBehalf: opts.onBehalf || null, coachLock: opts.coachLock || null,
       backTo: opts.backTo || null, onDone: opts.onDone || null, skipOnline: !!opts.onBehalf,
+      plansHref: opts.plansHref || null,   // client self-book: link the confirm-step "buy a plan" nudge
       clientWallets: [], loadPackagesFn: opts.loadPackages || null,
     };
     // Featured equipment (a client-Home hero tile): pre-add the item so it's on the booking from the start.

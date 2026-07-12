@@ -588,7 +588,7 @@
   function renderBook(kind) {
     UI.clear(view);
     if (window.BookFlow) {
-      var opts = {};
+      var opts = { plansHref: "#/plan" };   // a PAYG member can jump to buy a membership/pack at checkout
       if (PENDING_EQUIP) { opts.featureEquipment = PENDING_EQUIP; PENDING_EQUIP = null; }
       window.BookFlow.start(principal, kind || "court", opts);
     } else set(el("div", { class: "cf-empty", text: "Booking is unavailable." }));
