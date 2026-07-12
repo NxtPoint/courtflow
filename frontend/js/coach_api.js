@@ -125,6 +125,9 @@
     //   ics_url,can:{accept,propose,decline,reschedule,cancel,mark_completed,mark_no_show,add_to_calendar}}}
     //   the coach EVENT STORY (drill-through on any lesson/class they run).
     bookingStory: function (id) { return A().apiJSON("/api/coach/bookings/" + enc(id)); },
+    // GET /api/coach/classes/:enrolment_id -> {booking:{...}} — the class sibling of bookingStory
+    //   (same shape: charge fold + transactions log + can), so Widgets.TransactionDetail renders it.
+    classStory: function (enrolmentId) { return A().apiJSON("/api/coach/classes/" + enc(enrolmentId)); },
     // GET /api/coach/clients/:id/invoice?month= -> {invoice:{month,currency,club_name,coach_name,
     //   client_name,client_email,lines:[{at,description,gross_minor,status,note?}],totals:{...}}}
     clientInvoice: function (userId, month) {

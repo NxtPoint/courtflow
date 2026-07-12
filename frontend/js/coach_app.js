@@ -82,13 +82,14 @@
     var parts = (location.hash || "").replace(/^#\/?/, "").split("/").filter(Boolean);
     var top = parts[0] || "home";
     setActive(["home", "schedule", "clients", "money", "setup"].indexOf(top) >= 0 ? top :
-      (top === "client" ? "clients" : (top === "event" ? "schedule" : (top === "service" ? "setup" : ""))));
+      (top === "client" ? "clients" : ((top === "event" || top === "class") ? "schedule" : (top === "service" ? "setup" : ""))));
     window.scrollTo(0, 0);
     if (top === "home") return renderHome();
     if (top === "schedule") return renderSchedule();
     if (top === "clients") return renderClients();
     if (top === "client") return renderClient(parts[1]);
     if (top === "event") return renderEvent(parts[1]);
+    if (top === "class") return renderClassEvent(parts[1]);
     if (top === "money") return renderMoney();
     if (top === "setup") return renderSetup(parts[1]);
     if (top === "service") return renderService(parts[1]);
@@ -477,17 +478,17 @@
   var STATE_LABEL = { paid: "Paid", owed: "Owed", written_off: "Written off", refunded: "Refunded", cancelled: "Cancelled", pending: "Awaiting payment" };
   function eventMoneyRow(e, cur) {
     var when = ""; try { when = UI.fmtDate(e.starts_at) + " · " + UI.fmtTime(e.starts_at); } catch (x) {}
-    var tappable = e.kind === "lesson" && e.id;   // class-event drill lands with the event-ledger widget
-    var row = el("div", { class: "cf-item" + (tappable ? " cf-item-tap" : "") }, [
+    var hash = e.id ? (e.kind === "class" ? ("#/class/" + e.id) : ("#/event/" + e.id)) : null;   // both drill to the ONE event story
+    var row = el("div", { class: "cf-item" + (hash ? " cf-item-tap" : "") }, [
       el("span", { class: "cf-chip " + e.kind, text: typeLabel(e.kind) }),
       el("div", { class: "cf-item-main" }, [
         el("div", { class: "cf-item-t", text: when }),
         el("div", { class: "cf-item-s", text: (STATE_LABEL[e.state] || e.state) + " · " + money(e.invoiced_minor, cur) }),
       ]),
       statusChip(e.state === "owed" ? "held" : (e.state === "paid" ? "confirmed" : (e.state === "cancelled" ? "cancelled" : e.state))),
-      (tappable ? el("span", { class: "cf-muted", text: "›" }) : null),
+      (hash ? el("span", { class: "cf-muted", text: "›" }) : null),
     ].filter(Boolean));
-    if (tappable) row.addEventListener("click", function () { go("#/event/" + e.id); });
+    if (hash) row.addEventListener("click", function () { go(hash); });
     return row;
   }
   async function arr(id, action, then, it) {
@@ -535,6 +536,24 @@
         collect: { group: "Coaching charge", manual: true, run: function (b) { arr(b.arrears.id, "collect", function () { renderEvent(id); }); } },
         discount: { group: "Coaching charge", manual: true, run: function (b) { arr(b.arrears.id, "discount", function () { renderEvent(id); }, b.arrears); } },
         write_off: { group: "Coaching charge", tone: "danger", manual: true, run: function (b) { arr(b.arrears.id, "writeoff", function () { renderEvent(id); }); } },
+      },
+    });
+  }
+  // A CLASS enrolment's event story — the SAME shared widget (Widgets.TransactionDetail) over the class
+  // sibling reader (CoachAPI.classStory → enrolment_story), so a class drills to the fold + Transactions
+  // just like a lesson. Coach-side classes are view-first; the receipt opens for a paid seat.
+  function renderClassEvent(id) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.TransactionDetail.mount(host, {
+      role: "coach",
+      scope: { id: id },
+      fields: { showCoach: false },
+      data: { get: function (i) { return window.CoachAPI.classStory(i).then(function (r) { return r.booking; }); } },
+      onNavigate: function (t) { if (t.kind === "person") go("#/client/" + t.id); },
+      actions: {
+        receipt: { manual: true, run: function (b) { var oid = b.charge && b.charge.order_id; if (oid) window.open("/receipt.html?order=" + encodeURIComponent(oid), "_blank"); } },
+        add_to_calendar: { manual: true, run: function (b) { addToCalendar(b.ics_url); } },
       },
     });
   }
