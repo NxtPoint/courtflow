@@ -1522,9 +1522,20 @@ def create_client_invoice(client_user_id):
             reason=((b.get("reason") or "").strip() or None), actor_user_id=p.user_id)
         if not inv:
             return jsonify(error="no_valid_lines"), 400
+        # Whether the client can even BE emailed a pay link (surface it honestly to the admin).
+        client_email = s.execute(
+            text('SELECT email FROM iam."user" WHERE id = :u'), {"u": str(client_user_id)}).scalar()
+    # Email is best-effort and fires AFTER the invoice commits — a delivery hiccup (or a client with no
+    # email) must NEVER fail or roll back the invoice. emit is itself fire-and-forget, but keep it out of
+    # the tx + guarded so the invoice is unconditionally saved.
+    try:
         from marketing_crm.tracking import emit
         emit("statement_ready", {"club_id": str(p.club_id), "user_id": str(client_user_id),
+                                 "email": (client_email or None),
                                  "amount_minor": inv.get("amount_minor"), "currency": inv.get("currency")})
+    except Exception:
+        pass
+    inv["emailed"] = bool(client_email)
     return jsonify(inv), 201
 
 

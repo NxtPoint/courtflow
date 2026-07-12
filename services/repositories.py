@@ -125,10 +125,13 @@ def get_service(session, *, club_id, product_id):
     # packages — bundle_plans tied to THIS specific service (product_id), PLUS any legacy unscoped
     # pack (product_id NULL) matching by kind+coach until a backfill scopes it. So two services under
     # one coach no longer show each other's packs — each shows only its own (+ shared legacy ones).
+    # RETIRED (deleted) packs must NOT resurface in the editor — the delete path PATCHes status='retired'
+    # (service_editor.js), so without this filter a "deleted" pack keeps coming back on the next open.
     pkg_rows = session.execute(
         text("SELECT id, label, sessions_count, duration_minutes, price_minor, validity_days, status, "
              "       coach_user_id, product_id "
              "FROM billing.bundle_plan WHERE club_id = :c "
+             "  AND COALESCE(status, 'active') <> 'retired' "
              "  AND (product_id = :pid "
              "       OR (product_id IS NULL AND service_kind = :sk "
              "           AND (coach_user_id IS NULL OR coach_user_id = :coach))) "

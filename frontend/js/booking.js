@@ -107,13 +107,28 @@
     if (st.selCoach !== "ANY" && st.selCoach && st.selCoach.coach_user_id) return st.selCoach.coach_user_id;
     return (st.slot && st.slot.coach_user_id) || null;
   }
+  // The SPECIFIC service (billing.product) the booking is for — a lesson/court carries it on the chosen
+  // service, a class on the session. Packs are per-service, so the checkout must match on it (mirrors the
+  // server draw's product predicate); without it a coach's Private pack showed as covering a Semi-private
+  // booking → "covered · R0" then a NO_TOKEN at confirm.
+  function chosenProductId() {
+    if (st.type === "class") return (st.selClass && st.selClass.product_id) || null;
+    return (st.selService && st.selService.product_id) || null;
+  }
+  // A wallet matches the chosen product when: it's unscoped (legacy NULL product), OR we don't yet know
+  // the product, OR they're equal. Same shape as the server's (product_id IS NULL OR chosen IS NULL OR =).
+  function walletMatchesProduct(w, prod) {
+    return !(w.product_id != null && prod != null && String(w.product_id) !== String(prod));
+  }
   function matchTokenWallet() {
     var wallets = ctx.walletsByKind[bookingServiceKind()] || [];
     var coach = chosenCoachUserId();
+    var prod = chosenProductId();
     var hit = wallets.filter(function (w) {
       if (w.status !== "active" || walletMinutesLeft(w) <= 0) return false;
       if (w.coach_user_id != null && coach != null && String(w.coach_user_id) !== String(coach)) return false;
       if (w.coach_user_id != null && coach == null) return false;
+      if (!walletMatchesProduct(w, prod)) return false;   // per-service: don't offer service X's pack for Y
       return true;
     }).sort(function (a, b) {
       var ax = a.expires_at || "9999", bx = b.expires_at || "9999";
@@ -156,11 +171,13 @@
     var kind = st.type === "lesson" ? "lesson" : (st.type === "class" ? "class" : null);
     if (!kind) return null;
     var coach = st.type === "lesson" ? chosenCoachUserId() : null;
+    var prod = chosenProductId();
     var hit = (st.clientWallets || []).filter(function (w) {
       if (w.service_kind && w.service_kind !== kind) return false;
       if (w.status !== "active") return false;
       if ((w.minutes_remaining || 0) <= 0 && (w.sessions_remaining || 0) <= 0) return false;
       if (coach != null && w.coach_user_id != null && String(w.coach_user_id) !== String(coach)) return false;
+      if (!walletMatchesProduct(w, prod)) return false;   // per-service: service X's pack can't cover Y
       return true;
     })[0] || null;
     st.tokenWallet = hit;

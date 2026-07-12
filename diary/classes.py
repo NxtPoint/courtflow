@@ -369,7 +369,7 @@ def list_sessions(session, *, club_id, date_from=None, date_to=None, resource_id
         where.append("cs.resource_id = :rid"); params["rid"] = resource_id
     rows = session.execute(
         text("SELECT cs.id, cs.resource_id, r.name AS class_name, cs.coach_user_id, "
-             "       cs.starts_at, cs.ends_at, cs.capacity, cs.price_id, "
+             "       cs.starts_at, cs.ends_at, cs.capacity, cs.price_id, pp.id AS product_id, "
              "       pr.amount_minor AS price_minor, pp.payment_modes AS payment_modes, "
              "       cu.first_name AS coach_first, cu.surname AS coach_surname, "
              "       cp.display_name AS coach_display, "
@@ -397,7 +397,7 @@ def list_sessions(session, *, club_id, date_from=None, date_to=None, resource_id
                                                    d.pop("coach_surname", None)) if x).strip()
                            or None)
         d.pop("coach_first", None); d.pop("coach_surname", None); d.pop("coach_display", None)
-        for k in ("id", "resource_id", "coach_user_id", "price_id"):
+        for k in ("id", "resource_id", "coach_user_id", "price_id", "product_id"):
             if d.get(k) is not None:
                 d[k] = str(d[k])
         for k in ("starts_at", "ends_at"):

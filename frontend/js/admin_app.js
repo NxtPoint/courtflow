@@ -872,7 +872,12 @@
       genBtn.disabled = true; genBtn.textContent = "Generating…";
       try {
         var res = await window.AdminAPI.createInvoice(selectedClient.user_id, body);
-        UI.toast("Invoice for " + money(res.amount_minor, res.currency || cur) + " sent to " + (selectedClient.email || selectedClient.name) + ".", "info");
+        var amt = money(res.amount_minor, res.currency || cur);
+        var emailed = res.emailed !== false && selectedClient.email;
+        UI.toast(emailed
+          ? ("Invoice for " + amt + " emailed to " + selectedClient.email + " — it's on their account to pay online.")
+          : ("Invoice for " + amt + " created on " + selectedClient.name + "'s account (no email on file — they can pay it from their portal)."),
+          "info");
         go("#/person/" + selectedClient.user_id);
       } catch (e) { genBtn.disabled = false; genBtn.textContent = "Generate & email invoice"; UI.toast(UI.errMsg(e), "error"); }
     });
