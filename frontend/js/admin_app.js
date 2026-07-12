@@ -1376,8 +1376,10 @@
     DOW.forEach(function (o) {
       var on = curDays ? curDays.indexOf(o[0]) >= 0 : peakOn;   // null days + peak on = every day
       sel[o[0]] = on;
-      var b = el("button", { class: "cf-chip" + (on ? " class" : ""), text: o[1], type: "button" });
-      b.addEventListener("click", function () { sel[o[0]] = !sel[o[0]]; b.className = "cf-chip" + (sel[o[0]] ? " class" : ""); });
+      // Reuse the membership Access-hours day style: .cf-day.on is a SOLID green pill (white text), so a
+      // selected day is unmistakable (the old cf-chip tint was too subtle to read).
+      var b = el("button", { class: "cf-day" + (on ? " on" : ""), text: o[1], type: "button" });
+      b.addEventListener("click", function () { sel[o[0]] = !sel[o[0]]; b.className = "cf-day" + (sel[o[0]] ? " on" : ""); });
       chips.appendChild(b);
     });
     var pf = el("input", { type: "time", value: m2t(policy.peak_start_min), style: "max-width:110px" });
