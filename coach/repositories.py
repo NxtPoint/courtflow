@@ -1452,18 +1452,48 @@ def coach_month_money(session, *, club_id, coach_user_id, month=None):
 
     totals = _sum_totals(events)
 
-    # The coach's own cut on what was PAID this month, at their effective rate (net + commission = paid,
-    # so it reconciles). Ledger balance is the authoritative running club↔coach figure (separate).
-    pct = 0.0
-    try:
-        from billing.commission import resolve_commission_pct
-        pct = float(resolve_commission_pct(session, club_id=club_id, coach_user_id=coach_user_id))
-    except Exception:
-        pct = 0.0
-    commission = int(round(totals["paid_minor"] * pct / 100.0))
-    net = totals["paid_minor"] - commission
+    # The coach's own cut — read from the ACTUAL commission_split rows tied to this month's events
+    # (the SAME source as the per-event transaction ledger "Commission earned" / "Lesson paid"), so
+    # the summary can never disagree with the drill-down. coach party = what the coach keeps, owner
+    # party = the club's commission; refund_clawback (negative) nets a refunded lesson back out.
+    # In clean data net + commission == the coaching that was paid; the resolved-rate approximation it
+    # replaces could drift from what was actually charged at collection.
+    net = commission = 0
+    order_ids = [e["order_id"] for e in events if e.get("order_id")]
+    booking_ids = [e["id"] for e in events if e.get("kind") == "lesson" and e.get("id")]
+    if order_ids or booking_ids:
+        try:
+            cr = session.execute(
+                text("""
+                    SELECT COALESCE(SUM(cs.amount_minor) FILTER (WHERE cs.party_type='coach'),0) AS net,
+                           COALESCE(SUM(cs.amount_minor) FILTER (WHERE cs.party_type='owner'),0) AS commission
+                    FROM billing.commission_split cs
+                    LEFT JOIN billing.order_line ol ON ol.id = cs.order_line_id
+                    WHERE cs.club_id = :c AND cs.coach_user_id = :u
+                      AND cs.basis IN ('lesson_commission','class_commission','arrears_commission','refund_clawback')
+                      AND (cs.booking_id = ANY(:bids) OR ol.order_id = ANY(:oids))
+                """),
+                {"c": str(club_id), "u": str(coach_user_id),
+                 "bids": booking_ids or ["00000000-0000-0000-0000-000000000000"],
+                 "oids": order_ids or ["00000000-0000-0000-0000-000000000000"]},
+            ).mappings().first()
+            net = int(cr["net"] or 0)
+            commission = int(cr["commission"] or 0)
+        except Exception:
+            net = commission = 0
     totals["commission_minor"] = commission
     totals["net_minor"] = net
+    # The ACTUAL effective rate for the label (derived from the money, so it matches), else the
+    # configured rate as a fallback when nothing's been collected yet.
+    gross_coaching = net + commission
+    if gross_coaching > 0:
+        pct = round(commission * 100.0 / gross_coaching, 1)
+    else:
+        try:
+            from billing.commission import resolve_commission_pct
+            pct = float(resolve_commission_pct(session, club_id=club_id, coach_user_id=coach_user_id))
+        except Exception:
+            pct = 0.0
     try:
         from billing.commission import coach_balance
         totals["balance_minor"] = int(coach_balance(session, club_id=club_id, coach_user_id=coach_user_id))
