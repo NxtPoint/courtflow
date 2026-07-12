@@ -22,10 +22,12 @@ from diary import pricing
 
 log = logging.getLogger("diary.availability")
 
-# Default booking start cadence (minutes): a booking may start every 30 min. This is the slot
-# GRID granularity, independent of a booking's length. A club may configure a finer cadence per
-# availability_rule (slot_minutes); we never offer starts coarser than this.
-BOOKING_GRANULARITY_MIN = 30
+# Booking start cadence (minutes): a booking may start every 15 min. This is the slot GRID
+# granularity, independent of a booking's LENGTH (a 60-min booking is offered at :00/:15/:30/:45).
+# The per-slot stride is min(availability_rule.slot_minutes, this), so this is the FLOOR applied
+# uniformly to every court AND coach — keeping the lesson coach∩court intersection aligned (the two
+# sides key on identical start times). 15-min starts need no 15-min price rows (length is unchanged).
+BOOKING_GRANULARITY_MIN = 15
 
 
 def _club_tz(session, club_id):

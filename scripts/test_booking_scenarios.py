@@ -412,6 +412,23 @@ def sc_class_online_hold_expiry(s, fx):
         {"cs": sid, "u": fx.members[0]}).first()
     check("held_until stamped on the online seat", held is not None)
     check("order awaiting_payment (paywall pending)", ostatus == "awaiting_payment", str(ostatus))
+    # Bug (c): the client's OWN view flags the unpaid seat as awaiting_payment (not a confirmed session).
+    mine = C.list_my_enrolments(s, club_id=fx.club_id, user_id=fx.members[0])
+    me_row = [e for e in mine if e["class_session_id"] == str(sid)]
+    check("client's own view flags the unpaid seat 'awaiting_payment' (not confirmed)",
+          len(me_row) == 1 and me_row[0].get("awaiting_payment") is True,
+          str(me_row and me_row[0].get("awaiting_payment")))
+    # Bug (b): the class SERVICE's payment preference is surfaced so the checkout can honour it.
+    cprod2 = s.execute(text("SELECT pr.product_id FROM diary.class_session cs "
+                            "JOIN billing.price pr ON pr.id = cs.price_id WHERE cs.id=:s"), {"s": sid}).scalar()
+    if cprod2:
+        s.execute(text("UPDATE billing.product SET payment_modes='online' WHERE id=:p"), {"p": cprod2})
+        sess = C.list_sessions(s, club_id=fx.club_id,
+                               date_from=fx.target.isoformat(), date_to=fx.target.isoformat())
+        srow = [x for x in sess if x["id"] == str(sid)]
+        check("list_sessions surfaces the class payment preference (online-only)",
+              len(srow) == 1 and srow[0].get("payment_modes") == "online",
+              str(srow and srow[0].get("payment_modes")))
     # A second member is waitlisted behind the held seat (capacity 1).
     r2 = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[1],
                  settlement_mode="online")
@@ -591,6 +608,9 @@ def sc_peak_court_pricing(s, fx):
         s10 = by_start.get(utc_iso(at(fx, 10)))
         check("availability 17:00 slot shows R250 (peak)", bool(s17) and s17["price"] == 25000, str(s17 and s17.get("price")))
         check("availability 10:00 slot shows R150 (off-peak)", bool(s10) and s10["price"] == 15000, str(s10 and s10.get("price")))
+        # 15-min start grid (BOOKING_GRANULARITY_MIN=15): starts are offered on the quarter-hour, not only :00/:30.
+        _mins = set(sl["start"][14:16] for sl in slots)
+        check("15-min start grid live (:15/:45 starts offered)", ("15" in _mins or "45" in _mins), str(sorted(_mins)))
 
         # 3) create_booking CHARGES what was shown — peak at 17:00, base at 10:00.
         def _order_amt(booking_id):

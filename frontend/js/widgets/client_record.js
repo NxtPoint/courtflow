@@ -343,12 +343,20 @@
       var card = UI.card([CRMUI.sectionHead("Refund requests")], "cf-mt");
       var l = el("div", { class: "cf-list" });
       (pn.refunds || []).forEach(function (r) {
-        l.appendChild(el("div", { class: "cf-item" }, [
+        // A PENDING request can be DECIDED right here (same action as Money → Approvals; single-sourced),
+        // so the owner never has to leave the client record. Gated by the scope's can{} + wired actions.
+        var pending = (r.status === "pending" || r.status === "requested");
+        var right = [UI.statusChip(r.status)];
+        if (pending) {
+          var ap = actBtn("approve_refund_request", r, { label: "Approve", tone: "primary" }); if (ap) right.push(ap);
+          var dc = actBtn("decline_refund_request", r, { label: "Decline", tone: "ghost" }); if (dc) right.push(dc);
+        }
+        l.appendChild(el("div", { class: "cf-item", style: "flex-wrap:wrap;gap:6px" }, [
           el("div", { class: "cf-item-main" }, [
             el("div", { class: "cf-item-t", text: money(r.amount_minor, r.currency_code || c) }),
             el("div", { class: "cf-item-s", text: [r.reason, r.created_at ? fDate(r.created_at) : ""].filter(Boolean).join(" · ") }),
           ]),
-          UI.statusChip(r.status),
+          el("div", { class: "cf-row", style: "gap:6px;align-items:center;flex-wrap:wrap" }, right),
         ]));
       });
       card.appendChild(l);

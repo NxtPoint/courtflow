@@ -462,6 +462,26 @@
         },
         // Online payment refund (reuses the shared refund modal)
         refund: { manual: true, run: function (pay) { refundModal(pay.order_id, { amount_minor: pay.amount_minor, currency: pay.currency_code || clubCur() }, function () { renderPerson(id); }); } },
+        // Decide a pending refund REQUEST in place (same endpoints as Money → Approvals; the record
+        // reloads on success so the status updates here without leaving the client). A cancelled prompt
+        // returns a rejected promise → the widget silently aborts (runAct only toasts a truthy error).
+        approve_refund_request: {
+          done: "Approved.",
+          run: function (r) {
+            var note = window.prompt("Approve & refund this via Yoco? Optional note:", "");
+            if (note === null) return Promise.reject();
+            var alsoCancel = window.confirm("Also CANCEL the booking + free the slot?\n\nOK = refund + cancel.   Cancel = refund only.");
+            return window.AdminAPI.approveRefundRequest(r.id, { note: note, cancel_booking: alsoCancel });
+          },
+        },
+        decline_refund_request: {
+          tone: "ghost", done: "Declined.",
+          run: function (r) {
+            var note = window.prompt("Decline this request? Reason (shown to the member):", "");
+            if (note === null) return Promise.reject();
+            return window.AdminAPI.declineRefundRequest(r.id, { note: note });
+          },
+        },
       },
     });
   }

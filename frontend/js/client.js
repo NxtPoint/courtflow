@@ -392,13 +392,18 @@
   }
   function isForChild(e) { return !!(principal && e.player_user_id && String(e.player_user_id) !== String(principal.user_id)); }
   function classRow(e) {
+    // An online seat whose payment is still outstanding isn't confirmed — show "Awaiting payment" so the
+    // client knows to finish (or that it will auto-release), rather than an "enrolled" chip implying it's done.
+    var chip = e.awaiting_payment
+      ? el("span", { class: "cf-chip", style: "background:#fde68a;color:#7c2d12", text: "Awaiting payment" })
+      : statusChip(e.status);
     return el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/class/" + e.enrolment_id); } }, [
       el("span", { class: "cf-chip class", text: "Class" }),
       el("div", { class: "cf-item-main" }, [
         el("div", { class: "cf-item-t", text: (e.class_name || "Class") + (isForChild(e) && e.player_name ? " · " + e.player_name : "") }),
         el("div", { class: "cf-item-s", text: UI.fmtDate(e.starts_at) + " · " + timeRange(e) }),
       ]),
-      statusChip(e.status),
+      chip,
     ]);
   }
 

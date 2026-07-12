@@ -101,6 +101,9 @@
     // even if they aren't in the bookable-coaches list (so the rate card + times are always theirs).
     if (st.coachLock) return st.coachLock;
     if (st.selCoach !== "ANY" && st.selCoach && st.selCoach.coach_user_id) return st.selCoach.coach_user_id;
+    // A class carries its OWN coach (class packs are coach-scoped) — resolve it so a held class pack
+    // presents as "token", exactly like a lesson pack does. Classes live in st.selClass, not st.slot.
+    if (st.type === "class" && st.selClass && st.selClass.coach_user_id) return st.selClass.coach_user_id;
     return (st.slot && st.slot.coach_user_id) || null;
   }
   function matchTokenWallet() {
@@ -495,7 +498,14 @@
       var sub = UI.fmtTime(c.starts_at) + "–" + UI.fmtTime(c.ends_at);
       if (c.spots_left != null) sub += full ? " · Full" : " · " + c.spots_left + " spots left";
       if (priceMinor != null) sub += " · " + UI.money(priceMinor, ctx.billing.currency);
-      list.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { st.selClass = c; st.view = "confirm"; render(); } }, [
+      list.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () {
+        st.selClass = c;
+        // Honour the class SERVICE's payment preference (loadDurations is skipped for classes, so this is
+        // the only place st.paymentModes is set) — otherwise the checkout offers every club method even when
+        // the class is configured online-only. CSV → array; null/empty = no per-service restriction.
+        st.paymentModes = (c.payment_modes ? String(c.payment_modes).split(",").map(function (m) { return m.trim(); }).filter(Boolean) : null);
+        st.view = "confirm"; render();
+      } }, [
         el("span", { class: "cf-chip class", text: full ? "waitlist" : "class" }),
         el("div", { class: "cf-item-main" }, [
           el("div", { class: "cf-item-t", text: c.class_name || "Class" }),

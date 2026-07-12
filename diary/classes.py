@@ -370,7 +370,7 @@ def list_sessions(session, *, club_id, date_from=None, date_to=None, resource_id
     rows = session.execute(
         text("SELECT cs.id, cs.resource_id, r.name AS class_name, cs.coach_user_id, "
              "       cs.starts_at, cs.ends_at, cs.capacity, cs.price_id, "
-             "       pr.amount_minor AS price_minor, "
+             "       pr.amount_minor AS price_minor, pp.payment_modes AS payment_modes, "
              "       cu.first_name AS coach_first, cu.surname AS coach_surname, "
              "       cp.display_name AS coach_display, "
              "       (SELECT count(*) FROM diary.enrolment e "
@@ -380,6 +380,7 @@ def list_sessions(session, *, club_id, date_from=None, date_to=None, resource_id
              "FROM diary.class_session cs "
              "LEFT JOIN diary.resource r ON r.id = cs.resource_id "
              "LEFT JOIN billing.price pr ON pr.id = cs.price_id "
+             "LEFT JOIN billing.product pp ON pp.id = pr.product_id "
              "LEFT JOIN iam.user cu ON cu.id = cs.coach_user_id "
              "LEFT JOIN iam.coach_profile cp ON cp.user_id = cs.coach_user_id "
              "       AND cp.club_id = cs.club_id "
@@ -1154,14 +1155,19 @@ def list_my_enrolments(session, *, club_id, user_id):
     DEPENDENT (junior classes are often a parent enrolling a child; the enrolment.user_id is the child
     but the guardian manages it). Enrolled + waitlisted only, with the session time / class name /
     coach so the client sees them in 'Your sessions' and can cancel. club-scoped."""
+    # Lazy expiry FIRST so a client viewing their own sessions clears any of their OWN abandoned
+    # unpaid-online seats (they'd otherwise linger looking booked until someone else opened the class).
+    release_expired_enrolments(session, club_id=club_id)
     rows = session.execute(
         text("SELECT e.id AS enrolment_id, e.status, e.class_session_id, e.user_id AS player_user_id, "
-             "       cs.starts_at, cs.ends_at, r.name AS class_name, cs.coach_user_id, "
+             "       cs.starts_at, cs.ends_at, r.name AS class_name, cs.coach_user_id, e.settlement_mode, "
+             "       o.status AS order_status, "
              "       cu.first_name AS coach_first, cu.surname AS coach_surname, cp.display_name AS coach_display, "
              "       pu.first_name AS player_first, pu.surname AS player_surname "
              "FROM diary.enrolment e "
              "JOIN diary.class_session cs ON cs.id = e.class_session_id "
              "LEFT JOIN diary.resource r ON r.id = cs.resource_id "
+             "LEFT JOIN billing.\"order\" o ON o.id = e.order_id "
              "LEFT JOIN iam.user cu ON cu.id = cs.coach_user_id "
              "LEFT JOIN iam.coach_profile cp ON cp.user_id = cs.coach_user_id AND cp.club_id = cs.club_id "
              "LEFT JOIN iam.user pu ON pu.id = e.user_id "
@@ -1185,6 +1191,9 @@ def list_my_enrolments(session, *, club_id, user_id):
         for k in ("starts_at", "ends_at"):
             if d.get(k) is not None:
                 d[k] = d[k].isoformat()
+        # An online seat with a still-unpaid order isn't a confirmed booking — flag it so the client sees
+        # "Awaiting payment", not a firm session (it lazily auto-cancels if the payment is abandoned).
+        d["awaiting_payment"] = (d.pop("order_status", None) == "awaiting_payment")
         d["can_cancel"] = True
         out.append(d)
     return out

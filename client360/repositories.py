@@ -503,11 +503,17 @@ def _events(session, *, user_id, limit=50):
 
 def _can(scope):
     if scope == "admin":
+        # `approve_refund_request`/`decline_refund_request` let the ONE client record DECIDE a pending
+        # refund request in place (the same action Money → Approvals runs) — so the owner never has to
+        # hunt for it, and both surfaces call the same endpoint (they can't diverge).
         return {"void": True, "write_off": True, "discount": True, "wallet_adjust": True,
                 "wallet_expire": True, "grant_membership": True, "revoke_membership": True,
-                "refund": True, "issue": True}
+                "refund": True, "issue": True,
+                "approve_refund_request": True, "decline_refund_request": True}
     if scope == "coach":
-        return {"discount": True, "collect": True}
+        # A coach decides a dispute routed to them (the backend still enforces they own it).
+        return {"discount": True, "collect": True,
+                "approve_refund_request": True, "decline_refund_request": True}
     # client
     return {"pay": True, "request_refund": True}
 
