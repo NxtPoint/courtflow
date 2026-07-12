@@ -1850,6 +1850,60 @@ def cockpit_summary(session, *, club_id, dt_from=None, dt_to=None):
     }
 
 
+# The category labels + display order, shared by the by-service rollup and the per-service client drill.
+_SVC_LABELS = {"lesson": "Coaching", "court": "Court hire", "class": "Classes",
+               "membership": "Membership", "pack": "Session packs", "other": "Other"}
+_SVC_ORDER = ["lesson", "court", "class", "membership", "pack", "other"]
+
+# The ONE order-selection + category CTE both earnings readers use, so the per-client drill can NEVER
+# drift from the by-service totals. Month-scoped ('open'/'paid' orders created in [:s,:e)), settlement-
+# WRAPPER excluded (a 'Pay all' order that just pays others). Exposes: id, user_id, status,
+# amount_minor, category. Callers add their own SELECT … FROM cat.
+_EARNINGS_CAT_CTE = """
+    WITH o AS (
+        SELECT ord.id, ord.user_id, ord.status, ord.amount_minor,
+               (SELECT COALESCE(b.booking_type, pr.kind) FROM billing.order_line ol
+                  LEFT JOIN diary.booking b  ON b.id = ol.booking_id
+                  LEFT JOIN billing.price   p  ON p.id = ol.price_id
+                  LEFT JOIN billing.product pr ON pr.id = p.product_id
+                 WHERE ol.order_id = ord.id ORDER BY ol.created_at LIMIT 1) AS kind,
+               EXISTS(SELECT 1 FROM billing.token_wallet w WHERE w.order_id = ord.id) AS is_pack,
+               EXISTS(SELECT 1 FROM billing.membership_subscription ms
+                       WHERE ms.order_id = ord.id) AS is_membership
+        FROM billing."order" ord
+        WHERE ord.club_id = :c
+          AND ord.created_at >= :s AND ord.created_at < :e
+          AND ord.status IN ('open','paid')
+          AND ord.settled_by_order_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM billing."order" ch WHERE ch.settled_by_order_id = ord.id)
+    ),
+    cat AS (
+        SELECT id, user_id, status, amount_minor,
+               CASE WHEN is_pack THEN 'pack'
+                    WHEN is_membership THEN 'membership'
+                    WHEN kind = 'lesson' THEN 'lesson'
+                    WHEN kind = 'court' THEN 'court'
+                    WHEN kind = 'class' THEN 'class'
+                    ELSE 'other' END AS category
+        FROM o
+    )
+"""
+
+
+def _earnings_month_bounds(session, month):
+    """(ym, start_ts, end_ts) for a YYYY-MM (default current month, server clock)."""
+    mb = session.execute(
+        text("""
+            SELECT to_char(COALESCE(to_date(:m,'YYYY-MM'), date_trunc('month', now())),'YYYY-MM') AS ym,
+                   date_trunc('month', COALESCE(to_date(:m,'YYYY-MM'), now()))::timestamptz AS s,
+                   (date_trunc('month', COALESCE(to_date(:m,'YYYY-MM'), now()))
+                    + interval '1 month')::timestamptz AS e
+        """),
+        {"m": month},
+    ).mappings().first()
+    return mb["ym"], mb["s"], mb["e"]
+
+
 def earnings_by_service(session, *, club_id, month=None):
     """The ONE 'how is the club earning — by service, by month' reader. Month-scoped and ORDER-based
     (what was billed this month, by order.created_at), so it reconciles cleanly: per service category
@@ -1863,50 +1917,18 @@ def earnings_by_service(session, *, club_id, month=None):
     per-service rows. All guarded → zeros so it never 500s. Reuse-first: composes the existing
     cockpit_coach_earnings / cockpit_memberships / commission.settlement_overview readers."""
     cur = _club_currency(session, club_id=club_id)
-    mb = session.execute(
-        text("""
-            SELECT to_char(COALESCE(to_date(:m,'YYYY-MM'), date_trunc('month', now())),'YYYY-MM') AS ym,
-                   date_trunc('month', COALESCE(to_date(:m,'YYYY-MM'), now()))::timestamptz AS s,
-                   (date_trunc('month', COALESCE(to_date(:m,'YYYY-MM'), now()))
-                    + interval '1 month')::timestamptz AS e
-        """),
-        {"m": month},
-    ).mappings().first()
-    ym, s_dt, e_dt = mb["ym"], mb["s"], mb["e"]
+    ym, s_dt, e_dt = _earnings_month_bounds(session, month)
 
     rows = []
     try:
         rows = session.execute(
-            text("""
-                WITH o AS (
-                    SELECT ord.id, ord.status, ord.amount_minor,
-                           (SELECT COALESCE(b.booking_type, pr.kind) FROM billing.order_line ol
-                              LEFT JOIN diary.booking b  ON b.id = ol.booking_id
-                              LEFT JOIN billing.price   p  ON p.id = ol.price_id
-                              LEFT JOIN billing.product pr ON pr.id = p.product_id
-                             WHERE ol.order_id = ord.id ORDER BY ol.created_at LIMIT 1) AS kind,
-                           EXISTS(SELECT 1 FROM billing.token_wallet w WHERE w.order_id = ord.id) AS is_pack,
-                           EXISTS(SELECT 1 FROM billing.membership_subscription ms
-                                   WHERE ms.order_id = ord.id) AS is_membership
-                    FROM billing."order" ord
-                    WHERE ord.club_id = :c
-                      AND ord.created_at >= :s AND ord.created_at < :e
-                      AND ord.status IN ('open','paid')
-                      AND ord.settled_by_order_id IS NULL
-                      AND NOT EXISTS (SELECT 1 FROM billing."order" ch
-                                       WHERE ch.settled_by_order_id = ord.id)
-                )
-                SELECT CASE WHEN is_pack THEN 'pack'
-                            WHEN is_membership THEN 'membership'
-                            WHEN kind = 'lesson' THEN 'lesson'
-                            WHEN kind = 'court' THEN 'court'
-                            WHEN kind = 'class' THEN 'class'
-                            ELSE 'other' END AS category,
+            text(_EARNINGS_CAT_CTE + """
+                SELECT category,
                        COALESCE(SUM(amount_minor),0) AS billed,
                        COALESCE(SUM(amount_minor) FILTER (WHERE status='paid'),0) AS collected,
                        COALESCE(SUM(amount_minor) FILTER (WHERE status='open'),0) AS outstanding,
                        COUNT(*) AS n
-                FROM o GROUP BY 1
+                FROM cat GROUP BY category
             """),
             {"c": club_id, "s": s_dt, "e": e_dt},
         ).mappings().all()
@@ -1914,17 +1936,14 @@ def earnings_by_service(session, *, club_id, month=None):
         session.rollback()
         rows = []
 
-    _LBL = {"lesson": "Coaching", "court": "Court hire", "class": "Classes",
-            "membership": "Membership", "pack": "Session packs", "other": "Other"}
-    _ORDER = ["lesson", "court", "class", "membership", "pack", "other"]
     by_cat = {r["category"]: r for r in rows}
     services = []
-    for k in _ORDER:
+    for k in _SVC_ORDER:
         r = by_cat.get(k)
         if not r or int(r["billed"] or 0) <= 0:
             continue
         services.append({
-            "key": k, "label": _LBL[k],
+            "key": k, "label": _SVC_LABELS[k],
             "billed_minor": int(r["billed"] or 0),
             "collected_minor": int(r["collected"] or 0),
             "outstanding_minor": int(r["outstanding"] or 0),
@@ -1971,6 +1990,62 @@ def earnings_by_service(session, *, club_id, month=None):
             "mrr_minor": mem["mrr_minor"],
         },
         "services": services,
+    }
+
+
+def earnings_service_clients(session, *, club_id, category, month=None):
+    """The month → service → CLIENT drill: for ONE service category in a month, the clients who make it
+    up, each with their own Billed → Collected → Outstanding (order-based, same CTE as
+    earnings_by_service so the rows sum EXACTLY to that service's totals). Ordered by outstanding then
+    billed (chase-first). Drill each client → the person 360 → their transactions. Guarded → []."""
+    cur = _club_currency(session, club_id=club_id)
+    ym, s_dt, e_dt = _earnings_month_bounds(session, month)
+    cat = (category or "").strip().lower()
+    if cat not in _SVC_LABELS:
+        cat = "other"
+    rows = []
+    try:
+        rows = session.execute(
+            text(_EARNINGS_CAT_CTE + """
+                SELECT c.user_id,
+                       COALESCE(cp.display_name,
+                                NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)), ''),
+                                u.email, 'Walk-in / unknown') AS name,
+                       COALESCE(SUM(c.amount_minor),0) AS billed,
+                       COALESCE(SUM(c.amount_minor) FILTER (WHERE c.status='paid'),0) AS collected,
+                       COALESCE(SUM(c.amount_minor) FILTER (WHERE c.status='open'),0) AS outstanding,
+                       COUNT(*) AS n
+                FROM cat c
+                LEFT JOIN iam."user" u ON u.id = c.user_id
+                LEFT JOIN iam.coach_profile cp ON cp.user_id = c.user_id AND cp.club_id = :c
+                WHERE c.category = :cat
+                GROUP BY c.user_id, cp.display_name, u.first_name, u.surname, u.email
+                ORDER BY outstanding DESC, billed DESC
+            """),
+            {"c": club_id, "s": s_dt, "e": e_dt, "cat": cat},
+        ).mappings().all()
+    except Exception:
+        session.rollback()
+        rows = []
+    clients = [{
+        "user_id": str(r["user_id"]) if r["user_id"] else None,
+        "name": r["name"] or "Walk-in / unknown",
+        "billed_minor": int(r["billed"] or 0),
+        "collected_minor": int(r["collected"] or 0),
+        "outstanding_minor": int(r["outstanding"] or 0),
+        "count": int(r["n"] or 0),
+    } for r in rows]
+    return {
+        "month": ym,
+        "currency": cur,
+        "category": cat,
+        "label": _SVC_LABELS[cat],
+        "clients": clients,
+        "totals": {
+            "billed_minor": sum(c["billed_minor"] for c in clients),
+            "collected_minor": sum(c["collected_minor"] for c in clients),
+            "outstanding_minor": sum(c["outstanding_minor"] for c in clients),
+        },
     }
 
 

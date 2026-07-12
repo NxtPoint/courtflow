@@ -86,7 +86,7 @@
     window.scrollTo(0, 0);
     if (top === "home") return renderHome();
     if (top === "people") return renderPeople();
-    if (top === "money") return renderMoney(parts[1]);
+    if (top === "money") return renderMoney(parts[1], parts[2]);
     if (top === "diary") return renderDiary(parts[1]);
     if (top === "setup") return renderSetup(parts[1]);
     if (top === "overview" || top === "insights") return renderOverview(parts[1]);
@@ -163,10 +163,11 @@
   // ---- HOME (the command center — money · today · people · approvals) ------
   async function renderHome() {
     loading();
-    var hub = {}, today = { events: [] };
+    var hub = {}, today = { events: [] }, earn = null;
     var tk = UI.dateKey(new Date());
     try { hub = await window.AdminAPI.home(); } catch (e) {}
     try { today = await window.API.master({ date_from: tk + "T00:00:00", date_to: tk + "T23:59:59" }); } catch (e) {}
+    try { earn = await window.AdminAPI.earningsByService(); } catch (e) {}
     var mo = hub.money || {}, pe = hub.people || {}, ap = hub.approvals || {}, cur = mo.currency || "ZAR";
     var wrap = el("div", {});
     wrap.appendChild(el("div", { class: "cf-greet" }, [
@@ -204,13 +205,17 @@
     } else { todayBody.push(el("div", { class: "cf-empty", text: "Nothing booked today yet." })); }
     wrap.appendChild(focusCard({ title: "Today at the club", to: "#/diary", cta: "Open diary ›", body: todayBody }));
 
-    // 2) Money
-    wrap.appendChild(focusCard({ title: "Money", to: "#/money", cta: "Settle & review ›", body: [statLine([
-      { value: money(mo.owed_to_club_minor, cur), label: "Owed to the club", tone: (mo.owed_to_club_minor > 0 ? "bad" : "") },
-      { value: money(mo.net_revenue_minor, cur), label: "Net revenue (mo)" },
-      { value: money(mo.rent_due_minor, cur), label: "Coach settlements due" },
-      { value: (mo.active_members || 0), label: "Active members" },
-    ])] }));
+    // 2) Money — the SAME reconciling triad band the Money tab leads with (this month at a glance).
+    // Falls back to the lighter home() stat line if the earnings read failed.
+    var moneyBody = (earn && earn.summary)
+      ? [clubMoneyBand(earn)]
+      : [statLine([
+          { value: money(mo.owed_to_club_minor, cur), label: "Owed to the club", tone: (mo.owed_to_club_minor > 0 ? "bad" : "") },
+          { value: money(mo.net_revenue_minor, cur), label: "Net revenue (mo)" },
+          { value: money(mo.rent_due_minor, cur), label: "Coach settlements due" },
+          { value: (mo.active_members || 0), label: "Active members" },
+        ])];
+    wrap.appendChild(focusCard({ title: "Money", to: "#/money", cta: "Settle & review ›", body: moneyBody }));
 
     // 3) People needing attention
     var pBody = [statLine([
@@ -684,11 +689,11 @@
     ["activity", "Club activity", "Every payment, refund and adjustment"],
   ];
   function clubCur() { return (CLUB && CLUB.currency_code) || "ZAR"; }
-  function renderMoney(section) {
+  function renderMoney(section, sub) {
     if (section === "invoice") return moneyInvoice();
     if (section === "sales") return moneySales();
     if (section === "bookings") return moneyBookings();
-    if (section === "revenue") return moneyRevenue();
+    if (section === "revenue") return sub ? moneyServiceClients(sub) : moneyRevenue();
     if (section === "settlement") return moneySettlement();
     if (section === "approvals") return moneyApprovals();
     if (section === "payments") return moneyPayments();
@@ -1036,14 +1041,58 @@
       svc.forEach(function (x) {
         var chipKind = (["court", "lesson", "class"].indexOf(x.key) >= 0) ? x.key : "";
         var sub = money(x.collected_minor, cur) + " collected" + (x.outstanding_minor > 0 ? " · " + money(x.outstanding_minor, cur) + " owed" : "");
-        l.appendChild(el("div", { class: "cf-item" }, [
+        l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/money/revenue/" + x.key); } }, [
           el("span", { class: "cf-chip " + chipKind, text: x.key }),
           el("div", { class: "cf-item-main" }, [
             el("div", { class: "cf-item-t", text: x.label + "  ·  " + x.count }),
             el("div", { class: "cf-item-s", text: sub }),
           ]),
           el("span", { style: "font-weight:700", text: money(x.billed_minor, cur) }),
+          el("span", { class: "cf-muted", text: "›" }),
         ]));
+      });
+      sc.appendChild(l);
+    }
+    wrap.appendChild(sc);
+    set(wrap);
+  }
+
+  // month → service → CLIENT drill: which clients make up this service's billed/collected/outstanding
+  // this month. Each row → the person 360 (→ their transactions), completing month→service→client→txn.
+  async function moneyServiceClients(category) {
+    loading();
+    var data;
+    try { data = await window.AdminAPI.earningsServiceClients(category, MONEY_MONTH); }
+    catch (e) { set(el("div", {}, [backBar("Earnings by service", "#/money/revenue"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    MONEY_MONTH = data.month;
+    var cur = data.currency || clubCur();
+    var t = data.totals || {};
+    var wrap = el("div", {}, [backBar("Earnings by service", "#/money/revenue")]);
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
+      el("h1", { style: "margin:0", text: data.label || "Service" }),
+      moneyMonthPager(function (n) { MONEY_MONTH = addMonth(MONEY_MONTH, n); moneyServiceClients(category); }),
+    ]));
+    wrap.appendChild(card([window.CRMUI.moneySummary({
+      currency: cur, month: data.month,
+      billed_minor: t.billed_minor, collected_minor: t.collected_minor, outstanding_minor: t.outstanding_minor,
+    })]));
+    var clients = data.clients || [];
+    var sc = card([window.CRMUI.sectionHead("By client · " + clients.length)]);
+    if (!clients.length) sc.appendChild(el("div", { class: "cf-empty", text: "No " + (data.label || "service").toLowerCase() + " billed this month." }));
+    else {
+      var l = el("div", { class: "cf-list" });
+      clients.forEach(function (x) {
+        var sub = money(x.collected_minor, cur) + " collected" + (x.outstanding_minor > 0 ? " · " + money(x.outstanding_minor, cur) + " owed" : "");
+        var row = el("div", { class: "cf-item" + (x.user_id ? " cf-item-tap" : "") }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: x.name + "  ·  " + x.count }),
+            el("div", { class: "cf-item-s", text: sub }),
+          ]),
+          el("span", { style: "font-weight:700", text: money(x.billed_minor, cur) }),
+          (x.user_id ? el("span", { class: "cf-muted", text: "›" }) : null),
+        ].filter(Boolean));
+        if (x.user_id) row.addEventListener("click", function () { go("#/person/" + x.user_id); });
+        l.appendChild(row);
       });
       sc.appendChild(l);
     }

@@ -318,6 +318,9 @@
     //            coach_payouts_due_minor,total_owed_now_minor,active_members,mrr_minor},
     //   services:[{key,label,billed_minor,collected_minor,outstanding_minor,count}]}
     earningsByService: function (month) { return A().apiJSON("/api/admin/financials/earnings-by-service" + (month ? ("?month=" + month) : "")); },
+    // GET /api/admin/financials/service-clients?category=&month= -> {month,currency,category,label,
+    //   clients:[{user_id,name,billed_minor,collected_minor,outstanding_minor,count}], totals:{...}}
+    earningsServiceClients: function (category, month) { return A().apiJSON("/api/admin/financials/service-clients?category=" + encodeURIComponent(category) + (month ? ("&month=" + month) : "")); },
 
     // ---- club <-> coach settlement (payouts + aging) ---------------------
     // GET /api/admin/financials/settlement -> {clients:[{user_id,name,owed_minor,age_days,bucket}],

@@ -1222,6 +1222,21 @@ def get_earnings_by_service():
     return jsonify(data), 200
 
 
+@admin_bp.get("/financials/service-clients")
+def get_earnings_service_clients():
+    """The month → service → CLIENT drill: for ONE service `category` in a `month`, the clients that
+    make up that service's billed/collected/outstanding. `?category=lesson|court|class|membership|
+    pack|other&month=YYYY-MM`. Sums EXACTLY to that service's row in earnings-by-service."""
+    p, err = _admin()
+    if err:
+        return err
+    category = (request.args.get("category") or "other").strip()
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = repo.earnings_service_clients(s, club_id=p.club_id, category=category, month=month)
+    return jsonify(data), 200
+
+
 @admin_bp.get("/financials/memberships")
 def get_cockpit_memberships():
     p, err = _admin()
