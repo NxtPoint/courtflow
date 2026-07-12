@@ -628,8 +628,11 @@
     box.className = ""; UI.clear(box);
     // Honour the class-type filter (if the member picked one above) so only that class's sessions show.
     if (st.classFilter) classes = (classes || []).filter(function (c) { return String(c.resource_id) === String(st.classFilter); });
-    if (!classes.length) { box.appendChild(el("div", { class: "cf-empty", text: "No classes this day — try another." })); return; }
+    if (!classes.length) { box.appendChild(el("div", { class: "cf-empty", text: "No classes this day — pick a highlighted day on the calendar." })); return; }
     var list = el("div", { class: "cf-list" });
+    // A one-line hint so it's unmistakable the rows ARE the action (a member read the list as info and
+    // hunted for a missing "Book" button). Each row also carries a "Book ›" cue on the right.
+    list.appendChild(el("div", { class: "cf-muted cf-tiny", style: "margin:0 2px 6px", text: "Tap a class to continue to payment" }));
     classes.forEach(function (c) {
       var full = c.spots_left === 0;
       var priceMinor = c.price_minor != null ? c.price_minor : c.price;
@@ -649,6 +652,8 @@
           el("div", { class: "cf-item-t", text: c.class_name || "Class" }),
           el("div", { class: "cf-item-s", text: sub }),
         ]),
+        // The explicit call-to-action so the row reads as a button, not just a fact.
+        el("span", { class: "cf-book-cue", text: (full ? "Join waitlist" : "Book") + " ›" }),
       ]));
     });
     box.appendChild(list);
@@ -698,7 +703,10 @@
         var off = st.backdate ? (dd > today) : (dd < today || dd > maxDay);
         var sel = UI.dateKey(dd) === UI.dateKey(st.day);
         var hasClass = !!cdays[UI.dateKey(dd)];
-        grid.appendChild(el("button", { type: "button", class: "cf-cal-day" + (off ? " off" : "") + (sel ? " sel" : ""),
+        // CLASS mode: fade days with NO class so the dotted (class) days stand out — the dot alone was
+        // easy to miss. Selected/off days keep their own styling.
+        var dim = st.type === "class" && !off && !sel && !hasClass;
+        grid.appendChild(el("button", { type: "button", class: "cf-cal-day" + (off ? " off" : "") + (sel ? " sel" : "") + (dim ? " noclass" : ""),
           disabled: off ? "disabled" : null,
           onclick: function () { if (off) return; st.day = dd; st.slot = null; st.selClass = null; renderCalendar(); loadSlots(); refreshSummary(); } }, [
           el("span", { class: "cf-cal-dnum", text: String(day) }),
