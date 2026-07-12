@@ -86,7 +86,7 @@
       var ch = b.charge || {}, state = ch.state || ch.status;
       var owedAmt = (ch.owed_minor != null ? ch.owed_minor : ch.amount_minor);
       var settleAct = cfg.actions && (cfg.actions.settle || cfg.actions.pay);
-      var canFold = ch.billed_minor != null && ["covered", "none", "unknown"].indexOf(state) < 0 && window.CRMUI && window.CRMUI.statementFold;
+      var canFold = ch.billed_minor != null && ["covered", "none", "unknown", "void", "cancelled"].indexOf(state) < 0 && window.CRMUI && window.CRMUI.statementFold;
       if (canFold) {
         // A settlement-paid order has its payment on the parent, so ch.paid_minor is 0 though it IS paid.
         var paidShown = (state === "paid" && !ch.paid_minor) ? ch.invoiced_minor : ch.paid_minor;
@@ -100,6 +100,7 @@
       } else {
         var moneyLine =
           state === "covered" ? "Covered by your membership" :
+          (state === "void" || state === "cancelled") ? "Cancelled — no charge" :
           state === "owed" ? "You owe " + money(owedAmt, cur) :
           state === "pending" ? "Payment pending · " + money(ch.amount_minor, cur) :
           state === "refunded" ? "Refunded " + money(ch.refunded_minor || ch.amount_minor, cur) :

@@ -1456,6 +1456,9 @@ def _booking_charge(session, club_id, order_id, settlement_mode):
                  "FROM billing.order_line WHERE order_id = :o"),
             {"o": str(order_id)},
         ).scalar() or 0) or amt
+        # A voided (cancelled) order is R0 across the board — never bill/invoice it.
+        if o["status"] == "void":
+            billed = 0
         discount = max(0, billed - amt)
         openref = session.execute(
             text("SELECT 1 FROM billing.refund_request WHERE order_id = :o AND status = 'pending' LIMIT 1"),

@@ -1319,7 +1319,9 @@ def _fold_event(row):
     wo = paid = outstanding = refunded = 0
     invoiced = current
     if sstatus == "cancelled" or ostatus == "void":
-        invoiced = 0
+        # A cancelled booking is R0 across the board — its order was voided (a late-cancel fee, if any,
+        # is a SEPARATE order). Zero BILLED too, else it inflates Billed with no reconciling line.
+        billed = discount = invoiced = 0
         state = "cancelled"
     elif ostatus == "written_off":
         wo = current
