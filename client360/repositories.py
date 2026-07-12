@@ -194,9 +194,15 @@ def _payments(session, *, club_id, user_id):
     return _guard(session, _run, [])
 
 
-def _bookings(session, *, club_id, user_id):
+def _bookings(session, *, club_id, user_id, coach_user_id=None):
     """Bookings (as the party) + class enrolments, split upcoming/history. Copied from get_person so
-    the phantom '(court held for lesson)' exclusion + cancelled filter + row shape are identical."""
+    the phantom '(court held for lesson)' exclusion + cancelled filter + row shape are identical.
+    When `coach_user_id` is set (COACH scope), the record is FILTERED to that coach's own events —
+    lessons they run + classes they run — so a coach only ever sees the bookings they were part of
+    (the golden-rule 'coach = a filter on the client record' — never other coaches / court hire)."""
+    lesson_scope = "AND bk.coach_user_id = :coach" if coach_user_id else ""
+    class_scope = "AND cs.coach_user_id = :coach" if coach_user_id else ""
+
     def _run():
         rows = session.execute(
             text("""
@@ -219,6 +225,7 @@ def _bookings(session, *, club_id, user_id):
                 WHERE bk.club_id = :c AND bk.booked_by_user_id = :u
                   AND bk.status <> 'cancelled'
                   AND (bk.booking_type <> 'court' OR bk.notes IS DISTINCT FROM '(court held for lesson)')
+                  """ + lesson_scope + """
                 UNION ALL
                 SELECT NULL::uuid AS booking_id, e.id AS enrolment_id, 'class' AS kind, cs.starts_at, cs.ends_at,
                        e.status, (cs.starts_at >= now()) AS is_upcoming, r.name AS resource_name,
@@ -238,9 +245,10 @@ def _bookings(session, *, club_id, user_id):
                 LEFT JOIN iam.coach_profile cp ON cp.user_id = cs.coach_user_id AND cp.club_id = cs.club_id
                 LEFT JOIN billing."order" oe ON oe.id = e.order_id
                 WHERE e.club_id = :c AND e.user_id = :u AND e.status <> 'cancelled'
+                  """ + class_scope + """
                 ORDER BY starts_at DESC LIMIT 100
             """),
-            {"c": club_id, "u": user_id},
+            {"c": club_id, "u": user_id, "coach": str(coach_user_id) if coach_user_id else None},
         ).mappings().all()
         return _rows(rows)
     allb = _guard(session, _run, [])
@@ -408,13 +416,24 @@ def _activity_summary(session, *, club_id, user_id, month=None):
     return _guard(session, _run, default)
 
 
-def _statement_fold(session, *, club_id, user_id, month=None):
+def _statement_fold(session, *, club_id, user_id, month=None, coach_user_id=None):
     """The client's money as an OUTCOME of their bookings — the SAME reconciling fold the coach + admin
     Money views use (CRMUI.statementFold): Billed − Discount − Written-off = Invoiced ; Invoiced = Paid
     + Outstanding. ORDER-status-driven over THIS month's orders (session date, else raised date), so it
-    reconciles by construction. Excludes settlement WRAPPERS + void (cancelled = R0). Guarded → zeros."""
+    reconciles by construction. Excludes settlement WRAPPERS + void (cancelled = R0). Guarded → zeros.
+    When `coach_user_id` is set (COACH scope), the fold is the coach's OWN coaching with this client
+    (reuses the coach lane's event fold), so it matches the coach-scoped bookings shown above it."""
     default = {"billed_minor": 0, "discount_minor": 0, "written_off_minor": 0, "invoiced_minor": 0,
                "paid_minor": 0, "outstanding_minor": 0, "refunded_minor": 0}
+
+    if coach_user_id:
+        def _coach_run():
+            from coach.repositories import _coach_month_events, _sum_totals
+            ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+            events = _coach_month_events(session, club_id=club_id, coach_user_id=coach_user_id,
+                                         ym=ym, client_user_id=user_id)
+            return _sum_totals(events)
+        return _guard(session, _coach_run, default)
 
     def _run():
         ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
@@ -584,14 +603,47 @@ def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=No
     500-ing OR rolling back the caller's transaction. club_id-scoped throughout.
 
     The payload is a SUPERSET of the legacy admin get_person shape (which delegates here), so
-    existing consumers keep working."""
+    existing consumers keep working.
+
+    COACH SCOPE is a strict FILTER (golden rule — the coach uses the SAME Widgets.ClientRecord as
+    admin/client, just scoped): it returns ONLY contact + the coach's own bookings (events) + the
+    coach's own coaching money fold + the coach's own packages + coaching. Everything else — the
+    client's membership, card payments, full-club statement, dependents, refunds, PII, activity — is
+    OMITTED SERVER-SIDE so a coach's browser never receives it."""
     scope = (scope or "admin").lower()
+    coach_scope = (scope == "coach")
+    cscope_id = coach_user_id if coach_scope else None
     out = _identity(session, club_id=club_id, user_id=user_id)
     if out is None:
         return None
     is_coach = out["is_coach"]
 
-    # --- back-compat blocks (present in every scope; keep get_person's exact shapes) ---
+    # Bookings (the event record) + the money fold + packages — ALL coach-scoped in coach scope, so a
+    # coach only ever sees their own events + their own coaching money + their own packages.
+    upcoming, history, count = _bookings(session, club_id=club_id, user_id=user_id, coach_user_id=cscope_id)
+    out["upcoming"] = upcoming
+    out["history"] = history
+    out["bookings_count"] = count
+    # The reconciling money fold (Billed − Discount − Written-off = Invoiced = Paid + Outstanding) — the
+    # SAME standard everywhere (CRMUI.statementFold); coach-scoped to their coaching in coach scope.
+    out["statement_fold"] = _statement_fold(session, club_id=club_id, user_id=user_id, month=month,
+                                            coach_user_id=cscope_id)
+    out["packages"] = _packages(session, club_id=club_id, user_id=user_id, coach_user_id=cscope_id)
+
+    if coach_scope:
+        # A strict view of THIS coach's relationship with the client — nothing else. (No membership,
+        # payments, full statement, dependents, refunds, PII, activity: omitted, not just UI-hidden.)
+        out["coaching"] = _coaching(session, club_id=club_id, user_id=user_id,
+                                    coach_user_id=coach_user_id, month=month)
+        if coach_user_id is not None:
+            out["service_breakdown"] = _service_breakdown(
+                session, club_id=club_id, coach_user_id=coach_user_id, user_id=user_id, month=month)
+        out["month"] = month
+        out["scope"] = scope
+        out["can"] = _can(scope)
+        return out
+
+    # --- admin / client FULL payload (unchanged shapes; get_person delegates here) ---
     out["membership"] = _membership_line(session, club_id=club_id, user_id=user_id,
                                          currency=out["currency"])
 
@@ -602,46 +654,21 @@ def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=No
                   {"items": [], "count": 0, "total_owed_minor": 0, "currency": out["currency"]})
     out["statement"] = stmt
     out["owed_minor"] = int(stmt.get("total_owed_minor") or 0)
-
     out["payments"] = _payments(session, club_id=club_id, user_id=user_id)
-
-    upcoming, history, count = _bookings(session, club_id=club_id, user_id=user_id)
-    out["upcoming"] = upcoming
-    out["history"] = history
-    out["bookings_count"] = count
 
     if is_coach:
         out["settlement"] = _settlement(session, club_id=club_id, user_id=user_id)
 
-    # --- NEW cross-lane blocks (reuse-first) ---
-    pack_coach = coach_user_id if scope == "coach" else None
     out["membership_status"] = _membership_status(session, club_id=club_id, user_id=user_id)
-    out["packages"] = _packages(session, club_id=club_id, user_id=user_id, coach_user_id=pack_coach)
     out["dependents"] = _dependents(session, club_id=club_id, user_id=user_id)
     out["refunds"] = _refunds(session, club_id=club_id, user_id=user_id)
     out["activity"] = _activity(session, club_id=club_id, user_id=user_id)
-    # Month-at-a-glance summary (sessions played + billed/paid/outstanding) — the clean headline every
-    # scope can show; for the client it replaces the raw transaction firehose. month=None → this month.
     out["activity_summary"] = _activity_summary(session, club_id=club_id, user_id=user_id, month=month)
-    # The reconciling money fold (Billed − Discount − Written-off = Invoiced = Paid + Outstanding) — the
-    # SAME standard the coach + admin Money use, rendered by CRMUI.statementFold across all three apps.
-    out["statement_fold"] = _statement_fold(session, club_id=club_id, user_id=user_id, month=month)
     out["notifications_unread"] = _notifications_unread(session, club_id=club_id, user_id=user_id)
-    # Mission 1.2 — surface the now-linked data on the 360 (via the iam.user<->core.person bridge):
-    # full demographics, consent state, and the CRM/behavioural event stream.
     out["profile"] = _profile(session, user_id=user_id)
     out["consent"] = _consent(session, user_id=user_id)
     out["events"] = _events(session, user_id=user_id)
-
-    # Coaching statement — coach + admin scopes only (the coach's per-client coaching view).
-    if scope in ("coach", "admin"):
-        out["coaching"] = _coaching(session, club_id=club_id, user_id=user_id,
-                                    coach_user_id=(coach_user_id if scope == "coach" else None),
-                                    month=month)
-        # The month → client → SERVICE → transaction middle tier (coach scope: their own services).
-        if scope == "coach" and coach_user_id is not None:
-            out["service_breakdown"] = _service_breakdown(
-                session, club_id=club_id, coach_user_id=coach_user_id, user_id=user_id, month=month)
+    out["coaching"] = _coaching(session, club_id=club_id, user_id=user_id, coach_user_id=None, month=month)
 
     out["month"] = month
     out["scope"] = scope

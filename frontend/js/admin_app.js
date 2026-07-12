@@ -434,7 +434,9 @@
     window.Widgets.ClientRecord.mount(host, {
       scope: { id: id, role: "admin" },
       back: { label: "People", hash: "#/people" },
-      fields: { showActivity: true },
+      // The raw transaction-log "Activity" ream is RETIRED — bookings-as-events (each drilling to the
+      // fold + Transactions) are the record now. (showActivity defaults off.)
+      fields: {},
       data: { get: function (i) { return window.AdminAPI.person(i).then(function (r) { return r.person; }); } },
       onNavigate: function (t) {
         if (!t || !t.id) return;

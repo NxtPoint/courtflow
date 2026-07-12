@@ -1506,27 +1506,8 @@ def coach_month_money(session, *, club_id, coach_user_id, month=None):
             "totals": totals, "clients": clients}
 
 
-def coach_client_detail(session, *, club_id, coach_user_id, client_user_id, month=None):
-    """The lean, coach-scoped CLIENT view (deliberately NOT the Client 360 — privacy). Contact details
-    + every booking THIS coach had with the client this month (each folded to its money state) + the
-    client's folded statement for the coach. Never exposes other coaches / memberships / cross-coach
-    money. Returns None if the client isn't one of this coach's clients this month."""
-    ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
-    cur = _club_currency(session, club_id=club_id)
-    events = _coach_month_events(session, club_id=club_id, coach_user_id=coach_user_id,
-                                 ym=ym, client_user_id=client_user_id)
-    # Contact from iam.user — always resolvable even in a month with no sessions (so the header shows).
-    u = session.execute(
-        text('SELECT id, first_name, surname, email, phone FROM iam."user" WHERE id = :id'),
-        {"id": str(client_user_id)},
-    ).mappings().first()
-    if not u:
-        return None
-    name = " ".join(x for x in [u["first_name"], u["surname"]] if x).strip() or u["email"] or "Client"
-    return {
-        "month": ym,
-        "currency": cur,
-        "client": {"user_id": str(u["id"]), "name": name, "email": u["email"], "phone": u["phone"]},
-        "totals": _sum_totals(events),
-        "events": events,
-    }
+# NOTE: the coach client view is NOT a separate reader anymore — it's the ONE Widgets.ClientRecord over
+# client360.get_client_360(scope='coach') (golden rule; the composer coach-scopes bookings + the money
+# fold server-side). `_coach_month_events` + `_sum_totals` above are still used — the composer's
+# `_statement_fold` imports them to build the coach-scoped fold. (The old `coach_client_detail` +
+# `/clients/<id>/detail` route were retired.)

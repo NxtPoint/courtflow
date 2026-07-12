@@ -441,64 +441,34 @@
   function clName(c) { return [c.first_name, c.surname].filter(Boolean).join(" ").trim() || c.email || "Client"; }
   function clInitials(c) { var n = clName(c).split(/\s+/); return ((n[0] || "C")[0] + (n.length > 1 ? n[n.length - 1][0] : "")).toUpperCase(); }
 
-  // The LEAN, coach-scoped client view (deliberately NOT Client 360 — a coach must not see a client's
-  // dealings with other coaches / memberships / cross-coach money). Just: contact, the client's folded
-  // statement WITH THIS COACH for the month, and every booking (event) — each tapping into the event
-  // story where the coach reviews + edits it within the rules. Data: CoachAPI.clientDetail.
-  async function renderClient(userId) {
-    ensureMonth(); loading();
-    var d = null;
-    try { d = await window.CoachAPI.clientDetail(userId, MONTH); } catch (e) {}
-    if (!d) { set(el("div", {}, [backBar("Clients", "#/clients"), el("div", { class: "cf-empty", text: "Client not found." })])); return; }
-    var cur = d.currency || "ZAR", cl = d.client || {};
+  // The client record — the ONE shared widget (Widgets.ClientRecord), SAME as admin + client. COACH
+  // scope is a strict FILTER: the composer returns only THIS coach's own bookings (events) + coaching
+  // money fold + packages + coaching, and OMITS everything else server-side (membership, card payments,
+  // full-club statement, dependents, refunds, PII, activity). Golden rule: one widget, role = config.
+  function renderClient(userId) {
+    ensureMonth();
     var wrap = el("div", {});
     wrap.appendChild(backBar("Clients", "#/clients"));
-    // Contact header — name + email + cell (the details a coach legitimately needs).
-    wrap.appendChild(card([el("div", { class: "cf-row", style: "align-items:center;gap:12px" }, [
-      el("div", { class: "cf-avatar", style: "width:46px;height:46px;font-size:1.1rem", text: (cl.name || "?").slice(0, 1).toUpperCase() }),
-      el("div", { class: "cf-item-main" }, [
-        el("div", { style: "font-weight:700;font-size:1.12rem", text: cl.name || "Client" }),
-        el("div", { class: "cf-muted", style: "font-size:.86rem", text: [cl.email, cl.phone].filter(Boolean).join(" · ") || "No contact on file" }),
-      ]),
-    ])]));
-    // Folded statement for the month (with you).
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:8px 0 6px" }, [
-      el("h2", { style: "margin:0;font-size:1rem", text: "Statement" }), monthNav(function () { renderClient(userId); }),
-    ]));
-    wrap.appendChild(card([window.CRMUI.statementFold({ currency: cur, month: MONTH, totals: d.totals || {} })]));
-    // Bookings (events) — each drills to the event story to review/edit.
-    var evs = d.events || [];
-    var evCard = card([window.CRMUI.sectionHead("Your bookings" + (evs.length ? " · " + evs.length : ""))]);
-    if (!evs.length) evCard.appendChild(el("div", { class: "cf-empty", text: "No bookings with you in " + monthLabel(MONTH) + "." }));
-    else { var l = el("div", { class: "cf-list" }); evs.forEach(function (e) { l.appendChild(eventMoneyRow(e, cur)); }); evCard.appendChild(l); }
-    wrap.appendChild(evCard);
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin:2px 0 6px" }, [monthNav(function () { renderClient(userId); })]));
+    var host = el("div", {}); wrap.appendChild(host);
     set(wrap);
-  }
-  // ONE booking (event) row inside the client view: type · when · money state → the event story.
-  var STATE_LABEL = { paid: "Paid", owed: "Owed", written_off: "Written off", refunded: "Refunded", cancelled: "Cancelled", pending: "Awaiting payment" };
-  function eventMoneyRow(e, cur) {
-    var when = ""; try { when = UI.fmtDate(e.starts_at) + " · " + UI.fmtTime(e.starts_at); } catch (x) {}
-    var hash = e.id ? (e.kind === "class" ? ("#/class/" + e.id) : ("#/event/" + e.id)) : null;   // both drill to the ONE event story
-    var row = el("div", { class: "cf-item" + (hash ? " cf-item-tap" : "") }, [
-      el("span", { class: "cf-chip " + e.kind, text: typeLabel(e.kind) }),
-      el("div", { class: "cf-item-main" }, [
-        el("div", { class: "cf-item-t", text: when }),
-        el("div", { class: "cf-item-s", text: (STATE_LABEL[e.state] || e.state) + " · " + money(e.invoiced_minor, cur) }),
-      ]),
-      statusChip(e.state === "owed" ? "held" : (e.state === "paid" ? "confirmed" : (e.state === "cancelled" ? "cancelled" : e.state))),
-      (hash ? el("span", { class: "cf-muted", text: "›" }) : null),
-    ].filter(Boolean));
-    if (hash) row.addEventListener("click", function () { go(hash); });
-    return row;
-  }
-  async function arr(id, action, then, it) {
-    try {
-      if (!id) { UI.toast("No coaching charge to act on.", "warn"); return; }
-      if (action === "collect") { await window.CoachAPI.arrearsCollected(id); UI.toast("Marked collected.", "info"); }
-      else if (action === "discount") { var v = window.prompt("New amount (e.g. 250.00):", (((it && it.gross_minor) || 0) / 100).toFixed(2)); if (v === null) return; var f = parseFloat(v); if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; } await window.CoachAPI.arrearsAdjust(id, { gross_minor: Math.round(f * 100) }); UI.toast("Discounted.", "info"); }
-      else { var r = window.prompt("Write off this lesson? Reason (shown to the client & club):", ""); if (r === null) return; await window.CoachAPI.arrearsAdjust(id, { status: "written_off", reason: r }); UI.toast("Written off.", "info"); }
-      if (then) then();
-    } catch (e) { UI.toast(UI.errMsg(e), "error"); }
+    window.Widgets.ClientRecord.mount(host, {
+      scope: { id: userId, role: "coach" },
+      fields: { showDetails: false, showDependents: false, showActivity: false, showEvents: false,
+                showPackages: true, showCoaching: true, showBookings: true },
+      data: { get: function (i) { return window.CoachAPI.client360(i, MONTH).then(function (r) { return r.person; }); } },
+      onNavigate: function (t) {
+        if (!t || !t.id) return;
+        if (t.kind === "person") go("#/client/" + t.id);
+        else if (t.kind === "class") go("#/class/" + t.id);
+        else go("#/event/" + t.id);   // lesson/court booking → the coach's ONE event story
+      },
+      actions: {
+        // Coaching arrears — collect / discount (the same handler the event story uses).
+        collect: { manual: true, run: function (it) { arr(it.id, "collect", function () { renderClient(userId); }); } },
+        discount: { manual: true, run: function (it) { arr(it.id, "discount", function () { renderClient(userId); }, it); } },
+      },
+    });
   }
   async function arr(id, action, then, it) {
     try {

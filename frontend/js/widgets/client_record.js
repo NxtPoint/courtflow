@@ -78,7 +78,9 @@
           ]),
         ]),
       ]);
-      head.appendChild(membershipLine(pn, c));
+      // Membership is the CLIENT's relationship with the CLUB — a coach (a strict filter on their own
+      // events) doesn't see it. The coach payload omits it server-side; skip the line here too.
+      if (((cfg.scope && cfg.scope.role) || "") !== "coach") head.appendChild(membershipLine(pn, c));
       // Edit profile — config-driven (client scope wires it); returns to this record on save.
       if (cfg.onEditProfile) {
         head.appendChild(el("div", { class: "cf-row", style: "margin-top:10px" }, [
@@ -237,14 +239,18 @@
       if (has("write_off")) rowActs.push({ label: cfg.actions.write_off.label || "Write off", tone: "danger", onClick: function (it) { runAct(cfg.actions.write_off, it); } });
       if (has("pay")) rowActs.push({ label: cfg.actions.pay.label || "Pay", onClick: function (it) { runAct(cfg.actions.pay, it); } });
       if (has("request_refund")) rowActs.push({ label: "Request refund", onClick: function (it) { runAct(cfg.actions.request_refund, it); } });
-      var owed = (pn.statement && pn.statement.items) || [];
-      card.appendChild(CRMUI.lineItems(owed.map(function (it) { return Object.assign({}, it, { gross_minor: it.amount_minor }); }), {
-        currency: c,
-        empty: "Nothing owed — all settled.",
-        label: function (it) { return it.description || it.category || "Owed"; },
-        sub: function (it) { return [it.category, it.coach_name, it.date ? fDate(it.date) : ""].filter(Boolean).join(" · "); },
-        actions: rowActs,
-      }));
+      // The owed line-items are the CLIENT's full-club statement — only admin/client have it. A coach's
+      // payload omits it (they see their coaching fold + their bookings-as-events instead).
+      if (pn.statement) {
+        var owed = (pn.statement.items) || [];
+        card.appendChild(CRMUI.lineItems(owed.map(function (it) { return Object.assign({}, it, { gross_minor: it.amount_minor }); }), {
+          currency: c,
+          empty: "Nothing owed — all settled.",
+          label: function (it) { return it.description || it.category || "Owed"; },
+          sub: function (it) { return [it.category, it.coach_name, it.date ? fDate(it.date) : ""].filter(Boolean).join(" · "); },
+          actions: rowActs,
+        }));
+      }
       // Online payments (with an admin Refund action per row).
       var pays = pn.payments || [];
       if (fields.showPayments !== false && pays.length) {

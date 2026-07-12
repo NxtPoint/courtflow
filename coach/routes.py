@@ -594,23 +594,6 @@ def get_coach_money():
     return jsonify(data), 200
 
 
-@coach_bp.get("/clients/<client_user_id>/detail")
-def get_coach_client_detail(client_user_id):
-    """The LEAN, coach-scoped client view (deliberately NOT Client 360 — privacy): contact details +
-    every booking THIS coach had with the client in `?month=` (each folded to its money state) + the
-    client's folded statement. Never exposes other coaches / memberships / cross-coach money."""
-    p, err = _coach()
-    if err:
-        return err
-    month = (request.args.get("month") or "").strip() or None
-    with session_scope() as s:
-        data = repo.coach_client_detail(s, club_id=p.club_id, coach_user_id=p.user_id,
-                                        client_user_id=client_user_id, month=month)
-    if data is None:
-        return jsonify(error="NOT_FOUND"), 404
-    return jsonify(data), 200
-
-
 @coach_bp.get("/clients/<client_user_id>/invoice")
 def get_client_invoice(client_user_id):
     """The printable coaching invoice for one client + month (paid/owed/written-off lines + totals).
