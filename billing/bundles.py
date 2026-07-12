@@ -81,10 +81,14 @@ def _plan_dict(row) -> Optional[Dict[str, Any]]:
 
 
 def list_plans(session, *, club_id, service_kind=None, active_only=True,
-               coach_user_id=None) -> List[Dict[str, Any]]:
+               coach_user_id=None, product_id=None) -> List[Dict[str, Any]]:
     """The club's configured bundle plans (active by default), cheapest-first. Optionally filter to
     one service_kind and/or a coach (for the coach console's own lesson packs). Each plan = the
-    _plan_dict shape."""
+    _plan_dict shape.
+
+    `product_id` scopes to a SPECIFIC service (Private vs Semi-private): show packs for that product
+    OR legacy unscoped ones (product_id NULL) — same shape as the draw match — so the buy-wizard offers
+    exactly the packs that would be drawable for the service being booked, not every coach's packs."""
     where = ["club_id = :c"]
     params: Dict[str, Any] = {"c": str(club_id)}
     if service_kind:
@@ -93,6 +97,9 @@ def list_plans(session, *, club_id, service_kind=None, active_only=True,
     if coach_user_id:
         where.append("coach_user_id = :coach")
         params["coach"] = str(coach_user_id)
+    if product_id:
+        where.append("(product_id = :pid OR product_id IS NULL)")
+        params["pid"] = str(product_id)
     if active_only:
         where.append("active = true")
     rows = session.execute(

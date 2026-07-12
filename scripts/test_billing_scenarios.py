@@ -1943,6 +1943,18 @@ def sc_pack_service_isolation(s, fx):
     check("after assign: GONE from SEMI-PRIVATE", not has_pack(semi))
     BN.assign_plan_product(s, club_id=fx.club_id, plan_id=legacy["id"], product_id=semi)
     check("assign never steals an already-scoped pack (still only PRIVATE)", bool(has_pack(priv)) and not has_pack(semi))
+    # The buy-WIZARD's data source (list_plans) must scope to coach + service too — the "Save on your
+    # lessons" modal was showing EVERY coach's/service's lesson packs (duplicates). After the assign the
+    # pack shows when scoped to PRIVATE, is hidden for SEMI-PRIVATE, and never appears for another coach.
+    def wiz(pid, coach=fx.coach_uid):
+        return [p for p in BN.list_plans(s, club_id=fx.club_id, service_kind="lesson",
+                                         coach_user_id=str(coach), product_id=str(pid))
+                if p["id"] == legacy["id"]]
+    check("buy-wizard scoped to PRIVATE shows the pack", bool(wiz(priv)))
+    check("buy-wizard scoped to SEMI-PRIVATE hides it", not wiz(semi))
+    other = s.execute(text("INSERT INTO iam.\"user\" (email, first_name) VALUES "
+                           "('othercoach@bill.test','Other') RETURNING id")).scalar()
+    check("buy-wizard for ANOTHER coach never sees this coach's pack", not wiz(priv, coach=other))
 
 
 def sc_activity_summary(s, fx):

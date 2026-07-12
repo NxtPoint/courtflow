@@ -24,7 +24,21 @@
   function durLabel(d) { return d ? (d + " min") : "Any length"; }
 
   // ---- catalogue (ONLY what's configured) ------------------------------------
-  function svcPacks() { return (data.bundles.plans || []).filter(function (p) { return p.service_kind === (ui.forKind || "court") && p.active !== false; }); }
+  function svcPacks() {
+    var kind = ui.forKind || "court";
+    var seen = {}, out = [];
+    (data.bundles.plans || []).forEach(function (p) {
+      if (p.service_kind !== kind || p.active === false) return;
+      // Collapse GENUINE duplicate rows only — same coach + service + offer (sessions/price/length/expiry).
+      // Keying on coach+product too means a generic (unscoped) browse never hides a DIFFERENT coach's or
+      // service's pack; it only removes a true double of the same offer.
+      var k = [p.coach_user_id || "", p.product_id || "", p.sessions_count, p.price_minor,
+               p.duration_minutes || 0, p.validity_days || 0].join("|");
+      if (seen[k]) return;
+      seen[k] = 1; out.push(p);
+    });
+    return out;
+  }
   function memPlans() { return (data.mem.plans || []).filter(function (p) { return p.active !== false; }); }
   function paygDurations() {
     var durs = []; svcPacks().forEach(function (p) { var d = p.duration_minutes || 0; if (durs.indexOf(d) < 0) durs.push(d); });
@@ -64,11 +78,16 @@
     }
   }
 
-  // ---- load (once per open) --------------------------------------------------
+  // ---- load (once per SCOPE) -------------------------------------------------
   async function load() {
+    // Scope the pack catalogue to the coach + specific service being booked (when known), so a coach's
+    // Private pack doesn't appear under Semi-private and other coaches' packs don't show at all.
+    var q = "";
+    if (ui.coachId) q += "&coach_id=" + encodeURIComponent(ui.coachId);
+    if (ui.productId) q += "&product_id=" + encodeURIComponent(ui.productId);
     var out = await Promise.all([
       window.TFAuth.apiJSON("/api/billing/membership/status").catch(function () { return {}; }),
-      window.TFAuth.apiJSON("/api/billing/bundles").catch(function () { return {}; }),
+      window.TFAuth.apiJSON("/api/billing/bundles" + (q ? ("?" + q.slice(1)) : "")).catch(function () { return {}; }),
       window.TFAuth.apiJSON("/api/billing/bundles/wallets").catch(function () { return { wallets: [] }; }),
       window.TFAuth.apiJSON("/api/me/plan").catch(function () { return null; }),
     ]);
@@ -81,6 +100,11 @@
   function open(opts) {
     opts = opts || {};
     ui.forKind = (opts.forKind === "lesson" || opts.forKind === "class") ? opts.forKind : "court";
+    // Scope to the coach + service being booked (if given). The catalogue is cached per-scope, so a
+    // change of coach/service forces a reload (else we'd serve the previous coach's packs).
+    var newScope = (opts.coachId || "") + "|" + (opts.productId || "");
+    if (newScope !== ui._scope) { ui.loaded = false; ui._scope = newScope; }
+    ui.coachId = opts.coachId || null; ui.productId = opts.productId || null;
     ui.mode = "payg"; ui.paygDur = null; ui.selPackId = null; ui.memTier = null; ui.selPriceId = null;
     if (ui.bg) _close();
     var bg = el("div", { class: "cf-modal-bg" });

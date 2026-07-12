@@ -385,11 +385,16 @@ def bundles_list():
         return jsonify(error="no_club"), 403
 
     service_kind = (request.args.get("service_kind") or "").strip() or None
+    # Optional scope: the coach + specific service (product) being booked, so the buy-wizard offers ONLY
+    # that coach/service's packs (a coach with two same-kind services no longer shows both, or every coach).
+    coach_id = (request.args.get("coach_id") or "").strip() or None
+    product_id = (request.args.get("product_id") or "").strip() or None
 
     from db import session_scope
     from billing import bundles as bundles_repo
     with session_scope() as s:
-        plans = bundles_repo.list_plans(s, club_id=p.club_id, service_kind=service_kind)
+        plans = bundles_repo.list_plans(s, club_id=p.club_id, service_kind=service_kind,
+                                        coach_user_id=coach_id, product_id=product_id)
         online = bool(_truthy("PAYMENTS_ENABLED") and _club_allows_online(s, p.club_id))
         allowed = _bundle_allowed_modes(s, p.club_id)
     return jsonify(plans=plans, count=len(plans), online_enabled=online,

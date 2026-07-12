@@ -801,7 +801,13 @@
           el("div", { style: "font-weight:700", text: "Save with a plan" }),
           el("div", { class: "cf-muted cf-tiny", text: msg }),
         ]),
-        el("a", { class: "cf-btn cf-btn-sm", href: st.plansHref + "/" + st.type, text: "See plans" }),
+        el("button", { class: "cf-btn cf-btn-sm", type: "button", text: "See plans", onclick: function () {
+          // Open the buy-wizard AS AN OVERLAY (keeps the booking intact), SCOPED to this exact coach +
+          // service — so a lesson shows only THIS coach's packs for THIS service, not every coach's.
+          if (window.PlanWizard && window.PlanWizard.open) {
+            window.PlanWizard.open({ forKind: st.type, coachId: chosenCoachUserId(), productId: chosenProductId() });
+          } else { location.hash = st.plansHref + "/" + st.type; }
+        } }),
       ]),
     ]);
   }
