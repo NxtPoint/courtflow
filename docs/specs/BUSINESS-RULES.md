@@ -48,6 +48,11 @@ a membership tier's lifecycle derives from its term plans' status.
   raising a new charge — a lesson matches a **coach-scoped** wallet, a class a **coach-agnostic** one. Staff
   on-behalf settlement is desk-only (at-court / monthly / the client's pack) — it **skips online (Yoco)**,
   and an online-only per-service preference does not restrict staff.
+- **Back-capture (log a PAST session):** the SAME on-behalf flow opened for a past date. A coach/admin can
+  log a lesson/class that already happened — it **bills the client + credits the coach** but holds **no
+  calendar slot**. Staff-only: `allow_past` is role-gated AND requires an on-behalf booking, so a member can
+  never back-date (that would dodge the booking window / late-cancel logic). A past lesson resolves the
+  coach's resource from `coach_user_id` (no availability slot carries it).
 - **Lesson approval lifecycle (accept / propose / decline).** A coach can require approval of lessons
   clients book with them (`iam.coach_profile.review_bookings`). When ON, a client self-booking that coach
   creates a **`requested`** lesson that **reserves nothing** (no court, no order, no payment) until the
@@ -308,6 +313,11 @@ show active items — dormant/retired vanish for customers but stay visible to t
 ONE `billing.order`, and the amount owed = **SUM of the client's unpaid (`status='open'`) orders** — never
 double-counted (account_ledger and coach_arrears are tracked internally but never added into the total).
 Full spec: [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md).
+- **Admin ad-hoc invoice.** Money → New invoice bills a client for a **service × how-many** (price
+  re-derived server-side, tamper-proof) and/or a **custom fee**, less an optional rand discount → ONE owed
+  `billing.order` (settlement `monthly_account`, on this same statement, settleable online) + emails the
+  client a `/portal` pay link (`POST /api/admin/clients/<id>/invoice` → `admin.create_invoice`). Not booked
+  to the calendar. (Creating the client first requires a **name + valid email** — the pay-link address.)
 - **Pay-all or part-settle.** `GET /api/me/statement` returns the unpaid orders **grouped by category**
   (Coaching / Court hire / Classes / Membership / Session packs / Other, with coach name + date + status).
   `POST /api/me/statement/pay {order_ids?}` creates ONE **settlement order** (`create_settlement_order` —
