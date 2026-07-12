@@ -682,6 +682,20 @@ p{margin:0 0 10px}
 .cf-paycell.owe-ok .cf-payv{color:var(--success)}
 .cf-paycell.owe-bad{border-color:var(--danger);background:var(--danger-bg)}
 .cf-paycell.owe-bad .cf-payv{color:var(--danger)}
+/* Phone: the 3-up KPI/money tiles keep their columns but shrink the value font + allow the cells to
+   shrink below content (minmax(0,1fr)) so long amounts (R25130.00) never overflow the box on mobile. */
+@media(max-width:560px){
+  .cf-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  .cf-stat{padding:11px 6px}
+  .cf-stat-v{font-size:1.02rem;overflow-wrap:anywhere}
+  .cf-stat-k{font-size:.66rem}
+  .cf-metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  .cf-metric{padding:12px 8px}
+  .cf-metric-v{font-size:1.3rem}
+  .cf-paybar{gap:8px}
+  .cf-paycell{padding:11px 10px;min-width:0}
+  .cf-payv{font-size:1.02rem;overflow-wrap:anywhere}
+}
 .cf-settle{display:flex;align-items:center;justify-content:center;width:100%;margin-top:14px;padding:14px;
   border:0;border-radius:12px;background:var(--green);color:#fff;font:700 1rem Inter,system-ui,sans-serif;cursor:pointer}
 .cf-settle:hover{background:var(--green-600)}

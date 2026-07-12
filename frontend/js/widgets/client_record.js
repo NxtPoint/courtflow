@@ -28,6 +28,8 @@
     function cur() { return _pn || {}; }
     function fDate(v) { try { return UI.fmtDate(v); } catch (e) { return v || ""; } }
     function fDT(v) { try { return UI.fmtDate(v) + " " + UI.fmtTime(v); } catch (e) { return v || ""; } }
+    // Compact date for list rows: "4 Jul · 09:00" (no weekday / year) — keeps a long list tight.
+    function fShort(v) { try { var d = new Date(v); return d.getDate() + " " + d.toLocaleDateString(undefined, { month: "short" }) + " · " + UI.fmtTime(v); } catch (e) { return fDT(v); } }
 
     function loading() { UI.clear(host); host.appendChild(el("div", { class: "cf-loading", style: "min-height:200px", text: "Loading…" })); }
     function fail(e) { UI.clear(host); var w = el("div", {}); if (cfg.back) w.appendChild(UI.backBar(cfg.back.label || "Back", cfg.back.hash)); w.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); host.appendChild(w); }
@@ -348,14 +350,18 @@
       rows.forEach(function (b) {
         var k = (b.kind || "court").toLowerCase();
         var tap = !!(b.booking_id || b.enrolment_id) && cfg.onNavigate;
+        // ONE trailing chip = the money state (pay_status) — the booking-status chip was redundant on a
+        // money record and cramped the row (3 chips) on mobile. Compact date keeps the list tight.
+        var payTone = /paid|covered/i.test(b.pay_status || "") ? " confirmed"
+          : /owed|await|pending/i.test(b.pay_status || "") ? " held"
+            : /written|refund|cancel/i.test(b.pay_status || "") ? " cf-chip-muted" : "";
         var row = el("div", { class: "cf-item" + (tap ? " cf-item-tap" : "") }, [
           el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(k) >= 0 ? k : "court"), text: k }),
           el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: fDT(b.starts_at) }),
+            el("div", { class: "cf-item-t", text: fShort(b.starts_at) }),
             el("div", { class: "cf-item-s", text: [b.service, b.resource_name, b.coach_name].filter(Boolean).join(" · ") || "" }),
           ]),
-          b.pay_status ? el("span", { class: "cf-chip", text: b.pay_status }) : null,
-          el("span", { class: "cf-chip " + (b.status === "confirmed" ? "confirmed" : "held"), text: b.status }),
+          b.pay_status ? el("span", { class: "cf-chip" + payTone, text: b.pay_status }) : null,
           tap ? el("span", { class: "cf-muted", text: "›" }) : null,
         ].filter(Boolean));
         if (tap) row.addEventListener("click", function () { cfg.onNavigate({ kind: b.booking_id ? "event" : "class", id: b.booking_id || b.enrolment_id }); });
