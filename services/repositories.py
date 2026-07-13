@@ -97,7 +97,7 @@ def get_service(session, *, club_id, product_id):
     commission · the club's enabled methods (for the payment picker)."""
     prod = session.execute(
         text("SELECT id, kind, name, description, coach_user_id, payment_modes, active, status, "
-             "       members_covered "
+             "       members_covered, COALESCE(max_clients, 1) AS max_clients "
              "FROM billing.product WHERE club_id = :c AND id = :id"),
         {"c": club_id, "id": str(product_id)},
     ).mappings().first()
@@ -166,11 +166,29 @@ def get_service(session, *, club_id, product_id):
         "payment_modes": _modes_list(prod["payment_modes"]),          # None = all club-enabled
         # Court-service membership eligibility (court services only) — false = PAYG-only (clay).
         "members_covered": (bool(prod["members_covered"]) if prod["members_covered"] is not None else True),
+        # Semi-private (squad) cap — how many clients may share one lesson slot (1 = normal private).
+        # Each client is billed their OWN order at the service price (per-head).
+        "max_clients": int(prod["max_clients"] or 1),
         "club_payment_methods": club_payment_methods(session, club_id=club_id),
         "variations": variations,
         "packages": packages,
         "commission": commission,
     }
+
+
+def set_max_clients(session, *, club_id, product_id, max_clients):
+    """Persist the semi-private cap for a lesson service. 1 = a normal private lesson; >1 lets a squad
+    share the slot (each client billed their own order per-head). Clamped to [1, 12]; lessons only."""
+    try:
+        n = max(1, min(12, int(max_clients or 1)))
+    except (TypeError, ValueError):
+        n = 1
+    session.execute(
+        text("UPDATE billing.product SET max_clients = :n, updated_at = now() "
+             "WHERE club_id = :c AND id = :p AND kind = 'lesson'"),
+        {"n": n, "c": club_id, "p": str(product_id)},
+    )
+    return True
 
 
 def set_payment_modes(session, *, club_id, product_id, modes):

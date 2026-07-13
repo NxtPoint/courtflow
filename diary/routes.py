@@ -137,6 +137,23 @@ def _member_by_email(session, club_id, email):
     return str(row["id"]) if row else None
 
 
+def _service_max_clients(session, club_id, product_id):
+    """How many clients a service (billing.product) allows on one slot — 1 for a normal private
+    lesson, >1 for a semi-private / squad. Club-scoped; defaults to 1 (no product → private)."""
+    if not product_id:
+        return 1
+    from sqlalchemy import text
+    row = session.execute(
+        text("SELECT COALESCE(max_clients, 1) AS mc FROM billing.product "
+             "WHERE id = :p AND club_id = :c"),
+        {"p": str(product_id), "c": club_id},
+    ).scalar()
+    try:
+        return max(1, int(row or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 # ---------------------------------------------------------------------------
 # availability + resources (read)
 # ---------------------------------------------------------------------------
@@ -314,6 +331,24 @@ def create_booking():
             return gate
 
     with session_scope() as s:
+        # SEMI-PRIVATE (squad) lesson: extra CLIENTS ride the same slot, each billed their own order
+        # (per-head). Accept member emails or user_ids; resolve to members and CAP at the service's
+        # max_clients (primary + extras). Non-members are ignored (a squad partner must be a member).
+        extra_clients = []
+        raw_extra = b.get("extra_clients") or []
+        if raw_extra and b.get("booking_type") == "lesson":
+            for item in raw_extra:
+                uid = None
+                if isinstance(item, str) and "@" in item:
+                    uid = _member_by_email(s, p.club_id, item.strip())
+                elif isinstance(item, dict):
+                    uid = item.get("user_id") or _member_by_email(s, p.club_id, (item.get("email") or "").strip())
+                else:
+                    uid = item
+                if uid:
+                    extra_clients.append(str(uid))
+            cap = max(0, _service_max_clients(s, p.club_id, b.get("product_id")) - 1)
+            extra_clients = extra_clients[:cap]
         res = bookings_mod.create_booking(
             s, club_id=p.club_id, booked_by_user_id=p.user_id, role=p.role,
             booking_type=b.get("booking_type", "court"),
@@ -325,6 +360,7 @@ def create_booking():
             court_resource_id=b.get("court_resource_id"),
             product_id=b.get("product_id"),   # the chosen SERVICE (Private/Semi-private) → price exactly it
             addons=b.get("addons"),            # equipment hire [{resource_id, qty}] on a court booking
+            extra_clients=extra_clients,       # semi-private squad members (each billed their own order)
             audience=audience, notes=b.get("notes"),
             recurrence_id=b.get("recurrence_id"),
             booked_for_user_id=booked_for_user_id,

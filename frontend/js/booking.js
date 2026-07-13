@@ -840,8 +840,13 @@
 
     if (ctx.dependents && ctx.dependents.length) card.appendChild(playerSection());
 
+    // Semi-private (squad) lesson: add fellow PLAYERS who each get their own bill (not a free guest).
+    var squad = squadSection();
+    if (squad) card.appendChild(squad);
+
     // On-behalf: the client IS the booked party (posted via for_email) — no self player/guest step.
-    if (st.type !== "class" && !st.onBehalf) {
+    // A semi-private lesson uses the squad section above (billable partners), not the free-guest step.
+    if (st.type !== "class" && !st.onBehalf && !isSemiPrivate()) {
       var gName = el("input", { class: "cf-input", placeholder: "Guest name", value: (st.guest && st.guest.name) || "" });
       var gEmail = el("input", { class: "cf-input", type: "email", placeholder: "Guest email (optional)", value: (st.guest && st.guest.email) || "" });
       st._gName = gName; st._gEmail = gEmail;
@@ -935,6 +940,34 @@
     });
     return wrap;
   }
+  function isSemiPrivate() {
+    return st.type === "lesson" && st.selService && (parseInt(st.selService.max_clients, 10) || 1) > 1;
+  }
+  function squadSection() {
+    if (!isSemiPrivate()) return null;
+    var maxPartners = (parseInt(st.selService.max_clients, 10) || 1) - 1;
+    if (maxPartners < 1) return null;
+    if (!st.squad) st.squad = [];
+    var sec = el("div", { class: "cf-confirm-sec" });
+    sec.appendChild(el("h3", { text: "Semi-private — add players" }));
+    sec.appendChild(el("p", { class: "cf-muted cf-tiny",
+      text: "Up to " + maxPartners + " other player" + (maxPartners === 1 ? "" : "s") + " can share this lesson. "
+          + "Each is billed separately at the lesson price — enter their member email." }));
+    var list = el("div", { class: "cf-list" });
+    st.squad.forEach(function (email, i) {
+      var inpE = el("input", { class: "cf-input", type: "email", placeholder: "player email", value: email || "", style: "max-width:260px" });
+      inpE.addEventListener("input", function () { st.squad[i] = inpE.value.trim(); });
+      var rm = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", type: "button", text: "Remove",
+        onclick: function () { st.squad.splice(i, 1); renderConfirm(); } });
+      list.appendChild(el("div", { class: "cf-item" }, [inpE, el("span", { class: "cf-spacer" }), rm]));
+    });
+    sec.appendChild(list);
+    if (st.squad.length < maxPartners) {
+      sec.appendChild(el("button", { class: "cf-btn cf-btn-sm", type: "button", style: "margin-top:8px",
+        text: "+ Add player", onclick: function () { st.squad.push(""); renderConfirm(); } }));
+    }
+    return sec;
+  }
   function captureGuest() {
     if (st.type !== "class" && st._gName) {
       var n = st._gName.value.trim(), em = st._gEmail.value.trim();
@@ -993,6 +1026,11 @@
         if (st.selService) body.product_id = st.selService.product_id;   // charge the CHOSEN service exactly
         body.resource_id = st.slot.resource_id;
         body.court_resource_id = (st.selCourt !== "ANY" && st.selCourt.id) || st.slot.court_resource_id || null;
+        // Semi-private (squad): fellow players, each billed their own order (server caps at max_clients).
+        if (isSemiPrivate() && st.squad && st.squad.length) {
+          var squad = st.squad.map(function (e) { return (e || "").trim(); }).filter(Boolean);
+          if (squad.length) body.extra_clients = squad;
+        }
       } else {
         body.resource_id = st.slot.resource_id;
         if (st.selService && st.selService.product_id) body.product_id = st.selService.product_id;  // the CHOSEN court service → priced exactly

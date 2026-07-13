@@ -267,7 +267,8 @@ def services_for(session, *, club_id, kind, coach_user_id=None, audience="any"):
             params["coach"] = coach_user_id
         rows = session.execute(
             text("SELECT pr.id AS product_id, pr.name, pr.payment_modes, p.duration_minutes, "
-                 "       p.amount_minor, p.id AS price_id, p.currency_code "
+                 "       p.amount_minor, p.id AS price_id, p.currency_code, "
+                 "       COALESCE(pr.max_clients, 1) AS max_clients "
                  "FROM billing.price p JOIN billing.product pr ON pr.id = p.product_id "
                  "WHERE " + " AND ".join(where) +
                  " ORDER BY pr.name NULLS LAST, p.duration_minutes ASC, p.amount_minor ASC"),
@@ -282,6 +283,7 @@ def services_for(session, *, club_id, kind, coach_user_id=None, audience="any"):
                          if m.strip() in _PAY_MODES]
                 svc = {"product_id": pid, "name": r["name"] or _default_name,
                        "payment_modes": (modes or None), "currency_code": r["currency_code"],
+                       "max_clients": int(r["max_clients"] or 1),  # >1 = semi-private (squad) service
                        "durations": []}
                 by_id[pid] = svc
                 out.append(svc)

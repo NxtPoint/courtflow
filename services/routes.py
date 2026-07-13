@@ -144,6 +144,11 @@ def patch_service(product_id):
         if "payment_modes" in b:
             repo.set_payment_modes(s, club_id=p.club_id, product_id=product_id,
                                    modes=b.get("payment_modes"))
+        # Semi-private (squad) cap — a lesson-service config (not commission), so the OWNING coach may
+        # set it too. >1 lets a squad share one slot, each client billed their own order per-head.
+        if "max_clients" in b:
+            repo.set_max_clients(s, club_id=p.club_id, product_id=product_id,
+                                 max_clients=b.get("max_clients"))
         # Court-SERVICE membership eligibility (owner only) — false = a PAYG-only court (e.g. clay), never
         # free for members. Only meaningful for a court service; harmless on others.
         if "members_covered" in b and _is_owner(p):
