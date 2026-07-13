@@ -508,6 +508,7 @@
         mark_completed: { done: "Marked completed.", run: function (b) { return window.API.setBookingStatus(b.id, { status: "completed" }); } },
         mark_no_show: { done: "Marked no-show.", run: function (b) { return window.API.setBookingStatus(b.id, { status: "no_show" }); } },
         reschedule: { manual: true, run: function (b) { rescheduleModal(b, function () { renderEvent(id); }); } },
+        add_player: { manual: true, run: function (b) { window.CRMUI.addLessonPlayerModal({ onSubmit: function (email) { return window.API.addBookingPlayer(b.id, { email: email }); }, onDone: function () { renderEvent(id); } }); } },
         cancel: { tone: "danger", back: true, confirm: "Cancel this session?", done: "Cancelled.", run: function (b) { return window.API.cancelBooking(b.id, { reason: "coach cancelled" }); } },
         add_to_calendar: { manual: true, run: function (b) { addToCalendar(b.ics_url); } },
         // Coaching money (arrears) — coach's write_off is the COACHING write-off, so it belongs in the

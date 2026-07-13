@@ -1463,6 +1463,85 @@ def get_booking(session, *, club_id, booking_id):
     return bk
 
 
+def _can_add_lesson_partner(session, *, booking_id, order_id, booking_type, status):
+    """True if this lesson is semi-private (service max_clients > 1) and still has room for another
+    client — drives the 'Add player' action in the event story (add a squad member after booking)."""
+    if booking_type != "lesson" or status not in ("confirmed", "held", "completed"):
+        return False
+    mc = session.execute(
+        text("SELECT COALESCE(pp.max_clients, 1) FROM billing.order_line ol "
+             "JOIN billing.price prc ON prc.id = ol.price_id "
+             "JOIN billing.product pp ON pp.id = prc.product_id "
+             "WHERE ol.booking_id = :b AND ol.order_id = :o ORDER BY ol.created_at LIMIT 1"),
+        {"b": booking_id, "o": order_id}).scalar()
+    max_clients = int(mc or 1)
+    if max_clients <= 1:
+        return False
+    party_n = session.execute(
+        text("SELECT count(*) FROM diary.booking_party WHERE booking_id = :b AND party_role <> 'guest'"),
+        {"b": booking_id}).scalar() or 0
+    return (1 + int(party_n)) < max_clients   # primary + existing partners still below the cap
+
+
+def add_lesson_partner(session, *, club_id, booking_id, new_user_id, actor_user_id, role, now=None):
+    """Add ANOTHER client to an EXISTING semi-private lesson, AFTER it was first booked. Squad
+    confirmations typically land later, so a coach/admin (or the original booker) can attach the
+    partner when they commit — no need to know both players up front.
+
+    Identical billing to booking two clients together: the new client becomes a booking_party
+    ('partner') and gets their OWN owed order at the same service price (per-head, at_court), linked
+    via order_line.booking_id. Respects the service's max_clients cap. Nothing on the primary changes.
+    Permission is enforced at the route (same gate as reschedule — staff or the booking's owner)."""
+    now = now or datetime.now(timezone.utc)
+    bk = _booking_dict(session, booking_id)
+    if not bk or str(bk["club_id"]) != str(club_id):
+        return _err("NOT_FOUND", 404)
+    if bk["booking_type"] != "lesson":
+        return _err("NOT_A_LESSON", 422, message="only a lesson can be semi-private")
+    if bk["status"] == "cancelled":
+        return _err("BOOKING_CANCELLED", 409, message="that lesson was cancelled")
+    new_user_id = str(new_user_id) if new_user_id else None
+    if not new_user_id or new_user_id == str(bk["booked_by_user_id"]):
+        return _err("BAD_CLIENT", 422, message="pick a different client")
+    # Already on this lesson (as a non-guest party or the primary)?
+    if session.execute(
+        text("SELECT 1 FROM diary.booking_party WHERE booking_id = :b AND user_id = :u "
+             "AND party_role <> 'guest'"), {"b": booking_id, "u": new_user_id}).first():
+        return _err("ALREADY_ON_LESSON", 409, message="that client is already on this lesson")
+    # Resolve the SERVICE (product_id) + its max_clients from the primary order's line, so the added
+    # head is priced by exactly the same service the lesson was booked under (two-tier coach pricing).
+    prod = session.execute(
+        text("SELECT prc.product_id AS pid, COALESCE(pp.max_clients, 1) AS mc "
+             "FROM billing.order_line ol JOIN billing.price prc ON prc.id = ol.price_id "
+             "JOIN billing.product pp ON pp.id = prc.product_id "
+             "WHERE ol.booking_id = :b AND ol.order_id = :o "
+             "ORDER BY ol.created_at LIMIT 1"),
+        {"b": booking_id, "o": bk["order_id"]}).mappings().first()
+    product_id = str(prod["pid"]) if prod and prod["pid"] else None
+    max_clients = int(prod["mc"]) if prod else 1
+    # Cap: primary(1) + existing non-guest partners + this one must fit max_clients.
+    party_n = session.execute(
+        text("SELECT count(*) FROM diary.booking_party WHERE booking_id = :b AND party_role <> 'guest'"),
+        {"b": booking_id}).scalar() or 0
+    if 1 + int(party_n) + 1 > max_clients:
+        return _err("LESSON_FULL", 409,
+                    message="this lesson is already at its client limit (raise Max clients on the service)")
+    # Insert the partner + raise THEIR own owed order (per-head), linked via order_line.booking_id.
+    _insert_party(session, booking_id=booking_id, club_id=club_id,
+                  party={"user_id": new_user_id, "party_role": "partner"})
+    starts = _parse_dt(bk["starts_at"]); ends = _parse_dt(bk["ends_at"])
+    dur = int((ends - starts).total_seconds() // 60)
+    eo = _create_order_guarded(
+        session, club_id=club_id, user_id=new_user_id, booking_id=booking_id,
+        booking_type="lesson", settlement_mode="at_court",
+        parties=[{"user_id": new_user_id, "party_role": "partner"}],
+        resource_id=bk["resource_id"], starts_at=starts, ends_at=ends, audience="member",
+        duration_minutes=dur, coach_user_id=bk["coach_user_id"], product_id=product_id)
+    booking = _booking_dict(session, booking_id)
+    booking["added_order_id"] = eo.get("order_id")
+    return {"ok": True, "booking": booking, "order_id": eo.get("order_id")}
+
+
 def _booking_charge(session, club_id, order_id, settlement_mode):
     """The charge + payment status for a booking's order (guarded cross-lane read). Maps the order
     status to a client word: paid / owed / pending / refunded / cancelled / covered."""
@@ -1648,6 +1727,9 @@ def booking_story(session, *, club_id, user_id, booking_id):
         # is the coach, so the client's action is WITHDRAW (below) — showing Decline 403'd.
         "decline": status == "proposed",
         "withdraw": status == "requested",
+        # A semi-private lesson the client booked — they can add a fellow player later (each billed).
+        "add_player": _can_add_lesson_partner(session, booking_id=b["id"], order_id=b["order_id"],
+                                              booking_type=b["booking_type"], status=status),
     }
     return {
         "id": str(b["id"]),
@@ -1758,6 +1840,9 @@ def coach_booking_story(session, *, club_id, coach_user_id, booking_id):
         "collect": bool(arrears and arrears["status"] == "owed"),
         "discount": bool(arrears and arrears["status"] == "owed"),
         "write_off": bool(arrears and arrears["status"] == "owed"),
+        # Semi-private: the coach can add another client to this lesson later (each billed per-head).
+        "add_player": _can_add_lesson_partner(session, booking_id=b["id"], order_id=b["order_id"],
+                                              booking_type=b["booking_type"], status=status),
     }
     return {
         "id": str(b["id"]),
@@ -1876,6 +1961,9 @@ def admin_booking_story(session, *, club_id, booking_id):
         "mark_completed": status == "confirmed" and started and is_lesson,
         "mark_no_show": status == "confirmed" and started and is_lesson,
         "add_to_calendar": status in ("confirmed", "held", "completed"),
+        # Semi-private: admin can add another client to this lesson later (each billed per-head).
+        "add_player": _can_add_lesson_partner(session, booking_id=b["id"], order_id=b["order_id"],
+                                              booking_type=b["booking_type"], status=status),
         # order money (client charge)
         "desk_pay": order_settleable,
         "refund": charge["refundable"],

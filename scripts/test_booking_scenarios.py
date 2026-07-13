@@ -1156,6 +1156,52 @@ def sc_semi_private_perhead(s, fx):
         check(f"client {idx}'s order voided by the cancel", st == "void", f"status={st}")
 
 
+def sc_semi_private_add_later(s, fx):
+    """SEMI-PRIVATE add-a-player-LATER: a lesson booked solo can gain a second client after the fact
+    (squad confirmations land late). The added client is billed their OWN order (per-head) + becomes
+    visible in their 360; the cap + duplicate + non-lesson guards hold."""
+    print("\n# Semi-private: add a 2nd client to an ALREADY-booked lesson (late confirmation) → their own bill")
+    from client360 import repositories as CL
+    m0, m1, m2 = fx.members[0], fx.members[1], fx.members[2]
+    start, end = at(fx, 13), at(fx, 14)
+    # Book a normal lesson SOLO first (no extra_clients).
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m0, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=utc_iso(start), ends_at=utc_iso(end))
+    check("solo lesson booked", r.get("ok"), str(r))
+    bid = r["booking"]["id"]
+    # The service allows 2 clients (set max_clients=2 on the lesson product for this scratch club).
+    s.execute(text("UPDATE billing.product SET max_clients = 2 WHERE club_id = :c AND kind = 'lesson'"),
+              {"c": fx.club_id})
+    # Coach adds the partner AFTER the fact.
+    a = B.add_lesson_partner(s, club_id=fx.club_id, booking_id=bid, new_user_id=m1,
+                             actor_user_id=fx.coach_uid, role="coach")
+    check("coach adds a 2nd client to the existing lesson", a.get("ok"), str(a))
+    add_oid = a.get("order_id")
+    row = s.execute(text('SELECT o.user_id AS uid, '
+                         ' (SELECT COALESCE(SUM(ol.amount_minor),0) FROM billing.order_line ol '
+                         '    WHERE ol.order_id = o.id) AS amt '
+                         'FROM billing."order" o WHERE o.id = :o'), {"o": add_oid}).mappings().first()
+    check("added client billed their OWN order @ R400",
+          row and str(row["uid"]) == str(m1) and int(row["amt"]) == 40000, str(dict(row) if row else None))
+    # The added client now SEES the lesson in their 360 at their own head.
+    c = CL.get_client_360(s, club_id=fx.club_id, user_id=m1, scope="admin")
+    les = [x for x in ((c.get("upcoming") or []) + (c.get("history") or [])) if x.get("kind") == "lesson"]
+    check("added client sees the lesson in their 360", len(les) == 1 and int(les[0].get("amount_minor") or 0) == 40000,
+          f"lessons={len(les)}")
+    # Guards: duplicate add is refused, and a 3rd client exceeds max_clients=2.
+    dup = B.add_lesson_partner(s, club_id=fx.club_id, booking_id=bid, new_user_id=m1,
+                               actor_user_id=fx.coach_uid, role="coach")
+    check("adding the same client twice is refused", dup.get("error") == "ALREADY_ON_LESSON", str(dup))
+    full = B.add_lesson_partner(s, club_id=fx.club_id, booking_id=bid, new_user_id=m2,
+                                actor_user_id=fx.coach_uid, role="coach")
+    check("a 3rd client past max_clients=2 is refused (LESSON_FULL)", full.get("error") == "LESSON_FULL", str(full))
+    # Cancelling the lesson voids BOTH the primary and the late-added partner's order.
+    B.cancel_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=m0, role="member")
+    st = s.execute(text('SELECT status FROM billing."order" WHERE id = :o'), {"o": add_oid}).scalar()
+    check("the late-added partner's order voids on cancel too", st == "void", f"status={st}")
+
+
 SCENARIOS = [
     sc_cancel_after_start_guard,
     sc_unpriced_booking_refused,
@@ -1178,6 +1224,7 @@ SCENARIOS = [
     sc_class_courts,
     sc_backcapture_past_lesson,
     sc_semi_private_perhead,
+    sc_semi_private_add_later,
 ]
 
 

@@ -475,12 +475,35 @@
     });
   }
 
+  // Add a fellow player to an EXISTING semi-private lesson (squad confirmations land late). Shared by
+  // the coach + admin (+ client) event stories — cfg.onSubmit(email) → Promise; cfg.onDone(res) refreshes.
+  function addLessonPlayerModal(cfg) {
+    cfg = cfg || {};
+    var m = UI.modal("Add a player", {});
+    var email = el("input", { class: "cf-input", type: "email", placeholder: "player@example.com" });
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
+      text: "Add another client to this semi-private lesson. They must be a club member — enter their email. They'll get their OWN bill at the lesson price." }));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Member email" }), email]));
+    var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Add player" });
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" },
+      [el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), btn]));
+    btn.addEventListener("click", function () {
+      var em = email.value.trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) { UI.toast("Enter a valid member email.", "warn"); return; }
+      btn.disabled = true;
+      Promise.resolve(cfg.onSubmit(em)).then(
+        function (res) { UI.toast("Player added — billed their own bill.", "info"); m.close(); if (cfg.onDone) cfg.onDone(res); },
+        function (e) { btn.disabled = false; UI.toast(UI.errMsg(e), "error"); });
+    });
+  }
+
   window.CRMUI = {
     money: money,
     stats: stats,
     moneySummary: moneySummary,
     statementFold: statementFold,
     createClientModal: createClientModal,
+    addLessonPlayerModal: addLessonPlayerModal,
     bars: bars,
     weekChart: weekChart,
     activityBlock: activityBlock,

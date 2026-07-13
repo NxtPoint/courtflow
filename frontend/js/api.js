@@ -73,6 +73,14 @@
         { method: "POST", body: body || {} });
     },
 
+    // POST /api/diary/bookings/:id/add-player  body: {email} | {user_id}
+    // Add another client to an existing semi-private lesson (squad confirmations land late) — each
+    // added client is billed their own order at the lesson price (per-head).
+    addBookingPlayer: function (id, body) {
+      return A().apiJSON("/api/diary/bookings/" + encodeURIComponent(id) + "/add-player",
+        { method: "POST", body: body || {} });
+    },
+
     // POST /api/diary/bookings/:id/status
     // body: {status:"completed"|"no_show"|"attended", party_id?, attended?}
     setBookingStatus: function (id, body) {

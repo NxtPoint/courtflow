@@ -23,6 +23,7 @@
     ["mark_completed", "Session", "Mark completed", "primary"],
     ["mark_no_show", "Session", "No-show", ""],
     ["reschedule", "Session", "Reschedule", ""],
+    ["add_player", "Session", "Add player", ""],
     ["reassign_coach", "Session", "Reassign coach", ""],
     ["add_to_calendar", "Session", "Add to calendar", "ghost"],
     ["cancel", "Session", "Cancel", "danger"],

@@ -426,6 +426,33 @@ def reschedule_booking(booking_id):
     return _result(res)
 
 
+@diary_bp.post("/bookings/<booking_id>/add-player")
+def add_lesson_player(booking_id):
+    """Add ANOTHER client to an existing semi-private lesson AFTER it was booked (squad confirmations
+    land late). Same edit gate as reschedule (staff or the booking's owner). The new client is billed
+    their own owed order at the service price (per-head)."""
+    p = _principal()
+    if not p or not _need_club(p):
+        return jsonify(error="unauthorized"), 401
+    b = _body()
+    with session_scope() as s:
+        bk = bookings_mod.get_booking(s, club_id=p.club_id, booking_id=booking_id)
+        if not bk:
+            return jsonify(error="NOT_FOUND"), 404
+        if not can(p, "reschedule_booking", bk):
+            return jsonify(error="forbidden"), 403
+        uid = (b.get("user_id") or "").strip() or None
+        if not uid:
+            uid = _member_by_email(s, p.club_id, (b.get("email") or "").strip())
+        if not uid:
+            return jsonify(error="MEMBER_NOT_FOUND",
+                           message="No member with that email in your club."), 404
+        res = bookings_mod.add_lesson_partner(
+            s, club_id=p.club_id, booking_id=booking_id, new_user_id=uid,
+            actor_user_id=p.user_id, role=p.role)
+    return _result(res)
+
+
 @diary_bp.post("/bookings/<booking_id>/cancel")
 def cancel_booking(booking_id):
     p = _principal()
