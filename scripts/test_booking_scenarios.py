@@ -67,6 +67,20 @@ def _mk_user(s, email, first):
     ).scalar_one()
 
 
+def _mk_dependent(s, club_id, guardian_user_id, first):
+    """A login-less child (iam.user with NULL email) + the guardian link — so a parent's kids can be
+    booked/billed. Mirrors iam.create_dependent's shape without the login machinery."""
+    du = s.execute(
+        text('INSERT INTO iam."user" (first_name) VALUES (:f) RETURNING id'), {"f": first},
+    ).scalar_one()
+    s.execute(
+        text("INSERT INTO iam.dependent (club_id, guardian_user_id, dependent_user_id, first_name, is_active) "
+             "VALUES (:c, :g, :d, :f, true)"),
+        {"c": club_id, "g": guardian_user_id, "d": du, "f": first},
+    )
+    return str(du)
+
+
 def setup(s):
     fx = Fx()
     fx.club_id = s.execute(
@@ -1202,6 +1216,48 @@ def sc_semi_private_add_later(s, fx):
     check("the late-added partner's order voids on cancel too", st == "void", f"status={st}")
 
 
+def sc_semi_private_dependents(s, fx):
+    """SEMI-PRIVATE with a parent's TWO KIDS on ONE account: each child is a login-less dependent, so
+    BOTH heads bill to the GUARDIAN (spend rolls up to the payer). The parent sees ONE lesson at R800
+    (both kids); each kid is recorded as a player; a cancel voids both the parent's orders."""
+    print("\n# Semi-private: a parent's 2 kids (dependents) → both billed to the PARENT, parent sees R800")
+    from client360 import repositories as CL
+    g = fx.members[0]
+    k1 = _mk_dependent(s, fx.club_id, g, "Kid1")
+    k2 = _mk_dependent(s, fx.club_id, g, "Kid2")
+    s.execute(text("UPDATE billing.product SET max_clients = 2 WHERE club_id = :c AND kind = 'lesson'"),
+              {"c": fx.club_id})
+    start, end = at(fx, 15), at(fx, 16)
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=g, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=utc_iso(start), ends_at=utc_iso(end),
+                         parties=[{"party_role": "player", "user_id": k1}], extra_clients=[k2])
+    check("semi-private for 2 kids booked", r.get("ok"), str(r))
+    bid = r["booking"]["id"]
+    owners = [str(x) for x in s.execute(
+        text('SELECT DISTINCT o.user_id FROM billing."order" o JOIN billing.order_line ol ON ol.order_id = o.id '
+             'WHERE ol.booking_id = :b'), {"b": bid}).scalars()]
+    check("BOTH kids' orders bill the parent", owners == [str(g)], f"owners={owners}")
+    c = CL.get_client_360(s, club_id=fx.club_id, user_id=g, scope="admin")
+    les = [x for x in ((c.get("upcoming") or []) + (c.get("history") or [])) if x.get("kind") == "lesson"]
+    check("parent sees ONE lesson for the squad", len(les) == 1, f"lessons={len(les)}")
+    check("…billed the parent R800 (both kids' heads)",
+          bool(les) and int(les[0].get("amount_minor") or 0) == 80000, str(les[0]) if les else "none")
+    pn = s.execute(text("SELECT count(*) FROM diary.booking_party WHERE booking_id = :b AND party_role <> 'guest'"),
+                   {"b": bid}).scalar()
+    check("both kids recorded as players", pn == 2, f"parties={pn}")
+    # A 3rd head is refused (max_clients=2, two heads already).
+    k3 = _mk_dependent(s, fx.club_id, g, "Kid3")
+    full = B.add_lesson_partner(s, club_id=fx.club_id, booking_id=bid, new_user_id=k3,
+                                actor_user_id=fx.coach_uid, role="coach")
+    check("a 3rd kid past max_clients=2 is refused", full.get("error") == "LESSON_FULL", str(full))
+    B.cancel_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=g, role="member")
+    voids = [str(x) for x in s.execute(
+        text('SELECT DISTINCT o.status FROM billing."order" o JOIN billing.order_line ol ON ol.order_id = o.id '
+             'WHERE ol.booking_id = :b'), {"b": bid}).scalars()]
+    check("cancel voids both kids' orders", voids == ["void"], f"statuses={voids}")
+
+
 SCENARIOS = [
     sc_cancel_after_start_guard,
     sc_unpriced_booking_refused,
@@ -1225,6 +1281,7 @@ SCENARIOS = [
     sc_backcapture_past_lesson,
     sc_semi_private_perhead,
     sc_semi_private_add_later,
+    sc_semi_private_dependents,
 ]
 
 

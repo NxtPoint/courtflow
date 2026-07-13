@@ -1431,7 +1431,7 @@
         mark_no_show: { done: "Marked no-show.", run: function (b) { return window.API.setBookingStatus(b.id, { status: "no_show" }); } },
         reschedule: { manual: true, run: function (b) { timeModal("Reschedule", b, function (body) { return window.API.rescheduleBooking(b.id, { starts_at: body.starts_at, ends_at: body.ends_at, scope: "this" }); }, "Rescheduled.", function () { renderEvent(id); }); } },
         reassign_coach: { manual: true, run: function (b) { reassignModal(b, function () { renderEvent(id); }); } },
-        add_player: { manual: true, run: function (b) { window.CRMUI.addLessonPlayerModal({ onSubmit: function (email) { return window.API.addBookingPlayer(b.id, { email: email }); }, onDone: function () { renderEvent(id); } }); } },
+        add_player: { manual: true, run: function (b) { window.CRMUI.addLessonPlayerModal({ searchFn: function (q) { return window.API.searchBookingMembers(q); }, onSubmit: function (payload) { return window.API.addBookingPlayer(b.id, payload); }, onDone: function () { renderEvent(id); } }); } },
         cancel: { tone: "danger", back: true, confirm: "Cancel this booking and free the slot?", done: "Cancelled.", run: function (b) { return window.API.cancelBooking(b.id, { reason: "admin cancelled" }); } },
         add_to_calendar: { manual: true, run: function (b) { addToCalendar(b.ics_url); } },
         desk_pay: { manual: true, run: function (b) { deskPayModal(b.order_id, b.charge, function () { renderEvent(id); }); } },

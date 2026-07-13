@@ -236,9 +236,16 @@ def _bookings(session, *, club_id, user_id, coach_user_id=None, month=None):
                       AND o2.user_id = :u ORDER BY o2.created_at LIMIT 1
                 ) ob ON true
                 WHERE bk.club_id = :c
-                  AND (bk.booked_by_user_id = :u OR EXISTS(
-                        SELECT 1 FROM diary.booking_party bp WHERE bp.booking_id = bk.id
-                          AND bp.user_id = :u AND bp.party_role <> 'guest'))
+                  AND (bk.booked_by_user_id = :u
+                       OR EXISTS(SELECT 1 FROM diary.booking_party bp WHERE bp.booking_id = bk.id
+                                   AND bp.user_id = :u AND bp.party_role <> 'guest')
+                       -- a guardian sees a lesson their DEPENDENT (child) plays in — the child has no
+                       -- login, and the guardian is billed (order.user_id = guardian), so the amount
+                       -- subquery above sums the guardian's own heads (both kids) for this booking.
+                       OR EXISTS(SELECT 1 FROM diary.booking_party bp
+                                   JOIN iam.dependent d ON d.dependent_user_id = bp.user_id
+                                     AND d.guardian_user_id = :u AND d.is_active = true
+                                  WHERE bp.booking_id = bk.id AND bp.party_role <> 'guest'))
                   AND bk.status <> 'cancelled'
                   AND (bk.booking_type <> 'court' OR bk.notes IS DISTINCT FROM '(court held for lesson)')
                   """ + lesson_scope + lesson_month + """

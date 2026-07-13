@@ -426,6 +426,22 @@ def reschedule_booking(booking_id):
     return _result(res)
 
 
+@diary_bp.get("/members/search")
+def search_members():
+    """Staff-only member picker for the semi-private 'add player' flow: match members by name/email and
+    surface their dependents (kids) as their own rows — so a coach can add a member OR a parent's child
+    by NAME (a parent account with two kids shows both)."""
+    p = _principal()
+    if not p or not _need_club(p):
+        return jsonify(error="unauthorized"), 401
+    if p.role not in ("coach", "club_admin", "platform_admin"):
+        return jsonify(error="forbidden"), 403
+    q = (request.args.get("q") or "").strip()
+    with session_scope() as s:
+        results = iam_repo.search_members_with_dependents(s, club_id=p.club_id, q=q, limit=8)
+    return jsonify(results=results, count=len(results)), 200
+
+
 @diary_bp.post("/bookings/<booking_id>/add-player")
 def add_lesson_player(booking_id):
     """Add ANOTHER client to an existing semi-private lesson AFTER it was booked (squad confirmations

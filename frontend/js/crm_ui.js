@@ -475,25 +475,68 @@
     });
   }
 
-  // Add a fellow player to an EXISTING semi-private lesson (squad confirmations land late). Shared by
-  // the coach + admin (+ client) event stories — cfg.onSubmit(email) → Promise; cfg.onDone(res) refreshes.
+  // Add a fellow player to an EXISTING semi-private lesson (squad confirmations land late). ONE modal,
+  // shared by the coach/admin/client event stories. Role diff is config, not a fork:
+  //   cfg.onSubmit(payload) -> Promise  where payload = {user_id} (picked) or {email} (typed)
+  //   cfg.searchFn(q)       -> Promise<{results:[{user_id,name,kind,email?,guardian_name?}]}>  (staff)
+  //   cfg.onDone(res)       -> refresh the story
+  // Staff pass searchFn → live name search over members + a parent's KIDS (dependents). Without it
+  // (client), the modal is the email box only. A parent picking their own child is handled server-side
+  // (a dependent's bill rolls up to the guardian).
   function addLessonPlayerModal(cfg) {
     cfg = cfg || {};
     var m = UI.modal("Add a player", {});
-    var email = el("input", { class: "cf-input", type: "email", placeholder: "player@example.com" });
     m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
-      text: "Add another client to this semi-private lesson. They must be a club member — enter their email. They'll get their OWN bill at the lesson price." }));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Member email" }), email]));
-    var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Add player" });
+      text: "Add another client to this semi-private lesson — they get their OWN bill at the lesson price. "
+          + (cfg.searchFn ? "Search by name (a parent's children appear too), or type a member email." : "Enter their member email.") }));
+
+    function submit(payload, label) {
+      Promise.resolve(cfg.onSubmit(payload)).then(
+        function (res) { UI.toast((label ? label + " added" : "Player added") + " — billed their own bill.", "info"); m.close(); if (cfg.onDone) cfg.onDone(res); },
+        function (e) { UI.toast(UI.errMsg(e), "error"); });
+    }
+
+    if (cfg.searchFn) {
+      var q = el("input", { class: "cf-input", placeholder: "Search name or email…" });
+      var results = el("div", { class: "cf-list", style: "margin:8px 0;max-height:260px;overflow:auto" });
+      m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Find a member or child" }), q]));
+      m.body.appendChild(results);
+      var timer = null, token = 0;
+      function runSearch() {
+        var term = q.value.trim(); var mine = ++token;
+        if (term.length < 2) { UI.clear(results); return; }
+        Promise.resolve(cfg.searchFn(term)).then(function (r) {
+          if (mine !== token) return;   // a newer keystroke won
+          UI.clear(results);
+          var rows = (r && r.results) || [];
+          if (!rows.length) { results.appendChild(el("div", { class: "cf-empty", text: "No match." })); return; }
+          rows.forEach(function (it) {
+            var sub = it.kind === "dependent" ? ("Child of " + (it.guardian_name || "a member")) : (it.email || "Member");
+            var row = el("button", { class: "cf-item", style: "width:100%;text-align:left;cursor:pointer;border:0;background:none" }, [
+              el("div", { class: "cf-item-main" }, [
+                el("div", { class: "cf-item-t", text: it.name }),
+                el("div", { class: "cf-item-s", text: sub }),
+              ]),
+              it.kind === "dependent" ? el("span", { class: "cf-chip", text: "child" }) : null,
+            ].filter(Boolean));
+            row.addEventListener("click", function () { submit({ user_id: it.user_id }, it.name); });
+            results.appendChild(row);
+          });
+        }, function () { if (mine === token) { UI.clear(results); } });
+      }
+      q.addEventListener("input", function () { clearTimeout(timer); timer = setTimeout(runSearch, 220); });
+    }
+
+    // Always offer a direct email fallback (add a member by email, no search needed).
+    var email = el("input", { class: "cf-input", type: "email", placeholder: "player@example.com" });
+    var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Add by email" });
+    m.body.appendChild(el("div", { class: "cf-field", style: "margin-top:6px" }, [el("label", { text: "…or add a member by email" }), email]));
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" },
       [el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), btn]));
     btn.addEventListener("click", function () {
       var em = email.value.trim();
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) { UI.toast("Enter a valid member email.", "warn"); return; }
-      btn.disabled = true;
-      Promise.resolve(cfg.onSubmit(em)).then(
-        function (res) { UI.toast("Player added — billed their own bill.", "info"); m.close(); if (cfg.onDone) cfg.onDone(res); },
-        function (e) { btn.disabled = false; UI.toast(UI.errMsg(e), "error"); });
+      submit({ email: em });
     });
   }
 

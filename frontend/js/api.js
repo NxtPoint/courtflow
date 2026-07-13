@@ -73,6 +73,11 @@
         { method: "POST", body: body || {} });
     },
 
+    // GET /api/diary/members/search?q=  -> staff picker: members + their dependents (kids) by name
+    searchBookingMembers: function (q) {
+      return A().apiJSON("/api/diary/members/search?q=" + encodeURIComponent(q || ""), { method: "GET" });
+    },
+
     // POST /api/diary/bookings/:id/add-player  body: {email} | {user_id}
     // Add another client to an existing semi-private lesson (squad confirmations land late) — each
     // added client is billed their own order at the lesson price (per-head).

@@ -756,8 +756,10 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     # desk (owed) — a single Yoco checkout can't collect from multiple payers.
     extra_order_ids = []
     for p in extra_parties:
+        # Bill whoever PAYS for this player: the player if a member, else their guardian (a login-less
+        # dependent child bills to the adult) — so a parent's two kids raise two orders BOTH owned by them.
         eo = _create_order_guarded(
-            session, club_id=club_id, user_id=p["user_id"], booking_id=booking_id,
+            session, club_id=club_id, user_id=_bill_owner(session, p["user_id"]), booking_id=booking_id,
             booking_type=booking_type, settlement_mode="at_court", parties=[p],
             resource_id=resource_id, starts_at=starts, ends_at=ends, audience=audience,
             duration_minutes=duration_minutes, coach_user_id=coach_uid, product_id=product_id,
@@ -1463,24 +1465,47 @@ def get_booking(session, *, club_id, booking_id):
     return bk
 
 
-def _can_add_lesson_partner(session, *, booking_id, order_id, booking_type, status):
-    """True if this lesson is semi-private (service max_clients > 1) and still has room for another
-    client — drives the 'Add player' action in the event story (add a squad member after booking)."""
-    if booking_type != "lesson" or status not in ("confirmed", "held", "completed"):
-        return False
+def _bill_owner(session, player_user_id):
+    """Who PAYS for a player: the player themselves if they're a member with their own account, else
+    their GUARDIAN — a login-less dependent (child) is billed to the adult (docs: spend rolls up to the
+    payer = order.user_id = guardian; activity rolls up to the player). So a semi-private with two of a
+    parent's kids raises two per-head orders, BOTH owned by the parent."""
+    try:
+        from iam.repositories import guardian_user_id_for
+        g = guardian_user_id_for(session, str(player_user_id))
+        return str(g) if g else str(player_user_id)
+    except Exception:
+        return str(player_user_id)
+
+
+def _lesson_head_count(session, booking_id):
+    """How many billed CLIENTS (heads) a lesson currently has — one order per head (per-head billing),
+    so a distinct-order count is the head count regardless of members vs dependents."""
+    return int(session.execute(
+        text("SELECT count(DISTINCT order_id) FROM billing.order_line "
+             "WHERE booking_id = :b AND order_id IS NOT NULL"), {"b": booking_id}).scalar() or 0)
+
+
+def _lesson_max_clients(session, booking_id, order_id):
+    """The semi-private cap for a lesson — read from the service (product) the primary order priced under."""
     mc = session.execute(
         text("SELECT COALESCE(pp.max_clients, 1) FROM billing.order_line ol "
              "JOIN billing.price prc ON prc.id = ol.price_id "
              "JOIN billing.product pp ON pp.id = prc.product_id "
              "WHERE ol.booking_id = :b AND ol.order_id = :o ORDER BY ol.created_at LIMIT 1"),
         {"b": booking_id, "o": order_id}).scalar()
-    max_clients = int(mc or 1)
+    return int(mc or 1)
+
+
+def _can_add_lesson_partner(session, *, booking_id, order_id, booking_type, status):
+    """True if this lesson is semi-private (service max_clients > 1) and still has room for another
+    client — drives the 'Add player' action in the event story (add a squad member after booking)."""
+    if booking_type != "lesson" or status not in ("confirmed", "held", "completed"):
+        return False
+    max_clients = _lesson_max_clients(session, booking_id, order_id)
     if max_clients <= 1:
         return False
-    party_n = session.execute(
-        text("SELECT count(*) FROM diary.booking_party WHERE booking_id = :b AND party_role <> 'guest'"),
-        {"b": booking_id}).scalar() or 0
-    return (1 + int(party_n)) < max_clients   # primary + existing partners still below the cap
+    return _lesson_head_count(session, booking_id) < max_clients   # still below the per-head cap
 
 
 def add_lesson_partner(session, *, club_id, booking_id, new_user_id, actor_user_id, role, now=None):
@@ -1519,20 +1544,20 @@ def add_lesson_partner(session, *, club_id, booking_id, new_user_id, actor_user_
         {"b": booking_id, "o": bk["order_id"]}).mappings().first()
     product_id = str(prod["pid"]) if prod and prod["pid"] else None
     max_clients = int(prod["mc"]) if prod else 1
-    # Cap: primary(1) + existing non-guest partners + this one must fit max_clients.
-    party_n = session.execute(
-        text("SELECT count(*) FROM diary.booking_party WHERE booking_id = :b AND party_role <> 'guest'"),
-        {"b": booking_id}).scalar() or 0
-    if 1 + int(party_n) + 1 > max_clients:
+    # Cap by billed HEADS (one order per head) — robust whether the players are members or a parent's
+    # dependents. Already-full → refuse before touching anything.
+    if _lesson_head_count(session, booking_id) + 1 > max_clients:
         return _err("LESSON_FULL", 409,
                     message="this lesson is already at its client limit (raise Max clients on the service)")
-    # Insert the partner + raise THEIR own owed order (per-head), linked via order_line.booking_id.
+    # Insert the partner (the PLAYER — a member or a login-less dependent child) + raise the owed order
+    # to whoever PAYS (the player if a member, else their guardian), linked via order_line.booking_id.
     _insert_party(session, booking_id=booking_id, club_id=club_id,
                   party={"user_id": new_user_id, "party_role": "partner"})
+    bill_user_id = _bill_owner(session, new_user_id)
     starts = _parse_dt(bk["starts_at"]); ends = _parse_dt(bk["ends_at"])
     dur = int((ends - starts).total_seconds() // 60)
     eo = _create_order_guarded(
-        session, club_id=club_id, user_id=new_user_id, booking_id=booking_id,
+        session, club_id=club_id, user_id=bill_user_id, booking_id=booking_id,
         booking_type="lesson", settlement_mode="at_court",
         parties=[{"user_id": new_user_id, "party_role": "partner"}],
         resource_id=bk["resource_id"], starts_at=starts, ends_at=ends, audience="member",

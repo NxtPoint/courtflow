@@ -611,7 +611,7 @@
         add_to_calendar: { manual: true, run: function (b) { addToCalendar(b.ics_url); } },
         receipt: { manual: true, run: function (b) { go("#/billing/order/" + b.charge.order_id); } },
         reschedule: { manual: true, run: function (b) { rescheduleSheet(b); } },
-        add_player: { manual: true, run: function (b) { window.CRMUI.addLessonPlayerModal({ onSubmit: function (email) { return window.API.addBookingPlayer(b.id, { email: email }); }, onDone: function () { renderBookingStory(b.id); } }); } },
+        add_player: { manual: true, run: function (b) { window.CRMUI.addLessonPlayerModal({ onSubmit: function (payload) { return window.API.addBookingPlayer(b.id, payload); }, onDone: function () { renderBookingStory(b.id); } }); } },
         cancel: { manual: true, run: function (b) { cancelBooking(b); } },
         request_refund: { manual: true, run: function (b) { requestRefund(b.charge.order_id); } },
         withdraw: { tone: "danger", back: true, done: "Withdrawn.", run: function (b) { return window.API.cancelBooking(b.id, { reason: "withdrawn" }); } },

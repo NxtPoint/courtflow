@@ -264,6 +264,52 @@ def patch_profile(session, *, user_id, fields):
 # linked to a guardian via iam.dependent, so it can be a booking_party.user_id.
 # ---------------------------------------------------------------------------
 
+def search_members_with_dependents(session, *, club_id, q, limit=8):
+    """Search club members by name/email AND surface members' dependents (children) as their own
+    pickable rows — so the semi-private 'add player' picker can add a MEMBER or one of a parent's KIDS
+    by NAME (a parent account with two kids shows both). Returns a flat list of
+    {user_id, name, email?, kind:'member'|'dependent', guardian_name?}. Club-scoped; guarded to a
+    2-char minimum. A dependent surfaces when its OWN name matches OR its guardian's name/email does."""
+    q = (q or "").strip()
+    if len(q) < 2:
+        return []
+    like = "%" + q.replace("%", "") + "%"
+    out, seen = [], set()
+    for r in session.execute(
+        text("SELECT u.id, u.first_name, u.surname, u.email "
+             "FROM iam.\"user\" u JOIN iam.membership m ON m.user_id = u.id AND m.club_id = :c "
+             "WHERE u.first_name ILIKE :q OR u.surname ILIKE :q OR u.email ILIKE :q "
+             "   OR (COALESCE(u.first_name,'') || ' ' || COALESCE(u.surname,'')) ILIKE :q "
+             "ORDER BY u.first_name, u.surname LIMIT :lim"),
+        {"c": club_id, "q": like, "lim": limit},
+    ).mappings().all():
+        uid = str(r["id"]); seen.add(uid)
+        name = " ".join(x for x in [r["first_name"], r["surname"]] if x).strip() or (r["email"] or "Member")
+        out.append({"user_id": uid, "kind": "member", "name": name, "email": r["email"]})
+    for r in session.execute(
+        text("SELECT d.dependent_user_id, d.first_name, d.surname, "
+             "       gu.first_name AS g_first, gu.surname AS g_surname, gu.email AS g_email "
+             "FROM iam.dependent d "
+             "JOIN iam.\"user\" gu ON gu.id = d.guardian_user_id "
+             "JOIN iam.membership m ON m.user_id = gu.id AND m.club_id = :c "
+             "WHERE d.club_id = :c AND d.is_active = true "
+             "  AND ( d.first_name ILIKE :q OR d.surname ILIKE :q "
+             "        OR (COALESCE(d.first_name,'') || ' ' || COALESCE(d.surname,'')) ILIKE :q "
+             "        OR gu.first_name ILIKE :q OR gu.surname ILIKE :q OR gu.email ILIKE :q "
+             "        OR (COALESCE(gu.first_name,'') || ' ' || COALESCE(gu.surname,'')) ILIKE :q ) "
+             "ORDER BY d.first_name LIMIT :lim"),
+        {"c": club_id, "q": like, "lim": limit * 2},
+    ).mappings().all():
+        uid = str(r["dependent_user_id"])
+        if uid in seen:
+            continue
+        seen.add(uid)
+        gname = " ".join(x for x in [r["g_first"], r["g_surname"]] if x).strip() or (r["g_email"] or "guardian")
+        cname = " ".join(x for x in [r["first_name"], r["surname"]] if x).strip() or "Child"
+        out.append({"user_id": uid, "kind": "dependent", "name": cname, "guardian_name": gname})
+    return out[: limit * 2]
+
+
 def list_dependents(session, *, club_id, guardian_user_id, include_inactive=False):
     """The guardian's dependents in this club. Always scoped by club_id + guardian_user_id."""
     sql = ("SELECT id, dependent_user_id, first_name, surname, dob, relationship, "
