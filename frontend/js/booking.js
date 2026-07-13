@@ -943,6 +943,31 @@
   function isSemiPrivate() {
     return st.type === "lesson" && st.selService && (parseInt(st.selService.max_clients, 10) || 1) > 1;
   }
+  // Local (client-side) kid search — a self-booking member picks from THEIR OWN dependents (the staff
+  // member-search endpoint is not exposed to members). Same {results:[…]} shape the picker expects.
+  function localKidSearch(q) {
+    var term = (q || "").toLowerCase();
+    var kids = (ctx.dependents || []).filter(function (d) { return playerName(d).toLowerCase().indexOf(term) >= 0; })
+      .map(function (d) { return { user_id: d.dependent_user_id, name: playerName(d), kind: "dependent", guardian_name: "your child" }; });
+    return Promise.resolve({ results: kids });
+  }
+  function squadPickerConfig() {
+    var picked = (st.squad || []).map(function (x) { return x.payload && x.payload.user_id; }).filter(Boolean);
+    var primaryDep = st.player && st.player.dependent_user_id;
+    return {
+      // Staff (on-behalf) → the full member+kids search; a self-booking member → their own kids only.
+      searchFn: st.onBehalf ? function (q) { return window.API.searchBookingMembers(q); }
+                            : ((ctx.dependents && ctx.dependents.length) ? localKidSearch : null),
+      excludeIds: picked.concat(primaryDep ? [primaryDep] : []),
+      toast: "Added to the booking.",
+      onSubmit: function (payload, label) {
+        st.squad = st.squad || [];
+        st.squad.push({ payload: payload, name: label || (payload && payload.email) || "Player" });
+        renderConfirm();
+        return true;
+      },
+    };
+  }
   function squadSection() {
     if (!isSemiPrivate()) return null;
     var maxPartners = (parseInt(st.selService.max_clients, 10) || 1) - 1;
@@ -952,19 +977,21 @@
     sec.appendChild(el("h3", { text: "Semi-private — add players" }));
     sec.appendChild(el("p", { class: "cf-muted cf-tiny",
       text: "Up to " + maxPartners + " other player" + (maxPartners === 1 ? "" : "s") + " can share this lesson. "
-          + "Each is billed separately at the lesson price — enter their member email." }));
+          + "Each is billed separately at the lesson price. Add a member or one of your children." }));
     var list = el("div", { class: "cf-list" });
-    st.squad.forEach(function (email, i) {
-      var inpE = el("input", { class: "cf-input", type: "email", placeholder: "player email", value: email || "", style: "max-width:260px" });
-      inpE.addEventListener("input", function () { st.squad[i] = inpE.value.trim(); });
-      var rm = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", type: "button", text: "Remove",
-        onclick: function () { st.squad.splice(i, 1); renderConfirm(); } });
-      list.appendChild(el("div", { class: "cf-item" }, [inpE, el("span", { class: "cf-spacer" }), rm]));
+    st.squad.forEach(function (item, i) {
+      list.appendChild(el("div", { class: "cf-item" }, [
+        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: item.name })]),
+        el("span", { class: "cf-spacer" }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", type: "button", text: "Remove",
+          onclick: function () { st.squad.splice(i, 1); renderConfirm(); } }),
+      ]));
     });
+    if (!st.squad.length) list.appendChild(el("div", { class: "cf-empty", text: "No extra players yet." }));
     sec.appendChild(list);
     if (st.squad.length < maxPartners) {
       sec.appendChild(el("button", { class: "cf-btn cf-btn-sm", type: "button", style: "margin-top:8px",
-        text: "+ Add player", onclick: function () { st.squad.push(""); renderConfirm(); } }));
+        text: "+ Add player", onclick: function () { window.CRMUI.addLessonPlayerModal(squadPickerConfig()); } }));
     }
     return sec;
   }
@@ -1026,9 +1053,10 @@
         if (st.selService) body.product_id = st.selService.product_id;   // charge the CHOSEN service exactly
         body.resource_id = st.slot.resource_id;
         body.court_resource_id = (st.selCourt !== "ANY" && st.selCourt.id) || st.slot.court_resource_id || null;
-        // Semi-private (squad): fellow players, each billed their own order (server caps at max_clients).
+        // Semi-private (squad): fellow players (members or a parent's kids), each billed their own
+        // order (server validates + caps at max_clients). Send the picked {user_id}|{email} payloads.
         if (isSemiPrivate() && st.squad && st.squad.length) {
-          var squad = st.squad.map(function (e) { return (e || "").trim(); }).filter(Boolean);
+          var squad = st.squad.map(function (x) { return x.payload; }).filter(Boolean);
           if (squad.length) body.extra_clients = squad;
         }
       } else {

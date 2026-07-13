@@ -490,9 +490,16 @@
       text: "Add another client to this semi-private lesson — they get their OWN bill at the lesson price. "
           + (cfg.searchFn ? "Search by name (a parent's children appear too), or type a member email." : "Enter their member email.") }));
 
+    var exclude = {};
+    (cfg.excludeIds || []).forEach(function (x) { if (x) exclude[String(x)] = 1; });
     function submit(payload, label) {
-      Promise.resolve(cfg.onSubmit(payload)).then(
-        function (res) { UI.toast((label ? label + " added" : "Player added") + " — billed their own bill.", "info"); m.close(); if (cfg.onDone) cfg.onDone(res); },
+      Promise.resolve(cfg.onSubmit(payload, label)).then(
+        function (res) {
+          if (cfg.toast !== false) {
+            UI.toast(cfg.toast || ((label ? label + " added" : "Player added") + " — billed their own bill."), "info");
+          }
+          m.close(); if (cfg.onDone) cfg.onDone(res);
+        },
         function (e) { UI.toast(UI.errMsg(e), "error"); });
     }
 
@@ -508,7 +515,7 @@
         Promise.resolve(cfg.searchFn(term)).then(function (r) {
           if (mine !== token) return;   // a newer keystroke won
           UI.clear(results);
-          var rows = (r && r.results) || [];
+          var rows = ((r && r.results) || []).filter(function (it) { return !exclude[String(it.user_id)]; });
           if (!rows.length) { results.appendChild(el("div", { class: "cf-empty", text: "No match." })); return; }
           rows.forEach(function (it) {
             var sub = it.kind === "dependent" ? ("Child of " + (it.guardian_name || "a member")) : (it.email || "Member");

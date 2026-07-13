@@ -154,6 +154,27 @@ def _service_max_clients(session, club_id, product_id):
         return 1
 
 
+def _addable_player_uid(session, club_id, uid, *, owner_uid, is_staff):
+    """Validate a semi-private extra PLAYER before billing them. Returns the uid (str) if allowed, else
+    None. Allowed: a club MEMBER (adult with their own account) — anyone may add one (they get their own
+    bill, per the squad rule) — OR a DEPENDENT (child): staff may add any in-club child; a member may add
+    only their OWN. Blocks a member from dumping a bill on an arbitrary account by posting a raw user_id."""
+    if not uid:
+        return None
+    from sqlalchemy import text
+    uid = str(uid)
+    if session.execute(
+        text("SELECT 1 FROM iam.membership WHERE club_id = :c AND user_id = :u LIMIT 1"),
+        {"c": club_id, "u": uid}).first():
+        return uid
+    guardian = session.execute(
+        text("SELECT guardian_user_id FROM iam.dependent WHERE club_id = :c AND dependent_user_id = :u "
+             "AND is_active = true LIMIT 1"), {"c": club_id, "u": uid}).scalar()
+    if guardian and (is_staff or str(guardian) == str(owner_uid)):
+        return uid
+    return None
+
+
 # ---------------------------------------------------------------------------
 # availability + resources (read)
 # ---------------------------------------------------------------------------
@@ -331,12 +352,15 @@ def create_booking():
             return gate
 
     with session_scope() as s:
-        # SEMI-PRIVATE (squad) lesson: extra CLIENTS ride the same slot, each billed their own order
-        # (per-head). Accept member emails or user_ids; resolve to members and CAP at the service's
-        # max_clients (primary + extras). Non-members are ignored (a squad partner must be a member).
+        # SEMI-PRIVATE (squad) lesson: extra PLAYERS ride the same slot, each billed their own order
+        # (per-head). Accept member emails, member user_ids, or a member's DEPENDENT (child) user_id.
+        # Each is validated as addable (see _addable_player_uid — a non-staff booker may only add club
+        # members + their OWN kids, never an arbitrary account) and CAPPED at the service's max_clients.
         extra_clients = []
         raw_extra = b.get("extra_clients") or []
         if raw_extra and b.get("booking_type") == "lesson":
+            is_staff = p.role in _ON_BEHALF_ROLES
+            owner_uid = booked_for_user_id or p.user_id   # whose OWN dependents may be added (non-staff)
             for item in raw_extra:
                 uid = None
                 if isinstance(item, str) and "@" in item:
@@ -345,8 +369,9 @@ def create_booking():
                     uid = item.get("user_id") or _member_by_email(s, p.club_id, (item.get("email") or "").strip())
                 else:
                     uid = item
+                uid = _addable_player_uid(s, p.club_id, uid, owner_uid=owner_uid, is_staff=is_staff)
                 if uid:
-                    extra_clients.append(str(uid))
+                    extra_clients.append(uid)
             cap = max(0, _service_max_clients(s, p.club_id, b.get("product_id")) - 1)
             extra_clients = extra_clients[:cap]
         res = bookings_mod.create_booking(

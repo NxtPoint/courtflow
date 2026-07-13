@@ -1258,6 +1258,28 @@ def sc_semi_private_dependents(s, fx):
     check("cancel voids both kids' orders", voids == ["void"], f"statuses={voids}")
 
 
+def sc_semi_private_addable_guard(s, fx):
+    """Route guard (_addable_player_uid): a MEMBER may add club members + their OWN kids as squad
+    players, but NEVER an arbitrary account or another family's child (no billing a stranger). Staff
+    may add any in-club member/child. This is the security boundary behind the upfront + add-later flows."""
+    print("\n# Semi-private guard: a member can't add someone else's account or child as a squad player")
+    from diary.routes import _addable_player_uid
+    g1, g2 = fx.members[0], fx.members[1]
+    mine = _mk_dependent(s, fx.club_id, g1, "MyKid")
+    theirs = _mk_dependent(s, fx.club_id, g2, "TheirKid")
+    stranger = _mk_user(s, "stranger@nope.test", "Stray")   # a real user with NO membership in this club
+    check("a club member is addable by a member",
+          _addable_player_uid(s, fx.club_id, str(g2), owner_uid=str(g1), is_staff=False) == str(g2))
+    check("my OWN child is addable (non-staff)",
+          _addable_player_uid(s, fx.club_id, mine, owner_uid=str(g1), is_staff=False) == mine)
+    check("another family's child is NOT addable by a member",
+          _addable_player_uid(s, fx.club_id, theirs, owner_uid=str(g1), is_staff=False) is None)
+    check("…but STAFF can add any in-club child",
+          _addable_player_uid(s, fx.club_id, theirs, owner_uid=str(g1), is_staff=True) == theirs)
+    check("a non-member account is never addable (even by staff)",
+          _addable_player_uid(s, fx.club_id, str(stranger), owner_uid=str(g1), is_staff=True) is None)
+
+
 SCENARIOS = [
     sc_cancel_after_start_guard,
     sc_unpriced_booking_refused,
@@ -1282,6 +1304,7 @@ SCENARIOS = [
     sc_semi_private_perhead,
     sc_semi_private_add_later,
     sc_semi_private_dependents,
+    sc_semi_private_addable_guard,
 ]
 
 
