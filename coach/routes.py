@@ -482,6 +482,32 @@ def get_clients():
     return jsonify(clients=rows, count=len(rows)), 200
 
 
+@coach_bp.post("/clients")
+def coach_create_client():
+    """A coach creates a new client (walk-up / off-system) — the SAME as the admin People 'New client'.
+    First name + surname + email required, cell optional. Reuses admin.repositories.create_client
+    (idempotent on email; links to their Clerk login by email on first sign-in)."""
+    p, err = _coach()
+    if err:
+        return err
+    b = _body()
+    first = (b.get("first_name") or "").strip()
+    surname = (b.get("surname") or "").strip()
+    email = (b.get("email") or "").strip()
+    if not first or not surname:
+        return jsonify(error="first name and surname required"), 400
+    from admin import repositories as admin_repo
+    if not admin_repo._EMAIL_RE.match(email):
+        return jsonify(error="valid email required"), 400
+    try:
+        with session_scope() as s:
+            res = admin_repo.create_client(s, club_id=p.club_id, name=(first + " " + surname).strip(),
+                                           email=email, phone=(b.get("phone") or "").strip() or None)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(res), 201
+
+
 @coach_bp.get("/members/search")
 def coach_member_search():
     """Type-ahead lookup of club members (name/email) for 'book a client' — returns email + phone so
