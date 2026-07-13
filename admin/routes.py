@@ -877,15 +877,18 @@ def create_client():
         return err
     b = _body()
     email = (b.get("email") or "").strip()
-    name = (b.get("name") or "").strip()
+    first = (b.get("first_name") or "").strip()
+    surname = (b.get("surname") or "").strip()
+    name = (b.get("name") or "").strip()   # back-compat (older callers)
     # A valid client MUST have a name + a real email (identity key + pay-link/receipt delivery address).
-    if not name:
+    if not first and not name:
         return jsonify(error="name required"), 400
     if not repo._EMAIL_RE.match(email):
         return jsonify(error="valid email required"), 400
     try:
         with session_scope() as s:
-            res = repo.create_client(s, club_id=p.club_id, name=name,
+            res = repo.create_client(s, club_id=p.club_id, first_name=first or None,
+                                     surname=surname or None, name=name or None,
                                      email=email, phone=b.get("phone"))
     except ValueError as e:
         return jsonify(error=str(e)), 400

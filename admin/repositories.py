@@ -970,11 +970,12 @@ def upsert_user_by_email(session, *, email, first_name=None, surname=None, phone
     return row["id"]
 
 
-def create_client(session, *, club_id, name, email, phone=None):
-    """Create (or link) a plain client from the admin 'New client' tool — a walk-up / off-system
-    customer the club needs on the system NOW (e.g. someone who paid on Wix during cutover). Reuses
-    upsert_user_by_email (iam.user keyed by email → they link to their Clerk login by email on first
-    sign-in) + ensures an active 'member' iam.membership. Idempotent on email. Returns
+def create_client(session, *, club_id, name=None, first_name=None, surname=None, email, phone=None):
+    """Create (or link) a plain client from the 'New client' tool (admin OR coach) — a walk-up /
+    off-system customer the club needs on the system NOW. Reuses upsert_user_by_email (iam.user keyed
+    by email → they link to their Clerk login by email on first sign-in) + ensures an active 'member'
+    iam.membership. Idempotent on email. Prefer explicit first_name + surname (correct datastore
+    writeback); falls back to splitting a single `name` for older callers. Returns
     {user_id, email, name, created}."""
     email = (email or "").strip().lower()
     # A valid client MUST carry a name + a real email — the email is the identity key (links them to
@@ -982,10 +983,15 @@ def create_client(session, *, club_id, name, email, phone=None):
     # (the API is the source of truth, not just the admin form).
     if not _EMAIL_RE.match(email):
         raise ValueError("valid email required")
-    nm = (name or "").strip()
-    if not nm:
-        raise ValueError("name required")
-    first, _sep, surname = nm.partition(" ")
+    first = (first_name or "").strip()
+    surname = (surname or "").strip()
+    if not first:
+        # Back-compat: a single `name` → split on the first space (first = word 1, surname = the rest).
+        nm0 = (name or "").strip()
+        if not nm0:
+            raise ValueError("name required")
+        first, _sep, surname = nm0.partition(" ")
+    nm = (first + " " + surname).strip()
     existed = session.execute(
         text("SELECT 1 FROM iam.user WHERE lower(email) = lower(:e)"), {"e": email},
     ).first() is not None

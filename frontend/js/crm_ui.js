@@ -440,11 +440,47 @@
     return wrap;
   }
 
+  // ---- the ONE "new client" modal (admin + coach — golden rule: one component) ---------------
+  // Separate first name + surname (so the datastore writes back correctly, not a name-split), a valid
+  // email (identity + receipts/pay-links), and a country-code cell (+27 SA default). Config:
+  //   { onCreate(body)->Promise, onDone(res)? }  — body = {first_name, surname, email, phone}
+  var DIAL_CODES = [["+27", "🇿🇦 +27"], ["+44", "🇬🇧 +44"], ["+1", "🇺🇸/🇨🇦 +1"], ["+61", "🇦🇺 +61"],
+    ["+91", "🇮🇳 +91"], ["+971", "🇦🇪 +971"], ["+263", "🇿🇼 +263"], ["+267", "🇧🇼 +267"],
+    ["+264", "🇳🇦 +264"], ["+258", "🇲🇿 +258"], ["+260", "🇿🇲 +260"], ["+234", "🇳🇬 +234"], ["+353", "🇮🇪 +353"]];
+  function createClientModal(cfg) {
+    cfg = cfg || {};
+    var m = UI.modal("New client", { lg: true });
+    var first = el("input", { class: "cf-input", placeholder: "First name" });
+    var surname = el("input", { class: "cf-input", placeholder: "Surname" });
+    var email = el("input", { class: "cf-input", type: "email", placeholder: "name@example.com" });
+    var cc = el("select", { class: "cf-select", style: "max-width:130px" });
+    DIAL_CODES.forEach(function (d) { cc.appendChild(el("option", { value: d[0], text: d[1], selected: d[0] === "+27" ? "selected" : null })); });
+    var ph = el("input", { class: "cf-input", type: "tel", placeholder: "83 123 4567", style: "flex:1" });
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem", text: "First name, surname and a valid email are required — the email links them to their login and delivers receipts / pay links. Issue their membership on the next screen." }));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "First name" }), first]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Surname" }), surname]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Email" }), email]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Cell (optional)" }), el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [cc, ph])]));
+    var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Create client" });
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), btn]));
+    btn.addEventListener("click", function () {
+      var fn = first.value.trim(), sn = surname.value.trim(), em = email.value.trim();
+      if (!fn || !sn) { UI.toast("First name and surname are required.", "warn"); return; }
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) { UI.toast("Enter a valid email address.", "warn"); return; }
+      var phone = ph.value.trim() ? (cc.value + " " + ph.value.trim()) : null;
+      btn.disabled = true;
+      Promise.resolve(cfg.onCreate({ first_name: fn, surname: sn, email: em, phone: phone })).then(
+        function (res) { UI.toast((res && res.created === false) ? "Client already existed — opening their record." : "Client created.", "info"); m.close(); if (cfg.onDone) cfg.onDone(res); },
+        function (e) { btn.disabled = false; UI.toast(UI.errMsg(e), "error"); });
+    });
+  }
+
   window.CRMUI = {
     money: money,
     stats: stats,
     moneySummary: moneySummary,
     statementFold: statementFold,
+    createClientModal: createClientModal,
     bars: bars,
     weekChart: weekChart,
     activityBlock: activityBlock,

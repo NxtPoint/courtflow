@@ -501,7 +501,7 @@ def coach_create_client():
         return jsonify(error="valid email required"), 400
     try:
         with session_scope() as s:
-            res = admin_repo.create_client(s, club_id=p.club_id, name=(first + " " + surname).strip(),
+            res = admin_repo.create_client(s, club_id=p.club_id, first_name=first, surname=surname,
                                            email=email, phone=(b.get("phone") or "").strip() or None)
     except ValueError as e:
         return jsonify(error=str(e)), 400

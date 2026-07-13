@@ -442,29 +442,11 @@
     }
     set(wrap);
   }
-  // Create a new client (walk-up / off-system) — first name + surname + email required, cell optional.
-  // Same as the admin People 'New client'. On success, opens their record.
+  // The ONE shared new-client modal (CRMUI.createClientModal — same component the admin uses).
   function newClientModal() {
-    var m = modal("New client");
-    var first = el("input", { class: "cf-input", placeholder: "First name" });
-    var surname = el("input", { class: "cf-input", placeholder: "Surname" });
-    var email = el("input", { class: "cf-input", type: "email", placeholder: "Email (for receipts & login)" });
-    var cell = el("input", { class: "cf-input", type: "tel", placeholder: "Cell (optional)" });
-    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem", text: "Add someone who isn't on the system yet. They link to their login by email when they first sign in." }));
-    [["First name", first], ["Surname", surname], ["Email", email], ["Cell (optional)", cell]].forEach(function (f) {
-      m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: f[0] }), f[1]]));
-    });
-    var save = el("button", { class: "cf-btn cf-btn-primary", text: "Create client" });
-    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
-      el("button", { class: "cf-btn", text: "Close", onclick: m.close }), save,
-    ]));
-    save.addEventListener("click", function () {
-      if (!first.value.trim() || !surname.value.trim()) { UI.toast("First name and surname are required.", "warn"); return; }
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) { UI.toast("Enter a valid email.", "warn"); return; }
-      save.disabled = true;
-      window.CoachAPI.createClient({ first_name: first.value.trim(), surname: surname.value.trim(), email: email.value.trim(), phone: cell.value.trim() || null })
-        .then(function (res) { UI.toast("Client created.", "info"); m.close(); if (res && res.user_id) go("#/client/" + res.user_id); else renderClients(); },
-          function (e) { save.disabled = false; UI.toast(UI.errMsg(e), "error"); });
+    window.CRMUI.createClientModal({
+      onCreate: function (body) { return window.CoachAPI.createClient(body); },
+      onDone: function (res) { if (res && res.user_id) go("#/client/" + res.user_id); else renderClients(); },
     });
   }
   function clName(c) { return [c.first_name, c.surname].filter(Boolean).join(" ").trim() || c.email || "Client"; }
