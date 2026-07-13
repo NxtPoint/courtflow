@@ -448,7 +448,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                    coach_user_id=None, court_resource_id=None, audience="member",
                    notes=None, recurrence_id=None, hold_minutes=HOLD_MINUTES_DEFAULT,
                    booked_for_user_id=None, propose=False, product_id=None, addons=None,
-                   allow_past=False, now=None):
+                   allow_past=False, now=None, extra_clients=None):
     """Create a court/lesson/class booking, concurrency-safe (docs/03 §4).
 
     For a lesson, pass court_resource_id to auto-hold a court in the SAME transaction (two
@@ -468,6 +468,19 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     # On-behalf override: persist the booking under the client, not the actor.
     owner_user_id = booked_for_user_id or booked_by_user_id
     parties = parties or []
+    # SEMI-PRIVATE (squad) lessons: extra CLIENTS ride the SAME lesson slot but are billed PER HEAD —
+    # each gets their OWN owed order at the service price (never merged onto the primary's order). They
+    # are booking_party rows on this booking, so they show in each client's own statement / person-360,
+    # and a cancel voids every order via order_line.booking_id. Only meaningful for a lesson.
+    extra_parties = []
+    if extra_clients and booking_type == "lesson":
+        seen_extra = {str(owner_user_id)}
+        for ec in extra_clients:
+            uid = ec.get("user_id") if isinstance(ec, dict) else ec
+            if not uid or str(uid) in seen_extra:
+                continue
+            seen_extra.add(str(uid))
+            extra_parties.append({"user_id": str(uid), "party_role": "partner"})
     starts = _parse_dt(starts_at)
     ends = _parse_dt(ends_at)
     if ends <= starts:
@@ -701,6 +714,8 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                 )
             for p in parties:
                 _insert_party(session, booking_id=booking_id, club_id=club_id, party=p)
+            for p in extra_parties:  # semi-private squad members (billed on their own orders below)
+                _insert_party(session, booking_id=booking_id, club_id=club_id, party=p)
             # EQUIPMENT add-ons (court bookings only): lock each item, re-check availability by TIME,
             # insert booking_equipment rows, and collect their billing lines — all inside THIS savepoint,
             # so an unavailable item (or a race for the last unit) rolls the whole booking back cleanly.
@@ -735,7 +750,24 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         if linked_court_id:
             _attach_order(session, linked_court_id, order_id)
 
+    # SEMI-PRIVATE per-head billing: one owed order per extra client at the SAME service price. Never
+    # attached to booking.order_id (that stays the primary's) — they link via order_line.booking_id, so
+    # cancel_booking voids them all and each client sees only their own line. Extras always settle at the
+    # desk (owed) — a single Yoco checkout can't collect from multiple payers.
+    extra_order_ids = []
+    for p in extra_parties:
+        eo = _create_order_guarded(
+            session, club_id=club_id, user_id=p["user_id"], booking_id=booking_id,
+            booking_type=booking_type, settlement_mode="at_court", parties=[p],
+            resource_id=resource_id, starts_at=starts, ends_at=ends, audience=audience,
+            duration_minutes=duration_minutes, coach_user_id=coach_uid, product_id=product_id,
+        )
+        if eo.get("order_id"):
+            extra_order_ids.append(eo["order_id"])
+
     booking = _booking_dict(session, booking_id)
+    if extra_order_ids:
+        booking["extra_order_ids"] = extra_order_ids
 
     # Online stays held -> return checkout; everything else is confirmed -> emit.
     if online:
@@ -1011,16 +1043,23 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
         _credit_linked_tokens(session, club_id=club_id, order_id=bk["order_id"],
                               except_booking_id=booking_id, reason=reason or "cancellation")
 
-    # A cancelled booking must NOT leave a phantom debt: void its owed order (open/awaiting_payment)
-    # so it drops off the client's statement AND off the coach's tab (void_order clears arrears too).
+    # A cancelled booking must NOT leave a phantom debt: void its owed order(s) (open/awaiting_payment)
+    # so it drops off each client's statement AND off the coach's tab (void_order clears arrears too).
     # A PAID order is left intact — refunding a paid booking is a separate, explicit flow. Mirrors
-    # cancel_membership. (Without this, a cancelled court still showed as owed in Billing.)
-    if bk.get("order_id"):
-        try:
-            from billing.statement import void_order
-            void_order(session, club_id=club_id, order_id=bk["order_id"], reason="booking cancelled")
-        except Exception:
-            log.info("cancel_booking: order void skipped (billing unavailable) order=%s", bk.get("order_id"))
+    # cancel_membership. SEMI-PRIVATE: a squad lesson raises ONE order PER head (all linked via
+    # order_line.booking_id, not booking.order_id), so we void EVERY order referencing this booking —
+    # a bare booking.order_id would leave the partners' debts stranded.
+    try:
+        from billing.statement import void_order
+        order_ids = [r[0] for r in session.execute(
+            text("SELECT DISTINCT order_id FROM billing.order_line WHERE booking_id = :b"),
+            {"b": booking_id}).all() if r[0]]
+        if bk.get("order_id") and bk["order_id"] not in order_ids:
+            order_ids.append(bk["order_id"])
+        for oid in order_ids:
+            void_order(session, club_id=club_id, order_id=oid, reason="booking cancelled")
+    except Exception:
+        log.info("cancel_booking: order void skipped (billing unavailable) order=%s", bk.get("order_id"))
 
     # Actually BILL the late-cancel / no-show fee (owner decision M6): raise a small owed order on
     # the client so it lands on their statement to collect. Guarded + best-effort — never blocks the

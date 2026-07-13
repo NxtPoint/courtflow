@@ -1364,15 +1364,17 @@ def _fold_event(row):
 
 _COACH_EVENTS_SQL = """
     SELECT b.id AS event_id, 'lesson' AS kind, b.starts_at, b.ends_at,
-           b.status AS session_status, b.booked_by_user_id AS client_user_id,
-           b.order_id, o.status AS order_status,
+           b.status AS session_status, o.user_id AS client_user_id,
+           o.id AS order_id, o.status AS order_status,
            COALESCE(ol.original_amount_minor, ol.amount_minor) AS billed,
            ol.amount_minor AS current_amt,
            u.first_name, u.surname, u.email, u.phone
+    -- One row PER order line (per head): a semi-private lesson has one booking but one order per client,
+    -- so client/order/status come from the LINE's own order, never the booking's primary order_id.
     FROM diary.booking b
     JOIN billing.order_line ol ON ol.booking_id = b.id AND ol.club_id = b.club_id
-    LEFT JOIN billing."order" o ON o.id = b.order_id
-    LEFT JOIN iam."user" u ON u.id = b.booked_by_user_id
+    LEFT JOIN billing."order" o ON o.id = ol.order_id
+    LEFT JOIN iam."user" u ON u.id = o.user_id
     WHERE b.club_id = :c AND b.coach_user_id = :u AND b.booking_type = 'lesson'
       AND b.order_id IS NOT NULL AND b.status NOT IN ('requested','proposed')
       AND to_char(b.starts_at, 'YYYY-MM') = :ym
@@ -1403,7 +1405,7 @@ def _coach_month_events(session, *, club_id, coach_user_id, ym, client_user_id=N
     params = {"c": str(club_id), "u": str(coach_user_id), "ym": ym}
     lesson_client = class_client = ""
     if client_user_id:
-        lesson_client = "AND b.booked_by_user_id = :cl"
+        lesson_client = "AND o.user_id = :cl"
         class_client = "AND e.user_id = :cl"
         params["cl"] = str(client_user_id)
     sql = _COACH_EVENTS_SQL.format(lesson_client=lesson_client, class_client=class_client)

@@ -1102,6 +1102,60 @@ def sc_backcapture_past_lesson(s, fx):
           f"kinds={kinds}")
 
 
+def sc_semi_private_perhead(s, fx):
+    """SEMI-PRIVATE (squad) lesson: one slot, TWO clients, each billed their OWN order at the service
+    price (PER HEAD — never summed onto one payer). Both see the lesson once in their person-360 at
+    their own head; a cancel voids BOTH debts (no partner left stranded owing)."""
+    print("\n# Semi-private lesson: 2 clients, one slot → 1 order EACH (per-head), both billed + "
+          "visible; cancel voids both")
+    from client360 import repositories as CL
+    m0, m1 = fx.members[0], fx.members[1]
+    start, end = at(fx, 11), at(fx, 12)
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m0, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=utc_iso(start), ends_at=utc_iso(end), extra_clients=[m1])
+    ok = r.get("ok")
+    check("semi-private lesson booked", ok, str(r))
+    b = r.get("booking") or {}
+    bid = b.get("id"); prim_oid = b.get("order_id")
+    extra = b.get("extra_order_ids") or []
+    check("one EXTRA order raised for the partner", len(extra) == 1, f"extra={extra}")
+
+    def _owner_amt(oid):
+        row = s.execute(text('SELECT o.user_id AS uid, '
+                             ' (SELECT COALESCE(SUM(ol.amount_minor),0) FROM billing.order_line ol '
+                             '    WHERE ol.order_id = o.id) AS amt '
+                             'FROM billing."order" o WHERE o.id = :o'), {"o": oid}).mappings().first()
+        return (str(row["uid"]), int(row["amt"])) if row else (None, None)
+
+    p_owner, p_amt = _owner_amt(prim_oid)
+    e_owner, e_amt = _owner_amt(extra[0]) if extra else (None, None)
+    check("primary billed to client 1 @ R400", p_owner == str(m0) and p_amt == 40000, f"{p_owner}/{p_amt}")
+    check("partner billed to client 2 @ R400 (per-head, not doubled)",
+          e_owner == str(m1) and e_amt == 40000, f"{e_owner}/{e_amt}")
+    # Both orders reference the ONE lesson booking (linked via order_line.booking_id, not order_id).
+    linked = {str(x) for x in s.execute(
+        text("SELECT DISTINCT order_id FROM billing.order_line WHERE booking_id = :b"),
+        {"b": bid}).scalars()}
+    check("both orders link to the one lesson booking",
+          {str(prim_oid), str(extra[0])} <= linked if extra else False, str(linked))
+    # person-360: EACH client sees the lesson ONCE, at THEIR OWN R400 (never the R800 table total).
+    for idx, who in enumerate((m0, m1), start=1):
+        c = CL.get_client_360(s, club_id=fx.club_id, user_id=who, scope="admin")
+        les = [x for x in ((c.get("upcoming") or []) + (c.get("history") or []))
+               if x.get("kind") == "lesson"]
+        check(f"client {idx} sees the semi-private lesson in their 360 exactly once", len(les) == 1,
+              f"lessons={len(les)}")
+        check(f"client {idx}'s 360 lesson shows their OWN head R400",
+              bool(les) and int(les[0].get("amount_minor") or 0) == 40000,
+              str(les[0]) if les else "none")
+    # Cancel the lesson → BOTH clients' owed orders void (no phantom debt on the partner).
+    B.cancel_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=m0, role="member")
+    for idx, oid in enumerate((prim_oid, extra[0] if extra else None), start=1):
+        st = s.execute(text('SELECT status FROM billing."order" WHERE id = :o'), {"o": oid}).scalar() if oid else None
+        check(f"client {idx}'s order voided by the cancel", st == "void", f"status={st}")
+
+
 SCENARIOS = [
     sc_cancel_after_start_guard,
     sc_unpriced_booking_refused,
@@ -1123,6 +1177,7 @@ SCENARIOS = [
     sc_court_service_allocation,
     sc_class_courts,
     sc_backcapture_past_lesson,
+    sc_semi_private_perhead,
 ]
 
 

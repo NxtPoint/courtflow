@@ -221,14 +221,24 @@ def _bookings(session, *, club_id, user_id, coach_user_id=None, month=None):
                           LEFT JOIN billing.product p ON p.id = prc.product_id
                           WHERE ol.booking_id = bk.id ORDER BY ol.created_at LIMIT 1) AS service_raw,
                        (SELECT COALESCE(SUM(ol.amount_minor),0) FROM billing.order_line ol
-                          WHERE ol.booking_id = bk.id) AS amount_minor,
+                          JOIN billing."order" ou ON ou.id = ol.order_id
+                          WHERE ol.booking_id = bk.id AND ou.user_id = :u) AS amount_minor,
                        ob.status AS order_status, ob.settlement_mode AS settlement_mode
                 FROM diary.booking bk
                 LEFT JOIN diary.resource r ON r.id = bk.resource_id
                 LEFT JOIN iam.user cu ON cu.id = bk.coach_user_id
                 LEFT JOIN iam.coach_profile cp ON cp.user_id = bk.coach_user_id AND cp.club_id = bk.club_id
-                LEFT JOIN billing."order" ob ON ob.id = bk.order_id
-                WHERE bk.club_id = :c AND bk.booked_by_user_id = :u
+                LEFT JOIN LATERAL (
+                    -- THIS client's own order for the booking (semi-private bills one order per head, so
+                    -- bk.order_id — the primary's — is wrong for a partner; match by order.user_id instead).
+                    SELECT o2.status, o2.settlement_mode FROM billing."order" o2
+                    WHERE o2.id IN (SELECT ol.order_id FROM billing.order_line ol WHERE ol.booking_id = bk.id)
+                      AND o2.user_id = :u ORDER BY o2.created_at LIMIT 1
+                ) ob ON true
+                WHERE bk.club_id = :c
+                  AND (bk.booked_by_user_id = :u OR EXISTS(
+                        SELECT 1 FROM diary.booking_party bp WHERE bp.booking_id = bk.id
+                          AND bp.user_id = :u AND bp.party_role <> 'guest'))
                   AND bk.status <> 'cancelled'
                   AND (bk.booking_type <> 'court' OR bk.notes IS DISTINCT FROM '(court held for lesson)')
                   """ + lesson_scope + lesson_month + """

@@ -105,6 +105,11 @@ _DDL = [
     # member (e.g. a clay court sold as a PAYG-only premium surface) — every booking of it is PAYG for all.
     # Only meaningful for kind='court_booking'. Default true = unchanged (a member's court is covered).
     f"ALTER TABLE {SCHEMA}.product ADD COLUMN IF NOT EXISTS members_covered boolean NOT NULL DEFAULT true;",
+    # Semi-private / squad LESSONS: how many CLIENTS one lesson booking may hold (1 = private). When > 1
+    # the booking flow lets a coach add up to this many members to ONE lesson (coach ∩ court, one slot),
+    # and EACH client is invoiced their own order at the service's per-head price. Only meaningful for a
+    # lesson product. Default 1 = unchanged (a private lesson).
+    f"ALTER TABLE {SCHEMA}.product ADD COLUMN IF NOT EXISTS max_clients int NOT NULL DEFAULT 1;",
     # Widen product.kind to accept 'equipment' (ball machine / racquets / balls — a flat-fee booking add-on).
     # A plain CREATE TABLE IF NOT EXISTS never re-applies the inline CHECK, so migrate it on an existing db.
     # Idempotent: drop the auto-named CHECK if present, re-add the full set (a second boot = same end state).
