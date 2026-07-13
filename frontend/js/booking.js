@@ -449,6 +449,15 @@
     if (st.type === "class") {
       container.appendChild(el("div", { class: "cf-card", style: "margin-bottom:14px", id: "bk-classfilter" }));
     }
+    // COURT: choose the court (service + specific court) FIRST — the SAME resource-first order as a lesson
+    // (coach) or a class (filter), so you always pick WHERE before WHEN. The court picker used to sit in the
+    // 3rd column, so picking a time jumped to confirm before you'd chosen a court; it's now a top card.
+    if (st.type === "court") {
+      container.appendChild(el("div", { class: "cf-card", style: "margin-bottom:14px" }, [
+        el("div", { class: "cf-pref-h", style: "margin-bottom:10px", text: "Choose your court" }),
+        pickerControl(),
+      ]));
+    }
 
     var cols = [ el("div", { class: "cf-sched-col" }, [ el("div", { class: "cf-sched-h", text: "When" }), el("div", { id: "bk-cal" }) ]) ];
 
@@ -462,17 +471,9 @@
         el("div", { class: "cf-mid-h cf-muted", style: "margin-top:14px", text: "Pick a time" }),
         el("div", { id: "bk-slots", class: "cf-loading", text: "Finding times…" }),
       ]));
-      // Column 3: a COURT keeps its court-type/court picker here; the lesson picker moved to the top, so a
-      // lesson's third column is just the running summary.
-      var col3 = [];
-      if (st.type === "court") {
-        col3.push(el("div", { class: "cf-pref-h", text: "Court" }), pickerControl(),
-                  el("div", { class: "cf-pref-h", style: "margin-top:14px", text: "Your booking" }));
-      } else {
-        col3.push(el("div", { class: "cf-pref-h", text: "Your booking" }));
-      }
-      col3.push(summaryBox());
-      cols.push(el("div", { class: "cf-sched-col" }, col3));
+      // Column 3 is just the running summary now — BOTH court and lesson pick their resource (court /
+      // coach) in the full-width card at the top, so the order reads WHERE → how long → WHEN everywhere.
+      cols.push(el("div", { class: "cf-sched-col" }, [el("div", { class: "cf-pref-h", text: "Your booking" }), summaryBox()]));
     }
 
     container.appendChild(el("div", { class: "cf-card cf-sched-card" }, [ el("div", { class: "cf-sched" }, cols) ]));
@@ -827,7 +828,7 @@
     else if (modes.indexOf(st.settlement) < 0) st.settlement = modes[0] || "at_court";
 
     var card = el("div", { class: "cf-card", style: "max-width:560px;margin:0 auto" });
-    card.appendChild(el("button", { class: "cf-sheet-back", type: "button", text: "‹ Back to times",
+    card.appendChild(el("button", { class: "cf-sheet-back", type: "button", text: "‹ Back to edit",
       onclick: function () { st.view = "schedule"; render(); } }));
     card.appendChild(el("h2", { text: "Confirm your booking" }));
 
