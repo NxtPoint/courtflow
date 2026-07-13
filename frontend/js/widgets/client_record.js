@@ -174,16 +174,18 @@
     // ONE event row inside a service group → the transaction detail (fold + transaction log).
     function eventRow(e, c) {
       var id = e.booking_id || e.enrolment_id;
-      var tap = !!id && cfg.onNavigate;
+      var orderOnly = !id && e.order_id;                       // an invoice/membership/pack (no booking)
+      var tap = (!!id && cfg.onNavigate) || orderOnly;
       var row = el("div", { class: "cf-item" + (tap ? " cf-item-tap" : ""), style: "margin-left:8px" }, [
         el("div", { class: "cf-item-main" }, [
-          el("div", { class: "cf-item-t", text: fShort(e.starts_at) }),
-          el("div", { class: "cf-item-s", text: [e.service, e.coach_name, e.pay_status].filter(Boolean).join(" · ") }),
+          el("div", { class: "cf-item-t", text: e.is_order_only ? (e.service || "Invoice") : fShort(e.starts_at) }),
+          el("div", { class: "cf-item-s", text: e.is_order_only ? [fShort(e.starts_at), e.pay_status].filter(Boolean).join(" · ") : [e.service, e.coach_name, e.pay_status].filter(Boolean).join(" · ") }),
         ]),
         el("span", { style: "font-weight:700", text: money(e.amount_minor, c) }),
         (tap ? el("span", { class: "cf-muted", text: "›" }) : null),
       ].filter(Boolean));
-      if (tap) row.addEventListener("click", function () { cfg.onNavigate({ kind: e.booking_id ? "event" : "class", id: id }); });
+      if (id && cfg.onNavigate) row.addEventListener("click", function () { cfg.onNavigate({ kind: e.booking_id ? "event" : "class", id: id }); });
+      else if (orderOnly) row.addEventListener("click", function () { window.open("/receipt.html?order=" + encodeURIComponent(e.order_id), "_blank"); });
       return row;
     }
 

@@ -272,6 +272,58 @@ def _bookings(session, *, club_id, user_id, coach_user_id=None, month=None):
     return upcoming, [b for b in allb if not b.get("is_upcoming")], len(allb)
 
 
+def _month_extra_orders(session, *, club_id, user_id, month):
+    """The month's billable orders that AREN'T a booking/enrolment — admin invoices, memberships, packs,
+    standalone fees. Added to month_events (as order-only 'events') so the person-360's service groups
+    reconcile to the fold (the fold counts these; the booking list didn't). Each drills to its receipt.
+    Excludes settlement wrappers + already-a-booking orders. Guarded → []."""
+    if not month:
+        return []
+
+    def _run():
+        rows = session.execute(
+            text("""
+                SELECT ord.id AS order_id, ord.amount_minor, ord.status, ord.created_at,
+                       (SELECT ol.description FROM billing.order_line ol
+                         WHERE ol.order_id = ord.id ORDER BY ol.created_at LIMIT 1) AS description,
+                       CASE
+                         WHEN EXISTS(SELECT 1 FROM billing.token_wallet w WHERE w.order_id = ord.id) THEN 'pack'
+                         WHEN EXISTS(SELECT 1 FROM billing.membership_subscription ms WHERE ms.order_id = ord.id) THEN 'membership'
+                         ELSE COALESCE((SELECT CASE WHEN pr.kind = 'court_booking' THEN 'court' ELSE pr.kind END
+                                         FROM billing.order_line ol
+                                         JOIN billing.price p ON p.id = ol.price_id
+                                         JOIN billing.product pr ON pr.id = p.product_id
+                                        WHERE ol.order_id = ord.id AND ol.price_id IS NOT NULL
+                                        ORDER BY ol.created_at LIMIT 1), 'other')
+                       END AS kind
+                FROM billing."order" ord
+                WHERE ord.club_id = :c AND ord.user_id = :u AND ord.settled_by_order_id IS NULL
+                  AND ord.status IN ('open','paid','refunded','written_off')
+                  AND to_char(ord.created_at,'YYYY-MM') = :ym
+                  AND NOT EXISTS(SELECT 1 FROM billing.order_line ol
+                                  WHERE ol.order_id = ord.id
+                                    AND (ol.booking_id IS NOT NULL OR ol.enrolment_id IS NOT NULL))
+                  AND NOT EXISTS(SELECT 1 FROM billing."order" ch WHERE ch.settled_by_order_id = ord.id)
+                ORDER BY ord.created_at DESC
+            """),
+            {"c": str(club_id), "u": str(user_id), "ym": month},
+        ).mappings().all()
+        out = []
+        for r in rows:
+            k = r["kind"] if r["kind"] in ("lesson", "court", "class", "membership", "pack") else "other"
+            out.append({
+                "order_id": str(r["order_id"]), "booking_id": None, "enrolment_id": None,
+                "kind": k,
+                "starts_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else r["created_at"],
+                "service": r["description"] or ({"membership": "Membership", "pack": "Session pack"}.get(k, "Invoice")),
+                "amount_minor": int(r["amount_minor"] or 0),
+                "pay_status": _pay_label(r["status"], None),
+                "is_order_only": True,
+            })
+        return out
+    return _guard(session, _run, [])
+
+
 def _settlement(session, *, club_id, user_id):
     """Coach settlement summary (gross/commission/rent/net/balance) from cockpit earnings. Guarded."""
     default = {"gross_lesson_minor": 0, "commission_earned_minor": 0, "coach_earning_minor": 0,
@@ -639,6 +691,10 @@ def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=No
     # month block (each event drills to the transaction detail). NB `events` is taken (the CRM
     # behavioural stream), so this is `month_events`. upcoming/history kept for back-compat.
     mev = (upcoming or []) + (history or [])
+    # Add the month's NON-booking orders (invoices / memberships / packs) so the service groups
+    # reconcile to the fold. A coach's scoped view only sees their own coaching bookings — no invoices.
+    if not coach_scope:
+        mev = mev + _month_extra_orders(session, club_id=club_id, user_id=user_id, month=month)
     mev.sort(key=lambda b: b.get("starts_at") or "", reverse=True)
     out["month_events"] = mev
     # The reconciling money fold (Billed − Discount − Written-off = Invoiced = Paid + Outstanding) — the
