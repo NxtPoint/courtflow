@@ -388,9 +388,10 @@ def my_360():
     p, err = _principal()
     if err:
         return err
+    month = (request.args.get("month") or "").strip() or None
     from client360 import get_client_360
     with session_scope() as s:
-        data = get_client_360(s, club_id=p.club_id, user_id=p.user_id, scope="client")
+        data = get_client_360(s, club_id=p.club_id, user_id=p.user_id, scope="client", month=month)
     if data is None:
         return jsonify(error="not_a_member"), 404
     return jsonify(person=data), 200

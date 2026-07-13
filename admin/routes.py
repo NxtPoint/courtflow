@@ -845,11 +845,27 @@ def get_person(user_id):
     p, err = _admin()
     if err:
         return err
+    month = (request.args.get("month") or "").strip() or None
+    from client360 import get_client_360
     with session_scope() as s:
-        person = repo.get_person(s, club_id=p.club_id, user_id=user_id)
+        person = get_client_360(s, club_id=p.club_id, user_id=user_id, scope="admin", month=month)
     if person is None:
         return jsonify(error="NOT_FOUND"), 404
     return jsonify(person=person), 200
+
+
+@admin_bp.patch("/clients/<user_id>")
+def edit_client(user_id):
+    """Admin edits a client's contact details from the person-360 (name / surname / phone). Email is
+    the identity key (not editable here). Reuses iam.patch_profile."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    from iam import repositories as iam_repo
+    with session_scope() as s:
+        iam_repo.patch_profile(s, user_id=user_id, fields=b)   # whitelists name/surname/phone/dob/address/…
+    return jsonify(ok=True), 200
 
 
 @admin_bp.post("/clients")

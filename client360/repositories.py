@@ -194,14 +194,18 @@ def _payments(session, *, club_id, user_id):
     return _guard(session, _run, [])
 
 
-def _bookings(session, *, club_id, user_id, coach_user_id=None):
+def _bookings(session, *, club_id, user_id, coach_user_id=None, month=None):
     """Bookings (as the party) + class enrolments, split upcoming/history. Copied from get_person so
     the phantom '(court held for lesson)' exclusion + cancelled filter + row shape are identical.
+    Each row carries `amount_minor` (its order-line charge) so the person-360 can group the month's
+    events by SERVICE TYPE with money that reconciles to the fold.
     When `coach_user_id` is set (COACH scope), the record is FILTERED to that coach's own events —
-    lessons they run + classes they run — so a coach only ever sees the bookings they were part of
-    (the golden-rule 'coach = a filter on the client record' — never other coaches / court hire)."""
+    lessons they run + classes they run. When `month` (YYYY-MM) is set, scoped to that month's
+    sessions (the person-360 shows one month at a time)."""
     lesson_scope = "AND bk.coach_user_id = :coach" if coach_user_id else ""
     class_scope = "AND cs.coach_user_id = :coach" if coach_user_id else ""
+    lesson_month = "AND to_char(bk.starts_at,'YYYY-MM') = :ym" if month else ""
+    class_month = "AND to_char(cs.starts_at,'YYYY-MM') = :ym" if month else ""
 
     def _run():
         rows = session.execute(
@@ -216,6 +220,8 @@ def _bookings(session, *, club_id, user_id, coach_user_id=None):
                           LEFT JOIN billing.price prc ON prc.id = ol.price_id
                           LEFT JOIN billing.product p ON p.id = prc.product_id
                           WHERE ol.booking_id = bk.id ORDER BY ol.created_at LIMIT 1) AS service_raw,
+                       (SELECT COALESCE(SUM(ol.amount_minor),0) FROM billing.order_line ol
+                          WHERE ol.booking_id = bk.id) AS amount_minor,
                        ob.status AS order_status, ob.settlement_mode AS settlement_mode
                 FROM diary.booking bk
                 LEFT JOIN diary.resource r ON r.id = bk.resource_id
@@ -225,7 +231,7 @@ def _bookings(session, *, club_id, user_id, coach_user_id=None):
                 WHERE bk.club_id = :c AND bk.booked_by_user_id = :u
                   AND bk.status <> 'cancelled'
                   AND (bk.booking_type <> 'court' OR bk.notes IS DISTINCT FROM '(court held for lesson)')
-                  """ + lesson_scope + """
+                  """ + lesson_scope + lesson_month + """
                 UNION ALL
                 SELECT NULL::uuid AS booking_id, e.id AS enrolment_id, 'class' AS kind, cs.starts_at, cs.ends_at,
                        e.status, (cs.starts_at >= now()) AS is_upcoming, r.name AS resource_name,
@@ -237,6 +243,8 @@ def _bookings(session, *, club_id, user_id, coach_user_id=None):
                           LEFT JOIN billing.price prc ON prc.id = ol.price_id
                           LEFT JOIN billing.product p ON p.id = prc.product_id
                           WHERE ol.enrolment_id = e.id ORDER BY ol.created_at LIMIT 1) AS service_raw,
+                       (SELECT COALESCE(SUM(ol.amount_minor),0) FROM billing.order_line ol
+                          WHERE ol.enrolment_id = e.id) AS amount_minor,
                        oe.status AS order_status, oe.settlement_mode AS settlement_mode
                 FROM diary.enrolment e
                 JOIN diary.class_session cs ON cs.id = e.class_session_id AND cs.club_id = e.club_id
@@ -245,10 +253,11 @@ def _bookings(session, *, club_id, user_id, coach_user_id=None):
                 LEFT JOIN iam.coach_profile cp ON cp.user_id = cs.coach_user_id AND cp.club_id = cs.club_id
                 LEFT JOIN billing."order" oe ON oe.id = e.order_id
                 WHERE e.club_id = :c AND e.user_id = :u AND e.status <> 'cancelled'
-                  """ + class_scope + """
-                ORDER BY starts_at DESC LIMIT 100
+                  """ + class_scope + class_month + """
+                ORDER BY starts_at DESC LIMIT 200
             """),
-            {"c": club_id, "u": user_id, "coach": str(coach_user_id) if coach_user_id else None},
+            {"c": club_id, "u": user_id, "coach": str(coach_user_id) if coach_user_id else None,
+             "ym": month},
         ).mappings().all()
         return _rows(rows)
     allb = _guard(session, _run, [])
@@ -257,6 +266,7 @@ def _bookings(session, *, club_id, user_id, coach_user_id=None):
     for b in allb:
         b["service"] = _service_label(b.pop("service_raw", None), b.get("kind"))
         b["pay_status"] = _pay_label(b.pop("order_status", None), b.pop("settlement_mode", None))
+        b["amount_minor"] = int(b.get("amount_minor") or 0)
     upcoming = [b for b in allb if b.get("is_upcoming")]
     upcoming.reverse()  # soonest-first
     return upcoming, [b for b in allb if not b.get("is_upcoming")], len(allb)
@@ -576,7 +586,7 @@ def _can(scope):
         # hunt for it, and both surfaces call the same endpoint (they can't diverge).
         return {"void": True, "write_off": True, "discount": True, "wallet_adjust": True,
                 "wallet_expire": True, "grant_membership": True, "revoke_membership": True,
-                "refund": True, "issue": True,
+                "refund": True, "issue": True, "edit": True,
                 "approve_refund_request": True, "decline_refund_request": True}
     if scope == "coach":
         # A coach decides a dispute routed to them (the backend still enforces they own it).
@@ -620,10 +630,17 @@ def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=No
 
     # Bookings (the event record) + the money fold + packages — ALL coach-scoped in coach scope, so a
     # coach only ever sees their own events + their own coaching money + their own packages.
-    upcoming, history, count = _bookings(session, club_id=club_id, user_id=user_id, coach_user_id=cscope_id)
+    upcoming, history, count = _bookings(session, club_id=club_id, user_id=user_id,
+                                         coach_user_id=cscope_id, month=month)
     out["upcoming"] = upcoming
     out["history"] = history
     out["bookings_count"] = count
+    # ONE flat month list (newest first) — the person-360 groups these by service type into its
+    # month block (each event drills to the transaction detail). NB `events` is taken (the CRM
+    # behavioural stream), so this is `month_events`. upcoming/history kept for back-compat.
+    mev = (upcoming or []) + (history or [])
+    mev.sort(key=lambda b: b.get("starts_at") or "", reverse=True)
+    out["month_events"] = mev
     # The reconciling money fold (Billed − Discount − Written-off = Invoiced = Paid + Outstanding) — the
     # SAME standard everywhere (CRMUI.statementFold); coach-scoped to their coaching in coach scope.
     out["statement_fold"] = _statement_fold(session, club_id=club_id, user_id=user_id, month=month,

@@ -465,7 +465,7 @@
       fields: { showActivity: false, showDependents: true, showPackages: true, showCoaching: false },
       onEditProfile: function () { PROFILE_RETURN = "#/activity"; go("#/profile"); },
       onSettleAll: function () { payOrders(null); },   // the spend rollup's "Settle" → pay all outstanding
-      data: { get: function () { return window.API.my360().then(function (r) { return r.person; }); } },
+      data: { get: function (i, m) { return window.API.my360(m).then(function (r) { return r.person; }); } },
       onNavigate: function (t) {
         if (!t || !t.id) return;
         if (t.kind === "class") go("#/class/" + t.id);

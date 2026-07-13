@@ -467,7 +467,7 @@
       // The raw transaction-log "Activity" ream is RETIRED — bookings-as-events (each drilling to the
       // fold + Transactions) are the record now. (showActivity defaults off.)
       fields: {},
-      data: { get: function (i) { return window.AdminAPI.person(i).then(function (r) { return r.person; }); } },
+      data: { get: function (i, m) { return window.AdminAPI.person(i, m).then(function (r) { return r.person; }); } },
       onNavigate: function (t) {
         if (!t || !t.id) return;
         if (t.kind === "person") go("#/person/" + t.id);
@@ -475,6 +475,8 @@
         else go("#/event/" + t.id);
       },
       actions: {
+        // Edit the client's contact/details (the widget opens its editor; PATCH /api/admin/clients/:id).
+        edit: { run: function (body) { return window.AdminAPI.updateClient(id, body); } },
         // Membership + packages
         issue: { manual: true, run: function (pn) { issuePackage(id, pn.name); } },
         revoke_membership: {

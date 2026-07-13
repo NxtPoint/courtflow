@@ -25,6 +25,10 @@
     function money(m, c) { return UI.money(m || 0, c || "ZAR"); }
     function has(key) { return !!(cur().can && cur().can[key] && cfg.actions && cfg.actions[key]); }
     var _pn = null;
+    // The person-360 shows ONE month at a time (the money + events block pages through months).
+    var _month = cfg.month || (function () { var d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); })();
+    function monthLabel(ym) { try { var p = ym.split("-"); return new Date(p[0], parseInt(p[1], 10) - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" }); } catch (e) { return ym; } }
+    function shiftMonth(ym, d) { var p = ym.split("-"); var dt = new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1 + d, 1); return dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0"); }
     function cur() { return _pn || {}; }
     function fDate(v) { try { return UI.fmtDate(v); } catch (e) { return v || ""; } }
     function fDT(v) { try { return UI.fmtDate(v) + " " + UI.fmtTime(v); } catch (e) { return v || ""; } }
@@ -74,84 +78,135 @@
     function render(pn) {
       _pn = pn;
       var c = pn.currency || "ZAR";
+      var _role = (cfg.scope && cfg.scope.role) || "";
       var wrap = el("div", {});
       if (cfg.back) wrap.appendChild(UI.backBar(cfg.back.label || "Back", cfg.back.hash));
 
-      // ---- Header: identity, roles, member status, membership line + actions ----
+      // ---- 1) WHO — identity + status + contact (email·cell) + kids + Edit, all up top (2026-07 redesign).
       var chips = el("div", { class: "cf-row", style: "gap:6px;flex-wrap:wrap;margin-top:6px" });
-      (pn.roles || []).forEach(function (r) { chips.appendChild(el("span", { class: "cf-chip", text: r })); });
       chips.appendChild(el("span", { class: "cf-chip " + (pn.member_status === "active" ? "confirmed" : "held"), text: pn.member_status || "—" }));
+      (pn.roles || []).filter(function (r) { return r !== "member"; }).forEach(function (r) { chips.appendChild(el("span", { class: "cf-chip", text: r })); });
       if (pn.notifications_unread) chips.appendChild(el("span", { class: "cf-chip held", text: pn.notifications_unread + " unread" }));
+      var contactBits = [pn.email, pn.phone].filter(Boolean);
       var head = UI.card([
-        el("div", { class: "cf-detail-h" }, [
+        el("div", { class: "cf-row", style: "gap:10px;align-items:flex-start;justify-content:space-between" }, [
           el("div", { class: "cf-row", style: "gap:10px;align-items:center" }, [
             el("div", { class: "cf-avatar", text: pInit(pn) }),
             el("div", {}, [
               el("h1", { style: "margin:0;font-size:1.25rem", text: pn.name }),
-              el("div", { class: "cf-muted", style: "font-size:.85rem", text: [pn.email, pn.phone].filter(Boolean).join(" · ") || "—" }),
+              el("div", { class: "cf-muted", style: "font-size:.85rem", text: contactBits.join(" · ") || "—" }),
               chips,
             ]),
           ]),
-        ]),
+          // Edit — admin/client wire cfg.actions.edit (or cfg.onEditProfile). Opens the contact/details editor.
+          (has("edit") || cfg.onEditProfile)
+            ? el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Edit", onclick: function () { if (cfg.onEditProfile) cfg.onEditProfile(); else editModal(pn); } })
+            : null,
+        ].filter(Boolean)),
       ]);
-      // Membership is the CLIENT's relationship with the CLUB — a coach (a strict filter on their own
-      // events) doesn't see it. The coach payload omits it server-side; skip the line here too.
-      if (((cfg.scope && cfg.scope.role) || "") !== "coach") head.appendChild(membershipLine(pn, c));
-      // Edit profile — config-driven (client scope wires it); returns to this record on save.
-      if (cfg.onEditProfile) {
-        head.appendChild(el("div", { class: "cf-row", style: "margin-top:10px" }, [
-          el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Edit profile", onclick: function () { cfg.onEditProfile(); } }),
-        ]));
+      // Kids (dependents) inline — who this person can book for.
+      if (_role !== "coach" && (pn.dependents || []).length) {
+        head.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin-top:8px", text: "Kids: " + pn.dependents.map(function (d) { return d.name || d.first_name || "Child"; }).join(" · ") }));
       }
+      // Membership line (the club relationship) — omitted for a coach's scoped view.
+      if (_role !== "coach") head.appendChild(membershipLine(pn, c));
       wrap.appendChild(head);
-      var _role = (cfg.scope && cfg.scope.role) || "";
 
-      // ---- 1) MONEY — the headline. The reconciling fold + a consolidated sessions/by-service line +
-      // owed items + payments, ALL in ONE section right under the header (redesign 2026-07: was three
-      // scattered blocks — ACTIVITY counts + BILLING by-service + Money). ----
-      wrap.appendChild(moneyCard(pn, c));
-
-      // ---- 2) BOOKINGS — the record. Upcoming + history as events → each drills to the fold +
-      // Transactions (the ONE event story). ----
-      if (fields.showBookings !== false) {
-        wrap.appendChild(bookingsCard("Upcoming", pn.upcoming || [], "Nothing upcoming."));
-        wrap.appendChild(bookingsCard("History", pn.history || [], "No past bookings."));
-      }
-
-      // ---- 3) COACHING (coach + admin scopes) + the month→service drill + settlement if they coach here ----
-      if (fields.showCoaching !== false && pn.coaching && pn.coaching.totals) wrap.appendChild(coachingCard(pn));
-      if (fields.showCoaching !== false && pn.service_breakdown && (pn.service_breakdown.services || []).length) wrap.appendChild(serviceBreakdownCard(pn));
-      if (pn.is_coach && pn.settlement) {
-        var st = pn.settlement;
-        wrap.appendChild(UI.card([
-          CRMUI.sectionHead("Coaching settlement"),
-          CRMUI.stats([
-            { value: money(st.gross_lesson_minor, c), label: "Gross lessons" },
-            { value: money(st.commission_earned_minor, c), label: "Club commission" },
-            { value: money(st.rent_due_minor, c), label: "Rent due" },
-            { value: money(st.net_to_coach_minor, c), label: "Net to coach" },
-          ]),
-          el("div", { class: "cf-muted", style: "font-size:.8rem;margin-top:8px", text: "Ledger balance: " + money(st.lifetime_balance_minor, c) }),
-        ], "cf-mt"));
-      }
-
-      // ---- 4) PACKAGES + REFUND REQUESTS (the action queue) ----
+      // ---- 2) PACKAGES — prepaid holdings + change/buy (unchanged). ----
       if (fields.showPackages !== false && pn.packages) wrap.appendChild(packagesCard(pn, c));
-      if ((pn.refunds || []).length) wrap.appendChild(refundsCard(pn, c));
 
-      // ---- 5) ▸ More details — reference info tucked away (collapsed by default): demographics/PII +
-      // consent + dependents + the behavioural event stream. Keeps the default view focused on money +
-      // bookings. Not shown to a coach (PII omitted server-side anyway). ----
-      var moreKids = [];
-      if (fields.showDetails !== false && _role !== "coach") {
-        moreKids.push(detailsCard(pn));
-        if ((pn.consent || []).length) moreKids.push(consentCard(pn));
-      }
-      if (fields.showDependents !== false && (pn.dependents || []).length) moreKids.push(dependentsCard(pn));
-      if (fields.showEvents !== false && (pn.events || []).length) moreKids.push(eventsCard(pn));
-      if (moreKids.length) wrap.appendChild(collapsible("More details", moreKids));
+      // ---- 3) ACTIVITY & MONEY — ONE month-scrollable block: the reconciling fold, then the month's
+      // events GROUPED BY SERVICE TYPE (court/lessons/classes; each sums to the fold), each event
+      // drilling to the transaction detail + log. (Replaces the old Upcoming/History/Coaching sections.)
+      wrap.appendChild(moneyBlock(pn, c));
 
       UI.clear(host); host.appendChild(wrap);
+    }
+
+    // The month money+events block. Fold on top; the month's events grouped by service type; expand a
+    // group → its events → drill to the ONE transaction detail (cfg.onNavigate).
+    function moneyBlock(pn, c) {
+      var card = UI.card([
+        el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
+          el("h2", { style: "margin:0;font-size:1.05rem", text: "Activity & money" }),
+          el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
+            el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹", onclick: function () { _month = shiftMonth(_month, -1); load(); } }),
+            el("span", { style: "font-weight:600;font-size:.85rem;min-width:96px;text-align:center", text: monthLabel(_month) }),
+            el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { _month = shiftMonth(_month, 1); load(); } }),
+          ]),
+        ]),
+      ], "cf-mt");
+      if (pn.statement_fold && CRMUI.statementFold) card.appendChild(CRMUI.statementFold({ currency: c, month: pn.month || _month, totals: pn.statement_fold }));
+      // Group the month's events by service kind. Owner-first order: Lessons · Court hire · Classes.
+      var evs = pn.month_events || [];
+      var box = el("div", { style: "margin-top:12px" });
+      if (!evs.length) {
+        box.appendChild(el("div", { class: "cf-empty", text: "No activity in " + monthLabel(_month) + "." }));
+        card.appendChild(box);
+        return card;
+      }
+      var byKind = {};
+      evs.forEach(function (e) { var k = (e.kind === "court" ? "court" : e.kind) || "other"; (byKind[k] = byKind[k] || []).push(e); });
+      var ORDER = [["lesson", "Lessons"], ["court", "Court hire"], ["class", "Classes"], ["other", "Other"]];
+      var seen = {};
+      ORDER.forEach(function (kd) { if (byKind[kd[0]]) { seen[kd[0]] = 1; box.appendChild(serviceGroup(kd[1], kd[0], byKind[kd[0]], c)); } });
+      Object.keys(byKind).forEach(function (k) { if (!seen[k]) box.appendChild(serviceGroup(k, k, byKind[k], c)); });
+      card.appendChild(box);
+      return card;
+    }
+
+    // A collapsible service-type group: header shows "<label> · <count>  <money>"; expands to its events.
+    function serviceGroup(label, kind, events, c) {
+      var total = events.reduce(function (a, e) { return a + (e.amount_minor || 0); }, 0);
+      var open = false;
+      var body = el("div", { style: "display:none;padding:2px 0 6px" });
+      events.forEach(function (e) { body.appendChild(eventRow(e, c)); });
+      var chev = el("span", { class: "cf-muted", text: "▸" });
+      var header = el("div", { class: "cf-item cf-item-tap", onclick: function () { open = !open; body.style.display = open ? "" : "none"; chev.textContent = open ? "▾" : "▸"; } }, [
+        el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(kind) >= 0 ? kind : ""), text: kind }),
+        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: label + " · " + events.length })]),
+        el("span", { style: "font-weight:700", text: money(total, c) }),
+        chev,
+      ]);
+      return el("div", { style: "margin-bottom:6px" }, [header, body]);
+    }
+
+    // ONE event row inside a service group → the transaction detail (fold + transaction log).
+    function eventRow(e, c) {
+      var id = e.booking_id || e.enrolment_id;
+      var tap = !!id && cfg.onNavigate;
+      var row = el("div", { class: "cf-item" + (tap ? " cf-item-tap" : ""), style: "margin-left:8px" }, [
+        el("div", { class: "cf-item-main" }, [
+          el("div", { class: "cf-item-t", text: fShort(e.starts_at) }),
+          el("div", { class: "cf-item-s", text: [e.service, e.coach_name, e.pay_status].filter(Boolean).join(" · ") }),
+        ]),
+        el("span", { style: "font-weight:700", text: money(e.amount_minor, c) }),
+        (tap ? el("span", { class: "cf-muted", text: "›" }) : null),
+      ].filter(Boolean));
+      if (tap) row.addEventListener("click", function () { cfg.onNavigate({ kind: e.booking_id ? "event" : "class", id: id }); });
+      return row;
+    }
+
+    // The contact/details editor (admin). Edits the whitelisted profile fields via cfg.actions.edit.
+    function editModal(pn) {
+      var m = UI.modal("Edit " + (pn.name || "client"), { lg: true });
+      var f = {};
+      function field(key, label, type) {
+        var inp = el("input", { class: "cf-input", type: type || "text", value: (pn.profile && pn.profile[key]) || (key === "phone" ? (pn.phone || "") : "") });
+        f[key] = inp;
+        m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: label }), inp]));
+      }
+      field("first_name", "First name"); field("surname", "Surname"); field("phone", "Cell");
+      field("dob", "Date of birth", "date");
+      field("address_line1", "Address"); field("city", "City");
+      field("emergency_contact_name", "Emergency contact"); field("emergency_contact_phone", "Emergency phone");
+      m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
+        el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }),
+        el("button", { class: "cf-btn cf-btn-primary", text: "Save", onclick: function () {
+          var body = {}; Object.keys(f).forEach(function (k) { body[k] = f[k].value; });
+          Promise.resolve(cfg.actions.edit.run(body)).then(function () { UI.toast("Saved.", "info"); m.close(); load(); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+        } }),
+      ]));
     }
 
     function membershipLine(pn, c) {
@@ -470,7 +525,7 @@
     function load() {
       loading();
       var id = cfg.scope && cfg.scope.id;
-      Promise.resolve(cfg.data.get(id)).then(render, fail);
+      Promise.resolve(cfg.data.get(id, _month)).then(render, fail);   // data.get(id, month) — month-scoped 360
     }
     load();
     return { refresh: load, destroy: function () { UI.clear(host); _pn = null; } };

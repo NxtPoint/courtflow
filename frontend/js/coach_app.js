@@ -446,17 +446,15 @@
   // money fold + packages + coaching, and OMITS everything else server-side (membership, card payments,
   // full-club statement, dependents, refunds, PII, activity). Golden rule: one widget, role = config.
   function renderClient(userId) {
-    ensureMonth();
-    var wrap = el("div", {});
-    wrap.appendChild(backBar("Clients", "#/clients"));
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin:2px 0 6px" }, [monthNav(function () { renderClient(userId); })]));
-    var host = el("div", {}); wrap.appendChild(host);
-    set(wrap);
+    var host = el("div", {});
+    set(host);
+    // The ONE widget owns its own month pager now — no external monthNav.
     window.Widgets.ClientRecord.mount(host, {
       scope: { id: userId, role: "coach" },
+      back: { label: "Clients", hash: "#/clients" },
       fields: { showDetails: false, showDependents: false, showActivity: false, showEvents: false,
                 showPackages: true, showCoaching: true, showBookings: true },
-      data: { get: function (i) { return window.CoachAPI.client360(i, MONTH).then(function (r) { return r.person; }); } },
+      data: { get: function (i, m) { return window.CoachAPI.client360(i, m).then(function (r) { return r.person; }); } },
       onNavigate: function (t) {
         if (!t || !t.id) return;
         if (t.kind === "person") go("#/client/" + t.id);

@@ -37,6 +37,8 @@
     // POST /api/admin/clients  body:{name,email,phone} -> {user_id,email,name,created} — add a
     // walk-up / off-system client to the system (they link to their login by email on first sign-in).
     createClient: function (body) { return A().apiJSON("/api/admin/clients", { method: "POST", body: body || {} }); },
+    // PATCH /api/admin/clients/:id — edit a client's contact/details (whitelisted profile fields).
+    updateClient: function (id, body) { return A().apiJSON("/api/admin/clients/" + enc(id), { method: "PATCH", body: body || {} }); },
     // POST /api/admin/members/:id/issue  body:{kind:'membership'|'pack', price_id?|bundle_plan_id?,
     //   start_date?, mark_paid?, pay_provider?} -> the purchase (owed order + activated; mark_paid settles).
     issuePackage: function (id, body) { return A().apiJSON("/api/admin/members/" + enc(id) + "/issue", { method: "POST", body: body || {} }); },
@@ -49,7 +51,7 @@
     // GET /api/admin/people/:user_id -> {person:{...profile,roles,is_coach,member_status,
     //   membership, statement:{items,total_owed_minor}, owed_minor, payments:[], upcoming:[],
     //   history:[], bookings_count, settlement?}}  — one record, drill-through to the event story.
-    person: function (id) { return A().apiJSON("/api/admin/people/" + enc(id)); },
+    person: function (id, month) { return A().apiJSON("/api/admin/people/" + enc(id) + (month ? ("?month=" + enc(month)) : "")); },
     // (grantMembership wrapper removed 2026-07-05 — the SPA uses issuePackage; the classic console
     //  hits POST /api/admin/members/<id>/membership directly.)
     // DELETE /api/admin/members/:user_id/membership -> {ok, voided_orders}

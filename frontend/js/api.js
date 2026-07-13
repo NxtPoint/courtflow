@@ -190,7 +190,7 @@
     //   identity, membership, packages, owed statement, payments, bookings, refunds, dependents,
     //   activity + a `can` map (pay/request_refund). The SAME composer payload as AdminAPI.person /
     //   CoachAPI.client360; feeds Widgets.ClientRecord in the client app (adapter unwraps .person).
-    my360: function () { return A().apiJSON("/api/me/360"); },
+    my360: function (month) { return A().apiJSON("/api/me/360" + (month ? ("?month=" + encodeURIComponent(month)) : "")); },
     // GET /api/me/refund-requests -> {requests:[{id,order_id,amount_minor,reason,status,...}], count}
     refundRequests: function () { return A().apiJSON("/api/me/refund-requests"); },
     // POST /api/me/refund-requests  body: {order_id(req), amount_minor?, reason?} -> {refund_request}
