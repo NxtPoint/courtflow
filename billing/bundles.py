@@ -801,6 +801,31 @@ def create_bundle_order(session, *, club_id, user_id, bundle_plan_id,
     return out
 
 
+def allowed_purchase_modes(session, *, club_id, plan, online_ok):
+    """The settlement modes a member may use to BUY this pack: the club's enabled methods (online kept
+    only when `online_ok`), INTERSECTED with the pack's OWN SERVICE payment preference. A pack inherits
+    the payment rule of the service it belongs to, so a clay CARD-ONLY service returns only its card
+    modes — deliberately with NO at-court fallback, because a fallback is what let a card-only pack be
+    taken on an owed (unpaid) order. When the service does NOT restrict methods, the always-buyable
+    default (club methods, else at_court) is kept. Returns a list (possibly EMPTY → caller refuses)."""
+    from services.repositories import club_payment_methods
+    enabled = club_payment_methods(session, club_id=club_id)
+    club_modes = [m for m in enabled if m != "online" or online_ok]
+    svc = None
+    if plan:
+        try:
+            from diary.pricing import payment_modes_for
+            kind = _PRODUCT_KIND_BY_SERVICE.get(plan.get("service_kind"), plan.get("service_kind"))
+            svc = payment_modes_for(session, club_id=club_id, kind=kind,
+                                    coach_user_id=plan.get("coach_user_id"),
+                                    product_id=plan.get("product_id"))
+        except Exception:
+            svc = None
+    if svc is not None:
+        return [m for m in club_modes if m in svc]   # service RESTRICTS — honour exactly, no fallback
+    return club_modes or ["at_court"]
+
+
 def is_bundle_order(session, *, order_id) -> bool:
     """True if this order is a bundle purchase (has a linked token_wallet)."""
     row = session.execute(

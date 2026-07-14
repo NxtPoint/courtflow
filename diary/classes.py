@@ -66,8 +66,19 @@ def _enrolled_count(session, class_session_id):
     ).scalar() or 0
 
 
+def _class_payment_modes(session, club_id, price_id):
+    """The class SERVICE's allowed payment methods (a subset) or None (no per-service restriction).
+    Scoped to THIS class's own product so a card-only class actually refuses at-court / month-end."""
+    try:
+        from diary.pricing import payment_modes_for
+        return payment_modes_for(session, club_id=club_id, kind="class",
+                                 product_id=_class_product_id(session, club_id, price_id))
+    except Exception:
+        return None
+
+
 def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_court",
-          audience="member", payer_user_id=None):
+          audience="member", payer_user_id=None, role="member"):
     """Enrol a player; over-capacity -> waitlisted. Capacity-safe via FOR UPDATE on the
     session row. Idempotent-ish: a prior cancelled enrolment is reactivated; an existing
     active/waitlisted enrolment is returned as-is.
@@ -81,6 +92,24 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
         return _err("SESSION_NOT_FOUND", 404)
     if cs["status"] != "scheduled":
         return _err("SESSION_CLOSED", 409, status_value=cs["status"])
+
+    # PAYMENT GATE — a class is a SERVICE, so enrolment must respect the same rules as a court/lesson
+    # booking (create_booking), else a member could post a mode that bypasses the gate:
+    #   • 'membership_covered' / 'free' → an R0 seat (a membership covers COURTS only; 'free' is admin-
+    #     only). Downgrade covered → at_court, and let _settlement_allowed refuse 'free' for a member.
+    #   • a money mode the club disabled OR that THIS class's service doesn't offer (a card-only class
+    #     taken pay-at-court) → refuse. Staff (admin/coach) override, exactly as create_booking does.
+    if settlement_mode == "membership_covered":
+        settlement_mode = "at_court"   # classes are NEVER membership-covered (court-only benefit)
+    if role in ("member", "guest"):
+        from diary.bookings import _settlement_allowed, _policy
+        if not _settlement_allowed(settlement_mode, _policy(session, club_id), role):
+            return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=settlement_mode)
+        if settlement_mode in ("online", "at_court", "monthly_account"):
+            pm = _class_payment_modes(session, club_id, cs.get("price_id"))
+            if pm is not None and settlement_mode not in pm:
+                return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=settlement_mode,
+                            message="this class doesn't offer that payment method")
 
     # Free any lapsed unpaid-online seats on THIS session first, so a new enrolee can take a freed
     # seat instead of queueing on the waitlist behind someone's abandoned checkout.

@@ -426,14 +426,13 @@ def bundles_wallets():
     return jsonify(wallets=wallets, count=len(wallets)), 200
 
 
-def _bundle_allowed_modes(session, club_id):
-    """The modes a member may use to buy a pack: the club's enabled methods, with 'online' kept only
-    when platform + club have online pay on. Always non-empty so a pack is always buyable."""
-    from services.repositories import club_payment_methods
-    enabled = club_payment_methods(session, club_id=club_id)
+def _bundle_allowed_modes(session, club_id, plan=None):
+    """The modes a member may use to buy THIS pack — the pack's service payment rule intersected with
+    the club's enabled methods (online gated by platform + club). Thin wrapper over the pure
+    billing.bundles.allowed_purchase_modes (which the harness tests directly). May be EMPTY → refuse."""
+    from billing.bundles import allowed_purchase_modes
     online_ok = _truthy("PAYMENTS_ENABLED") and _club_allows_online(session, club_id)
-    out = [m for m in enabled if m != "online" or online_ok]
-    return out or ["at_court"]
+    return allowed_purchase_modes(session, club_id=club_id, plan=plan, online_ok=online_ok)
 
 
 @yoco_bp.post("/api/billing/bundles/checkout")
@@ -463,7 +462,16 @@ def bundles_checkout():
     from billing import bundles as bundles_repo
 
     with session_scope() as s:
-        allowed = _bundle_allowed_modes(s, p.club_id)
+        # Resolve the plan FIRST so the allowed modes are scoped to the pack's own service (a card-only
+        # clay pack must not be sellable at-court). A missing/inactive plan is a clean 404.
+        plan = bundles_repo.get_plan(s, club_id=p.club_id, plan_id=plan_id)
+        if not plan or not plan.get("active"):
+            return jsonify(error="bundle_plan_not_found"), 404
+        allowed = _bundle_allowed_modes(s, p.club_id, plan=plan)
+        if not allowed:
+            # The pack's service restricts payment to a method the club can't currently offer (e.g.
+            # card-only while online pay is off) — refuse rather than granting an unpaid pack.
+            return jsonify(error="payment_mode_not_available_for_service"), 400
         if req_mode and req_mode in allowed:
             mode = req_mode
         elif len(allowed) == 1:

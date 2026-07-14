@@ -97,14 +97,16 @@ def _first_free_court(session, club_id, starts, ends):
 _PRODUCT_KIND_BY_BOOKING = {"court": "court_booking", "lesson": "lesson", "class": "class"}
 
 
-def _service_payment_modes_guarded(session, club_id, booking_type, coach_user_id):
+def _service_payment_modes_guarded(session, club_id, booking_type, coach_user_id, product_id=None):
     """The per-service allowed payment methods (or None = no restriction). Guarded — never raises,
-    so a missing billing.* can never block a booking."""
+    so a missing billing.* can never block a booking. `product_id` scopes to the EXACT service (this
+    court service — e.g. Clay — or this lesson service), so a card-only service's rule is enforced;
+    without it we'd resolve the generic first-of-kind product and miss a per-service restriction."""
     try:
         from diary.pricing import payment_modes_for
         return payment_modes_for(session, club_id=club_id,
                                  kind=_PRODUCT_KIND_BY_BOOKING.get(booking_type, booking_type),
-                                 coach_user_id=coach_user_id)
+                                 coach_user_id=coach_user_id, product_id=product_id)
     except Exception:
         return None
 
@@ -646,7 +648,10 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     # refuses a crafted request that picks a method the service doesn't offer. Only the money modes
     # are constrained (token/membership_covered/free are not "methods" a service restricts).
     if role in ("member", "guest") and settlement_mode in ("online", "at_court", "monthly_account"):
-        pm = _service_payment_modes_guarded(session, club_id, booking_type, coach_uid)
+        # Scope to the EXACT service (the resolved court service / chosen lesson service) so a card-only
+        # service (e.g. Clay) actually refuses at-court / month-end — a kind-only resolve would read the
+        # club's default court product and silently allow the wrong method.
+        pm = _service_payment_modes_guarded(session, club_id, booking_type, coach_uid, product_id=product_id)
         if pm is not None and settlement_mode not in pm:
             return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=settlement_mode,
                         message="this service doesn't offer that payment method")

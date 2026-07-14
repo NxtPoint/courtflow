@@ -1280,6 +1280,71 @@ def sc_semi_private_addable_guard(s, fx):
           _addable_player_uid(s, fx.club_id, str(stranger), owner_uid=str(g1), is_staff=True) is None)
 
 
+def sc_class_payment_gate(s, fx):
+    """A class is a SERVICE — enrolment must respect the payment rules like a court/lesson booking. A
+    member CANNOT post 'membership_covered'/'free' to conjure an R0 seat (a membership covers COURTS
+    only), and a CARD-ONLY class refuses pay-at-court. (Before the fix, enrol took any settlement_mode
+    verbatim — a member could self-enrol for free or on an owed order against a card-only class.)"""
+    print("\n# Class payment gate: no free seat via membership_covered; a card-only class refuses at-court")
+    m = fx.members[0]
+    C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                        dates=[fx.target.isoformat()], start_time="15:00",
+                        duration_minutes=90, capacity=10)
+    sid = s.execute(text("SELECT id FROM diary.class_session WHERE club_id=:c AND resource_id=:r AND starts_at=:sa"),
+                    {"c": fx.club_id, "r": fx.class_res, "sa": at(fx, 15)}).scalar()
+    # 1) 'membership_covered' is DOWNGRADED → the seat is OWED at the class price (R120), never free.
+    r = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m,
+                settlement_mode="membership_covered", role="member")
+    check("class enrol accepted", r.get("ok"), str(r))
+    oid = r.get("order_id")
+    amt = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'), {"o": oid}).scalar() if oid else None
+    sm = s.execute(text('SELECT settlement_mode FROM billing."order" WHERE id=:o'), {"o": oid}).scalar() if oid else None
+    check("membership_covered on a CLASS is NOT free — owed at the class price R120", amt == 12000, f"amount={amt}")
+    check("…and it settled at-court, not membership_covered", sm != "membership_covered", f"mode={sm}")
+    C.cancel_enrolment(s, club_id=fx.club_id, class_session_id=sid, user_id=m)
+    # 2) CARD-ONLY class: at-court refused; online accepted.
+    s.execute(text("UPDATE billing.product SET payment_modes='online' WHERE club_id=:c AND kind='class'"),
+              {"c": fx.club_id})
+    bad = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m, settlement_mode="at_court", role="member")
+    check("card-only class refuses pay-at-court", bad.get("error") == "SETTLEMENT_NOT_ALLOWED", str(bad))
+    ok = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m, settlement_mode="online", role="member")
+    check("card-only class accepts online (card)", ok.get("ok"), str(ok))
+    C.cancel_enrolment(s, club_id=fx.club_id, class_session_id=sid, user_id=m)
+    # 3) 'free' is admin-only — a member can't self-enrol free.
+    freebad = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m, settlement_mode="free", role="member")
+    check("a member cannot self-enrol 'free'", freebad.get("error") == "SETTLEMENT_NOT_ALLOWED", str(freebad))
+    # 4) STAFF override still works (admin enrols at-court on the card-only class).
+    st = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[1],
+                 settlement_mode="at_court", role="club_admin")
+    check("staff may still enrol at-court on a card-only class", st.get("ok"), str(st))
+
+
+def sc_card_only_service_gate(s, fx):
+    """A CARD-ONLY service (payment_modes='online') refuses pay-at-court / month-end on the BOOKING
+    path server-side — the guard scopes to the EXACT service product, so a clay-style card-only court
+    can't be taken on an owed order (the leak behind the unpaid clay pack's sibling on the diary side).
+    Staff keep their override."""
+    print("\n# Card-only service: a member can't book it pay-at-court (server enforces the service's payment rule)")
+    m = fx.members[0]
+    s.execute(text("UPDATE billing.product SET payment_modes = 'online' WHERE club_id = :c AND kind = 'court_booking'"),
+              {"c": fx.club_id})
+    start, end = at(fx, 9), at(fx, 10)
+    bad = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                           booking_type="court", resource_id=fx.courts[0],
+                           starts_at=utc_iso(start), ends_at=utc_iso(end), settlement_mode="at_court")
+    check("pay-at-court REFUSED on a card-only court (SETTLEMENT_NOT_ALLOWED)",
+          bad.get("error") == "SETTLEMENT_NOT_ALLOWED", str(bad))
+    check("nothing persisted — the slot is still free", has_slot(court_slots(s, fx, fx.courts[0]), start))
+    ok = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=utc_iso(start), ends_at=utc_iso(end), settlement_mode="online")
+    check("online IS accepted on a card-only court", ok.get("ok"), str(ok))
+    staff = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="club_admin",
+                             booking_type="court", resource_id=fx.courts[1],
+                             starts_at=utc_iso(start), ends_at=utc_iso(end), settlement_mode="at_court")
+    check("staff may still force pay-at-court (admin override)", staff.get("ok"), str(staff))
+
+
 SCENARIOS = [
     sc_cancel_after_start_guard,
     sc_unpriced_booking_refused,
@@ -1305,6 +1370,8 @@ SCENARIOS = [
     sc_semi_private_add_later,
     sc_semi_private_dependents,
     sc_semi_private_addable_guard,
+    sc_card_only_service_gate,
+    sc_class_payment_gate,
 ]
 
 

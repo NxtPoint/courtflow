@@ -2023,7 +2023,37 @@ def sc_admin_invoice(s, fx):
     check("all-zero invoice returns None", inv3 is None, str(inv3))
 
 
+def sc_pack_respects_service_payment_mode(s, fx):
+    """A pack INHERITS its service's payment rule. A CARD-ONLY court service (payment_modes='online')
+    must NOT sell an owed at-court pack — that is exactly the leak that let a member take a clay 10-pack
+    unpaid (owed order + wallet granted immediately). _bundle_allowed_modes now intersects with the
+    pack's service: card-only → only 'online' (no at-court fallback); an unrestricted pack is unchanged."""
+    print("\n# Pack respects its SERVICE payment rule — a card-only clay pack can't be bought pay-at-court")
+    cardonly = s.execute(
+        text("INSERT INTO billing.product (club_id, kind, name, payment_modes) "
+             "VALUES (:c,'court_booking','Clay Hire','online') RETURNING id"), {"c": fx.club_id}).scalar_one()
+    _price(s, fx.club_id, cardonly, 15000, dur=60)
+    clay = BN.create_plan(s, club_id=fx.club_id, sessions_count=10, price_minor=120000,
+                          duration_minutes=60, product_id=cardonly, label="Clay 10")
+    clay_plan = BN.get_plan(s, club_id=fx.club_id, plan_id=clay["id"])
+    # online ON → the card-only clay pack offers ONLY card (no at-court fallback that grants it unpaid).
+    allowed = BN.allowed_purchase_modes(s, club_id=fx.club_id, plan=clay_plan, online_ok=True)
+    check("card-only clay pack: pay-at-court is NOT offered", "at_court" not in allowed, f"allowed={allowed}")
+    check("card-only clay pack: only card (online) is offered", allowed == ["online"], f"allowed={allowed}")
+    # online OFF → there is NO valid way to pay a card-only pack → EMPTY (route refuses, never grants unpaid).
+    none_ok = BN.allowed_purchase_modes(s, club_id=fx.club_id, plan=clay_plan, online_ok=False)
+    check("card-only clay pack with card off: NOTHING is offered (purchase refused, not granted unpaid)",
+          none_ok == [], f"allowed={none_ok}")
+    # An UNRESTRICTED pack (service has no payment_modes) still allows pay-at-court — unchanged.
+    openp = BN.create_plan(s, club_id=fx.club_id, sessions_count=10, price_minor=120000,
+                           duration_minutes=60, product_id=fx.court_product, label="Open 10")
+    open_plan = BN.get_plan(s, club_id=fx.club_id, plan_id=openp["id"])
+    allowed2 = BN.allowed_purchase_modes(s, club_id=fx.club_id, plan=open_plan, online_ok=True)
+    check("unrestricted pack still allows pay-at-court", "at_court" in allowed2, f"allowed={allowed2}")
+
+
 SCENARIOS = [
+    sc_pack_respects_service_payment_mode,
     sc_admin_invoice,
     sc_activity_summary,
     sc_pack_service_isolation,
