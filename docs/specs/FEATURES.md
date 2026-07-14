@@ -76,6 +76,14 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   locked to themselves for a coach, coach-pickable for the owner — with on-behalf **pack auto-draw**
   (lesson = coach-scoped wallet, class = coach-agnostic) and no Yoco redirect. **Book-for-a-child** —
   a parent books for a dependent, billed to the parent. 🔭
+- **Semi-private (squad) lessons** — a lesson service can carry **more than one client on one slot**
+  (`billing.product.max_clients`), each billed **per head** (one owed order per client at the service
+  price, linked to the ONE booking via `order_line.booking_id` — never summed onto a single payer; a
+  child's head bills the guardian). Add players **up front** ("add players" step) or **later**
+  (`POST /api/diary/bookings/<id>/add-player`, for late squad confirmations), with cap / duplicate /
+  non-lesson guards and a **who-can-be-added** security boundary (a member may add club members + their
+  OWN kids, never a stranger or another family's child; staff may add any in-club member). Each client
+  sees the lesson **once, at their own head**, in their 360; **cancel voids every client's order**. ✅
 - **No completing the future** — a booking can't be marked completed / no-showed before it has
   started (`CANNOT_COMPLETE_FUTURE`). ✅
 - **Booking window / lead time / cancellation cutoff** from club policy. ✅ (window) 🔭 (cutoff UI)
@@ -147,6 +155,12 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 - **The one payment rule** — more than one allowed mode → the client **chooses**; exactly one
   non-online mode → checkout happens **immediately** (no prompt); online → Yoco. The booking/buy flow
   hides the chooser when there's a single way to pay. ✅
+- **Payment rules are enforced server-side (not just in the UI)** — every purchase path honours the
+  EXACT service's `payment_modes`. A **card-only service** (e.g. clay) **refuses pay-at-court / month-end**
+  on a booking (`SETTLEMENT_NOT_ALLOWED`, nothing persists); a **class enrolment** obeys the same rule (a
+  member can't post `membership_covered`/`free` to conjure an R0 seat — a membership covers **courts** only —
+  and a card-only class refuses at-court); and a **pack inherits its service's rule** (a card-only service
+  sells only a card pack, never an owed at-court pack). **Staff keep their override** in every case. ✅
 - **Memberships & packs buy offline** — not just online: an at-club / month-end purchase opens an owed
   order and **activates the membership or grants the pack immediately**; online holds until the webhook. ✅
 - **Online payments — Yoco** hosted checkout (card + Apple/Google/Samsung Pay); held booking →
@@ -178,6 +192,11 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 - **Idempotent splits** — a replayed payment writes no second split. ✅
 - **Coach statement** (per-client paid + owed = net; mark-collected; **discount / write-off**) and a
   mirrored **client statement**. 🔭 (UI) — engine exercised via commission ✅
+- **Money is the OUTCOME of bookings — one reconciling fold** — every money view (coach, admin, client)
+  is the SAME order-status-driven fold, **Billed − Discount − Written-off = Invoiced = Paid + Outstanding**,
+  single-sourced in `CRMUI.statementFold` / `moneySummary`; an event's headline is the **sum of its
+  transactions** (on the shared `TransactionDetail`), and admin **Money is month-paged** with an
+  order-based **earnings-by-service** breakdown. 🔭
 - **Owner financial cockpit** — revenue by service, commission owed + rent per coach, membership MRR,
   refund-aware. 🔭
 - **Proportional commission clawback on refund** — a refund reverses the coach's accrued commission in
@@ -295,15 +314,21 @@ Three rollback-only scratch-DB harnesses drive the **real** engine code and asse
 **`python -m scripts.test_all`** (or each: `test_booking_scenarios`, `test_billing_scenarios`,
 `test_statement_reconciliation`).
 
-**Booking engine — `scripts/test_booking_scenarios.py` (139 checks):** court book/cancel/double-book/
+**Booking engine — `scripts/test_booking_scenarios.py` (180 checks):** court book/cancel/double-book/
 reschedule (+ conflict preserves original) · lesson = coach + court rows, collapsed to one line ·
 lesson needs a free court · **coach∩class conflict** (read + write) · 15-min slot granularity ·
 class enrol/capacity/waitlist/promote · lesson approval lifecycle (request → accept/decline/propose →
 client accept) · court→service allocation · classes reserve N courts (+ auto-repick) · online class seat
 lazy-expiry · peak court pricing · membership entitlement caps → PAYG · configurable trial · equipment
-hire · **coach back-capture of a past lesson** (staff-only allow_past, resource from coach_user_id).
+hire · **coach back-capture of a past lesson** (staff-only allow_past, resource from coach_user_id) ·
+**semi-private (squad) lessons** — per-head billing (one owed order EACH, both visible in their own 360,
+cancel voids all) · **add-a-player-later** (own bill + cap/duplicate/non-lesson guards) · a parent's **two
+kids** both billed to the guardian (R800, two players) · the **addable-player guard** (a member may add
+club members + their OWN kids, never a stranger or another family's child) · **card-only service refuses
+pay-at-court** on the booking path (staff override kept) · **class payment gate** (no free/membership-
+covered seat conjured; a card-only class refuses at-court; staff override kept).
 
-**Commercial engines — `scripts/test_billing_scenarios.py` (277 checks):** settlement per mode
+**Commercial engines — `scripts/test_billing_scenarios.py` (281 checks):** settlement per mode
 (at-court desk, online held→paid, monthly-account ledger) · **idempotent payment replay** · commission
 30%/40% scoping + accrual + idempotency · token pack buy→activate→**unit/minute draw-down**→credit-back
 + NO_TOKEN · membership coverage (R0) + **access window** inside/outside + trial idempotency · refund-
@@ -319,7 +344,9 @@ pricing** (coach's own product ELSE shared, never merged) · **per-service selec
 fix** (each class bills its own price) · **cancel late-fee + paid-booking resize** (`PAID_CANNOT_EXTEND`) ·
 **lesson-reschedule court auto-reassign** · **membership-covered reschedule guard**
 (`NOT_COVERED_AT_NEW_TIME`) · **settlement/approval-gate whitelist** (no client `free`; accept coerces
-covered/free → at-court) · **online-only** + **off-platform reconcile** · **on-behalf token/pack draw-down**.
+covered/free → at-court) · **online-only** + **off-platform reconcile** · **on-behalf token/pack draw-down** ·
+**a pack inherits its service's payment rule** (a card-only service sells only a card pack — no owed at-court
+pack; an unrestricted pack still allows pay-at-court).
 
 **Unified statement — `scripts/test_statement_reconciliation.py` (47 checks):** no double-count
 (orders only, never ledger + arrears too) · pay-all-once · **partial settle** (selected lines only) ·

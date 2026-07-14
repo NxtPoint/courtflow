@@ -139,6 +139,7 @@ membership**). All own-scope (gated by `view_own_ledger`). Looks correct.
 | `manage_club / branding / policy / resources / coaches / prices`, `view_finances`, `run_billing`, `take_pay_at_court`, `view_club_analytics`, `view_master_diary` | club_admin+ |
 | `provision_club`, `impersonate`, `cross_club` | platform_admin |
 | `cancel/reschedule/edit_booking`, `mark_attendance`, `accept/propose/decline` | admin (any) · coach (own) · member/guest (own) |
+| **add a player to a semi-private lesson** (`POST /api/diary/bookings/<id>/add-player`) | **the SAME gate as reschedule** — `can(reschedule_booking)`: admin (any) · coach (own) · the booking's owner. A non-staff booker may only add a **club member** or **their OWN dependent** (`_addable_player_uid`); staff may add any member/child. Each added player is billed their own owed order per-head. |
 | `manage_own_availability / time_off`, `view_own_rosters` | club_admin, coach |
 | `create_booking`, `book_court/lesson/class` | all roles |
 | `manage_own_profile`, `view_own_ledger` (gates own statement view + pay/part-pay + self-cancel membership), `manage_own_membership`, `request_refund` | all roles |
@@ -146,6 +147,23 @@ membership**). All own-scope (gated by `view_own_ledger`). Looks correct.
 
 Note every admin write currently collapses to a **single threshold (`club_admin`)** — that's the knob a
 staff-role split would turn.
+
+**Recent (2026-07) staff/config permission facts (not `can()` actions — enforced at the route/repo):**
+- **Search members** (`GET /api/diary/members/search`, `GET /api/coach/members/search`) — **staff only**
+  (coach / club_admin / platform_admin). A member/guest never gets the member-lookup picker.
+- **Create a client** ("New client" — a walk-up/off-system customer) — **admin AND coach**
+  (`POST /api/admin/clients`, `POST /api/coach/clients`; the coach route delegates to `admin.create_client`).
+  Members can't create other clients.
+- **Set a service's `max_clients`** (the semi-private/squad cap) — a **lesson-service config**, so the
+  **OWNING coach OR the owner** may set it (`PATCH /api/services/<id>`, guarded by `_load_manageable`, lessons
+  only), exactly like the service's name/variations/payment — **never** commission (owner-only, greyed for the
+  coach).
+- **Payment-mode enforcement** — a member/guest is bound to the **club-enabled ∩ service-offered** modes: the
+  EXACT service's `payment_modes` are enforced by `product_id` (a card-only service — e.g. Clay — refuses
+  pay-at-court), a pack's purchasable modes = its SERVICE's modes ∩ enabled (`allowed_purchase_modes`; an
+  unpayable pack is refused, no at-court fallback), and a class enrolment's mode is gated the same
+  (`diary.classes.enrol(role=…)` — a member can't conjure a free or unpayable class seat). Staff on-behalf
+  (admin/coach) still settle at-court / offline as before.
 
 ---
 

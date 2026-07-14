@@ -37,6 +37,19 @@ a membership tier's lifecycle derives from its term plans' status.
   free** (coach ∩ court); booking a lesson auto-holds a court (two rows, one `order_id`). The held court
   is **never billed separately** — the lesson's single order covers both, and the court row confirms
   alongside the lesson when the order is paid.
+- **Semi-private (squad) lessons — PER-HEAD billing.** A lesson SERVICE can carry more than one client on
+  the ONE slot (`billing.product.max_clients`, int NOT NULL DEFAULT 1, lessons only, 1–12; set via the service
+  editor's "Semi-private (squad)" card). Each player gets their **OWN owed order at the service price — never
+  merged**: `create_booking(extra_clients=[…])` records each extra as a `diary.booking_party` (role `partner`)
+  plus a separate order linked via `order_line.booking_id` (the primary keeps `booking.order_id`). Billing
+  follows **whoever pays** (`_bill_owner` → `iam.guardian_user_id_for`): the player if they're a member, else
+  their **guardian** — so a parent's two kids on one squad raise **two** orders BOTH owned by the parent (spend
+  rolls up to the payer, activity to the player). **Add a player later:** `add_lesson_partner`
+  (`POST /api/diary/bookings/<id>/add-player`) + an **"Add player"** action on the shared event story
+  (`Widgets.TransactionDetail`, offered only while the lesson is semi-private and below its cap). The player
+  picker is staff-only (`GET /api/diary/members/search` → `iam.search_members_with_dependents`, members + a
+  parent's kids as their own rows); a non-staff caller may add only club members + their OWN kids, staff any
+  in-club member/child. **Cancel voids EVERY order on the booking**, not just the primary's.
 - **Classes:** owner/coach create class types + schedule **recurring or one-off** sessions; capacity +
   **waitlist** (auto-promote the next person on a cancellation); rosters + attendance; shown on the
   master diary.
@@ -252,6 +265,21 @@ show active items — dormant/retired vanish for customers but stay visible to t
   membership product default → the club's globally-enabled methods (`billing.membership.membership_modes_pref`).
   Admin endpoints: `GET/PATCH /api/admin/membership-config`; `/membership/status` & `/api/billing/bundles`
   return `allowed_payment_modes`, and the `*/checkout` endpoints validate the chosen `settlement_mode`.
+- **Every purchase enforces ITS OWN payment_modes server-side (no fallback leak).** The one rule above is
+  policed at every purchase point against the SPECIFIC service, not a generic first-of-kind product:
+  - **Court/lesson booking** — `_service_payment_modes_guarded` now passes the resolved `product_id`, so a
+    **card-only** service (e.g. Clay) **refuses** pay-at-court / month-end (`SETTLEMENT_NOT_ALLOWED`, 422); a
+    member can't post a mode the service doesn't offer.
+  - **Packs** — `billing.bundles.allowed_purchase_modes` **intersects** the club's enabled methods with the
+    pack's SERVICE modes, so a card-only pack is **card-only with NO at-court fallback** (an empty result →
+    the buy is refused rather than granted on an unpaid owed order — the old fallback let a card-only pack be
+    taken unpaid).
+  - **Class enrolment** (`diary.classes.enrol`) is gated exactly like `create_booking`: `membership_covered`
+    is **downgraded to at-court** (classes are court-only-free — you can't conjure an R0 seat via a
+    membership), `free` stays **admin-only**, and a money mode must be both club-enabled AND offered by THIS
+    class's service. The route passes `role` for the staff override. (Closed a member self-enrol-for-R0
+    exploit.) Membership checkout + the admin offline "issue a pack" flow were already correct and are
+    unchanged.
 - **Online:** `online` booking → `awaiting_payment` order + `held` booking → Yoco hosted checkout (card +
   Apple/Google/Samsung Pay) → verified webhook → `apply_payment_event` → order `paid` + booking
   `confirmed`. **Gotcha:** the booking API returns `{booking:{order_id,status}, checkout}` — read
@@ -286,6 +314,15 @@ show active items — dormant/retired vanish for customers but stay visible to t
   proportional commission clawback is unchanged.
 
 ## 6. Commission / coaching-settlement engine (the commercial core)
+- **THE ONE money model — money is an OUTCOME of bookings (order-status-driven fold).** Every money surface
+  — coach console, admin Money, and the client record — reports the SAME month-scoped reconciling fold:
+  **Billed − Discount − Written-off = Invoiced; Invoiced = Paid + Outstanding.** A cancelled/void booking is
+  **R0** across the board; **you-keep vs club-commission** come from the ACTUAL `commission_split` rows (not a
+  re-derived %); an EVENT is the **sum of its transactions** (the fold headline + a Transactions log on the
+  shared `Widgets.TransactionDetail`, class events drilling to the same story). It is single-sourced through
+  `CRMUI.statementFold` (the fold) + `CRMUI.moneySummary` (a Billed→Collected→Outstanding band) on both
+  consoles; admin Money is month-paged with an order-based `earnings_by_service`. Backing readers:
+  `coach/repositories.py`, `admin/repositories.py`, `billing/commission.py`.
 - The owner monetises each coach via **rent and/or commission %** — freely combinable, per coach.
   Tables: `coach_agreement` (rent), `commission_rule` (scoped, dated %), `commission_split` (per-payment
   decomposition), `coach_ledger` (running balance), `coach_arrears`.

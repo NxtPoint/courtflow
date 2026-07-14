@@ -63,6 +63,12 @@ widgets/_registry → widgets/* → <role>_app`):
 - **`window.CRMUI`** (`frontend/js/crm_ui.js`) — composed presenters: `stats · bars · statementTable ·
   lineItems · requestQueue · drawer · sectionHead · activityFeed · greetBand`. **The client shell now
   loads `crm_ui.js`** (it didn't before — the root cause of the client re-implementing money inline).
+  **Added under the golden rule (2026-07-14):** **`CRMUI.moneySummary`** + **`CRMUI.statementFold`** —
+  the ONE money band/fold (money = the OUTCOME of bookings: Billed − Discount − Written-off = Invoiced =
+  Paid + Outstanding), single-sourced across the coach, admin AND client money views so no two consoles
+  compute a different "paid"; **`CRMUI.createClientModal`** — the ONE create-client dialog (admin + coach,
+  same modal); **`CRMUI.addLessonPlayerModal`** — the ONE add-a-player picker (name / kids list) for
+  semi-private squad lessons, used wherever a player is added to a lesson.
 - **`window.Widgets`** (`frontend/js/widgets/`):
   - `_registry.js` → `window.Widgets = {}`.
   - `txn_detail.js` → **`Widgets.TransactionDetail`** — the ONE booking/transaction detail ("event
@@ -86,7 +92,10 @@ widgets/_registry → widgets/* → <role>_app`):
     single-source composer (`GET /api/admin/people/<id>` · `GET /api/coach/clients/<id>/360` ·
     `GET /api/me/360`). Adopted by admin `renderPerson` (full staff actions), coach `renderClient` (coaching
     collect/discount only) and the client `#/activity` record view (pay/request_refund only); the three
-    previously hand-built person/client renderers were **DELETED** (see §7 — the reversal).
+    previously hand-built person/client renderers were **DELETED** (see §7 — the reversal). **Reconfirmed
+    2026-07-14:** an interim coach-only "lean" client view (spun up during the money-as-an-outcome work)
+    was retired again — coach `renderClient` renders through the SAME `Widgets.ClientRecord`, scoped
+    **server-side** (the composer returns only the coach's own relationship), so there is no coach fork.
 - **`window.ServiceEditor`** (`service_editor.js`, whose `packagesCard` is now the ONE pack editor for
   owner + coach) and **`window.ClassUI`** (`class_ui.js`, lazy) — the single-sourced editors the Setup
   sections mount. **`window.AdminUI`** (bottom of `admin_api.js`) — the owner's config editors (clubProfile,

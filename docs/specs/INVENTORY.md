@@ -57,13 +57,19 @@ equipment items for the court add-on picker — id · name · quantity · featur
 `/bookings` now also accepts **`addons:[{resource_id,qty}]`** → equipment lines on the booking's order) ·
 `GET resources` · `GET durations` · **`GET services`** (`?kind=&coach_id=&audience=`
 — bookable SERVICES for a coach: each product [e.g. Private / Semi-private] with its OWN
-`durations:[{duration_minutes,amount_minor,price_id}]` + `payment_modes` + `currency_code`, so the wizard
+`durations:[{duration_minutes,amount_minor,price_id}]` + `payment_modes` + `currency_code` + **`max_clients`**
+(the squad cap — `services_for` carries it), so the wizard
 offers the service name before the duration; `diary/pricing.py::services_for`, STRICT TWO-TIER via
 `_coach_has_own_product` — a coach's OWN active product ELSE the shared NULL-coach product, never merged;
 also returns **court SERVICES** [e.g. Hardcourt Hire / Clay Hire], each a `product(kind='court_booking')`
 with its own price + allocated courts, so the client picks a court service like a lesson service) ·
 `GET/POST bookings` (**POST now accepts `product_id`** — the chosen service [lesson, class OR court service]
-is priced exactly, passing `coach_user_id`+`product_id` into the order; pricing/availability/`create_booking`
+is priced exactly, passing `coach_user_id`+`product_id` into the order; **POST also accepts
+`extra_clients:[…]`** — a SEMI-PRIVATE (squad) lesson shares one slot across >1 client, each billed their OWN
+owed order at the service price [per-head; `create_booking(extra_clients=…)` → a `booking_party` role
+'partner' per head + a separate order linked via `order_line.booking_id`, billed to the player or their
+guardian via `_bill_owner`/`iam.guardian_user_id_for`]; capped by the service's `product.max_clients`;
+pricing/availability/`create_booking`
 are **court-service-aware** — a court's service resolves via `diary.pricing.court_service_for_resource`
 [the court's own `product_id`, else the club default court product, else unscoped], and a court booked under
 the wrong service is rejected **`COURT_NOT_IN_SERVICE`**; single-court-service clubs unchanged. **POST also
@@ -80,14 +86,24 @@ reschedule is now held inside the coach's PUBLISHED hours via `diary.availabilit
 linked unpaid order** via `billing.statement.void_order` — a cancelled court no longer stays phantom-owed;
 raises a late-cancellation **fee order** when policy applies; returns `was_paid`) ·
 `POST bookings/<id>/status` · **`POST bookings/<id>/{accept,propose,decline}`** (lesson lifecycle — only
-the awaited party; admin always) · **`GET bookings/<id>/calendar.ics`** (booking .ics) ·
+the awaited party; admin always) · **`POST bookings/<id>/add-player`** (add ANOTHER client to an existing
+semi-private lesson AFTER booking — squad confirmations land late; `{email}`|`{user_id}` → own owed order
+per-head via `diary.bookings.add_lesson_partner`; edit gate = reschedule's [staff OR the booking's owner];
+the route helper **`_addable_player_uid`** lets a non-staff booker add only club members + their OWN kids,
+staff any) · **`GET members/search`** (`?q=` — **staff-only** picker: matches members by name/email AND
+surfaces their dependents/kids as their own rows for the add-player flow; `iam.search_members_with_dependents`) ·
+**`GET bookings/<id>/calendar.ics`** (booking .ics) ·
 `GET master` · `GET classes` · `POST classes` ·
 `GET classes/<rid>/sessions` · `POST classes/<rid>/schedule` · `GET classes/<sid>/roster` ·
-`POST classes/<sid>/enrol` · `POST classes/<sid>/cancel-enrolment` · `POST classes/<sid>/attendance` ·
+`POST classes/<sid>/enrol` (`diary.classes.enrol` now takes a **`role`** + gates the payment mode against
+the class service's offered modes / membership_covered / free — a member can't conjure a free or
+unpayable seat) · `POST classes/<sid>/cancel-enrolment` · `POST classes/<sid>/attendance` ·
 `POST classes/sessions/<sid>/cancel`.
 
 **Billing `/api/billing/*`:** `GET config` · `GET receipt/<order_id>` · `POST desk-payment` ·
-`GET bundles` (+`allowed_payment_modes`) · `GET bundles/wallets` · `POST bundles/checkout` ·
+`GET bundles` (+`allowed_payment_modes`) · `GET bundles/wallets` · `POST bundles/checkout` (the pack's
+allowed modes = its SERVICE modes ∩ club-enabled via pure **`billing.bundles.allowed_purchase_modes`** — no
+at-court fallback, an unpayable pack is refused) ·
 `GET membership/status` (+`allowed_payment_modes` per plan) · `POST membership/checkout`. The two
 `checkout` routes accept `settlement_mode` (offline → 'open'/owed order + grant immediately; online → Yoco).
 
@@ -105,9 +121,13 @@ Courts & hours; DELETE now real: hard-delete a court with no bookings/sessions, 
 **`PATCH coaches/<id>`** (lifecycle status) · **`DELETE coaches/<id>`** (real: hard-delete if no
 history, else archive) · `GET people` (roster; `admin.list_people` now also returns **`on_trial`**,
 **`has_active_pack`** and **`membership_tier`** alongside `has_membership` — the People segmented-control
-holdings slicers: membership-tier · On-trial · Has-pack · No-membership) · `GET payments` ·
+holdings slicers: membership-tier · On-trial · Has-pack · No-membership — plus **`owed_minor`**, **`last_seen`**,
+**`last_kind`** and **`first_seen`** for the headline-first person cards) · `GET payments` ·
 `POST|DELETE members/<id>/membership` ·
-**`POST clients`** (create a walk-up/off-system client now — returns `user_id`, idempotent on email) ·
+**`POST clients`** (create a walk-up/off-system client now — returns `user_id`, idempotent on email; body is
+**`first_name`+`surname`** [split] +email +optional phone — `admin.create_client` now takes first/surname) ·
+**`PATCH clients/<id>`** (edit a client's contact details from the person-360 — name/surname/phone, email is
+the identity key & not editable; `admin.edit_client` → `iam.patch_profile`) ·
 **`GET clients/<client_user_id>/packages`** (`?coach_id=` — a client's ACTIVE packs for admin on-behalf
 booking to auto-route to a prepaid pack; `coach_id` filters lesson packs to that coach's/coach-agnostic,
 class/court always included) ·
@@ -140,6 +160,11 @@ and `POST/PATCH .../variations` carry `peak_amount_minor` ·
 — packs are created/edited ONLY under a service via `POST/PATCH/DELETE /api/services/<product_id>/packages`) ·
 `GET coach-agreements` · `PUT coach-agreements/<coach_id>` · `GET/POST commission-rules`
 (+`DELETE /<id>`, `GET /preview`) · `GET financials/{summary,revenue,coach-earnings,memberships}` ·
+**`GET financials/earnings-by-service`** (`?month=` — the MONEY FOLD by service: the club's
+Billed→Collected→Outstanding triad + a club-keeps/payouts-due/standing-debt/members summary band + per-service
+rows; order-status-driven so it reconciles; `admin.repositories.earnings_by_service`) · **`GET financials/
+service-clients`** (`?category=&month=` — the per-service → client drill: the clients making up that service's
+billed/collected/outstanding, summing EXACTLY to its row; `admin.earnings_service_clients`) ·
 `GET coach-statement` · `POST coach-statement/arrears/<id>/collected` ·
 **`PATCH coach-statement/arrears/<id>`** (discount/write-off) ·
 **`GET financials/settlement`** (the "who owes what" aging view: clients bucketed by age + coaches with a
@@ -176,7 +201,9 @@ the Money lists by construction). Admin-gated, guarded (missing/empty → empty 
 (+`POST services/<pid>/rate`, `PATCH/DELETE services/<id>`) · `PUT hours` ·
 *(the `/api/coach/bundle-plans` routes were REMOVED 2026-07-09 — a coach edits their packs under a service
 via `POST/PATCH/DELETE /api/services/<product_id>/packages`; coach onboarding is now Profile/Hours/Services)* ·
-`GET/POST/DELETE time-off` · `GET clients` · **`GET members/search`** (`?q=` type-ahead client lookup for
+`GET/POST/DELETE time-off` · **`POST clients`** (a coach creates a walk-up/off-system client — SAME as the
+admin People "New client"; `first_name`+`surname`+email required, delegates to `admin.create_client`) ·
+`GET clients` · **`GET members/search`** (`?q=` type-ahead client lookup for
 "book a client", min 2 chars; `coach/repositories.search_members`) · **`GET packages`** (every client
 holding an active lesson pack with THIS coach + remaining balance — the coach's "clients with packages"
 view; `coach/repositories.py::coach_package_holders`) · **`GET members/<client_user_id>/packages`**
@@ -192,7 +219,10 @@ players+attendance, can-flags for accept/propose/decline/reschedule/cancel/mark-
 mark-collected/discount/write-off; `diary/bookings.py::coach_booking_story`) ·
 `GET cockpit` (+ **plan_balances**, month-end-after-commission, + **`billed_minor`** = gross coaching value
 for the month before write-off/discount/collection, distinct from collected `gross_minor`;
-`coach/repositories.py::_coach_billed`) · `POST photo-presign` ·
+`coach/repositories.py::_coach_billed`) · **`GET money`** (`?month=` — the coach MONEY FOLD: this-month's
+bookings folded to Billed−Discount−WrittenOff=Invoiced=Paid+Outstanding [order-status-driven, reconciles],
+explicit club-commission + a per-event log; `coach/repositories.coach_month_money` / `_coach_month_events` /
+`_fold_event`) · `POST photo-presign` ·
 `GET classes*` (shared) · `POST coach-statement/...` (shared admin route, coach-gated for own).
 
 **Services `/api/services/*`** (`services/routes.py` — the ONE surface a service is edited through by BOTH
@@ -278,6 +308,11 @@ coach BCC only on his own lesson/class. (`send_booking_confirmation` is legacy; 
   `account_ledger`, `membership_subscription`, `refund_request`, `bundle_plan`, `token_wallet`,
   `token_ledger`, `coach_agreement`, `commission_rule`, `commission_split`, `coach_ledger`,
   `coach_arrears`, **`coach_payout`**, **`month_end_notice`**
+  - *New column (2026-07-13 — semi-private/squad lessons):* **`billing.product.max_clients int NOT NULL
+    DEFAULT 1`** — the squad cap on a lesson service (1 = a normal private lesson; >1 lets a squad share ONE
+    slot, each client billed their own owed order at the service price [per-head]). Only meaningful for a
+    lesson product; set via the service editor (owner or the owning coach). See
+    [[semi-private-lessons]] (SHIPPED 2026-07-13).
   - *New tables (2026-07-11 — club↔coach settlement + month-end sweep):* **`billing.coach_payout`** — a
     recorded club↔coach settlement (the missing half of the loop; the cockpit REPORTS the running
     `coach_ledger` balance, a payout pays it DOWN): `direction club_to_coach|coach_to_club|offset`,
@@ -342,12 +377,16 @@ its full **event story** (GOLDEN RULE: exactly ONE booking capability per app, r
 
 **GOLDEN RULE — one widget per capability** ([FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)):
 the shared **`frontend/js/widgets/`** layer — **`Widgets.TransactionDetail`** (the one event story across
-all three apps), **`Widgets.Calendar`** (the admin diary — Day view = resource-timeline grid, Week/Month
+all three apps — now carries an **`add_player`** action [gated on `can.add_player`] that opens
+`CRMUI.addLessonPlayerModal` to add a squad client to a semi-private lesson), **`Widgets.Calendar`** (the
+admin diary — Day view = resource-timeline grid, Week/Month
 agenda; see below), **`Widgets.Setup`** + **`Widgets.ServiceList`**
 (owner + coach setup), **`Widgets.ClientRecord`** (the ONE client record — identity/membership/packages/owed
-statement/payments/bookings/refunds/dependents/activity, fed by the `client360` composer; adopted by admin
+statement/payments/bookings/refunds/dependents/activity + the month **MONEY FOLD** (`month_events`/
+`statement_fold`) & coach `service_breakdown`, fed by the `client360` composer; adopted by admin
 `renderPerson`, coach `renderClient` and the client `#/activity` record view, role diffs = config; the three
-hand-built person/client renderers were **deleted**) — plus promoted `window.UI` helpers (`card/backBar/kv/modal/statusChip/…`) and
+hand-built person/client renderers were **deleted** and the coach client fork **retired** — every client view
+is now ONE widget off the ONE composer) — plus promoted `window.UI` helpers (`card/backBar/kv/modal/statusChip/…`) and
 `crm_ui.js` (`CRMUI.*`). Role differences = configuration (a data adapter + an actions capability-map +
 `fields`), never forked render code.
 - **Client** — `frontend/app/app.html` + `frontend/js/client.js`. ONE page, **no bottom nav** (Book from
@@ -420,14 +459,18 @@ SPAs above, all on the shared widget layer.
 
 **JS modules** (`frontend/js/*.js`): **`client`** (client SPA — Home/sessions/billing-by-category/event
 story) · **`coach_app`** (coach SPA — bottom-nav Home·Schedule·Clients·Money·Setup + the one coach event
-story) · **`admin_app`** (admin SPA, in progress — responsive shell + command-center Home) ·
+story) · **`admin_app`** (admin SPA — COMPLETE + LIVE at `/admin`; responsive shell + command-center Home) ·
 `portal` (role-focused nav + `landingFor` + notification bell) ·
 `home` (client Home + staff redirect) · `booking` (full-screen; replaced `book`/`quickbook`) · `my` ·
 `plan` · `account` · `coach` (5-tab console; +`coach_api`, `coach_onboarding`) *(`statement.js` DELETED 2026-07-11)* ·
 `admin` (5-tab console; +`admin_api`, `class_ui`; `AdminUI.courtsManage` = per-court click-to-edit hours) ·
 **`crm_ui`** (shared CRMUI components for both consoles — now incl. **`CRMUI.activityBlock`/`spendBlock`/
 `weekChart`**, the shared month-at-a-glance activity + spend-by-service + weekly-chart blocks rendered on the
-client Home AND the Client 360 rollup) · `settings` · `onboarding` · `notifications` ·
+client Home AND the Client 360 rollup; plus the MONEY-FOLD renderers **`CRMUI.moneySummary`** (the
+Billed→Collected→Outstanding band) + **`CRMUI.statementFold`** (the authoritative fold summary — single
+"paid" figure), the **`CRMUI.createClientModal`** "New client" form (admin + coach; first-name/surname split,
++27 country code) and **`CRMUI.addLessonPlayerModal`** (add a squad player to a semi-private lesson)) ·
+`settings` · `onboarding` · `notifications` ·
 `pay` (`Pay.purchase`/`buyMembership`/`buyPack` — THE payment rule) · `pay_return` · `receipt` ·
 `analytics` (page-view beacon) · `overview` (Business Overview dashboard) · `api` · `auth_client` ·
 `ui` (+`UI.lifecycleBar`/`lifeActions`/`statusChip`/`subtabs` lifecycle helpers). `account.js` renders the
@@ -460,11 +503,13 @@ dashboard (`sync:false`).
 - Compile: `python -m py_compile $(git ls-files '*.py')`.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 139 / billing 277 / statement 47** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 180 / billing 281 / statement 47** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
   on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +
   **`sc_order_discount`** (billing) and **`sc_discount_reconcile`** (statement) for the Client 360 sprint,
   plus the **court-service allocation** checks (booking +18) and the **per-service-packs** scenario
-  (billing +44) for the 2026-07-09 court-services + per-service-packs sprint).
+  (billing +44) for the 2026-07-09 court-services + per-service-packs sprint, plus the **semi-private (squad)
+  lesson** checks — per-head billing, `add_lesson_partner` full/dup guards, `_addable_player_uid` route gate,
+  `allowed_purchase_modes` card-only-service refusal — for the 2026-07-13 squad-lessons sprint).
 - Frontend: `node --check <file>.js`.

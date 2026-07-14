@@ -70,6 +70,21 @@ sweep. When you activate one, tick it and move the detail into the relevant spec
   consolidate before building more on it.
 - **HubSpot adapter (A7)** — genuinely unused; keep only if HubSpot is a real future option.
 
+## E. Inert until an owner sets a value (data-config — no env, no deploy)
+
+Fully built, shipped and live, but they do nothing until the owner sets a data value in the console — the
+defaults keep existing behaviour unchanged (same pattern as the equipment / peak / caps / trial controls in
+[EQUIPMENT-AND-CONSTRAINTS.md](EQUIPMENT-AND-CONSTRAINTS.md)).
+
+- **E1 — Semi-private (squad) lessons** — a lesson can seat >1 client with **per-head billing** (one owed
+  order per client; a child's head bills the guardian), an add-a-player-later step, and cancel voids every
+  order. **Dark until** the owner sets a lesson service's **Max clients > 1** (`billing.product.max_clients`,
+  in the service editor). Default `1` = today's single-client lesson, unchanged.
+- **E2 — Per-service payment restriction (card-only service)** — every service purchase enforces its OWN
+  `billing.product.payment_modes`, so a card-only service refuses pay-at-court (a pack inherits its service's
+  modes with no at-court fallback; class enrolment is gated the same way). **Dark until** the owner narrows
+  that service's **payment modes** in the service editor; a service offering all modes behaves as before.
+
 ---
 
 ## Suggested switch-on order (highest owner value first)

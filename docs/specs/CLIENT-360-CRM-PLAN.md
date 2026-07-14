@@ -10,6 +10,17 @@
 > offline-conversion loop** (`offline_conversions/`, see `docs/specs/GOOGLE-ADS-PLAN.md`); GA4↔Ads↔Search
 > Console linked + a remarketing audience. Original plan (still the roadmap for later slices) follows.
 >
+> **Composer as-built (2026-07-12):** `client360.get_client_360(session, *, club_id, user_id,
+> scope='admin', coach_user_id=None, month=None)` is the ONE cross-lane reader every client view derives
+> from. It now takes **`month`** (YYYY-MM) and returns **`month_events`** (renamed from `events` — the
+> month's bookings/enrolments, plus `_month_extra_orders` folding in non-booking orders so the
+> service groups reconcile) + a **`statement_fold`** (the Billed−Discount−WrittenOff=Invoiced=Paid+Outstanding
+> money model). **`scope='coach'` is a STRICT server-side FILTER, not a fork** (the separate coach
+> `get_client` reader was RETIRED): it returns ONLY contact + the coach's own events + the coach's own
+> coaching fold + own packages + coaching + a per-service `service_breakdown` (the month → client →
+> service → transaction drill); membership, card payments, full-club statement, dependents, refunds,
+> PII and activity are OMITTED server-side. All three roles render the SAME `Widgets.ClientRecord`.
+>
 > Written from a full read of both repos (`C:\dev\nextpoint` + `C:\dev\webhook-server`) on 2026-07-10.
 > **Owner ask:** grow 907 people → thousands, convert them, keep courts ~95% full. Data foundation
 > first, marketing engine second. People tab = single source of truth. Maximise reuse across

@@ -186,6 +186,16 @@ except the additive columns noted in [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md
   **profile/Account "Your plan"** card shows the tier + window summary + next-renew, with a
   **Cancel membership** button (paid memberships only → `POST /api/me/membership/cancel`).
 
+### The ONE client record — coach = a scoped filter, not a fork (2026-07-12, shipped) ✅
+The person/client-360 across all three SPAs is now the single `Widgets.ClientRecord`, fed by the ONE
+`client360.get_client_360(...)` composer (`month=` + `scope`). It renders **headline-first**: WHO
+(name · status · contact · kids · Edit — PII behind Edit) → Packages → a **month-paged money block**
+(`CRMUI.statementFold` fold — Billed − Discount − Written-off = Invoiced = Paid + Outstanding — with
+collapsible SERVICE GROUPS, each reconciling to the fold) → every event drills to the shared
+`Widgets.TransactionDetail`. The coach's client view is **the same widget with a strict server-scoped
+filter** (`scope='coach'` returns only the coach's own events + own coaching fold + own packages; the
+old coach `get_client` fork was retired), never forked render code.
+
 ### Consolidation — remaining (the bigger, careful piece; do with Tomo)
 Tomo's principle: **all of a thing's config in ONE place; summary blocks + popup edit; no duplicate
 screens.** Still to do:

@@ -8,6 +8,18 @@ later cosmetic cleanup. Authored 2026-06-28.
 Goal: ONE client-facing statement listing every owed service once, payable online anytime in the
 month, with a hard guarantee that nothing can over- or under-charge.
 
+> **As-built extension (2026-07-12) — the reconciling FOLD is now the single money model everywhere.**
+> The order-status-driven fold **Billed − Discount − Written-off = Invoiced; Invoiced = Paid +
+> Outstanding** (month-scoped) is the one shape money is shown in across the **coach, admin, AND client**
+> surfaces, single-sourced in `CRMUI.statementFold` (the reconciling headline) + `CRMUI.moneySummary`
+> (the Billed→Collected→Outstanding band). A cancelled/void booking folds to R0 across the board;
+> You-keep / club-commission come from ACTUAL `commission_split` rows. It fans out to the ONE client
+> record — `client360.get_client_360` returns a `statement_fold` (via `billing/statement` +
+> `_statement_fold`; coach scope folds only the coach's own coaching) that `Widgets.ClientRecord`
+> renders through the same `statementFold`, so the client record, the coach console and the admin
+> console can never show two different "paid" figures. Payment-status wording stays single-sourced in
+> `billing.statement.settlement_status_label`.
+
 ---
 
 ## 1. The problem (what's wrong today)

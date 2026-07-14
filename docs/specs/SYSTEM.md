@@ -67,7 +67,11 @@ row across all three apps drills into it), **Calendar** (the admin diary agenda;
 client Home agenda are kept as legitimately distinct views), and **Setup** + **ServiceList** (owner +
 coach share the gold-standard Setup). Common DOM helpers
 (`card/backBar/kv/modal/toLocal/addToCalendar/statusChip`) live once on `window.UI`; composed presenters
-(`stats/lineItems/activityFeed/…`) on `window.CRMUI`.
+(`stats/lineItems/activityFeed/statementFold/moneySummary/…`) on `window.CRMUI` — including the **ONE shared
+create-client modal** (`CRMUI.createClientModal`: first-name/surname split + phone country-code, +27 default;
+used by admin AND coach — coach `POST /api/coach/clients` reuses `admin.create_client`, admin
+`PATCH /api/admin/clients/<id>` edits via `iam.patch_profile`) and the shared **add-a-player** modal
+(`CRMUI.addLessonPlayerModal`, serving both the upfront squad step and add-later).
 
 ## Auth & multi-tenancy (the spine)
 `auth/principal.py`: verify the Clerk JWT → upsert `iam.user` (link-by-email) → load memberships →
@@ -103,7 +107,13 @@ the schema gate. Extensions: `btree_gist` (the no-double-book EXCLUDE constraint
 class_sessions), and books with a Postgres **GiST EXCLUDE** constraint so two bookings can never overlap
 a resource (concurrency-safe; the loser gets `SLOT_TAKEN`). Lessons reserve a **coach ∩ court**
 intersection (a lesson holds a court too, one `order_id` across both rows); `create_booking` auto-assigns
-a free court and refuses without a free coach AND court. **Lesson approval lifecycle:** a coach with
+a free court and refuses without a free coach AND court. A lesson service may be **semi-private (squad)** —
+`billing.product.max_clients > 1` lets >1 client ride the ONE slot with **per-head billing**:
+`create_booking(extra_clients=[…])` (and `add_lesson_partner` for an add-later) records each extra as a
+`diary.booking_party(role='partner')` + a **separate order** at the service price (never merged), billed to
+the player or — for a login-less child — their **guardian** (`_bill_owner` → `iam.guardian_user_id_for`);
+cancelling voids EVERY order on the booking. The staff-only picker `GET /api/diary/members/search` →
+`iam.search_members_with_dependents` lists members + a parent's kids as their own rows. **Lesson approval lifecycle:** a coach with
 `iam.coach_profile.review_bookings` ON turns a client's self-booked lesson into a **`requested`** booking
 that reserves NOTHING until the coach **accepts** (auto-assign court + settle → `confirmed`), **proposes**
 a new time (→ **`proposed`**, awaiting the client), or **declines** (→ `cancelled`); on-behalf bookings
@@ -212,17 +222,34 @@ guarded no-op when the order is settled, a real charge has succeeded, it's an R0
 - **`billing/refunds.py`** — client refund-request workflow + admin approve/decline.
 - **`billing/me.py`** — client financial reads.
 
-**`client360/` — the ONE cross-lane client read model (2026-07-09).** `client360.get_client_360(session, *,
-club_id, user_id, scope)` is the single source of truth every client-record view derives from. It is
-**reuse-first** — it does not query tables directly but **composes the existing lane readers**
-(`billing.statement`/`membership`/`bundles`/`commission`/`refunds`/`activity`, core notifications, diary
-bookings/enrolments, `iam.dependent`) into ONE guarded, club-scoped payload: identity, membership(+status),
-packages{active,history}, statement + owed, payments, bookings, dependents, refunds, coaching, activity,
-notifications-unread, and a per-`scope` (`admin`/`coach`/`client`) `can{}` capability map. It is a **superset**
-of the old admin person-360, so **`admin.repositories.get_person` now delegates to it** (`scope='admin'`) —
+**`client360/` — the ONE cross-lane client read model (2026-07-09; coach view folded in 2026-07).**
+`client360.get_client_360(session, *, club_id, user_id, scope, coach_user_id, month)` is the single source of
+truth every client-record view derives from. It is **reuse-first** — it does not query tables directly but
+**composes the existing lane readers** (`billing.statement`/`membership`/`bundles`/`commission`/`refunds`/
+`activity`, core notifications, diary bookings/enrolments, `iam.dependent`) into ONE guarded, club-scoped
+payload. It is now **month-aware**: it takes `month=` and returns `month_events` (renamed from `events` —
+one flat, newest-first list of the month's events that the person-360 groups by service type),
+`statement_fold` (the reconciling money fold, below), and `_month_extra_orders` folded in (non-booking
+orders — invoices/memberships/packs — so the service groups reconcile to the fold). The **coach view is the
+SAME composer, not a fork:** `scope='coach'` (+`coach_user_id`) is a **strict SERVER-SIDE filter** — the coach
+sees ONLY their own events + their own coaching fold + their own packages + a `service_breakdown`, while
+membership, card-payments, the full statement, dependents, refunds, PII and activity are **OMITTED
+server-side** (not merely UI-hidden). For `admin`/`client` scope it returns the full superset (identity,
+membership(+status), packages{active,history}, statement + owed, payments, bookings, dependents, refunds,
+coaching, activity, notifications-unread) with a per-`scope` `can{}` capability map. It is a **superset** of
+the old admin person-360, so **`admin.repositories.get_person` now delegates to it** (`scope='admin'`) —
 existing consumers and the `sc_person_360` harness are unchanged — and the coach/client views read the same
 model scope-filtered (`GET /api/coach/clients/<id>/360`, `GET /api/me/360`). One read model → the ONE
 `Widgets.ClientRecord` renders it across all three apps.
+
+**The ONE money model — money as an OUTCOME of bookings.** Every money surface (coach console, admin Money,
+the client record) reports the SAME month-scoped reconciling fold — **Billed − Discount − Written-off =
+Invoiced; Invoiced = Paid + Outstanding** — with a cancelled/void booking counting **R0** and you-keep vs
+club-commission taken from the ACTUAL `commission_split` rows. It is single-sourced on the front end through
+`CRMUI.statementFold` + `CRMUI.moneySummary` (a Billed→Collected→Outstanding band) and on the server through
+`client360.statement_fold` / `coach.repositories` / `admin.repositories` (admin Money is month-paged with an
+order-based `earnings_by_service`). An EVENT = the sum of its transactions, drilling to the shared
+`Widgets.TransactionDetail`.
 
 **The payment rule (one shared rule across every purchase).** What payment methods a purchase offers is
 configurable per service (`billing.product.payment_modes`) and **per membership tier** (new column
@@ -230,6 +257,13 @@ configurable per service (`billing.product.payment_modes`) and **per membership 
 enabled methods). The front end (`Pay.purchase` → `buyMembership`/`buyPack` in `pay.js`, and `booking.js`)
 applies ONE rule: more than one allowed mode → the client chooses; exactly one non-online mode → check out
 immediately (no prompt); online → Yoco. Offline modes settle through the unified statement as `open` orders.
+The rule is **enforced server-side against the SPECIFIC service**, not a generic first-of-kind product:
+`create_booking`'s `_service_payment_modes_guarded` passes the resolved `product_id` (so a card-only Clay
+service refuses pay-at-court), `billing.bundles.allowed_purchase_modes` intersects a pack with its own
+service's modes (a card-only pack has NO at-court fallback — refuse rather than grant unpaid), and
+`diary.classes.enrol` is gated like `create_booking` (`membership_covered` downgraded to at-court — classes
+are court-only-free, `free` admin-only, money mode must be club-enabled AND offered by the class's service;
+staff override via `role`). This closed a member self-enrol-for-R0 exploit.
 
 ## Events, CRM & notifications
 Producers call `marketing_crm.emit(event, payload)` → writes `core.usage_event` (the decoupled event
@@ -271,9 +305,10 @@ event. No new endpoints, no schema change. **Running now** via the **interim** T
 `KLAVIYO_API_KEY`). Diagnostic: `POST /api/cron/ses-selftest?to=<email>` (OPS-guarded).
 
 ## Request flow (a booking, end to end)
-1. SPA `booking.js` (full-screen): pick service → schedule on a month calendar with **inline per-duration
-   price** (or "covered by membership"; coach/court default "Any") → settlement (at-court / monthly /
-   membership / **token** / online / free).
+1. SPA `booking.js` (full-screen), **resource-first**: pick service → **pick WHERE (the court / coach /
+   class) at the top** → then schedule on a month calendar with **inline per-duration price** (or "covered by
+   membership") — **time is the LAST action** (no auto-advance, with a Back button), the SAME order for court,
+   lesson and class flows → settlement (at-court / monthly / membership / **token** / online / free).
 2. `POST /api/diary/bookings` → `create_booking` (club-scoped, exclusion-constrained); creates the order
    per settlement mode (online → `awaiting_payment` + booking `held`; token → draws a wallet token at R0;
    membership-covered → R0). A **gated lesson** (review-coach, client self-book) → `requested`, with **no

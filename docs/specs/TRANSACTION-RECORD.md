@@ -1,5 +1,13 @@
 # The Unified Transaction Record (design — for sign-off)
 
+> **As-built (2026-07-12): BUILT + LIVE as `Widgets.TransactionDetail` (`frontend/js/widgets/txn_detail.js`).**
+> The event story now **leads with the money FOLD headline** — `Billed − Discount − Written-off =
+> Invoiced; Invoiced = Paid + Outstanding`, rendered through the shared `CRMUI.statementFold` (it
+> falls back to a one-line status for covered / no-charge events where a fold doesn't apply) — and
+> **the event = the sum of its transactions**: a **Transactions** log lists the money rows that make up
+> the fold. **Class events drill to the SAME shared widget** (no separate class record). The rest of
+> this doc is the original design that got there; the reconciliation invariants below still hold.
+
 **Status: DESIGNED, not yet built.** The owner's mandate: there is ONE and only one place a
 transaction is ever seen — identical for client, coach and admin. It opens with a **summary** of the
 event and its current status, drills to a **plain-English chronological log**, **reconciles to

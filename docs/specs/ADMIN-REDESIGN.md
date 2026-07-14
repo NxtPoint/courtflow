@@ -14,6 +14,18 @@ config-driven via `cfg.grid`, empty coach columns hidden), **Week/Month stay age
 into the shared event story; the full drag-timeline **editing** (walk-in/block-time/desk-pay) still lives at
 `/admin-classic`. Insights embeds the court-utilisation heatmap + the Business Overview.
 
+**As-built delta (2026-07-12) — the money FOLD + person-360 restructure.** The person-360 is now the
+shared `Widgets.ClientRecord` fed by the ONE `client360.get_client_360` composer, **headline-first**: WHO
+(name · status · contact · kids · Edit — PII behind Edit) → PACKAGES → a **month-paged money block**
+(`CRMUI.statementFold` — Billed − Discount − Written-off = Invoiced = Paid + Outstanding — with collapsible
+**SERVICE GROUPS** that group the month's events by service type, each reconciling to the fold) → each event
+drills to the shared `Widgets.TransactionDetail`. The old Upcoming/History/Coaching blocks were dropped.
+The **People roster** (`admin.list_people`) now carries per-row owed + last-seen + first-session-based
+**New (≤30d)** + smart slices + sort. **Money** is month-paged with an order-based, settlement-safe
+**earnings-by-service** (`earnings_by_service` / `earnings_service_clients`, by service by month → per-client
+drill). Creating a client is the ONE shared `CRMUI.createClientModal` (admin + coach; first_name/surname
+split, +27 code) → `admin.create_client`; edit = `PATCH /api/admin/clients/<id>` via `iam.patch_profile`.
+
 Owner brief: "take the learnings from client and coach and apply to admin — admin is the hardest,
 needs a lot of thought." Owner answers to framing questions:
 - **Device: BOTH** → responsive. Mobile-first cards that reflow into denser desktop layouts
@@ -56,7 +68,9 @@ Backed by a new lean `GET /api/admin/home` composing existing repo reads (keeps 
 ### People (`#/people`, `#/person/:id`)
 Roster with a category slicer (Members / Coaches / Guests / Admins / All) + search → row opens the
 **unified person 360** (`#/person/:id`). Today member-360 and coach-360 are two different drawers;
-unify them into ONE record page (mirrors coach `get_client`):
+unify them into ONE record page (mirrors coach `get_client`). **(As-built the record was restructured
+headline-first — WHO → Packages → month-paged fold with reconciling service groups — and is the shared
+`Widgets.ClientRecord`; see the 2026-07-12 delta at the top.)** Planned block layout below:
 - **Header**: name, contact, role/status chips, membership line (+ grant/revoke), Total owed.
 - **Money**: what they owe the club (unpaid orders, each Void / Write-off) + online payments.
 - **Bookings**: upcoming + history, each → the admin event story.

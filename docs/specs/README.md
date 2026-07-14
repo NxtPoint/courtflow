@@ -155,7 +155,22 @@ operating guide; **this folder is the detail.**
 > auto-held court is ONE row in every agenda/list view, never two); and class-pick UX polish. **This was also
 > the full close-out sweep** — docs reconciled to as-built, `OUTSTANDING.md` rewritten as one clean backlog,
 > and a new **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** capturing every built-but-dark capability + how to switch
-> it on. **Current gate baseline: `python -m scripts.test_all` → booking 139 / billing 277 / statement 47.**
+> it on.
+>
+> **2026-07-14 — MONEY-AS-AN-OUTCOME + THE ONE CLIENT-360 + SEMI-PRIVATE LESSONS.** Money is now the
+> **outcome of bookings**: an order-status fold (Billed − Discount − Written-off = Invoiced = Paid +
+> Outstanding) single-sourced across the coach, admin and client consoles (`CRMUI.statementFold` /
+> `moneySummary`). The coach client view is no longer a fork — coach, admin and client all render the ONE
+> **`Widgets.ClientRecord`** off the single `client360` composer (coach = a server-scoped filter); the
+> person-360 was restructured **headline-first** with a richer admin roster, and creating a client is now
+> ONE shared modal (admin + coach, `CRMUI.createClientModal`). Booking is **resource-first**. **Semi-private
+> (squad) lessons** shipped — `billing.product.max_clients > 1` puts >1 client on one lesson slot with
+> **per-head billing** (one owed order each; a child's head bills the guardian), an add-a-player-later step
+> (`CRMUI.addLessonPlayerModal`), and cancel that voids every order. Plus a **payment-gate correctness
+> sweep** — every service purchase enforces its OWN `billing.product.payment_modes` (a card-only Clay
+> refuses pay-at-court; a pack inherits its service's modes with no at-court fallback; class enrolment
+> gated, and a member-self-enrol-for-free exploit closed). **Current gate baseline: `python -m
+> scripts.test_all` → booking 180 / billing 281 / statement 47.**
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,

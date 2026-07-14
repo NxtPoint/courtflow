@@ -11,12 +11,17 @@ the coach sets up services, then the client books against them. Expected results
 > **Automated gate (separate from this manual plan):** the backend money/booking invariants are also
 > proven by scratch-DB scenario harnesses — **`python -m scripts.test_all`** runs **THREE** (each in its
 > own scratch club, always rolled back, never persisted):
-> - **booking** (`test_booking_scenarios`, **139** checks) — double-book refusal, coach∩court integrity,
+> - **booking** (`test_booking_scenarios`, **180** checks) — double-book refusal, coach∩court integrity,
 >   recurrence/waitlist, lazy hold-expiry, off-peak per-slot pricing, court→service allocation (per-service
->   courts + pricing), **classes reserve N courts** (held + conflict guard + auto-repick) + editable, and the
+>   courts + pricing), **classes reserve N courts** (held + conflict guard + auto-repick) + editable, the
 >   **online class seat held → lazy-expired on abandonment → waitlister promoted** (a paid seat is never
->   expired).
-> - **billing / commercial** (`test_billing_scenarios`, **277** checks) — PAYG/membership/bundle settlement,
+>   expired), plus the 2026-07-13/14 additions: **semi-private (squad) lessons** — per-head billing upfront
+>   (one owed order per client, cancel voids all), add-a-player-later (cap/duplicate/non-lesson guards), a
+>   parent's **two kids** both billed to the guardian, and the addable-player security guard (a member can't
+>   bill a stranger or another family's child) — and the **payment-gate** correctness: a **card-only service**
+>   refuses pay-at-court on the booking path (staff override kept), and **class enrolment** respects the
+>   service's payment rule (no free/membership-covered seat conjured, card-only refuses at-court).
+> - **billing / commercial** (`test_billing_scenarios`, **281** checks) — PAYG/membership/bundle settlement,
 >   desk-payment idempotency, refunds, commission, refund clawback, membership-cancel-voids-order, the
 >   transaction log, dispute routing, client month-end, void clears arrears, abandoned reclaim on read, the
 >   booking + coach event stories, cancel-voids-order + phantom cleanup, the **client by-service breakdown**
@@ -26,7 +31,9 @@ the coach sets up services, then the client books against them. Expected results
 >   coach's), **cancel late-fee + paid-booking resize** (`PAID_CANNOT_EXTEND`), **lesson-reschedule court
 >   auto-reassign**, **membership-covered reschedule guard** (`NOT_COVERED_AT_NEW_TIME`), **settlement/
 >   approval-gate whitelist** (no client `free`; accept coerces covered/free → at-court), **online-only**
->   and **off-platform reconcile** paths, and **on-behalf token/pack draw-down**.
+>   and **off-platform reconcile** paths, **on-behalf token/pack draw-down**, and **a pack inherits its
+>   service's payment rule** (a card-only service can't sell an owed at-court pack — the leak that let a clay
+>   10-pack be taken unpaid is closed; an unrestricted pack still allows pay-at-court).
 > - **statement reconciliation** (`test_statement_reconciliation`, **47** checks) — the unified-statement
 >   money invariant: a client owes the SUM of unpaid orders with **no double-count** (ledger/arrears never
 >   added in), **pay-all** settles every debt **once + idempotent** (replay = no re-charge, no double

@@ -129,6 +129,15 @@ a no-op (existing wallets backfill from the count balance once, `WHERE base_minu
 - `POST /api/billing/bundles/checkout {bundle_plan_id}` → an `online`/`awaiting_payment` order for
   `price_minor` + a `pending` `token_wallet` (carrying `base_minutes`) linked by `order_id`. Returns
   `{order_id}` → `Pay.startYocoCheckout(order_id)`.
+
+> **Payment modes — a pack INHERITS its service's payment rule** (`bundles.allowed_purchase_modes`,
+> read by `yoco_billing/routes`): the buyable modes = the club's enabled methods (online kept only
+> when `online_ok`) **INTERSECTED with the pack's OWN SERVICE `payment_modes`** (via
+> `diary.pricing.payment_modes_for` on the pack's `product_id`/coach/kind). So a **card-only** service's
+> pack is **card-only, with NO at-court fallback** — the fallback is exactly what previously let a
+> restricted pack be granted on an owed (unpaid) order. If the intersection is EMPTY the purchase is
+> **refused**, never granted unpaid. A service that doesn't restrict methods keeps the always-buyable
+> default (club methods, else `at_court`).
 - **Activation hook** in `yoco_billing/routes.yoco_webhook`, next to the membership hook: on a paid
   `charge_succeeded` whose order is a bundle purchase (`bundles.is_bundle_order`), call
   `bundles.activate_wallet_for_order` — idempotent (replay = still N sessions, never 2N).

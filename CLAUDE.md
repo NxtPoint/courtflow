@@ -19,25 +19,30 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 139 / billing 277 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 180 / billing 281 / statement 47**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   - `test_booking_scenarios` (139) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   - `test_booking_scenarios` (180) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
      waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused,
      PEAK court pricing (shown==charged), membership entitlement caps (duration/courts-per-day → PAYG) +
      clay-court exclusion, configurable trial inherits its tier's caps, equipment hire (one order/no
      double-bill + time-based availability, single ball machine can't double-book, cancel voids the add-on),
-     coach back-capture of a PAST lesson (staff-only allow_past, resource resolved from coach_user_id)**.
-   - `test_billing_scenarios` (277) — settlement modes, commission, tokens, membership (offline + per-tier),
+     coach back-capture of a PAST lesson (staff-only allow_past, resource resolved from coach_user_id),
+     SEMI-PRIVATE (squad) lessons — per-head billing (one owed order per client), add-a-player-later,
+     a parent's kids bill the guardian, a member can't add a stranger/another family's child, cancel
+     voids every head; a card-only SERVICE refuses pay-at-court on the booking; a class enrolment is
+     payment-gated (no free seat via membership_covered/free, card-only class refuses pay-at-court)**.
+   - `test_billing_scenarios` (281) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
      class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
      partial-refund state, coach payout nets the ledger, month-end sweep idempotent, pack service-isolation
      (assign + buy-wizard coach/product scoping), admin ad-hoc invoice (service×qty + fee − discount,
-     tamper-proof), client activity-summary (counts/minutes/by-service/by-week)**.
+     tamper-proof), client activity-summary (counts/minutes/by-service/by-week), a pack respects its
+     SERVICE's payment rule (a card-only pack is card-only — no at-court fallback that grants it unpaid)**.
    - `test_statement_reconciliation` (47) — no double-count, pay-all-once, part-settle, reclaim,
      membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
 
@@ -88,7 +93,7 @@ Touch only your lane; coordinate on shared interface files (`contracts/events.md
 | **Diary** | `diary/` | Court/lesson/class lifecycle, GiST constraint, availability, classes, recurrence, book-on-behalf, `/api/diary/*`. |
 | **Billing** | `billing/`, `yoco_billing/` | orders/ledger, `apply_payment_event` (idempotent), membership/bundles/commission/refunds/statement engines, Yoco adapter, `/api/billing/*`. |
 | **CRM** | `core/`, `marketing_crm/`, `offline_conversions/` | `emit()`→`core.usage_event`, notifications (in-app inbox + transactional email), Klaviyo sync, consent. **Identity bridge** `core.repositories.persons.link_person_for_user` (iam.user ↔ `core.person.iam_user_id`, adopt-or-create by email; 911 backfilled) — feeds Client-360. **gclid capture** → `core.acquisition` + the **Google Ads offline-conversion feed** (`offline_conversions/`). |
-| **Client 360** | `client360/` | The ONE cross-lane read-model — `get_client_360(scope)` composes existing lane readers into a single client payload (identity/memberships/packages/statement/payments/bookings/refunds/coaching/activity + `can{}`; booking rows carry service + pay-status). Read-only, reuse-first. **Each block runs in a SAVEPOINT (`_guard`→`begin_nested`), NEVER a bare `session.rollback()`** — the composer runs inside the caller's `session_scope`, so a full rollback would discard the caller's writes. `admin.get_person` delegates here; coach `/clients/<id>/360` + client `/me/360` call it. **The single source of truth every client view is a view off.** |
+| **Client 360** | `client360/` | The ONE cross-lane read-model — `get_client_360(scope, coach_user_id, month)` composes existing lane readers into a single client payload (identity/memberships/packages/statement/payments/bookings/refunds/coaching/activity + `month_events` + the reconciling `statement_fold` + `can{}`; booking rows carry service + pay-status + their own head's amount). Read-only, reuse-first. **`scope='coach'` is a STRICT SERVER-SIDE filter** (the coach fork was retired — coach = a filter, not a fork): it returns ONLY the coach's own events + own coaching fold + own packages + coaching; membership/card-payments/full-statement/dependents/refunds/PII/activity are OMITTED server-side (never sent to a coach's browser). **Each block runs in a SAVEPOINT (`_guard`→`begin_nested`), NEVER a bare `session.rollback()`** — the composer runs inside the caller's `session_scope`, so a full rollback would discard the caller's writes. `admin.get_person` delegates here; coach `/clients/<id>/360` + client `/me/360` call it. **The single source of truth every client view is a view off**, and the money everywhere is the ONE reconciling fold: **Billed − Discount − Written-off = Invoiced = Paid + Outstanding** (`CRMUI.statementFold`/`moneySummary`, coach + admin + client all reconcile). |
 | **Admin** | `admin/`, `services/`, `insights/` | Owner write APIs + onboarding, per-service commission editor, financial cockpit, person-360, the insights composer, **general order discount + pack-wallet adjust/expire**. |
 | **Coach / Client** | `coach/`, `me/` | Coach self-service (onboarding, approval queue, clients-360, statement, cockpit) + client self-service (profile, dependents, statement, refund requests). |
 | **Analytics** | `analytics/` | Read-only guarded aggregations → `/api/analytics/*` (the standalone `/overview.html`); first-party beacon in `beacon.py`. |
@@ -145,11 +150,37 @@ match). **Packs are created/edited ONLY under a service** (the service editor �
 the standalone "Session packs" section + `AdminUI.bundlePlans` + the coach-onboarding packs step + the
 admin/coach bundle-plan write routes were DELETED (GET `/api/admin/bundle-plans` kept for offline
 issue-pack). Backfill existing packs onto their service with `scripts/backfill_pack_products.py`.
+**SEMI-PRIVATE (squad) lessons:** a lesson SERVICE can carry >1 client on one slot via
+`billing.product.max_clients` (int, default 1; set in the service editor's "Semi-private (squad)" card,
+lessons only, 1–12). Billing is **PER HEAD** — each client gets their OWN owed order at the service price,
+never merged. `create_booking(extra_clients=[…])` inserts each as a `diary.booking_party` (role `partner`)
++ a separate order linked via `order_line.booking_id` (booking.order_id stays the PRIMARY's). Each head is
+billed to whoever **PAYS**: the player if a member, else their **GUARDIAN** (`_bill_owner` →
+`iam.guardian_user_id_for`) — so a parent's two kids raise two orders BOTH owned by the parent (spend rolls
+up to the payer, activity to the player). **Add a player LATER** (squad confirmations land late):
+`diary.bookings.add_lesson_partner` + `POST /api/diary/bookings/<id>/add-player` (email or user_id; same
+edit gate as reschedule) — surfaced as an "Add player" action on the shared `Widgets.TransactionDetail`
+(`can.add_player`, true only when the lesson is semi-private + below its cap). The player PICKER is
+`GET /api/diary/members/search` (staff-only) → `iam.search_members_with_dependents` (members AND a parent's
+kids as their own rows); the shared `CRMUI.addLessonPlayerModal` (staff = name search, self-booking member =
+own-kids search, email fallback) serves BOTH the add-later modal and the upfront booking-flow squad step.
+`_addable_player_uid` (route) validates each extra player: a non-staff booker may add only club members +
+their OWN kids, never an arbitrary account or another family's child; staff add any in-club member/child.
+**Cancel voids EVERY order on the booking** (primary + per-head partners), so no partner is left owing.
 
 **Three purchasing models:** PAYG (per-duration) · membership (term plans) · tokens/bundles (prepaid packs,
 atomic draw-down + idempotent credit-back). Memberships & packs are also purchasable **offline**
-(at-court/monthly → owed order, activated immediately). **One payment rule** (`billing.price.payment_modes`):
+(at-court/monthly → owed order, activated immediately). **One payment rule** (`billing.product.payment_modes`):
 >1 mode → choose · single non-online → immediate · online → Yoco. Frontend: `frontend/js/pay.js`.
+- **Every service purchase respects its OWN `payment_modes` — enforced SERVER-SIDE, per the EXACT service.**
+  A COURT/LESSON booking scopes the guard to the resolved `product_id` (`_service_payment_modes_guarded`),
+  so a card-only Clay court refuses pay-at-court/month-end (not just the UI). A PACK inherits its service's
+  modes (`billing.bundles.allowed_purchase_modes` intersects the pack's product modes with the club-enabled
+  set — a card-only pack is card-only, with **NO at-court fallback**: an unpayable restricted pack is
+  refused, never granted on an unpaid/owed order). A CLASS enrolment (`diary.classes.enrol`) is gated like
+  a booking — `membership_covered` is downgraded to at-court (classes are court-only-free), `free` is
+  admin-only, and the money mode must be club-enabled AND offered by that class's service. Members/guests
+  are bound to these; admins/coaches override. (Membership checkout already scoped to its own modes.)
 
 **Online payments (Yoco) — wired & verified.** `yoco_billing/` is a pure adapter behind
 `register_gateway`/`get_gateway` (`billing/` core untouched). An `online` booking creates an `awaiting_payment`
@@ -323,6 +354,13 @@ member by email on the first authenticated hit.
 - **Never let an agent change DNS.** The Wix→Render SEO cutover is supervised by Tomo.
 - **The booking API returns `{booking:{order_id,status}, checkout}`** — read `res.booking.order_id`, NOT
   `res.order_id` (that bug silently confirmed online bookings without redirecting).
+- **A service's `payment_modes` is enforced SERVER-SIDE per the EXACT `product_id`** — resolve allowed modes
+  by the resolved service product, NEVER by `kind` alone (a kind-only resolve reads the club's default court
+  product and lets a card-only Clay court/pack/class be taken pay-at-court on an owed/unpaid order). Bookings
+  pass `product_id` to `_service_payment_modes_guarded`; packs use `billing.bundles.allowed_purchase_modes`
+  (no at-court fallback for a restricted pack — refuse if unpayable); `diary.classes.enrol` gates the mode
+  (and never lets a member conjure a free seat via `membership_covered`/`free`). Don't regress these to a
+  kind-level check.
 - **`marketing/` (untracked) is NOT platform code** — ad-ops notes. Don't commit it with platform changes
   (`git add <paths>`, NOT `git add -A`); don't confuse it with `frontend/marketing/` or `marketing_crm/`.
 - **`UI.clear(node)` must drop the `cf-loading` class** (it does, in `frontend/js/ui.js`) — `.cf-loading` paints
