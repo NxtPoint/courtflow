@@ -170,7 +170,11 @@ their OWN kids, never an arbitrary account or another family's child; staff add 
 
 **Three purchasing models:** PAYG (per-duration) · membership (term plans) · tokens/bundles (prepaid packs,
 atomic draw-down + idempotent credit-back). Memberships & packs are also purchasable **offline**
-(at-court/monthly → owed order, activated immediately). **One payment rule** (`billing.product.payment_modes`):
+(at-court/monthly → owed order, activated immediately). **A paid pack is NEVER bypassed:** `create_booking`
+(and the squad/partner path) AUTO-DRAWS a matching active pack even when an OWED method (at_court/monthly_account)
+is chosen — so a pack-holder can't be double-charged by a wrong tap or a stale client (the front-end also
+defaults a pack-holder to "Covered by your pack"). Don't regress the draw to fire only on `settlement_mode='token'`.
+**One payment rule** (`billing.product.payment_modes`):
 >1 mode → choose · single non-online → immediate · online → Yoco. Frontend: `frontend/js/pay.js`.
 - **Every service purchase respects its OWN `payment_modes` — enforced SERVER-SIDE, per the EXACT service.**
   A COURT/LESSON booking scopes the guard to the resolved `product_id` (`_service_payment_modes_guarded`),
@@ -194,7 +198,12 @@ boot re-seed can't reset it).
   the webhook's payment id (`p_`) — refunding a `p_` 404s.
 - **Reconciliation (missed-webhook recovery):** `yoco_billing/reconcile.py` — `client.get_checkout` asks Yoco;
   a `completed`+`paymentId` replays `charge_succeeded` (idempotent). `POST /api/billing/yoco/reconcile/<order_id>`
-  + `POST /api/cron/reconcile-payments`.
+  + `POST /api/cron/reconcile-payments`. **Recovering the payment is NOT enough — the purchase must also be
+  ACTIVATED.** Both the webhook AND reconcile call the ONE shared `yoco_billing/activation.py::activate_purchase`
+  (activate the membership/pack + emit `bundle_activated`); it's idempotent and runs even on an `{ignored}`
+  replay, so a webhook-after-reconcile REPAIRS an un-granted pack. **Never let reconcile settle without calling
+  it** — the historic gap left online packs `paid` but `pending`/unusable with no email (Render Free sleeps →
+  webhook missed → reconcile is the common path). Remediate stragglers with `scripts/fix_bypassed_packs.py`.
 - **Receipts:** `GET /api/billing/receipt/<order_id>` (online AND desk payments) → `frontend/app/receipt.html`
   (+ a professional PDF at `GET /api/billing/receipt/<order_id>/pdf`).
 
