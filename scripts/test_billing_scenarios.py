@@ -373,6 +373,42 @@ def sc_reconcile_activates_pack(s, fx):
     check("balance unchanged after idempotent re-activate (still 300)", w_final["minutes_remaining"] == 300, str(dict(w_final)))
 
 
+def sc_reconcile_guard_activates_pack(s, fx):
+    print("\n# GUARD: reconcile (missed-webhook recovery) MUST activate the pack, not just mark it paid")
+    # End-to-end behavioural guard: drive the REAL reconcile_order (with a stubbed Yoco get_checkout)
+    # and assert the recovered pack ends up ACTIVE. If anyone removes the activate_purchase call from
+    # reconcile again, the wallet stays 'pending' → THIS fails, so the reconcile-parity gap can't
+    # silently reopen. (The static call is the mechanism; this proves the OUTCOME.)
+    from yoco_billing import client as yoco_client
+    from yoco_billing import reconcile as RC
+    plan = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=5,
+                          price_minor=170000, duration_minutes=60, coach_user_id=fx.coach_uid, label="5pk-guard")
+    order = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member, bundle_plan_id=plan["id"],
+                                   settlement_mode="online")
+    oid = order["order_id"]
+    check("online pack starts awaiting_payment", _order(s, oid)["status"] == "awaiting_payment", str(_order(s, oid)))
+    wp = s.execute(text("SELECT status FROM billing.token_wallet WHERE order_id=:o"), {"o": str(oid)}).scalar()
+    check("its wallet starts PENDING", wp == "pending", str(wp))
+    # reconcile finds the checkout via a payment_attempt row (as the real checkout-create writes).
+    s.execute(text("INSERT INTO billing.payment_attempt (club_id, order_id, provider, intent_id, status) "
+                   "VALUES (:c,:o,'yoco','ch_guard_1','created')"), {"c": fx.club_id, "o": oid})
+    # Stub Yoco's GET checkout → a COMPLETED checkout with a paymentId (no network).
+    _orig = yoco_client.get_checkout
+    yoco_client.get_checkout = lambda checkout_id: {
+        "status": "completed", "paymentId": "p_guard_reco_1",
+        "amount": 170000, "currency": "ZAR", "metadata": {"club_id": str(fx.club_id)}}
+    try:
+        res = RC.reconcile_order(s, order_id=str(oid))
+    finally:
+        yoco_client.get_checkout = _orig
+    check("reconcile recovered the payment (order paid)",
+          res.get("changed") and _order(s, oid)["status"] == "paid", str(res))
+    w = s.execute(text("SELECT status, minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                  {"o": str(oid)}).mappings().first()
+    check("GUARD: reconciled pack wallet is ACTIVE + granted (reconcile called activate_purchase)",
+          w and w["status"] == "active" and w["minutes_remaining"] == 300, str(dict(w) if w else None))
+
+
 def sc_membership(s, fx):
     print("\n# Membership: active sub covers courts (R0); access window enforced; trial idempotent")
     # An active (manual) membership with no access window → covers any time.
@@ -2141,6 +2177,7 @@ def sc_pack_respects_service_payment_mode(s, fx):
 SCENARIOS = [
     sc_pack_autodraw_guardrail,
     sc_reconcile_activates_pack,
+    sc_reconcile_guard_activates_pack,
     sc_pack_respects_service_payment_mode,
     sc_admin_invoice,
     sc_activity_summary,

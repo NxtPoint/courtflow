@@ -19,7 +19,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 180 / billing 281 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 180 / billing 298 / statement 47**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -35,14 +35,16 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      a parent's kids bill the guardian, a member can't add a stranger/another family's child, cancel
      voids every head; a card-only SERVICE refuses pay-at-court on the booking; a class enrolment is
      payment-gated (no free seat via membership_covered/free, card-only class refuses pay-at-court)**.
-   - `test_billing_scenarios` (281) — settlement modes, commission, tokens, membership (offline + per-tier),
+   - `test_billing_scenarios` (298) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
      class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
      partial-refund state, coach payout nets the ledger, month-end sweep idempotent, pack service-isolation
      (assign + buy-wizard coach/product scoping), admin ad-hoc invoice (service×qty + fee − discount,
      tamper-proof), client activity-summary (counts/minutes/by-service/by-week), a pack respects its
-     SERVICE's payment rule (a card-only pack is card-only — no at-court fallback that grants it unpaid)**.
+     SERVICE's payment rule (a card-only pack is card-only — no at-court fallback that grants it unpaid),
+     PAID PACK NEVER BYPASSED (owed-mode booking auto-draws a matching pack), RECONCILE activates the
+     pack/wallet (behavioural GUARD — reconcile must call activate_purchase, not just mark paid)**.
    - `test_statement_reconciliation` (47) — no double-count, pay-all-once, part-settle, reclaim,
      membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
 
