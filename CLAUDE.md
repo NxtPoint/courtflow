@@ -195,7 +195,30 @@ boot re-seed can't reset it).
 - **Reconciliation (missed-webhook recovery):** `yoco_billing/reconcile.py` — `client.get_checkout` asks Yoco;
   a `completed`+`paymentId` replays `charge_succeeded` (idempotent). `POST /api/billing/yoco/reconcile/<order_id>`
   + `POST /api/cron/reconcile-payments`.
-- **Receipts:** `GET /api/billing/receipt/<order_id>` (online AND desk payments) → `frontend/app/receipt.html`.
+- **Receipts:** `GET /api/billing/receipt/<order_id>` (online AND desk payments) → `frontend/app/receipt.html`
+  (+ a professional PDF at `GET /api/billing/receipt/<order_id>/pdf`).
+
+**Invoice & receipt DOCUMENTS (`billing/invoicing.py` — the ONE module; `billing/invoice_pdf.py` = reportlab
+renderer).** An invoice is a **document that RENDERS over live orders, NEVER a second debt store** — the debt
+stays on `billing."order"` (one debt = one order). An invoice's line amounts FREEZE at issue (an immutable
+document + seller/bill-to snapshot); its **paid/outstanding derives LIVE** from the orders it references — so a
+mid-month card payment flips the invoice to Paid and double-counting is structurally impossible. Numbering is
+**gapless per club** (`club.billing_profile.invoice_prefix` + `next_invoice_seq`, allocated atomically at issue).
+- **Company financial identity** = `club.billing_profile` (registered name, company reg no., **bank details** for
+  EFT-payable invoices, invoice terms/footer, + a **DORMANT VAT block** — NextPoint is NOT VAT-registered, so
+  `vat_number` is NULL and no VAT line shows; flip it on later without a rebuild). Edited at Admin → Setup →
+  **"Company & billing details"** (`AdminUI.billingDetails`, `club_admin`+). Letterhead logo = `club.branding.logo_url`.
+- **Three issue paths, one document type:** admin **ad-hoc** invoice (`create_invoice` → numbered doc, emails it) ·
+  **intra-month** "invoice the outstanding balance" (`POST /api/admin/clients/<id>/statement-invoice`) · **month-end**
+  auto-consolidation (`run_month_end` rolls each client's open orders into ONE statement invoice). `issue_invoice`
+  skips orders already on an active invoice (one active invoice per open order — no double-issue).
+- **Serve/act:** `GET /api/billing/invoice/<id>` (+ `/pdf`), `POST …/mark-paid` (EFT/cash → settles every open order
+  via the desk-payment core → receipts fire → invoice derives Paid), `POST …/void`. Lists: `GET /api/me/invoices` ·
+  `GET /api/admin/clients/<id>/invoices`. Client UI: `#/invoices` (view + download PDF + pay-outstanding).
+- **Email:** the `invoice_issued` event reuses the booking-confirmation shell + a statement summary + a **"Pay online"**
+  box + the **PDF attached** — attachment is **flag-gated `EMAIL_INVOICE_PDF_ENABLED`** (needs `ses:SendRawEmail`,
+  which the interim key lacks → attachments silently dropped; until then the email links the in-portal PDF).
+  `EFT` desk payments carry a **reference** (`provider_payment_id`, captured in the "Mark as paid" modal).
 
 **Booking flow** (`frontend/js/booking.js`, full-screen): Service → **Schedule** (month calendar with inline
 per-duration chips for court/lesson; live price or "Covered by your membership"; a court booking defaults the
@@ -402,6 +425,11 @@ member by email on the first authenticated hit.
   `.ics` email attachment is OFF (`EMAIL_ICS_ENABLED=0` — interim key lacks `ses:SendRawEmail`; the in-app "Add
   to calendar" download still works). Long-term CourtFlow-domain setup: `docs/specs/SES-SETUP.md`. Klaviyo
   marketing stays dark until `KLAVIYO_API_KEY`.
+- **Invoice PDF email attachment** (`EMAIL_INVOICE_PDF_ENABLED=1`) is OFF for the SAME reason (needs
+  `ses:SendRawEmail`) — until granted, the invoice email links the in-portal PDF instead of attaching it (the
+  document, numbering, and in-app/download PDF all work now). Grant the IAM action (or stand up CourtFlow SES),
+  then set the flag. Also: fill Admin → Setup → **Company & billing details** (esp. bank details) so issued
+  invoices show EFT instructions — until then an invoice PDF falls back to the club name/address with no bank block.
 - **DNS / SEO cutover** for `nextpointtennis.com` — supervised, never an agent.
 - Volatile env/infra values and full pre-flight: `docs/specs/ENV-STATUS.md` + `BUILD_PROMPT.md`.
 
