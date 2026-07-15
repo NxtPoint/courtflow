@@ -1,8 +1,8 @@
-# scripts/fix_bypassed_packs.py — remediate the "paid pack bypassed" bug (SUPERVISED, dry-run first).
+# scripts/fix_bypassed_packs.py — remediate the reconcile / pack-bypass billing bugs (SUPERVISED, dry-run first).
 #
-# Two idempotent, club-scoped repairs for data created before the pack fixes (commits a244e19 etc.):
+# Three idempotent, club-scoped repairs for data created before the fixes (commits a244e19 etc.):
 #
-#   (A) ACTIVATE pending wallets on PAID orders. The reconcile (missed-webhook) path used to mark an
+#   (A) ACTIVATE pending PACK wallets on PAID orders. The reconcile (missed-webhook) path used to mark an
 #       online pack paid WITHOUT activating the wallet, leaving it 'pending' (unusable). Activate them.
 #
 #   (B) UNWIND duplicate owed lessons. A member self-booking a lesson never drew their pack -> the lesson
@@ -10,6 +10,11 @@
 #       order whose owner holds an ACTIVE matching pack (same coach/duration/service), DRAW a token for
 #       the delivered lesson and VOID the owed order -> the client owes R0 and the wallet reflects the
 #       lesson taken.
+#
+#   (C) ACTIVATE stuck MEMBERSHIPS. The SAME reconcile gap left online memberships PAID but with the
+#       subscription stuck at its 'expired' pending-placeholder (current_period_end NULL) — the member
+#       paid but isn't actually covered. Activate the term. (No double-charge to unwind; membership's
+#       receipt email rode payment_succeeded, so unlike packs the buyer did get an email.)
 #
 # DRY-RUN BY DEFAULT: prints exactly what it WOULD do and rolls back. Pass --commit to write.
 # Optional: --club <uuid>  --user <email>  to scope. Safe to re-run (idempotent throughout).
@@ -28,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from db import get_engine
 from billing import bundles as BN
+from billing import membership as MB
 from billing import statement as ST
 
 
@@ -102,6 +108,29 @@ def repair_owed_lessons(s, args):
     return unwound
 
 
+def repair_stuck_memberships(s, args):
+    # A stuck reconciled membership: the order is PAID but the subscription is still at its 'expired'
+    # pending-placeholder with no term (current_period_end IS NULL) — never activated. (A genuinely
+    # lapsed membership that HAD a term carries a non-NULL current_period_end, so this can't touch it;
+    # a cancelled one is status='cancelled'.) activate_membership_for_order is idempotent + paid-gated.
+    clause, params = _scope_clause(args, "o")
+    rows = s.execute(text(
+        'SELECT ms.order_id, ms.user_id '
+        'FROM billing.membership_subscription ms JOIN billing."order" o ON o.id = ms.order_id '
+        "WHERE o.status = 'paid' AND ms.status = 'expired' AND ms.current_period_end IS NULL" + clause),
+        params).mappings().all()
+    print(f"\n(C) PAID memberships never activated (reconcile gap): {len(rows)}")
+    activated = 0
+    for r in rows:
+        who = s.execute(text('SELECT email FROM iam."user" WHERE id=:u'), {"u": r["user_id"]}).scalar()
+        res = MB.activate_membership_for_order(s, order_id=str(r["order_id"]), provider="yoco")
+        ok = bool(res and res.get("status") in ("activated", "extended"))
+        activated += 1 if ok else 0
+        print(f"   - {who or r['user_id']}  membership order={str(r['order_id'])[:8]}  -> "
+              f"{'ACTIVATED (term ends ' + str(res.get('current_period_end')) + ')' if ok else 'no-op ('+str(res.get('status'))+')'}")
+    return activated
+
+
 def main():
     ap = argparse.ArgumentParser(description="Remediate bypassed prepaid packs (dry-run by default).")
     ap.add_argument("--commit", action="store_true", help="write changes (default: dry-run + rollback)")
@@ -113,7 +142,9 @@ def main():
     try:
         activated = repair_pending_wallets(s, args)
         unwound = repair_owed_lessons(s, args)
-        print(f"\nSUMMARY: {activated} wallet(s) activated, {unwound} duplicate owed lesson(s) unwound.")
+        memberships = repair_stuck_memberships(s, args)
+        print(f"\nSUMMARY: {activated} pack wallet(s) activated, {unwound} duplicate owed lesson(s) "
+              f"unwound, {memberships} membership(s) activated.")
         if args.commit:
             s.commit()
             print("COMMITTED.")
