@@ -253,13 +253,13 @@ aggregations (a missing/empty table → empty panel, never a 500). The admin con
 → `POST /api/track/page`; **`beacon.py` resolves `club_id` server-side** (browsing host → `iam.resolve_club_by_host`,
 else `sole_club_id`) because the DB-less web can't emit the UUID, and stores a non-PII `metadata.authed` flag
 (set client-side via `window.cfAuthed` in `auth_client.js` once Clerk resolves) for the logged-in-visitors metric.
-**Public vs members-area (2026-07-11):** the portal is an SPA, so a signed-in member fires a `page_view` on
+**Public vs members-area:** the portal is an SPA, so a signed-in member fires a `page_view` on
 every route change — which used to swamp the "website traffic" numbers. Every public-traffic panel in
 `analytics/repositories.py` now filters `metadata.authed != 'true'` (marketing traffic = PUBLIC visitors only)
 and `members_area()` reports signed-in in-app activity separately; the KPI headline is **Unique visitors**
 (people), "Website visits" was relabelled **Page views**.
 
-## Growth & acquisition measurement (Google Ads / GA4 / gclid) — LIVE 2026-07-11
+## Growth & acquisition measurement (Google Ads / GA4 / gclid) — LIVE
 Know which ad clicks become paying members, and feed that back to Google so bidding chases buyers, not clickers.
 - **Google tag (GA4 + Ads)** injected by `web_app._google_tag_head` — dark until `GA4_MEASUREMENT_ID` /
   `GOOGLE_ADS_ID` set. `window.cfConversion(name)` maps a semantic event → the Ads conversion `send_to`
@@ -282,7 +282,7 @@ Know which ad clicks become paying members, and feed that back to Google so bidd
   final state: `docs/specs/GOOGLE-ADS-PLAN.md`. Bidding: Maximize Clicks R15 cap → revert to Max Conversions
   after ~15–30 conversions accrue.
 
-## Ten-Fifty5 embed — match analysis inside the members area (LIVE, private test 2026-07-11)
+## Ten-Fifty5 embed — match analysis inside the members area (LIVE, private test)
 A logged-in member opens **Ten-Fifty5** (AI match analysis / technique — the 1050 product; web at
 `ten-fifty5.com`, API at `api.nextpointtennis.com`) **inside** the client SPA in an iframe, signed in with
 their OWN NextPoint Clerk token — **no second login**. The two products are **separate Clerk apps**
