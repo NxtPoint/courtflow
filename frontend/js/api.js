@@ -143,6 +143,13 @@
     deskPayment: function (body) {
       return A().apiJSON("/api/billing/desk-payment", { method: "POST", body: body });
     },
+    // ---- invoice documents (mark paid by EFT/cash, or void) --------------
+    invoiceMarkPaid: function (invoiceId, body) {
+      return A().apiJSON("/api/billing/invoice/" + encodeURIComponent(invoiceId) + "/mark-paid", { method: "POST", body: body });
+    },
+    invoiceVoid: function (invoiceId) {
+      return A().apiJSON("/api/billing/invoice/" + encodeURIComponent(invoiceId) + "/void", { method: "POST", body: {} });
+    },
 
     // ---- me: client self-service ("My Account") -------------------------
     // GET /api/me/profile -> {email(read-only), first_name, surname, phone, dob, address_*,

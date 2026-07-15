@@ -502,6 +502,15 @@
         },
         // Online payment refund (reuses the shared refund modal)
         refund: { manual: true, run: function (pay) { refundModal(pay.order_id, { amount_minor: pay.amount_minor, currency: pay.currency_code || clubCur() }, function () { renderPerson(id); }); } },
+        // Invoices — issue one for the current outstanding balance, mark an unpaid one paid (EFT/cash),
+        // or void it. All render over the LIVE orders, so paid-status always matches the statement.
+        issue_statement_invoice: { manual: true, run: function () { issueStatementInvoice(id); } },
+        invoice_mark_paid: { manual: true, run: function (iv) { invoiceMarkPaidModal(iv, function () { renderPerson(id); }); } },
+        invoice_void: {
+          tone: "ghost",
+          confirm: function (iv) { return "Void invoice " + (iv.number || "") + "? It stops covering its charges (they can be re-invoiced). The underlying debt is untouched."; },
+          done: "Invoice voided.", run: function (iv) { return window.API.invoiceVoid(iv.invoice_id); },
+        },
         // Decide a pending refund REQUEST in place (same endpoints as Money → Approvals; the record
         // reloads on success so the status updates here without leaving the client). A cancelled prompt
         // returns a rejected promise → the widget silently aborts (runAct only toasts a truthy error).
@@ -1486,6 +1495,45 @@
       el("button", { class: "cf-btn cf-btn-primary", text: "Save", onclick: function () { if (!s.value) { UI.toast("Pick a time.", "warn"); return; } var st = new Date(s.value), en = new Date(st.getTime() + parseInt(dur.value, 10) * 60000); send({ starts_at: st.toISOString(), ends_at: en.toISOString() }).then(function () { UI.toast(okMsg, "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }),
     ]));
   }
+  // Issue ONE consolidated invoice for a client's current outstanding balance (intra-month).
+  // On success, show the number + offer the PDF; on 422 explain why nothing was issued.
+  function issueStatementInvoice(clientId) {
+    window.AdminAPI.statementInvoice(clientId, {}).then(function (res) {
+      var im = modal("Invoice " + (res.invoice_number || ""));
+      im.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 12px", text:
+        "Invoiced the outstanding balance" + (res.emailed ? " and emailed it to the client." : " (no email on file).") +
+        " They can pay online or by EFT using the banking details on the invoice." }));
+      im.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px" }, [
+        res.invoice_id ? el("button", { class: "cf-btn", text: "View invoice PDF", onclick: function () { UI.openAuthedFile("/api/billing/invoice/" + res.invoice_id + "/pdf", (res.invoice_number || "invoice") + ".pdf"); } }) : el("span"),
+        el("button", { class: "cf-btn cf-btn-primary", text: "Done", onclick: function () { im.close(); renderPerson(clientId); } }),
+      ]));
+    }, function (e) {
+      var code = e && e.body && e.body.error;
+      UI.toast(code === "NOTHING_OWED" ? "Nothing outstanding to invoice."
+        : code === "ALL_ALREADY_INVOICED" ? "Everything outstanding is already on an active invoice."
+        : UI.errMsg(e), "warn");
+    });
+  }
+
+  // Mark a whole INVOICE paid by EFT/cash/card-at-desk (settles all its open orders → receipts fire).
+  function invoiceMarkPaidModal(iv, then) {
+    var m = modal("Mark invoice paid");
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px", text:
+      "Records " + money(iv.outstanding_minor || iv.total_minor, iv.currency || clubCur()) + " for invoice " + (iv.number || "") + " and generates a receipt." }));
+    var prov = el("select", { class: "cf-input" }, [["eft", "EFT"], ["cash", "Cash"], ["card_at_desk", "Card at desk"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); }));
+    var ref = el("input", { class: "cf-input", placeholder: "e.g. EFT / bank reference (optional)" });
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Method" }), prov]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Reference" }), ref]));
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
+      el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
+      el("button", { class: "cf-btn cf-btn-primary", text: "Mark paid", onclick: function () {
+        window.API.invoiceMarkPaid(iv.invoice_id, { provider: prov.value, reference: (ref.value.trim() || null) })
+          .then(function () { UI.toast("Invoice marked paid.", "info"); m.close(); (then || route)(); },
+                function (e) { UI.toast(UI.errMsg(e), "error"); });
+      } }),
+    ]));
+  }
+
   function deskPayModal(orderId, ch, then) {
     var m = modal("Mark as paid");
     var amt = el("input", { class: "cf-input", type: "number", step: "0.01", value: ((ch.amount_minor || 0) / 100).toFixed(2) });

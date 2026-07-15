@@ -147,6 +147,12 @@
       return A().apiJSON("/api/admin/policy", { method: "PATCH", body: body });
     },
 
+    // ---- invoice a client's outstanding balance (intra-month statement invoice) ----
+    // POST /api/admin/clients/<id>/statement-invoice  body: {due_date?, period?}
+    statementInvoice: function (userId, body) {
+      return A().apiJSON("/api/admin/clients/" + encodeURIComponent(userId) + "/statement-invoice", { method: "POST", body: body || {} });
+    },
+
     // ---- billing profile (company & bank details for invoices/receipts) --
     // GET /api/admin/billing-profile -> {billing_profile:{...}}
     billingProfile: function () { return A().apiJSON("/api/admin/billing-profile"); },

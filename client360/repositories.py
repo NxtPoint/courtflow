@@ -440,6 +440,16 @@ def _refunds(session, *, club_id, user_id):
     return _guard(session, _run, [])
 
 
+def _invoices(session, *, club_id, user_id):
+    """The client's issued invoice documents (newest first, live paid/outstanding). Reuses
+    billing.invoicing.list_invoices. Billing data — admin/client scope ONLY (coach scope returns
+    before this block, so a coach's browser never receives it)."""
+    def _run():
+        from billing import invoicing as INV
+        return INV.list_invoices(session, club_id=club_id, user_id=user_id)
+    return _guard(session, _run, [])
+
+
 def _coaching(session, *, club_id, user_id, coach_user_id=None, month=None):
     """The client's coaching statement (per-coach paid/owed/net + arrears items). Reuses
     billing.commission.client_statement. For coach scope, filter to just that coach. `month`
@@ -656,6 +666,7 @@ def _can(scope):
         return {"void": True, "write_off": True, "discount": True, "wallet_adjust": True,
                 "wallet_expire": True, "grant_membership": True, "revoke_membership": True,
                 "refund": True, "issue": True, "edit": True,
+                "issue_statement_invoice": True, "invoice_mark_paid": True, "invoice_void": True,
                 "approve_refund_request": True, "decline_refund_request": True}
     if scope == "coach":
         # A coach decides a dispute routed to them (the backend still enforces they own it).
@@ -752,6 +763,7 @@ def get_client_360(session, *, club_id, user_id, scope="admin", coach_user_id=No
     out["membership_status"] = _membership_status(session, club_id=club_id, user_id=user_id)
     out["dependents"] = _dependents(session, club_id=club_id, user_id=user_id)
     out["refunds"] = _refunds(session, club_id=club_id, user_id=user_id)
+    out["invoices"] = _invoices(session, club_id=club_id, user_id=user_id)
     out["activity"] = _activity(session, club_id=club_id, user_id=user_id)
     out["activity_summary"] = _activity_summary(session, club_id=club_id, user_id=user_id, month=month)
     out["notifications_unread"] = _notifications_unread(session, club_id=club_id, user_id=user_id)
