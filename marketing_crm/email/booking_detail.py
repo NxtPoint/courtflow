@@ -202,8 +202,17 @@ def _load_booking(session, club_id, ctx):
         text("""
             SELECT b.id, b.booking_type, b.status, b.starts_at, b.ends_at,
                    r.name AS resource_name, b.coach_user_id, b.order_id, b.settlement_mode,
+                   -- OWNER = the CLIENT the booking is FOR (booked_by_user_id — on-behalf already sets
+                   -- this to the client). ACTOR = who performed the action (created_by_user_id) — shown
+                   -- as "Booked by" only when it differs from the owner (staff/parent booking).
                    cl.first_name AS cl_first, cl.surname AS cl_surname,
                    cl.email AS cl_email, cl.phone AS cl_phone,
+                   ac.first_name AS ac_first, ac.surname AS ac_surname,
+                   -- The prepaid pack this booking drew (so "Paid by package" names WHICH one).
+                   (SELECT bp.label FROM billing.token_ledger tl
+                      JOIN billing.token_wallet tw ON tw.id = tl.wallet_id
+                      LEFT JOIN billing.bundle_plan bp ON bp.id = tw.bundle_plan_id
+                      WHERE tl.booking_id = b.id AND bp.label IS NOT NULL LIMIT 1) AS pack_label,
                    co.email AS coach_email,
                    COALESCE(cp.display_name,
                             NULLIF(TRIM(COALESCE(co.first_name,'') || ' ' || COALESCE(co.surname,'')),''))
@@ -228,6 +237,7 @@ def _load_booking(session, club_id, ctx):
             FROM diary.booking b
             LEFT JOIN diary.resource r ON r.id = b.resource_id
             LEFT JOIN iam."user" cl ON cl.id = b.booked_by_user_id
+            LEFT JOIN iam."user" ac ON ac.id = b.created_by_user_id
             LEFT JOIN iam."user" co ON co.id = b.coach_user_id
             LEFT JOIN iam.coach_profile cp ON cp.user_id = b.coach_user_id AND cp.club_id = b.club_id
             WHERE b.id = :bid AND b.club_id = :c
@@ -242,6 +252,10 @@ def _load_booking(session, club_id, ctx):
     court = b["held_court"] if is_lesson else b["resource_name"]
     service = _clean_service(b["service_name"], b["booking_type"])
     tzname = _club_tzname(session, club_id)
+    # The block shows the OWNER (the client the booking is for = booked_by_user_id). "Booked by" names
+    # the ACTOR (created_by_user_id) only when they differ (a staff/parent booking) — a self-book omits it.
+    owner_name = " ".join(x for x in [b["cl_first"], b["cl_surname"]] if x).strip() or None
+    actor_name = " ".join(x for x in [b["ac_first"], b["ac_surname"]] if x).strip() or None
     return _normalize(
         service=service, booking_type=b["booking_type"],
         starts=b["starts_at"], ends=b["ends_at"], tzname=tzname, court=court,
@@ -249,6 +263,8 @@ def _load_booking(session, club_id, ctx):
         coach_email=(b["coach_email"] if is_lesson else None),
         cl_first=b["cl_first"], cl_surname=b["cl_surname"],
         cl_email=b["cl_email"], cl_phone=b["cl_phone"],
+        booked_by_name=(actor_name if (actor_name and actor_name != owner_name) else None),
+        pack_label=b.get("pack_label"),
         settlement_mode=b["settlement_mode"], charge=charge,
         equipment=b.get("equipment"),
     )
@@ -432,7 +448,8 @@ def _charge(session, club_id, order_id, settlement_mode):
 
 
 def _normalize(*, service, booking_type, starts, ends, tzname, court, coach_name, coach_email,
-               cl_first, cl_surname, cl_email, cl_phone, settlement_mode, charge, equipment=None):
+               cl_first, cl_surname, cl_email, cl_phone, settlement_mode, charge, equipment=None,
+               booked_by_name=None, pack_label=None):
     s, e = _as_dt(starts), _as_dt(ends)
     dur = int((e - s).total_seconds() // 60) if (s and e) else None
     # Name is the real name ONLY — never the email as a fallback (that duplicated the email into the
@@ -441,6 +458,10 @@ def _normalize(*, service, booking_type, starts, ends, tzname, court, coach_name
     price = None
     if charge and charge.get("amount_minor"):
         price = _money(charge.get("amount_minor"), charge.get("currency"))
+    # "Paid by package" — name WHICH pack when the booking drew a prepaid token.
+    pay_status = _pay_status(settlement_mode, charge)
+    if pack_label and settlement_mode == "token":
+        pay_status = "Paid by package: " + pack_label
     return {
         "booking_type": booking_type,
         "service": service,
@@ -451,8 +472,9 @@ def _normalize(*, service, booking_type, starts, ends, tzname, court, coach_name
         "coach": {"name": coach_name, "email": (coach_email or None)},
         "client": {"first": cl_first, "surname": cl_surname, "name": name,
                    "email": cl_email, "phone": cl_phone},
+        "booked_by": booked_by_name,
         "price": price,
-        "pay_status": _pay_status(settlement_mode, charge),
+        "pay_status": pay_status,
     }
 
 
@@ -501,6 +523,7 @@ def html_block(d):
         ("Name", cl.get("name")),
         ("Email", cl.get("email")),
         ("Cell", cl.get("phone")),
+        ("Booked by", d.get("booked_by")),        # the actor, only when different from the owner above
     ])
     if d.get("is_purchase"):
         purchase_rows = _rows_html([
@@ -531,7 +554,7 @@ def text_block(d):
     cl = d.get("client") or {}
     lines = ["CLIENT DETAILS"]
     for label, value in [("Name", cl.get("name")), ("Email", cl.get("email")),
-                         ("Cell", cl.get("phone"))]:
+                         ("Cell", cl.get("phone")), ("Booked by", d.get("booked_by"))]:
         if value:
             lines.append("  %s: %s" % (label, value))
     lines.append("")

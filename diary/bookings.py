@@ -557,7 +557,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                 session, club_id=club_id, booking_type="lesson", resource_id=resource_id,
                 coach_user_id=_gate_coach, starts_at=starts, ends_at=ends, status=_gate_status,
                 held_until=None, booked_by_user_id=owner_user_id, recurrence_id=recurrence_id,
-                settlement_mode=_gate_sm, notes=notes)
+                created_by_user_id=booked_by_user_id, settlement_mode=_gate_sm, notes=notes)
             for _party in parties:
                 _insert_party(session, booking_id=_gid, club_id=club_id, party=_party)
             _gb = _booking_dict(session, _gid)
@@ -710,6 +710,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                 session, club_id=club_id, booking_type=booking_type, resource_id=resource_id,
                 coach_user_id=coach_uid, starts_at=starts, ends_at=ends, status=status,
                 held_until=held_until, booked_by_user_id=owner_user_id,
+                created_by_user_id=booked_by_user_id,   # the ACTOR (staff/parent/self), for the audit + email
                 recurrence_id=recurrence_id, settlement_mode=settlement_mode, notes=notes,
             )
             linked_court_id = None
@@ -721,7 +722,8 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                     session, club_id=club_id, booking_type="court",
                     resource_id=court_resource_id, coach_user_id=coach_uid,
                     starts_at=starts, ends_at=ends, status=status, held_until=held_until,
-                    booked_by_user_id=owner_user_id, recurrence_id=recurrence_id,
+                    booked_by_user_id=owner_user_id, created_by_user_id=booked_by_user_id,
+                    recurrence_id=recurrence_id,
                     settlement_mode=settlement_mode, notes="(court held for lesson)",
                 )
             for p in parties:
@@ -793,16 +795,18 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
 
 def _insert_booking(session, *, club_id, booking_type, resource_id, coach_user_id,
                     starts_at, ends_at, status, held_until, booked_by_user_id,
-                    recurrence_id, settlement_mode, notes):
+                    recurrence_id, settlement_mode, notes, created_by_user_id=None):
     row = session.execute(
         text("INSERT INTO diary.booking "
              "(club_id, booking_type, resource_id, coach_user_id, starts_at, ends_at, "
-             " status, held_until, booked_by_user_id, recurrence_id, settlement_mode, notes) "
-             "VALUES (:c, :bt, :rid, :coach, :sa, :ea, :st, :hu, :by, :rec, :sm, :notes) "
+             " status, held_until, booked_by_user_id, created_by_user_id, recurrence_id, "
+             " settlement_mode, notes) "
+             "VALUES (:c, :bt, :rid, :coach, :sa, :ea, :st, :hu, :by, :cby, :rec, :sm, :notes) "
              "RETURNING id"),
         {"c": club_id, "bt": booking_type, "rid": resource_id, "coach": coach_user_id,
          "sa": starts_at, "ea": ends_at, "st": status, "hu": held_until,
-         "by": booked_by_user_id, "rec": recurrence_id, "sm": settlement_mode, "notes": notes},
+         "by": booked_by_user_id, "cby": created_by_user_id, "rec": recurrence_id,
+         "sm": settlement_mode, "notes": notes},
     ).mappings().first()
     return row["id"]
 
@@ -1296,6 +1300,7 @@ def accept_booking(session, *, club_id, booking_id, actor_user_id, role, now=Non
                 session, club_id=club_id, booking_type="court", resource_id=court_resource_id,
                 coach_user_id=coach_uid, starts_at=starts, ends_at=ends, status=status,
                 held_until=held_until, booked_by_user_id=owner_user_id, recurrence_id=None,
+                created_by_user_id=actor_user_id,
                 settlement_mode=settlement_mode, notes="(court held for lesson)")
     except IntegrityError as e:
         if _is_slot_taken(e):

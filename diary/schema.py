@@ -144,7 +144,7 @@ _DDL = [
                                 ('held','confirmed','cancelled','completed','no_show',
                                  'requested','proposed')),
         held_until          timestamptz,             -- short-lived hold expiry (online flow)
-        booked_by_user_id   uuid,
+        booked_by_user_id   uuid,                    -- the CLIENT/owner the booking is FOR (on-behalf sets this to the client, not the actor)
         recurrence_id       uuid,                    -- groups a recurring series (nullable)
         order_id            uuid,                    -- -> billing.order (settlement)
         settlement_mode     text,                    -- echoed from the order (audit/display)
@@ -171,6 +171,10 @@ _DDL = [
     # Partial index to make the capacity-sweep's expired-hold scan cheap.
     f"CREATE INDEX IF NOT EXISTS ix_booking_held_until "
     f"ON {SCHEMA}.booking (held_until) WHERE status = 'held';",
+    # The ACTOR who performed the booking (staff / parent / self), distinct from booked_by_user_id
+    # (the CLIENT it's for). Populated going forward; NULL for pre-existing rows + self-books where
+    # it equals the client. Drives the confirmation email's "Booked by" line (who did the action).
+    f"ALTER TABLE {SCHEMA}.booking ADD COLUMN IF NOT EXISTS created_by_user_id uuid;",
 
     # THE exclusion constraint (docs/03 §4) — guarded ADD (no IF NOT EXISTS for it).
     # tstzrange(starts_at, ends_at) with '&&' overlap, only for held/confirmed rows, so
