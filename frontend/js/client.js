@@ -130,6 +130,7 @@
       return renderHome();
     }
     if (top === "activity") return renderRecord();   // "Full activity ›" now opens the ONE Client-360 record
+    if (top === "invoices") return renderInvoices();  // the member's issued invoices (view/download PDF)
     if (top === "analysis") return renderAnalysis();  // embedded Ten-Fifty5 match analysis / technique
     if (top === "plan") return renderPlan(parts[1]);
     if (top === "profile") return parts[1] === "child" ? renderChildEdit(parts[2]) : renderProfile();  // /profile/edit → the same one screen
@@ -445,6 +446,43 @@
       });
       box.appendChild(l);
     }
+    box.appendChild(el("div", { class: "cf-row", style: "margin-top:8px" }, [
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Invoices ›", onclick: function () { go("#/invoices"); } }),
+    ]));
+  }
+
+  // ---- INVOICES (the member's issued invoice documents — view / download PDF) ----
+  async function renderInvoices() {
+    loading();
+    var invoices = [];
+    try { invoices = (await window.TFAuth.apiJSON("/api/me/invoices")).invoices || []; }
+    catch (e) { set(el("div", {}, [pageHeader("Invoices", "Home", "#/"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    var wrap = el("div", {}, [pageHeader("Invoices", "Home", "#/")]);
+    if (!invoices.length) { wrap.appendChild(el("div", { class: "cf-empty", text: "You have no invoices yet." })); set(wrap); return; }
+    var chipCls = { "Paid": "confirmed", "Unpaid": "owed", "Partially paid": "owed", "Void": "" };
+    var l = el("div", { class: "cf-list" });
+    invoices.forEach(function (iv) {
+      var right = el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [
+        el("span", { style: "font-weight:700", text: money(iv.total_minor, iv.currency) }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "PDF", onclick: function () { UI.openAuthedFile("/api/billing/invoice/" + iv.invoice_id + "/pdf", (iv.number || "invoice") + ".pdf"); } }),
+      ]);
+      l.appendChild(el("div", { class: "cf-item" }, [
+        el("span", { class: "cf-chip " + (chipCls[iv.status_label] || ""), text: iv.status_label }),
+        el("div", { class: "cf-item-main" }, [
+          el("div", { class: "cf-item-t", text: iv.number || "Invoice" }),
+          el("div", { class: "cf-item-s", text: (iv.issued_at ? UI.fmtDate(iv.issued_at) : "") + (iv.outstanding_minor > 0 ? " · " + money(iv.outstanding_minor, iv.currency) + " due" : "") }),
+        ]),
+        right,
+      ]));
+    });
+    wrap.appendChild(l);
+    // A card-settle shortcut for anything still outstanding (reuses the unified pay-all).
+    if (invoices.some(function (iv) { return iv.outstanding_minor > 0; })) {
+      wrap.appendChild(el("div", { class: "cf-row", style: "margin-top:12px" }, [
+        el("button", { class: "cf-btn cf-btn-primary", text: "Pay outstanding online", onclick: function () { payOrders(null); } }),
+      ]));
+    }
+    set(wrap);
   }
 
   // ---- MY RECORD (the ONE Client-360 widget, client scope — golden rule) ----

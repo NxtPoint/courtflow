@@ -444,6 +444,21 @@ def get_statement():
     return jsonify(data), 200
 
 
+@me_bp.get("/invoices")
+def get_invoices():
+    """The caller's OWN issued invoice documents (newest first, with live paid/outstanding). Each
+    is downloadable as a PDF via GET /api/billing/invoice/<id>/pdf. STRICTLY member-scoped."""
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "view_own_ledger", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    from billing import invoicing
+    with session_scope() as s:
+        invoices = invoicing.list_invoices(s, club_id=p.club_id, user_id=p.user_id)
+    return jsonify(invoices=invoices), 200
+
+
 @me_bp.get("/activity")
 def get_activity():
     """The client's monthly ACTIVITY — answers 'what did I book', 'what did I spend on what', and

@@ -501,6 +501,43 @@ def void_invoice(session, *, club_id, invoice_id) -> Dict[str, Any]:
 # BUILD the canonical invoice document (frozen lines + LIVE paid/outstanding)
 # ---------------------------------------------------------------------------
 
+def list_invoices(session, *, club_id, user_id, limit=100) -> List[Dict[str, Any]]:
+    """A client's invoice documents, newest first, with live outstanding derived from the
+    covered orders (one aggregate query). For lists/records — the full doc is build_invoice_document."""
+    rows = session.execute(
+        text('SELECT i.id, i.invoice_number, i.kind, i.status, i.issued_at, i.due_date, '
+             '       i.total_minor, i.currency_code, '
+             '       COALESCE(SUM(CASE WHEN o.status = \'open\' THEN o.amount_minor ELSE 0 END),0) AS outstanding '
+             'FROM billing.invoice i '
+             'LEFT JOIN (SELECT DISTINCT invoice_id, order_id FROM billing.invoice_line '
+             '           WHERE order_id IS NOT NULL) il ON il.invoice_id = i.id '
+             'LEFT JOIN billing."order" o ON o.id = il.order_id '
+             'WHERE i.club_id = :c AND i.user_id = :u '
+             'GROUP BY i.id '
+             'ORDER BY i.issued_at DESC LIMIT :lim'),
+        {"c": str(club_id), "u": str(user_id), "lim": int(limit)},
+    ).mappings().all()
+    out = []
+    for r in rows:
+        outstanding = int(r["outstanding"] or 0)
+        if r["status"] == "void":
+            label = "Void"
+        elif outstanding <= 0:
+            label = "Paid"
+        elif outstanding < int(r["total_minor"] or 0):
+            label = "Partially paid"
+        else:
+            label = "Unpaid"
+        out.append({
+            "invoice_id": str(r["id"]), "number": r["invoice_number"], "kind": r["kind"],
+            "doc_status": r["status"], "issued_at": _iso(r["issued_at"]), "due_date": _iso(r["due_date"]),
+            "total_minor": int(r["total_minor"] or 0), "currency": r["currency_code"],
+            "outstanding_minor": outstanding, "is_paid": (r["status"] != "void" and outstanding <= 0),
+            "status_label": label,
+        })
+    return out
+
+
 def build_invoice_document(session, *, invoice_id, club_id=None) -> Optional[Dict[str, Any]]:
     """Assemble the full document dict for an issued invoice: frozen seller/bill-to/lines
     snapshot + paid/outstanding DERIVED LIVE from the referenced orders. None if not found."""

@@ -915,11 +915,16 @@
         var res = await window.AdminAPI.createInvoice(selectedClient.user_id, body);
         var amt = money(res.amount_minor, res.currency || cur);
         var emailed = res.emailed !== false && selectedClient.email;
-        UI.toast(emailed
-          ? ("Invoice for " + amt + " emailed to " + selectedClient.email + " — it's on their account to pay online.")
-          : ("Invoice for " + amt + " created on " + selectedClient.name + "'s account (no email on file — they can pay it from their portal)."),
-          "info");
-        go("#/person/" + selectedClient.user_id);
+        // Confirm with the invoice number + a way to view the professional PDF right away.
+        var im = modal(res.invoice_number ? ("Invoice " + res.invoice_number) : "Invoice created");
+        im.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 12px", text:
+          (emailed ? ("Invoice for " + amt + " emailed to " + selectedClient.email + ".")
+                   : ("Invoice for " + amt + " created (no email on file).")) +
+          " It's on " + selectedClient.name + "'s account to pay online, or by EFT using the banking details on the invoice." }));
+        im.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px" }, [
+          res.invoice_id ? el("button", { class: "cf-btn", text: "View invoice PDF", onclick: function () { UI.openAuthedFile("/api/billing/invoice/" + res.invoice_id + "/pdf", (res.invoice_number || "invoice") + ".pdf"); } }) : el("span"),
+          el("button", { class: "cf-btn cf-btn-primary", text: "Go to client", onclick: function () { im.close(); go("#/person/" + selectedClient.user_id); } }),
+        ]));
       } catch (e) { genBtn.disabled = false; genBtn.textContent = "Generate & email invoice"; UI.toast(UI.errMsg(e), "error"); }
     });
 
@@ -1485,11 +1490,13 @@
     var m = modal("Mark as paid");
     var amt = el("input", { class: "cf-input", type: "number", step: "0.01", value: ((ch.amount_minor || 0) / 100).toFixed(2) });
     var prov = el("select", { class: "cf-input" }, [["cash", "Cash"], ["card_at_desk", "Card at desk"], ["eft", "EFT"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); }));
+    var ref = el("input", { class: "cf-input", placeholder: "e.g. EFT / bank reference (optional)" });
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Amount" }), amt]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Method" }), prov]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Reference" }), ref]));
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
       el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
-      el("button", { class: "cf-btn cf-btn-primary", text: "Record payment", onclick: function () { var f = parseFloat(amt.value); if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; } window.API.deskPayment({ order_id: orderId, amount_minor: Math.round(f * 100), provider: prov.value }).then(function () { UI.toast("Payment recorded.", "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }),
+      el("button", { class: "cf-btn cf-btn-primary", text: "Record payment", onclick: function () { var f = parseFloat(amt.value); if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; } window.API.deskPayment({ order_id: orderId, amount_minor: Math.round(f * 100), provider: prov.value, provider_payment_id: (ref.value.trim() || null) }).then(function () { UI.toast("Payment recorded.", "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }),
     ]));
   }
   function refundModal(orderId, ch, then) {

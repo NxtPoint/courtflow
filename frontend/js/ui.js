@@ -261,6 +261,27 @@
     return close;
   }
 
+  // Open/download a Bearer-auth'd binary file (e.g. an invoice/receipt PDF) — plain links can't
+  // carry the token. Fetches via TFAuth.apiFetch → blob → opens in a new tab (falls back to a
+  // download if the popup is blocked). Shared by all three SPAs.
+  async function openAuthedFile(path, filename) {
+    var auth = window.TFAuth;
+    if (!auth || !auth.apiFetch) { toast("Sign-in required.", "warn"); return; }
+    try {
+      var res = await auth.apiFetch(path);
+      if (!res || !res.ok) throw new Error("Could not load file (" + (res && res.status) + ")");
+      var blob = await res.blob();
+      var url = URL.createObjectURL(blob);
+      var w = window.open(url, "_blank");
+      if (!w) {
+        var a = document.createElement("a");
+        a.href = url; a.download = filename || "document.pdf";
+        document.body.appendChild(a); a.click(); a.remove();
+      }
+      setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+    } catch (e) { toast(errMsg(e), "error"); }
+  }
+
   window.UI = {
     CLUB_TZ: CLUB_TZ,
     fmtTime: fmtTime, fmtDate: fmtDate, fmtDateTime: fmtDateTime, fmtRange: fmtRange,
@@ -269,6 +290,6 @@
     el: el, esc: esc, clear: clear, toast: toast, errMsg: errMsg, groupByDay: groupByDay,
     lifecycleBar: lifecycleBar, subtabs: subtabs, lifeActions: lifeActions, statusChip: statusChip,
     card: card, backBar: backBar, kv: kv, pageHeader: pageHeader, modal: modal, toLocal: toLocal, addToCalendar: addToCalendar,
-    menu: menu, logRow: logRow,
+    menu: menu, logRow: logRow, openAuthedFile: openAuthedFile,
   };
 })();

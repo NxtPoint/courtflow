@@ -1661,6 +1661,19 @@ def issue_client_statement_invoice(client_user_id):
     return jsonify(res), 201
 
 
+@admin_bp.get("/clients/<client_user_id>/invoices")
+def list_client_invoices(client_user_id):
+    """A client's issued invoice documents (newest first, with live paid/outstanding) for the
+    person-360 record. club_admin+."""
+    p, err = _admin()
+    if err:
+        return err
+    from billing import invoicing
+    with session_scope() as s:
+        invoices = invoicing.list_invoices(s, club_id=p.club_id, user_id=client_user_id)
+    return jsonify(invoices=invoices), 200
+
+
 @admin_bp.post("/clients/<client_user_id>/wallets/<wallet_id>/adjust")
 def admin_wallet_adjust(client_user_id, wallet_id):
     """Manually adjust a client's prepaid pack balance (money-adjacent, audited). Body:
