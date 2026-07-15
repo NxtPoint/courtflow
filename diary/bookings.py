@@ -2050,6 +2050,78 @@ def admin_booking_story(session, *, club_id, booking_id):
     }
 
 
+def order_story(session, *, club_id, order_id, scope="owner", user_id=None):
+    """The transaction record for a STANDALONE PURCHASE order (session pack / membership / ad-hoc
+    invoice — an order with NO booking). Returns the SAME 'event story' shape a booking does, so the
+    shared Widgets.TransactionDetail renders it identically: the money card (reuses _booking_charge)
+    + the full-lifecycle audit LOG (reuses _event_log: created → paid → activated → cancelled/voided
+    → refunded) + `can` actions. So a package/membership purchase is a FIRST-CLASS transaction record
+    (audit trail + void/cancel/refund) instead of a dead-end receipt.
+
+    scope: 'owner'/'admin' → full actions (desk_pay/void/write_off/refund/receipt); 'client' → the
+    caller's OWN order only (pay/receipt/request_refund). None if not found / not the caller's."""
+    o = session.execute(
+        text('SELECT o.id, o.user_id, o.amount_minor, o.currency_code, o.settlement_mode, o.status, '
+             '       o.created_at, u.first_name, u.surname, u.email, u.phone '
+             'FROM billing."order" o LEFT JOIN iam."user" u ON u.id = o.user_id '
+             'WHERE o.id = :o AND o.club_id = :c'),
+        {"o": str(order_id), "c": str(club_id)},
+    ).mappings().first()
+    if not o:
+        return None
+    if scope == "client" and (not user_id or str(o["user_id"]) != str(user_id)):
+        return None
+
+    line = session.execute(
+        text("SELECT COALESCE(p.name, NULLIF(ol.description,'')) AS service "
+             "FROM billing.order_line ol LEFT JOIN billing.price pr ON pr.id = ol.price_id "
+             "LEFT JOIN billing.product p ON p.id = pr.product_id "
+             "WHERE ol.order_id = :o ORDER BY ol.created_at LIMIT 1"),
+        {"o": str(order_id)},
+    ).mappings().first() or {}
+
+    # Purchase kind drives the chip + the membership-aware void cleanup.
+    from billing import bundles as _bn, membership as _mb
+    if _bn.is_bundle_order(session, order_id=str(order_id)):
+        kind = "pack"
+    elif _mb.is_membership_order(session, order_id=str(order_id)):
+        kind = "membership"
+    else:
+        kind = "invoice"
+
+    charge = _booking_charge(session, club_id, str(order_id), o["settlement_mode"])
+    state = charge.get("state")
+    owed_or_pending = state in ("owed", "pending")
+
+    if scope == "client":
+        client_block = None                    # the client IS the caller — the widget omits it
+        can = {"pay": owed_or_pending,
+               "receipt": state in ("paid", "refunded", "part_refunded"),
+               "request_refund": bool(charge.get("refundable"))}
+    else:
+        name = " ".join(x for x in [o["first_name"], o["surname"]] if x).strip() or (o["email"] or "Client")
+        client_block = {"name": name, "email": o["email"], "phone": o["phone"],
+                        "user_id": str(o["user_id"]) if o["user_id"] else None}
+        can = {"desk_pay": owed_or_pending, "void": owed_or_pending, "write_off": owed_or_pending,
+               "refund": bool(charge.get("refundable")), "receipt": True}
+
+    return {
+        "id": str(o["id"]), "order_id": str(o["id"]),
+        "booking_type": kind,                  # pack | membership | invoice (chip + label)
+        "service": line.get("service"),
+        "status": o["status"],
+        "starts_at": o["created_at"].isoformat() if o["created_at"] else None,
+        "ends_at": None,
+        "client": client_block,
+        "charge": charge,
+        "log": _event_log(session, club_id,
+                          scope=("client" if scope == "client" else "owner"),
+                          user_id=(str(user_id) if scope == "client" else None),
+                          order_id=str(order_id), booking_id=None),
+        "can": can,
+    }
+
+
 def admin_reassign_coach(session, *, club_id, booking_id, new_coach_user_id):
     """Admin god-view action (docs/specs/ADMIN-REDESIGN.md): move a lesson to a different coach.
     Only a FUTURE, not-yet-paid lesson is reassignable — so commission attribution stays clean

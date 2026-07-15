@@ -229,7 +229,9 @@
         (tap ? el("span", { class: "cf-muted", text: "›" }) : null),
       ].filter(Boolean));
       if (id && cfg.onNavigate) row.addEventListener("click", function () { cfg.onNavigate({ kind: e.booking_id ? "event" : "class", id: id }); });
-      else if (orderOnly) row.addEventListener("click", function () { window.open("/receipt.html?order=" + encodeURIComponent(e.order_id), "_blank"); });
+      // A purchase (pack / membership / invoice — no booking) drills into the SAME transaction record
+      // (money card + audit log + actions), NOT a dead-end receipt. The app routes kind:'order'.
+      else if (orderOnly && cfg.onNavigate) row.addEventListener("click", function () { cfg.onNavigate({ kind: "order", id: e.order_id }); });
       return row;
     }
 

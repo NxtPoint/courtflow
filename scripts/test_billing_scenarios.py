@@ -409,6 +409,44 @@ def sc_reconcile_guard_activates_pack(s, fx):
           w and w["status"] == "active" and w["minutes_remaining"] == 300, str(dict(w) if w else None))
 
 
+def sc_purchase_transaction_record(s, fx):
+    print("\n# A PURCHASE (pack/membership) is a first-class TRANSACTION RECORD (order_story) + void unwinds it")
+    # A pack purchase has the SAME transaction-record shape a booking does (money card + audit log +
+    # actions) — so it opens the event story, not a dead-end receipt.
+    plan = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=10,
+                          price_minor=340000, duration_minutes=60, coach_user_id=fx.coach_uid, label="10 Lessons")
+    po = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member, bundle_plan_id=plan["id"],
+                                settlement_mode="monthly_account")
+    rec = B.order_story(s, club_id=fx.club_id, order_id=po["order_id"], scope="owner")
+    check("pack purchase HAS a transaction record", rec is not None)
+    check("record: kind=pack, owed, void offered, has an audit log",
+          rec and rec["booking_type"] == "pack" and rec["charge"]["state"] == "owed"
+          and rec["can"].get("void") and len(rec["log"]) >= 1,
+          str(rec and (rec["booking_type"], rec["charge"]["state"], rec["can"].get("void"), len(rec["log"]))))
+    # Client scope: STRICTLY the caller's own order + NO destructive actions (no billing leak to others).
+    check("client scope: another user's order → None (no leak)",
+          B.order_story(s, club_id=fx.club_id, order_id=po["order_id"], scope="client", user_id=str(fx.coach_uid)) is None)
+    cown = B.order_story(s, club_id=fx.club_id, order_id=po["order_id"], scope="client", user_id=str(fx.member))
+    check("client scope: own order, only pay/receipt/request_refund",
+          cown and not cown["can"].get("void") and set(cown["can"].keys()) <= {"pay", "receipt", "request_refund"},
+          str(cown and cown["can"]))
+    # Void the owed PACK order → void_order expires its wallet (the record's cancel cleanup).
+    ST.void_order(s, club_id=fx.club_id, order_id=po["order_id"], write_off=False)
+    w = s.execute(text("SELECT status FROM billing.token_wallet WHERE order_id=:o"), {"o": po["order_id"]}).scalar()
+    check("void pack order → its wallet is expired (no dangling grant)", w == "expired", str(w))
+    rec2 = B.order_story(s, club_id=fx.club_id, order_id=po["order_id"], scope="owner")
+    check("after void: record state void, void no longer offered", rec2 and rec2["charge"]["state"] == "void" and not rec2["can"].get("void"))
+
+    # Void an unpaid MEMBERSHIP order → its subscription is cancelled (cancel the unpaid membership).
+    prod = s.execute(text("INSERT INTO billing.product (club_id,kind,name) VALUES (:c,'membership','M2') RETURNING id"), {"c": fx.club_id}).scalar_one()
+    pr = s.execute(text("INSERT INTO billing.price (club_id,product_id,audience,amount_minor,currency_code,unit,term_months,label,active,status) VALUES (:c,:p,'any',22000,'ZAR','per_month',1,'Fam',true,'active') RETURNING id"), {"c": fx.club_id, "p": prod}).scalar_one()
+    mo = MB.create_membership_order(s, club_id=fx.club_id, user_id=fx.member, price_id=str(pr), settlement_mode="monthly_account")
+    check("membership purchase record kind=membership", B.order_story(s, club_id=fx.club_id, order_id=mo["order_id"], scope="owner")["booking_type"] == "membership")
+    ST.void_order(s, club_id=fx.club_id, order_id=mo["order_id"], write_off=False)
+    sub = s.execute(text("SELECT status FROM billing.membership_subscription WHERE order_id=:o"), {"o": mo["order_id"]}).scalar()
+    check("void membership order → subscription cancelled", sub == "cancelled", str(sub))
+
+
 def sc_membership(s, fx):
     print("\n# Membership: active sub covers courts (R0); access window enforced; trial idempotent")
     # An active (manual) membership with no access window → covers any time.
@@ -2178,6 +2216,7 @@ SCENARIOS = [
     sc_pack_autodraw_guardrail,
     sc_reconcile_activates_pack,
     sc_reconcile_guard_activates_pack,
+    sc_purchase_transaction_record,
     sc_pack_respects_service_payment_mode,
     sc_admin_invoice,
     sc_activity_summary,

@@ -92,6 +92,7 @@
     if (top === "overview" || top === "insights") return renderOverview(parts[1]);
     if (top === "person") return renderPerson(parts[1]);
     if (top === "event") return renderEvent(parts[1]);
+    if (top === "txn") return renderTxn(parts[1]);
     if (top === "class") return renderClassEvent(parts[1]);
     if (top === "profile") return renderProfile();
     return renderHome();
@@ -472,6 +473,7 @@
         if (!t || !t.id) return;
         if (t.kind === "person") go("#/person/" + t.id);
         else if (t.kind === "class") go("#/class/" + t.id);
+        else if (t.kind === "order") go("#/txn/" + t.id);   // a purchase (pack/membership/invoice) record
         else go("#/event/" + t.id);
       },
       actions: {
@@ -1455,6 +1457,29 @@
         collect: { done: "Marked collected.", run: function (b) { return window.AdminAPI.arrearsCollected(b.arrears.id); } },
         discount: { manual: true, run: function (b) { var v = window.prompt("New coaching amount (e.g. 250.00):", ((b.arrears.gross_minor || 0) / 100).toFixed(2)); if (v === null) return; var f = parseFloat(v); if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; } window.AdminAPI.arrearsAdjust(b.arrears.id, { gross_minor: Math.round(f * 100) }).then(function () { UI.toast("Discounted.", "info"); renderEvent(id); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } },
         write_off_coaching: { tone: "danger", manual: true, run: function (b) { var r = window.prompt("Write off this coaching charge? Reason (shown to coach & client):", ""); if (r === null) return; window.AdminAPI.arrearsAdjust(b.arrears.id, { status: "written_off", reason: r }).then(function () { UI.toast("Written off.", "info"); renderEvent(id); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } },
+      },
+    });
+  }
+
+  // The admin PURCHASE record — a standalone order (pack / membership / ad-hoc invoice) shown in the
+  // SAME TransactionDetail widget (money card + audit log + actions), fed by order_story. This is where
+  // a package/membership event drills to now (instead of a read-only receipt), so it can be voided/
+  // cancelled/refunded/marked-paid with the full audit trail beneath it.
+  function renderTxn(orderId) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.TransactionDetail.mount(host, {
+      role: "admin",
+      scope: { id: orderId },
+      fields: { showCoach: false, showNotes: true },
+      data: { get: function (i) { return window.AdminAPI.orderRecord(i).then(function (r) { return r.booking; }); } },
+      onNavigate: function (t) { if (t.kind === "person") go("#/person/" + t.id); },
+      actions: {
+        desk_pay: { manual: true, run: function (b) { deskPayModal(b.order_id, b.charge, function () { renderTxn(orderId); }); } },
+        refund: { manual: true, run: function (b) { refundModal(b.order_id, b.charge, function () { renderTxn(orderId); }); } },
+        void: { tone: "danger", back: true, confirm: "Cancel & void this purchase? It's removed from the client's statement, and any linked membership or pack is cancelled.", done: "Cancelled.", run: function (b) { return window.AdminAPI.voidOrder(b.order_id, { write_off: false }); } },
+        write_off: { tone: "danger", confirm: "Write off (forgive) this charge? No money is collected.", done: "Written off.", run: function (b) { return window.AdminAPI.voidOrder(b.order_id, { write_off: true }); } },
+        receipt: { manual: true, run: function (b) { window.open("/receipt.html?order=" + encodeURIComponent(b.order_id), "_blank"); } },
       },
     });
   }

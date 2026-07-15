@@ -1524,6 +1524,23 @@ def get_admin_class(enrolment_id):
     return jsonify(booking=story), 200
 
 
+@admin_bp.get("/orders/<order_id>/record")
+def get_admin_order_record(order_id):
+    """The admin transaction record of one STANDALONE purchase order (session pack / membership /
+    ad-hoc invoice) — same shape as the booking story so the ONE TransactionDetail widget renders it
+    (money card + full audit log + void/write-off/refund/mark-paid). Every order-only event drills
+    here (#/txn/:order_id) instead of the old read-only receipt."""
+    p, err = _admin()
+    if err:
+        return err
+    from diary import bookings as bookings_mod
+    with session_scope() as s:
+        story = bookings_mod.order_story(s, club_id=p.club_id, order_id=order_id, scope="owner")
+    if story is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(booking=story), 200
+
+
 @admin_bp.post("/bookings/<booking_id>/reassign-coach")
 def reassign_coach(booking_id):
     """Move a future, not-yet-paid lesson to a different bookable coach. Body {coach_user_id}.
@@ -1554,6 +1571,8 @@ def void_order(order_id):
     b = _body()
     from billing import statement as statement_repo
     with session_scope() as s:
+        # void_order also unwinds a voided PURCHASE order (cancels its membership subscription / expires
+        # its pack wallet) — so cancelling an unpaid membership/pack from its record fully cleans up.
         res = statement_repo.void_order(s, club_id=p.club_id, order_id=order_id,
                                         write_off=bool(b.get("write_off")))
     if not res.get("ok"):

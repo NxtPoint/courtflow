@@ -698,6 +698,23 @@ def my_booking_story(booking_id):
     return jsonify(booking=story), 200
 
 
+@me_bp.get("/orders/<order_id>/record")
+def my_order_record(order_id):
+    """The caller's OWN standalone purchase (pack / membership / invoice) as a transaction record —
+    same shape as the booking story so the ONE widget renders it (money card + audit log + pay/receipt/
+    request-refund). Strictly own-order-scoped."""
+    p, err = _principal()
+    if err:
+        return err
+    from diary import bookings as diary_bookings
+    with session_scope() as s:
+        story = diary_bookings.order_story(
+            s, club_id=p.club_id, order_id=order_id, scope="client", user_id=p.user_id)
+    if story is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(booking=story), 200
+
+
 @me_bp.get("/classes/<enrolment_id>")
 def my_class_story(enrolment_id):
     """The full record of one of the caller's CLASS enrolments — the class sibling of the booking story,

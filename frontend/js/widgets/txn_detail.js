@@ -44,7 +44,7 @@
     var UI = window.UI, el = UI.el, fields = cfg.fields || {};
     function money(m, c) { return UI.money(m || 0, c || "ZAR"); }
     function tRange(b) { try { return UI.fmtTime(b.starts_at) + "–" + UI.fmtTime(b.ends_at); } catch (e) { return ""; } }
-    function typeLabel(t) { return ({ court: "Court", lesson: "Lesson", class: "Class" })[t] || "Session"; }
+    function typeLabel(t) { return ({ court: "Court", lesson: "Lesson", class: "Class", pack: "Package", membership: "Membership", invoice: "Invoice" })[t] || "Transaction"; }
 
     function loading() { UI.clear(host); host.appendChild(el("div", { class: "cf-loading", style: "min-height:200px", text: "Loading…" })); }
     function fail(e) { UI.clear(host); host.appendChild(el("div", {}, [UI.backBar("Back"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); }
@@ -78,7 +78,8 @@
       ]);
       // event subtitle (plain English: coach for a lesson, class name for a class)
       var sub = b.booking_type === "lesson" ? (coachName ? "with " + coachName : "")
-              : (b.booking_type === "class" ? (b.class_name || "") : "");
+              : (b.booking_type === "class" ? (b.class_name || "")
+              : (b.service || ""));   // pack / membership / invoice → the item name
       if (sub) head.appendChild(el("div", { class: "cf-muted", style: "margin-top:2px", text: sub }));
 
       // Money — the event as the SUM of its transactions: Billed − Discount − Written-off = Invoiced ;
@@ -180,7 +181,7 @@
         };
         toggleBtn.addEventListener("click", function () { expanded = !expanded; paintHist(); });
         var histCard = UI.card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:2px" }, [el("h2", { style: "margin:0;font-size:1.05rem", text: "Transactions" }), toggleBtn]),
-          el("div", { class: "cf-muted", style: "font-size:.8rem;margin-bottom:8px", text: "Everything that happened to this booking — the state above is their sum." }), histBox]);
+          el("div", { class: "cf-muted", style: "font-size:.8rem;margin-bottom:8px", text: "Everything that happened to this transaction — the state above is their sum." }), histBox]);
         paintHist();
         wrap.appendChild(histCard);
       }

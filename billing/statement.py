@@ -364,6 +364,21 @@ def void_order(session, *, club_id, order_id, write_off=False, reason=None) -> D
              "(SELECT id FROM billing.order_line WHERE order_id = :o)"),
         {"c": str(club_id), "o": str(order_id)},
     )
+    # PURCHASE cleanup: voiding an unpaid MEMBERSHIP order cancels its subscription; an unpaid/pending
+    # PACK order expires its wallet — so nothing it granted is left dangling (a no-op for booking orders,
+    # whose order_id links no subscription/wallet). This is what lets "cancel the unpaid membership/pack"
+    # from its transaction record fully unwind it.
+    session.execute(
+        text("UPDATE billing.membership_subscription SET status = 'cancelled', updated_at = now() "
+             "WHERE club_id = :c AND order_id = :o AND status <> 'cancelled'"),
+        {"c": str(club_id), "o": str(order_id)},
+    )
+    session.execute(
+        text("UPDATE billing.token_wallet "
+             "SET status = 'expired', minutes_remaining = 0, tokens_remaining = 0, updated_at = now() "
+             "WHERE club_id = :c AND order_id = :o AND status IN ('pending','active')"),
+        {"c": str(club_id), "o": str(order_id)},
+    )
     return {"ok": True, "status": new_status}
 
 

@@ -131,6 +131,7 @@
     }
     if (top === "activity") return renderRecord();   // "Full activity ›" now opens the ONE Client-360 record
     if (top === "invoices") return renderInvoices();  // the member's issued invoices (view/download PDF)
+    if (top === "txn") return renderTxn(parts[1]);    // a purchase (pack/membership/invoice) transaction record
     if (top === "analysis") return renderAnalysis();  // embedded Ten-Fifty5 match analysis / technique
     if (top === "plan") return renderPlan(parts[1]);
     if (top === "profile") return parts[1] === "child" ? renderChildEdit(parts[2]) : renderProfile();  // /profile/edit → the same one screen
@@ -507,6 +508,7 @@
       onNavigate: function (t) {
         if (!t || !t.id) return;
         if (t.kind === "class") go("#/class/" + t.id);
+        else if (t.kind === "order") go("#/txn/" + t.id);   // a purchase (pack/membership/invoice) record
         else go("#/booking/" + t.id);        // event → the client's booking story (same hash as everywhere)
       },
       actions: {
@@ -654,6 +656,24 @@
         request_refund: { manual: true, run: function (b) { requestRefund(b.charge.order_id); } },
         withdraw: { tone: "danger", back: true, done: "Withdrawn.", run: function (b) { return window.API.cancelBooking(b.id, { reason: "withdrawn" }); } },
         decline: { tone: "danger", back: true, done: "Declined.", run: function (b) { return window.API.declineBooking(b.id, {}); } },
+      },
+    });
+  }
+
+  // A purchase (pack / membership / invoice) as the SAME transaction record — money card + audit log +
+  // pay/receipt/request-refund. Reached from an order-only event (instead of a read-only receipt).
+  function renderTxn(orderId) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.TransactionDetail.mount(host, {
+      role: "client",
+      scope: { id: orderId },
+      grouped: false,
+      data: { get: function (i) { return window.API.orderRecord(i).then(function (r) { return r.booking; }); } },
+      actions: {
+        pay: { manual: true, run: function (b) { payOrders([b.order_id || (b.charge && b.charge.order_id)]); } },
+        receipt: { manual: true, run: function (b) { go("#/billing/order/" + (b.order_id || b.charge.order_id)); } },
+        request_refund: { manual: true, run: function (b) { requestRefund(b.order_id || b.charge.order_id); } },
       },
     });
   }

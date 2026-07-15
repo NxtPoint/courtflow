@@ -83,6 +83,8 @@
     //   duration_minutes,is_future,court_name,coach:{name,user_id},client:{name,email,phone,user_id},
     //   venue,players,order_id,charge,arrears,ics_url,can:{...}}} — god-view of any booking.
     bookingStory: function (id) { return A().apiJSON("/api/admin/bookings/" + enc(id)); },
+    // The transaction record of a standalone purchase (pack/membership/invoice) — same shape as a booking story.
+    orderRecord: function (orderId) { return A().apiJSON("/api/admin/orders/" + enc(orderId) + "/record"); },
     // POST /api/admin/bookings/:id/reassign-coach  body: {coach_user_id} -> {ok, booking}. 409 busy.
     reassignCoach: function (id, body) {
       return A().apiJSON("/api/admin/bookings/" + enc(id) + "/reassign-coach", { method: "POST", body: body || {} });
