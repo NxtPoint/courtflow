@@ -19,6 +19,7 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
 - `audit_class_packs.py` — reports class-pack vs session price (read-only).
 - `audit_client_data.py` — read-only Client-360 data scorecard.
 - `cleanup_coachless_classes.py` — soft-retire legacy coachless classes (dry-run by default, reversible).
+- `fix_bypassed_packs.py` — remediate the "paid pack bypassed" bug: (A) activate PENDING wallets on paid orders (the reconcile gap) + (B) unwind duplicate OWED lesson orders (draw the pack token + void the owed order → client owes R0). **Dry-run by default**; `--commit` to write; `--club`/`--user` to scope. Idempotent. Behind the fix in commit a244e19; run once over affected clients, then it's spent.
 - `klaviyo_reactivation.py` — sync the dormant opted-in cohort to Klaviyo (dry-run default; **dark until `KLAVIYO_API_KEY`**). A recurring win-back tool — schedule it if/when Klaviyo goes live.
 
 ## Spent one-offs (job done for club #1 — kept for provenance / future tenants)
