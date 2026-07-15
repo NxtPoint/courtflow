@@ -826,6 +826,13 @@
     var modes = payModes();
     if (free) st.settlement = "membership_covered";
     else if (modes.indexOf(st.settlement) < 0) st.settlement = modes[0] || "at_court";
+    // A pack-holder defaults to DRAWING the pack ("Covered by your pack") — mirrors the on-behalf flow
+    // so a self-booking member sees the pack selected instead of an owed method. Once only
+    // (st.tokenDefaulted) so they can still switch to another method. Belt-and-braces only: the SERVER
+    // now auto-draws a matching pack even if an owed method is sent, so this can't cause a double-charge.
+    if (!free && !st.tokenDefaulted && matchTokenWallet() && modes.indexOf("token") >= 0) {
+      st.settlement = "token"; st.tokenDefaulted = true;
+    }
 
     var card = el("div", { class: "cf-card", style: "max-width:560px;margin:0 auto" });
     card.appendChild(el("button", { class: "cf-sheet-back", type: "button", text: "‹ Back to edit",

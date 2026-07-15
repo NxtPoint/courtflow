@@ -287,6 +287,92 @@ def sc_tokens(s, fx):
     check("court token with no wallet → NO_TOKEN", rc.get("error") == "NO_TOKEN", str(rc))
 
 
+def sc_pack_autodraw_guardrail(s, fx):
+    print("\n# GUARDRAIL: a paid pack is DRAWN even when an OWED method is chosen (no double-charge)")
+    # The Ryan bug: a self-booking member with a paid lesson pack picked/sent an owed method
+    # (monthly_account/at_court) → the pack was bypassed → a full-price owed order (double-charge).
+    # The server now auto-routes a matching pack to a token draw. Set it up and prove it.
+    plan = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=10,
+                          price_minor=340000, duration_minutes=60, coach_user_id=fx.coach_uid,
+                          label="10 lessons w/ Allon")
+    order = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member, bundle_plan_id=plan["id"])
+    oid = order["order_id"]
+    ev = NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
+                                provider_payment_id="p_pack_guard", amount_minor=340000,
+                                currency="ZAR", status="succeeded", direction="charge",
+                                club_id=str(fx.club_id), user_id=str(fx.member), raw={"t": 9})
+    apply_payment_event(ev, session=s)
+    BN.activate_wallet_for_order(s, order_id=oid)
+    w0 = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                   {"o": str(oid)}).mappings().first()
+    check("pack active with 600 min", w0 and w0["minutes_remaining"] == 600, str(dict(w0) if w0 else None))
+
+    def _book(hour, mode):
+        return B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                                booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                                starts_at=iso(at(fx, hour)), ends_at=iso(at(fx, hour + 1)),
+                                settlement_mode=mode)
+
+    # 1) A member picks MONTHLY ACCOUNT but holds a matching pack → the pack is drawn (R0 token).
+    r1 = _book(9, "monthly_account")
+    check("owed-mode lesson booked", r1.get("ok"), str(r1))
+    o1 = _order(s, r1["booking"]["order_id"])
+    check("→ auto-drew the pack: order settlement='token'", o1 and o1["settlement_mode"] == "token", str(o1 and o1["settlement_mode"]))
+    check("→ order is R0 paid (NOT a duplicate owed order)", o1 and o1["status"] == "paid" and o1["amount_minor"] == 0, str(o1))
+    w1 = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                   {"o": str(oid)}).mappings().first()
+    check("→ pack drawn 60 min → 540 remaining", w1["minutes_remaining"] == 540, str(dict(w1)))
+
+    # 2) Same with AT_COURT → also drawn.
+    r2 = _book(11, "at_court")
+    o2 = _order(s, r2["booking"]["order_id"])
+    check("at-court + pack also draws token (R0)", o2 and o2["settlement_mode"] == "token" and o2["amount_minor"] == 0, str(o2))
+
+    # 3) NO double-count: the member owes NOTHING (only the paid pack exists; lessons are R0).
+    stmt = ST.statement(s, club_id=fx.club_id, user_id=fx.member)
+    check("member owes R0 (no duplicate owed lesson orders)", int(stmt.get("total_owed_minor") or 0) == 0,
+          "owed=" + str(stmt.get("total_owed_minor")))
+
+    # 4) Guardrail only fires on a MATCH: drain the pack, then an owed-mode lesson stays owed (PAYG).
+    s.execute(text("UPDATE billing.token_wallet SET minutes_remaining=0, status='exhausted' WHERE order_id=:o"),
+              {"o": str(oid)})
+    r4 = _book(13, "monthly_account")
+    o4 = _order(s, r4["booking"]["order_id"])
+    check("exhausted pack → owed-mode stays owed (monthly_account)", o4 and o4["settlement_mode"] == "monthly_account" and o4["status"] == "open", str(o4))
+
+
+def sc_reconcile_activates_pack(s, fx):
+    print("\n# RECONCILE PARITY: activate_purchase grants a pending pack + is idempotent (the no-email bug)")
+    # The reconcile (missed-webhook) path used to mark an online pack PAID without activating the wallet
+    # or emitting the email. The shared activate_purchase helper now closes that gap.
+    from yoco_billing.activation import activate_purchase
+    plan = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=5,
+                          price_minor=170000, duration_minutes=60, coach_user_id=fx.coach_uid, label="5 pk")
+    order = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member, bundle_plan_id=plan["id"])
+    oid = order["order_id"]
+    # Simulate reconcile recovering the payment (marks order paid) WITHOUT the old inline activation.
+    ev = NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
+                                provider_payment_id="p_reco_1", amount_minor=170000, currency="ZAR",
+                                status="succeeded", direction="charge", club_id=str(fx.club_id),
+                                user_id=str(fx.member), raw={"source": "reconcile"})
+    apply_payment_event(ev, session=s)
+    w_pending = s.execute(text("SELECT status FROM billing.token_wallet WHERE order_id=:o"),
+                          {"o": str(oid)}).mappings().first()
+    check("wallet is PENDING before activation (the gap)", w_pending and w_pending["status"] == "pending", str(dict(w_pending) if w_pending else None))
+    # The parity fix: reconcile now calls activate_purchase → the pack activates.
+    res = activate_purchase(s, order_id=str(oid), club_id=str(fx.club_id))
+    check("activate_purchase granted the pack", res.get("bundle") and res["bundle"].get("status") == "granted", str(res.get("bundle")))
+    w_active = s.execute(text("SELECT status, minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                         {"o": str(oid)}).mappings().first()
+    check("wallet now ACTIVE + granted (usable)", w_active and w_active["status"] == "active" and w_active["minutes_remaining"] == 300, str(dict(w_active)))
+    # Idempotent: a webhook landing AFTER reconcile calls it again → no second grant.
+    res2 = activate_purchase(s, order_id=str(oid), club_id=str(fx.club_id))
+    check("second activation is idempotent (already active, not re-granted)", res2.get("bundle") and res2["bundle"].get("status") != "granted", str(res2.get("bundle")))
+    w_final = s.execute(text("SELECT minutes_remaining FROM billing.token_wallet WHERE order_id=:o"),
+                        {"o": str(oid)}).mappings().first()
+    check("balance unchanged after idempotent re-activate (still 300)", w_final["minutes_remaining"] == 300, str(dict(w_final)))
+
+
 def sc_membership(s, fx):
     print("\n# Membership: active sub covers courts (R0); access window enforced; trial idempotent")
     # An active (manual) membership with no access window → covers any time.
@@ -2053,6 +2139,8 @@ def sc_pack_respects_service_payment_mode(s, fx):
 
 
 SCENARIOS = [
+    sc_pack_autodraw_guardrail,
+    sc_reconcile_activates_pack,
     sc_pack_respects_service_payment_mode,
     sc_admin_invoice,
     sc_activity_summary,

@@ -643,6 +643,33 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     if booking_type == "lesson" and not coach_uid:
         return _err("COACH_REQUIRED", 422, message="a lesson must be booked with a coach")
 
+    # Token / PREPAID PACK settlement (docs/specs/02): match a prepaid wallet BEFORE inserting anything
+    # (a NO-token request persists nothing → clean NO_TOKEN, UI falls back to PAYG). The matched wallet
+    # is locked FOR UPDATE and drawn in the SAME transaction right after order creation. service_kind/
+    # duration/coach drive the match: a lesson token may be coach-specific, a court/class token is
+    # coach-agnostic; product_id scopes a per-service pack to its exact service.
+    #
+    # GUARDRAIL (owner decision 2026-07-15): a paid pack must NEVER be silently bypassed. If the booker
+    # holds a matching ACTIVE pack and picked an OWED method (pay-at-court / monthly account), auto-route
+    # the booking to DRAW the pack (R0 'token') instead of raising a duplicate owed order. This is the
+    # server-side safety net BEHIND the UI's pack default — a wrong tap or a stale client can't double-
+    # charge a client who already paid for a pack. (Runs before the payment-mode guard so a pack draw is
+    # never blocked by a service that restricts cash/online methods.)
+    token_wallet = None
+    _wants_token = (settlement_mode == "token")
+    if _wants_token or settlement_mode in ("at_court", "monthly_account"):
+        duration_for_match = int((ends - starts).total_seconds() // 60)
+        match_coach = coach_uid if booking_type == "lesson" else None
+        token_wallet = _match_token_wallet_guarded(
+            session, club_id=club_id, user_id=owner_user_id, booking_type=booking_type,
+            duration_minutes=duration_for_match, coach_user_id=match_coach,
+            product_id=product_id)
+        if token_wallet is not None:
+            settlement_mode = "token"          # draw the pack — R0, never a duplicate owed order
+        elif _wants_token:
+            return _err("NO_TOKEN", 422,
+                        message="no matching prepaid token — choose another way to pay")
+
     # Per-service payment preference (members/guests only; admins/coaches override). A service may
     # offer only a subset of the club-enabled methods — the booking UI already hides the rest, this
     # refuses a crafted request that picks a method the service doesn't offer. Only the money modes
@@ -655,26 +682,6 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         if pm is not None and settlement_mode not in pm:
             return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=settlement_mode,
                         message="this service doesn't offer that payment method")
-
-    # Token settlement (docs/specs/02): PRE-FLIGHT match a prepaid wallet BEFORE we insert the
-    # booking, so a NO-token request never persists anything (clean NO_TOKEN — the UI falls back to
-    # PAYG). The matched wallet is locked FOR UPDATE and held through the insert; the draw happens
-    # in the SAME transaction right after order creation. service_kind/duration/coach drive the
-    # match: a lesson token may be coach-specific (coach_uid), a court/class token is coach-agnostic.
-    token_wallet = None
-    if settlement_mode == "token":
-        duration_for_match = int((ends - starts).total_seconds() // 60)
-        match_coach = coach_uid if booking_type == "lesson" else None
-        # PER-SERVICE: the booking's CHOSEN service (court's own service or the lesson's product) —
-        # so a per-service pack only draws for that exact service. `product_id` was resolved above
-        # (court → its own service; lesson → the chosen product); None falls back to kind+coach.
-        token_wallet = _match_token_wallet_guarded(
-            session, club_id=club_id, user_id=owner_user_id, booking_type=booking_type,
-            duration_minutes=duration_for_match, coach_user_id=match_coach,
-            product_id=product_id)
-        if token_wallet is None:
-            return _err("NO_TOKEN", 422,
-                        message="no matching prepaid token — choose another way to pay")
 
     # A BILLABLE booking must have a CONFIGURED price for its service + duration — otherwise
     # _create_order_guarded would silently write an R0 line and a delivered lesson/court would never
@@ -1261,13 +1268,19 @@ def accept_booking(session, *, club_id, booking_id, actor_user_id, role, now=Non
     if not court_resource_id:
         return _err("NO_COURT_AVAILABLE", 422, message="no court is free at this time")
 
+    # Same GUARDRAIL as create_booking: a matching prepaid pack is drawn even when an OWED method was
+    # picked, so a paid pack is never bypassed (no duplicate owed order). Explicit 'token' with no
+    # wallet still errors NO_TOKEN.
     token_wallet = None
-    if settlement_mode == "token":
+    _wants_token = (settlement_mode == "token")
+    if _wants_token or settlement_mode in ("at_court", "monthly_account"):
         dur = int((ends - starts).total_seconds() // 60)
         token_wallet = _match_token_wallet_guarded(
             session, club_id=club_id, user_id=owner_user_id, booking_type="lesson",
             duration_minutes=dur, coach_user_id=coach_uid)
-        if token_wallet is None:
+        if token_wallet is not None:
+            settlement_mode = "token"
+        elif _wants_token:
             return _err("NO_TOKEN", 422, message="no matching prepaid token — choose another way to pay")
 
     linked_court_id = None

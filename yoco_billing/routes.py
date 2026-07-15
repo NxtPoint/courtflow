@@ -201,39 +201,15 @@ def yoco_webhook():
         # idempotent (already_active guard), giving belt-and-braces.
         with session_scope() as s:
             result = apply_payment_event(event, session=s)
-            if (not result.get("ignored")
-                    and (event.kind or "").strip().lower() == "charge_succeeded"
-                    and result.get("order_id")):
-                from billing import membership as membership_repo
-                if membership_repo.is_membership_order(s, order_id=result["order_id"]):
-                    # months omitted → the granted duration is the LINKED PLAN's term_months
-                    # (read off the order's price_id), so each term plan grants its own length.
-                    act = membership_repo.activate_membership_for_order(
-                        s, order_id=result["order_id"], provider="yoco")
-                    result["membership"] = act
-                # Bundle/token pack purchase (docs/specs/02): activate the linked PENDING wallet —
-                # grant sessions_count tokens + set expires_at. Idempotent keyed off order_id (a
-                # replay finds it already active → no second grant), mirroring the membership hook.
-                from billing import bundles as bundles_repo
-                if bundles_repo.is_bundle_order(s, order_id=result["order_id"]):
-                    result["bundle"] = bundles_repo.activate_wallet_for_order(
-                        s, order_id=result["order_id"], provider="yoco")
-                    # NEW emit: a pack just activated → drive a "Pack activated" notification.
-                    # (The receipt notification from payment_succeeded covers the payment; this
-                    # covers the grant.) Best-effort + guarded — never affects settlement.
-                    _b = result["bundle"]
-                    if _b and _b.get("status") == "granted":
-                        try:
-                            from marketing_crm.tracking import emit
-                            emit("bundle_activated", {
-                                "club_id": str(event.club_id) if event.club_id else None,
-                                "user_id": _b.get("user_id"),
-                                "ref_type": "order", "ref_id": str(result["order_id"]),
-                                "label": _b.get("label"),
-                                "tokens_total": _b.get("tokens_total"),
-                            })
-                        except Exception:
-                            log.debug("bundle_activated emit skipped (tracking unavailable)")
+            # Activate the linked membership/pack + emit the pack-activated email. Shared with the
+            # reconcile path (yoco_billing.activation) so the two online settlement routes can't
+            # drift. Runs even on an `ignored` replay (activation is idempotent), so a webhook that
+            # lands AFTER reconcile still REPAIRS a pack reconcile left un-granted. On a genuine DB
+            # error it raises → the outer except returns 500 → Yoco retries.
+            if (event.kind or "").strip().lower() == "charge_succeeded":
+                from yoco_billing.activation import activate_purchase
+                oid = result.get("order_id") or event.order_ref
+                result.update(activate_purchase(s, order_id=oid, club_id=event.club_id))
     except Exception:
         # Transient (e.g. DB) error — 500 so Yoco retries the delivery.
         log.exception("apply_payment_event failed for yoco webhook")

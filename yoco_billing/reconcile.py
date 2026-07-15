@@ -99,6 +99,17 @@ def reconcile_order(session, *, order_id: str) -> Dict[str, Any]:
         raw={"source": "reconcile", "checkout_id": str(checkout_id), "checkout": co},
     )
     res = apply_payment_event(event, session=session)
+    # CRITICAL PARITY WITH THE WEBHOOK: recovering the payment is not enough — a pack/membership must
+    # also be ACTIVATED (and the pack-activated email emitted). The reconcile path historically did
+    # NEITHER, so an online pack recovered here showed PAID but the wallet stayed PENDING (unusable)
+    # and no email was ever sent. activate_purchase is idempotent (grants only a pending wallet), so
+    # it's safe on an already-processed order too. Guarded so one order can't break the sweep.
+    try:
+        from yoco_billing.activation import activate_purchase
+        activate_purchase(session, order_id=str(order_id), club_id=str(order.get("club_id")))
+    except Exception:
+        log.warning("reconcile: activation failed order=%s (payment recovered, activation deferred)",
+                    order_id, exc_info=False)
     changed = not res.get("ignored")
     log.info("reconcile: order=%s recovered=%s (%s)", order_id, changed,
              "applied" if changed else "already-processed")
