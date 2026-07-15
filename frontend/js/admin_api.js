@@ -147,6 +147,16 @@
       return A().apiJSON("/api/admin/policy", { method: "PATCH", body: body });
     },
 
+    // ---- billing profile (company & bank details for invoices/receipts) --
+    // GET /api/admin/billing-profile -> {billing_profile:{...}}
+    billingProfile: function () { return A().apiJSON("/api/admin/billing-profile"); },
+    // PATCH /api/admin/billing-profile  body: {registered_name,company_reg_no,vat_number,
+    //   bank_name,bank_account_name,bank_account_number,bank_branch_code,bank_swift,
+    //   billing_email,billing_phone,invoice_prefix,invoice_terms,invoice_footer}
+    patchBillingProfile: function (body) {
+      return A().apiJSON("/api/admin/billing-profile", { method: "PATCH", body: body });
+    },
+
     // ---- resources (courts) ---------------------------------------------
     // GET /api/admin/resources -> {resources:[{id,kind,name,surface,capacity,...}]}
     resources: function () { return A().apiJSON("/api/admin/resources"); },
@@ -462,6 +472,100 @@
       } finally { btn.disabled = false; btn.textContent = opts.saveLabel || "Save"; }
     });
     UI.clear(host); host.appendChild(card);
+  }
+
+  // ---------------------------------------------------------------------------
+  // COMPANY & BILLING DETAILS — the invoice/receipt letterhead identity + bank
+  // details for EFT-payable invoices. -> GET/PATCH /api/admin/billing-profile.
+  // Self-loads if `data.billing_profile` isn't supplied. club_admin+ only (server-gated).
+  // ---------------------------------------------------------------------------
+  function billingDetails(host, data, opts) {
+    init(); opts = opts || {};
+    function textarea(o) { return el("textarea", Object.assign({ class: "cf-input", rows: "2" }, o || {})); }
+
+    function draw(bp) {
+      bp = bp || {};
+      var f = {
+        registered_name: input({ value: bp.registered_name || "", placeholder: "Registered / legal company name" }),
+        company_reg_no: input({ value: bp.company_reg_no || "", placeholder: "e.g. 2019/123456/07" }),
+        vat_number: input({ value: bp.vat_number || "", placeholder: "Leave blank if not VAT-registered" }),
+        billing_email: input({ value: bp.billing_email || "", placeholder: "Accounts / billing email", type: "email" }),
+        billing_phone: input({ value: bp.billing_phone || "", placeholder: "Billing phone", type: "tel" }),
+        bank_name: input({ value: bp.bank_name || "", placeholder: "e.g. FNB" }),
+        bank_account_name: input({ value: bp.bank_account_name || "", placeholder: "Account holder" }),
+        bank_account_number: input({ value: bp.bank_account_number || "", placeholder: "Account number" }),
+        bank_branch_code: input({ value: bp.bank_branch_code || "", placeholder: "Branch / routing code" }),
+        bank_swift: input({ value: bp.bank_swift || "", placeholder: "SWIFT / BIC (optional)" }),
+        invoice_prefix: input({ value: bp.invoice_prefix || "INV-", placeholder: "INV-" }),
+        invoice_terms: textarea({ placeholder: "e.g. Payment due within 7 days of invoice date." }),
+        invoice_footer: textarea({ placeholder: "Optional footer / thank-you note shown on every invoice." }),
+      };
+      f.invoice_terms.value = bp.invoice_terms || "";
+      f.invoice_footer.value = bp.invoice_footer || "";
+
+      var company = el("div", { class: "cf-card" }, [
+        el("h2", { text: "Company details" }),
+        el("p", { class: "cf-muted", text: "Shown as the letterhead on every invoice and receipt. Your logo (Branding) and address (Club profile) appear too." }),
+        field("Registered company name", f.registered_name),
+        el("div", { class: "cf-grid cf-grid-2" }, [
+          field("Company reg. no.", f.company_reg_no),
+          field("VAT number", f.vat_number)]),
+        el("div", { class: "cf-grid cf-grid-2" }, [
+          field("Billing email", f.billing_email),
+          field("Billing phone", f.billing_phone)]),
+      ]);
+      var bank = el("div", { class: "cf-card" }, [
+        el("h2", { text: "Bank details" }),
+        el("p", { class: "cf-muted", text: "Printed on unpaid invoices so clients can pay by EFT (the invoice number is the reference)." }),
+        el("div", { class: "cf-grid cf-grid-2" }, [
+          field("Bank", f.bank_name), field("Account name", f.bank_account_name)]),
+        el("div", { class: "cf-grid cf-grid-2" }, [
+          field("Account number", f.bank_account_number), field("Branch code", f.bank_branch_code)]),
+        field("SWIFT / BIC", f.bank_swift),
+      ]);
+      var invoice = el("div", { class: "cf-card" }, [
+        el("h2", { text: "Invoice options" }),
+        field("Invoice number prefix", f.invoice_prefix),
+        field("Payment terms", f.invoice_terms),
+        field("Footer note", f.invoice_footer),
+      ]);
+
+      var btn = el("button", { class: "cf-btn cf-btn-primary", text: opts.saveLabel || "Save billing details" });
+      invoice.appendChild(actionRow((opts.before || []).concat([btn])));
+      btn.addEventListener("click", async function () {
+        btn.disabled = true; btn.textContent = "Saving…";
+        try {
+          await window.AdminAPI.patchBillingProfile({
+            registered_name: f.registered_name.value.trim(),
+            company_reg_no: f.company_reg_no.value.trim(),
+            vat_number: f.vat_number.value.trim(),
+            billing_email: f.billing_email.value.trim(),
+            billing_phone: f.billing_phone.value.trim(),
+            bank_name: f.bank_name.value.trim(),
+            bank_account_name: f.bank_account_name.value.trim(),
+            bank_account_number: f.bank_account_number.value.trim(),
+            bank_branch_code: f.bank_branch_code.value.trim(),
+            bank_swift: f.bank_swift.value.trim(),
+            invoice_prefix: f.invoice_prefix.value.trim() || "INV-",
+            invoice_terms: f.invoice_terms.value.trim(),
+            invoice_footer: f.invoice_footer.value.trim(),
+          });
+          UI.toast("Billing details saved.", "info");
+          if (typeof opts.onSaved === "function") opts.onSaved();
+        } catch (e) {
+          UI.toast(UI.errMsg(e), "error");
+        } finally { btn.disabled = false; btn.textContent = opts.saveLabel || "Save billing details"; }
+      });
+
+      UI.clear(host);
+      host.appendChild(company); host.appendChild(bank); host.appendChild(invoice);
+    }
+
+    if (data && data.billing_profile) { draw(data.billing_profile); return; }
+    UI.clear(host); host.appendChild(el("p", { class: "cf-muted", text: "Loading…" }));
+    window.AdminAPI.billingProfile()
+      .then(function (r) { draw((r && r.billing_profile) || {}); })
+      .catch(function (e) { UI.clear(host); host.appendChild(el("p", { class: "cf-muted", text: UI.errMsg(e) })); });
   }
 
   // ---------------------------------------------------------------------------
@@ -1746,7 +1850,7 @@
   }
 
   window.AdminUI = {
-    clubProfile: clubProfile, hours: hours, courts: courts, courtsManage: courtsManage,
+    clubProfile: clubProfile, billingDetails: billingDetails, hours: hours, courts: courts, courtsManage: courtsManage,
     coachManage: coachManage,
     services: services, coaches: coaches, membershipPlans: membershipPlans,
     membershipServices: membershipServices, equipmentManage: equipmentManage,

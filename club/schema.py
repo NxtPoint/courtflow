@@ -97,6 +97,37 @@ _DDL = [
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS peak_days text;",
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS peak_start_min int;",
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS peak_end_min int;",
+
+    # --- club.billing_profile : the club's FINANCIAL IDENTITY for invoices/receipts ------
+    # One row per club. Everything a professional invoice / statement letterhead needs that
+    # isn't already on club.club (legal_name) or club.location (address) or club.branding
+    # (logo_url): company registration, bank details (for EFT-payable invoices), an optional
+    # VAT block (DORMANT until the club registers — NextPoint is not VAT-registered today, so
+    # vat_number is NULL and no VAT line is shown), invoice terms/footer, and the GAPLESS
+    # per-club invoice number counter (prefix + next_seq, allocated atomically at issue).
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.billing_profile (
+        club_id             uuid PRIMARY KEY REFERENCES {SCHEMA}.club(id) ON DELETE CASCADE,
+        registered_name     text,            -- company's registered/legal name for the invoice (falls back to club.legal_name / name)
+        company_reg_no      text,            -- company registration number
+        vat_number          text,            -- DORMANT until VAT-registered (NULL = not registered → no VAT line)
+        vat_rate_bps        int NOT NULL DEFAULT 0,     -- VAT rate in basis points (1500 = 15%); 0 = none
+        prices_include_vat  boolean NOT NULL DEFAULT true,  -- whether stored prices are VAT-inclusive (used only when vat_number set)
+        bank_name           text,
+        bank_account_name   text,            -- account holder
+        bank_account_number text,
+        bank_branch_code    text,
+        bank_swift          text,            -- SWIFT/BIC (optional)
+        billing_email       text,            -- billing/accounts contact email shown on the invoice (falls back to location email)
+        billing_phone       text,
+        invoice_prefix      text NOT NULL DEFAULT 'INV-',  -- e.g. 'INV-' → INV-000042
+        next_invoice_seq    int  NOT NULL DEFAULT 1,        -- gapless counter, allocated atomically at issue
+        invoice_terms       text,            -- payment terms shown on the invoice (e.g. 'Due within 7 days')
+        invoice_footer      text,            -- free-text footer / thank-you note
+        created_at          timestamptz NOT NULL DEFAULT now(),
+        updated_at          timestamptz NOT NULL DEFAULT now()
+    );
+    """,
 ]
 
 

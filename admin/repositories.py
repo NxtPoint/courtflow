@@ -154,6 +154,69 @@ def patch_branding(session, *, club_id, primary_color=None, accent_color=None, l
     return get_branding(session, club_id=club_id)
 
 
+def get_billing_profile(session, *, club_id):
+    """The club's financial-identity config for invoices/receipts (company reg, VAT [dormant],
+    bank details, invoice prefix/terms/footer). Never returns the raw counter to the editor
+    beyond display; numbering is managed by billing.invoicing._next_invoice_number."""
+    return _row(session.execute(
+        text("SELECT club_id, registered_name, company_reg_no, vat_number, vat_rate_bps, "
+             "       prices_include_vat, bank_name, bank_account_name, bank_account_number, "
+             "       bank_branch_code, bank_swift, billing_email, billing_phone, "
+             "       invoice_prefix, next_invoice_seq, invoice_terms, invoice_footer, "
+             "       created_at, updated_at "
+             "FROM club.billing_profile WHERE club_id = :c"),
+        {"c": club_id},
+    ).mappings().first())
+
+
+def patch_billing_profile(session, *, club_id, registered_name=None, company_reg_no=None,
+                          vat_number=None, vat_rate_bps=None, prices_include_vat=None,
+                          bank_name=None, bank_account_name=None, bank_account_number=None,
+                          bank_branch_code=None, bank_swift=None, billing_email=None,
+                          billing_phone=None, invoice_prefix=None, invoice_terms=None,
+                          invoice_footer=None):
+    """Upsert-then-partial-update the club's billing_profile (1 row per club). Inserts a
+    defaults row if absent (so numbering starts cleanly). COALESCE partial update — a field
+    omitted (None) is unchanged; an empty string clears it. next_invoice_seq is NEVER written
+    here (managed atomically at issue)."""
+    session.execute(
+        text("INSERT INTO club.billing_profile (club_id) VALUES (:c) "
+             "ON CONFLICT (club_id) DO NOTHING"),
+        {"c": club_id},
+    )
+    session.execute(
+        text("""
+            UPDATE club.billing_profile SET
+                registered_name     = COALESCE(:registered_name, registered_name),
+                company_reg_no      = COALESCE(:company_reg_no, company_reg_no),
+                vat_number          = COALESCE(:vat_number, vat_number),
+                vat_rate_bps        = COALESCE(:vat_rate_bps, vat_rate_bps),
+                prices_include_vat  = COALESCE(:prices_include_vat, prices_include_vat),
+                bank_name           = COALESCE(:bank_name, bank_name),
+                bank_account_name   = COALESCE(:bank_account_name, bank_account_name),
+                bank_account_number = COALESCE(:bank_account_number, bank_account_number),
+                bank_branch_code    = COALESCE(:bank_branch_code, bank_branch_code),
+                bank_swift          = COALESCE(:bank_swift, bank_swift),
+                billing_email       = COALESCE(:billing_email, billing_email),
+                billing_phone       = COALESCE(:billing_phone, billing_phone),
+                invoice_prefix      = COALESCE(:invoice_prefix, invoice_prefix),
+                invoice_terms       = COALESCE(:invoice_terms, invoice_terms),
+                invoice_footer      = COALESCE(:invoice_footer, invoice_footer),
+                updated_at          = now()
+            WHERE club_id = :c
+        """),
+        {"c": club_id, "registered_name": registered_name, "company_reg_no": company_reg_no,
+         "vat_number": vat_number, "vat_rate_bps": vat_rate_bps,
+         "prices_include_vat": prices_include_vat, "bank_name": bank_name,
+         "bank_account_name": bank_account_name, "bank_account_number": bank_account_number,
+         "bank_branch_code": bank_branch_code, "bank_swift": bank_swift,
+         "billing_email": billing_email, "billing_phone": billing_phone,
+         "invoice_prefix": invoice_prefix, "invoice_terms": invoice_terms,
+         "invoice_footer": invoice_footer},
+    )
+    return get_billing_profile(session, club_id=club_id)
+
+
 def get_policy(session, *, club_id):
     return _row(session.execute(
         text("SELECT club_id, booking_window_days, min_booking_minutes, "
@@ -594,9 +657,17 @@ def create_invoice(session, *, club_id, user_id, lines, discount_minor=0, reason
         text('SELECT amount_minor, currency_code FROM billing."order" WHERE id = :o AND club_id = :c'),
         {"o": str(order_id), "c": club_id},
     ).mappings().first()
+    # Issue the formal invoice DOCUMENT over this order (numbered, PDF-able, emailed). The order
+    # remains the single live debt; the invoice renders over it (paid-status derives from it).
+    from billing.invoicing import issue_invoice
+    inv = issue_invoice(session, club_id=club_id, user_id=user_id, order_ids=[str(order_id)],
+                        kind="adhoc", due_date=None, created_by_user_id=actor_user_id,
+                        notes=reason)
     return {"order_id": str(order_id),
             "amount_minor": int(row["amount_minor"]) if row else None,
-            "currency": (row["currency_code"] if row else None)}
+            "currency": (row["currency_code"] if row else None),
+            "invoice_id": (inv.get("invoice_id") if inv and inv.get("ok") else None),
+            "invoice_number": (inv.get("invoice_number") if inv and inv.get("ok") else None)}
 
 
 def _get_price(session, *, club_id, price_id):

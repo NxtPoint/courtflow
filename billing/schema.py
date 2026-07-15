@@ -803,6 +803,74 @@ _DDL = [
     END $$;
     """,
     # --- end token / bundle engine ---
+
+    # ===========================================================================
+    # --- invoice DOCUMENTS (billing/invoicing.py) ---
+    #
+    # SHARED-FILE PROTOCOL: appended at the very END of billing's _DDL. Touches nothing
+    # above. Idempotent CREATE/ALTER ... IF NOT EXISTS throughout (python -m db twice = no-op).
+    #
+    # THE INVARIANT THIS PRESERVES: an invoice is a *document that RENDERS over live orders*,
+    # NEVER a second debt store. The debt lives on billing."order" and is settled exactly
+    # once (a client can still pay any open order online in real time — issuing an invoice
+    # does NOT change an order). An invoice's LINE AMOUNTS are frozen at issue (an immutable
+    # legal document + seller/bill-to snapshot), but its PAID / OUTSTANDING status is DERIVED
+    # LIVE from the orders its lines reference — so a mid-month card payment simply flips the
+    # invoice to Paid, and double-counting is structurally impossible (one debt store: orders).
+    #
+    #   invoice      — one issued document. Gapless per-club number (club.billing_profile seq).
+    #                  status is DOCUMENT lifecycle only (issued|void); paid-ness is derived.
+    #   invoice_line — one row per covered order (statement invoice) or per billed item
+    #                  (ad-hoc invoice). Carries order_id so paid/outstanding derives live.
+    # ---------------------------------------------------------------------------
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.invoice (
+        id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id            uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        invoice_number     text NOT NULL,                  -- gapless per-club (prefix + seq)
+        user_id            uuid,                            -- bill-to = the PAYER (iam.user.id)
+        kind               text NOT NULL DEFAULT 'adhoc'
+                             CHECK (kind IN ('adhoc','statement')),  -- adhoc=own lines; statement=covers open orders
+        status             text NOT NULL DEFAULT 'issued'
+                             CHECK (status IN ('issued','void')),    -- DOCUMENT lifecycle only (paid-ness derived)
+        currency_code      text NOT NULL,
+        total_minor        int  NOT NULL DEFAULT 0,          -- frozen sum at issue (snapshot)
+        issued_at          timestamptz NOT NULL DEFAULT now(),
+        due_date           date,
+        period_label       text,                            -- 'YYYY-MM' for a month-end statement invoice
+        bill_to            jsonb,                            -- {{name,email,phone,address}} snapshot at issue
+        seller             jsonb,                            -- {{registered_name,reg_no,vat_number,bank,address,logo_url}} snapshot
+        notes              text,                             -- footer / terms / custom note snapshot
+        created_by_user_id uuid,                             -- who issued it
+        created_at         timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    # Gapless per-club numbering must be unique.
+    f"CREATE UNIQUE INDEX IF NOT EXISTS uq_invoice_number "
+    f"ON {SCHEMA}.invoice (club_id, invoice_number);",
+    f"CREATE INDEX IF NOT EXISTS ix_invoice_club_user ON {SCHEMA}.invoice (club_id, user_id);",
+    f"CREATE INDEX IF NOT EXISTS ix_invoice_club_status ON {SCHEMA}.invoice (club_id, status);",
+    f"CREATE INDEX IF NOT EXISTS ix_invoice_club_period "
+    f"ON {SCHEMA}.invoice (club_id, period_label) WHERE period_label IS NOT NULL;",
+
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.invoice_line (
+        id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        invoice_id   uuid NOT NULL REFERENCES {SCHEMA}.invoice(id) ON DELETE CASCADE,
+        club_id      uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        order_id     uuid,                                  -- the order this line RENDERS over (paid-status source)
+        description  text,
+        qty          int  NOT NULL DEFAULT 1,
+        amount_minor int  NOT NULL DEFAULT 0,               -- frozen snapshot
+        created_at   timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_invoice_line_invoice ON {SCHEMA}.invoice_line (invoice_id);",
+    # Find every active invoice that already covers a given order (so month-end never
+    # re-invoices a debt already on a live invoice — one active invoice per open order).
+    f"CREATE INDEX IF NOT EXISTS ix_invoice_line_order "
+    f"ON {SCHEMA}.invoice_line (order_id) WHERE order_id IS NOT NULL;",
+    # --- end invoice documents ---
 ]
 
 

@@ -149,6 +149,126 @@ def desk_payment():
 
 
 # ---------------------------------------------------------------------------
+# Invoice DOCUMENTS — serve JSON + a professional PDF (owner or view_finances; else the payer).
+# An invoice RENDERS over live orders (its paid status is derived live) — see billing/invoicing.py.
+# ---------------------------------------------------------------------------
+
+def _invoice_guard(order_user_id, invoice_club_id):
+    """Return (principal, error_tuple). Allows the bill-to payer OR a club-finance viewer."""
+    from auth import resolve_principal
+    from iam.permissions import can
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return None, (jsonify(error="unauthorized"), 401)
+    same_club = bool(p.club_id and str(p.club_id) == str(invoice_club_id))
+    owns = bool(p.user_id and order_user_id and str(order_user_id) == str(p.user_id))
+    if not (owns or (same_club and can(p, "view_finances", {"club_id": invoice_club_id}))):
+        return None, (jsonify(error="forbidden"), 403)
+    return p, None
+
+
+@billing_bp.get("/api/billing/invoice/<invoice_id>")
+def billing_invoice(invoice_id):
+    """JSON of an issued invoice document (frozen lines + live paid/outstanding)."""
+    from db import session_scope
+    from billing import invoicing
+    from sqlalchemy import text
+    with session_scope() as s:
+        head = s.execute(text("SELECT club_id, user_id FROM billing.invoice WHERE id = :i"),
+                         {"i": str(invoice_id)}).mappings().first()
+        if not head:
+            return jsonify(error="not_found"), 404
+        _, err = _invoice_guard(head["user_id"], head["club_id"])
+        if err:
+            return err
+        doc = invoicing.build_invoice_document(s, invoice_id=invoice_id)
+    return jsonify(invoice=doc), 200
+
+
+@billing_bp.get("/api/billing/invoice/<invoice_id>/pdf")
+def billing_invoice_pdf(invoice_id):
+    """The invoice as a downloadable PDF (professional letterhead + bank details)."""
+    from flask import Response
+    from db import session_scope
+    from billing import invoicing, invoice_pdf
+    from sqlalchemy import text
+    with session_scope() as s:
+        head = s.execute(text("SELECT club_id, user_id FROM billing.invoice WHERE id = :i"),
+                         {"i": str(invoice_id)}).mappings().first()
+        if not head:
+            return jsonify(error="not_found"), 404
+        _, err = _invoice_guard(head["user_id"], head["club_id"])
+        if err:
+            return err
+        doc = invoicing.build_invoice_document(s, invoice_id=invoice_id)
+        pay_url = invoicing.portal_url(s, head["club_id"])
+        pdf = invoice_pdf.render_pdf(doc, pay_online_url=pay_url)
+        fname = (doc.get("number") or "invoice").replace("/", "-") + ".pdf"
+    return Response(pdf, mimetype="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{fname}"'})
+
+
+@billing_bp.post("/api/billing/invoice/<invoice_id>/mark-paid")
+def billing_invoice_mark_paid(invoice_id):
+    """Admin marks an invoice PAID by EFT/cash/card-at-desk (take_pay_at_court). Settles every
+    open order it covers via the desk-payment core → receipts fire → the invoice shows Paid.
+    Body: {provider?(eft|cash|card_at_desk), reference?}."""
+    from auth import resolve_principal
+    from iam.permissions import can
+    from db import session_scope
+    from billing import invoicing
+    from sqlalchemy import text
+
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(error="unauthorized"), 401
+    body = request.get_json(silent=True) or {}
+    with session_scope() as s:
+        head = s.execute(text("SELECT club_id FROM billing.invoice WHERE id = :i"),
+                         {"i": str(invoice_id)}).mappings().first()
+        if not head:
+            return jsonify(error="not_found"), 404
+        if not can(p, "take_pay_at_court", {"club_id": head["club_id"]}):
+            return jsonify(error="forbidden"), 403
+        res = invoicing.mark_invoice_paid(
+            s, club_id=head["club_id"], invoice_id=invoice_id,
+            provider=(body.get("provider") or "eft"),
+            reference=((body.get("reference") or "").strip() or None),
+            recorded_by=p.user_id)
+        if not res.get("ok"):
+            return jsonify(res), 422
+        doc = invoicing.build_invoice_document(s, invoice_id=invoice_id)
+        res["invoice"] = doc
+    return jsonify(res), 200
+
+
+@billing_bp.post("/api/billing/invoice/<invoice_id>/void")
+def billing_invoice_void(invoice_id):
+    """Admin voids an invoice DOCUMENT (does not touch the debt; its orders can be re-invoiced).
+    Gated to a club-finance manager (view_finances = club_admin+)."""
+    from auth import resolve_principal
+    from iam.permissions import can
+    from db import session_scope
+    from billing import invoicing
+    from sqlalchemy import text
+
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(error="unauthorized"), 401
+    with session_scope() as s:
+        head = s.execute(text("SELECT club_id FROM billing.invoice WHERE id = :i"),
+                         {"i": str(invoice_id)}).mappings().first()
+        if not head:
+            return jsonify(error="not_found"), 404
+        if not can(p, "view_finances", {"club_id": head["club_id"]}):
+            return jsonify(error="forbidden"), 403
+        res = invoicing.void_invoice(s, club_id=head["club_id"], invoice_id=invoice_id)
+        if not res.get("ok"):
+            return jsonify(res), 422
+    return jsonify(res), 200
+
+
+# ---------------------------------------------------------------------------
 # POST /api/cron/month-end — OPS-only month-end sweep (fired by the keep-warm GitHub Action, NOT an
 # always-on Render cron). Accrues coach arrears + rent for the period, then notifies every client with
 # an open statement balance (statement_ready). Idempotent per (club,user,period). Body/query:

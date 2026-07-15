@@ -158,11 +158,21 @@ def _t_coach_invited(ctx):
 def _t_statement_ready(ctx):
     amt = _money(_g(ctx, "amount_minor"), _g(ctx, "currency_code", "currency"))
     if amt:
-        body = (f"You have {amt} due for coaching this month. Pay securely online from your "
+        body = (f"You have {amt} outstanding on your account. Pay securely online from your "
                 "dashboard — tap to go straight in.")
     else:
-        body = ("Your coaching invoice for this month is ready. Pay securely online from your "
+        body = ("Your statement for this month is ready. Pay securely online from your "
                 "dashboard — tap to go straight in.")
+    return ("Your statement is ready", body, "/portal")
+
+
+def _t_invoice_issued(ctx):
+    num = _g(ctx, "invoice_number")
+    amt = _money(_g(ctx, "amount_minor"), _g(ctx, "currency_code", "currency"))
+    lead = f"Invoice {num}" if num else "Your invoice"
+    body = (f"{lead}" + (f" for {amt}" if amt else "") + " is ready. A summary is below and the "
+            "full invoice is attached. Pay securely online, or by EFT using the banking details "
+            "on the invoice.")
     return ("Your invoice is ready", body, "/portal")
 
 
@@ -261,7 +271,8 @@ KIND_MAP = {
     # promoted player TWO emails. class_enrolled is the single confirmation. The waitlist_slot_open
     # EVENT still fires (kept for CRM/Klaviyo triggers) — it just no longer sends a transactional email.
     "coach_invited":         _t_coach_invited,
-    "statement_ready":       _t_statement_ready,         # month-end: invoice ready → pay online
+    "statement_ready":       _t_statement_ready,         # month-end: balance reminder → pay online
+    "invoice_issued":        _t_invoice_issued,          # issued invoice DOCUMENT (summary + PDF + pay-online)
     "lesson_requested":      _t_lesson_requested,        # lesson approval lifecycle (→ coach)
     "lesson_proposed":       _t_lesson_proposed,         # (→ client)
     "lesson_accepted":       _t_lesson_accepted,         # (→ requester)
@@ -324,6 +335,17 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
         except Exception:
             detail = None
 
+    # Invoice DOCUMENT block (statement summary + Pay-online box) + the professional PDF
+    # attachment (flag-gated on EMAIL_INVOICE_PDF_ENABLED). Loaded here so the invoice email is
+    # the single confirm+PDF send. Guarded → None → the plain body is used.
+    invoice_doc = None
+    if kind == "invoice_issued":
+        try:
+            from marketing_crm.email import invoice_detail
+            invoice_doc = invoice_detail.load(session, club_id, ctx or {})
+        except Exception:
+            invoice_doc = None
+
     if kind == "payment_succeeded" and detail:
         if detail.get("is_purchase"):
             ok = detail.get("order_kind")
@@ -356,7 +378,7 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
 
     status = _try_email(recipient.get("email"), title, body, recipient.get("name"),
                         from_name=ident.get("from_name"), reply_to=ident.get("reply_to"),
-                        bcc=bcc, kind=kind, ctx=ctx, detail=detail)
+                        bcc=bcc, kind=kind, ctx=ctx, detail=detail, invoice_doc=invoice_doc)
     if status and status != "skipped" and notif_id:
         try:
             notif_repo.set_email_status(session, notification_id=notif_id, email_status=status)
@@ -399,7 +421,7 @@ def _club_identity(session, club_id):
 
 
 def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, bcc=None,
-               kind=None, ctx=None, detail=None):
+               kind=None, ctx=None, detail=None, invoice_doc=None):
     """Send a transactional email via SES: HTML + plain-text, the club's From-name + Reply-To, and a
     calendar (.ics) attachment for booking-type events. Returns 'sent'|'failed'|'skipped'. With no
     AWS/SES creds → 'skipped' (a clean no-op), so the engine is fully usable with NO keys. NEVER raises.
@@ -418,7 +440,14 @@ def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, 
         greeting = ("Hi %s,\n\n" % name) if name else ""
         html_greeting = ("Hi %s,<br><br>" % ses._esc(name)) if name else ""
         intro = body or title
-        if detail:
+        if invoice_doc:
+            # Invoice email: statement summary + Pay-online box in the SAME green shell, PDF attached.
+            from marketing_crm.email import invoice_detail
+            text_body = "%s%s\n\n%s\n\n%s" % (greeting, intro, invoice_detail.text_block(invoice_doc), sig)
+            inner = ("<p style=\"margin:0 0 4px\">%s%s</p>%s"
+                     % (html_greeting, ses._esc(intro), invoice_detail.html_block(invoice_doc)))
+            html_body = ses.html_wrap(title, inner, footer=sig)
+        elif detail:
             text_body = "%s%s\n\n%s\n\n%s" % (greeting, intro, booking_detail.text_block(detail), sig)
             inner = ("<p style=\"margin:0 0 4px\">%s%s</p>%s"
                      % (html_greeting, ses._esc(intro), booking_detail.html_block(detail)))
@@ -433,6 +462,16 @@ def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, 
         attachments = None
         if kind in _ICS_KINDS and ctx and os.getenv("EMAIL_ICS_ENABLED", "0").strip() == "1":
             attachments = ses._ics_attachment(ctx) or None
+        # The invoice PDF (flag-gated on EMAIL_INVOICE_PDF_ENABLED → needs ses:SendRawEmail; until
+        # then the email links to the in-portal PDF via 'Pay online' and this is a no-op).
+        if invoice_doc:
+            try:
+                from marketing_crm.email import invoice_detail
+                inv_att = invoice_detail.pdf_attachment(invoice_doc)
+                if inv_att:
+                    attachments = (attachments or []) + inv_att
+            except Exception:
+                pass
         ok = ses.send_raw_email(to_email, title, text_body, body_html=html_body,
                                 attachments=attachments, from_name=from_name, reply_to=reply_to,
                                 bcc=bcc)

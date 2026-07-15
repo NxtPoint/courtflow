@@ -1523,6 +1523,8 @@
   var ADMIN_SETUP = [
     { key: "profile", label: "Club profile & payments", desc: "Name, contact, branding, accepted payment methods",
       mount: function (h) { window.AdminAPI.onboarding().then(function (d) { UI.clear(h); window.AdminUI.clubProfile(h, d || {}, { saveLabel: "Save changes" }); setupPayments(h, (d && d.policy) || {}); }, function (e) { UI.clear(h); h.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }); } },
+    { key: "billing-details", label: "Company & billing details", desc: "Legal name, VAT/reg no., bank details & terms for invoices",
+      mount: function (h) { UI.clear(h); window.AdminUI.billingDetails(h); } },
     { key: "courts", label: "Courts & hours", desc: "Courts, surfaces and weekly playing hours",
       mount: function (h) { UI.clear(h); window.AdminUI.courtsManage(h); } },
     { key: "services", label: "Services & pricing", desc: "Lessons, classes, court hire — prices, packages, commission",

@@ -169,6 +169,39 @@ def patch_branding():
     return jsonify(branding=branding), 200
 
 
+@admin_bp.get("/billing-profile")
+def get_billing_profile():
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        return jsonify(billing_profile=repo.get_billing_profile(s, club_id=p.club_id)), 200
+
+
+@admin_bp.patch("/billing-profile")
+def patch_billing_profile():
+    """Company & billing details for invoices/receipts (letterhead identity + bank details +
+    dormant VAT). club_admin+ only — same gate as every other club-config write."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        profile = repo.patch_billing_profile(
+            s, club_id=p.club_id,
+            registered_name=b.get("registered_name"), company_reg_no=b.get("company_reg_no"),
+            vat_number=b.get("vat_number"), vat_rate_bps=b.get("vat_rate_bps"),
+            prices_include_vat=b.get("prices_include_vat"),
+            bank_name=b.get("bank_name"), bank_account_name=b.get("bank_account_name"),
+            bank_account_number=b.get("bank_account_number"),
+            bank_branch_code=b.get("bank_branch_code"), bank_swift=b.get("bank_swift"),
+            billing_email=b.get("billing_email"), billing_phone=b.get("billing_phone"),
+            invoice_prefix=b.get("invoice_prefix"), invoice_terms=b.get("invoice_terms"),
+            invoice_footer=b.get("invoice_footer"),
+        )
+    return jsonify(billing_profile=profile), 200
+
+
 @admin_bp.patch("/policy")
 def patch_policy():
     p, err = _admin()
@@ -1585,13 +1618,47 @@ def create_client_invoice(client_user_id):
     # the tx + guarded so the invoice is unconditionally saved.
     try:
         from marketing_crm.tracking import emit
-        emit("statement_ready", {"club_id": str(p.club_id), "user_id": str(client_user_id),
-                                 "email": (client_email or None),
-                                 "amount_minor": inv.get("amount_minor"), "currency": inv.get("currency")})
+        emit("invoice_issued", {"club_id": str(p.club_id), "user_id": str(client_user_id),
+                                "email": (client_email or None), "invoice_id": inv.get("invoice_id"),
+                                "invoice_number": inv.get("invoice_number"),
+                                "amount_minor": inv.get("amount_minor"), "currency": inv.get("currency")})
     except Exception:
         pass
     inv["emailed"] = bool(client_email)
     return jsonify(inv), 201
+
+
+@admin_bp.post("/clients/<client_user_id>/statement-invoice")
+def issue_client_statement_invoice(client_user_id):
+    """Issue ONE consolidated invoice for a client's CURRENT outstanding balance (intra-month,
+    on demand — the same document the month-end sweep produces automatically). Snapshots the
+    client's open orders into a numbered invoice, emails it, and returns {invoice_id,
+    invoice_number, total_minor}. Orders already on an active invoice are skipped. The orders
+    themselves are untouched (still card-settleable in real time). Body: {due_date?, period?}."""
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    from billing import invoicing
+    with session_scope() as s:
+        res = invoicing.issue_statement_invoice(
+            s, club_id=p.club_id, user_id=client_user_id,
+            period_label=((b.get("period") or "").strip() or None),
+            due_date=(b.get("due_date") or None), created_by_user_id=p.user_id)
+        if not res.get("ok"):
+            return jsonify(error=res.get("error", "NOTHING_OWED")), 422
+        client_email = s.execute(
+            text('SELECT email FROM iam."user" WHERE id = :u'), {"u": str(client_user_id)}).scalar()
+    try:
+        from marketing_crm.tracking import emit
+        emit("invoice_issued", {"club_id": str(p.club_id), "user_id": str(client_user_id),
+                                "email": (client_email or None), "invoice_id": res.get("invoice_id"),
+                                "invoice_number": res.get("invoice_number"),
+                                "amount_minor": res.get("total_minor")})
+    except Exception:
+        pass
+    res["emailed"] = bool(client_email)
+    return jsonify(res), 201
 
 
 @admin_bp.post("/clients/<client_user_id>/wallets/<wallet_id>/adjust")

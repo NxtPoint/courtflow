@@ -29,3 +29,4 @@ Flask-Cors==4.0.1
 gunicorn==22.0.0
 sqlparse==0.5.5
 PyJWT[crypto]==2.10.1  # per-user IdP (Clerk) token verification — auth/ (dark until AUTH_ENABLED=1)
+reportlab==4.2.5  # pure-Python PDF engine for professional invoices/receipts (billing/invoicing.py) — no system deps

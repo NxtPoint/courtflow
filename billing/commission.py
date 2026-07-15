@@ -1178,10 +1178,28 @@ def run_month_end(session, *, club_id, period_label=None) -> Dict[str, Any]:
         if not fresh:
             already += 1
             continue
+        # Consolidate this client's open orders into ONE numbered statement invoice document
+        # (orders already on an active invoice are skipped). If there's genuinely nothing new to
+        # invoice (all already invoiced intra-month), fall back to a plain balance reminder so the
+        # client is still nudged. The orders are never modified (still card-settleable live).
+        invoice_id = None
+        try:
+            from billing import invoicing
+            res = invoicing.issue_statement_invoice(
+                session, club_id=club_id, user_id=str(r["user_id"]), period_label=period)
+            if res.get("ok"):
+                invoice_id = res.get("invoice_id")
+        except Exception:
+            log.info("run_month_end: invoice issue skipped user=%s", r["user_id"])
         try:
             from marketing_crm.tracking import emit
-            emit("statement_ready", {"club_id": str(club_id), "user_id": str(r["user_id"]),
-                                     "amount_minor": int(r["owed"] or 0), "currency": r["cur"] or "ZAR"})
+            if invoice_id:
+                emit("invoice_issued", {"club_id": str(club_id), "user_id": str(r["user_id"]),
+                                        "invoice_id": invoice_id, "amount_minor": int(r["owed"] or 0),
+                                        "currency": r["cur"] or "ZAR"})
+            else:
+                emit("statement_ready", {"club_id": str(club_id), "user_id": str(r["user_id"]),
+                                         "amount_minor": int(r["owed"] or 0), "currency": r["cur"] or "ZAR"})
         except Exception:
             log.info("run_month_end: notify skipped user=%s", r["user_id"])
         notified += 1

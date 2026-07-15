@@ -719,7 +719,7 @@ def billing_receipt(order_id):
 
     from db import session_scope
     from billing import orders as orders_repo
-    from yoco_billing import receipt as receipt_mod
+    from billing import invoicing            # receipt building consolidated into the billing lane
 
     with session_scope() as s:
         order = orders_repo.get_order(s, order_id=order_id)
@@ -729,7 +729,44 @@ def billing_receipt(order_id):
             return jsonify(error="forbidden"), 403
         if not _owns_or_can_view(p, order, can):
             return jsonify(error="forbidden"), 403
-        data = receipt_mod.build_receipt(s, order_id=str(order_id))
+        data = invoicing.build_receipt(s, order_id=str(order_id))
     if not data:
         return jsonify(error="order not found"), 404
     return jsonify(receipt=data), 200
+
+
+# ---------------------------------------------------------------------------
+# GET /api/billing/receipt/<order_id>/pdf — the same receipt as a professional PDF (auth'd).
+# ---------------------------------------------------------------------------
+
+@yoco_bp.get("/api/billing/receipt/<order_id>/pdf")
+def billing_receipt_pdf(order_id):
+    from flask import Response
+    from auth import resolve_principal
+    from iam.permissions import can
+
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(error="unauthorized"), 401
+
+    from db import session_scope
+    from billing import orders as orders_repo
+    from billing import invoicing, invoice_pdf
+
+    with session_scope() as s:
+        order = orders_repo.get_order(s, order_id=order_id)
+        if not order:
+            return jsonify(error="order not found"), 404
+        if not _in_callers_club(p, order["club_id"]):
+            return jsonify(error="forbidden"), 403
+        if not _owns_or_can_view(p, order, can):
+            return jsonify(error="forbidden"), 403
+        r = invoicing.build_receipt(s, order_id=str(order_id))
+        if not r:
+            return jsonify(error="order not found"), 404
+        doc = invoicing.receipt_to_document(r)
+        pay_url = invoicing.portal_url(s, order["club_id"])
+        pdf = invoice_pdf.render_pdf(doc, pay_online_url=pay_url)
+        fname = (doc.get("number") or "receipt").replace("/", "-") + ".pdf"
+    return Response(pdf, mimetype="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{fname}"'})
