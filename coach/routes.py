@@ -652,6 +652,22 @@ def get_coach_earnings_by_service():
     return jsonify(data), 200
 
 
+@coach_bp.get("/financials/revenue-me")
+def get_coach_revenue_pnl():
+    """The coach's OWN earnings P&L (their Money landing): sales − discount − write-off = net ; net =
+    received + owed ; what they KEEP vs the club's commission, on received (realised) + owed (projected).
+    Same reader as the admin coach-detail, coach-scoped (their own orders only)."""
+    p, err = _coach()
+    if err:
+        return err
+    from admin import repositories as admin_repo
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = admin_repo.revenue_coach_pnl(s, club_id=p.club_id, coach_user_id=p.user_id,
+                                            month=month, coach_scope=True)
+    return jsonify(data), 200
+
+
 @coach_bp.get("/financials/revenue-clients")
 def get_coach_earnings_clients():
     """The coach revenue drill's CLIENT level — within a service, this coach's clients (coach-scoped).

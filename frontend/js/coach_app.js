@@ -631,7 +631,7 @@
     window.Widgets.Earnings.mount(host, {
       scope: { role: "coach" }, title: "Money", month: MONTH,
       data: {
-        service: function (m) { MONTH = m || MONTH; return window.CoachAPI.earningsByService(m); },
+        coachPnl: function (_coachId, m) { MONTH = m || MONTH; return window.CoachAPI.revenueMe(m); },
         clients: function (opts) { return window.CoachAPI.earningsClients(opts); },
         txns: function (opts) { return window.CoachAPI.earningsTransactions(opts); },
       },

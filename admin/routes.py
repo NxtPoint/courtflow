@@ -1274,17 +1274,29 @@ def get_earnings_by_service():
     return jsonify(data), 200
 
 
-@admin_bp.get("/financials/revenue-coaches")
-def get_earnings_coaches():
-    """The revenue drill's SECOND level: one service's revenue split by the COACH who earned it (+ a single
-    'Club' row for uncoached court/membership). `?category=<svc>&month=YYYY-MM`. Sums to the service total."""
+@admin_bp.get("/financials/revenue-club")
+def get_revenue_club():
+    """The CLUB earnings P&L (the Money revenue landing): direct club services + the commission taken from
+    each coach → total club earnings (collected + projected) and Club-keeps vs Coaches-keep. `?month=`."""
     p, err = _admin()
     if err:
         return err
-    category = (request.args.get("category") or "").strip() or None
     month = (request.args.get("month") or "").strip() or None
     with session_scope() as s:
-        data = repo.earnings_coaches(s, club_id=p.club_id, category=category, month=month)
+        data = repo.revenue_club_overview(s, club_id=p.club_id, month=month)
+    return jsonify(data), 200
+
+
+@admin_bp.get("/financials/revenue-coach/<coach_user_id>")
+def get_revenue_coach(coach_user_id):
+    """ONE coach's earnings P&L: sales − discount − write-off = net ; net = received + owed ; commission
+    split (coach − / club +) on received (realised) + owed (projected). `?month=`."""
+    p, err = _admin()
+    if err:
+        return err
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = repo.revenue_coach_pnl(s, club_id=p.club_id, coach_user_id=coach_user_id, month=month)
     return jsonify(data), 200
 
 

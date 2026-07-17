@@ -116,6 +116,8 @@
     money: function (month) { return A().apiJSON("/api/coach/money" + (month ? ("?month=" + enc(month)) : "")); },
     // Earnings by service (the coach's own slice — same shape/widget as admin).
     earningsByService: function (month) { return A().apiJSON("/api/coach/financials/earnings-by-service" + (month ? ("?month=" + enc(month)) : "")); },
+    // The coach's OWN earnings P&L (their Money landing) — sales/net/received/owed + keep-vs-commission.
+    revenueMe: function (month) { return A().apiJSON("/api/coach/financials/revenue-me" + (month ? ("?month=" + enc(month)) : "")); },
     // The coach revenue drill's CLIENT level (coach-scoped — no by-coach level; they ARE the coach).
     earningsClients: function (opts) {
       opts = opts || {};

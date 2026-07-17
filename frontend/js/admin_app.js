@@ -709,7 +709,7 @@
   var MONEY_SECTIONS = [
     ["invoice", "New invoice", "Bill a client for a service (× times) or a custom fee — emailed to pay online"],
     ["sales", "Sales by day", "Daily takings incl. Yoco reversals — net income"],
-    ["revenue", "Revenue per service", "Total by service → coach/club → client → transaction"],
+    ["revenue", "Club earnings", "Courts + memberships + commission from coaches → coach → client → transaction"],
     ["bookings", "Bookings by day", "Every booking — client, service and coach"],
     ["approvals", "Approvals", "Refund requests awaiting your decision"],
     ["activity", "Club activity", "Every payment, refund and adjustment"],
@@ -771,12 +771,12 @@
     set(host);
     window.Widgets.Earnings.mount(host, {
       scope: { role: "admin" },
-      title: "Revenue per service",
+      title: "Club earnings",
       month: MONEY_MONTH,
       back: { label: "Money", hash: "#/money" },
       data: {
-        service: function (month) { return window.AdminAPI.earningsByService(month).then(function (d) { MONEY_MONTH = d.month || MONEY_MONTH; return d; }); },
-        coaches: function (opts) { return window.AdminAPI.earningsCoaches(opts); },
+        club: function (month) { return window.AdminAPI.revenueClub(month).then(function (d) { MONEY_MONTH = d.month || MONEY_MONTH; return d; }); },
+        coachPnl: function (coachId, month) { return window.AdminAPI.revenueCoach(coachId, month); },
         clients: function (opts) { return window.AdminAPI.earningsClients(opts); },
         txns: function (opts) { return window.AdminAPI.earningsTransactions(opts); },
       },

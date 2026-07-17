@@ -1,32 +1,33 @@
-// widgets/earnings.js — Widgets.Earnings: the ONE "how am I earning" view, a NESTED revenue drill shared
-// by the ADMIN (the aggregate of the whole club) and the COACH (their own slice). Same widget, config
-// ONLY — like TransactionDetail / ClientRecord. Golden rule: no fork.
+// widgets/earnings.js — Widgets.Earnings: the ONE club-vs-coach earnings P&L, shared by the ADMIN (the
+// whole club) and the COACH (their own slice). Same widget, config ONLY — like TransactionDetail /
+// ClientRecord. Golden rule: no fork.
 //
-//   Admin drill:  Revenue per service → SERVICE → by COACH / Club → CLIENT → TRANSACTIONS → the record
-//   Coach drill:  (their slice)       → SERVICE → CLIENT → TRANSACTIONS → the record   (skips by-coach —
-//                                                                                       they ARE the coach)
+//   Admin:  CLUB earnings (direct services + commission from coaches) → a COACH (P&L) or a DIRECT service
+//           → CLIENT → TRANSACTIONS → the shared record
+//   Coach:  their OWN P&L (sales − w/off = net ; net = received + owed ; keep vs club commission)
+//           → CLIENT → TRANSACTIONS → the record
 //
-//   cfg.scope.role   'admin' | 'coach'  — picks the money-band extras + whether the by-coach level shows
-//   cfg.title        L0 heading (default "Revenue per service" / "My earnings")
-//   cfg.month        initial 'YYYY-MM' (the widget owns the pager thereafter)
-//   cfg.back         {label, hash}?  — a back link on the top (services) level (admin: back to Money menu)
-//   cfg.data.service(month)                          -> {month,currency,summary,services[]}
-//   cfg.data.coaches({category, month})              -> {coaches[], totals, label}          (admin only)
-//   cfg.data.clients({category, earned_by?, month})  -> {clients[], totals, label}
-//   cfg.data.txns({category, user_id, earned_by?, month}) -> {transactions[], totals}
-//   cfg.onNavigate({kind:'event'|'class'|'txn'|'person', id})  — drill a transaction to the SHARED record
-//   cfg.homeExtra(serviceData) -> node?              — L0-only footer (coach disputes queue)
+//   cfg.scope.role   'admin' | 'coach'
+//   cfg.title / cfg.month / cfg.back {label,hash}?
+//   cfg.data.club(month)                      -> {direct[], coaches[], club{}}                (admin L0)
+//   cfg.data.coachPnl(coachUserId|null, month)-> a coach P&L object                            (detail / coach L0)
+//   cfg.data.clients({category?, earned_by?, month}) -> {clients[], totals}
+//   cfg.data.txns({category?, user_id, earned_by?, month}) -> {transactions[], totals}
+//   cfg.onNavigate({kind:'event'|'class'|'txn'|'person', id})
+//   cfg.homeExtra(data) -> node?              — L0-only footer (coach disputes)
 //
-// The money band IS CRMUI.statementFold; a transaction drills to the SAME Widgets.TransactionDetail the
-// coach + admin already share. Admin is literally the coach's view, aggregated — plus one extra level.
+// The club P&L answers "how much do WE make" = court/membership/pack revenue (100% club) + the commission
+// we take from each coach; a coach's row/detail shows their sales split into received (realised commission)
+// + owed (projected commission — we always collect). A transaction drills to the SAME shared record.
 (function () {
   function mount(host, cfg) {
     var UI = window.UI, CRMUI = window.CRMUI, el = UI.el;
-    function money(m, c) { return UI.money(m || 0, c || "ZAR"); }
     var role = (cfg.scope && cfg.scope.role) || "admin";
     var isCoach = role === "coach";
+    var keepLabel = isCoach ? "You keep" : "Coach keeps";
     var MONTH = cfg.month || null;
     var CUR = "ZAR";
+    function money(m) { return UI.money(m || 0, CUR); }
 
     function monthLabel(ym) { try { var p = String(ym).split("-"); return new Date(p[0], parseInt(p[1], 10) - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" }); } catch (e) { return ym; } }
     function shiftMonth(ym, d) { var p = String(ym).split("-"); var dt = new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1 + d, 1); return dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0"); }
@@ -41,158 +42,188 @@
         el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { onShift(1); } }),
       ]);
     }
-
-    // The money-band extras below the fold — the ONLY summary-level scope difference.
-    function bandExtras(s) {
-      if (isCoach) {
-        var bal = s.balance_minor || 0;
-        return [
-          { label: "You keep", sub: "on paid", value_minor: s.coach_keeps_minor, tone: "good" },
-          { label: "Club commission", sub: "on paid", value_minor: s.commission_minor },
-          { label: "Net balance with club", value_minor: bal, tone: bal < 0 ? "bad" : "good", sub: bal > 0 ? "club owes you" : (bal < 0 ? "you owe the club" : "settled") },
-        ];
-      }
-      var owed = s.total_owed_now_minor || 0, payouts = s.coach_payouts_due_minor || 0;
-      var ex = [{ label: "Club keeps", sub: "est. after coach pay", value_minor: s.club_keeps_minor, tone: "good" }];
-      if (payouts > 0) ex.push({ label: "Coach payouts due", sub: "to coaches now", value_minor: payouts });
-      ex.push({ label: "Owed to the club", sub: "all unpaid, now", value_minor: owed, tone: owed > 0 ? "bad" : undefined });
-      return ex;
+    function backBtn(label, onBack) { return el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", style: "margin-bottom:8px", text: "‹ " + label, onclick: onBack }); }
+    function titleRow(title, onShift) {
+      return el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:10px" },
+        [el("h1", { style: "margin:0", text: title })].concat(onShift ? [pager(onShift)] : []));
     }
 
-    // A drill row: label + net (invoiced) + a paid/owed line, tap to go a level deeper.
-    function foldRow(label, x, onTap) {
-      var owed = x.outstanding_minor || 0;
-      var bits = [money(x.paid_minor, CUR) + " paid"];
-      if (owed > 0) bits.push(money(owed, CUR) + " owed");
-      if (x.discount_minor) bits.push(money(x.discount_minor, CUR) + " disc.");
-      if (x.written_off_minor) bits.push(money(x.written_off_minor, CUR) + " w/off");
+    // A statement line: label (+ optional sub) on the left, a value on the right; tones + a top rule + indent.
+    function stmtLine(label, value, o) {
+      o = o || {};
+      var left = el("div", { style: o.indent ? "padding-left:14px" : "" }, [
+        el("span", { style: o.muted ? "color:var(--muted)" : "", text: label }),
+        o.sub ? el("span", { class: "cf-muted", style: "font-size:.78rem;margin-left:6px", text: o.sub }) : null,
+      ].filter(Boolean));
+      var vs = "font-weight:" + (o.strong ? "700" : "600") + ";";
+      if (o.tone === "good") vs += "color:var(--success);";
+      else if (o.tone === "bad") vs += "color:var(--danger);";
+      else if (o.muted) vs += "color:var(--muted);";
+      return el("div", { class: "cf-row", style: "justify-content:space-between;align-items:baseline;padding:3px 0;" + (o.border ? "border-top:1px solid var(--border);margin-top:5px;padding-top:8px;" : "") },
+        [left, el("span", { style: vs, text: value })]);
+    }
+
+    // A tap row: title + sub on the left, a value (+ optional secondary) on the right.
+    function tapRow(title, sub, value, value2, onTap) {
       return el("div", { class: "cf-item cf-item-tap", onclick: onTap }, [
         el("div", { class: "cf-item-main" }, [
-          el("div", { class: "cf-item-t", text: label }),
-          el("div", { class: "cf-item-s", text: bits.join(" · ") }),
+          el("div", { class: "cf-item-t", text: title }),
+          el("div", { class: "cf-item-s", text: sub }),
         ]),
         el("div", { style: "text-align:right;min-width:92px" }, [
-          el("div", { style: "font-weight:700", text: money(x.invoiced_minor, CUR) }),
-          owed > 0 ? el("div", { style: "font-size:.76rem;color:var(--danger);font-weight:600", text: money(owed, CUR) + " owed" }) : null,
+          el("div", { style: "font-weight:700", text: value }),
+          value2 ? el("div", { style: "font-size:.76rem;color:var(--success);font-weight:600", text: value2 }) : null,
         ].filter(Boolean)),
       ]);
     }
 
-    function backBtn(label, onBack) {
-      return el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", style: "margin-bottom:8px", text: "‹ " + label, onclick: onBack });
-    }
-    function totalsLine(t) {
-      t = t || {};
-      return money(t.billed_minor, CUR) + " billed · " + money(t.paid_minor, CUR) + " paid · " + money(t.outstanding_minor, CUR) + " owed";
-    }
-    // A deeper-level screen: back + crumb title + a totals line + the rows (or an empty note).
-    function drillScreen(opts) {
-      var wrap = el("div", {});
-      wrap.appendChild(backBtn(opts.backLabel, opts.onBack));
-      wrap.appendChild(el("h1", { style: "margin:0 0 2px;font-size:1.2rem", text: opts.title }));
-      if (opts.crumb) wrap.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem", text: opts.crumb }));
-      wrap.appendChild(el("div", { class: "cf-muted", style: "margin:4px 0 10px;font-size:.85rem", text: monthLabel(MONTH) + " · " + totalsLine(opts.totals) }));
-      if (opts.note) wrap.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 10px;font-size:.82rem", text: opts.note }));
-      var c = UI.card([]), l = el("div", { class: "cf-list" });
-      if (!opts.rows.length) l.appendChild(el("div", { class: "cf-empty", text: opts.empty || "Nothing here." }));
-      opts.rows.forEach(function (r) { l.appendChild(r); });
-      c.appendChild(l); wrap.appendChild(c);
-      return wrap;
+    // The coach P&L card — sales − disc − w/off = net ; net = received + owed ; commission split on each.
+    function pnlCard(p) {
+      var box = UI.card([]);
+      box.appendChild(el("h1", { style: "margin:0 0 2px;font-size:1.2rem", text: p.name || "Coach" }));
+      box.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin-bottom:6px", text: monthLabel(MONTH) + " · " + (p.rate_pct || 0) + "% club commission" }));
+      box.appendChild(stmtLine("Total sales", money(p.sales_minor)));
+      if (p.discount_minor) box.appendChild(stmtLine("Less discount", "− " + money(p.discount_minor), { muted: true }));
+      if (p.written_off_minor) box.appendChild(stmtLine("Less write-off", "− " + money(p.written_off_minor), { muted: true }));
+      box.appendChild(stmtLine("Net", money(p.net_minor), { strong: true, border: true }));
+      box.appendChild(stmtLine("Received", money(p.received_minor), { border: true }));
+      box.appendChild(stmtLine("Club commission", "+ " + money(p.club_comm_received_minor), { indent: true, tone: "good", sub: (p.rate_pct || 0) + "%" }));
+      box.appendChild(stmtLine(keepLabel, money(p.coach_keeps_received_minor), { indent: true }));
+      box.appendChild(stmtLine("Owed", money(p.owed_minor), { border: true }));
+      box.appendChild(stmtLine("Projected commission", "+ " + money(p.club_comm_owed_minor), { indent: true, tone: "good", muted: true, sub: "on collect" }));
+      box.appendChild(stmtLine(keepLabel, money(p.coach_keeps_owed_minor), { indent: true, muted: true }));
+      box.appendChild(stmtLine(keepLabel + " (total)", money(p.coach_keeps_total_minor), { strong: true, border: true }));
+      box.appendChild(stmtLine("Club commission (total)", money(p.club_comm_total_minor), { strong: true, tone: "good" }));
+      return box;
     }
 
-    // ── L0 · SERVICES ─────────────────────────────────────────────────────────
-    function renderServices() {
+    // The CLUB earnings card — direct services + commission from coaches → club total & club-vs-coach.
+    function clubCard(d) {
+      var c = d.club || {};
+      var box = UI.card([]);
+      box.appendChild(el("div", { class: "cf-muted", style: "font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px", text: "Club earnings · " + monthLabel(MONTH) }));
+      box.appendChild(stmtLine("Total club earnings", money(c.earnings_projected_minor), { strong: true, sub: "projected" }));
+      box.appendChild(stmtLine("Collected so far", money(c.earnings_collected_minor), { muted: true, sub: "banked" }));
+      box.appendChild(stmtLine("Direct services", money(c.direct_net_minor), { border: true, sub: "100% club · " + money(c.direct_received_minor) + " in" }));
+      box.appendChild(stmtLine("Commission from coaches", money((c.commission_received_minor || 0) + (c.commission_owed_minor || 0)), { sub: money(c.commission_received_minor) + " in · " + money(c.commission_owed_minor) + " owed" }));
+      box.appendChild(stmtLine("Club keeps", money(c.earnings_projected_minor), { strong: true, border: true, tone: "good" }));
+      box.appendChild(stmtLine("Coaches keep", money(c.coaches_keep_projected_minor), { strong: true }));
+      return box;
+    }
+
+    // ── L0 (admin) · CLUB ──────────────────────────────────────────────────────
+    function renderClub() {
       loading();
-      Promise.resolve(cfg.data.service(MONTH)).then(function (d) {
+      Promise.resolve(cfg.data.club(MONTH)).then(function (d) {
         MONTH = d.month || MONTH; CUR = d.currency || CUR;
-        var s = d.summary || {};
         var wrap = el("div", {});
         if (cfg.back) wrap.appendChild(UI.backBar(cfg.back.label || "Back", cfg.back.hash));
-        wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:10px" }, [
-          el("h1", { style: "margin:0", text: cfg.title || (isCoach ? "My earnings" : "Revenue per service") }),
-          pager(function (n) { MONTH = shiftMonth(MONTH, n); renderServices(); }),
-        ]));
-        wrap.appendChild(UI.card([CRMUI.statementFold({ currency: CUR, month: MONTH, totals: s, extra: bandExtras(s) })]));
+        wrap.appendChild(titleRow(cfg.title || "Club earnings", function (n) { MONTH = shiftMonth(MONTH, n); renderClub(); }));
+        wrap.appendChild(clubCard(d));
 
-        var svc = (d.services || []).filter(function (x) { return (x.billed_minor || 0) > 0; });
-        var scard = UI.card([CRMUI.sectionHead("By service")]);
-        if (!svc.length) scard.appendChild(el("div", { class: "cf-empty", text: "No earnings in " + monthLabel(MONTH) + "." }));
-        else { var sl = el("div", { class: "cf-list" }); svc.forEach(function (x) { sl.appendChild(foldRow(x.label, x, function () { onService(x); })); }); scard.appendChild(sl); }
-        wrap.appendChild(scard);
+        var coaches = d.coaches || [], direct = (d.direct || []).filter(function (x) { return (x.billed_minor || 0) > 0; });
+        var cc = UI.card([CRMUI.sectionHead("Coaches" + (coaches.length ? " · " + coaches.length : ""))]);
+        if (!coaches.length) cc.appendChild(el("div", { class: "cf-empty", text: "No coach revenue this month." }));
+        else { var cl = el("div", { class: "cf-list" }); coaches.forEach(function (p) { cl.appendChild(tapRow(p.name, money(p.received_minor) + " in · " + money(p.owed_minor) + " owed", money(p.net_minor), money(p.club_comm_total_minor) + " club", function () { renderCoach(p.coach_user_id, false); })); }); cc.appendChild(cl); }
+        wrap.appendChild(cc);
+
+        if (direct.length) {
+          var dc = UI.card([CRMUI.sectionHead("Direct services (100% club)")]);
+          var dl = el("div", { class: "cf-list" });
+          direct.forEach(function (x) { dl.appendChild(tapRow(x.label, money(x.paid_minor) + " in" + ((x.outstanding_minor || 0) > 0 ? " · " + money(x.outstanding_minor) + " owed" : ""), money(x.invoiced_minor), null, function () { renderDirect(x); })); });
+          dc.appendChild(dl); wrap.appendChild(dc);
+        }
 
         if (typeof cfg.homeExtra === "function") { try { var extra = cfg.homeExtra(d); if (extra) wrap.appendChild(extra); } catch (e) {} }
         show(wrap);
       }, fail);
     }
-    // A service tap: admin → by coach/club; coach → straight to their clients (they're the only coach).
-    function onService(svc) { if (isCoach) renderClients(svc, null); else renderCoaches(svc); }
 
-    // ── L1 (admin) · BY COACH / CLUB ──────────────────────────────────────────
-    function renderCoaches(svc) {
+    // ── COACH P&L ── admin detail (from a coach row) OR the coach app's own L0 landing ───────────────
+    function renderCoach(coachId, isL0) {
       loading();
-      Promise.resolve(cfg.data.coaches({ category: svc.key, month: MONTH })).then(function (d) {
-        CUR = d.currency || CUR;
-        var rows = (d.coaches || []).map(function (co) {
-          return foldRow(co.name, co, function () { renderClients(svc, { earned_by: co.is_club ? "club" : co.coach_user_id, name: co.name }); });
-        });
-        show(drillScreen({
-          backLabel: "Revenue per service", onBack: renderServices,
-          title: svc.label, crumb: "Revenue by coach / club",
-          totals: d.totals, rows: rows, empty: "No revenue in " + svc.label + " this month.",
-        }));
+      Promise.resolve(cfg.data.coachPnl(coachId, MONTH)).then(function (p) {
+        MONTH = p.month || MONTH; CUR = p.currency || CUR;
+        var wrap = el("div", {});
+        if (isL0) wrap.appendChild(titleRow(cfg.title || "Money", function (n) { MONTH = shiftMonth(MONTH, n); renderCoach(coachId, true); }));
+        else wrap.appendChild(backBtn(cfg.title || "Club earnings", renderClub));
+        wrap.appendChild(pnlCard(p));
+        // By client (the coach's clients this month) → transactions.
+        var q = { month: MONTH };
+        if (!isCoach && p.coach_user_id) q.earned_by = p.coach_user_id;   // admin: filter to this coach
+        Promise.resolve(cfg.data.clients(q)).then(function (cd) {
+          var clients = cd.clients || [];
+          var cc = UI.card([CRMUI.sectionHead("By client" + (clients.length ? " · " + clients.length : ""))]);
+          if (!clients.length) cc.appendChild(el("div", { class: "cf-empty", text: "No clients this month." }));
+          else { var cl = el("div", { class: "cf-list" }); clients.forEach(function (x) { cl.appendChild(clientRow(x, { earned_by: q.earned_by, backLabel: p.name, onBack: function () { renderCoach(coachId, isL0); } })); }); cc.appendChild(cl); }
+          wrap.appendChild(cc);
+          if (isL0 && typeof cfg.homeExtra === "function") { try { var extra = cfg.homeExtra(p); if (extra) wrap.appendChild(extra); } catch (e) {} }
+          show(wrap);
+        }, function () { show(wrap); });
       }, fail);
     }
 
-    // ── L2 (admin) / L1 (coach) · BY CLIENT ───────────────────────────────────
-    function renderClients(svc, coachSel) {
+    // ── DIRECT SERVICE (admin) · a club-run service → its clients ───────────────
+    function renderDirect(svc) {
       loading();
-      var q = { category: svc.key, month: MONTH };
-      if (coachSel) q.earned_by = coachSel.earned_by;
-      Promise.resolve(cfg.data.clients(q)).then(function (d) {
-        CUR = d.currency || CUR;
-        var rows = (d.clients || []).map(function (cl) {
-          return foldRow(cl.name, cl, function () { renderTxns(svc, coachSel, cl); });
-        });
-        show(drillScreen({
-          backLabel: coachSel ? coachSel.name : "Revenue per service",
-          onBack: function () { if (coachSel) renderCoaches(svc); else renderServices(); },
-          title: coachSel ? (svc.label + " · " + coachSel.name) : svc.label,
-          crumb: "By client",
-          totals: d.totals, rows: rows, empty: "No clients this month.",
-        }));
+      Promise.resolve(cfg.data.clients({ category: svc.key, earned_by: "club", month: MONTH })).then(function (cd) {
+        CUR = cd.currency || CUR;
+        var wrap = el("div", {});
+        wrap.appendChild(backBtn(cfg.title || "Club earnings", renderClub));
+        wrap.appendChild(el("h1", { style: "margin:0 0 2px;font-size:1.2rem", text: svc.label }));
+        wrap.appendChild(el("div", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem", text: monthLabel(MONTH) + " · 100% club · " + totalsLine(cd.totals) }));
+        var c = UI.card([]), l = el("div", { class: "cf-list" });
+        var clients = cd.clients || [];
+        if (!clients.length) l.appendChild(el("div", { class: "cf-empty", text: "No clients this month." }));
+        clients.forEach(function (x) { l.appendChild(clientRow(x, { category: svc.key, earned_by: "club", backLabel: svc.label, onBack: function () { renderDirect(svc); } })); });
+        c.appendChild(l); wrap.appendChild(c);
+        show(wrap);
       }, fail);
     }
 
-    // ── L3 · TRANSACTIONS ─────────────────────────────────────────────────────
-    function renderTxns(svc, coachSel, client) {
+    function totalsLine(t) { t = t || {}; return money(t.billed_minor) + " billed · " + money(t.paid_minor) + " paid · " + money(t.outstanding_minor) + " owed"; }
+    function clientRow(x, ctx) {
+      var owed = x.outstanding_minor || 0;
+      return tapRow(x.name, money(x.paid_minor) + " paid" + (owed > 0 ? " · " + money(owed) + " owed" : ""),
+        money(x.invoiced_minor), owed > 0 ? money(owed) + " owed" : null,
+        function () { renderTxns(x, ctx); });
+    }
+
+    // ── TRANSACTIONS ── the leaf → the shared record ────────────────────────────
+    function renderTxns(client, ctx) {
+      ctx = ctx || {};
       loading();
-      var q = { category: svc.key, user_id: client.user_id, month: MONTH };
-      if (coachSel) q.earned_by = coachSel.earned_by;
+      var q = { user_id: client.user_id, month: MONTH };
+      if (ctx.category) q.category = ctx.category;
+      if (ctx.earned_by) q.earned_by = ctx.earned_by;
       Promise.resolve(cfg.data.txns(q)).then(function (d) {
         CUR = d.currency || CUR;
-        var rows = (d.transactions || []).map(function (x) {
+        var wrap = el("div", {});
+        wrap.appendChild(backBtn(ctx.backLabel || client.name, ctx.onBack || renderClub));
+        wrap.appendChild(el("h1", { style: "margin:0 0 2px;font-size:1.2rem", text: client.name }));
+        wrap.appendChild(el("div", { class: "cf-muted", style: "font-size:.85rem", text: monthLabel(MONTH) + " · " + totalsLine(d.totals) }));
+        wrap.appendChild(el("p", { class: "cf-muted", style: "margin:4px 0 10px;font-size:.82rem", text: "Tap a transaction to open its record — pay, discount, void or refund. Get these right before month-end." }));
+        var c = UI.card([]), l = el("div", { class: "cf-list" });
+        var txns = d.transactions || [];
+        if (!txns.length) l.appendChild(el("div", { class: "cf-empty", text: "No transactions." }));
+        txns.forEach(function (x) {
           var chip = { paid: "confirmed", owed: "held" }[x.state] || "";
-          return el("div", { class: "cf-item cf-item-tap", onclick: function () { drillTxn(x); } }, [
+          l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { drillTxn(x); } }, [
             el("span", { class: "cf-chip " + (x.category || ""), text: x.label }),
             el("div", { class: "cf-item-main" }, [
               el("div", { class: "cf-item-t", text: x.client_name }),
               el("div", { class: "cf-item-s", text: (x.at ? UI.fmtDate(x.at) : "") + (x.description ? " · " + x.description : "") }),
             ]),
             el("div", { style: "text-align:right" }, [
-              el("div", { style: "font-weight:700", text: money(x.billed_minor, CUR) }),
+              el("div", { style: "font-weight:700", text: money(x.billed_minor) }),
               el("span", { class: "cf-chip " + chip, style: "font-size:.7rem", text: x.state }),
             ]),
-          ]);
+          ]));
         });
-        show(drillScreen({
-          backLabel: client.name, onBack: function () { renderClients(svc, coachSel); },
-          title: client.name, crumb: svc.label + (coachSel ? " · " + coachSel.name : ""),
-          totals: d.totals, rows: rows, empty: "No transactions.",
-          note: "Tap a transaction to open its record — pay, discount, void or refund. Get these right before month-end.",
-        }));
+        c.appendChild(l); wrap.appendChild(c);
+        show(wrap);
       }, fail);
     }
-
     function drillTxn(x) {
       if (!cfg.onNavigate) return;
       if (x.booking_id) cfg.onNavigate({ kind: "event", id: x.booking_id });
@@ -200,8 +231,9 @@
       else if (x.order_id) cfg.onNavigate({ kind: "txn", id: x.order_id });
     }
 
-    renderServices();
-    return { refresh: renderServices };
+    if (isCoach) renderCoach(null, true);
+    else renderClub();
+    return { refresh: function () { if (isCoach) renderCoach(null, true); else renderClub(); } };
   }
 
   window.Widgets = window.Widgets || {};

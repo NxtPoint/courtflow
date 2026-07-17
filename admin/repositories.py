@@ -2295,53 +2295,167 @@ def _drill_totals(rows):
     }
 
 
-def earnings_coaches(session, *, club_id, month=None, category=None, coach_user_id=None):
-    """The admin revenue drill's SECOND level: a service's revenue split BY the coach who earned it —
-    each coach's fold (Billed − Discount − Written-off = Invoiced ; Paid + Outstanding), plus a single
-    'Club' row for orders no coach earned (court hire / membership). Same CTE, so the coach rows sum
-    EXACTLY to the service total. `coach_user_id` scopes the whole read (coach app) — not used by admin.
-    Guarded → empty. Each row carries coach_user_id (None = Club) + is_club so the widget drills on."""
+# The fold columns qualified for a `cat c` alias (the drill queries SELECT … FROM cat c).
+_FOLD_C = (_EARNINGS_FOLD_COLS.replace("billed_orig", "c.billed_orig")
+                              .replace("amount_minor", "c.amount_minor")
+                              .replace("status", "c.status"))
+
+
+def _coach_default_rate(session, club_id, coach_user_id):
+    """The CLUB-keeps commission fraction (0..1) for a coach from the most specific active,
+    product-agnostic commission_rule (a coach-specific rule wins over the club default). Used only to
+    PROJECT commission on OWED money when nothing's been collected yet this month (no realised rate)."""
+    try:
+        pct = session.execute(
+            text("SELECT commission_pct FROM billing.commission_rule "
+                 "WHERE club_id = :c AND active AND product_id IS NULL "
+                 "  AND (coach_user_id = :u OR coach_user_id IS NULL) "
+                 "ORDER BY (coach_user_id IS NOT NULL) DESC LIMIT 1"),
+            {"c": club_id, "u": str(coach_user_id)},
+        ).scalar()
+        return (float(pct) / 100.0) if pct is not None else 0.0
+    except Exception:
+        session.rollback()
+        return 0.0
+
+
+def _coach_realised_split(session, club_id, s_dt, e_dt):
+    """{coach_id: {club_minor, coach_minor, rate}} — the REALISED commission split (on collected lessons/
+    classes) from the commission engine (cockpit_coach_earnings). rate = club's share of collected (None
+    if nothing collected). The authoritative realised split; the drill projects owed at this same rate."""
+    out = {}
+    try:
+        for e in cockpit_coach_earnings(session, club_id=club_id, dt_from=s_dt, dt_to=e_dt):
+            cid = str(e["coach_user_id"])
+            club = int(e.get("commission_earned_minor") or 0)
+            coach = int(e.get("coach_earning_minor") or 0)
+            denom = club + coach
+            out[cid] = {"club_minor": club, "coach_minor": coach, "rate": (club / denom if denom > 0 else None)}
+    except Exception:
+        session.rollback()
+    return out
+
+
+def _coach_pnl_from_fold(f, rate, *, name=None, coach_user_id=None):
+    """Turn a coach's fold + a club-keeps rate into the P&L object the drill renders: total sales − disc
+    − write-off = net ; net = received + owed ; on EACH of received/owed the club commission comes off
+    (−coach / +club) — received is REALISED, owed is PROJECTED at the same rate (we always collect)."""
+    received = f["paid_minor"]
+    owed = f["outstanding_minor"]
+    club_recv = int(round(received * rate))
+    club_owed = int(round(owed * rate))
+    return {
+        "coach_user_id": coach_user_id, "name": name,
+        "sales_minor": f["billed_minor"], "discount_minor": f["discount_minor"],
+        "written_off_minor": f["written_off_minor"], "net_minor": f["invoiced_minor"],
+        "received_minor": received, "owed_minor": owed, "rate_pct": round(rate * 100, 1),
+        "club_comm_received_minor": club_recv, "coach_keeps_received_minor": received - club_recv,
+        "club_comm_owed_minor": club_owed, "coach_keeps_owed_minor": owed - club_owed,
+        "club_comm_total_minor": club_recv + club_owed,
+        "coach_keeps_total_minor": (received - club_recv) + (owed - club_owed),
+    }
+
+
+def revenue_coach_pnl(session, *, club_id, coach_user_id, month=None, coach_scope=False):
+    """ONE coach's earnings P&L for the month: total sales − discount − write-off = net ; net = received
+    + owed ; commission split (coach keeps − / club +) on received (realised) and owed (projected at the
+    same rate). Feeds the admin coach-detail screen AND the coach app's own Money landing. `coach_scope`
+    restricts the CTE to the coach's own orders (the coach app); admin filters by attribution. Guarded."""
     cur = _club_currency(session, club_id=club_id)
     ym, s_dt, e_dt = _earnings_month_bounds(session, month)
-    is_coach = coach_user_id is not None
-    cte = _earnings_cte(coach=is_coach)
+    cte = _earnings_cte(coach=coach_scope)
+    params = {"c": club_id, "s": s_dt, "e": e_dt, "coach": str(coach_user_id)}
+    where_sql = "" if coach_scope else " WHERE c.coach_user_id = :coach"
+    try:
+        row = session.execute(text(cte + "SELECT " + _FOLD_C + " FROM cat c" + where_sql), params).mappings().first()
+        f = _fold_from_row(row) if row else _fold_from_row({})
+    except Exception:
+        session.rollback()
+        f = _fold_from_row({})
+    rs = _coach_realised_split(session, club_id, s_dt, e_dt).get(str(coach_user_id))
+    rate = rs["rate"] if (rs and rs["rate"] is not None) else _coach_default_rate(session, club_id, coach_user_id)
+    name = session.execute(
+        text("SELECT COALESCE(cp.display_name, NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)),''), u.email) "
+             "FROM iam.\"user\" u LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id AND cp.club_id = :c "
+             "WHERE u.id = :u"),
+        {"c": club_id, "u": str(coach_user_id)},
+    ).scalar()
+    pnl = _coach_pnl_from_fold(f, rate, name=(name or "Coach"), coach_user_id=str(coach_user_id))
+    pnl.update({"month": ym, "currency": cur, "scope": ("coach" if coach_scope else "admin")})
+    return pnl
+
+
+def revenue_club_overview(session, *, club_id, month=None):
+    """The CLUB earnings P&L (the Money tab's revenue landing, admin): how much the CLUB makes = its DIRECT
+    services (court/membership/pack it runs, 100% club) + the COMMISSION it takes from each coach. Returns
+    `direct` (per-category club-run fold, drillable to clients), `coaches` (each coach's P&L incl. the club
+    commission), and `club` (the roll-up — collected now + projected when all owed lands, and Club-keeps vs
+    Coaches-keep). Every fold rides the ONE CTE, so it reconciles. Guarded → zeros."""
+    cur = _club_currency(session, club_id=club_id)
+    ym, s_dt, e_dt = _earnings_month_bounds(session, month)
+    cte = _earnings_cte(coach=False)
     params = {"c": club_id, "s": s_dt, "e": e_dt}
-    if is_coach:
-        params["coach"] = str(coach_user_id)
-    cat = (category or "").strip().lower()
-    where_sql = ""
-    if cat in _SVC_LABELS:
-        where_sql = " WHERE c.category = :cat"
-        params["cat"] = cat
+    realised = _coach_realised_split(session, club_id, s_dt, e_dt)
+
     coaches = []
     try:
         rows = session.execute(
             text(cte + "SELECT c.coach_user_id, "
-                 "COALESCE(cp.display_name, NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)),''), "
-                 "         u.email) AS name, "
-                 + _EARNINGS_FOLD_COLS.replace("billed_orig", "c.billed_orig")
-                                      .replace("amount_minor", "c.amount_minor")
-                                      .replace("status", "c.status")
-                 + " FROM cat c LEFT JOIN iam.\"user\" u ON u.id = c.coach_user_id "
-                 "LEFT JOIN iam.coach_profile cp ON cp.user_id = c.coach_user_id AND cp.club_id = :c"
-                 + where_sql + " GROUP BY c.coach_user_id, cp.display_name, u.first_name, u.surname, u.email "
+                 "COALESCE(cp.display_name, NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)),''), u.email) AS name, "
+                 + _FOLD_C + " FROM cat c LEFT JOIN iam.\"user\" u ON u.id = c.coach_user_id "
+                 "LEFT JOIN iam.coach_profile cp ON cp.user_id = c.coach_user_id AND cp.club_id = :c "
+                 "WHERE c.coach_user_id IS NOT NULL "
+                 "GROUP BY c.coach_user_id, cp.display_name, u.first_name, u.surname, u.email "
                  "ORDER BY billed DESC"),
             params,
         ).mappings().all()
         for r in rows:
+            cid = str(r["coach_user_id"])
             f = _fold_from_row(r)
-            cid = str(r["coach_user_id"]) if r["coach_user_id"] else None
-            f["coach_user_id"] = cid
-            f["is_club"] = cid is None
-            f["name"] = "Club" if cid is None else (r["name"] or "Coach")
-            coaches.append(f)
+            rs = realised.get(cid)
+            rate = rs["rate"] if (rs and rs["rate"] is not None) else _coach_default_rate(session, club_id, cid)
+            coaches.append(_coach_pnl_from_fold(f, rate, name=(r["name"] or "Coach"), coach_user_id=cid))
     except Exception:
         session.rollback()
         coaches = []
-    return {"month": ym, "currency": cur, "scope": ("coach" if is_coach else "admin"),
-            "category": (cat if cat in _SVC_LABELS else None),
-            "label": _SVC_LABELS.get(cat, "Revenue"),
-            "coaches": coaches, "totals": _drill_totals(coaches)}
+
+    direct = []
+    try:
+        rows = session.execute(
+            text(cte + "SELECT c.category, " + _FOLD_C + " FROM cat c WHERE c.coach_user_id IS NULL "
+                 "GROUP BY c.category"),
+            params,
+        ).mappings().all()
+        by_cat = {r["category"]: r for r in rows}
+        for k in _SVC_ORDER:
+            r = by_cat.get(k)
+            if not r or int(r["billed"] or 0) <= 0:
+                continue
+            f = _fold_from_row(r)
+            f["key"] = k
+            f["label"] = _SVC_LABELS[k]
+            direct.append(f)
+    except Exception:
+        session.rollback()
+        direct = []
+
+    direct_received = sum(d["paid_minor"] for d in direct)
+    direct_net = sum(d["invoiced_minor"] for d in direct)
+    direct_owed = sum(d["outstanding_minor"] for d in direct)
+    comm_recv = sum(c["club_comm_received_minor"] for c in coaches)
+    comm_owed = sum(c["club_comm_owed_minor"] for c in coaches)
+    keep_recv = sum(c["coach_keeps_received_minor"] for c in coaches)
+    keep_owed = sum(c["coach_keeps_owed_minor"] for c in coaches)
+    club = {
+        "direct_received_minor": direct_received, "direct_net_minor": direct_net, "direct_owed_minor": direct_owed,
+        "commission_received_minor": comm_recv, "commission_owed_minor": comm_owed,
+        "earnings_collected_minor": direct_received + comm_recv,
+        "earnings_projected_minor": direct_net + comm_recv + comm_owed,
+        "coaches_keep_collected_minor": keep_recv,
+        "coaches_keep_projected_minor": keep_recv + keep_owed,
+    }
+    return {"month": ym, "currency": cur, "scope": "admin",
+            "direct": direct, "coaches": coaches, "club": club}
 
 
 def earnings_clients(session, *, club_id, month=None, category=None, earned_by=None, coach_user_id=None):

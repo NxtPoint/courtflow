@@ -339,15 +339,11 @@
     //   services:[{key,label,billed_minor,collected_minor,outstanding_minor,count}]}
     //   + services:[{key,label,...fold}], clients:[{user_id,name,...fold}]
     earningsByService: function (month) { return A().apiJSON("/api/admin/financials/earnings-by-service" + (month ? ("?month=" + month) : "")); },
-    // GET /api/admin/financials/revenue-coaches?category=&month= -> {coaches:[{coach_user_id|null,is_club,
-    //   name,...fold}], totals, label} — one service split by the coach who earned it (+ a Club row).
-    earningsCoaches: function (opts) {
-      opts = opts || {};
-      var q = [];
-      if (opts.category) q.push("category=" + encodeURIComponent(opts.category));
-      if (opts.month) q.push("month=" + encodeURIComponent(opts.month));
-      return A().apiJSON("/api/admin/financials/revenue-coaches" + (q.length ? ("?" + q.join("&")) : ""));
-    },
+    // GET /api/admin/financials/revenue-club?month= -> {direct:[{key,label,...fold}], coaches:[{coach_user_id,
+    //   name,sales_minor,net_minor,received_minor,owed_minor,club_comm_*,coach_keeps_*}], club:{...roll-up}}
+    revenueClub: function (month) { return A().apiJSON("/api/admin/financials/revenue-club" + (month ? ("?month=" + encodeURIComponent(month)) : "")); },
+    // GET /api/admin/financials/revenue-coach/:coach_user_id?month= -> ONE coach P&L object.
+    revenueCoach: function (coachUserId, month) { return A().apiJSON("/api/admin/financials/revenue-coach/" + encodeURIComponent(coachUserId) + (month ? ("?month=" + encodeURIComponent(month)) : "")); },
     // GET /api/admin/financials/revenue-clients?category=&earned_by=&month= -> {clients:[{user_id,name,
     //   ...fold}], totals, label} — a service (+ optional coach/'club') split by client.
     earningsClients: function (opts) {
