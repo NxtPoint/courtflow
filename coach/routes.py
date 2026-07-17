@@ -652,6 +652,22 @@ def get_coach_earnings_by_service():
     return jsonify(data), 200
 
 
+@coach_bp.get("/financials/revenue-clients")
+def get_coach_earnings_clients():
+    """The coach revenue drill's CLIENT level — within a service, this coach's clients (coach-scoped).
+    Same admin reader, coach-scoped, so the coach skips the by-coach level (they ARE the coach)."""
+    p, err = _coach()
+    if err:
+        return err
+    from admin import repositories as admin_repo
+    category = (request.args.get("category") or "").strip() or None
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = admin_repo.earnings_clients(s, club_id=p.club_id, category=category,
+                                           month=month, coach_user_id=p.user_id)
+    return jsonify(data), 200
+
+
 @coach_bp.get("/financials/transactions")
 def get_coach_earnings_transactions():
     """The coach's month → (SERVICE and/or CLIENT) → TRANSACTIONS drill — the same reader as admin, coach-

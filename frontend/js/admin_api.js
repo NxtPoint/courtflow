@@ -339,13 +339,33 @@
     //   services:[{key,label,billed_minor,collected_minor,outstanding_minor,count}]}
     //   + services:[{key,label,...fold}], clients:[{user_id,name,...fold}]
     earningsByService: function (month) { return A().apiJSON("/api/admin/financials/earnings-by-service" + (month ? ("?month=" + month) : "")); },
-    // GET /api/admin/financials/transactions?category=&user_id=&month= -> {transactions:[{order_id,
+    // GET /api/admin/financials/revenue-coaches?category=&month= -> {coaches:[{coach_user_id|null,is_club,
+    //   name,...fold}], totals, label} — one service split by the coach who earned it (+ a Club row).
+    earningsCoaches: function (opts) {
+      opts = opts || {};
+      var q = [];
+      if (opts.category) q.push("category=" + encodeURIComponent(opts.category));
+      if (opts.month) q.push("month=" + encodeURIComponent(opts.month));
+      return A().apiJSON("/api/admin/financials/revenue-coaches" + (q.length ? ("?" + q.join("&")) : ""));
+    },
+    // GET /api/admin/financials/revenue-clients?category=&earned_by=&month= -> {clients:[{user_id,name,
+    //   ...fold}], totals, label} — a service (+ optional coach/'club') split by client.
+    earningsClients: function (opts) {
+      opts = opts || {};
+      var q = [];
+      if (opts.category) q.push("category=" + encodeURIComponent(opts.category));
+      if (opts.earned_by) q.push("earned_by=" + encodeURIComponent(opts.earned_by));
+      if (opts.month) q.push("month=" + encodeURIComponent(opts.month));
+      return A().apiJSON("/api/admin/financials/revenue-clients" + (q.length ? ("?" + q.join("&")) : ""));
+    },
+    // GET /api/admin/financials/transactions?category=&user_id=&earned_by=&month= -> {transactions:[{order_id,
     //   booking_id,enrolment_id,user_id,client_name,label,category,description,at,billed_minor,state}], totals}
     earningsTransactions: function (opts) {
       opts = opts || {};
       var q = [];
       if (opts.category) q.push("category=" + encodeURIComponent(opts.category));
       if (opts.user_id) q.push("user_id=" + encodeURIComponent(opts.user_id));
+      if (opts.earned_by) q.push("earned_by=" + encodeURIComponent(opts.earned_by));
       if (opts.month) q.push("month=" + encodeURIComponent(opts.month));
       return A().apiJSON("/api/admin/financials/transactions" + (q.length ? ("?" + q.join("&")) : ""));
     },

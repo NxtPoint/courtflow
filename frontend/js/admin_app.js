@@ -702,12 +702,14 @@
   //  through Widgets.ClientRecord actions calling AdminAPI.revokeMembership / AdminAPI.voidOrder.)
   // ---- MONEY (Setup-style: a clean section menu → focused pages) ----------------------------
   var MONEY_MONTH = null; // 'YYYY-MM' for Sales by day (null = current month)
-  // The Money tab LEADS with earnings-by-service (Widgets.Earnings). These are the secondary actions
-  // below it. (Coach settlement + Online payments were retired — settlement moved to the coach's own
-  // balance in the earnings band; "online payments" duplicated Sales by day, which now nets reversals.)
+  // The Money tab is a MENU: the reconciling band + these sections. "Revenue per service" is the nested
+  // drill (service → coach/club → client → transaction → the shared record). (Coach settlement + Online
+  // payments were retired — settlement lives in the coach's own balance; "online payments" duplicated
+  // Sales by day, which now nets reversals.)
   var MONEY_SECTIONS = [
     ["invoice", "New invoice", "Bill a client for a service (× times) or a custom fee — emailed to pay online"],
     ["sales", "Sales by day", "Daily takings incl. Yoco reversals — net income"],
+    ["revenue", "Revenue per service", "Total by service → coach/club → client → transaction"],
     ["bookings", "Bookings by day", "Every booking — client, service and coach"],
     ["approvals", "Approvals", "Refund requests awaiting your decision"],
     ["activity", "Club activity", "Every payment, refund and adjustment"],
@@ -716,6 +718,7 @@
   function renderMoney(section, sub) {
     if (section === "invoice") return moneyInvoice();
     if (section === "sales") return moneySales();
+    if (section === "revenue") return moneyRevenue();
     if (section === "bookings") return moneyBookings();
     if (section === "approvals") return moneyApprovals();
     if (section === "activity") return moneyActivity();
@@ -744,18 +747,37 @@
       el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { onShift(1); } }),
     ]);
   }
-  // The Money tab = the ONE shared Widgets.Earnings (admin scope = the aggregate of the whole club),
-  // service-first, drilling to transactions → the shared record. A compact actions footer (New invoice,
-  // Sales by day, etc.) sits below it. The coach sees the SAME widget, scoped to their own services.
-  function moneyMenu() {
+  // The Money HOME = the reconciling money band (a quick glance) + the section menu. "Revenue per service"
+  // opens the nested drill (moneyRevenue); the rest are the day/approval/activity surfaces.
+  async function moneyMenu() {
+    loading();
+    var data = {};
+    try { data = await window.AdminAPI.earningsByService(MONEY_MONTH); MONEY_MONTH = data.month || MONEY_MONTH; }
+    catch (e) { data = {}; }
+    var wrap = el("div", {});
+    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:10px" }, [
+      el("h1", { style: "margin:0", text: "Money" }),
+      moneyMonthPager(function (n) { MONEY_MONTH = addMonth(MONEY_MONTH || data.month, n); moneyMenu(); }),
+    ]));
+    wrap.appendChild(card([clubMoneyBand(data)]));
+    wrap.appendChild(moneyActionsFooter());
+    set(wrap);
+  }
+  // The nested REVENUE drill — the ONE shared Widgets.Earnings (admin scope = the whole club): service →
+  // by coach/club → client → transactions → the shared record. The coach sees the SAME widget, their slice
+  // (skipping the by-coach level). Reached from the Money menu; back returns there.
+  function moneyRevenue() {
     var host = el("div", {});
     set(host);
     window.Widgets.Earnings.mount(host, {
       scope: { role: "admin" },
-      title: "Money",
+      title: "Revenue per service",
       month: MONEY_MONTH,
+      back: { label: "Money", hash: "#/money" },
       data: {
-        get: function (month) { return window.AdminAPI.earningsByService(month).then(function (d) { MONEY_MONTH = d.month || MONEY_MONTH; return d; }); },
+        service: function (month) { return window.AdminAPI.earningsByService(month).then(function (d) { MONEY_MONTH = d.month || MONEY_MONTH; return d; }); },
+        coaches: function (opts) { return window.AdminAPI.earningsCoaches(opts); },
+        clients: function (opts) { return window.AdminAPI.earningsClients(opts); },
         txns: function (opts) { return window.AdminAPI.earningsTransactions(opts); },
       },
       onNavigate: function (t) {
@@ -765,12 +787,11 @@
         else if (t.kind === "txn") go("#/txn/" + t.id);
         else go("#/event/" + t.id);
       },
-      homeExtra: function () { return moneyActionsFooter(); },
     });
   }
-  // The secondary actions below the earnings view (New invoice, Sales by day, Bookings, Approvals, Activity).
+  // The section menu (New invoice, Sales by day, Revenue per service, Bookings, Approvals, Activity).
   function moneyActionsFooter() {
-    var c = card([window.CRMUI.sectionHead("More")]);
+    var c = card([]);
     var l = el("div", { class: "cf-list" });
     MONEY_SECTIONS.forEach(function (s) {
       var trailing = el("span", { class: "cf-muted", text: "›" });

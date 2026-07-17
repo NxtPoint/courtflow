@@ -1274,21 +1274,52 @@ def get_earnings_by_service():
     return jsonify(data), 200
 
 
+@admin_bp.get("/financials/revenue-coaches")
+def get_earnings_coaches():
+    """The revenue drill's SECOND level: one service's revenue split by the COACH who earned it (+ a single
+    'Club' row for uncoached court/membership). `?category=<svc>&month=YYYY-MM`. Sums to the service total."""
+    p, err = _admin()
+    if err:
+        return err
+    category = (request.args.get("category") or "").strip() or None
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = repo.earnings_coaches(s, club_id=p.club_id, category=category, month=month)
+    return jsonify(data), 200
+
+
+@admin_bp.get("/financials/revenue-clients")
+def get_earnings_clients():
+    """The revenue drill's CLIENT level: within a service (and, optionally, a chosen coach/'club'), the
+    per-client fold. `?category=<svc>&earned_by=<coach_uuid|club>&month=YYYY-MM`. Sums to the coach total."""
+    p, err = _admin()
+    if err:
+        return err
+    category = (request.args.get("category") or "").strip() or None
+    earned_by = (request.args.get("earned_by") or "").strip() or None
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = repo.earnings_clients(s, club_id=p.club_id, category=category,
+                                     earned_by=earned_by, month=month)
+    return jsonify(data), 200
+
+
 @admin_bp.get("/financials/transactions")
 def get_earnings_transactions():
     """The month → (SERVICE and/or CLIENT) → TRANSACTIONS drill: the individual orders behind a service
     or a client this month, each with its billed/paid/owed state + a record link so it opens the shared
-    transaction record. `?category=lesson|court|class|membership|pack|other` and/or `?user_id=<id>`,
-    `&month=YYYY-MM`. Sums EXACTLY to the service's / client's row in earnings-by-service."""
+    transaction record. `?category=lesson|court|class|membership|pack|other`, `?user_id=<id>`,
+    `?earned_by=<coach_uuid|club>`, `&month=YYYY-MM`. Sums EXACTLY to the service's / client's row."""
     p, err = _admin()
     if err:
         return err
     category = (request.args.get("category") or "").strip() or None
     user_id = (request.args.get("user_id") or "").strip() or None
+    earned_by = (request.args.get("earned_by") or "").strip() or None
     month = (request.args.get("month") or "").strip() or None
     with session_scope() as s:
         data = repo.earnings_transactions(s, club_id=p.club_id, category=category,
-                                          user_id=user_id, month=month)
+                                          user_id=user_id, earned_by=earned_by, month=month)
     return jsonify(data), 200
 
 

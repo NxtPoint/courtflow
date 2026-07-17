@@ -116,6 +116,14 @@
     money: function (month) { return A().apiJSON("/api/coach/money" + (month ? ("?month=" + enc(month)) : "")); },
     // Earnings by service (the coach's own slice — same shape/widget as admin).
     earningsByService: function (month) { return A().apiJSON("/api/coach/financials/earnings-by-service" + (month ? ("?month=" + enc(month)) : "")); },
+    // The coach revenue drill's CLIENT level (coach-scoped — no by-coach level; they ARE the coach).
+    earningsClients: function (opts) {
+      opts = opts || {};
+      var q = [];
+      if (opts.category) q.push("category=" + enc(opts.category));
+      if (opts.month) q.push("month=" + enc(opts.month));
+      return A().apiJSON("/api/coach/financials/revenue-clients" + (q.length ? ("?" + q.join("&")) : ""));
+    },
     earningsTransactions: function (opts) {
       opts = opts || {};
       var q = [];

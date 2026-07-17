@@ -1998,7 +1998,18 @@ def _earnings_cte(coach=False):
                  WHERE ol.order_id = ord.id ORDER BY ol.created_at LIMIT 1) AS description,
                EXISTS(SELECT 1 FROM billing.token_wallet w WHERE w.order_id = ord.id) AS is_pack,
                EXISTS(SELECT 1 FROM billing.membership_subscription ms
-                       WHERE ms.order_id = ord.id) AS is_membership
+                       WHERE ms.order_id = ord.id) AS is_membership,
+               -- The COACH who EARNED this order (lesson booking / class session / pack sold); NULL = the
+               -- club (court hire, membership). Drives the admin revenue drill's by-coach/club level.
+               COALESCE(
+                 (SELECT bk.coach_user_id FROM billing.order_line ol JOIN diary.booking bk ON bk.id = ol.booking_id
+                   WHERE ol.order_id = ord.id AND bk.coach_user_id IS NOT NULL LIMIT 1),
+                 (SELECT cs.coach_user_id FROM billing.order_line ol JOIN diary.enrolment e ON e.id = ol.enrolment_id
+                   JOIN diary.class_session cs ON cs.id = e.class_session_id
+                   WHERE ol.order_id = ord.id AND cs.coach_user_id IS NOT NULL LIMIT 1),
+                 (SELECT w.coach_user_id FROM billing.token_wallet w
+                   WHERE w.order_id = ord.id AND w.coach_user_id IS NOT NULL LIMIT 1)
+               ) AS coach_user_id
         FROM billing."order" ord
         WHERE ord.club_id = :c
           AND ord.created_at >= :s AND ord.created_at < :e
@@ -2008,7 +2019,7 @@ def _earnings_cte(coach=False):
     ),
     cat AS (
         SELECT id, user_id, status, amount_minor, billed_orig, created_at,
-               booking_id, enrolment_id, description,
+               booking_id, enrolment_id, description, coach_user_id,
                CASE WHEN is_pack THEN 'pack'
                     WHEN is_membership THEN 'membership'
                     WHEN kind = 'lesson' THEN 'lesson'
@@ -2188,13 +2199,26 @@ def earnings_by_service(session, *, club_id, month=None, coach_user_id=None):
             "summary": summary, "services": services, "clients": clients}
 
 
+def _earned_by_clause(earned_by, params):
+    """Shared filter for the admin drill's coach/club level: 'club' → orders NOT earned by any coach
+    (court hire / membership); a coach uuid → orders that coach earned. Returns a SQL fragment (may be '')
+    and mutates `params`. Coach-scoped readers don't use this (the scope already restricts the set)."""
+    if not earned_by:
+        return ""
+    if str(earned_by).lower() == "club":
+        return "c.coach_user_id IS NULL"
+    params["eb"] = str(earned_by)
+    return "c.coach_user_id = :eb"
+
+
 def earnings_transactions(session, *, club_id, month=None, category=None, user_id=None,
-                          coach_user_id=None):
+                          coach_user_id=None, earned_by=None):
     """The month → (SERVICE and/or CLIENT) → TRANSACTIONS drill. Each row is ONE order (a booking / class /
     purchase) with its billed/paid/owed state + the RECORD LINK (booking_id / enrolment_id / order_id) so
     it drills to the SHARED transaction record (edit / void / discount / refund — the same record the coach
-    sees). Filter by `category` (a service) and/or `user_id` (a client); coach-scoped when coach_user_id.
-    Same CTE as earnings_by_service, so the rows sum EXACTLY to that service's / client's totals. Guarded."""
+    sees). Filter by `category` (a service), `user_id` (a client) and/or `earned_by` (the admin drill's
+    coach/'club' node); coach-scoped when coach_user_id. Same CTE as earnings_by_service, so the rows sum
+    EXACTLY to that service's / client's totals. Guarded."""
     cur = _club_currency(session, club_id=club_id)
     ym, s_dt, e_dt = _earnings_month_bounds(session, month)
     is_coach = coach_user_id is not None
@@ -2210,6 +2234,9 @@ def earnings_transactions(session, *, club_id, month=None, category=None, user_i
     if user_id:
         where.append("c.user_id = :u")
         params["u"] = str(user_id)
+    eb = _earned_by_clause(earned_by, params)
+    if eb:
+        where.append(eb)
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
     rows = []
     try:
@@ -2256,6 +2283,115 @@ def earnings_transactions(session, *, club_id, month=None, category=None, user_i
             "outstanding_minor": sum(t["amount_minor"] for t in txns if t["status"] == "open"),
         },
     }
+
+
+def _drill_totals(rows):
+    """Sum a set of fold dicts into a {billed,invoiced,paid,outstanding} header total for a drill level."""
+    return {
+        "billed_minor": sum(x["billed_minor"] for x in rows),
+        "invoiced_minor": sum(x["invoiced_minor"] for x in rows),
+        "paid_minor": sum(x["paid_minor"] for x in rows),
+        "outstanding_minor": sum(x["outstanding_minor"] for x in rows),
+    }
+
+
+def earnings_coaches(session, *, club_id, month=None, category=None, coach_user_id=None):
+    """The admin revenue drill's SECOND level: a service's revenue split BY the coach who earned it —
+    each coach's fold (Billed − Discount − Written-off = Invoiced ; Paid + Outstanding), plus a single
+    'Club' row for orders no coach earned (court hire / membership). Same CTE, so the coach rows sum
+    EXACTLY to the service total. `coach_user_id` scopes the whole read (coach app) — not used by admin.
+    Guarded → empty. Each row carries coach_user_id (None = Club) + is_club so the widget drills on."""
+    cur = _club_currency(session, club_id=club_id)
+    ym, s_dt, e_dt = _earnings_month_bounds(session, month)
+    is_coach = coach_user_id is not None
+    cte = _earnings_cte(coach=is_coach)
+    params = {"c": club_id, "s": s_dt, "e": e_dt}
+    if is_coach:
+        params["coach"] = str(coach_user_id)
+    cat = (category or "").strip().lower()
+    where_sql = ""
+    if cat in _SVC_LABELS:
+        where_sql = " WHERE c.category = :cat"
+        params["cat"] = cat
+    coaches = []
+    try:
+        rows = session.execute(
+            text(cte + "SELECT c.coach_user_id, "
+                 "COALESCE(cp.display_name, NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)),''), "
+                 "         u.email) AS name, "
+                 + _EARNINGS_FOLD_COLS.replace("billed_orig", "c.billed_orig")
+                                      .replace("amount_minor", "c.amount_minor")
+                                      .replace("status", "c.status")
+                 + " FROM cat c LEFT JOIN iam.\"user\" u ON u.id = c.coach_user_id "
+                 "LEFT JOIN iam.coach_profile cp ON cp.user_id = c.coach_user_id AND cp.club_id = :c"
+                 + where_sql + " GROUP BY c.coach_user_id, cp.display_name, u.first_name, u.surname, u.email "
+                 "ORDER BY billed DESC"),
+            params,
+        ).mappings().all()
+        for r in rows:
+            f = _fold_from_row(r)
+            cid = str(r["coach_user_id"]) if r["coach_user_id"] else None
+            f["coach_user_id"] = cid
+            f["is_club"] = cid is None
+            f["name"] = "Club" if cid is None else (r["name"] or "Coach")
+            coaches.append(f)
+    except Exception:
+        session.rollback()
+        coaches = []
+    return {"month": ym, "currency": cur, "scope": ("coach" if is_coach else "admin"),
+            "category": (cat if cat in _SVC_LABELS else None),
+            "label": _SVC_LABELS.get(cat, "Revenue"),
+            "coaches": coaches, "totals": _drill_totals(coaches)}
+
+
+def earnings_clients(session, *, club_id, month=None, category=None, earned_by=None, coach_user_id=None):
+    """The revenue drill's CLIENT level: within a service (and, for admin, a chosen coach/'club'), the
+    per-client fold. `earned_by` = a coach uuid or 'club' (admin's picked coach node); `coach_user_id`
+    scopes the whole read (coach app). Same CTE → the client rows sum EXACTLY to the coach/service total.
+    Chase-first ordering (outstanding, then billed). Guarded → empty."""
+    cur = _club_currency(session, club_id=club_id)
+    ym, s_dt, e_dt = _earnings_month_bounds(session, month)
+    is_coach = coach_user_id is not None
+    cte = _earnings_cte(coach=is_coach)
+    params = {"c": club_id, "s": s_dt, "e": e_dt}
+    if is_coach:
+        params["coach"] = str(coach_user_id)
+    where = []
+    cat = (category or "").strip().lower()
+    if cat in _SVC_LABELS:
+        where.append("c.category = :cat")
+        params["cat"] = cat
+    eb = _earned_by_clause(earned_by, params)
+    if eb:
+        where.append(eb)
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    clients = []
+    try:
+        rows = session.execute(
+            text(cte + "SELECT c.user_id, "
+                 "COALESCE(cp.display_name, NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)),''), "
+                 "         u.email, 'Walk-in / unknown') AS name, "
+                 + _EARNINGS_FOLD_COLS.replace("billed_orig", "c.billed_orig")
+                                      .replace("amount_minor", "c.amount_minor")
+                                      .replace("status", "c.status")
+                 + " FROM cat c LEFT JOIN iam.\"user\" u ON u.id = c.user_id "
+                 "LEFT JOIN iam.coach_profile cp ON cp.user_id = c.user_id AND cp.club_id = :c"
+                 + where_sql + " GROUP BY c.user_id, cp.display_name, u.first_name, u.surname, u.email "
+                 "ORDER BY outstanding DESC, billed DESC"),
+            params,
+        ).mappings().all()
+        for r in rows:
+            f = _fold_from_row(r)
+            f["user_id"] = str(r["user_id"]) if r["user_id"] else None
+            f["name"] = r["name"] or "Walk-in / unknown"
+            clients.append(f)
+    except Exception:
+        session.rollback()
+        clients = []
+    return {"month": ym, "currency": cur,
+            "category": (cat if cat in _SVC_LABELS else None),
+            "label": _SVC_LABELS.get(cat, "Revenue"),
+            "clients": clients, "totals": _drill_totals(clients)}
 
 
 def admin_home(session, *, club_id):
