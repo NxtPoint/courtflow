@@ -337,10 +337,18 @@
     //   summary:{billed_minor,collected_minor,outstanding_minor,club_keeps_minor,
     //            coach_payouts_due_minor,total_owed_now_minor,active_members,mrr_minor},
     //   services:[{key,label,billed_minor,collected_minor,outstanding_minor,count}]}
+    //   + services:[{key,label,...fold}], clients:[{user_id,name,...fold}]
     earningsByService: function (month) { return A().apiJSON("/api/admin/financials/earnings-by-service" + (month ? ("?month=" + month) : "")); },
-    // GET /api/admin/financials/service-clients?category=&month= -> {month,currency,category,label,
-    //   clients:[{user_id,name,billed_minor,collected_minor,outstanding_minor,count}], totals:{...}}
-    earningsServiceClients: function (category, month) { return A().apiJSON("/api/admin/financials/service-clients?category=" + encodeURIComponent(category) + (month ? ("&month=" + month) : "")); },
+    // GET /api/admin/financials/transactions?category=&user_id=&month= -> {transactions:[{order_id,
+    //   booking_id,enrolment_id,user_id,client_name,label,category,description,at,billed_minor,state}], totals}
+    earningsTransactions: function (opts) {
+      opts = opts || {};
+      var q = [];
+      if (opts.category) q.push("category=" + encodeURIComponent(opts.category));
+      if (opts.user_id) q.push("user_id=" + encodeURIComponent(opts.user_id));
+      if (opts.month) q.push("month=" + encodeURIComponent(opts.month));
+      return A().apiJSON("/api/admin/financials/transactions" + (q.length ? ("?" + q.join("&")) : ""));
+    },
 
     // ---- club <-> coach settlement (payouts + aging) ---------------------
     // GET /api/admin/financials/settlement -> {clients:[{user_id,name,owed_minor,age_days,bucket}],

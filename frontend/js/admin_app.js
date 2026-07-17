@@ -702,14 +702,14 @@
   //  through Widgets.ClientRecord actions calling AdminAPI.revokeMembership / AdminAPI.voidOrder.)
   // ---- MONEY (Setup-style: a clean section menu → focused pages) ----------------------------
   var MONEY_MONTH = null; // 'YYYY-MM' for Sales by day (null = current month)
+  // The Money tab LEADS with earnings-by-service (Widgets.Earnings). These are the secondary actions
+  // below it. (Coach settlement + Online payments were retired — settlement moved to the coach's own
+  // balance in the earnings band; "online payments" duplicated Sales by day, which now nets reversals.)
   var MONEY_SECTIONS = [
     ["invoice", "New invoice", "Bill a client for a service (× times) or a custom fee — emailed to pay online"],
-    ["sales", "Sales by day", "Daily takings — client, service and amount"],
+    ["sales", "Sales by day", "Daily takings incl. Yoco reversals — net income"],
     ["bookings", "Bookings by day", "Every booking — client, service and coach"],
-    ["revenue", "Earnings by service", "Billed, collected & outstanding per service, by month"],
-    ["settlement", "Coach settlement", "What each coach is owed · the club's cut"],
     ["approvals", "Approvals", "Refund requests awaiting your decision"],
-    ["payments", "Online payments", "Recent card payments · refund"],
     ["activity", "Club activity", "Every payment, refund and adjustment"],
   ];
   function clubCur() { return (CLUB && CLUB.currency_code) || "ZAR"; }
@@ -717,10 +717,7 @@
     if (section === "invoice") return moneyInvoice();
     if (section === "sales") return moneySales();
     if (section === "bookings") return moneyBookings();
-    if (section === "revenue") return sub ? moneyServiceClients(sub) : moneyRevenue();
-    if (section === "settlement") return moneySettlement();
     if (section === "approvals") return moneyApprovals();
-    if (section === "payments") return moneyPayments();
     if (section === "activity") return moneyActivity();
     return moneyMenu();
   }
@@ -747,29 +744,51 @@
       el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { onShift(1); } }),
     ]);
   }
-  async function moneyMenu() {
-    loading();
-    var data = { summary: {}, services: [] }, pending = 0;
-    try { data = await window.AdminAPI.earningsByService(MONEY_MONTH); } catch (e) {}
-    try { pending = ((await window.AdminAPI.refundRequests({ status: "pending" })).requests || []).length; } catch (e) {}
-    MONEY_MONTH = data.month || MONEY_MONTH;
-    var wrap = el("div", {});
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:10px" }, [
-      el("h1", { style: "margin:0", text: "Money" }),
-      moneyMonthPager(function (n) { MONEY_MONTH = addMonth(MONEY_MONTH, n); moneyMenu(); }),
-    ]));
-    wrap.appendChild(card([clubMoneyBand(data)]));
-    var c = card([]), l = el("div", { class: "cf-list" });
-    MONEY_SECTIONS.forEach(function (s) {
-      var badge = (s[0] === "approvals" && pending) ? el("span", { class: "cf-chip held", text: pending })
-        : el("span", { class: "cf-muted", text: "›" });
-      l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/money/" + s[0]); } }, [
-        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: s[1] }), el("div", { class: "cf-item-s", text: s[2] })]),
-        badge,
-      ]));
+  // The Money tab = the ONE shared Widgets.Earnings (admin scope = the aggregate of the whole club),
+  // service-first, drilling to transactions → the shared record. A compact actions footer (New invoice,
+  // Sales by day, etc.) sits below it. The coach sees the SAME widget, scoped to their own services.
+  function moneyMenu() {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.Earnings.mount(host, {
+      scope: { role: "admin" },
+      title: "Money",
+      month: MONEY_MONTH,
+      data: {
+        get: function (month) { return window.AdminAPI.earningsByService(month).then(function (d) { MONEY_MONTH = d.month || MONEY_MONTH; return d; }); },
+        txns: function (opts) { return window.AdminAPI.earningsTransactions(opts); },
+      },
+      onNavigate: function (t) {
+        if (!t || !t.id) return;
+        if (t.kind === "person") go("#/person/" + t.id);
+        else if (t.kind === "class") go("#/class/" + t.id);
+        else if (t.kind === "txn") go("#/txn/" + t.id);
+        else go("#/event/" + t.id);
+      },
+      homeExtra: function () { return moneyActionsFooter(); },
     });
-    c.appendChild(l); wrap.appendChild(c);
-    set(wrap);
+  }
+  // The secondary actions below the earnings view (New invoice, Sales by day, Bookings, Approvals, Activity).
+  function moneyActionsFooter() {
+    var c = card([window.CRMUI.sectionHead("More")]);
+    var l = el("div", { class: "cf-list" });
+    MONEY_SECTIONS.forEach(function (s) {
+      var trailing = el("span", { class: "cf-muted", text: "›" });
+      var row = el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/money/" + s[0]); } }, [
+        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: s[1] }), el("div", { class: "cf-item-s", text: s[2] })]),
+        trailing,
+      ]);
+      l.appendChild(row);
+      // Live pending-approvals badge (best-effort).
+      if (s[0] === "approvals") {
+        window.AdminAPI.refundRequests({ status: "pending" }).then(function (r) {
+          var n = (r.requests || []).length;
+          if (n) row.replaceChild(el("span", { class: "cf-chip held", text: n }), trailing);
+        }, function () {});
+      }
+    });
+    c.appendChild(l);
+    return c;
   }
 
   // New invoice — an ad-hoc bill for a client: configured service(s) × how many, and/or a custom fee,
@@ -1054,186 +1073,6 @@
   function addMonth(ym, n) { try { var p = (ym || "").split("-"), d = new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1 + n, 1); return d.getFullYear() + "-" + (d.getMonth() + 1 < 10 ? "0" : "") + (d.getMonth() + 1); } catch (e) { return ym; } }
   function monthLabel(ym) { try { var p = ym.split("-"); return new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1, 1).toLocaleDateString("en-ZA", { month: "long", year: "numeric" }); } catch (e) { return ym; } }
   function dayLabel(iso) { try { return new Date(iso + "T12:00:00").toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }); } catch (e) { return iso; } }
-
-  // Earnings by service, one month at a time — the reconciling band + a per-service split showing
-  // each line's Billed (headline), Collected and Outstanding. Order-based + settlement-safe (the
-  // earnings_by_service reader); the "how is the club earning, by service, by month" surface.
-  async function moneyRevenue() {
-    loading();
-    var data;
-    try { data = await window.AdminAPI.earningsByService(MONEY_MONTH); }
-    catch (e) { set(el("div", {}, [backBar("Money", "#/money"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
-    MONEY_MONTH = data.month;
-    var cur = data.currency || clubCur();
-    var wrap = el("div", {}, [backBar("Money", "#/money")]);
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
-      el("h1", { style: "margin:0", text: "Earnings by service" }),
-      moneyMonthPager(function (n) { MONEY_MONTH = addMonth(MONEY_MONTH, n); moneyRevenue(); }),
-    ]));
-    wrap.appendChild(card([clubMoneyBand(data)]));
-    var svc = data.services || [];
-    var sc = card([window.CRMUI.sectionHead("By service")]);
-    if (!svc.length) sc.appendChild(el("div", { class: "cf-empty", text: "No billed activity this month." }));
-    else {
-      var l = el("div", { class: "cf-list" });
-      svc.forEach(function (x) {
-        var chipKind = (["court", "lesson", "class"].indexOf(x.key) >= 0) ? x.key : "";
-        var sub = money(x.collected_minor, cur) + " collected" + (x.outstanding_minor > 0 ? " · " + money(x.outstanding_minor, cur) + " owed" : "");
-        l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/money/revenue/" + x.key); } }, [
-          el("span", { class: "cf-chip " + chipKind, text: x.key }),
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: x.label + "  ·  " + x.count }),
-            el("div", { class: "cf-item-s", text: sub }),
-          ]),
-          el("span", { style: "font-weight:700", text: money(x.billed_minor, cur) }),
-          el("span", { class: "cf-muted", text: "›" }),
-        ]));
-      });
-      sc.appendChild(l);
-    }
-    wrap.appendChild(sc);
-    set(wrap);
-  }
-
-  // month → service → CLIENT drill: which clients make up this service's billed/collected/outstanding
-  // this month. Each row → the person 360 (→ their transactions), completing month→service→client→txn.
-  async function moneyServiceClients(category) {
-    loading();
-    var data;
-    try { data = await window.AdminAPI.earningsServiceClients(category, MONEY_MONTH); }
-    catch (e) { set(el("div", {}, [backBar("Earnings by service", "#/money/revenue"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
-    MONEY_MONTH = data.month;
-    var cur = data.currency || clubCur();
-    var t = data.totals || {};
-    var wrap = el("div", {}, [backBar("Earnings by service", "#/money/revenue")]);
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
-      el("h1", { style: "margin:0", text: data.label || "Service" }),
-      moneyMonthPager(function (n) { MONEY_MONTH = addMonth(MONEY_MONTH, n); moneyServiceClients(category); }),
-    ]));
-    wrap.appendChild(card([window.CRMUI.statementFold({ currency: cur, month: data.month, totals: t })]));
-    var clients = data.clients || [];
-    var sc = card([window.CRMUI.sectionHead("By client · " + clients.length)]);
-    if (!clients.length) sc.appendChild(el("div", { class: "cf-empty", text: "No " + (data.label || "service").toLowerCase() + " billed this month." }));
-    else {
-      var l = el("div", { class: "cf-list" });
-      clients.forEach(function (x) {
-        var sub = money(x.collected_minor, cur) + " collected" + (x.outstanding_minor > 0 ? " · " + money(x.outstanding_minor, cur) + " owed" : "");
-        var row = el("div", { class: "cf-item" + (x.user_id ? " cf-item-tap" : "") }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: x.name + "  ·  " + x.count }),
-            el("div", { class: "cf-item-s", text: sub }),
-          ]),
-          el("span", { style: "font-weight:700", text: money(x.billed_minor, cur) }),
-          (x.user_id ? el("span", { class: "cf-muted", text: "›" }) : null),
-        ].filter(Boolean));
-        if (x.user_id) row.addEventListener("click", function () { go("#/person/" + x.user_id); });
-        l.appendChild(row);
-      });
-      sc.appendChild(l);
-    }
-    wrap.appendChild(sc);
-    set(wrap);
-  }
-
-  // Record a club<->coach settlement (payout) — nets the coach_ledger balance (append-only).
-  function recordPayoutModal(coach, onDone) {
-    var cur = clubCur(), bal = coach.balance_minor || 0;
-    var m = UI.modal("Record settlement · " + (coach.name || "Coach"), {});
-    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
-      text: bal > 0 ? ("The club owes this coach " + money(bal, cur) + ". Record the EFT you paid to settle it.")
-        : bal < 0 ? ("This coach owes the club " + money(-bal, cur) + " (commission / rent). Record the settlement received.")
-          : "This coach's balance is settled — record a settlement only if money moved." }));
-    var dir = el("select", { class: "cf-input" });
-    [["club_to_coach", "Club paid the coach"], ["coach_to_club", "Coach paid the club"], ["offset", "Offset (net, no cash)"]].forEach(function (o) {
-      var opt = el("option", { value: o[0], text: o[1] });
-      if ((bal >= 0 && o[0] === "club_to_coach") || (bal < 0 && o[0] === "coach_to_club")) opt.selected = true;
-      dir.appendChild(opt);
-    });
-    var amt = el("input", { class: "cf-input", type: "number", step: "0.01", min: "0", value: (Math.abs(bal) / 100).toFixed(2) });
-    var method = el("select", { class: "cf-input" });
-    [["eft", "EFT"], ["cash", "Cash"], ["offset", "Offset"]].forEach(function (o) { method.appendChild(el("option", { value: o[0], text: o[1] })); });
-    var ref = el("input", { class: "cf-input", placeholder: "Reference (e.g. EFT number)" });
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Direction" }), dir]));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Amount" }), amt]));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Method" }), method]));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Reference" }), ref]));
-    var btn = el("button", { class: "cf-btn cf-btn-primary", text: "Record payout" });
-    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
-      el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), btn,
-    ]));
-    btn.addEventListener("click", async function () {
-      var f = parseFloat(amt.value);
-      if (isNaN(f) || f <= 0) { UI.toast("Enter a valid amount.", "warn"); return; }
-      btn.disabled = true;
-      try {
-        await window.AdminAPI.recordCoachPayout({ coach_user_id: coach.coach_user_id, amount_minor: Math.round(f * 100), direction: dir.value, method: method.value, reference: ref.value.trim() || null });
-        UI.toast("Payout recorded.", "info"); m.close(); if (onDone) onDone();
-      } catch (e) { btn.disabled = false; UI.toast(UI.errMsg(e), "error"); }
-    });
-  }
-
-  async function moneySettlement() {
-    loading();
-    var ov = { clients: [], client_totals: {}, coaches: [] }, payouts = [];
-    try { ov = await window.AdminAPI.settlementOverview(); } catch (e) {}
-    try { payouts = (await window.AdminAPI.coachPayouts()).payouts || []; } catch (e) {}
-    var cur = clubCur();
-    var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Settlement" })]);
-    // Client aging (who owes the club, bucketed by age).
-    var t = ov.client_totals || {};
-    wrap.appendChild(card([window.CRMUI.sectionHead("Clients owing"), window.CRMUI.stats([
-      { value: money(t["0-30"] || 0, cur), label: "0–30 days" },
-      { value: money(t["31-60"] || 0, cur), label: "31–60 days" },
-      { value: money(t["61+"] || 0, cur), label: "61+ days" },
-    ])]));
-    var cls = ov.clients || [];
-    if (cls.length) {
-      var cc = card([]), cl = el("div", { class: "cf-list" });
-      cls.forEach(function (x) {
-        cl.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/person/" + x.user_id); } }, [
-          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: x.name || "Client" }), el("div", { class: "cf-item-s", text: x.age_days + " days · " + x.bucket })]),
-          el("span", { style: "font-weight:700", text: money(x.owed_minor, cur) }),
-          el("span", { class: "cf-muted", text: "›" }),
-        ]));
-      });
-      cc.appendChild(cl); wrap.appendChild(cc);
-    }
-    // Coach balances (the club<->coach settlement worklist) + Record payout.
-    var coachKids = [window.CRMUI.sectionHead("Coach balances")];
-    var coaches = ov.coaches || [];
-    if (!coaches.length) coachKids.push(el("div", { class: "cf-empty", text: "All coaches settled." }));
-    else {
-      var l = el("div", { class: "cf-list" });
-      coaches.forEach(function (co) {
-        var bal = co.balance_minor || 0;
-        l.appendChild(el("div", { class: "cf-item" }, [
-          el("div", { class: "cf-item-main cf-item-tap", onclick: function () { go("#/person/" + co.coach_user_id); } }, [
-            el("div", { class: "cf-item-t", text: co.name || "Coach" }),
-            el("div", { class: "cf-item-s", text: (bal > 0 ? "Club owes " : "Owes club ") + money(Math.abs(bal), cur) }),
-          ]),
-          el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Record payout", onclick: function () { recordPayoutModal(co, moneySettlement); } }),
-        ]));
-      });
-      coachKids.push(l);
-    }
-    wrap.appendChild(card(coachKids));
-    // Recent settlements.
-    if (payouts.length) {
-      var pc = card([window.CRMUI.sectionHead("Recent settlements")]), pl = el("div", { class: "cf-list" });
-      payouts.slice(0, 12).forEach(function (pay) {
-        var dirTxt = pay.direction === "club_to_coach" ? "to coach" : (pay.direction === "coach_to_club" ? "from coach" : "offset");
-        pl.appendChild(el("div", { class: "cf-item" }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: money(pay.amount_minor, pay.currency || cur) + " · " + dirTxt }),
-            el("div", { class: "cf-item-s", text: (pay.method || "eft") + (pay.reference ? " · " + pay.reference : "") + " · " + (pay.status || "paid") }),
-          ]),
-        ]));
-      });
-      pc.appendChild(pl); wrap.appendChild(pc);
-    }
-    set(wrap);
-  }
-
   async function moneyApprovals() {
     loading();
     var reqs = [];
@@ -1251,38 +1090,6 @@
         { label: "Decline", tone: "danger", onClick: function (it) { decideRefund(it, "decline"); } },
       ],
     })]));
-    set(wrap);
-  }
-
-  async function moneyPayments() {
-    loading();
-    var pays = [];
-    try { pays = (await window.AdminAPI.payments()).payments || []; } catch (e) {}
-    var cur = clubCur();
-    var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Online payments" })]);
-    if (!pays.length) wrap.appendChild(el("div", { class: "cf-empty", text: "No online payments yet." }));
-    else {
-      var c = card([]), l = el("div", { class: "cf-list" });
-      pays.slice(0, 50).forEach(function (pay) {
-        // EVERY payment drills to its transaction RECORD — the ONE place refunds happen: a booking →
-        // the event story, a class → its enrolment record, any other sale (membership/pack/invoice) →
-        // the purchase record (#/txn). The inline Refund is only a fallback for a payment with no order.
-        var recHash = pay.booking_id ? ("#/event/" + pay.booking_id) : (pay.enrolment_id ? ("#/class/" + pay.enrolment_id) : (pay.order_id ? ("#/txn/" + pay.order_id) : null));
-        var trailing = pay.refunded ? el("span", { class: "cf-chip held", text: "refunded" })
-          : recHash ? el("span", { class: "cf-muted", text: "›" })
-            : el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Refund", onclick: function () { refundPayment(pay, cur); } });
-        var row = el("div", { class: "cf-item" + (recHash ? " cf-item-tap" : "") }, [
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: money(pay.amount_minor, pay.currency_code || cur) + (pay.payer_email ? " · " + pay.payer_email : "") }),
-            el("div", { class: "cf-item-s", text: (function () { try { return UI.fmtDate(pay.created_at); } catch (e) { return ""; } })() }),
-          ]),
-          trailing,
-        ]);
-        if (recHash) row.addEventListener("click", function () { go(recHash); });
-        l.appendChild(row);
-      });
-      c.appendChild(l); wrap.appendChild(c);
-    }
     set(wrap);
   }
 
@@ -1304,12 +1111,6 @@
       else await window.AdminAPI.declineRefundRequest(rq.id, { note: note });
       UI.toast(isA ? "Approved." : "Declined.", "info"); moneyApprovals();
     } catch (e) { UI.toast(UI.errMsg(e), "error"); }
-  }
-  async function refundPayment(pay, cur) {
-    if (!window.confirm("Refund " + money(pay.amount_minor, pay.currency_code || cur) + " to " + (pay.payer_email || "the customer") + " via Yoco?")) return;
-    var alsoCancel = window.confirm("Also CANCEL the booking + free the slot?\n\nOK = refund + cancel.   Cancel = refund only.");
-    try { await window.AdminAPI.yocoRefund({ order_id: pay.order_id, cancel_booking: alsoCancel }); UI.toast("Refunded.", "info"); moneyPayments(); }
-    catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
   // ---- DIARY (standard calendar: Day / Week / Month + court & coach filters, default today) --

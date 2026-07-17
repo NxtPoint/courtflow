@@ -2074,6 +2074,27 @@ def order_story(session, *, club_id, order_id, scope="owner", user_id=None):
         return None
     if scope == "client" and (not user_id or str(o["user_id"]) != str(user_id)):
         return None
+    if scope == "coach":
+        # A coach may open ONLY an order that is THEIR earning — a pack they sold (token_wallet), or an
+        # order whose booking/enrolment is their own session. Same linkage the earnings CTE uses.
+        if not user_id:
+            return None
+        owns = session.execute(
+            text("""
+                SELECT 1
+                FROM billing.order_line ol
+                LEFT JOIN diary.booking b ON b.id = ol.booking_id
+                LEFT JOIN diary.enrolment en ON en.id = ol.enrolment_id
+                LEFT JOIN diary.class_session cs ON cs.id = en.class_session_id
+                LEFT JOIN billing.token_wallet tw ON tw.order_id = ol.order_id
+                WHERE ol.order_id = :o
+                  AND (b.coach_user_id = :u OR cs.coach_user_id = :u OR tw.coach_user_id = :u)
+                LIMIT 1
+            """),
+            {"o": str(order_id), "u": str(user_id)},
+        ).first()
+        if not owns:
+            return None
 
     line = session.execute(
         text("SELECT COALESCE(p.name, NULLIF(ol.description,'')) AS service "
@@ -2105,8 +2126,13 @@ def order_story(session, *, club_id, order_id, scope="owner", user_id=None):
         name = " ".join(x for x in [o["first_name"], o["surname"]] if x).strip() or (o["email"] or "Client")
         client_block = {"name": name, "email": o["email"], "phone": o["phone"],
                         "user_id": str(o["user_id"]) if o["user_id"] else None}
-        can = {"desk_pay": owed_or_pending, "void": owed_or_pending, "write_off": owed_or_pending,
-               "refund": bool(charge.get("refundable")), "receipt": True}
+        if scope == "coach":
+            # A coach sees their own earning read-only — the fold + audit log + a receipt, but NEVER the
+            # club's money actions (desk_pay/void/write_off/refund stay owner-only).
+            can = {"receipt": state in ("paid", "refunded", "part_refunded")}
+        else:
+            can = {"desk_pay": owed_or_pending, "void": owed_or_pending, "write_off": owed_or_pending,
+                   "refund": bool(charge.get("refundable")), "receipt": True}
 
     return {
         "id": str(o["id"]), "order_id": str(o["id"]),

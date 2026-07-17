@@ -1963,9 +1963,26 @@ _SVC_ORDER = ["lesson", "court", "class", "membership", "pack", "other"]
 # (a 'Pay all' order that just pays others). Includes open/paid/written_off/refunded (void = cancelled,
 # excluded → R0) so the FULL fold is computable. Exposes: id, user_id, status, amount_minor (current),
 # billed_orig (pre-discount line total), category. Callers add their own SELECT … FROM cat.
-_EARNINGS_CAT_CTE = """
+def _earnings_cte(coach=False):
+    """The ONE order-selection + category CTE both earnings readers (by-service + the transactions drill)
+    use, so a drill can NEVER drift from the by-service totals. When `coach` is set (a :coach param), the
+    order set is SCOPED to that coach's own services — the lessons + classes they RUN and the packs they
+    SOLD — so the COACH sees the exact same view as admin, just their slice. carries booking_id/enrolment_id
+    so a transaction drills to the shared transaction record."""
+    coach_filter = ""
+    if coach:
+        coach_filter = """
+          AND (
+            EXISTS (SELECT 1 FROM billing.order_line ol JOIN diary.booking bk ON bk.id = ol.booking_id
+                     WHERE ol.order_id = ord.id AND bk.coach_user_id = :coach)
+            OR EXISTS (SELECT 1 FROM billing.order_line ol JOIN diary.enrolment e ON e.id = ol.enrolment_id
+                        JOIN diary.class_session cs ON cs.id = e.class_session_id
+                        WHERE ol.order_id = ord.id AND cs.coach_user_id = :coach)
+            OR EXISTS (SELECT 1 FROM billing.token_wallet w WHERE w.order_id = ord.id AND w.coach_user_id = :coach)
+          )"""
+    return """
     WITH o AS (
-        SELECT ord.id, ord.user_id, ord.status, ord.amount_minor,
+        SELECT ord.id, ord.user_id, ord.status, ord.amount_minor, ord.created_at,
                (SELECT COALESCE(SUM(COALESCE(ol.original_amount_minor, ol.amount_minor)),0)
                   FROM billing.order_line ol WHERE ol.order_id = ord.id) AS billed_orig,
                (SELECT COALESCE(b.booking_type, pr.kind) FROM billing.order_line ol
@@ -1973,6 +1990,12 @@ _EARNINGS_CAT_CTE = """
                   LEFT JOIN billing.price   p  ON p.id = ol.price_id
                   LEFT JOIN billing.product pr ON pr.id = p.product_id
                  WHERE ol.order_id = ord.id ORDER BY ol.created_at LIMIT 1) AS kind,
+               (SELECT ol.booking_id FROM billing.order_line ol
+                 WHERE ol.order_id = ord.id AND ol.booking_id IS NOT NULL LIMIT 1) AS booking_id,
+               (SELECT ol.enrolment_id FROM billing.order_line ol
+                 WHERE ol.order_id = ord.id AND ol.enrolment_id IS NOT NULL LIMIT 1) AS enrolment_id,
+               (SELECT ol.description FROM billing.order_line ol
+                 WHERE ol.order_id = ord.id ORDER BY ol.created_at LIMIT 1) AS description,
                EXISTS(SELECT 1 FROM billing.token_wallet w WHERE w.order_id = ord.id) AS is_pack,
                EXISTS(SELECT 1 FROM billing.membership_subscription ms
                        WHERE ms.order_id = ord.id) AS is_membership
@@ -1981,10 +2004,11 @@ _EARNINGS_CAT_CTE = """
           AND ord.created_at >= :s AND ord.created_at < :e
           AND ord.status IN ('open','paid','written_off','refunded')
           AND ord.settled_by_order_id IS NULL
-          AND NOT EXISTS (SELECT 1 FROM billing."order" ch WHERE ch.settled_by_order_id = ord.id)
+          AND NOT EXISTS (SELECT 1 FROM billing."order" ch WHERE ch.settled_by_order_id = ord.id)""" + coach_filter + """
     ),
     cat AS (
-        SELECT id, user_id, status, amount_minor, billed_orig,
+        SELECT id, user_id, status, amount_minor, billed_orig, created_at,
+               booking_id, enrolment_id, description,
                CASE WHEN is_pack THEN 'pack'
                     WHEN is_membership THEN 'membership'
                     WHEN kind = 'lesson' THEN 'lesson'
@@ -1993,7 +2017,7 @@ _EARNINGS_CAT_CTE = """
                     ELSE 'other' END AS category
         FROM o
     )
-"""
+    """
 
 
 # The reconciling FOLD, computed off the cat CTE the same way everywhere (coach / client / admin):
@@ -2044,31 +2068,30 @@ def _earnings_month_bounds(session, month):
     return mb["ym"], mb["s"], mb["e"]
 
 
-def earnings_by_service(session, *, club_id, month=None):
-    """The ONE 'how is the club earning — by service, by month' reader. Month-scoped and ORDER-based
-    (what was billed this month, by order.created_at), so it reconciles cleanly: per service category
-    Billed = Collected + Outstanding. Excludes settlement WRAPPER orders (a 'Pay all' order that just
-    pays other orders) so nothing double-counts, and only counts committed statuses ('paid'=collected,
-    'open'=outstanding) — an in-flight online checkout ('awaiting_payment') isn't billed yet.
-
-    Category = the SAME grouping as the unified statement (billing.statement.unpaid_orders):
-    Coaching / Court hire / Classes / Membership / Session packs / Other. Returns a club summary band
-    (the triad + club-keeps-after-coach-pay + coach payouts due + standing debt + members/MRR) plus the
-    per-service rows. All guarded → zeros so it never 500s. Reuse-first: composes the existing
-    cockpit_coach_earnings / cockpit_memberships / commission.settlement_overview readers."""
+def earnings_by_service(session, *, club_id, month=None, coach_user_id=None):
+    """The ONE 'how am I earning — by service, by month' reader, shared by ADMIN (aggregate of the whole
+    club) and the COACH (their own slice — set coach_user_id). Month-scoped + ORDER-based so it reconciles
+    cleanly per service: Billed − Discount − Written-off = Invoiced ; Invoiced = Paid + Outstanding.
+    Returns {summary (the fold + scope-specific extras), services[], clients[]} — the SAME payload shape
+    for both, so ONE widget renders it. `services` = per-category fold; `clients` = per-client fold (the
+    coach's client-first drill). All guarded → zeros. Reuse-first: the coach filter rides the same CTE."""
     cur = _club_currency(session, club_id=club_id)
     ym, s_dt, e_dt = _earnings_month_bounds(session, month)
+    is_coach = coach_user_id is not None
+    cte = _earnings_cte(coach=is_coach)
+    params = {"c": club_id, "s": s_dt, "e": e_dt}
+    if is_coach:
+        params["coach"] = str(coach_user_id)
 
     rows = []
     try:
         rows = session.execute(
-            text(_EARNINGS_CAT_CTE + "SELECT category, " + _EARNINGS_FOLD_COLS + " FROM cat GROUP BY category"),
-            {"c": club_id, "s": s_dt, "e": e_dt},
+            text(cte + "SELECT category, " + _EARNINGS_FOLD_COLS + " FROM cat GROUP BY category"),
+            params,
         ).mappings().all()
     except Exception:
         session.rollback()
         rows = []
-
     by_cat = {r["category"]: r for r in rows}
     services = []
     for k in _SVC_ORDER:
@@ -2079,6 +2102,33 @@ def earnings_by_service(session, *, club_id, month=None):
         f["key"] = k
         f["label"] = _SVC_LABELS[k]
         services.append(f)
+
+    # By-CLIENT aggregate (the coach's "start at the client" drill — admin gets it too). Same CTE, so
+    # the client rows sum EXACTLY to the service totals. Chase-first ordering (outstanding, then billed).
+    clients = []
+    try:
+        crows = session.execute(
+            text(cte + "SELECT c.user_id, "
+                 "COALESCE(cp.display_name, NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)),''), "
+                 "         u.email, 'Walk-in / unknown') AS name, "
+                 + _EARNINGS_FOLD_COLS.replace("billed_orig", "c.billed_orig")
+                                      .replace("amount_minor", "c.amount_minor")
+                                      .replace("status", "c.status")
+                 + " FROM cat c LEFT JOIN iam.\"user\" u ON u.id = c.user_id "
+                 "LEFT JOIN iam.coach_profile cp ON cp.user_id = c.user_id AND cp.club_id = :c "
+                 "GROUP BY c.user_id, cp.display_name, u.first_name, u.surname, u.email "
+                 "ORDER BY outstanding DESC, billed DESC"),
+            params,
+        ).mappings().all()
+        for r in crows:
+            f = _fold_from_row(r)
+            f["user_id"] = str(r["user_id"]) if r["user_id"] else None
+            f["name"] = r["name"] or "Walk-in / unknown"
+            clients.append(f)
+    except Exception:
+        session.rollback()
+        clients = []
+
     billed = sum(x["billed_minor"] for x in services)
     collected = sum(x["collected_minor"] for x in services)
     outstanding = sum(x["outstanding_minor"] for x in services)
@@ -2086,105 +2136,124 @@ def earnings_by_service(session, *, club_id, month=None):
     written_off = sum(x["written_off_minor"] for x in services)
     invoiced = sum(x["invoiced_minor"] for x in services)
     refunded = sum(x["refunded_minor"] for x in services)
+    summary = {"billed_minor": billed, "discount_minor": discount, "written_off_minor": written_off,
+               "invoiced_minor": invoiced, "collected_minor": collected, "paid_minor": collected,
+               "outstanding_minor": outstanding, "refunded_minor": refunded}
 
-    # Club keeps = collected − what the coaches earned this month (their share of coaching/classes);
-    # everything else (court/membership/packs) the club keeps in full. Payment-date-based earnings vs
-    # order-date collected differ slightly at month edges — labelled 'est.' in the UI. Guarded.
-    coach_earn = 0
-    try:
-        for e in cockpit_coach_earnings(session, club_id=club_id, dt_from=s_dt, dt_to=e_dt):
-            coach_earn += int(e.get("coach_earning_minor") or 0)
-    except Exception:
+    if is_coach:
+        # Coach extras: what they KEEP (their earning) + the club's commission + running ledger balance.
+        coach_keeps = 0
+        try:
+            for e in cockpit_coach_earnings(session, club_id=club_id, dt_from=s_dt, dt_to=e_dt):
+                if str(e.get("coach_user_id")) == str(coach_user_id):
+                    coach_keeps = int(e.get("coach_earning_minor") or 0)
+        except Exception:
+            pass
+        balance = 0
+        try:
+            from billing.commission import settlement_overview
+            for co in settlement_overview(session, club_id=club_id).get("coaches", []):
+                if str(co.get("coach_user_id")) == str(coach_user_id):
+                    balance = int(co.get("balance_minor") or 0)
+        except Exception:
+            pass
+        summary.update({"coach_keeps_minor": coach_keeps,
+                        "commission_minor": max(0, collected - coach_keeps),
+                        "balance_minor": balance})
+    else:
         coach_earn = 0
-    payouts_due = 0
-    total_owed_now = 0
-    try:
-        from billing.commission import settlement_overview
-        ov = settlement_overview(session, club_id=club_id)
-        payouts_due = sum(max(0, int(co.get("balance_minor") or 0)) for co in ov.get("coaches", []))
-        total_owed_now = int(ov.get("total_owed_minor") or 0)
-    except Exception:
-        pass
-    try:
-        mem = cockpit_memberships(session, club_id=club_id)
-    except Exception:
-        mem = {"active_members": 0, "mrr_minor": 0}
+        try:
+            for e in cockpit_coach_earnings(session, club_id=club_id, dt_from=s_dt, dt_to=e_dt):
+                coach_earn += int(e.get("coach_earning_minor") or 0)
+        except Exception:
+            pass
+        payouts_due = 0
+        total_owed_now = 0
+        try:
+            from billing.commission import settlement_overview
+            ov = settlement_overview(session, club_id=club_id)
+            payouts_due = sum(max(0, int(co.get("balance_minor") or 0)) for co in ov.get("coaches", []))
+            total_owed_now = int(ov.get("total_owed_minor") or 0)
+        except Exception:
+            pass
+        try:
+            mem = cockpit_memberships(session, club_id=club_id)
+        except Exception:
+            mem = {"active_members": 0, "mrr_minor": 0}
+        summary.update({"club_keeps_minor": max(0, collected - coach_earn),
+                        "coach_payouts_due_minor": payouts_due, "total_owed_now_minor": total_owed_now,
+                        "active_members": mem["active_members"], "mrr_minor": mem["mrr_minor"]})
 
-    return {
-        "month": ym,
-        "currency": cur,
-        "summary": {
-            "billed_minor": billed,
-            "discount_minor": discount,
-            "written_off_minor": written_off,
-            "invoiced_minor": invoiced,
-            "collected_minor": collected,
-            "paid_minor": collected,
-            "outstanding_minor": outstanding,
-            "refunded_minor": refunded,
-            "club_keeps_minor": max(0, collected - coach_earn),
-            "coach_payouts_due_minor": payouts_due,
-            "total_owed_now_minor": total_owed_now,
-            "active_members": mem["active_members"],
-            "mrr_minor": mem["mrr_minor"],
-        },
-        "services": services,
-    }
+    return {"month": ym, "currency": cur, "scope": ("coach" if is_coach else "admin"),
+            "summary": summary, "services": services, "clients": clients}
 
 
-def earnings_service_clients(session, *, club_id, category, month=None):
-    """The month → service → CLIENT drill: for ONE service category in a month, the clients who make it
-    up, each with their own Billed → Collected → Outstanding (order-based, same CTE as
-    earnings_by_service so the rows sum EXACTLY to that service's totals). Ordered by outstanding then
-    billed (chase-first). Drill each client → the person 360 → their transactions. Guarded → []."""
+def earnings_transactions(session, *, club_id, month=None, category=None, user_id=None,
+                          coach_user_id=None):
+    """The month → (SERVICE and/or CLIENT) → TRANSACTIONS drill. Each row is ONE order (a booking / class /
+    purchase) with its billed/paid/owed state + the RECORD LINK (booking_id / enrolment_id / order_id) so
+    it drills to the SHARED transaction record (edit / void / discount / refund — the same record the coach
+    sees). Filter by `category` (a service) and/or `user_id` (a client); coach-scoped when coach_user_id.
+    Same CTE as earnings_by_service, so the rows sum EXACTLY to that service's / client's totals. Guarded."""
     cur = _club_currency(session, club_id=club_id)
     ym, s_dt, e_dt = _earnings_month_bounds(session, month)
+    is_coach = coach_user_id is not None
+    cte = _earnings_cte(coach=is_coach)
+    params = {"c": club_id, "s": s_dt, "e": e_dt}
+    if is_coach:
+        params["coach"] = str(coach_user_id)
+    where = []
     cat = (category or "").strip().lower()
-    if cat not in _SVC_LABELS:
-        cat = "other"
+    if cat in _SVC_LABELS:
+        where.append("c.category = :cat")
+        params["cat"] = cat
+    if user_id:
+        where.append("c.user_id = :u")
+        params["u"] = str(user_id)
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
     rows = []
     try:
         rows = session.execute(
-            text(_EARNINGS_CAT_CTE + """
-                SELECT c.user_id,
-                       COALESCE(cp.display_name,
-                                NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)), ''),
-                                u.email, 'Walk-in / unknown') AS name,
-            """ + _EARNINGS_FOLD_COLS.replace("billed_orig", "c.billed_orig")
-                                     .replace("amount_minor", "c.amount_minor")
-                                     .replace("status", "c.status") + """
-                FROM cat c
-                LEFT JOIN iam."user" u ON u.id = c.user_id
-                LEFT JOIN iam.coach_profile cp ON cp.user_id = c.user_id AND cp.club_id = :c
-                WHERE c.category = :cat
-                GROUP BY c.user_id, cp.display_name, u.first_name, u.surname, u.email
-                ORDER BY outstanding DESC, billed DESC
-            """),
-            {"c": club_id, "s": s_dt, "e": e_dt, "cat": cat},
+            text(cte + "SELECT c.id AS order_id, c.user_id, c.status, c.amount_minor, c.billed_orig, "
+                 "c.created_at, c.category, c.booking_id, c.enrolment_id, c.description, "
+                 "COALESCE(cp.display_name, NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)),''), "
+                 "         u.email, 'Walk-in') AS client_name "
+                 "FROM cat c LEFT JOIN iam.\"user\" u ON u.id = c.user_id "
+                 "LEFT JOIN iam.coach_profile cp ON cp.user_id = c.user_id AND cp.club_id = :c"
+                 + where_sql + " ORDER BY c.created_at DESC"),
+            params,
         ).mappings().all()
     except Exception:
         session.rollback()
         rows = []
-    clients = []
+    txns = []
     for r in rows:
-        f = _fold_from_row(r)
-        f["user_id"] = str(r["user_id"]) if r["user_id"] else None
-        f["name"] = r["name"] or "Walk-in / unknown"
-        clients.append(f)
-
-    def _sum(k):
-        return sum(int(c[k] or 0) for c in clients)
+        billed = int(r["billed_orig"] or 0)
+        amt = int(r["amount_minor"] or 0)
+        st = r["status"]
+        state = "paid" if st == "paid" else ("owed" if st == "open" else st)
+        txns.append({
+            "order_id": str(r["order_id"]),
+            "booking_id": str(r["booking_id"]) if r["booking_id"] else None,
+            "enrolment_id": str(r["enrolment_id"]) if r["enrolment_id"] else None,
+            "user_id": str(r["user_id"]) if r["user_id"] else None,
+            "client_name": r["client_name"],
+            "category": r["category"], "label": _SVC_LABELS.get(r["category"], "Other"),
+            "description": r["description"],
+            "at": r["created_at"].isoformat() if r["created_at"] else None,
+            "billed_minor": billed, "amount_minor": amt,
+            "discount_minor": max(0, billed - amt), "state": state, "status": st,
+        })
     return {
-        "month": ym,
-        "currency": cur,
-        "category": cat,
-        "label": _SVC_LABELS[cat],
-        "clients": clients,
+        "month": ym, "currency": cur,
+        "category": (cat if cat in _SVC_LABELS else None),
+        "label": (_SVC_LABELS.get(cat) if cat in _SVC_LABELS else None),
+        "user_id": (str(user_id) if user_id else None),
+        "transactions": txns,
         "totals": {
-            "billed_minor": _sum("billed_minor"), "discount_minor": _sum("discount_minor"),
-            "written_off_minor": _sum("written_off_minor"), "invoiced_minor": _sum("invoiced_minor"),
-            "collected_minor": _sum("collected_minor"), "paid_minor": _sum("paid_minor"),
-            "outstanding_minor": _sum("outstanding_minor"), "refunded_minor": _sum("refunded_minor"),
+            "billed_minor": sum(t["billed_minor"] for t in txns),
+            "paid_minor": sum(t["amount_minor"] for t in txns if t["status"] == "paid"),
+            "outstanding_minor": sum(t["amount_minor"] for t in txns if t["status"] == "open"),
         },
     }
 

@@ -606,6 +606,23 @@ def get_class_story(enrolment_id):
     return jsonify(booking=story), 200
 
 
+@coach_bp.get("/orders/<order_id>/record")
+def get_coach_order_record(order_id):
+    """The coach's transaction record for a STANDALONE order they earned (a pack they SOLD) — the SAME
+    Widgets.TransactionDetail shape a lesson/class drills to, so the earnings widget's order-only rows
+    open a real record. Coach-scoped + read-only (fold + audit log + receipt; NO club money actions)."""
+    p, err = _coach()
+    if err:
+        return err
+    from diary import bookings as diary_bookings
+    with session_scope() as s:
+        story = diary_bookings.order_story(
+            s, club_id=p.club_id, order_id=order_id, scope="coach", user_id=p.user_id)
+    if story is None:
+        return jsonify(error="NOT_FOUND"), 404
+    return jsonify(booking=story), 200
+
+
 @coach_bp.get("/money")
 def get_coach_money():
     """The coach Money tab as an OUTCOME of bookings: the folded statement (Billed − Discount −
@@ -617,6 +634,38 @@ def get_coach_money():
     month = (request.args.get("month") or "").strip() or None
     with session_scope() as s:
         data = repo.coach_month_money(s, club_id=p.club_id, coach_user_id=p.user_id, month=month)
+    return jsonify(data), 200
+
+
+@coach_bp.get("/financials/earnings-by-service")
+def get_coach_earnings_by_service():
+    """The coach's OWN 'how am I earning — by service, by month' — the SAME reader + payload shape as the
+    admin surface (admin.repositories.earnings_by_service), scoped to this coach's services (lessons +
+    classes they run + packs they sold). So ONE Widgets.Earnings renders both; the coach is just the slice."""
+    p, err = _coach()
+    if err:
+        return err
+    from admin import repositories as admin_repo
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = admin_repo.earnings_by_service(s, club_id=p.club_id, month=month, coach_user_id=p.user_id)
+    return jsonify(data), 200
+
+
+@coach_bp.get("/financials/transactions")
+def get_coach_earnings_transactions():
+    """The coach's month → (SERVICE and/or CLIENT) → TRANSACTIONS drill — the same reader as admin, coach-
+    scoped. `?category=…` and/or `?user_id=…`, `&month=…`. Each row drills to the shared transaction record."""
+    p, err = _coach()
+    if err:
+        return err
+    from admin import repositories as admin_repo
+    category = (request.args.get("category") or "").strip() or None
+    user_id = (request.args.get("user_id") or "").strip() or None
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = admin_repo.earnings_transactions(s, club_id=p.club_id, category=category,
+                                                user_id=user_id, month=month, coach_user_id=p.user_id)
     return jsonify(data), 200
 
 

@@ -114,6 +114,16 @@
     //    balance_minor}, clients:[{client_user_id,client_name,count,...same fold fields}]}
     //   Everything folds from THIS month's sessions, so it reconciles: billed−disc−wo=invoiced=paid+out.
     money: function (month) { return A().apiJSON("/api/coach/money" + (month ? ("?month=" + enc(month)) : "")); },
+    // Earnings by service (the coach's own slice — same shape/widget as admin).
+    earningsByService: function (month) { return A().apiJSON("/api/coach/financials/earnings-by-service" + (month ? ("?month=" + enc(month)) : "")); },
+    earningsTransactions: function (opts) {
+      opts = opts || {};
+      var q = [];
+      if (opts.category) q.push("category=" + enc(opts.category));
+      if (opts.user_id) q.push("user_id=" + enc(opts.user_id));
+      if (opts.month) q.push("month=" + enc(opts.month));
+      return A().apiJSON("/api/coach/financials/transactions" + (q.length ? ("?" + q.join("&")) : ""));
+    },
     // GET /api/coach/bookings/:id -> {booking:{id,booking_type,status,starts_at,ends_at,
     //   duration_minutes,is_future,court_name,client:{name,email,phone,user_id},venue:{club_name,address},
     //   players:[{name,kind,attended}],charge:{amount_minor,currency,status,settlement_mode,order_id,...},
@@ -123,6 +133,9 @@
     // GET /api/coach/classes/:enrolment_id -> {booking:{...}} — the class sibling of bookingStory
     //   (same shape: charge fold + transactions log + can), so Widgets.TransactionDetail renders it.
     classStory: function (enrolmentId) { return A().apiJSON("/api/coach/classes/" + enc(enrolmentId)); },
+    // GET /api/coach/orders/:order_id/record -> {booking:{...}} — a standalone order the coach earned
+    //   (a pack they sold). Same record shape; coach-scoped, read-only (fold + log + receipt).
+    orderRecord: function (orderId) { return A().apiJSON("/api/coach/orders/" + enc(orderId) + "/record"); },
     // GET /api/coach/clients/:id/invoice?month= -> {invoice:{month,currency,club_name,coach_name,
     //   client_name,client_email,lines:[{at,description,gross_minor,status,note?}],totals:{...}}}
     clientInvoice: function (userId, month) {

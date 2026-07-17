@@ -91,6 +91,7 @@
     if (top === "event") return renderEvent(parts[1]);
     if (top === "roster") return renderRoster(parts[1]);
     if (top === "class") return renderClassEvent(parts[1]);
+    if (top === "txn") return renderTxn(parts[1]);
     if (top === "money") return renderMoney();
     if (top === "setup") return renderSetup(parts[1]);
     if (top === "service") return renderService(parts[1]);
@@ -618,76 +619,61 @@
     ]));
   }
 
-  // ---- MONEY (the OUTCOME of this month's bookings — no transaction ream) --------
-  // Money is derived entirely from the bookings: Billed − Discount − Written-off = Invoiced ; Invoiced
-  // = Paid + Outstanding (CRMUI.statementFold). Then the coach's own cut on the paid, and the running
-  // ledger balance. Per client, tap → the lean client view. The old activity ledger is GONE (the event
-  // record is the truth); disputes stay (an action, not a log).
-  async function renderMoney() {
-    ensureMonth(); loading();
-    var m = {}, disputes = [];
-    try { m = await window.CoachAPI.money(MONTH); } catch (e) {}
-    try { disputes = (await window.CoachAPI.refundRequests("pending")).requests || []; } catch (e) {}
-    var t = m.totals || {}, cur = m.currency || "ZAR";
-    var wrap = el("div", {});
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [el("h1", { style: "margin:0", text: "Money" }), monthNav(renderMoney)]));
-
-    // The folded statement for the month + the coach's cut on what was PAID + net balance with the club.
-    var bal = t.balance_minor || 0;
-    var extra = [
-      { label: "You keep", sub: "on paid", value_minor: t.net_minor, tone: "good" },
-      { label: "Club commission", sub: (m.commission_pct ? m.commission_pct + "% on paid" : "on paid"), value_minor: t.commission_minor },
-      { label: "Net balance with club", value_minor: bal, tone: bal < 0 ? "bad" : "good",
-        sub: bal > 0 ? "club owes you" : (bal < 0 ? "you owe the club" : "settled") },
-    ];
-    wrap.appendChild(card([window.CRMUI.statementFold({ currency: cur, month: MONTH, totals: t, extra: extra })]));
-
-    // Close out — the clients still owing this month (from the SAME fold, so it always agrees).
-    var owing = (m.clients || []).filter(function (r) { return (r.outstanding_minor || 0) > 0; });
-    var recCard = card([window.CRMUI.sectionHead("Close out " + monthLabel(MONTH) + (owing.length ? " · " + owing.length + " to settle" : ""))]);
-    if (!owing.length) recCard.appendChild(el("div", { class: "cf-empty", text: "All settled for " + monthLabel(MONTH) + " — nothing to finalise. 🎉" }));
-    else {
-      recCard.appendChild(el("p", { class: "cf-muted", style: "margin:-6px 0 8px;font-size:.85rem", text: "Before month-end, clear these tabs so the books are accurate. Tap a client to review each booking, then collect (mark paid at court / off-platform), discount, or write off." }));
-      var ol = el("div", { class: "cf-list" });
-      owing.forEach(function (r) { ol.appendChild(clientMoneyRow(r, cur)); });
-      recCard.appendChild(ol);
-    }
-    wrap.appendChild(recCard);
-
-    // Disputes (an action queue, not a log — kept).
-    if (disputes.length) {
+  // ---- MONEY (the coach's slice of the ONE shared Widgets.Earnings) --------------
+  // Money IS Widgets.Earnings, coach scope — the SAME widget the admin mounts, just filtered to this
+  // coach. Money band (fold + You-keep/Commission/Net-balance) + By service + By client, each drilling to
+  // the shared transaction record (lesson→event, class→class, pack→txn). The coach's own refund-request
+  // queue is appended as homeExtra (a decision, not a log). No fork — admin is this view, aggregated.
+  function renderMoney() {
+    ensureMonth();
+    var host = el("div", {});
+    set(host);
+    window.Widgets.Earnings.mount(host, {
+      scope: { role: "coach" }, title: "Money", month: MONTH,
+      data: {
+        get: function (m) { MONTH = m || MONTH; return window.CoachAPI.earningsByService(m); },
+        txns: function (opts) { return window.CoachAPI.earningsTransactions(opts); },
+      },
+      onNavigate: function (t) {
+        if (!t || !t.id) return;
+        if (t.kind === "event") go("#/event/" + t.id);
+        else if (t.kind === "class") go("#/class/" + t.id);
+        else if (t.kind === "txn") go("#/txn/" + t.id);
+        else if (t.kind === "person") go("#/client/" + t.id);
+      },
+      homeExtra: function () { return disputesCard(); },
+    });
+  }
+  // The coach's pending refund-request queue — an ACTION card below the earnings (a dispute is a decision
+  // the coach makes on their own lesson). Async-fills so the widget can append it synchronously.
+  function disputesCard() {
+    var host = el("div", {});
+    window.CoachAPI.refundRequests("pending").then(function (r) {
+      var disputes = (r && r.requests) || [];
+      if (!disputes.length) return;
       var dc = card([el("h2", { style: "margin:0 0 6px", text: "Refund requests" }), el("p", { class: "cf-muted", style: "margin:-2px 0 8px;font-size:.85rem", text: "A client asked for a refund on your lesson — you decide." })]);
-      dc.appendChild(window.CRMUI.lineItems(disputes.map(function (r) { return { id: r.id, gross_minor: (r.amount_minor != null ? r.amount_minor : r.order_amount_minor), currency: r.currency_code, _n: r.requester_name || "A client", _s: [r.item_description || "Lesson", r.reason ? "“" + r.reason + "”" : ""].filter(Boolean).join(" · ") }; }), {
-        currency: cur, label: function (it) { return it._n; }, sub: function (it) { return it._s; }, empty: "None.",
+      dc.appendChild(window.CRMUI.lineItems(disputes.map(function (rq) { return { id: rq.id, gross_minor: (rq.amount_minor != null ? rq.amount_minor : rq.order_amount_minor), currency: rq.currency_code, _n: rq.requester_name || "A client", _s: [rq.item_description || "Lesson", rq.reason ? "“" + rq.reason + "”" : ""].filter(Boolean).join(" · ") }; }), {
+        currency: "ZAR", label: function (it) { return it._n; }, sub: function (it) { return it._s; }, empty: "None.",
         actions: [{ label: "Approve", tone: "primary", onClick: function (it) { decideDispute(it.id, "approve"); } }, { label: "Decline", tone: "danger", onClick: function (it) { decideDispute(it.id, "decline"); } }],
       }));
-      wrap.appendChild(dc);
-    }
-
-    // Every client this month (from the fold) → tap to their lean record.
-    var byClient = card([window.CRMUI.sectionHead("By client")]);
-    if (!(m.clients || []).length) byClient.appendChild(el("div", { class: "cf-empty", text: "No sessions this month." }));
-    else {
-      byClient.appendChild(el("p", { class: "cf-muted", style: "margin:-6px 0 8px;font-size:.85rem", text: "Tap a client to review their bookings and settle." }));
-      var cl = el("div", { class: "cf-list" });
-      m.clients.forEach(function (r) { cl.appendChild(clientMoneyRow(r, cur)); });
-      byClient.appendChild(cl);
-    }
-    wrap.appendChild(byClient);
-    set(wrap);
+      host.appendChild(dc);
+    }, function () {});
+    return host;
   }
-  // ONE per-client money row (Close out + By client) — billed headline + paid/owed sub, tap → detail.
-  function clientMoneyRow(r, cur) {
-    var sub = money(r.paid_minor, cur) + " paid" + ((r.outstanding_minor || 0) > 0 ? " · " + money(r.outstanding_minor, cur) + " owed" : "");
-    return el("div", { class: "cf-item cf-item-tap", onclick: function () { if (r.client_user_id) go("#/client/" + r.client_user_id); } }, [
-      el("div", { class: "cf-avatar", style: "width:34px;height:34px;font-size:.8rem", text: (r.client_name || "?").slice(0, 1).toUpperCase() }),
-      el("div", { class: "cf-item-main" }, [
-        el("div", { class: "cf-item-t", text: r.client_name + "  ·  " + (r.count || 0) }),
-        el("div", { class: "cf-item-s", text: sub }),
-      ]),
-      el("span", { style: "font-weight:700", text: money(r.invoiced_minor, cur) }),
-      ((r.outstanding_minor || 0) > 0 ? el("span", { class: "cf-chip held", text: "owed" }) : el("span", { class: "cf-muted", text: "›" })),
-    ]);
+  // A standalone order the coach earned (a pack they sold) — the SAME shared record, read-only + receipt.
+  function renderTxn(orderId) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.TransactionDetail.mount(host, {
+      role: "coach",
+      scope: { id: orderId },
+      fields: { showCoach: false },
+      data: { get: function (i) { return window.CoachAPI.orderRecord(i).then(function (r) { return r.booking; }); } },
+      onNavigate: function (t) { if (t.kind === "person") go("#/client/" + t.id); },
+      actions: {
+        receipt: { manual: true, run: function (b) { if (b.order_id) window.open("/receipt.html?order=" + encodeURIComponent(b.order_id), "_blank"); } },
+      },
+    });
   }
   async function decideDispute(id, action) {
     var isA = action === "approve";
