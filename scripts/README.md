@@ -17,6 +17,7 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
 - `test_ses.py` — manual SES send test.
 - `audit_trials.py` — audits/cleans the 7-day trial grants.
 - `audit_class_packs.py` — reports class-pack vs session price (read-only).
+- `diagnose_coach_packs.py` — READ-ONLY: where each session PACK lands in the coach-earnings roll-up (its selling coach vs the CLUB, sale month, order status, whether it counts). Answers "why isn't coach X's pack showing on his earnings?" Optional args: `<name-needle> [YYYY-MM]`. Uses `DATABASE_URL` from env (Render Shell) or `.env.local`.
 - `audit_client_data.py` — read-only Client-360 data scorecard.
 - `cleanup_coachless_classes.py` — soft-retire legacy coachless classes (dry-run by default, reversible).
 - `fix_bypassed_packs.py` — remediate the reconcile / pack-bypass billing bugs: (A) activate PENDING pack wallets on paid orders (the reconcile gap) + (B) unwind duplicate OWED lesson orders (draw the pack token + void the owed order → client owes R0) + (C) activate stuck MEMBERSHIPS (paid but subscription left at its 'expired' pending-placeholder — member paid but wasn't covered). **Dry-run by default**; `--commit` to write; `--club`/`--user` to scope. Idempotent (never touches cancelled/lapsed subs). Behind the fixes in commits a244e19+; run once over affected clients, then it's spent.
