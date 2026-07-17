@@ -140,6 +140,14 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
             _mark_order(session, order_id, "paid")
             confirmed = _confirm_held_bookings(session, order_id, club_id)
             result["bookings_confirmed"] = confirmed
+            # Classes are the enrolment sibling of held bookings: an ONLINE seat deferred its
+            # "you're enrolled" confirmation until payment (so no premature email while the charge is
+            # pending). Emit it NOW + clear the hold. Guarded + idempotent; shared by webhook + reconcile.
+            try:
+                from diary.classes import confirm_paid_enrolments
+                confirm_paid_enrolments(session, club_id=club_id, order_id=order_id)
+            except Exception:
+                pass
             # --- commission fan-out (Phase D, owner lane) ----------------------
             # Accrue commission ON COLLECTION for each lesson/class line of the paid order.
             # Savepoint-guarded (like _confirm_held_bookings) so a split failure NEVER blocks

@@ -192,7 +192,13 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
     enrolment = _enrolment_dict(session, enrol_id)
     payload = _payload(cs, enrolment)
     if target == "enrolled":
-        events.emit("class_enrolled", payload)
+        # An ONLINE seat is HELD pending the Yoco payment — do NOT send the "you're enrolled"
+        # confirmation until the charge actually succeeds (else the client gets a confirmation while
+        # payment is still pending, and the seat may lazy-expire unpaid). The confirmation is emitted
+        # ON PAYMENT instead (billing.events → diary.classes.confirm_paid_enrolments). Firm modes
+        # (at-court / monthly / token / covered) confirm immediately, so they emit now.
+        if settlement_mode != "online":
+            events.emit("class_enrolled", payload)
     else:
         events.emit("class_waitlisted", payload)
     resp = {"ok": True, "enrolment": enrolment, "status_value": target}
@@ -204,6 +210,39 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
         resp["order_status"] = order.get("status")
         resp["checkout"] = order.get("checkout")
     return resp
+
+
+def confirm_paid_enrolments(session, *, club_id, order_id):
+    """Called on a class order's PAYMENT SUCCESS (billing.events → webhook AND reconcile): clear the
+    online hold on the paid enrolment(s) and emit the class_enrolled confirmation NOW — the online
+    enrol path deliberately DEFERRED it until payment (so no 'you're enrolled' email fires while a
+    Yoco charge is still pending). Idempotent + guarded: a re-run finds no still-held enrolment and
+    emits nothing. Returns the count confirmed."""
+    try:
+        rows = session.execute(
+            text("SELECT e.id, e.class_session_id FROM diary.enrolment e "
+                 "JOIN billing.order_line ol ON ol.enrolment_id = e.id "
+                 "WHERE ol.order_id = :o AND e.club_id = :c AND e.status = 'enrolled' "
+                 "  AND e.held_until IS NOT NULL"),
+            {"o": str(order_id), "c": str(club_id)},
+        ).mappings().all()
+    except Exception:
+        return 0
+    n = 0
+    for r in rows:
+        session.execute(
+            text("UPDATE diary.enrolment SET held_until = NULL, updated_at = now() WHERE id = :id"),
+            {"id": r["id"]},
+        )
+        try:
+            cs = _session_row(session, club_id, str(r["class_session_id"]))
+            enrolment = _enrolment_dict(session, r["id"])
+            if cs and enrolment:
+                events.emit("class_enrolled", _payload(cs, enrolment))
+        except Exception:
+            pass
+        n += 1
+    return n
 
 
 def cancel_enrolment(session, *, club_id, class_session_id, user_id, actor_user_id=None,

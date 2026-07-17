@@ -447,6 +447,32 @@ def sc_purchase_transaction_record(s, fx):
     check("void membership order → subscription cancelled", sub == "cancelled", str(sub))
 
 
+def sc_online_class_confirms_on_payment(s, fx):
+    from diary import classes as CL
+    print("\n# Online class: seat HELD on enrol, CONFIRMED (hold cleared) only on PAYMENT (no premature confirm)")
+    prod = s.execute(text("INSERT INTO billing.product (club_id,kind,name,coach_user_id) VALUES (:c,'class','OnlineClass',:u) RETURNING id"),
+                     {"c": fx.club_id, "u": fx.coach_uid}).scalar_one()
+    pid = _price(s, fx.club_id, prod, 12000, unit="per_session")
+    res = s.execute(text("INSERT INTO diary.resource (club_id,kind,name,coach_user_id,capacity) VALUES (:c,'class','OnlineClass',:u,10) RETURNING id"),
+                    {"c": fx.club_id, "u": fx.coach_uid}).scalar_one()
+    cs = s.execute(text("INSERT INTO diary.class_session (club_id,resource_id,coach_user_id,starts_at,ends_at,capacity,price_id,status) "
+                        "VALUES (:c,:r,:u,:sa,:ea,10,:p,'scheduled') RETURNING id"),
+                   {"c": fx.club_id, "r": res, "u": fx.coach_uid, "sa": at(fx, 16), "ea": at(fx, 17), "p": pid}).scalar_one()
+    r = CL.enrol(s, club_id=fx.club_id, class_session_id=str(cs), user_id=fx.member, settlement_mode="online")
+    check("online class enrol ok", r.get("ok"), str(r))
+    eid = r["enrolment"]["id"]; oid = r.get("order_id")
+    check("class order is awaiting_payment", oid and _order(s, oid)["status"] == "awaiting_payment", str(_order(s, oid) if oid else None))
+    check("seat HELD pending payment (held_until set → no premature confirm)",
+          s.execute(text("SELECT held_until FROM diary.enrolment WHERE id=:e"), {"e": eid}).scalar() is not None)
+    apply_payment_event(NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
+                                               provider_payment_id="p_oc1", amount_minor=12000, currency="ZAR",
+                                               status="succeeded", direction="charge", club_id=str(fx.club_id),
+                                               user_id=str(fx.member), raw={}), session=s)
+    check("order paid", _order(s, oid)["status"] == "paid")
+    check("ON PAYMENT: hold CLEARED (confirm_paid_enrolments ran → the confirmation fires here, not at enrol)",
+          s.execute(text("SELECT held_until FROM diary.enrolment WHERE id=:e"), {"e": eid}).scalar() is None)
+
+
 def sc_membership(s, fx):
     print("\n# Membership: active sub covers courts (R0); access window enforced; trial idempotent")
     # An active (manual) membership with no access window → covers any time.
@@ -2217,6 +2243,7 @@ SCENARIOS = [
     sc_reconcile_activates_pack,
     sc_reconcile_guard_activates_pack,
     sc_purchase_transaction_record,
+    sc_online_class_confirms_on_payment,
     sc_pack_respects_service_payment_mode,
     sc_admin_invoice,
     sc_activity_summary,

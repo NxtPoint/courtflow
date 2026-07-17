@@ -549,7 +549,10 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
             # coach can't be booked owed (M1). Staff booking on-behalf (booked_for_user_id set) is not
             # gated (handled above) so their at-court override is unaffected.
             if role in ("member", "guest") and _gate_sm in ("online", "at_court", "monthly_account"):
-                _pm = _service_payment_modes_guarded(session, club_id, "lesson", _gate_coach)
+                # Resolve modes by the EXACT chosen lesson service (product_id), not coach/kind alone —
+                # a coach with two differently-priced lesson services must be gated on the one booked,
+                # else a kind-level resolve reads the first-of-kind product (the known leak pattern).
+                _pm = _service_payment_modes_guarded(session, club_id, "lesson", _gate_coach, product_id=product_id)
                 if _pm is not None and _gate_sm not in _pm:
                     return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=_gate_sm,
                                 message="this coach doesn't offer that payment method")
