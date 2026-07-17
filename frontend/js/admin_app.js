@@ -963,31 +963,43 @@
         el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { shiftMonth(1); } }),
       ]),
     ]));
-    wrap.appendChild(el("div", { class: "cf-muted", style: "margin:-2px 0 12px;font-size:.9rem", text: "Total " + money(data.total_minor, cur) + " · " + (data.count || 0) + " sale" + (data.count === 1 ? "" : "s") }));
+    // Headline = NET income (gross − Yoco reversals). Show the breakdown when anything was reversed.
+    var headTxt = (data.refunded_minor
+      ? ("Net " + money(data.net_minor, cur) + "  ·  " + money(data.gross_minor, cur) + " gross − " + money(data.refunded_minor, cur) + " reversed")
+      : ("Total " + money(data.total_minor, cur)))
+      + " · " + (data.count || 0) + " transaction" + (data.count === 1 ? "" : "s");
+    wrap.appendChild(el("div", { class: "cf-muted", style: "margin:-2px 0 12px;font-size:.9rem", text: headTxt }));
     var days = data.days || [];
-    if (!days.length) wrap.appendChild(el("div", { class: "cf-empty", text: "No sales this month." }));
+    if (!days.length) wrap.appendChild(el("div", { class: "cf-empty", text: "No takings this month." }));
     else days.forEach(function (d) {
+      var dayFig = el("div", { class: "cf-row", style: "gap:8px;align-items:baseline" }, [
+        el("div", { style: "font-weight:600", text: money(d.net_minor != null ? d.net_minor : d.total_minor, cur) }),
+      ]);
+      if (d.refunded_minor) dayFig.insertBefore(el("span", { class: "cf-muted", style: "font-size:.8rem", text: money(d.gross_minor, cur) + " − " + money(d.refunded_minor, cur) }), dayFig.firstChild);
       wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:14px 2px 6px" }, [
-        el("div", { style: "font-weight:700", text: dayLabel(d.date) }),
-        el("div", { class: "cf-muted", style: "font-weight:600", text: money(d.total_minor, cur) }),
+        el("div", { style: "font-weight:700", text: dayLabel(d.date) }), dayFig,
       ]));
       var c = card([]), l = el("div", { class: "cf-list" });
       (d.sales || []).forEach(function (x) {
+        var isRef = x.direction === "refund";
         var t = (["court", "lesson", "class"].indexOf(x.service_type) >= 0) ? x.service_type : "court";
         l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { openSale(x); } }, [
-          el("span", { class: "cf-chip " + t, text: x.service_type }),
-          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: x.client_name }), el("div", { class: "cf-item-s", text: x.description || x.service_type })]),
-          el("span", { style: "font-weight:700", text: money(x.amount_minor, cur) }),
+          el("span", { class: "cf-chip " + (isRef ? "" : t), text: isRef ? "reversal" : x.service_type }),
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: x.client_name }), el("div", { class: "cf-item-s", text: (isRef ? "Refund · " : "") + (x.description || x.service_type) })]),
+          el("span", { style: "font-weight:700" + (isRef ? ";color:#b4232a" : ""), text: money(x.amount_minor, cur) }),
         ]));
       });
       c.appendChild(l); wrap.appendChild(c);
     });
     set(wrap);
   }
-  // Standard click-to-detail: a booking-backed sale → the event story; else its receipt.
+  // Click-to-detail: EVERY sale opens its TRANSACTION RECORD (never a bare receipt) — a booking →
+  // the event story, a class → its enrolment record, any other purchase (pack/membership/invoice) →
+  // the purchase record. The receipt/print stays as an action INSIDE the record (golden rule).
   function openSale(x) {
     if (x.booking_id) go("#/event/" + x.booking_id);
-    else if (x.order_id) window.open("/receipt.html?order=" + encodeURIComponent(x.order_id), "_blank");
+    else if (x.enrolment_id) go("#/class/" + x.enrolment_id);
+    else if (x.order_id) go("#/txn/" + x.order_id);
     else UI.toast("No detail available for this sale.", "warn");
   }
 

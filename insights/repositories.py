@@ -37,11 +37,11 @@ def _club_currency(session, club_id):
 
 
 def sales_by_day(session, *, club_id, month=None):
-    """Sales (successful CHARGE payments) for ONE month, grouped by day — the owner's daily takings.
-    Each sale carries the client, the service type (court / lesson / class / membership / pack) and
-    the amount, and a link target for the standard transaction-detail widget: a booking-backed sale
-    -> the event story (booking_id); everything else -> its receipt (order_id). `month` = 'YYYY-MM'
-    (default = current month). Guarded -> empty. club_id-scoped."""
+    """Daily takings for ONE month — successful CHARGES minus Yoco REVERSALS (refunds), so each day
+    shows GROSS / reversed / NET income. Each line carries the client, service type (court / lesson /
+    class / membership / pack), amount (NEGATIVE for a reversal) and a link to the standard transaction
+    record: booking-backed -> #/event (booking_id); class -> #/class (enrolment_id); everything else ->
+    #/txn (order_id). `month` = 'YYYY-MM' (default current). Guarded -> empty. club_id-scoped."""
     b = session.execute(
         text("""
             SELECT to_char(COALESCE(to_date(:m, 'YYYY-MM'), date_trunc('month', now())), 'YYYY-MM') AS ym,
@@ -57,6 +57,7 @@ def sales_by_day(session, *, club_id, month=None):
         return session.execute(
             text("""
                 SELECT p.id AS payment_id, p.order_id, p.amount_minor, p.currency_code, p.created_at,
+                       p.direction, p.provider,
                        COALESCE(NULLIF(TRIM(COALESCE(u.first_name,'') || ' ' || COALESCE(u.surname,'')), ''),
                                 u.email, 'Walk-in') AS client_name,
                        (SELECT COALESCE(bk.booking_type, pr.kind, 'other')
@@ -67,12 +68,16 @@ def sales_by_day(session, *, club_id, month=None):
                          WHERE ol.order_id = p.order_id ORDER BY ol.created_at LIMIT 1) AS service_type,
                        (SELECT ol.booking_id FROM billing.order_line ol
                          WHERE ol.order_id = p.order_id AND ol.booking_id IS NOT NULL LIMIT 1) AS booking_id,
+                       (SELECT ol.enrolment_id FROM billing.order_line ol
+                         WHERE ol.order_id = p.order_id AND ol.enrolment_id IS NOT NULL LIMIT 1) AS enrolment_id,
                        (SELECT ol.description FROM billing.order_line ol
                          WHERE ol.order_id = p.order_id ORDER BY ol.created_at LIMIT 1) AS description
                 FROM billing.payment p
                 JOIN billing."order" o ON o.id = p.order_id
                 LEFT JOIN iam."user" u ON u.id = o.user_id
-                WHERE p.club_id = :c AND p.direction = 'charge' AND p.status = 'succeeded'
+                WHERE p.club_id = :c
+                  AND ((p.direction = 'charge' AND p.status = 'succeeded')
+                       OR (p.direction = 'refund' AND p.status IN ('succeeded','refunded')))
                   AND p.created_at >= :s AND p.created_at < :e
                 ORDER BY p.created_at DESC
             """),
@@ -81,30 +86,48 @@ def sales_by_day(session, *, club_id, month=None):
 
     rows = _guard(_rows, [])
     days = {}
-    total = 0
+    gross = 0
+    refunded = 0
     currency = None
     for r in rows:
         currency = currency or r["currency_code"]
         amt = int(r["amount_minor"] or 0)
-        total += amt
+        is_refund = (r["direction"] == "refund")
+        if is_refund:
+            refunded += amt
+        else:
+            gross += amt
         dkey = r["created_at"].date().isoformat()
-        d = days.setdefault(dkey, {"date": dkey, "total_minor": 0, "sales": []})
-        d["total_minor"] += amt
+        d = days.setdefault(dkey, {"date": dkey, "gross_minor": 0, "refunded_minor": 0,
+                                   "net_minor": 0, "total_minor": 0, "sales": []})
+        if is_refund:
+            d["refunded_minor"] += amt
+        else:
+            d["gross_minor"] += amt
+        d["net_minor"] = d["gross_minor"] - d["refunded_minor"]
+        d["total_minor"] = d["net_minor"]                  # headline per day = NET
         d["sales"].append({
             "payment_id": str(r["payment_id"]),
             "order_id": str(r["order_id"]) if r["order_id"] else None,
             "booking_id": str(r["booking_id"]) if r["booking_id"] else None,
+            "enrolment_id": str(r["enrolment_id"]) if r["enrolment_id"] else None,
             "client_name": r["client_name"],
             "service_type": r["service_type"],
             "description": r["description"],
-            "amount_minor": amt,
+            "direction": r["direction"],
+            "provider": r["provider"],
+            "amount_minor": (-amt if is_refund else amt),   # NEGATIVE for a reversal
             "at": r["created_at"].isoformat(),
         })
     day_list = sorted(days.values(), key=lambda x: x["date"], reverse=True)
+    net = gross - refunded
     return {
         "month": ym,
         "currency": currency or _club_currency(session, club_id),
-        "total_minor": total,
+        "total_minor": net,                # headline = NET income (gross − reversals)
+        "gross_minor": gross,
+        "refunded_minor": refunded,
+        "net_minor": net,
         "count": len(rows),
         "days": day_list,
     }
