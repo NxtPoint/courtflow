@@ -125,7 +125,7 @@
     if (top === "booking") return renderBookingStory(parts[1]);
     if (top === "class") return renderClassStory(parts[1]);
     if (top === "billing") {                        // drill-through screens under Home's billing
-      if (parts[1] === "order") return renderOrder(parts[2]);
+      if (parts[1] === "order") return renderTxn(parts[2]);   // an order → its transaction record (not a bare receipt)
       if (parts[1] === "cat") return renderBillingCategory(parts[2], parts[3]);
       return renderHome();
     }
@@ -580,7 +580,7 @@
     else {
       var box = el("div", { class: "cf-card", style: "padding:6px 14px" }), l = el("div", { class: "cf-list" });
       cat.items.forEach(function (it) {
-        l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go(it.booking_id ? ("#/booking/" + it.booking_id) : ("#/billing/order/" + it.order_id)); } }, [
+        l.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { go(it.booking_id ? ("#/booking/" + it.booking_id) : it.enrolment_id ? ("#/class/" + it.enrolment_id) : ("#/txn/" + it.order_id)); } }, [
           el("div", { class: "cf-item-main" }, [
             el("div", { class: "cf-item-t", text: UI.fmtDate(it.starts_at) + (it.coach_name ? " · " + it.coach_name : "") }),
             el("div", { class: "cf-item-s", text: [it.court_name, (function () { try { return UI.fmtTime(it.starts_at); } catch (e) { return ""; } })()].filter(Boolean).join(" · ") }),
@@ -649,7 +649,7 @@
         pay: { manual: true, run: function (b) { payOrders([b.charge.order_id]); } },
         accept: { done: "Confirmed.", run: function (b) { return window.API.acceptBooking(b.id); } },
         add_to_calendar: { manual: true, run: function (b) { addToCalendar(b.ics_url); } },
-        receipt: { manual: true, run: function (b) { go("#/billing/order/" + b.charge.order_id); } },
+        receipt: { manual: true, run: function (b) { window.open("/receipt.html?order=" + encodeURIComponent(b.charge.order_id), "_blank"); } },
         reschedule: { manual: true, run: function (b) { rescheduleSheet(b); } },
         add_player: { manual: true, run: function (b) { window.CRMUI.addLessonPlayerModal({ onSubmit: function (payload) { return window.API.addBookingPlayer(b.id, payload); }, onDone: function () { renderBookingStory(b.id); } }); } },
         cancel: { manual: true, run: function (b) { cancelBooking(b); } },
@@ -672,7 +672,7 @@
       data: { get: function (i) { return window.API.orderRecord(i).then(function (r) { return r.booking; }); } },
       actions: {
         pay: { manual: true, run: function (b) { payOrders([b.order_id || (b.charge && b.charge.order_id)]); } },
-        receipt: { manual: true, run: function (b) { go("#/billing/order/" + (b.order_id || b.charge.order_id)); } },
+        receipt: { manual: true, run: function (b) { window.open("/receipt.html?order=" + encodeURIComponent(b.order_id || b.charge.order_id), "_blank"); } },
         request_refund: { manual: true, run: function (b) { requestRefund(b.order_id || b.charge.order_id); } },
       },
     });
@@ -742,42 +742,9 @@
   }
 
   // ---- ORDER / RECEIPT detail ---------------------------------------------
-  async function renderOrder(orderId) {
-    loading();
-    var r;
-    try { var raw = await window.TFAuth.apiJSON("/api/billing/receipt/" + encodeURIComponent(orderId)); r = raw.receipt || raw; }
-    catch (e) { set(el("div", {}, [pageHeader("Receipt", "Back"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
-    var cur = r.currency || "ZAR";
-    var refunded = (r.refunded_minor || 0) > 0;
-    var paid = r.status === "paid" || refunded;
-    var wrap = el("div", {});
-    wrap.appendChild(pageHeader(paid ? "Receipt" : "Charge", "Back"));
-    var c = card([
-      el("div", { class: "cf-detail-h" }, [
-        el("div", {}, [el("div", { class: "cf-muted", style: "font-size:.78rem;font-weight:700", text: (paid ? "RECEIPT " : "CHARGE ") + (r.receipt_no || "") }),
-          el("h1", { style: "margin:4px 0 2px;font-size:1.3rem", text: money(r.amount_minor, cur) })]),
-        statusChip(refunded ? "refunded" : (r.status === "open" ? "owed" : (r.status || "paid"))),
-      ]),
-      el("div", { class: "cf-muted", style: "margin-bottom:6px", text: (r.issued_at ? UI.fmtDate(r.issued_at) : "") + (r.payer_email ? " · " + r.payer_email : "") }),
-    ]);
-    var lines = el("div", { style: "margin-top:6px" });
-    (r.lines || []).forEach(function (l) {
-      lines.appendChild(el("div", { class: "cf-item" }, [
-        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: pretty(l.description) + (l.qty > 1 ? " ×" + l.qty : "") })]),
-        el("span", { style: "font-weight:600", text: money(l.amount_minor, cur) }),
-      ]));
-    });
-    c.appendChild(lines);
-    c.appendChild(el("div", { class: "cf-kv", style: "border-top:2px solid var(--ink);margin-top:6px" }, [
-      el("div", { class: "cf-kv-k", text: "Total" }), el("div", { class: "cf-kv-v", style: "font-weight:800;text-align:right", text: money(r.amount_minor, cur) })]));
-    if (refunded) c.appendChild(kv("Refunded", el("span", { style: "color:var(--danger);font-weight:700", text: "−" + money(r.refunded_minor, cur) })));
-    wrap.appendChild(c);
-    var acts = el("div", { class: "cf-row", style: "gap:8px;margin-top:14px" });
-    if (r.status === "open") acts.appendChild(el("button", { class: "cf-btn cf-btn-primary", text: "Pay now · " + money(r.amount_minor, cur), onclick: function () { payOrders([orderId]); } }));
-    if (paid) acts.appendChild(el("a", { class: "cf-btn cf-btn-ghost", href: "/receipt.html?order=" + encodeURIComponent(orderId), target: "_blank", text: "Print / PDF" }));
-    wrap.appendChild(acts);
-    set(wrap);
-  }
+  // (renderOrder — the old client receipt PAGE — was retired: an order now opens its transaction
+  //  record via renderTxn (#/txn / #/billing/order both route there), with a Receipt action that
+  //  prints receipt.html. One record per transaction; the receipt is a print output, not a page.)
 
   // ---- CLASS record — the SAME transaction-record widget as bookings (via /api/me/classes/:id) -----
   function renderClassStory(id) {
@@ -791,7 +758,7 @@
       actions: {
         pay: { manual: true, run: function (b) { payOrders([b.charge.order_id]); } },
         settle: { manual: true, run: function (b) { payOrders([b.charge.order_id]); } },
-        receipt: { manual: true, run: function (b) { go("#/billing/order/" + b.charge.order_id); } },
+        receipt: { manual: true, run: function (b) { window.open("/receipt.html?order=" + encodeURIComponent(b.charge.order_id), "_blank"); } },
         request_refund: { manual: true, run: function (b) { requestRefund(b.charge.order_id); } },
         cancel: { tone: "danger", back: true, done: "Cancelled.", run: function (b) { return window.API.cancelEnrolment(b.class_session_id, isForChild(b) ? { user_id: b.player_user_id } : {}); } },
       },
