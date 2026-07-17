@@ -93,6 +93,7 @@
     if (top === "person") return renderPerson(parts[1]);
     if (top === "event") return renderEvent(parts[1]);
     if (top === "txn") return renderTxn(parts[1]);
+    if (top === "roster") return renderRoster(parts[1]);
     if (top === "class") return renderClassEvent(parts[1]);
     if (top === "profile") return renderProfile();
     return renderHome();
@@ -1394,9 +1395,68 @@
         coaches: (lists.coaches || []).map(function (c) { return { id: c.user_id, name: c.display_name || [c.first_name, c.surname].filter(Boolean).join(" ") || c.email }; }),
       },
       data: { events: function (r) { return window.API.master({ date_from: r.from, date_to: r.to }).then(function (x) { return x.events || []; }); } },
-      onNavigate: function (ev) { if (ev && ev.id) go("#/event/" + ev.id); },
+      onNavigate: function (ev) {
+        if (!ev || !ev.id) return;
+        // A CLASS session on the calendar opens its ROSTER (enrolled clients + check-in/no-show);
+        // a booking opens the transaction/event story.
+        if (ev.kind === "class" || ev.booking_type === "class") go("#/roster/" + ev.id);
+        else go("#/event/" + ev.id);
+      },
     });
   }
+
+  // The class ROSTER page — click a class on the calendar → the list of enrolled clients, each with
+  // Check-in / No-show (reuses AdminAPI.classRoster + classAttendance). A player drills to their record.
+  function renderRoster(sessionId) {
+    loading();
+    function rosterRow(p) {
+      var chip = p.status === "attended" ? el("span", { class: "cf-chip confirmed", text: "Checked in" })
+               : p.status === "no_show" ? el("span", { class: "cf-chip cf-btn-danger", text: "No-show" })
+               : el("span", { class: "cf-chip held", text: "Enrolled" });
+      var mark = function (attended) {
+        window.AdminAPI.classAttendance(sessionId, { user_id: p.user_id, attended: attended })
+          .then(function () { UI.toast(attended ? "Checked in." : "Marked no-show.", "info"); renderRoster(sessionId); },
+                function (e) { UI.toast(UI.errMsg(e), "error"); });
+      };
+      var acts = el("div", { class: "cf-row", style: "gap:6px" });
+      if (p.status !== "attended") acts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Check in", onclick: function () { mark(true); } }));
+      if (p.status !== "no_show") acts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "No-show", onclick: function () { mark(false); } }));
+      var main = el("div", { class: "cf-item-main" + (p.user_id ? " cf-item-tap" : "") }, [
+        el("div", { class: "cf-item-t", text: p.name || p.email || "Player" }),
+        el("div", { class: "cf-item-s", text: [p.email, p.phone].filter(Boolean).join(" · ") || "—" }),
+      ]);
+      if (p.user_id) main.addEventListener("click", function () { go("#/person/" + p.user_id); });
+      return el("div", { class: "cf-item" }, [main, el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [chip, acts])]);
+    }
+    window.AdminAPI.classRoster(sessionId).then(function (r) {
+      var sess = r.session || {}, enrolled = r.enrolled || [], waitlisted = r.waitlisted || [];
+      var when = "";
+      try { when = UI.fmtDate(sess.starts_at) + " · " + UI.fmtTime(sess.starts_at) + "–" + UI.fmtTime(sess.ends_at); } catch (e) {}
+      var present = enrolled.filter(function (p) { return p.status === "attended"; }).length;
+      var wrap = el("div", {}, [backBar("Diary", "#/diary")]);
+      wrap.appendChild(card([
+        el("h1", { style: "margin:0 0 2px;font-size:1.25rem", text: sess.class_name || "Class" }),
+        el("div", { class: "cf-muted", text: [when, sess.coach_name].filter(Boolean).join(" · ") || "" }),
+        el("div", { class: "cf-muted", style: "margin-top:4px;font-size:.85rem", text:
+          enrolled.length + " enrolled" + (sess.capacity ? " / " + sess.capacity : "") +
+          " · " + present + " checked in" + (waitlisted.length ? " · " + waitlisted.length + " waitlisted" : "") }),
+      ]));
+      var lc = card([el("h2", { style: "margin:0 0 8px;font-size:1.05rem", text: "Enrolled" })]);
+      var list = el("div", { class: "cf-list" });
+      if (!enrolled.length) list.appendChild(el("div", { class: "cf-empty", text: "No one enrolled yet." }));
+      enrolled.forEach(function (p) { list.appendChild(rosterRow(p)); });
+      lc.appendChild(list);
+      wrap.appendChild(lc);
+      if (waitlisted.length) {
+        var wl = card([el("h2", { style: "margin:0 0 8px;font-size:1.05rem", text: "Waitlist" })]);
+        var wlist = el("div", { class: "cf-list" });
+        waitlisted.forEach(function (p) { wlist.appendChild(el("div", { class: "cf-item" }, [el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: p.name || p.email || "Player" }), el("div", { class: "cf-item-s", text: "Waitlisted" })])])); });
+        wl.appendChild(wlist); wrap.appendChild(wl);
+      }
+      set(wrap);
+    }, function (e) { set(el("div", {}, [pageHeader("Roster", "Diary", "#/diary"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); });
+  }
+
   async function renderDiaryClasses(box) {
     UI.clear(box);
     box.appendChild(el("div", { class: "cf-loading", text: "Loading classes…" }));

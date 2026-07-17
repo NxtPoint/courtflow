@@ -1382,10 +1382,22 @@ def session_owner_coach(session, *, club_id, session_id):
 
 
 def roster(session, *, club_id, session_id):
-    """{enrolled:[{user_id,name,email,status}], waitlisted:[...]} for a class session."""
+    """{session:{...}, enrolled:[{user_id,name,email,phone,status}], waitlisted:[...]} for a class
+    session — drives the admin roster page (check-in / no-show)."""
+    sess = session.execute(
+        text("SELECT cs.starts_at, cs.ends_at, cs.capacity, cs.status, r.name AS class_name, "
+             "       COALESCE(cp.display_name, "
+             "                NULLIF(TRIM(COALESCE(cu.first_name,'')||' '||COALESCE(cu.surname,'')),'')) AS coach_name "
+             "FROM diary.class_session cs LEFT JOIN diary.resource r ON r.id = cs.resource_id "
+             "LEFT JOIN iam.user cu ON cu.id = cs.coach_user_id "
+             "LEFT JOIN iam.coach_profile cp ON cp.user_id = cs.coach_user_id AND cp.club_id = cs.club_id "
+             "WHERE cs.id = :s AND cs.club_id = :c"),
+        {"s": session_id, "c": club_id},
+    ).mappings().first()
     rows = session.execute(
         text("""
-            SELECT e.user_id, e.status, u.first_name, u.surname, u.email
+            SELECT e.user_id, e.status, e.settlement_mode, e.order_id,
+                   u.first_name, u.surname, u.email, u.phone
             FROM diary.enrolment e
             LEFT JOIN iam.user u ON u.id = e.user_id
             WHERE e.club_id = :c AND e.class_session_id = :s
@@ -1398,12 +1410,23 @@ def roster(session, *, club_id, session_id):
     for r in rows:
         name = " ".join(x for x in (r.get("first_name"), r.get("surname")) if x).strip() or None
         entry = {"user_id": str(r["user_id"]) if r.get("user_id") else None,
-                 "name": name, "email": r.get("email"), "status": r["status"]}
+                 "name": name, "email": r.get("email"), "phone": r.get("phone"),
+                 "status": r["status"], "settlement_mode": r.get("settlement_mode"),
+                 "order_id": str(r["order_id"]) if r.get("order_id") else None}
         if r["status"] == "waitlisted":
             waitlisted.append(entry)
         else:
             enrolled.append(entry)
-    return {"ok": True, "enrolled": enrolled, "waitlisted": waitlisted}
+    sess_block = None
+    if sess:
+        sess_block = {
+            "class_name": sess["class_name"], "coach_name": sess["coach_name"],
+            "starts_at": sess["starts_at"].isoformat() if sess["starts_at"] else None,
+            "ends_at": sess["ends_at"].isoformat() if sess["ends_at"] else None,
+            "capacity": sess["capacity"], "status": sess["status"],
+            "enrolled_count": len(enrolled), "waitlisted_count": len(waitlisted),
+        }
+    return {"ok": True, "session": sess_block, "enrolled": enrolled, "waitlisted": waitlisted}
 
 
 def mark_attendance(session, *, club_id, session_id, user_id, attended):
