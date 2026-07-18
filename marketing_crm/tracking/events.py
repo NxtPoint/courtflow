@@ -32,6 +32,7 @@ MEMBERSHIP_LAPSED = "membership_lapsed"
 FREE_LESSON_REQUESTED = "free_lesson_requested"
 NPS_SUBMITTED = "nps_submitted"
 FEEDBACK_SUBMITTED = "feedback_submitted"
+PROMO_REDEEMED = "promo_redeemed"   # a promo code was applied at checkout (measures campaign→sale)
 
 # Anonymous (beacon only — never forwarded to Klaviyo)
 PAGE_VIEW = "page_view"
@@ -45,7 +46,7 @@ EVENTS = {
     CLASS_ENROLLED, CLASS_WAITLISTED, WAITLIST_SLOT_OPEN,
     LESSON_COMPLETED,
     PAYMENT_SUCCEEDED, MONTHLY_STATEMENT_READY, MEMBERSHIP_STARTED, MEMBERSHIP_LAPSED,
-    FREE_LESSON_REQUESTED, NPS_SUBMITTED, FEEDBACK_SUBMITTED,
+    FREE_LESSON_REQUESTED, NPS_SUBMITTED, FEEDBACK_SUBMITTED, PROMO_REDEEMED,
 }
 
 # Transactional events ALWAYS forward to Klaviyo (regardless of marketing_opt_in) — legitimate

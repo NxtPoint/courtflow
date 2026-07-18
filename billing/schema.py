@@ -871,6 +871,71 @@ _DDL = [
     f"CREATE INDEX IF NOT EXISTS ix_invoice_line_order "
     f"ON {SCHEMA}.invoice_line (order_id) WHERE order_id IS NOT NULL;",
     # --- end invoice documents ---
+
+    # ===========================================================================
+    # --- PROMOTIONS (billing/promotions.py) ---
+    #
+    # SHARED-FILE PROTOCOL: appended at the very END of billing's _DDL. Touches nothing above.
+    # Idempotent CREATE/ALTER ... IF NOT EXISTS throughout (python -m db twice = no-op).
+    #
+    # A promotion is an OFFER + a redeemable CODE (a "special"). Redeeming it at checkout just
+    # DISCOUNTS the order via billing.statement.discount_order — it NEVER invents a second debt
+    # store (one debt = one order stays true). See docs/specs/PROMOTIONS-ENGINE.md.
+    #   promotion            — the offer + its rules (kind/value/scope/caps/window/code)
+    #   promotion_redemption — the usage ledger (drives caps + reporting; reversed on refund/void)
+    # ---------------------------------------------------------------------------
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.promotion (
+        id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id           uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        code              text,                           -- redeem code (unique per club, case-insensitive); NULL = automatic
+        name              text NOT NULL,                  -- admin label ("January Membership 20%")
+        description       text,
+        kind              text NOT NULL DEFAULT 'percent_off'
+                            CHECK (kind IN ('percent_off','amount_off')),   -- Phase 2 adds bonus_period/bonus_units
+        percent_bps       int,                            -- percent_off: basis points (2000 = 20%)
+        value_minor       int,                            -- amount_off: cents
+        applies_to        text NOT NULL DEFAULT 'all'
+                            CHECK (applies_to IN ('all','membership','pack','court','lesson','class','product')),
+        product_id        uuid REFERENCES {SCHEMA}.product(id) ON DELETE CASCADE,   -- when applies_to='product'
+        min_spend_minor   int,                            -- eligibility floor (NULL = none)
+        first_time_only   boolean NOT NULL DEFAULT false, -- customer's FIRST purchase of this scope only
+        max_redemptions   int,                            -- global cap (NULL = unlimited)
+        per_customer_cap  int NOT NULL DEFAULT 1,         -- redemptions per customer
+        stackable         boolean NOT NULL DEFAULT false, -- may combine with another promo / an admin discount
+        starts_at         timestamptz,
+        ends_at           timestamptz,
+        status            text NOT NULL DEFAULT 'active'
+                            CHECK (status IN ('active','paused','archived')),
+        created_by        uuid,
+        created_at        timestamptz NOT NULL DEFAULT now(),
+        updated_at        timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_promotion_club ON {SCHEMA}.promotion (club_id, status);",
+    # Codes unique per club, case-insensitive, among live (non-archived) promos — an archived code frees up.
+    f"CREATE UNIQUE INDEX IF NOT EXISTS uq_promotion_code "
+    f"ON {SCHEMA}.promotion (club_id, lower(code)) WHERE code IS NOT NULL AND status <> 'archived';",
+
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.promotion_redemption (
+        id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id        uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        promotion_id   uuid NOT NULL REFERENCES {SCHEMA}.promotion(id) ON DELETE CASCADE,
+        order_id       uuid NOT NULL REFERENCES {SCHEMA}."order"(id) ON DELETE CASCADE,
+        user_id        uuid,                              -- who redeemed (iam.user.id)
+        discount_minor int NOT NULL DEFAULT 0,            -- what it actually took off
+        status         text NOT NULL DEFAULT 'applied' CHECK (status IN ('applied','reversed')),
+        redeemed_at    timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    # One promo per order (no self-stack) — also the belt-and-braces guard against a double-apply race.
+    f"CREATE UNIQUE INDEX IF NOT EXISTS uq_redemption_order "
+    f"ON {SCHEMA}.promotion_redemption (promotion_id, order_id);",
+    f"CREATE INDEX IF NOT EXISTS ix_redemption_promo ON {SCHEMA}.promotion_redemption (promotion_id, status);",
+    f"CREATE INDEX IF NOT EXISTS ix_redemption_user "
+    f"ON {SCHEMA}.promotion_redemption (club_id, user_id, status);",
+    # --- end promotions ---
 ]
 
 

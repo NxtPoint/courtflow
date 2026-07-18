@@ -247,6 +247,38 @@ def _membership_allowed_modes(session, club_id, price_id=None):
     return out or ["at_court"]
 
 
+def _apply_checkout_promo(s, club_id, user_id, res, body, mode):
+    """Apply an optional promo_code to a freshly-created checkout order (before payment). Mutates res
+    (amount_minor + promo/promo_error). Returns an (json, status) tuple to ABORT — online only, so a
+    failed code never charges full price on a not-yet-activated order — or None to continue. Never raises."""
+    code = (body.get("promo_code") or "").strip()
+    if not code:
+        return None
+    try:
+        from billing import promotions
+        pr = promotions.apply_to_order(s, club_id=club_id, code=code,
+                                       order_id=res["order_id"], user_id=user_id, actor_user_id=user_id)
+    except Exception:
+        log.exception("checkout promo apply failed")
+        return None
+    if pr.get("ok"):
+        res["amount_minor"] = pr.get("new_total_minor", res["amount_minor"])
+        res["promo"] = {"discount_minor": pr["discount_minor"], "label": pr.get("label")}
+        return None
+    # Failed. An ONLINE order isn't activated yet → void it + abort so the member can fix the code.
+    if mode == "online":
+        try:
+            from billing import statement
+            statement.void_order(s, club_id=club_id, order_id=res["order_id"])
+        except Exception:
+            log.exception("checkout promo: void after failed code failed")
+        return jsonify(error="promo_failed",
+                       promo_error=pr.get("reason") or "That code couldn't be applied."), 400
+    # Offline: the membership/pack was already granted — proceed at full price, surface the reason.
+    res["promo_error"] = pr.get("reason") or "That code couldn't be applied."
+    return None
+
+
 @yoco_bp.post("/api/billing/membership/checkout")
 def membership_checkout():
     """AUTH'd member. Buy the chosen membership term plan. Body {price_id?, settlement_mode?}:
@@ -301,12 +333,19 @@ def membership_checkout():
         if int(res.get("amount_minor") or 0) <= 0:
             return jsonify(error="membership_has_no_price"), 400
 
+        # Optional promo code — apply to the freshly-created order before payment (discounted total
+        # then flows into Yoco / the owed order). A bad code on an online buy aborts cleanly.
+        abort = _apply_checkout_promo(s, p.club_id, p.user_id, res, body, mode)
+        if abort:
+            return abort
+
     return jsonify(order_id=res["order_id"], amount_minor=res["amount_minor"],
                    currency=res["currency"], price_id=res["price_id"],
                    term_months=res.get("term_months"), label=res.get("label"),
                    settlement_mode=res.get("settlement_mode"),
                    needs_checkout=bool(res.get("needs_checkout")),
                    activated=bool(res.get("activated")),
+                   promo=res.get("promo"), promo_error=res.get("promo_error"),
                    provider=res.get("settlement_mode") == "online" and "yoco" or "manual"), 200
 
 
@@ -471,6 +510,11 @@ def bundles_checkout():
         if int(res.get("amount_minor") or 0) <= 0:
             return jsonify(error="bundle_has_no_price"), 400
 
+        # Optional promo code — apply before payment (discounted total flows into Yoco / the owed order).
+        abort = _apply_checkout_promo(s, p.club_id, p.user_id, res, body, mode)
+        if abort:
+            return abort
+
     # Offline self-serve pack (at-court/monthly) is granted immediately above — the ONLINE path emits
     # bundle_activated from the paid webhook, so mirror it here or the member gets NO confirmation of
     # their pack (silent grant). Best-effort + guarded; the order already committed with session_scope.
@@ -491,6 +535,7 @@ def bundles_checkout():
                    settlement_mode=res.get("settlement_mode"),
                    needs_checkout=bool(res.get("needs_checkout")),
                    activated=bool(res.get("activated")),
+                   promo=res.get("promo"), promo_error=res.get("promo_error"),
                    provider="yoco" if res.get("settlement_mode") == "online" else "manual"), 200
 
 

@@ -1,8 +1,34 @@
-# Promotions Engine — plan (build later)
+# Promotions Engine
 
-**Status: PLAN ONLY — not built.** A new billing sub-module to run **specials with promo codes redeemed
-at checkout** — e.g. *20% off memberships*, *buy a 3-month pack, get 1 month free*, *R100 off your first
-lesson*. Scoped here; implement in phases (§9) after Tomo signs off the open decisions (§10).
+**Status: PHASE 1 BUILT & LIVE (2026-07-18).** A billing sub-module to run **specials with promo codes
+redeemed at checkout** — e.g. *20% off memberships*, *R100 off a pack*. Phase 2 (bonus_period "3 months +
+1 free" + unique Klaviyo codes) is still planned (§9).
+
+## Phase 1 — what shipped
+- **Schema:** `billing.promotion` + `billing.promotion_redemption` (idempotent DDL, `billing/schema.py`).
+- **Engine:** `billing/promotions.py` — `validate` (preview), `apply_to_order` (delegates to
+  `statement.discount_order`), `reverse_for_order` (refund/void frees the slot), + admin CRUD. Eligibility:
+  scope / window / min-spend / first-time / global + per-customer caps / stacking-off.
+- **Admin UI:** **Setup → "Promotions & offers"** (`AdminUI.promotions`) — create/edit/pause/archive a promo
+  (name, code, % or R off, scope, caps, min-spend, end date, first-time), and view its redemptions.
+- **Checkout wiring (LIVE):** the **membership** and **pack** purchase flows take an optional promo code
+  (`plan.js` field → `Pay.buyMembership/buyPack` → `promo_code` in the checkout body → applied server-side
+  before payment, so Yoco/owed reflects the discount). A bad code on an online buy aborts cleanly (voids the
+  un-paid order) so no one is charged full price.
+- **Customer API:** `POST /api/billing/promo/validate` (preview) · `POST /api/billing/promo/apply`
+  (staff/desk can apply a code to any open order). Admin: `/api/admin/promotions*`.
+- **Measurement:** every redemption emits `promo_redeemed` (→ usage_event + Klaviyo) — ties a sale back to
+  the campaign that carried the code.
+- **DEFERRED to a fast-follow:** the promo field on **court/lesson booking** checkout (`booking.js`) — the
+  engine + `/api/billing/promo/apply` already support it; only the booking-flow UI field is pending.
+
+> Verify on a sandbox before relying on it in anger: `python -m db` twice (idempotency) +
+> `python -m scripts.test_all` (booking/billing/statement harnesses). The engine is additive; existing
+> billing paths only gained the two `reverse_for_order` hooks + the opt-in checkout promo helper.
+
+---
+
+## Original plan (below) — Phase 1 above is the realised subset; Phase 2/3 remain.
 
 ## 1. What this is (and what it is NOT)
 - **Promotion** = the OFFER + its rules + a redeemable CODE. This module owns it.

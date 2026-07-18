@@ -165,6 +165,13 @@
       return A().apiJSON("/api/admin/billing-profile", { method: "PATCH", body: body });
     },
 
+    // ---- promotions (specials + promo codes) ----------------------------
+    promotions: function () { return A().apiJSON("/api/admin/promotions"); },
+    createPromotion: function (body) { return A().apiJSON("/api/admin/promotions", { method: "POST", body: body || {} }); },
+    updatePromotion: function (id, body) { return A().apiJSON("/api/admin/promotions/" + enc(id), { method: "PATCH", body: body || {} }); },
+    setPromotionStatus: function (id, status) { return A().apiJSON("/api/admin/promotions/" + enc(id) + "/status", { method: "POST", body: { status: status } }); },
+    promotionRedemptions: function (id) { return A().apiJSON("/api/admin/promotions/" + enc(id) + "/redemptions"); },
+
     // ---- resources (courts) ---------------------------------------------
     // GET /api/admin/resources -> {resources:[{id,kind,name,surface,capacity,...}]}
     resources: function () { return A().apiJSON("/api/admin/resources"); },
@@ -1881,8 +1888,128 @@
     reload();
   }
 
+  // ---- Promotions & offers (Setup section) — specials with promo codes redeemed at checkout.
+  function promotions(host) {
+    init();
+    function offerLabel(p) { return p.kind === "percent_off" ? (((p.percent_bps || 0) / 100) + "% off") : (UI.money(p.value_minor || 0) + " off"); }
+    function scopeLabel(p) { return p.applies_to === "all" ? "Everything" : (p.applies_to.charAt(0).toUpperCase() + p.applies_to.slice(1)); }
+
+    function draw() {
+      UI.clear(host);
+      host.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:flex-start;margin-bottom:12px" }, [
+        el("div", {}, [el("h2", { text: "Promotions & offers" }),
+          el("p", { class: "cf-muted", text: "Run a special with a promo code members enter at checkout — e.g. 20% off memberships." })]),
+        el("button", { class: "cf-btn cf-btn-primary", text: "+ New promotion", onclick: function () { editModal(null); } }),
+      ]));
+      var list = el("div", { class: "cf-list" }, [el("div", { class: "cf-muted", text: "Loading…" })]);
+      host.appendChild(list);
+      window.AdminAPI.promotions().then(function (d) {
+        UI.clear(list);
+        var rows = (d && d.promotions) || [];
+        if (!rows.length) { list.appendChild(el("div", { class: "cf-empty", text: "No promotions yet. Create one to run a special." })); return; }
+        rows.forEach(function (p) {
+          var used = (p.max_redemptions != null) ? (p.redemptions + "/" + p.max_redemptions + " used") : (p.redemptions + " used");
+          var bits = [offerLabel(p), scopeLabel(p), used];
+          if (p.code) bits.unshift("Code " + p.code);
+          var row = el("div", { class: "cf-item", style: "cursor:pointer" }, [
+            el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [el("span", { class: "cf-item-t", text: p.name }), p.status !== "active" ? UI.statusChip(p.status) : null].filter(Boolean)),
+            el("div", { class: "cf-item-sub", text: bits.join(" · ") }),
+          ]);
+          row.addEventListener("click", function () { editModal(p); });
+          list.appendChild(row);
+        });
+      }, function (e) { UI.clear(list); list.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+
+    function editModal(p) {
+      p = p || {}; var isNew = !p.id;
+      var m = UI.modal(isNew ? "New promotion" : "Edit promotion");
+      var f = {
+        name: input({ value: p.name || "", placeholder: "e.g. January Membership 20%" }),
+        code: input({ value: p.code || "", placeholder: "e.g. MEMBER20" }),
+        kind: el("select", { class: "cf-input" }, [["percent_off", "% off"], ["amount_off", "Amount off"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); })),
+        value: input({ type: "number", value: p.kind === "amount_off" ? fromMinor(p.value_minor) : (p.percent_bps ? (p.percent_bps / 100) : "") }),
+        applies_to: el("select", { class: "cf-input" }, [["all", "Everything"], ["membership", "Memberships"], ["pack", "Packs"], ["court", "Court hire"], ["lesson", "Lessons"], ["class", "Classes"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); })),
+        max_redemptions: input({ type: "number", placeholder: "blank = unlimited", value: p.max_redemptions != null ? p.max_redemptions : "" }),
+        per_customer_cap: input({ type: "number", value: p.per_customer_cap != null ? p.per_customer_cap : 1 }),
+        min_spend: input({ type: "number", placeholder: "optional", value: p.min_spend_minor != null ? fromMinor(p.min_spend_minor) : "" }),
+        ends_at: input({ type: "date", value: p.ends_at ? String(p.ends_at).slice(0, 10) : "" }),
+        first_time: el("input", { type: "checkbox" }),
+      };
+      f.kind.value = p.kind || "percent_off"; f.applies_to.value = p.applies_to || "all";
+      if (p.first_time_only) f.first_time.checked = true;
+      var valLabel = el("label", {});
+      function syncVal() { valLabel.textContent = f.kind.value === "percent_off" ? "Percent off (e.g. 20)" : "Amount off (R)"; }
+      f.kind.addEventListener("change", syncVal); syncVal();
+
+      m.body.appendChild(field("Name (internal)", f.name));
+      m.body.appendChild(field("Promo code (what members type)", f.code));
+      m.body.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [field("Offer type", f.kind), el("div", { class: "cf-field" }, [valLabel, f.value])]));
+      m.body.appendChild(field("Applies to", f.applies_to));
+      m.body.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [field("Total uses", f.max_redemptions), field("Uses per customer", f.per_customer_cap)]));
+      m.body.appendChild(el("div", { class: "cf-grid cf-grid-2" }, [field("Min spend (R, optional)", f.min_spend), field("Ends on (optional)", f.ends_at)]));
+      m.body.appendChild(el("label", { class: "cf-row", style: "gap:8px;align-items:center;margin-top:8px" }, [f.first_time, el("span", { text: "First-time purchases only" })]));
+
+      var footer = el("div", { class: "cf-row", style: "justify-content:space-between;margin-top:14px" });
+      var left = el("div", {});
+      if (!isNew && p.status !== "archived") {
+        left.appendChild(el("button", { class: "cf-btn cf-btn-sm", text: p.status === "paused" ? "Resume" : "Pause", onclick: function () { setStatus(p, p.status === "paused" ? "active" : "paused", m); } }));
+        left.appendChild(el("button", { class: "cf-btn cf-btn-sm", style: "margin-left:6px", text: "Archive", onclick: function () { setStatus(p, "archived", m); } }));
+      }
+      footer.appendChild(left);
+      var save = el("button", { class: "cf-btn cf-btn-primary", text: isNew ? "Create" : "Save" });
+      footer.appendChild(save);
+      m.body.appendChild(footer);
+      if (!isNew) m.body.appendChild(el("button", { class: "cf-link", style: "margin-top:10px", text: "View redemptions →", onclick: function () { m.close(); redemptions(p); } }));
+
+      save.addEventListener("click", async function () {
+        var body = {
+          name: f.name.value.trim(), code: f.code.value.trim() || null,
+          kind: f.kind.value, applies_to: f.applies_to.value,
+          per_customer_cap: parseInt(f.per_customer_cap.value, 10) || 1,
+          first_time_only: f.first_time.checked,
+          max_redemptions: f.max_redemptions.value.trim() ? parseInt(f.max_redemptions.value, 10) : null,
+          min_spend_minor: f.min_spend.value.trim() ? Math.round(parseFloat(f.min_spend.value) * 100) : null,
+          ends_at: f.ends_at.value || null,
+        };
+        if (f.kind.value === "percent_off") { body.percent_bps = Math.round(parseFloat(f.value.value || "0") * 100); body.value_minor = null; }
+        else { body.value_minor = Math.round(parseFloat(f.value.value || "0") * 100); body.percent_bps = null; }
+        if (!body.name) { UI.toast("Give it a name.", "warn"); return; }
+        save.disabled = true;
+        try {
+          if (isNew) await window.AdminAPI.createPromotion(body); else await window.AdminAPI.updatePromotion(p.id, body);
+          UI.toast("Saved.", "info"); m.close(); draw();
+        } catch (e) { save.disabled = false; UI.toast(UI.errMsg(e), "error"); }
+      });
+    }
+
+    function setStatus(p, status, m) {
+      window.AdminAPI.setPromotionStatus(p.id, status).then(function () { UI.toast("Updated.", "info"); if (m) m.close(); draw(); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+    }
+
+    function redemptions(p) {
+      var m = UI.modal("Redemptions — " + p.name);
+      var box = el("div", {}, [el("div", { class: "cf-muted", text: "Loading…" })]);
+      m.body.appendChild(box);
+      window.AdminAPI.promotionRedemptions(p.id).then(function (d) {
+        UI.clear(box);
+        var rows = (d && d.redemptions) || [];
+        if (!rows.length) { box.appendChild(el("div", { class: "cf-empty", text: "No redemptions yet." })); return; }
+        rows.forEach(function (r) {
+          var who = [r.first_name, r.surname].filter(Boolean).join(" ") || r.email || "—";
+          box.appendChild(el("div", { class: "cf-item" }, [
+            el("div", { class: "cf-row", style: "justify-content:space-between" }, [el("span", { class: "cf-item-t", text: who }), el("span", { text: UI.money(r.discount_minor) })]),
+            el("div", { class: "cf-item-sub", text: (r.status === "reversed" ? "Reversed · " : "") + String(r.redeemed_at).slice(0, 10) }),
+          ]));
+        });
+      }, function (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+
+    draw();
+  }
+
   window.AdminUI = {
-    clubProfile: clubProfile, billingDetails: billingDetails, hours: hours, courts: courts, courtsManage: courtsManage,
+    clubProfile: clubProfile, billingDetails: billingDetails, promotions: promotions, hours: hours, courts: courts, courtsManage: courtsManage,
     coachManage: coachManage,
     services: services, coaches: coaches, membershipPlans: membershipPlans,
     membershipServices: membershipServices, equipmentManage: equipmentManage,

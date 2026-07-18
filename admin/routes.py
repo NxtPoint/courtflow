@@ -230,6 +230,67 @@ def patch_policy():
 
 
 # ---------------------------------------------------------------------------
+# promotions (specials + promo codes — docs/specs/PROMOTIONS-ENGINE.md). Owner/admin only.
+# The offer + rules live here; redeeming a code at checkout just discounts the order.
+# ---------------------------------------------------------------------------
+
+@admin_bp.get("/promotions")
+def list_promotions():
+    p, err = _admin()
+    if err:
+        return err
+    from billing import promotions as promo
+    with session_scope() as s:
+        rows = promo.list_promotions(s, club_id=p.club_id)
+    return jsonify(promotions=rows), 200
+
+
+@admin_bp.post("/promotions")
+def create_promotion():
+    p, err = _admin()
+    if err:
+        return err
+    from billing import promotions as promo
+    with session_scope() as s:
+        res = promo.create(s, club_id=p.club_id, created_by=p.user_id, **_body())
+    return (jsonify(res), 200) if res.get("ok") else (jsonify(res), 400)
+
+
+@admin_bp.patch("/promotions/<promo_id>")
+def update_promotion(promo_id):
+    p, err = _admin()
+    if err:
+        return err
+    from billing import promotions as promo
+    with session_scope() as s:
+        res = promo.update(s, club_id=p.club_id, promo_id=promo_id, **_body())
+    return (jsonify(res), 200) if res.get("ok") else (jsonify(res), 400)
+
+
+@admin_bp.post("/promotions/<promo_id>/status")
+def set_promotion_status(promo_id):
+    p, err = _admin()
+    if err:
+        return err
+    from billing import promotions as promo
+    with session_scope() as s:
+        res = promo.set_status(s, club_id=p.club_id, promo_id=promo_id,
+                               status=(_body().get("status") or "").strip())
+    return (jsonify(res), 200) if res.get("ok") else (jsonify(res), 400)
+
+
+@admin_bp.get("/promotions/<promo_id>/redemptions")
+def promotion_redemptions(promo_id):
+    p, err = _admin()
+    if err:
+        return err
+    from billing import promotions as promo
+    with session_scope() as s:
+        rows = promo.list_redemptions(s, club_id=p.club_id, promo_id=promo_id)
+    return jsonify(redemptions=rows), 200
+
+
+# ---------------------------------------------------------------------------
 # resources (courts / coaches / classes)
 # ---------------------------------------------------------------------------
 

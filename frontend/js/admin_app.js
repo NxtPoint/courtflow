@@ -1595,6 +1595,8 @@
     //  is created/edited under it in Services & pricing. See docs/specs/FRONTEND-STANDARDISATION.md.)
     { key: "coaches", label: "Coaches & commission", desc: "Invite, hide or remove coaches · rent + commission",
       mount: function (h) { UI.clear(h); window.AdminUI.coachManage(h); } },
+    { key: "promotions", label: "Promotions & offers", desc: "Run a special with a promo code — e.g. 20% off memberships",
+      mount: function (h) { UI.clear(h); window.AdminUI.promotions(h); } },
   ];
   // Owner creates a court SERVICE (a club-owned court-hire tier, e.g. Hardcourt vs Clay). Each is a
   // billing.product(kind=court_booking) with its own price; courts are then ALLOCATED to it under

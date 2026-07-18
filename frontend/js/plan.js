@@ -131,9 +131,14 @@
       card.appendChild(opts);
     }
 
+    if (canBuy && memModes.length) {
+      var promoIn = el("input", { class: "cf-input", placeholder: "Promo code (optional)", value: state.memPromo || "" });
+      promoIn.addEventListener("input", function () { state.memPromo = promoIn.value.trim(); });
+      card.appendChild(el("div", { class: "cf-field", style: "margin-top:8px" }, [promoIn]));
+    }
     var btn = el("button", { class: "cf-btn cf-btn-primary cf-btn-lg cf-btn-block", text: isTrial() ? "Get this membership" : "Buy membership" });
     if (!canBuy) btn.disabled = true;
-    else btn.addEventListener("click", function () { buyMembership(btn, state.selMem, memModes, chooserHost); });
+    else btn.addEventListener("click", function () { buyMembership(btn, state.selMem, memModes, chooserHost, state.memPromo); });
     card.appendChild(btn);
     card.appendChild(chooserHost);
 
@@ -204,9 +209,14 @@
       });
       card.appendChild(opts);
     }
+    if (canBuy && packModes.length) {
+      var packPromoIn = el("input", { class: "cf-input", placeholder: "Promo code (optional)", value: state.packPromo || "" });
+      packPromoIn.addEventListener("input", function () { state.packPromo = packPromoIn.value.trim(); });
+      card.appendChild(el("div", { class: "cf-field", style: "margin-top:8px" }, [packPromoIn]));
+    }
     var btn = el("button", { class: "cf-btn cf-btn-primary cf-btn-lg cf-btn-block", text: "Buy pack" });
     if (!canBuy) btn.disabled = true;
-    else btn.addEventListener("click", function () { buyPack(btn, state.selPack, packModes, packChooser); });
+    else btn.addEventListener("click", function () { buyPack(btn, state.selPack, packModes, packChooser, state.packPromo); });
     card.appendChild(btn);
     card.appendChild(packChooser);
     if (!plans.length) card.appendChild(note("Your club doesn't offer session packs yet."));
@@ -237,17 +247,17 @@
   // ---- checkout --------------------------------------------------------------
   // Membership via the shared rule: online → Yoco; single non-online mode → immediate activation;
   // multiple modes → a chooser in `host`.
-  function buyMembership(btn, priceId, modes, host) {
+  function buyMembership(btn, priceId, modes, host, promoCode) {
     window.Pay.buyMembership({
-      priceId: priceId, modes: modes, host: host,
+      priceId: priceId, modes: modes, host: host, promoCode: promoCode,
       onActivated: function () { UI.toast("You're a member! Settle at the front desk.", "info"); setTimeout(function () { location.reload(); }, 1200); },
       onError: function (e) { UI.toast(UI.errMsg(e) || "Could not complete.", "error"); },
     });
   }
-  function buyPack(btn, planId, modes, host) {
+  function buyPack(btn, planId, modes, host, promoCode) {
     if (!planId) { UI.toast("Pick a pack first.", "error"); return; }
     window.Pay.buyPack({
-      planId: planId, modes: modes, host: host,
+      planId: planId, modes: modes, host: host, promoCode: promoCode,
       onActivated: function () { UI.toast("Pack added — settle at the front desk.", "info"); setTimeout(function () { location.reload(); }, 1200); },
       onError: function (e) { UI.toast(UI.errMsg(e) || "Could not complete.", "error"); },
     });

@@ -379,6 +379,12 @@ def void_order(session, *, club_id, order_id, write_off=False, reason=None) -> D
              "WHERE club_id = :c AND order_id = :o AND status IN ('pending','active')"),
         {"c": str(club_id), "o": str(order_id)},
     )
+    # Free any promo-redemption slot this order held — a voided order must not burn a promo use.
+    try:
+        from billing import promotions
+        promotions.reverse_for_order(session, order_id)
+    except Exception:
+        pass
     return {"ok": True, "status": new_status}
 
 

@@ -52,19 +52,27 @@
       var modes = (opts.modes || []).filter(function (m) { return m === "online" || m === "at_court" || m === "monthly_account"; });
       var onErr = opts.onError || function (e) { if (UI) UI.toast(UI.errMsg(e), "error"); };
 
+      function promoErr(e) {
+        // Surface a friendly promo reason (the server 400s with {error:'promo_failed', promo_error}).
+        if (e && e.body && e.body.promo_error && UI) { UI.toast(e.body.promo_error, "error"); return; }
+        onErr(e);
+      }
       function checkout(mode) {
         var body = {};
         Object.keys(opts.bodyBase || {}).forEach(function (k) { body[k] = opts.bodyBase[k]; });
         if (mode) body.settlement_mode = mode;
         return auth().apiJSON(opts.endpoint, { method: "POST", body: body })
           .then(function (res) {
+            // Promo feedback (a successful code discounts the order; a soft failure on an owed buy).
+            if (res && res.promo && UI) UI.toast("Code applied — you saved " + UI.money(res.promo.discount_minor) + ".", "info");
+            else if (res && res.promo_error && UI) UI.toast(res.promo_error, "warn");
             if (res && (res.settlement_mode === "online" || res.needs_checkout) && res.order_id) {
               return Pay.startYocoCheckout(res.order_id);
             }
             if (res && res.activated) { if (opts.onActivated) opts.onActivated(res); return res; }
             if (res && res.allowed) { renderChooser(res.allowed); return res; }
             throw new Error("unexpected checkout response");
-          }, onErr);
+          }, promoErr);
       }
 
       function renderChooser(ms) {
@@ -85,15 +93,17 @@
 
     buyMembership: function (opts) {
       opts = opts || {};
-      Pay.purchase({ endpoint: "/api/billing/membership/checkout",
-        bodyBase: opts.priceId ? { price_id: opts.priceId } : {},
+      var base = opts.priceId ? { price_id: opts.priceId } : {};
+      if (opts.promoCode) base.promo_code = opts.promoCode;
+      Pay.purchase({ endpoint: "/api/billing/membership/checkout", bodyBase: base,
         modes: opts.modes, host: opts.host, onActivated: opts.onActivated, onError: opts.onError });
     },
 
     buyPack: function (opts) {
       opts = opts || {};
-      Pay.purchase({ endpoint: "/api/billing/bundles/checkout",
-        bodyBase: { bundle_plan_id: opts.planId },
+      var base = { bundle_plan_id: opts.planId };
+      if (opts.promoCode) base.promo_code = opts.promoCode;
+      Pay.purchase({ endpoint: "/api/billing/bundles/checkout", bodyBase: base,
         modes: opts.modes, host: opts.host, onActivated: opts.onActivated, onError: opts.onError });
     },
   };

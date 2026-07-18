@@ -206,6 +206,12 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
             is_full = (refund_amt <= 0) or (paid_sum > 0 and refunded_sum >= paid_sum)
             if is_full:
                 _mark_order(session, order_id, "refunded")
+                # Free any promo-redemption slot a fully-refunded order held.
+                try:
+                    from billing import promotions
+                    promotions.reverse_for_order(session, order_id)
+                except Exception:
+                    pass
             # Reverse the coach's commission PROPORTIONALLY so the club doesn't eat the coach's
             # share of a refunded lesson (and the coach sees the refund). Savepoint-guarded +
             # idempotent, exactly like the charge fan-out — never blocks the refund record.

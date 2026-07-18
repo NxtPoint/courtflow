@@ -96,6 +96,62 @@ def billing_config():
 # POST /api/billing/desk-payment — admin records a pay-at-court settlement
 # ---------------------------------------------------------------------------
 
+@billing_bp.post("/api/billing/promo/validate")
+def promo_validate():
+    """Preview a promo code against an intended purchase (no write). Body: {code, applies_to?,
+    amount_minor?, product_id?}. Returns {ok, discount_minor, label} or {ok:false, error, reason}.
+    Auth required (a member checking their own basket); scoped to the caller's club."""
+    from auth import resolve_principal
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(ok=False, error="unauthorized"), 401
+    body = request.get_json(silent=True) or {}
+    code = (body.get("code") or "").strip()
+    if not code:
+        return jsonify(ok=False, error="code required"), 400
+    from db import session_scope
+    from billing import promotions
+    with session_scope() as s:
+        res = promotions.validate(
+            s, club_id=p.club_id, code=code,
+            applies_to=(body.get("applies_to") or "all"),
+            amount_minor=int(body.get("amount_minor") or 0),
+            product_id=body.get("product_id"), user_id=p.user_id)
+    return jsonify(res), (200 if res.get("ok") else 200)  # 200 either way; UI reads ok/reason
+
+
+@billing_bp.post("/api/billing/promo/apply")
+def promo_apply():
+    """Apply a promo code to a REAL open order (before payment). Body: {order_id, code}. Returns
+    {ok, discount_minor, new_total_minor, label} or {ok:false, error, reason}. The caller must own
+    the order OR be club staff."""
+    from auth import resolve_principal
+    from iam.permissions import can
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(ok=False, error="unauthorized"), 401
+    body = request.get_json(silent=True) or {}
+    order_id = (body.get("order_id") or "").strip()
+    code = (body.get("code") or "").strip()
+    if not order_id or not code:
+        return jsonify(ok=False, error="order_id and code required"), 400
+
+    from db import session_scope
+    from billing import orders as orders_repo, promotions
+    with session_scope() as s:
+        order = orders_repo.get_order(s, order_id=order_id)
+        if not order:
+            return jsonify(ok=False, error="order not found"), 404
+        # Owner of the order, or club staff (take_pay_at_court gate = club_admin/coach at desk).
+        is_owner = (order.get("user_id") and str(order["user_id"]) == str(p.user_id))
+        if not is_owner and not can(p, "take_pay_at_court", {"club_id": order["club_id"]}):
+            return jsonify(ok=False, error="forbidden"), 403
+        res = promotions.apply_to_order(
+            s, club_id=order["club_id"], code=code, order_id=order_id,
+            user_id=order.get("user_id"), actor_user_id=p.user_id)
+    return jsonify(res), 200
+
+
 @billing_bp.post("/api/billing/desk-payment")
 def desk_payment():
     """Admin-only. Body: {order_id, amount_minor, provider?(cash|card_at_desk|eft),
