@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Welcome back to NextPoint Tennis</title>
+<style>
+  :root{
+    --green:#0E7A47; --green-dark:#0B5C36; --tint:#E8F4EE; --lime:#C8E85C;
+    --lime-ink:#26330A; --ink:#10231A; --muted:#5B6B62; --line:#e4ebe7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--tint);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:520px;margin:0 auto;padding:28px 20px 56px;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:18px;overflow:hidden;
+    box-shadow:0 10px 30px rgba(16,35,26,.08);}
+  .band{background:var(--green);color:#fff;padding:26px 26px 22px;}
+  .band .brand{font-size:.8rem;letter-spacing:.14em;text-transform:uppercase;opacity:.85;}
+  .band h1{margin:8px 0 0;font-size:1.5rem;line-height:1.25;font-weight:700;}
+  .body{padding:26px;}
+  .body p{margin:0 0 16px;color:var(--muted);}
+  .body p.lead{color:var(--ink);font-size:1.06rem;}
+  .btn{display:block;width:100%;text-align:center;text-decoration:none;cursor:pointer;border:0;
+    padding:15px 18px;border-radius:12px;font-size:1rem;font-weight:700;margin-top:10px;}
+  .btn-primary{background:var(--lime);color:var(--lime-ink);}
+  .btn-primary:hover{background:#bcdd45;}
+  .btn-ghost{background:#fff;color:var(--green-dark);border:1px solid var(--line);}
+  .tick{width:56px;height:56px;border-radius:50%;background:var(--green);margin:2px auto 14px;
+    display:flex;align-items:center;justify-content:center;}
+  .tick svg{width:30px;height:30px;stroke:#fff;stroke-width:3;fill:none;}
+  .center{text-align:center;}
+  .undo{display:inline-block;margin-top:16px;font-size:.85rem;color:var(--muted);
+    text-decoration:underline;cursor:pointer;background:none;border:0;}
+  .foot{padding:16px 26px 24px;border-top:1px solid var(--line);color:var(--muted);font-size:.8rem;text-align:center;}
+  .hide{display:none!important;}
+  .spin{text-align:center;color:var(--muted);padding:26px;}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="band">
+        <div class="brand" id="brand">NextPoint Tennis</div>
+        <h1 id="headline">You're back in 🎾</h1>
+      </div>
+      <div class="body">
+        <div id="loading" class="spin">One moment…</div>
+
+        <!-- SUCCESS: opted in -->
+        <div id="ok" class="hide">
+          <div class="center">
+            <div class="tick"><svg viewBox="0 0 24 24"><polyline points="5 13 10 18 19 6"></polyline></svg></div>
+          </div>
+          <p class="lead center" id="okLead">You're all set — welcome back to NextPoint.</p>
+          <p class="center">We'll keep you posted on court time, coaching and what's on at the club. Now the fun part:</p>
+          <a class="btn btn-primary" id="bookBtn" href="https://nextpointtennis.com/login">Book a court</a>
+          <a class="btn btn-ghost" href="https://nextpointtennis.com/">See what's new</a>
+          <div class="center"><button id="undoBtn" class="undo">No thanks — I didn't mean to</button></div>
+        </div>
+
+        <!-- UNDONE -->
+        <div id="undone" class="hide">
+          <p class="lead">Done — you won't hear from us.</p>
+          <p>We've removed you from marketing updates. You'll still get essentials about your own bookings.</p>
+          <a class="btn btn-ghost" href="https://nextpointtennis.com/">Back to NextPoint</a>
+        </div>
+
+        <!-- EXPIRED / bad token -->
+        <div id="expired" class="hide">
+          <p class="lead">This link has expired.</p>
+          <p>No problem — you can update your preferences any time from your account.</p>
+          <a class="btn btn-ghost" href="https://nextpointtennis.com/login">Sign in to NextPoint</a>
+        </div>
+      </div>
+      <div class="foot">NextPoint Tennis · Killarney Country Club, Johannesburg</div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  var API = (window.__API_BASE || "https://courtflow-api.onrender.com").replace(/\/+$/,"");
+  var CF  = window.__CF || {};
+  if (CF.name) { document.getElementById("brand").textContent = CF.name; }
+
+  var token = new URLSearchParams(location.search).get("t") || "";
+  var el = function(id){ return document.getElementById(id); };
+  var show = function(id){ el(id).classList.remove("hide"); };
+  var hide = function(id){ el(id).classList.add("hide"); };
+
+  function apply(opt){
+    return fetch(API + "/api/subscribe", {
+      method:"POST", headers:{"content-type":"application/json"},
+      body: JSON.stringify({token: token, opt: opt})
+    }).then(function(r){ return r.json().catch(function(){ return {ok:false}; }); });
+  }
+
+  if (!token){ hide("loading"); show("expired"); return; }
+
+  // The email CTA ("Yes, keep me posted") IS the affirmative act — opt them in on landing, then let
+  // them undo if it was a mistake. One tap from the email = done.
+  apply(true).then(function(res){
+    hide("loading");
+    if (!res || res.ok === false){ show("expired"); return; }
+    if (res.first_name){
+      el("headline").textContent = "You're back in, " + res.first_name + " 🎾";
+      el("okLead").textContent = "You're all set, " + res.first_name + " — welcome back to NextPoint.";
+    }
+    show("ok");
+    try { if (window.cfConversion) window.cfConversion("resubscribe"); } catch(e){}
+  }).catch(function(){ hide("loading"); show("expired"); });
+
+  el("undoBtn").addEventListener("click", function(){
+    el("undoBtn").disabled = true;
+    apply(false).then(function(){ hide("ok"); show("undone"); });
+  });
+})();
+</script>
+</body>
+</html>

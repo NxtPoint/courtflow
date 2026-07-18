@@ -74,7 +74,7 @@ Each row is a flow/campaign to run. **Code** = what engineering must ship first 
 |---|---|---|---|---|---|---|
 | A1 | **Trial conversion** (5-email) | `trial_started` + delay to `trial_ends_at`+1d | transactional | — (wired) | copy done; flip Live | ◐ go-live |
 | A2 | **Welcome / activation** | "Subscribed to NextPoint Members" | opt-in | — | 2–3 emails, first week → `/login`→`/book` | 📋 |
-| A3 | **Re-permission** (non-consented 500) | one-off campaign → §5 cohort | *service notice* | cohort script (have) | copy + send | 📋 §5 |
+| A3 | **Re-permission** (non-consented 500) | one-off SES send → §5 cohort | *service notice* | ✅ page + script BUILT | revise copy in script; build A2 | ◐ Tomo to `--commit` |
 
 ### B. Court hire (hard + clay)
 | # | Flow | Trigger | Consent | Code | Posts | Status |
@@ -160,21 +160,35 @@ sentiment. This beats a bare link because unhappy players get caught privately i
 
 ---
 
-## 5. The non-consented ~500 — re-permission campaign  (decided: run it)
+## 5. The non-consented ~500 — re-permission campaign  ✅ BUILT (Code side)
 
 You can't *market* to them, but a **one-off service notice** to existing customers ("NextPoint has moved
 to a new app — want to keep hearing from us?") is defensible as legitimate account communication, provided
 it's genuinely one-off, clearly identifies us, and offers an easy opt-out. **Tomo confirms comfort with
-this basis before send.**
+this basis before the send (`--commit`).**
 
-- **Cohort:** `marketing_opt_in = false` existing customers (script can list them; dormant subset via
-  `scripts/klaviyo_reactivation.py` logic, extended to the non-consented).
-- **Copy (Cowork):** short, service-framed, ONE clear CTA → *"Yes, keep me posted"* (a subscribe link that
-  sets consent). No offers/discounts in this email — it's a permission ask, not a promo.
-- **Outcome:** opt-ins graduate into the ~500 marketable pool (auto via list subscription → Welcome flow).
-  Non-responders stay transactional-only; **do not re-send** the re-permission ask.
-- **Code:** a small script to assemble + subscribe-on-click the cohort (reuses `klaviyo.subscribe_emails`,
-  which sets `consent: SUBSCRIBED`). Consent is written back to our DB on opt-in.
+**What shipped (Code):**
+- **`/subscribe` page** (`courtflow-web`, `frontend/app/subscribe.html`) — tokened, no-login. The emailed
+  *"Yes, keep me posted"* tap IS the affirmative act, so landing opts them in (writes `marketing_email`
+  consent to our DB + subscribes to Klaviyo → the **Welcome flow** fires), shows a "you're back in ✓", and
+  **nudges them straight to Book a court** — the whole point is getting them back on court. An **undo** link
+  is offered (records a withdrawal).
+- **API** `POST/GET /api/subscribe` (`marketing_crm/repermission/`) — verifies the opt-in token (context
+  `optin`, signed with `OPS_KEY` via the shared `marketing_crm/signing.py`), reuses
+  `consent.grant_marketing_consent` for the write, emits `consent_recorded`.
+- **Send script** `scripts/repermission_campaign.py` — assembles the cohort and sends each a tokened notice
+  via **our own SES** (not a Klaviyo marketing blast). **Dry-run by default**; `--to you@email.com` sends a
+  single test; `--limit N --commit` a batch; `--commit` the full send. **Re-run-safe** — anyone who has since
+  opted in is auto-excluded.
+- **Cohort:** non-consented (`marketing_opt_in` false/null) EXISTING members (have a membership), with a
+  usable email, not already opted-in anywhere; test/admin addresses excluded.
+
+**Outcome:** opt-ins graduate into the ~500 marketable pool (auto via list subscription → Welcome flow).
+Non-responders stay transactional-only; **the script is a ONE-OFF — do not re-run/re-send.**
+
+**TODO (Tomo):** confirm comfort with the service-notice basis, then run `--to` a test → eyeball the render →
+`--commit`. **Cowork:** the email copy lives in `repermission_campaign.py` (`_email_html`/`_email_text`) —
+revise the wording there if you want; build the **Welcome flow (A2)** so opt-ins land somewhere warm.
 
 ---
 
@@ -183,7 +197,7 @@ this basis before send.**
 | # | Task | Unblocks | Effort |
 |---|---|---|---|
 | 1 | **`/feedback` page + `nps_submitted` emit + sentiment route** (§4) | C1, F3, Google reviews | ~1 day |
-| 2 | **Re-permission cohort script** (list + subscribe-on-click, write consent back) (§5) | A3 | ~½ day |
+| 2 | ~~Re-permission page + send script (§5)~~ | A3 | ✅ BUILT |
 | 3 | **Flip `on_trial = false` on `membership_started`** (clean "Unconverted trial" segment + converter-guard) | A1 exit metric | small |
 | 4 | **Enable `membership_lapsed` emit** (currently only in a disabled cron) | E2 win-back | small–med |
 | 5 | *(later)* **Reminder cron** → `booking_reminder` live | reminder flow | med |
@@ -216,10 +230,13 @@ this basis before send.**
 
 | Item | Owner | State |
 |---|---|---|
-| Trial-conversion 5-email flow | Posts | ◐ copy approved → flip Live + "Review and turn on" |
+| Trial-conversion 5-email flow (A1) | Posts | ✅ LIVE |
+| Member Preferences flow (1-day after signup) | Posts | ✅ built (Draft → flip Live) · trigger `trial_started`→wait 1d→prefs email |
+| Preferences one-off to the ~38 trial cohort | Posts | ◐ campaign `01KX8EV9…` ready → Tomo sends |
+| Add existing ~38 into the live 5-email flow ("Add past profiles") | Posts | 📋 queued |
 | Verified sender `info@nextpointtennis.com` | Tomo | ✅ |
 | `/feedback` page + review gate (§4) | Code | ✅ BUILT — Cowork builds the C1 post-lesson flow |
-| Re-permission campaign to the 500 (§5) | Code + Posts | 📋 script → copy → Tomo confirms basis → send |
+| Re-permission page + send to the 500 (§5) | Code | ✅ BUILT — Tomo: test `--to` → confirm basis → `--commit` |
 | `on_trial=false` on conversion (§6.3) | Code | 📋 |
 | `membership_lapsed` emit (§6.4) | Code | 📋 |
 | Welcome / activation flow (A2) | Posts | 📋 |

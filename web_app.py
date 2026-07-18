@@ -567,6 +567,15 @@ def feedback_page():
     return _app_shell("feedback.html")
 
 
+@app.get("/subscribe")
+def subscribe_page():
+    # Tokened, NO-LOGIN re-permission opt-in page. The one-off "we've moved — keep hearing from us?"
+    # email (scripts/repermission_campaign.py) links here (?t=<token>). The page opts the member into
+    # marketing (writes consent to our DB + subscribes to Klaviyo → Welcome flow) and nudges them back
+    # to booking. Served on the never-sleeps web. See KLAVIYO-MASTER-PLAN.md §5.
+    return _app_shell("subscribe.html")
+
+
 @app.get("/admin-classic")
 def admin_console_classic_redirect():
     # The classic tab console was RETIRED 2026-07-18 (its block-time surface ported into the new
