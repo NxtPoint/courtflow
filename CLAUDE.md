@@ -227,8 +227,8 @@ mid-month card payment flips the invoice to Paid and double-counting is structur
   via the desk-payment core → receipts fire → invoice derives Paid), `POST …/void`. Lists: `GET /api/me/invoices` ·
   `GET /api/admin/clients/<id>/invoices`. Client UI: `#/invoices` (view + download PDF + pay-outstanding).
 - **Email:** the `invoice_issued` event reuses the booking-confirmation shell + a statement summary + a **"Pay online"**
-  box + the **PDF attached** — attachment is **flag-gated `EMAIL_INVOICE_PDF_ENABLED`** (needs `ses:SendRawEmail`,
-  which the interim key lacks → attachments silently dropped; until then the email links the in-portal PDF).
+  box + the **PDF attached** — attachment is **flag-gated `EMAIL_INVOICE_PDF_ENABLED`, now ON** (verified
+  2026-07-18; the SES key carries `AmazonSESFullAccess`/`ses:SendRawEmail`, so MIME attachments send).
   `EFT` desk payments carry a **reference** (`provider_payment_id`, captured in the "Mark as paid" modal).
 
 **Booking flow** (`frontend/js/booking.js`, full-screen): Service → **Schedule** (month calendar with inline
@@ -429,19 +429,19 @@ member by email on the first authenticated hit.
   order-keyed email needs `booking_detail.load` to import `text` (a missing import silently blanks the block).
 
 ## Still needs Tomo (config, not code)
-- **`OPS_KEY` GitHub repository secret** (Settings → Secrets → Actions) = the API's `OPS_KEY` env value, so
-  `.github/workflows/month-end.yml` can fire the month-end sweep. Without it the workflow safely no-ops.
 - **S3** (`S3_BUCKET` + AWS keys) for coach photo uploads — until set, coaches paste a photo URL.
-- **SES** transactional email is **LIVE** but interim (rides the Ten-Fifty5 AWS account, `eu-north-1`); the
-  `.ics` email attachment is OFF (`EMAIL_ICS_ENABLED=0` — interim key lacks `ses:SendRawEmail`; the in-app "Add
-  to calendar" download still works). Long-term CourtFlow-domain setup: `docs/specs/SES-SETUP.md`. Klaviyo
-  marketing stays dark until `KLAVIYO_API_KEY`.
-- **Invoice PDF email attachment** (`EMAIL_INVOICE_PDF_ENABLED=1`) is OFF for the SAME reason (needs
-  `ses:SendRawEmail`) — until granted, the invoice email links the in-portal PDF instead of attaching it (the
-  document, numbering, and in-app/download PDF all work now). Grant the IAM action (or stand up CourtFlow SES),
-  then set the flag. Also: fill Admin → Setup → **Company & billing details** (esp. bank details) so issued
-  invoices show EFT instructions — until then an invoice PDF falls back to the club name/address with no bank block.
+- **SES** transactional email is **LIVE** (interim — rides the Ten-Fifty5 AWS account, `eu-north-1`). The
+  sending key carries **`AmazonSESFullAccess`** (`ses:*`, so `ses:SendRawEmail`/MIME **attachments work** — the
+  earlier "interim key lacks SendRawEmail" note was wrong). **Invoice PDF email attachment is ON + confirmed
+  working** (`EMAIL_INVOICE_PDF_ENABLED=1`, verified 2026-07-18 — issued invoices email with the PDF attached).
+  The booking **`.ics`** attachment can be turned on the SAME way (`EMAIL_ICS_ENABLED=1`) — optional; the in-app
+  "Add to calendar" download works regardless. Long-term CourtFlow-domain setup: `docs/specs/SES-SETUP.md`.
+  Klaviyo marketing stays dark until `KLAVIYO_API_KEY`.
 - **DNS / SEO cutover** for `nextpointtennis.com` — supervised, never an agent.
+- **Done (config that WAS pending):** `OPS_KEY` GitHub Actions secret set → the monthly statement sweep
+  (`.github/workflows/month-end.yml`) now fires on the **25th** (club billing day), issuing each client's
+  consolidated statement invoice + pay-link email; Admin → Setup → **Company & billing details** filled (bank
+  details → EFT instructions on invoices); invoice PDF email attachment on (above).
 - Volatile env/infra values and full pre-flight: `docs/specs/ENV-STATUS.md` + `BUILD_PROMPT.md`.
 
 ## Ground rules
