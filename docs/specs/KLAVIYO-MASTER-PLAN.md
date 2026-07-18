@@ -49,12 +49,16 @@ and always to a **segment** with that filter, never the raw list. Transactional 
 | `booking_cancelled` / `booking_rescheduled` | booking changed | transactional | ✅ |
 | `class_waitlisted` / `waitlist_slot_open` | waitlist | transactional | ✅ |
 | `payment_succeeded` | payment recorded | transactional | ✅ |
-| `membership_started` | member buys membership (conversion/exit signal) | marketing | ✅ emits |
-| `lesson_completed` | coach marks a lesson done | marketing | ✅ emits |
-| `membership_lapsed` | membership lifecycle | marketing | ⚠️ only via a **disabled cron** — see §6 code backlog |
+| `membership_started` | member buys membership (conversion/exit signal) | marketing | ✅ emits + **flips `on_trial=false`** |
+| `lesson_completed` | coach marks a lesson done | marketing | ✅ emits (carries `feedback_url`) |
+| `membership_lapsed` | membership lifecycle | marketing | ✅ **daily GH Action** `membership-refill.yml` |
 | `booking_reminder` | T-24h / T-2h | transactional | ⚠️ **cron off** — don't build the reminder flow yet |
-| `nps_submitted` / `feedback_submitted` | member leaves feedback | marketing | ⛔ **not emitted yet** — the feedback page (§4) adds this |
+| `nps_submitted` / `feedback_submitted` | member leaves feedback | marketing | ✅ emitted by the feedback page (§4) |
 | `account_created` | new signup | data only | ✅ (not a send trigger) |
+
+> **Forwarding fix (2026-07-18):** producer events (booking/lesson/membership) carry an iam.user UUID,
+> not always an email — `forward_event` now resolves the email from the UUID, so these events actually
+> reach Klaviyo (previously the forward was silently dropped when the payload had no email).
 
 **Profile traits on every synced member** (segment on these): `club`, `first_name`/`last_name`,
 `marketing_opt_in`, `on_trial`, `trial_ends_at`, `never_logged_in`, `member_status`, `role`, `signup_source`.
@@ -98,7 +102,7 @@ Each row is a flow/campaign to run. **Code** = what engineering must ship first 
 | # | Flow | Trigger | Consent | Code | Posts | Status |
 |---|---|---|---|---|---|---|
 | E1 | **Membership renewal reminder** | date/segment: before period end | opt-in | — | pre-expiry nudge | 📋 |
-| E2 | **Membership win-back** | `membership_lapsed` | opt-in | enable emit (§6) | "come back on court" | ⛔ |
+| E2 | **Membership win-back** | `membership_lapsed` | opt-in | ✅ emit live (daily) | "come back on court" | 📋 Cowork |
 | E3 | **Pack running low / top-up** | segment: wallet balance low | opt-in | *(later: emit a `pack_low` event)* | "1 session left — top up" | 📋 later |
 
 ### F. Reactivation & reviews
@@ -198,8 +202,8 @@ revise the wording there if you want; build the **Welcome flow (A2)** so opt-ins
 |---|---|---|---|
 | 1 | **`/feedback` page + `nps_submitted` emit + sentiment route** (§4) | C1, F3, Google reviews | ~1 day |
 | 2 | ~~Re-permission page + send script (§5)~~ | A3 | ✅ BUILT |
-| 3 | **Flip `on_trial = false` on `membership_started`** (clean "Unconverted trial" segment + converter-guard) | A1 exit metric | small |
-| 4 | **Enable `membership_lapsed` emit** (currently only in a disabled cron) | E2 win-back | small–med |
+| 3 | ~~Flip `on_trial = false` on `membership_started`~~ | A1 "Unconverted" segment | ✅ BUILT |
+| 4 | ~~Enable `membership_lapsed` emit~~ (daily `membership-refill.yml` GH Action) | E2 win-back | ✅ BUILT |
 | 5 | *(later)* **Reminder cron** → `booking_reminder` live | reminder flow | med |
 | 6 | *(later)* **`pack_low` event** on wallet draw-down | E3 top-up | small |
 

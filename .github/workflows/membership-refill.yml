@@ -1,0 +1,36 @@
+# membership-refill — fire the OPS-only daily membership-lapse sweep. Marks memberships whose
+# current_period_end has passed as 'expired' and emits `membership_lapsed` for each — which drives the
+# E2 win-back flow in Klaviyo (docs/specs/KLAVIYO-MASTER-PLAN.md §3 E2). Idempotent: a membership only
+# flips active→expired once, so a re-run is a clean no-op. Daily (not monthly) so a lapse is caught —
+# and the win-back email lands — within a day of the period ending.
+#
+# Free (GitHub Actions) — no always-on Render cron needed (all four render.yaml crons stay commented
+# out; rides the keep-warm CI pattern). 05:30 UTC (07:30 SAST) is inside the keep-warm window, so the
+# API is awake when it fires.
+#
+# REQUIRES a repository secret OPS_KEY set to the SAME value as the API service's OPS_KEY env var
+# (Settings → Secrets and variables → Actions). Without it the job no-ops (it won't fail the run).
+name: membership-refill
+
+on:
+  schedule:
+    - cron: "30 5 * * *"    # 05:30 UTC (07:30 SAST) daily
+  workflow_dispatch: {}       # run on demand from the Actions tab
+
+jobs:
+  refill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire the membership-lapse sweep
+        env:
+          OPS_KEY: ${{ secrets.OPS_KEY }}
+        run: |
+          if [ -z "$OPS_KEY" ]; then
+            echo "OPS_KEY secret not set — skipping the sweep (add it in repo Settings → Secrets)."
+            exit 0
+          fi
+          curl -fsS --max-time 120 -X POST \
+            https://courtflow-api.onrender.com/api/cron/membership-refill \
+            -H "X-Ops-Key: $OPS_KEY" \
+            -H "Content-Type: application/json" \
+          || echo "membership-refill call failed (idempotent — safe to re-run from the Actions tab)."

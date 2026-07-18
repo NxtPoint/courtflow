@@ -69,6 +69,22 @@ def build_traits(session, email, club_id=None):
     return traits
 
 
+def _email_from_iam(iam_user_id):
+    """Best-effort email lookup from an iam.user UUID. Producers (diary/billing) speak UUIDs and often
+    don't carry the email in the event payload, so without this the Klaviyo forward is silently dropped
+    for booking/lesson/membership events. Returns a normalised email or None. Never raises."""
+    if not iam_user_id:
+        return None
+    try:
+        with session_scope() as s:
+            row = s.execute(text("SELECT email FROM iam.user WHERE id = CAST(:u AS uuid)"),
+                            {"u": str(iam_user_id)}).scalar()
+        return norm_email(row) if row else None
+    except Exception:
+        log.exception("crm_sync: iam email lookup failed for %s", iam_user_id)
+        return None
+
+
 def _marketing_opt_in(email):
     """Best-effort read of the adult contact's marketing_opt_in from core.app_user. Defaults False
     (fail-closed for marketing). Never raises."""
@@ -152,7 +168,13 @@ def forward_event(event_type, email, club_id=None, properties=None):
       - all other (marketing) events send ONLY when the adult contact's marketing_opt_in is true.
     Synchronous — call from a background context (emit() already runs on its own thread).
     Self-gates on KLAVIYO_API_KEY via enabled(); off-key is a clean no-op. Never raises."""
-    if not enabled() or not email:
+    if not enabled():
+        return False
+    properties = properties or {}
+    # Producers pass iam.user UUIDs and often no email — recover it so the forward isn't dropped.
+    if not email:
+        email = _email_from_iam(properties.get("iam_user_id") or properties.get("user_id"))
+    if not email:
         return False
     try:
         if not is_transactional(event_type) and not _marketing_opt_in(email):
@@ -160,14 +182,19 @@ def forward_event(event_type, email, club_id=None, properties=None):
             # was already written by emit(); only the marketing forward is gated).
             log.debug("crm_sync: suppressed marketing event %s for %s (no opt-in)", event_type, email)
             return False
-        props = dict(properties or {})
+        props = dict(properties)
         if club_id is not None:
             props.setdefault("club", str(club_id))
         # Keep the profile fresh + segmentable on first touch (FULL traits, not just club).
         try:
             with session_scope() as s:
                 traits = build_traits(s, email, club_id=club_id)
-            klaviyo.upsert_profile(traits or {"email": email, "club": (str(club_id) if club_id else None)})
+            traits = traits or {"email": email, "club": (str(club_id) if club_id else None)}
+            # Conversion: buying membership clears the trial cohort flag, so "unconverted trial
+            # members" (on_trial=true AND NOT membership_started) stays a clean marketing segment.
+            if event_type == "membership_started":
+                traits["on_trial"] = False
+            klaviyo.upsert_profile(traits)
         except Exception:
             log.exception("forward_event: profile upsert failed for %s", email)
         return klaviyo.track_event(email, event_type, props)
