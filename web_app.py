@@ -558,6 +558,13 @@ def admin_console_new():
     return _app_shell("admin_app.html")
 
 
+@app.get("/admin-classic")
+def admin_console_classic_redirect():
+    # The classic tab console was RETIRED 2026-07-18 (its block-time surface ported into the new
+    # Diary). Bounce any old bookmark to the new console instead of 404ing.
+    return redirect("/admin", code=301)
+
+
 @app.get("/<page>.html")
 def app_shell_html(page: str):
     """Serve portal SPA shells referenced with a `.html` suffix. Agent E's nav + dashboard
