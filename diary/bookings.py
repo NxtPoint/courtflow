@@ -1178,7 +1178,27 @@ def set_status(session, *, club_id, booking_id, new_status, actor_user_id, role)
     booking = _booking_dict(session, booking_id)
     if new_status == "completed" and booking["booking_type"] == "lesson":
         res = _resource(session, club_id, booking["resource_id"])
-        events.emit("lesson_completed", _payload(booking, res))
+        payload = _payload(booking, res)
+        # The lesson is done → this is the review moment. Carry the CLIENT's email (so the Klaviyo
+        # forward can fire the post-lesson flow) + a signed, per-recipient /feedback URL the email
+        # CTA links to (happy → Google review → local reach; unhappy → private form). Best-effort +
+        # self-gating: a resolution miss just drops the extras, never blocks the status change.
+        try:
+            client_uid = booking.get("booked_by_user_id")
+            if client_uid:
+                em = session.execute(
+                    text("SELECT email FROM iam.user WHERE id = CAST(:u AS uuid)"),
+                    {"u": client_uid},
+                ).scalar()
+                if em:
+                    payload["email"] = em
+                from marketing_crm.feedback import feedback_url_for
+                fb = feedback_url_for(client_uid, booking["club_id"], context="lesson")
+                if fb:
+                    payload["feedback_url"] = fb
+        except Exception:
+            pass
+        events.emit("lesson_completed", payload)
     return {"ok": True, "booking": booking}
 
 

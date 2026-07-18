@@ -113,12 +113,31 @@ is enabled (§6). Booking confirmations also send via SES as a fallback, so conf
 
 ---
 
-## 4. Google reviews — the gated feedback loop  ⭐ (decided: build the page)
+## 4. Google reviews — the gated feedback loop  ✅ BUILT (Code side)
 
-**Review link:** `https://g.page/r/Ce9nBEAMXHTpEBM/review`
+**Review link:** `https://g.page/r/Ce9nBEAMXHTpEBM/review` (env `GOOGLE_REVIEW_URL`, committed in `render.yaml`).
+
+**Why this is a growth lever, not just a widget:** happy raters route to the Google Business Profile →
+reviews + recency feed the **local map-pack ranking** (`MARKETING-ENGINE.md §6`) → more Google reach. A
+click-through to Google also fires a **GA4/Ads `review_click` conversion** (the page reuses `window.cfConversion`).
 
 **Decision:** build the internal feedback capture so scores land in **our** DB + Client-360, and route by
 sentiment. This beats a bare link because unhappy players get caught privately instead of on Google.
+
+**What shipped (Code):**
+- **Page:** `courtflow-web` serves `GET /feedback?t=<token>&score=<1-5>` (`frontend/app/feedback.html`) —
+  branded, no-login, never-sleeps host so an emailed link never cold-starts. Tapping a star records it and
+  routes: **4–5★ → Google review CTA** (+ optional note); **1–3★ → private "how do we fix it?" form**.
+- **API:** `marketing_crm/feedback/` — `POST/GET /api/feedback` on `courtflow-api`. Tokens are stateless
+  **HMAC-signed** (`OPS_KEY`, no PII in the URL); one upsertable `core.nps_response` per token. 1–5★ maps to
+  the table's 0–10 NPS scale (`star*2`) so the existing NPS panel stays valid.
+- **Emits** `nps_submitted` / `feedback_submitted` → Klaviyo (gated) + `core.usage_event`.
+- **Trigger wired:** `lesson_completed` now carries the client's `email` + a signed `feedback_url` property
+  → Cowork's post-lesson flow (C1) uses `{{ event.feedback_url }}` as the star-CTA base (append `&score=N`).
+
+**Cowork TODO:** build the C1 post-lesson email in Flow Builder (trigger `lesson_completed`, star links to
+`{{ event.feedback_url }}&score=1..5`). F3 review-ask campaign to known-happy members can use the raw
+`GOOGLE_REVIEW_URL` directly (no gating needed for an already-happy audience).
 
 **How it works (C1 post-lesson email + F3 campaign):**
 1. Email asks for a 1–5 rating (Klaviyo rating block or tappable stars linking to the page).
@@ -199,7 +218,7 @@ this basis before send.**
 |---|---|---|
 | Trial-conversion 5-email flow | Posts | ◐ copy approved → flip Live + "Review and turn on" |
 | Verified sender `info@nextpointtennis.com` | Tomo | ✅ |
-| `/feedback` page + review gate (§4) | Code | 📋 next up |
+| `/feedback` page + review gate (§4) | Code | ✅ BUILT — Cowork builds the C1 post-lesson flow |
 | Re-permission campaign to the 500 (§5) | Code + Posts | 📋 script → copy → Tomo confirms basis → send |
 | `on_trial=false` on conversion (§6.3) | Code | 📋 |
 | `membership_lapsed` emit (§6.4) | Code | 📋 |

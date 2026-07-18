@@ -67,6 +67,11 @@ Ten-Fifty5 is a SaaS (no physical location → no GBP). NextPoint's GBP is optim
 striking-distance query ("tennis courts near me"): primary category **Tennis court**, description, services,
 posts, reviews, photos. Reviews + proximity + completeness win the local map pack. Ongoing: 1 post/week +
 ask every happy player for a review.
+- **Review engine (automated):** the platform's gated `/feedback` page (`marketing_crm/feedback/`,
+  `KLAVIYO-MASTER-PLAN.md §4`) turns "ask every happy player" into a flow: a completed lesson emails the
+  client a star rating; **4–5★ routes to the GBP review link** (`GOOGLE_REVIEW_URL` = `g.page/r/…`), 1–3★
+  goes to a private form. A Google click-through fires a **GA4/Ads `review_click` conversion**, so review
+  generation shows up in the digest/measurement alongside bookings.
 
 ## Current state & open items
 - ✅ Both brands measured + guarded; digest emailing daily; NextPoint GBP done; content pipelines live.

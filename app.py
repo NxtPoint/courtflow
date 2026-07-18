@@ -86,6 +86,7 @@ def create_app():
     _try_register(app, "marketing_crm.tracking", "page_bp")            # D: POST /api/track/page
     _try_register(app, "offline_conversions.blueprint", "offline_conv_bp")  # Google Ads offline-conversion CSV feed
     _try_register(app, "marketing_crm.consent.blueprint", "consent_bp")    # D: /api/consent/*
+    _try_register(app, "marketing_crm.feedback.blueprint", "feedback_bp")  # D: /api/feedback (gated review loop)
     _try_register(app, "marketing_crm.backoffice.blueprint", "cockpit_bp")  # D: /api/admin/cockpit/*
     _try_register(app, "admin.routes", "admin_bp")          # Admin: /api/admin/* (onboarding + settings)
     _try_register(app, "insights.routes", "insights_bp")    # Insights: /api/insights/* (Phase 2 P1 read-layer)

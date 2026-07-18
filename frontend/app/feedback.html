@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>How was your visit? · NextPoint Tennis</title>
+<style>
+  :root{
+    --green:#0E7A47; --green-dark:#0B5C36; --tint:#E8F4EE; --lime:#C8E85C;
+    --lime-ink:#26330A; --ink:#10231A; --muted:#5B6B62; --line:#e4ebe7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--tint);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:520px;margin:0 auto;padding:28px 20px 56px;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:18px;overflow:hidden;
+    box-shadow:0 10px 30px rgba(16,35,26,.08);}
+  .band{background:var(--green);color:#fff;padding:26px 26px 22px;}
+  .band .brand{font-size:.8rem;letter-spacing:.14em;text-transform:uppercase;opacity:.85;}
+  .band h1{margin:8px 0 0;font-size:1.5rem;line-height:1.25;font-weight:700;}
+  .body{padding:26px;}
+  .body p{margin:0 0 16px;color:var(--muted);}
+  .body p.lead{color:var(--ink);font-size:1.05rem;}
+  .stars{display:flex;gap:8px;justify-content:center;margin:22px 0 6px;}
+  .star{font-size:2.6rem;line-height:1;cursor:pointer;color:#d9e2dd;background:none;border:0;padding:2px 4px;
+    transition:transform .08s ease,color .12s ease;}
+  .star:hover,.star.on{color:#F2B705;}
+  .star:hover{transform:scale(1.12);}
+  .hint{text-align:center;font-size:.85rem;color:var(--muted);margin:0;}
+  .btn{display:block;width:100%;text-align:center;text-decoration:none;cursor:pointer;border:0;
+    padding:15px 18px;border-radius:12px;font-size:1rem;font-weight:700;margin-top:8px;}
+  .btn-primary{background:var(--lime);color:var(--lime-ink);}
+  .btn-primary:hover{background:#bcdd45;}
+  .btn-ghost{background:#fff;color:var(--green-dark);border:1px solid var(--line);}
+  textarea{width:100%;border:1px solid var(--line);border-radius:12px;padding:12px 14px;font:inherit;
+    resize:vertical;min-height:96px;margin:6px 0 12px;color:var(--ink);}
+  textarea:focus{outline:2px solid var(--green);border-color:var(--green);}
+  .foot{padding:16px 26px 24px;border-top:1px solid var(--line);color:var(--muted);font-size:.8rem;text-align:center;}
+  .hide{display:none!important;}
+  .spin{text-align:center;color:var(--muted);padding:26px;}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="band">
+        <div class="brand" id="brand">NextPoint Tennis</div>
+        <h1 id="headline">How was your visit?</h1>
+      </div>
+      <div class="body">
+        <div id="loading" class="spin">One moment…</div>
+
+        <!-- STEP 1: rate -->
+        <div id="rate" class="hide">
+          <p class="lead" id="ratePrompt">Tap to rate your experience.</p>
+          <div class="stars" id="stars"></div>
+          <p class="hint">1 = poor · 5 = loved it</p>
+        </div>
+
+        <!-- STEP 2a: happy → Google review -->
+        <div id="happy" class="hide">
+          <p class="lead" id="happyLead">So glad you enjoyed it! 🎾</p>
+          <p>Would you take 20 seconds to share that on Google? It genuinely helps other players find the club.</p>
+          <a id="reviewBtn" class="btn btn-primary" target="_blank" rel="noopener">Leave a Google review</a>
+          <p style="margin:18px 0 6px;color:var(--ink)">Anything you'd like to add?</p>
+          <textarea id="happyComment" placeholder="Optional — a quick note to the team"></textarea>
+          <button id="happySend" class="btn btn-ghost">Send note</button>
+        </div>
+
+        <!-- STEP 2b: unhappy → private feedback -->
+        <div id="unhappy" class="hide">
+          <p class="lead">Thanks for the honesty — we want to put it right.</p>
+          <p>Tell us what we could do better. This goes straight to the team, privately.</p>
+          <textarea id="badComment" placeholder="What let you down? What would you change?"></textarea>
+          <button id="badSend" class="btn btn-primary">Send to the team</button>
+        </div>
+
+        <!-- STEP 3: done -->
+        <div id="done" class="hide">
+          <p class="lead" id="doneMsg">Thank you — we've got it.</p>
+          <a class="btn btn-ghost" href="https://nextpointtennis.com/">Back to NextPoint</a>
+        </div>
+
+        <div id="expired" class="hide">
+          <p class="lead">This link has expired.</p>
+          <p>No problem — you can still reach us any time.</p>
+          <a class="btn btn-ghost" href="https://nextpointtennis.com/contact">Contact the club</a>
+        </div>
+      </div>
+      <div class="foot">NextPoint Tennis · Killarney Country Club, Johannesburg</div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  var API  = (window.__API_BASE || "https://courtflow-api.onrender.com").replace(/\/+$/,"");
+  var CF   = window.__CF || {};
+  if (CF.name) { document.getElementById("brand").textContent = CF.name; }
+
+  var qs = new URLSearchParams(location.search);
+  var token = qs.get("t") || "";
+  var preScore = parseInt(qs.get("score"), 10);
+
+  var el = function(id){ return document.getElementById(id); };
+  var show = function(id){ el(id).classList.remove("hide"); };
+  var hide = function(id){ el(id).classList.add("hide"); };
+
+  function fireReviewConversion(){
+    // Feed the marketing engine: a click-through to Google is a first-class conversion signal.
+    try { if (window.cfConversion) window.cfConversion("review_click"); } catch(e){}
+  }
+
+  function post(body){
+    return fetch(API + "/api/feedback", {
+      method:"POST", headers:{"content-type":"application/json"},
+      body: JSON.stringify(Object.assign({token: token}, body))
+    }).then(function(r){ return r.json().catch(function(){ return {ok:false}; }); });
+  }
+
+  function renderSentiment(res){
+    hide("rate");
+    if (res.review_url) { el("reviewBtn").setAttribute("href", res.review_url); }
+    if (res.first_name) {
+      el("happyLead").textContent = "So glad you enjoyed it, " + res.first_name + "! 🎾";
+      el("headline").textContent = "Thanks, " + res.first_name;
+    }
+    if (res.sentiment === "promoter") { show("happy"); }
+    else { show("unhappy"); }
+  }
+
+  function buildStars(){
+    var box = el("stars");
+    for (var i=1;i<=5;i++){
+      (function(n){
+        var b = document.createElement("button");
+        b.className = "star"; b.type = "button"; b.textContent = "★";
+        b.setAttribute("aria-label", n + " star" + (n>1?"s":""));
+        b.addEventListener("mouseenter", function(){ paint(n); });
+        b.addEventListener("click", function(){ submitScore(n); });
+        box.appendChild(b);
+      })(i);
+    }
+    box.addEventListener("mouseleave", function(){ paint(0); });
+  }
+  function paint(n){
+    var stars = el("stars").children;
+    for (var i=0;i<stars.length;i++){ stars[i].classList.toggle("on", i < n); }
+  }
+  function submitScore(n){
+    show("loading"); hide("rate");
+    post({score:n}).then(function(res){
+      hide("loading");
+      if (!res || res.ok === false){ show("expired"); return; }
+      renderSentiment(res);
+    });
+  }
+
+  function wireComment(btnId, taId){
+    el(btnId).addEventListener("click", function(){
+      var v = el(taId).value.trim();
+      el(btnId).disabled = true;
+      post(v ? {comment:v} : {}).then(function(){
+        hide("happy"); hide("unhappy");
+        el("doneMsg").textContent = v ? "Thank you — the team will see this." : "Thanks again!";
+        show("done");
+      });
+    });
+  }
+
+  // Boot ---------------------------------------------------------------------
+  if (!token){ hide("loading"); show("expired"); return; }
+  el("reviewBtn").addEventListener("click", fireReviewConversion);
+  buildStars();
+  wireComment("happySend","happyComment");
+  wireComment("badSend","badComment");
+
+  if (preScore >= 1 && preScore <= 5){
+    // Star tapped straight from the email — record immediately, skip the picker.
+    submitScore(preScore);
+  } else {
+    // Validate the token, greet, and show the picker.
+    fetch(API + "/api/feedback?t=" + encodeURIComponent(token))
+      .then(function(r){ return r.json().catch(function(){ return {ok:false}; }); })
+      .then(function(res){
+        hide("loading");
+        if (!res || res.ok === false){ show("expired"); return; }
+        if (res.review_url){ el("reviewBtn").setAttribute("href", res.review_url); }
+        if (res.first_name){
+          el("headline").textContent = "Hi " + res.first_name;
+          el("ratePrompt").textContent = "How was your visit, " + res.first_name + "? Tap to rate.";
+        }
+        show("rate");
+      })
+      .catch(function(){ hide("loading"); show("expired"); });
+  }
+})();
+</script>
+</body>
+</html>

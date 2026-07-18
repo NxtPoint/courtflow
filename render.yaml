@@ -88,6 +88,12 @@ services:
       # are no *_ENABLED flags to manage — just add the key when Klaviyo work begins. ---
       - key: KLAVIYO_API_KEY
         sync: false
+      # The club's Google review shortlink — happy raters on the /feedback page are routed here to
+      # grow the Google Business Profile (local map-pack reach; MARKETING-ENGINE.md §6). Public value,
+      # committed inline (per-club override = set a different link). Feedback tokens sign with OPS_KEY
+      # (no separate FEEDBACK_SECRET needed); set FEEDBACK_SECRET only to rotate independently.
+      - key: GOOGLE_REVIEW_URL
+        value: "https://g.page/r/Ce9nBEAMXHTpEBM/review"
 
       # --- AWS S3 (assets) + SES (transactional email) ---
       # SES: verify ONE CourtFlow domain (courtflow.app) in af-south-1 (DKIM + SPF), then SES_SENDER

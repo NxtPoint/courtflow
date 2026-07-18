@@ -558,6 +558,15 @@ def admin_console_new():
     return _app_shell("admin_app.html")
 
 
+@app.get("/feedback")
+def feedback_page():
+    # Tokened, NO-LOGIN review/feedback page. Post-lesson + review-ask emails link here (?t=<token>
+    # &score=<1-5>). Served on the never-sleeps web so an emailed link never hits an API cold-start;
+    # the page's JS posts the rating to courtflow-api (/api/feedback). Happy raters → the club's
+    # Google review page (grows local reach); unhappy → a private form. See KLAVIYO-MASTER-PLAN.md §4.
+    return _app_shell("feedback.html")
+
+
 @app.get("/admin-classic")
 def admin_console_classic_redirect():
     # The classic tab console was RETIRED 2026-07-18 (its block-time surface ported into the new
