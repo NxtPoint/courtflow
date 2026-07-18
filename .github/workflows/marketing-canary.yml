@@ -1,67 +1,92 @@
-# marketing-canary — the tripwire for silent marketing-measurement regressions.
+# marketing-canary — the multi-brand tripwire for silent marketing-measurement regressions.
 #
-# WHY THIS EXISTS: on 2026-07-18 we discovered the Google tag (GA4 + Ads conversions) had
-# been DARK on the live site for ~a week. Root cause: render.yaml committed the tag IDs as
-# blank value:"", so a routine blueprint sync reset them to empty and web_app._google_tag_head()
-# rendered nothing. GA4 key-events + purchases went to 0 and Ads had no conversion signal to
-# optimise on — and NOTHING told us. This canary makes that class of failure loud.
+# WHY THIS EXISTS: on 2026-07-18 the Google tag (GA4 + Ads conversions) was found DARK on the
+# live NextPoint site for ~a week. Root cause: render.yaml committed the tag IDs as blank
+# value:"", so a routine blueprint sync reset them to empty and web_app._google_tag_head()
+# rendered nothing. GA4 key-events + purchases went to 0 and Ads had no conversion signal — and
+# NOTHING told us. This canary makes that class of failure loud, across EVERY brand we run.
 #
-# It fetches the LIVE public site and asserts the marketing plumbing is actually present in the
-# served HTML. If any check fails the job exits non-zero, which GitHub emails to the repo owner
-# (and shows red in the Actions tab). Free, no infra, rides the keep-warm.yml pattern.
+# ONE MACHINE, MANY BRANDS: each brand is a matrix leg with its own site + expected tag tokens.
+#   - mode: enforce  -> a missing token fails the run (red + owner email). Use once a brand is
+#                       fully instrumented and the tag MUST stay up.
+#   - mode: warn     -> missing tokens are reported as ::warning:: but do NOT fail the run. Use
+#                       for a brand still being instrumented, so it's tracked without false alarms.
+# To onboard a new brand (or later, Meta pixels), add a matrix leg — no new infra. Checks only
+# read PUBLIC pages any visitor sees; the canary never needs secrets.
 #
-# Extend it as the engine grows (more asserts = more coverage). Keep checks CHEAP + PUBLIC —
-# this only reads pages any visitor can see; it never needs secrets.
+# Rides the keep-warm.yml pattern (free GitHub Actions). GitHub cron is UTC.
 name: marketing-canary
 
 on:
   schedule:
-    # Every 2 hours, 06:00–20:00 UTC (08:00–22:00 SAST). Frequent enough to catch a bad
-    # deploy the same day; cheap enough to ignore. GitHub cron is UTC.
-    - cron: "0 6-20/2 * * *"
-  workflow_dispatch: {}   # run on demand from the Actions tab (e.g. right after a deploy)
+    - cron: "0 6-20/2 * * *"   # every 2h, 08:00–22:00 SAST — catches a bad deploy same-day
+  workflow_dispatch: {}         # run on demand from the Actions tab (e.g. right after a deploy)
 
 jobs:
-  check:
+  canary:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false          # one brand failing must not hide the others
+      matrix:
+        include:
+          # --- NextPoint Tennis (courtflow) — fully instrumented, ENFORCED ---
+          - brand: nextpoint
+            mode: enforce
+            url: "https://nextpointtennis.com/"
+            sitemap: "https://nextpointtennis.com/sitemap.xml"
+            # space-separated substrings that MUST be present in the served HTML
+            require: "googletagmanager.com/gtag/js G-EKQP47P8M9 AW-17077631191 adsConversions cfConversion attribution.js"
+          # --- Ten-Fifty5 (1050) — NOT YET instrumented, WARN-only until the tag stack is ported ---
+          # When the portable tag (_google_tag_head + cfConversion + attribution.js + its own GA4/Ads
+          # IDs) ships to the 1050 repo, fill `require` with its tokens and flip mode -> enforce.
+          - brand: ten-fifty5
+            mode: warn
+            url: "https://www.ten-fifty5.com/"
+            sitemap: ""
+            require: "googletagmanager.com/gtag/js"
+    name: canary (${{ matrix.brand }})
     steps:
-      - name: Assert the Google tag + marketing plumbing is live on nextpointtennis.com
+      - name: Assert marketing plumbing is live on ${{ matrix.brand }}
+        env:
+          BRAND: ${{ matrix.brand }}
+          MODE: ${{ matrix.mode }}
+          URL: ${{ matrix.url }}
+          SITEMAP: ${{ matrix.sitemap }}
+          REQUIRE: ${{ matrix.require }}
         run: |
-          set -euo pipefail
-          SITE="https://nextpointtennis.com/"
-          echo "Fetching $SITE"
-          HTML="$(curl -fsS -A 'marketing-canary' --max-time 90 "$SITE")"
+          set -uo pipefail
+          echo "Brand: $BRAND  (mode: $MODE)"
+          echo "Fetching $URL"
+          HTML="$(curl -fsSL -A 'marketing-canary' --max-time 90 "$URL")" || {
+            echo "::error::[$BRAND] site fetch failed: $URL"; exit 1; }
 
           fail=0
-          assert() {  # assert <label> <string-that-must-be-present>
-            if printf '%s' "$HTML" | grep -qF -- "$2"; then
-              echo "  ok   : $1"
+          for token in $REQUIRE; do
+            if printf '%s' "$HTML" | grep -qF -- "$token"; then
+              echo "  ok   : $token"
             else
-              echo "  FAIL : $1  (missing: $2)"
+              echo "  MISS : $token"
               fail=1
             fi
-          }
+          done
 
-          # --- The Google tag (this is what went dark) ---
-          assert "GA4 measurement ID present"       "G-EKQP47P8M9"
-          assert "Google Ads global tag present"    "AW-17077631191"
-          assert "gtag.js loader present"           "googletagmanager.com/gtag/js"
-          assert "Ads conversion map present"       "adsConversions"
-          # --- Conversion + attribution wiring ---
-          assert "cfConversion helper present"      "cfConversion"
-          assert "attribution.js (gclid capture)"   "attribution.js"
-
-          # --- SEO canary: sitemap must be reachable (feeds Search Console) ---
-          echo "Checking sitemap.xml ..."
-          if curl -fsS -A 'marketing-canary' --max-time 60 "https://nextpointtennis.com/sitemap.xml" -o /dev/null; then
-            echo "  ok   : sitemap.xml reachable"
-          else
-            echo "  FAIL : sitemap.xml not reachable"
-            fail=1
+          if [ -n "$SITEMAP" ]; then
+            if curl -fsSL -A 'marketing-canary' --max-time 60 "$SITEMAP" -o /dev/null; then
+              echo "  ok   : sitemap reachable ($SITEMAP)"
+            else
+              echo "  MISS : sitemap not reachable ($SITEMAP)"
+              fail=1
+            fi
           fi
 
-          if [ "$fail" -ne 0 ]; then
-            echo "::error::Marketing canary FAILED — the live site is missing marketing plumbing (see FAIL lines above). Most likely a blueprint sync blanked the tag IDs, or a frontend deploy dropped the head injection."
+          if [ "$fail" -eq 0 ]; then
+            echo "[$BRAND] all marketing canary checks passed."
+            exit 0
+          fi
+          if [ "$MODE" = "enforce" ]; then
+            echo "::error::[$BRAND] marketing canary FAILED — live site is missing marketing plumbing (see MISS lines). Likely a blueprint sync blanked the tag IDs, or a deploy dropped the head injection."
             exit 1
+          else
+            echo "::warning::[$BRAND] marketing plumbing not yet present (MISS lines above) — expected until the tag stack is ported. Tracked in warn mode; not failing the run."
+            exit 0
           fi
-          echo "All marketing canary checks passed."
