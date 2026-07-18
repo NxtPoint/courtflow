@@ -36,14 +36,14 @@ jobs:
             sitemap: "https://nextpointtennis.com/sitemap.xml"
             # space-separated substrings that MUST be present in the served HTML
             require: "googletagmanager.com/gtag/js G-EKQP47P8M9 AW-17077631191 adsConversions cfConversion attribution.js"
-          # --- Ten-Fifty5 (1050) — NOT YET instrumented, WARN-only until the tag stack is ported ---
-          # When the portable tag (_google_tag_head + cfConversion + attribution.js + its own GA4/Ads
-          # IDs) ships to the 1050 repo, fill `require` with its tokens and flip mode -> enforce.
+          # --- Ten-Fifty5 (1050) — GA4 instrumented 2026-07-18 (organic-only, no Ads). ENFORCED. ---
+          # Tag injected by locker_room_app._marketing_head; GA4_MEASUREMENT_ID=G-4167EPFS34 lives
+          # inline in the 1050 render.yaml (locker-room svc). No Ads tokens by design (no paid ads yet).
           - brand: ten-fifty5
-            mode: warn
+            mode: enforce
             url: "https://www.ten-fifty5.com/"
-            sitemap: ""
-            require: "googletagmanager.com/gtag/js"
+            sitemap: "https://www.ten-fifty5.com/sitemap.xml"
+            require: "googletagmanager.com/gtag/js G-4167EPFS34 cfConversion"
     name: canary (${{ matrix.brand }})
     steps:
       - name: Assert marketing plumbing is live on ${{ matrix.brand }}
