@@ -1,0 +1,35 @@
+# reminders — fire the OPS-only booking/class reminder sweep HOURLY. diary.crons.run_reminders finds
+# bookings + class sessions starting in the T-24h and T-2h windows (70-min tolerance, deduped via
+# diary.reminder_log so nothing sends twice) and emits `booking_reminder` for each. That event is
+# transactional: it sends a SES reminder (marketing_crm.notifications) AND flows to Klaviyo — so
+# reminders are LIVE via SES the moment this runs (a no-show reducer), no Klaviyo flow required.
+#
+# Free (GitHub Actions) — no always-on Render cron needed (the four render.yaml crons stay commented
+# out; rides the keep-warm CI pattern). Hourly 05:00–20:00 UTC (07:00–22:00 SAST) covers T-2h for
+# bookings up to ~22:00 SAST; the T-24h window is wide, so a missed hour still catches the next run.
+#
+# REQUIRES the repo secret OPS_KEY (= the API service's OPS_KEY). Without it the job no-ops (won't fail).
+name: reminders
+
+on:
+  schedule:
+    - cron: "0 5-20 * * *"   # top of every hour, 05:00–20:00 UTC (07:00–22:00 SAST)
+  workflow_dispatch: {}        # run on demand from the Actions tab
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fire the reminder sweep
+        env:
+          OPS_KEY: ${{ secrets.OPS_KEY }}
+        run: |
+          if [ -z "$OPS_KEY" ]; then
+            echo "OPS_KEY secret not set — skipping (add it in repo Settings → Secrets)."
+            exit 0
+          fi
+          curl -fsS --max-time 120 -X POST \
+            https://courtflow-api.onrender.com/api/cron/reminders \
+            -H "X-Ops-Key: $OPS_KEY" \
+            -H "Content-Type: application/json" \
+          || echo "reminders call failed (deduped — safe to re-run from the Actions tab)."

@@ -52,9 +52,16 @@ and always to a **segment** with that filter, never the raw list. Transactional 
 | `membership_started` | member buys membership (conversion/exit signal) | marketing | ✅ emits + **flips `on_trial=false`** |
 | `lesson_completed` | coach marks a lesson done | marketing | ✅ emits (carries `feedback_url`) |
 | `membership_lapsed` | membership lifecycle | marketing | ✅ **daily GH Action** `membership-refill.yml` |
-| `booking_reminder` | T-24h / T-2h | transactional | ⚠️ **cron off** — don't build the reminder flow yet |
+| `booking_reminder` | T-24h / T-2h | transactional | ✅ **hourly GH Action** `reminders.yml` — **SES sends it** (below) |
+| `pack_low` | a pack drops to 1 session left | marketing | ✅ emitted on wallet draw-down (E3 top-up) |
+| `promo_redeemed` | a promo code applied at checkout | marketing | ✅ emitted by the promotions engine |
 | `nps_submitted` / `feedback_submitted` | member leaves feedback | marketing | ✅ emitted by the feedback page (§4) |
 | `account_created` | new signup | data only | ✅ (not a send trigger) |
+
+> **Reminders are SES-owned — do NOT build a Klaviyo reminder flow.** `booking_reminder` is transactional
+> and already has a SES template (`marketing_crm.notifications`), so enabling the hourly cron makes reminders
+> LIVE via SES immediately (a no-show reducer). The event still flows to Klaviyo for data, but attaching a
+> Klaviyo send to it would double-message. Leave `booking_reminder` for segmentation only.
 
 > **Forwarding fix (2026-07-18):** producer events (booking/lesson/membership) carry an iam.user UUID,
 > not always an email — `forward_event` now resolves the email from the UUID, so these events actually
@@ -83,13 +90,13 @@ Each row is a flow/campaign to run. **Code** = what engineering must ship first 
 ### B. Court hire (hard + clay)
 | # | Flow | Trigger | Consent | Code | Posts | Status |
 |---|---|---|---|---|---|---|
-| B1 | **Court booker → membership** ("the maths") | segment: ≥2 PAYG court bookings, no membership | opt-in | — | value/maths email + `/login`→Plan | 📋 |
+| B1 | **Court booker → membership** ("the maths") | segment: ≥2 PAYG court bookings, no membership | opt-in | — | template **`VZ8DiM`** built (R450-vs-R220 maths) | ◐ **wire on 1st `booking_confirmed`** (need it to build the segment) |
 | B2 | **Clay-court showcase** | segment: opted-in, never booked clay | opt-in | — | "only clay in Gauteng" cross-sell | 📋 |
 
 ### C. Lessons & coaching
 | # | Flow | Trigger | Consent | Code | Posts | Status |
 |---|---|---|---|---|---|---|
-| C1 | **Post-lesson feedback + rebook + review** | `lesson_completed` | opt-in | **feedback page (§4)** | rating → Google review / private; "book your next" | ⛔→◐ |
+| C1 | **Post-lesson feedback + rebook + review** | `lesson_completed` | opt-in | **feedback page (§4) ✅** | template **`RJDzuj`** built (5 stars → `{{ event.feedback_url }}&score=1..5` + rebook CTA) | ◐ **wire on 1st `lesson_completed`** |
 | C2 | **Coaching intro** (court-only members) | segment: member, no lesson in 90d | opt-in | — | "add coaching to your game" | 📋 |
 
 ### D. Classes / squads / juniors
@@ -103,17 +110,18 @@ Each row is a flow/campaign to run. **Code** = what engineering must ship first 
 |---|---|---|---|---|---|---|
 | E1 | **Membership renewal reminder** | date/segment: before period end | opt-in | — | pre-expiry nudge | 📋 |
 | E2 | **Membership win-back** | `membership_lapsed` | opt-in | ✅ emit live (daily) | "come back on court" | 📋 Cowork |
-| E3 | **Pack running low / top-up** | segment: wallet balance low | opt-in | *(later: emit a `pack_low` event)* | "1 session left — top up" | 📋 later |
+| E3 | **Pack running low / top-up** | `pack_low` event | opt-in | ✅ emit live | "1 session left — top up" | 📋 Cowork — build the flow |
 
 ### F. Reactivation & reviews
 | # | Flow | Trigger | Consent | Code | Posts | Status |
 |---|---|---|---|---|---|---|
 | F1 | **Lapsed win-back** (ongoing) | segment: no booking in 60/90d + opted-in | opt-in | — | "we've missed you" + soft offer | 📋 |
 | F2 | **Dormant reactivation** (opted-in) | list `NextPoint Reactivation` | opt-in | script `--commit` | "your account's ready in the new app" | 📋 |
-| F3 | **Google review campaign** | segment: happy active members (§4 gate) | opt-in | feedback gate (§4) | "loved your session? review us" | 📋 §4 |
+| F3 | **Google review campaign** | segment: happy active members (§4 gate) | opt-in | feedback gate (§4) | template **`T5Ub7j`** built (direct `g.page` CTA) | ◐ **ready** — needs an audience segment (engaged/active opted-in, or NPS≥4 once feedback data exists) |
 
-**Reminder flow (`booking_reminder`)** — NOT in the catalogue on purpose. Blocked until the reminder cron
-is enabled (§6). Booking confirmations also send via SES as a fallback, so confirmations aren't at risk.
+**Reminder flow (`booking_reminder`)** — ✅ **now LIVE via SES** (hourly `reminders.yml` cron → T-24h/T-2h,
+deduped). **Cowork: do NOT build a Klaviyo reminder flow** — SES already sends the reminder, so a Klaviyo send
+would double-message. The event is available for segmentation only.
 
 ---
 
@@ -196,16 +204,53 @@ revise the wording there if you want; build the **Welcome flow (A2)** so opt-ins
 
 ---
 
-## 6. Code backlog (Tomo / Claude Code) — in priority order
+## 6. Code backlog — ✅ CLEARED (every flow is now unblocked)
 
-| # | Task | Unblocks | Effort |
+| # | Task | Unblocks | Status |
 |---|---|---|---|
-| 1 | **`/feedback` page + `nps_submitted` emit + sentiment route** (§4) | C1, F3, Google reviews | ~1 day |
-| 2 | ~~Re-permission page + send script (§5)~~ | A3 | ✅ BUILT |
-| 3 | ~~Flip `on_trial = false` on `membership_started`~~ | A1 "Unconverted" segment | ✅ BUILT |
-| 4 | ~~Enable `membership_lapsed` emit~~ (daily `membership-refill.yml` GH Action) | E2 win-back | ✅ BUILT |
-| 5 | *(later)* **Reminder cron** → `booking_reminder` live | reminder flow | med |
-| 6 | *(later)* **`pack_low` event** on wallet draw-down | E3 top-up | small |
+| 1 | `/feedback` page + `nps_submitted` emit + sentiment route (§4) | C1, F3, Google reviews | ✅ BUILT |
+| 2 | Re-permission page + send script (§5) | A3 | ✅ BUILT |
+| 3 | Flip `on_trial = false` on `membership_started` | A1 "Unconverted" segment | ✅ BUILT |
+| 4 | Enable `membership_lapsed` emit (daily `membership-refill.yml`) | E2 win-back | ✅ BUILT |
+| 5 | Reminder cron → `booking_reminder` (hourly `reminders.yml`; **SES sends it**) | reminders | ✅ BUILT |
+| 6 | `pack_low` event on wallet draw-down | E3 top-up | ✅ BUILT |
+
+**🎉 The Code side of the roadmap is DONE.** Every event/trait/trigger any flow below needs is live. There is
+no remaining engineering blocker — the rest is Cowork building templates + flows in Flow Builder.
+
+---
+
+## 6b. ⭐ COWORK BUILD CHECKLIST — everything below is unblocked (build in this order)
+
+> **Message to Cowork:** all data is wired. Nothing here is waiting on Code. Build in priority order; if a
+> flow needs an event/trait/property you can't find, add a note here and Code will wire it (don't work around
+> it). Reserve the guardrails in §7 before any big send.
+
+**Do first (highest ROI, all triggers live):**
+1. **A1 Trial conversion** — flip the 5 emails to Live + "Review and turn on" (copy already approved).
+2. **A2 Welcome / activation** — trigger *Subscribed to `NextPoint Members`*. This catches the re-permission
+   opt-ins (§5) + every new consented member. Highest urgency: the §5 send already went out.
+3. **C1 Post-lesson feedback + rebook** — trigger `lesson_completed`; star links to `{{ event.feedback_url }}
+   &score=1..5` (the gated review page does the rest). 
+4. **E2 Membership win-back** — trigger `membership_lapsed` (fires daily now).
+
+**Then (segment-based — build the segment, then the campaign/flow):**
+5. **F1 Lapsed win-back** — segment: no `booking_confirmed` in 60/90d + `marketing_opt_in`.
+6. **B1 Court→membership "maths"** — segment: ≥2 `booking_confirmed` (booking_type=court, settlement≠membership_covered), no `membership_started`.
+7. **E1 Membership renewal** — segment/date before period end.
+8. **E3 Pack top-up** — trigger `pack_low` (fires at 1 session left).
+9. **F3 Google review campaign** — template `T5Ub7j` built; point it at an engaged/active opted-in segment.
+10. **C2 Coaching intro · D1 Class re-enrol · D2 Family/juniors · B2 Clay showcase** — segment-based, build as capacity allows.
+
+**Do NOT build:** a Klaviyo **reminder** flow (`booking_reminder` is SES-owned — see §3 note; a Klaviyo send
+would double-message).
+
+**Segmentation cheat-sheet** — the properties on the events you'll segment on:
+- `booking_confirmed` / `booking_reminder` carry `booking_type` (court/lesson/class) + `settlement_mode`
+  (so PAYG vs `membership_covered` is distinguishable) + `starts_at`.
+- `membership_started` flips `on_trial=false` → "Unconverted trial" = `on_trial=true AND NOT membership_started`.
+- `pack_low` carries `tokens_remaining` + `product_id`.
+- `promo_redeemed` carries `code` + `discount_minor` + `scope` (measure a campaign's promo → sales).
 
 ---
 
@@ -220,6 +265,34 @@ revise the wording there if you want; build the **Welcome flow (A2)** so opt-ins
    conversions show in GA4 / Google Ads. Primary CTA is `https://nextpointtennis.com/login`.
 
 ---
+
+## 7b. Copy & brand rules (apply to ALL emails — Posts + any Code-generated content)
+1. **No coach names in emails.** Do not name individual coaches (e.g. no "Neville Godwin" / "Ross Nemeth")
+   and no personal accolades like "2017 ATP Coach of the Year" — we grow all coaches equally. Use generic
+   **"ATP-level coaching" / "tour-level pros and specialist junior coaches."** (The trial-3 and welcome-2
+   emails were corrected to this on 2026-07-18.)
+2. **Never promise free lessons or free coaching.** Coaching/classes are pay-as-you-go / member-rate. The
+   only "free" we claim is *membership makes court bookings free*.
+3. Established club, **new app** — never "new business" / "we've launched" / "founding member."
+4. Prices in Rand (R). Membership from **R220/month** (covers courts only). Courts from R90, lessons from R250.
+
+## 7c. Posts ↔ Code sync (keep this current — it's our handshake)
+- **Posts has built (templates ready in Klaviyo, no Code needed to wire):** A1 trial (live), A2 Welcome (built,
+  Draft), Member-Preferences 1-day (built, Draft), preferences one-off campaign (draft). **Pre-built and
+  waiting on a trigger/segment:** C1 `RJDzuj`, B1 `VZ8DiM`, F3 `T5Ub7j`.
+- **What Posts needs from Code to light these up (in priority):**
+  1. **Fire the first `lesson_completed`** (a coach marks any lesson done — even a test) → the metric appears
+     in Klaviyo → Posts wires **C1** (the star-rating email uses `{{ event.feedback_url }}`, which Code already
+     attaches to `lesson_completed`).
+  2. **Fire the first `booking_confirmed`** (one court booking) → Posts builds the **B1** court-booker segment.
+  3. `membership_started` + flip `on_trial=false` (§6.3) → unblocks the trial converter-guard + Jan "Unconverted"
+     segment.
+  4. `membership_lapsed` emit (§6.4) → E2 win-back.
+- **Context (2026-07-18):** Code is mid-way on a **promo/discount engine** (coupons) — will return to the
+  roadmap after. When coupon support lands, Posts can wire the **Jan 20%-off** campaign (§5/§6) and any offer
+  emails. No blocker on Posts' side meanwhile; we keep pre-building templates.
+- **Guardrails still to set (Posts, in Klaviyo settings):** frequency cap 3/7d, Smart Sending default,
+  sunset-unengaged segment (§7).
 
 ## 8. Measurement
 - **Conversion:** `membership_started` metric + the `utm_campaign` in GA4. The trial flow's success =
@@ -241,9 +314,12 @@ revise the wording there if you want; build the **Welcome flow (A2)** so opt-ins
 | Verified sender `info@nextpointtennis.com` | Tomo | ✅ |
 | `/feedback` page + review gate (§4) | Code | ✅ BUILT — Cowork builds the C1 post-lesson flow |
 | Re-permission page + send to the 500 (§5) | Code | ✅ BUILT — Tomo: test `--to` → confirm basis → `--commit` |
-| `on_trial=false` on conversion (§6.3) | Code | 📋 |
-| `membership_lapsed` emit (§6.4) | Code | 📋 |
-| Welcome / activation flow (A2) | Posts | 📋 |
+| `on_trial=false` on conversion (§6.3) | Code | ✅ BUILT |
+| `membership_lapsed` emit — daily `membership-refill.yml` (§6.4) | Code | ✅ BUILT |
+| Reminders live via SES — hourly `reminders.yml` (booking_reminder) | Code | ✅ BUILT — Cowork: don't build a Klaviyo reminder flow |
+| `pack_low` emit on wallet draw-down (E3) | Code | ✅ BUILT — Cowork builds the top-up flow |
+| **Code side of the roadmap** | Code | ✅ **DONE — every trigger wired; see §6b checklist** |
+| Welcome / activation flow (A2) | Posts | ✅ built (Draft → flip Live) · trigger = Added to `NextPoint Members` → Welcome 1 (immediate) → wait 2d → Welcome 2 |
 | Court→membership "maths" (B1) | Posts | 📋 |
 | Guardrails (freq cap, sunset, smart send) | Posts | 📋 verify all set |
 

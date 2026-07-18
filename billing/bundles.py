@@ -393,6 +393,26 @@ def draw_token(session, *, club_id, wallet, booking_id, reason="booking",
         """),
         {"w": str(wallet_id), "drawn": int(drawn)},
     )
+    # Pack running low → emit pack_low ONCE, at the "1 session left" crossing, so Klaviyo can nudge a
+    # top-up (E3). Fires only on the transition (was >1, now exactly 1) — never repeatedly. Best-effort.
+    try:
+        base_m = base or 0
+        after = max(remaining - drawn, 0)
+        if base_m > 0 and after > 0:
+            before_tokens = (remaining + base_m - 1) // base_m if remaining > 0 else 0
+            after_tokens = (after + base_m - 1) // base_m
+            if after_tokens == 1 and before_tokens > 1:
+                row = session.execute(
+                    text("SELECT user_id, product_id FROM billing.token_wallet WHERE id = :w"),
+                    {"w": str(wallet_id)},
+                ).mappings().first()
+                if row and row.get("user_id"):
+                    from marketing_crm.tracking import emit
+                    emit("pack_low", {"club_id": str(club_id), "user_id": str(row["user_id"]),
+                                      "product_id": str(row["product_id"]) if row.get("product_id") else None,
+                                      "tokens_remaining": int(after_tokens)})
+    except Exception:
+        log.debug("pack_low emit skipped", exc_info=False)
     return True
 
 
