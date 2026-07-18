@@ -45,7 +45,7 @@ month-at-a-glance `activity_summary` block (`_activity_summary` → `billing.me.
 | `analytics/` | repositories, routes | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`); `/api/analytics/*`; the standalone `/overview.html` (rolling `?days=` window). The admin **native Overview tab** now uses the `insights/` lane instead (the old iframe embed was retired 2026-07-05). |
 | `insights/` | repositories, routes | **Phase-2 P1 read-layer** (guarded aggregations, no new tables): court-utilisation heatmap · **sales-by-day** · **bookings-by-day** · **overview** (month-scoped daily composer powering the native admin Overview tab — traffic incl. public-vs-member + logged-in split, bookings, revenue, members, NPS; reconciles with the Money lists by construction); `/api/insights/*` |
 | `crons/` | trigger | thin dispatcher → `/api/cron/*` |
-| `scripts/` | seed_nextpoint, provision_club, **backfill_pack_products** (map legacy NULL-product packs to their service — preview + `--commit`), **audit_class_packs** (report class packs vs their session `price_id`), **audit_trials** (7-day-trial grant audit/cleanup), **cleanup_coachless_classes** (soft-retire legacy empty coachless classes — dry-run + `--commit`) | seed/provision tenants + data maintenance |
+| `scripts/` | seed_nextpoint, provision_club, **backfill_pack_products** (map legacy NULL-product packs to their service — preview + `--commit`), **audit_class_packs** (report class packs vs their session `price_id`), **audit_trials** (7-day-trial grant audit/cleanup), **cleanup_coachless_classes** (soft-retire legacy empty coachless classes — dry-run + `--commit`), **reconcile_coach_commission** (READ-ONLY: every PAID lesson/class line must carry a coach `commission_split` — lists any that don't [should be NONE] + a covered-rand tie-out; optional `YYYY-MM`), **diagnose_coach_packs** (READ-ONLY: where each session pack lands in coach earnings — its wallet's coach ELSE the club, sale-based; optional `<name> [YYYY-MM]`) | seed/provision tenants + data maintenance |
 | `web_app.py`, `frontend/` | host-switch + SPA shells + marketing | The web service |
 | `migration/` | Wix→Render URL/301 helper | SEO migration |
 
@@ -162,9 +162,16 @@ and `POST/PATCH .../variations` carry `peak_amount_minor` ·
 (+`DELETE /<id>`, `GET /preview`) · `GET financials/{summary,revenue,coach-earnings,memberships}` ·
 **`GET financials/earnings-by-service`** (`?month=` — the MONEY FOLD by service: the club's
 Billed→Collected→Outstanding triad + a club-keeps/payouts-due/standing-debt/members summary band + per-service
-rows; order-status-driven so it reconciles; `admin.repositories.earnings_by_service`) · **`GET financials/
-service-clients`** (`?category=&month=` — the per-service → client drill: the clients making up that service's
-billed/collected/outstanding, summing EXACTLY to its row; `admin.earnings_service_clients`) ·
+rows; order-status-driven so it reconciles; `admin.repositories.earnings_by_service` — retained for the Money
+menu band) · **the CLUB-vs-COACH revenue P&L drill** (the ONE shared `Widgets.Earnings`, all off `_earnings_cte`
+so they can't drift): **`GET financials/revenue-club`** (`?month=` — the club overview: direct services +
+commission earned FROM each coach → per-coach P&L; `revenue_club_overview`) · **`GET financials/
+revenue-coach/<coach_user_id>`** (`?month=` — one coach's P&L: sales−discount−write-off=net, net=received+owed,
+commission −coach/+club realised on received + projected on owed; `revenue_coach_pnl`) · **`GET financials/
+revenue-clients`** (`?category=&earned_by=<coach_uuid|club>&month=` — the per-node → client fold, summing
+EXACTLY to the coach/club total; `earnings_clients`) · **`GET financials/transactions`** (`?category=&user_id=
+&earned_by=<coach_uuid|club>&month=` — the client/service → transaction drill, same CTE so it sums to the row;
+`earnings_transactions`) ·
 `GET coach-statement` · `POST coach-statement/arrears/<id>/collected` ·
 **`PATCH coach-statement/arrears/<id>`** (discount/write-off) ·
 **`GET financials/settlement`** (the "who owes what" aging view: clients bucketed by age + coaches with a
@@ -185,8 +192,9 @@ lesson to another bookable coach; `admin_reassign_coach`).
 
 **Insights `/api/insights/*` (Phase-2 P1 read-layer, lane `insights/`):** **`GET court-utilisation`**
 (`?days=` — booked-vs-available court-hours by weekday×hour + overall % → the Overview → Courts heatmap) ·
-**`GET sales-by-day`** (`?month=` — daily takings grouped by day, each sale = client + service type +
-amount → Money → Sales by day) · **`GET bookings-by-day`** (`?month=` — bookings grouped by the day
+**`GET sales-by-day`** (`?month=` — daily NET takings grouped by day (gross − gateway reversals), each sale
+= client + service type + amount, now also split per day into **`online_minor`** (Yoco/gateway) vs
+**`offline_minor`** (cash / EFT / card-at-desk) → Money → Sales by day) · **`GET bookings-by-day`** (`?month=` — bookings grouped by the day
 played, each = client + service + **coach** + status + `booking_id` drill → Money → Bookings by day;
 sibling of sales-by-day but over `diary.booking`, so it also shows membership-covered/R0 bookings) ·
 **`GET overview`** (`?month=` — the month-scoped **daily** business composer: dense per-day series for
@@ -222,7 +230,14 @@ for the month before write-off/discount/collection, distinct from collected `gro
 `coach/repositories.py::_coach_billed`) · **`GET money`** (`?month=` — the coach MONEY FOLD: this-month's
 bookings folded to Billed−Discount−WrittenOff=Invoiced=Paid+Outstanding [order-status-driven, reconciles],
 explicit club-commission + a per-event log; `coach/repositories.coach_month_money` / `_coach_month_events` /
-`_fold_event`) · `POST photo-presign` ·
+`_fold_event`) · **the coach's slice of the ONE shared `Widgets.Earnings`** (all delegate to the SAME
+`admin.repositories` readers, coach-scoped to this coach's own services): **`GET financials/revenue-me`**
+(`?month=` — this coach's P&L, `revenue_coach_pnl` with `coach_scope=True`) · **`GET financials/earnings-by-service`**
+(`?month=` — `earnings_by_service` scoped to this coach) · **`GET financials/revenue-clients`**
+(`?category=&month=` — `earnings_clients`, coach-scoped) · **`GET financials/transactions`**
+(`?category=&user_id=&month=` — `earnings_transactions`, coach-scoped) · **`GET orders/<order_id>/record`**
+(the shared transaction record for a coach's own order — `diary.bookings.order_story` `scope='coach'`,
+read-only, guarded to what the coach earned) · `POST photo-presign` ·
 `GET classes*` (shared) · `POST coach-statement/...` (shared admin route, coach-gated for own).
 
 **Services `/api/services/*`** (`services/routes.py` — the ONE surface a service is edited through by BOTH
@@ -279,8 +294,9 @@ locked out): the module takes its OWN creds `SES_AWS_ACCESS_KEY_ID`/`SES_AWS_SEC
 `SES_REGION=eu-north-1` + `SES_SENDER=noreply@ten-fifty5.com` (`SES_FROM_EMAIL` also read). Still self-gates
 (no creds → in-app only, never errors). Functions: `_from_source`, `html_wrap`, `send_email(…, from_name,
 reply_to)`, `send_raw_email(…, attachments=)`, `send_booking_confirmation`. **NB: the `.ics` email attachment
-is currently OFF** (`EMAIL_ICS_ENABLED=0` — the interim IAM key lacks `ses:SendRawEmail`; plain `SendEmail`
-is used) — the in-app `.ics` download still works. **Multi-tenant identity:** each club rides the one sender
+is currently OFF by choice** (`EMAIL_ICS_ENABLED=0`) — the SES key DOES carry `ses:SendRawEmail`
+(`AmazonSESFullAccess`), so it's set-the-flag-to-enable (invoice PDF attachments already use it,
+`EMAIL_INVOICE_PDF_ENABLED=1`); the in-app `.ics` download works regardless. **Multi-tenant identity:** each club rides the one sender
 with its own From display name (`club.club.name`) + Reply-To (its first `club.location.email`), resolved in
 `notifications.py::_club_identity`. Long-term (verify `nextpointtennis.com`/`courtflow.app` DKIM once the
 CourtFlow AWS account is back): **`docs/specs/SES-SETUP.md`**. No schema change.
@@ -386,7 +402,11 @@ statement/payments/bookings/refunds/dependents/activity + the month **MONEY FOLD
 `statement_fold`) & coach `service_breakdown`, fed by the `client360` composer; adopted by admin
 `renderPerson`, coach `renderClient` and the client `#/activity` record view, role diffs = config; the three
 hand-built person/client renderers were **deleted** and the coach client fork **retired** — every client view
-is now ONE widget off the ONE composer) — plus promoted `window.UI` helpers (`card/backBar/kv/modal/statusChip/…`) and
+is now ONE widget off the ONE composer), **`Widgets.Earnings`** (the ONE club-vs-coach earnings P&L —
+`frontend/js/widgets/earnings.js`, loaded in `admin_app.html` + `coach_app.html`; admin scope = the whole club
+[service → coach/club → client → transaction → the shared record], coach scope = the SAME widget filtered to
+that coach, **config-only, no fork**; mounted at admin Money → **Club earnings** and the coach **Money** tab) —
+plus promoted `window.UI` helpers (`card/backBar/kv/modal/statusChip/…`) and
 `crm_ui.js` (`CRMUI.*`). Role differences = configuration (a data adapter + an actions capability-map +
 `fields`), never forked render code.
 - **Client** — `frontend/app/app.html` + `frontend/js/client.js`. ONE page, **no bottom nav** (Book from
@@ -401,17 +421,23 @@ is now ONE widget off the ONE composer) — plus promoted `window.UI` helpers (`
   `ENV-STATUS.md`.
 - **Coach** — `frontend/app/coach_app.html` + `frontend/js/coach_app.js`. **Bottom nav Home · Schedule ·
   Clients · Money · Setup.** Schedule = a **weekly calendar** (tap lesson → the event story; tap class →
-  roster). Clients → full client record (by-service breakdown). Money = account + disputes + per-client
-  rollup. Setup = Services (lifecycle) + Classes (create/schedule/roster via `ClassUI`) + commission +
-  Edit-profile/Weekly-hours pages. **THE ONE COACH EVENT STORY** (`#/event/:id` → `GET /api/coach/bookings/<id>`)
-  carries the arrears actions (mark-collected / discount / write-off). Served at `/coach`, `/coach.html`
-  (non-coaches bounced).
+  roster). Clients → full client record (by-service breakdown). **Money = the ONE shared `Widgets.Earnings`,
+  coach scope** — this coach's P&L (service → client → transaction), the SAME widget the admin mounts, just
+  filtered to this coach; a transaction drills to the shared record via a new **`#/txn/<order_id>`** route
+  (`renderTxn` → `GET /api/coach/orders/<order_id>/record`). Setup = Services (lifecycle) + Classes
+  (create/schedule/roster via `ClassUI`) + commission + Edit-profile/Weekly-hours pages. **THE ONE COACH EVENT
+  STORY** (`#/event/:id` → `GET /api/coach/bookings/<id>`) carries the arrears actions (mark-collected /
+  discount / write-off). Served at `/coach`, `/coach.html` (non-coaches bounced).
 - **Admin / Owner — COMPLETE + LIVE** — `frontend/app/admin_app.html` + `frontend/js/admin_app.js`, served
   at **`/admin`** (also `/admin.html`, `/admin-app`). **Responsive:** bottom-nav on mobile, **left
   side-rail on desktop** (`.cf-admin`). Nav Home · People · Money · Diary · **Overview** · Setup. **Home**
   = command-center (4 focus cards, `GET /api/admin/home`) · **People** = roster → the
-  **unified person 360** (`#/person/:id`, `GET /api/admin/people/<id>`) · **Money** = Setup-style section
-  menu (Sales by day · **Bookings by day** · Revenue by service · Coach settlement · Approvals · Online payments · Activity) ·
+  **unified person 360** (`#/person/:id`, `GET /api/admin/people/<id>`) · **Money** = the reconciling money band
+  + a Setup-style section menu (New invoice · Sales by day · **Club earnings** · Bookings by day · Approvals ·
+  Club activity) — **Club earnings** opens the club-vs-coach P&L drill (the ONE shared `Widgets.Earnings`) and
+  Sales by day now shows the **Online (Yoco) vs Cash/EFT** split; the standalone **Coach settlement** +
+  **Online payments** tabs were **RETIRED** (settlement figures live in the earnings drill, payments in
+  Sales / Club activity) ·
   **Diary** = the shared **`Widgets.Calendar`** (court/coach filters) + Classes — the **Day view is the
   resource-timeline GRID** (courts + coaches as columns, 06:00–22:00 rows, `cf-ev` blocks; config-driven via
   `cfg.grid`, empty coach columns hidden, courts always shown), **Week/Month stay agenda**; any block drills
@@ -503,7 +529,7 @@ dashboard (`sync:false`).
 - Compile: `python -m py_compile $(git ls-files '*.py')`.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 180 / billing 281 / statement 47** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 180 / billing 311 / statement 47** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
   on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +

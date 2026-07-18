@@ -321,15 +321,29 @@ show active items — dormant/retired vanish for customers but stay visible to t
   re-derived %); an EVENT is the **sum of its transactions** (the fold headline + a Transactions log on the
   shared `Widgets.TransactionDetail`, class events drilling to the same story). It is single-sourced through
   `CRMUI.statementFold` (the fold) + `CRMUI.moneySummary` (a Billed→Collected→Outstanding band) on both
-  consoles; admin Money is month-paged with an order-based `earnings_by_service`. Backing readers:
-  `coach/repositories.py`, `admin/repositories.py`, `billing/commission.py`.
+  consoles, and the **Money tab is now ONE `Widgets.Earnings`** — a **CLUB-vs-COACH P&L** shared by admin and
+  coach. **Club earnings** = the club's DIRECT services (court/membership/pack it runs, 100% club) **plus** the
+  commission it takes from each coach → Total club earnings (collected-now + projected-when-all-owed) +
+  Club-keeps vs Coaches-keep, drilling coach → client → transaction. A **coach P&L** card reads Total sales −
+  discount − write-off = Net ; Net = **Received + Owed** ; the commission split is **realised on Received** and
+  **projected on Owed** at the same effective rate. The coach app shows the coach's OWN P&L ("You keep").
+  Backing readers (`admin/repositories.py`): `revenue_club_overview` / `revenue_coach_pnl` / `earnings_clients`
+  / `earnings_transactions` / `earnings_by_service`, all riding the ONE `_earnings_cte` (now carrying a
+  per-order coach-attribution column: lesson booking / class session / pack sold → that coach; court/membership
+  → NULL = Club) so every drill reconciles; plus `coach/repositories.py`, `billing/commission.py`.
 - The owner monetises each coach via **rent and/or commission %** — freely combinable, per coach.
   Tables: `coach_agreement` (rent), `commission_rule` (scoped, dated %), `commission_split` (per-payment
   decomposition), `coach_ledger` (running balance), `coach_arrears`.
 - **% resolution:** most-specific then latest-effective — `coach+product > product > coach > club > 0`.
-- **Base = ex-VAT.** Commission **accrues on COLLECTION**: online lessons/classes at payment; arrears
-  when the coach marks an invoice collected. **No commission on membership-covered free courts**
-  (gross 0). Coach-lesson **bundle** purchases accrue at the (collected) purchase.
+- **Base = ex-VAT.** Commission **accrues on every COLLECTION, regardless of payment method** — the split
+  posts wherever an order flips to `paid`: a Yoco checkout, an invoice pay-link, AND a desk cash/EFT/card
+  payment (`record_desk_payment`) all route through the ONE payment core (`apply_payment_event` →
+  `_accrue_commission` → `record_split_for_order`), and a 'pay-all' statement fans each child order's split out
+  (`settle_settlement_order`) — so NO payment method short-changes a coach. `void_order`/write-off drops the
+  lesson off the coach's tab; a refund claws the commission back proportionally. **No commission on
+  membership-covered free courts** (gross 0). Coach-lesson **bundle** purchases accrue at the (collected)
+  purchase — pack revenue is **sale-based** (recognised at the pack sale to the wallet's coach). (Read-only
+  guard scripts: `scripts/reconcile_coach_commission.py`, `scripts/diagnose_coach_packs.py`.)
 - **Coach pricing modes:** PAYG (online) · bundles (online) · **monthly arrears** (off-platform: the
   coach sends a statement and chases EFT, then **marks collected** → commission accrues).
 - **Coach month-end statement** (`/statement.html` + in the console): per client — lessons, paid-via-Yoco
@@ -341,8 +355,11 @@ show active items — dormant/retired vanish for customers but stay visible to t
 - **Club↔coach settlement (`coach_payout`).** The running `coach_ledger` balance (**+ = club owes coach,
   − = coach owes club**) is the single authoritative **net-owed** figure, and is settled by a recorded
   **`coach_payout`** in **either direction** — **append-only + idempotent** (never mutated, no double-pay).
-- **Month-end sweep.** A month-end job **accrues arrears + rent** and **notifies the clients who owe**,
-  **idempotent per month** (a re-run is a no-op). It is fired by a **GitHub Action** — no always-on cron.
+- **Month-end sweep (the 25th — the club's billing day).** A **GitHub Action** fires the sweep on the
+  **25th** of each month (was the 1st): it **accrues arrears + rent**, then for each client with an OPEN
+  balance > 0 **consolidates their open orders into ONE numbered statement invoice + pay-link email** (else a
+  plain balance reminder); a client who owes **nothing gets NO email**. **Idempotent per (club, user, YYYY-MM)**
+  (a re-run never re-issues/re-notifies) — no always-on cron.
 - Splits/accruals are **idempotent** (a replayed webhook never double-charges).
 
 ### Unified client statement (one debt = one order)

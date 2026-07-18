@@ -29,15 +29,19 @@ Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ h
 - 🟢 **Live now (env already set):** the whole app — login, booking, classes, the three purchasing
   models, **Yoco payments + refunds + receipts**, the **Business Overview dashboard + page beacon**, and
   **transactional email** (invites + booking/statement confirmations) via the interim Ten-Fifty5 SES.
+- 🟢 **Now live (2026-07-18):** the **month-end statement sweep** — the **`OPS_KEY` GitHub repository secret**
+  is **SET** (same value as `courtflow-api`'s `OPS_KEY` env var), so `.github/workflows/month-end.yml` fires the
+  OPS-guarded `POST /api/cron/month-end` on the **25th of each month at 08:00 SAST** (`cron: "0 6 25 * *"` — the
+  club's billing day, inside the keep-warm window). The **SES sending key now carries `AmazonSESFullAccess`**
+  (`ses:*`, which **includes `ses:SendRawEmail`**), so MIME attachments work → the **invoice-PDF email
+  attachment is ON** (`EMAIL_INVOICE_PDF_ENABLED=1`, verified 2026-07-18). Admin → Setup → **Company & billing
+  details** (incl. bank details) is filled, so issued invoices show EFT instructions.
 - 🟡 **One key away (add when you want them):**
   - **Klaviyo email** → `KLAVIYO_API_KEY` *(future — not started, per you)*
   - **Coach photo uploads** → `S3_BUCKET` + `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`
-  - **`.ics` email attachment** → set `EMAIL_ICS_ENABLED=1` once the SES IAM key gains `ses:SendRawEmail`
-    (currently `0` — add-to-calendar still works in-app)
-  - **Month-end sweep** → add an **`OPS_KEY` GitHub repository secret** (Settings → Secrets and variables →
-    Actions), the **same value** as `courtflow-api`'s `OPS_KEY` env var, so `.github/workflows/month-end.yml`
-    can call the OPS-guarded `POST /api/cron/month-end`. Until it's set the workflow **safely no-ops** (a
-    missing/wrong key is just rejected — no accrual, no client notifications).
+  - **`.ics` email attachment** → optional; the SES key **now has `ses:SendRawEmail`** (via `AmazonSESFullAccess`),
+    so it can be turned on the same way as the invoice PDF — set `EMAIL_ICS_ENABLED=1` (still `0` by default;
+    add-to-calendar already works in-app).
 - 🗑️ **Removed (dead flags, never read by code):** `YOCO_ENABLED`, `TRACKING_ENABLED`,
   `CONSENT_ENABLED`, `CRM_SYNC_ENABLED`, plus the `BRIDGE_TENFIFTY5_*` trio (`_ADMIN_EMAIL` /
   `_CLIENT_KEY` / `_URL`, left over from the deprecated Ten-Fifty5 bridge) — tracking/consent are
@@ -94,7 +98,8 @@ Everything above is already set on the **dev/onrender** config. At cutover, chan
 | `SES_AWS_ACCESS_KEY_ID` | 🟢 | **Dedicated** SES credential (separate from the S3 `AWS_*` pair) | access key id |
 | `SES_AWS_SECRET_ACCESS_KEY` | 🟢 | Dedicated SES secret | secret key |
 | `SES_REGION` | 🟢 | SES region — **pinned `eu-north-1` in `render.yaml`** (was blank; blank fell through to `AWS_REGION=af-south-1` and would break email). Must match the verified SES identity | `eu-north-1` |
-| `EMAIL_ICS_ENABLED` | 🟡 | Attach the booking `.ics` to emails — **`0` for now** (interim key lacks `ses:SendRawEmail`); flip to `1` when it does | `0` |
+| `EMAIL_INVOICE_PDF_ENABLED` | 🟢 | Attach the invoice **PDF** to the `invoice_issued` email (MIME `SendRawEmail`) — **`1`, ON** (verified 2026-07-18; the SES key carries `AmazonSESFullAccess` = `ses:*`, which includes `ses:SendRawEmail`) | `1` |
+| `EMAIL_ICS_ENABLED` | 🟡 | Attach the booking `.ics` to emails — **`0` by default** (optional). The SES key **now has** `ses:SendRawEmail`, so flip to `1` anytime to enable it; add-to-calendar already works in-app | `0` |
 
 ### Optional integrations — dark until you add the key 🟡
 | Var | Status | Lights up | Format |
@@ -184,7 +189,8 @@ SES_SENDER=noreply@ten-fifty5.com
 SES_AWS_ACCESS_KEY_ID=...      # dedicated SES creds (separate from S3's AWS_*)
 SES_AWS_SECRET_ACCESS_KEY=...
 SES_REGION=eu-north-1
-EMAIL_ICS_ENABLED=0            # flip to 1 when the key gains ses:SendRawEmail
+EMAIL_INVOICE_PDF_ENABLED=1    # ON — SES key has ses:SendRawEmail (AmazonSESFullAccess); invoice PDF attached
+EMAIL_ICS_ENABLED=0           # optional — key already has ses:SendRawEmail; flip to 1 to attach the .ics
 # courtflow-api — OPTIONAL (add when you want the feature)
 KLAVIYO_API_KEY=               # future: Klaviyo email
 GOOGLE_ADS_FEED_USER=          # HTTP Basic user for the Google Ads offline-conversion CSV feed (set)

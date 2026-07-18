@@ -82,7 +82,7 @@ these same capabilities into Home · People · Money · Diary · Setup · Insigh
 | **Dashboard** | Business-health landing: **Today at the club** (today's diary) + this-month money KPIs (net revenue · commission kept · rent due · active members · MRR · lessons paid) + net-revenue trend + last-30-days growth (visits/visitors/new customers/bookings/**NPS**) + **Quick actions** (incl. **Book a court for myself** → `/book/court`) | **financial-ish** |
 | **Diary** | Sub-tabbed **Timeline** (master resource-timeline; view/manage all bookings) + **Classes** (create class types, schedule sessions, rosters/attendance) | operational |
 | **People** | Member 360 drawer; **grant/revoke membership**; member's unified statement + **void / write-off** an owed order | operational + *financial (grant / write-off)* |
-| **Money** | **Billing** (config · recent payments · **refunds** · refund-requests) + the full **financial cockpit** (per-coach settlement, revenue-by-service, commission owed, MRR, range toggle) | **financial** |
+| **Money** | **Billing** (config · recent payments · **refunds** · refund-requests) + the full **financial cockpit** (per-coach settlement, revenue-by-service, commission owed, MRR, range toggle) + the **club earnings P&L** (`GET /api/admin/financials/revenue-club` — direct club services + all coaches' commission → club-keeps-vs-coaches-keep; **admin-only**, a coach never sees the roll-up) | **financial** |
 | **Insights** | Business analytics / Business Overview (visits/customers/revenue/NPS) | financial-ish |
 
 Court/resource config moved into **Settings → Courts**; the old separate Classes, Resources, Billing,
@@ -111,8 +111,19 @@ Cockpit and Overview tabs are folded into the five above (Diary/Money/Insights).
   completed/no-show, tap a class → roster; + **Book for a client** + **Book for myself** (→ `/book/court`) +
   block time off.
 - **Clients** — the 360 (private, derived).
-- **Money** — the month-end settlement statement (mark-collected + discount/write-off); supersedes the
-  standalone `/statement.html`.
+- **Money** — the coach's **OWN earnings P&L only** (one `Widgets.Earnings`, coach scope, via
+  `GET /api/coach/financials/revenue-me`): Total sales − discount − write-off = **Net** ; Net = **Received +
+  Owed** ; what **THEY keep** vs the **club's commission** (realised on received + projected on owed) →
+  by-client → transactions → the shared record. A coach sees **ONLY their own slice** — never other coaches,
+  never club-wide direct-service revenue, never the club earnings roll-up (that whole club overview —
+  direct services + all coaches + club-keeps-vs-coaches-keep — is **ADMIN-only**,
+  `GET /api/admin/financials/revenue-club`). Still carries the month-end settlement actions (mark-collected +
+  discount/write-off on own sessions); supersedes the standalone `/statement.html`.
+  - **Transaction record for an order they earned** (a pack they sold) — `GET /api/coach/orders/<order_id>/record`
+    = `diary.bookings.order_story(scope='coach')`: **READ-ONLY** (fold + audit log + receipt), **never** the club
+    money actions (`desk_pay`/`void`/`write_off`/`refund` stay owner-only), and **GUARDED to orders the coach
+    actually earned** (booking / enrolment / `token_wallet` linkage — a coach cannot open another coach's order
+    or an arbitrary one).
 - **Setup** — sub-tabbed **Services & pricing** (own services, self-scoped) **+ the club-commission card
   (READ-ONLY, greyed — surfaced but not editable)** + classes, and **My profile**.
 

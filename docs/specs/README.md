@@ -169,8 +169,21 @@ operating guide; **this folder is the detail.**
 > (`CRMUI.addLessonPlayerModal`), and cancel that voids every order. Plus a **payment-gate correctness
 > sweep** — every service purchase enforces its OWN `billing.product.payment_modes` (a card-only Clay
 > refuses pay-at-court; a pack inherits its service's modes with no at-court fallback; class enrolment
-> gated, and a member-self-enrol-for-free exploit closed). **Current gate baseline: `python -m
-> scripts.test_all` → booking 180 / billing 281 / statement 47.**
+> gated, and a member-self-enrol-for-free exploit closed).
+>
+> **2026-07-17/18 — MONEY TAB = ONE CLUB-vs-COACH EARNINGS P&L.** The Money tab is now ONE
+> **`Widgets.Earnings`** (`frontend/js/widgets/earnings.js`) shared by admin + coach — same widget, config
+> only (no fork, like `TransactionDetail`/`ClientRecord`). **Admin "Club earnings"** answers "how much do WE
+> make" = direct services (court/membership/pack, 100% club) **+** the commission taken from each coach,
+> drilling into a **per-coach P&L** (sales − discount − written-off = net; net = received + owed; commission
+> −coach/+club, realised on received + projected on owed — we always collect) → **by client → transaction →
+> the shared record**; the **coach** sees their OWN P&L only. **Sales by day** now splits **Online (Yoco)**
+> vs **Cash/EFT** (desk-recorded) takings, NET of reversals. The month-end statement sweep now fires on the
+> **25th** (the club billing day, `.github/workflows/month-end.yml`), and the **invoice PDF email attachment
+> is ON** (`EMAIL_INVOICE_PDF_ENABLED=1`). Two new **read-only** integrity scripts back coach payouts /
+> month-end: `scripts/reconcile_coach_commission` (every paid coaching line has its coach split — should read
+> CLEAN) and `scripts/diagnose_coach_packs` (where each pack lands in coach earnings, sale-based). **Current
+> gate baseline: `python -m scripts.test_all` → booking 180 / billing 311 / statement 47.**
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,

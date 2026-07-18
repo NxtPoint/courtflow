@@ -8,7 +8,7 @@ switches, unwired endpoints) live in their own doc: **[FEATURE-FLAGS.md](FEATURE
 > feature-complete for launch. What remains is (A) config owed by Tomo, (B) code backlog, (C) owner
 > decisions, (D) hardening, and (E) two large well-specced roadmaps (Admin Phase 2 + CRM Missions).
 > **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 180 /
-> billing 281 / statement 47** (2026-07-14).
+> billing 311 / statement 47** (2026-07-18).
 
 > Per-sprint changelog is NOT kept here anymore — it lives in git history + the memory index
 > (`.claude/.../MEMORY.md`). This file is the forward-looking backlog only.
@@ -19,8 +19,8 @@ switches, unwired endpoints) live in their own doc: **[FEATURE-FLAGS.md](FEATURE
 See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of each.
 
 **P1**
-- [ ] **`OPS_KEY` GitHub repository secret** (= the API's `OPS_KEY`) so `.github/workflows/month-end.yml`
-      can fire `POST /api/cron/month-end`. Until set the workflow safely no-ops (nothing accrues/notifies).
+- [x] ~~**`OPS_KEY` GitHub repository secret**~~ — **DONE 2026-07-18.** Set; `.github/workflows/month-end.yml`
+      now fires `POST /api/cron/month-end` on the **25th** (moved off the 1st — the club billing day).
 - [ ] **Google Ads scheduled CSV upload** — set `GOOGLE_ADS_FEED_USER`/`PASS`, then schedule the daily
       upload (Uploads → Schedules) pointed at `/feeds/google-ads/offline-conversions.csv`. The recorder half
       is already live. (`GOOGLE-ADS-PLAN.md`.)
@@ -32,9 +32,12 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
 - [ ] **`KLAVIYO_API_KEY`** → CRM lifecycle/marketing flows go live (event feed already emits). Then schedule
       the two manual cohort scripts (`scripts/klaviyo_reactivation.py`, `scripts/klaviyo_trial_cohort.py`).
 - [ ] **`S3_BUCKET` + AWS keys** → coach photo uploads (coaches paste a URL until then).
-- [ ] **SES follow-ups:** (a) flip `EMAIL_ICS_ENABLED=1` once the interim key gains `ses:SendRawEmail`;
-      (b) verify `nextpointtennis.com` DKIM in the CourtFlow AWS account + move `SES_SENDER` off the interim
-      ten-fifty5 account. (`SES-SETUP.md`.)
+- [ ] **SES follow-ups:** ~~SendRawEmail dependency~~ **RESOLVED 2026-07-18** — the sending key carries
+      `AmazonSESFullAccess` (`ses:*`, incl. `ses:SendRawEmail`), so `EMAIL_INVOICE_PDF_ENABLED=1` is **ON**
+      (invoices email the PDF attached). Remaining: (a) optionally flip `EMAIL_ICS_ENABLED=1` (permission now
+      exists — the booking `.ics` attachment; in-app "Add to calendar" works regardless); (b) verify
+      `nextpointtennis.com` DKIM in the CourtFlow AWS account + move `SES_SENDER` off the interim ten-fifty5
+      account. (`SES-SETUP.md`.)
 - [ ] **Revert Ads bidding** Max Clicks → Max Conversions after ~15–30 conversions accrue; set up a Google
       Business Profile. (`GOOGLE-ADS-PLAN.md`.)
 
@@ -63,6 +66,13 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
       current-month only; add month-nav + promote a shared `UI.monthNav` (Home/Insights/360 share ONE pager).
 - [ ] **Coach-lane aliases for holdings/arrears write routes** — discount / wallet adjust-expire / payout sit
       on the **admin** blueprint; add coach-lane aliases guarded to the coach's own clients.
+- [ ] **Re-home a "Record payout" action** — the Money rework retired the standalone Settlement tab, which
+      orphaned the coach-payout UI. The **net balance** now shows in the coach P&L + "Coach payouts due" in the
+      club roll-up (`settlement_overview`), and the backend (`record_coach_payout` + `POST/PATCH/GET
+      /api/admin/coach-payouts` + `AdminAPI.recordCoachPayout/coachPayouts/settlementOverview`) is intact — but
+      there's now **no button** to record a payout (so a coach's ledger balance can't be zeroed in-app after you
+      pay them). Decide: add a lightweight "Record payout" action on the coach P&L card (admin scope, reusing the
+      existing API), or confirm payouts are handled offline and delete the orphaned wrappers.
 - [ ] **Guest fee (Phase 2)** — charge a court guest a fixed fee collected **FROM THE GUEST** (not the
       member's account). Guests are non-billable today. Needs a guest-fee price/config + a guest-facing
       collection path (at-court or a guest payment link), kept off the member's statement.

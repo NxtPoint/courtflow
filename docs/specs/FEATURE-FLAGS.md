@@ -19,9 +19,17 @@ sweep. When you activate one, tick it and move the detail into the relevant spec
 | A3 | **Google Ads offline-conversions CSV feed** (`/feeds/google-ads/offline-conversions.csv`) | `GOOGLE_ADS_FEED_USER` + `GOOGLE_ADS_FEED_PASS` | `courtflow-api` | HIGH | Set both (HTTP Basic). Recorder half is already live (a gclid'd buyer paying ledgers `core.offline_conversion`). Point a Google Ads scheduled upload at the URL; conversion action MUST stay named exactly `Offline purchase`. Returns 404 until set. |
 | A4 | **Ten-Fifty5 members-area embed** — widen from test allowlist → all members | `TF5_EMBED_ALLOW_EMAILS` (clear it) | `courtflow-web` | HIGH | **Launch = clear the env** (empty → all members). Depends on the TF5-side env staying set (`AUTH_ISSUERS` on "Sport AI - API call"). Rollback = clear `TF5_EMBED_URL`. |
 | A5 | **S3 coach-photo upload** (`/api/coach/photo-presign`) | `S3_BUCKET` + `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (+ `S3_PUBLIC_BASE_URL`, `AWS_REGION`) | `courtflow-api` | MED | Set them → presigned direct-to-S3 upload. Until then coaches paste a photo URL. |
-| A6 | **`.ics` attachment on transactional email** | `EMAIL_ICS_ENABLED=1` | `courtflow-api` | LOW | Needs a SES identity with `ses:SendRawEmail` (the interim key lacks it). The in-app "Add to calendar" (`/api/diary/bookings/<id>/calendar.ics`) already works regardless. |
+| A6 | **`.ics` attachment on transactional email** | `EMAIL_ICS_ENABLED=1` | `courtflow-api` | LOW | **Blocker cleared 2026-07-18** — the SES key now carries `AmazonSESFullAccess` (`ses:*`), so `ses:SendRawEmail`/attachments work; just set the flag to turn it on (still OFF by choice). The in-app "Add to calendar" (`/api/diary/bookings/<id>/calendar.ics`) already works regardless. |
 | A7 | **HubSpot CRM adapter** (alternate to Klaviyo) | `HUBSPOT_PRIVATE_APP_TOKEN`/`HUBSPOT_API_KEY` | `courtflow-api` | LOW | A complete second CRM sync adapter, fully dark. Only if a club ever prefers HubSpot over Klaviyo. |
 | A8 | **Per-club online payments** (new tenants) | `PAYMENTS_ENABLED=1` (global, ON) + `club.policy.allow_online_payment` (per club) | — | — | Club #1 is ON. **New tenants provision with the per-club flag OFF** → Admin → Settings → Payments turns it on (the upsert is INSERT-ONLY so a boot re-seed can't reset it). |
+
+**Recently switched ON (graduated off this list):**
+- **`EMAIL_INVOICE_PDF_ENABLED` — ✅ ON / LIVE (verified 2026-07-18).** Issued invoices now email with the PDF
+  **attached** (previously the email only linked the in-portal PDF). Unblocked by the SES key gaining
+  `AmazonSESFullAccess` (`ses:*`, i.e. `ses:SendRawEmail`) — the SAME unlock that clears A6.
+- **`OPS_KEY` GitHub Actions secret — ✅ SET.** The month-end statement sweep now **fires live on the 25th**
+  of each month (`.github/workflows/month-end.yml`, `POST /api/cron/month-end`); it previously no-op'd without
+  the secret.
 
 ## B. Built but not wired to any UI (needs a small front-end or a scheduler)
 

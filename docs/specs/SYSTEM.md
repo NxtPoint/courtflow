@@ -44,7 +44,7 @@ Three mobile-first, drill-through single-page apps, one per role, on the **one s
 - **Admin / Owner — COMPLETE + LIVE** — `admin_app.html` + `admin_app.js`, served at **`/admin`** (also
   `/admin.html` and `/admin-app`). Responsive: bottom-nav on mobile, a **left side-rail on desktop**
   (`.cf-admin`). Home (command-center, `GET /api/admin/home`) · People (roster → unified person 360,
-  `GET /api/admin/people/<id>`) · Money (Setup-style sections incl. **Sales by day**) · Diary (the shared
+  `GET /api/admin/people/<id>`) · Money (Setup-style sections incl. **Club earnings** + **Sales by day**) · Diary (the shared
   Calendar widget + Classes — **Day view = resource-timeline grid**, Week/Month agenda, blocks drill to the
   event story) · **Overview** (first-class nav tab since 2026-07-05: month pager + ECharts sub-tabs
   Traffic/Bookings/Revenue/Members/NPS/Courts on `GET /api/insights/overview`; Courts = the court-utilisation
@@ -247,9 +247,29 @@ the client record) reports the SAME month-scoped reconciling fold — **Billed �
 Invoiced; Invoiced = Paid + Outstanding** — with a cancelled/void booking counting **R0** and you-keep vs
 club-commission taken from the ACTUAL `commission_split` rows. It is single-sourced on the front end through
 `CRMUI.statementFold` + `CRMUI.moneySummary` (a Billed→Collected→Outstanding band) and on the server through
-`client360.statement_fold` / `coach.repositories` / `admin.repositories` (admin Money is month-paged with an
-order-based `earnings_by_service`). An EVENT = the sum of its transactions, drilling to the shared
-`Widgets.TransactionDetail`.
+`client360.statement_fold` / `coach.repositories` / `admin.repositories`. An EVENT = the sum of its
+transactions, drilling to the shared `Widgets.TransactionDetail`.
+
+**The Money tab = ONE `Widgets.Earnings` (a CLUB-vs-COACH P&L), admin + coach** (`frontend/js/widgets/
+earnings.js`). Admin Money opens on the reconciling money band + a section MENU: New invoice · Sales by day ·
+**Club earnings** · Bookings by day · Approvals · Club activity — the old "Coach settlement" tab and the
+"Online payments" tab (a duplicate of Sales by day) were RETIRED. **Club earnings** (`#/money/revenue`) is a
+nested P&L drill: L0 = the CLUB's earnings = its DIRECT services (court/membership/pack it runs, 100% club) +
+the COMMISSION taken from each coach → Total club earnings (collected-now + projected-when-all-owed) +
+**Club-keeps vs Coaches-keep**; it lists each coach (net + club commission) and drillable direct-service rows.
+Tap a coach → that coach's P&L card (Total sales − discount − write-off = Net ; Net = **Received + Owed** ; the
+commission split is **realised** on Received and **projected on Owed** at the same effective rate ;
+Coach-keeps-total vs Club-commission-total) → by-client → transactions → the shared `Widgets.TransactionDetail`;
+a direct service drills service → clients → transactions. The **coach app's Money is the SAME widget** showing
+the coach's OWN P&L ("You keep" wording). Backing (`admin/repositories.py`): the ONE `_earnings_cte` gained a
+per-order **coach-attribution** column (lesson booking / class session / pack sold → that coach; court/membership
+→ NULL = Club), and every drill level rides that ONE CTE so it reconciles exactly — readers `revenue_club_overview`,
+`revenue_coach_pnl` (admin or coach-scope), `earnings_clients(category?, earned_by?)`, `earnings_transactions`,
+with `earnings_by_service` still feeding the Money-menu band (the old `earnings_coaches` was retired). The
+commission split is **realised** from `cockpit_coach_earnings` and **projected on owed** at that effective (else
+the coach's `commission_rule` default) rate. `diary.bookings.order_story` gained a read-only `coach` scope.
+**Sales by day** (`insights.sales_by_day`) now splits each day + the month total into **Online (Yoco)** vs
+**Cash/EFT** takings (counting every `billing.payment` row, cash-basis by payment date).
 
 **The payment rule (one shared rule across every purchase).** What payment methods a purchase offers is
 configurable per service (`billing.product.payment_modes`) and **per membership tier** (new column
@@ -325,8 +345,10 @@ Render auto-deploys `master` (push → both services rebuild). Both web services
 so a blueprint sync can't wipe them (`SEED_NEXTPOINT=1` boot seed, `SES_REGION=eu-north-1`); secrets are
 `sync:false`. No paid Render crons (hence lazy expiry + on-read accrual + the reconcile sweep for missed
 webhooks). Scheduled work rides **GitHub Actions** instead: `.github/workflows/month-end.yml` fires the
-**month-end sweep** `POST /api/cron/month-end` (OPS-guarded) — it accrues arrears + court rent, notifies
-clients with an open balance, and is **idempotent per month** (a re-run is a no-op).
+**month-end sweep** `POST /api/cron/month-end` (OPS-guarded) **on the 25th** (the club's billing day) — it
+accrues arrears + court rent, then for each client with an OPEN balance consolidates their open orders into
+ONE numbered statement invoice + pay-link email (a client who owes nothing gets NO email), and is
+**idempotent per (club, user, month)** (a re-run is a no-op).
 
 ## Key conventions
 - **Nothing hardcoded** — prices/durations/plans/commission/bundles are owner-configured data

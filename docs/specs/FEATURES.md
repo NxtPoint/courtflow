@@ -202,11 +202,18 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 - **Proportional commission clawback on refund** — a refund reverses the coach's accrued commission in
   the same proportion (arrears kept in lockstep). ✅
 - **Club ↔ coach payouts** — record a payout in **either direction** (`billing.coach_payout`) that
-  **nets the running `coach_ledger` balance**. Admin → Money → **Settlement** shows client **aging
-  buckets** (0–30 / 31–60 / 61+) plus each coach's balance with a **"Record payout"** action; the coach
-  **Money** tab gains a **"To finalise"** section (clients still owing this month). 🔭
-- **Month-end sweep** — `POST /api/cron/month-end` (fired by `.github/workflows/month-end.yml`) accrues
-  **arrears + rent** and **emails every client with an open balance** — **idempotent per month**. 🌐
+  **nets the running `coach_ledger` balance** (engine + routes intact). The dedicated **Settlement** tab and
+  the coach **"To finalise"** section were **retired 2026-07-17** — each coach's running balance plus the
+  commission the club realised (on collected) and projects (on owed) now surface inside the **Club earnings**
+  P&L drill; the admin Home still headlines "Coach settlements due". 🔭
+- **Money is a club-vs-coach P&L** — admin **Money → Club earnings** is the ONE shared `Widgets.Earnings`:
+  the club's earnings = **direct services** (courts, membership) **+ commission from coaches**, drilling
+  club → **per-coach P&L** (`sales − discount − write-off = net`, `net = received + owed`, commission
+  **−coach / +club** realised on received + projected on owed) → **by client → transaction → the shared
+  record**. The coach **Money** tab is the SAME widget, coach-scoped to their own P&L (config, no fork). 🔭
+- **Month-end sweep** — `POST /api/cron/month-end` (fired by `.github/workflows/month-end.yml` **on the 25th
+  of each month**, the billing day) accrues **arrears + rent** and **emails every client with an open
+  balance** — **idempotent per month**. The `OPS_KEY` GitHub Actions secret is now set, so it fires live. 🌐
 - *(Deferred: scheduled per-day rent accrual — see OUTSTANDING.)*
 
 - **Role-focused nav** — each role lands on and sees only its own surface: members/guests get
@@ -246,8 +253,9 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
     `coach.get_client` reader was **retired**. The shared **Client 360** record surfaces the same
     **activity + spend rollup** (numbers, no chart). Plus a **"Prepaid packages"** view — the clients who
     hold a pack with this coach and their remaining balance. 🔭
-  - **Money** = account balance/rent/net + disputes + per-client rollup + a **"To finalise"** section
-    (clients still owing this month) → record + activity log.
+  - **Money** = the coach's slice of the ONE shared **`Widgets.Earnings`** (the SAME P&L widget the owner
+    mounts, coach-scoped to their own services) — sales − discount − write-off = net, net = received + owed,
+    explicit club commission — drilling by client → transaction → the shared record (`#/txn/<order_id>`).
     **Setup** = Services (lifecycle Deactivate/Reactivate/Terminate + filter) + **Classes**
     (create / schedule / roster) + club-commission card + Edit-profile & Weekly-hours (as pages). 🔭
   - **THE ONE COACH EVENT STORY** (`#/event/:id`, `GET /api/coach/bookings/<id>`): client + contact,
@@ -262,9 +270,11 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
   **People needing attention** (new signups / pending coach invites / expiring memberships), **To
   approve / decide** (pending refund requests) — via `GET /api/admin/home`. **People** → unified
   **person 360** (`GET /api/admin/people/<id>`: identity + roles + membership grant/revoke + owed +
-  payments + bookings; if coach, settlement) → the admin event story. **Money** = a Setup-style section
-  menu (Sales by day · **Bookings by day** · Revenue · Coach settlement · Approvals · Payments · Activity),
-  each drilling to the event story. **Diary** = the shared **Calendar widget** (Day/Week/Month + court/coach
+  payments + bookings; if coach, settlement) → the admin event story. **Money** = the reconciling money band +
+  a Setup-style section menu (**New invoice** · **Sales by day** [now split **Online (Yoco) vs Cash/EFT**] ·
+  **Club earnings** [the club-vs-coach P&L drill] · **Bookings by day** · **Approvals** · **Club activity**),
+  each drilling to the shared transaction record / event story (the old Coach-settlement + Online-payments
+  tabs were retired). **Diary** = the shared **Calendar widget** (Day/Week/Month + court/coach
   filters, default today) + Classes; the full drag-and-drop resource-timeline stays at `/admin-classic`.
   **Overview** (first-class nav tab since 2026-07-05) = month pager + ECharts sub-tabs
   Traffic/Bookings/Revenue/Members/NPS/Courts (`GET /api/insights/overview`); Traffic splits public-site vs
@@ -328,7 +338,9 @@ club members + their OWN kids, never a stranger or another family's child) · **
 pay-at-court** on the booking path (staff override kept) · **class payment gate** (no free/membership-
 covered seat conjured; a card-only class refuses at-court; staff override kept).
 
-**Commercial engines — `scripts/test_billing_scenarios.py` (281 checks):** settlement per mode
+**Commercial engines — `scripts/test_billing_scenarios.py` (311 checks)** (the count grew 281→298→311 across
+the 2026-07-15 invoicing + pack-bypass sprints — incl. a behavioural guard that reconcile ACTIVATES the
+pack/wallet, not just marks it paid)**:** settlement per mode
 (at-court desk, online held→paid, monthly-account ledger) · **idempotent payment replay** · commission
 30%/40% scoping + accrual + idempotency · token pack buy→activate→**unit/minute draw-down**→credit-back
 + NO_TOKEN · membership coverage (R0) + **access window** inside/outside + trial idempotency · refund-

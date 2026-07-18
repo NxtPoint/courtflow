@@ -258,17 +258,36 @@ page shows ONE reconciled "Your statement", grouped by category with tick-to-par
 coach `coach_arrears` kept in **lockstep** with orders so commission accrues exactly once. Design:
 `docs/specs/UNIFIED-STATEMENT.md`.
 
-**Club↔coach settlement (the loop is CLOSED).** The cockpit *reports* each coach's running `coach_ledger`
-balance (`+` = club owes coach, `−` = coach owes club); a recorded **`coach_payout`** (`billing.commission.
-record_coach_payout`, both directions club↔coach + offset) posts ONE **append-only** ledger entry (idempotent
-on `ref_id=payout.id`) that nets it — the single authoritative net-owed figure. Admin → Money → **Settlement**
-(`GET /api/admin/financials/settlement`) shows client **aging** (0-30/31-60/61+) + per-coach balance with a
-"Record payout"; routes `POST/PATCH/GET /api/admin/coach-payouts`. **Month-end sweep** (`billing.commission.
-run_month_end` → `POST /api/cron/month-end`, `OPS_KEY`-guarded): accrues coach arrears + rent, then notifies
-every client with an OPEN balance (`statement_ready`), idempotent per `(club,user,period)` via
-`billing.month_end_notice`. Fired by **`.github/workflows/month-end.yml`** (rides the keep-warm CI pattern — the
-four `render.yaml` crons stay commented out). The coach Money tab has a **"To finalise"** list (clients still
-owing this month).
+**The Money tab = ONE `Widgets.Earnings` (`frontend/js/widgets/earnings.js`) — a club-vs-coach P&L across
+admin + coach, config-only (no fork).** Admin Money HOME is the reconciling band + a section menu (New invoice ·
+Sales by day · **Club earnings** · Bookings by day · Approvals · Club activity). **"Club earnings"**
+(`#/money/revenue`) is the roll-up: **CLUB earnings = the DIRECT services it runs** (court/membership/pack, 100%
+club) **+ the COMMISSION taken from each coach** → Total (collected-now + projected-when-all-owed) + **Club keeps
+vs Coaches keep**; drill a coach → their **P&L** (Total sales − discount − write-off = Net ; Net = Received +
+Owed ; commission −coach/+club REALISED on received + PROJECTED on owed at the same rate ; Coach-keeps-total vs
+Club-commission-total) → by client → transaction → the shared record; a direct service drills to its clients.
+The **coach app** Money is the coach's OWN P&L (same widget, "You keep" wording — never other coaches / the club
+roll-up). All off the ONE `_earnings_cte` (per-order coach attribution — lesson/class/pack → that coach,
+court/membership → NULL = club) via `admin.repositories.revenue_club_overview` / `revenue_coach_pnl` /
+`earnings_clients` / `earnings_transactions`; commission split = realised from `cockpit_coach_earnings`,
+projected-on-owed at the `commission_rule` rate. Retired: the admin **Coach-settlement** + **Online-payments**
+tabs (+ `earnings_coaches`). **Commission accrues to the coach on EVERY collection method** (Yoco / invoice
+paylink / cash-EFT desk / 'pay-all' statement) through the ONE payment core — no method short-changes a coach
+(monthly guard: `python -m scripts.reconcile_coach_commission`).
+
+**Club↔coach settlement.** The coach's running `coach_ledger` balance surfaces in the coach P&L (net balance
+with the club) + the roll-up's "Coach payouts due" (`billing.commission.settlement_overview`); a recorded
+**`coach_payout`** (`record_coach_payout`, both directions + offset, idempotent on `ref_id=payout.id`) nets it —
+routes `POST/PATCH/GET /api/admin/coach-payouts` + `GET /api/admin/financials/settlement` remain. The standalone
+**Settlement Money tab + its Record-payout modal were RETIRED** in the rework (figures now live in the P&L); the
+`AdminAPI.recordCoachPayout/coachPayouts/settlementOverview` wrappers stay but currently have **no UI trigger**
+(OUTSTANDING: decide whether to re-home a Record-payout action on the coach P&L). **Month-end sweep**
+(`billing.commission.run_month_end` → `POST /api/cron/month-end`, `OPS_KEY`-guarded): accrues coach arrears +
+rent, then for each client with an OPEN balance **consolidates their open orders into ONE numbered statement
+invoice + a pay-link email** (`invoice_issued`; else a plain `statement_ready` reminder — a client who owes
+nothing gets NO email), idempotent per `(club,user,period)` via `billing.month_end_notice`. Fired by
+**`.github/workflows/month-end.yml`** on the **25th** (the club billing day; rides the keep-warm CI pattern — the
+four `render.yaml` crons stay commented out).
 
 **Client month-at-a-glance + the ONE month-aware 360.** `billing.me.activity_summary(month)` →
 `GET /api/me/activity-summary`: sessions PLAYED (lessons/court/classes, standalone courts only) + minutes +

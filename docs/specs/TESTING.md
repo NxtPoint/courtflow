@@ -21,7 +21,7 @@ the coach sets up services, then the client books against them. Expected results
 >   bill a stranger or another family's child) — and the **payment-gate** correctness: a **card-only service**
 >   refuses pay-at-court on the booking path (staff override kept), and **class enrolment** respects the
 >   service's payment rule (no free/membership-covered seat conjured, card-only refuses at-court).
-> - **billing / commercial** (`test_billing_scenarios`, **281** checks) — PAYG/membership/bundle settlement,
+> - **billing / commercial** (`test_billing_scenarios`, **311** checks) — PAYG/membership/bundle settlement,
 >   desk-payment idempotency, refunds, commission, refund clawback, membership-cancel-voids-order, the
 >   transaction log, dispute routing, client month-end, void clears arrears, abandoned reclaim on read, the
 >   booking + coach event stories, cancel-voids-order + phantom cleanup, the **client by-service breakdown**
@@ -42,6 +42,16 @@ the coach sets up services, then the client books against them. Expected results
 >   balance (a paid order can't be voided), **arrears ↔ orders stay in lockstep** both directions, a **pack
 >   bought offline** is usable now + shows owed, and each line carries its **category + coach name**.
 >
+> **Read-only integrity scripts (run before coach payouts / month-end, against LIVE data).** Two safe
+> diagnostics — both READ-ONLY (roll back), reading `DATABASE_URL` from env (Render Shell) or a gitignored
+> `.env.local`:
+> - `python -m scripts.reconcile_coach_commission [YYYY-MM]` — proves **no coach is short-changed**: every
+>   PAID lesson/class line carries its coach `commission_split`. Should read **CLEAN** (any listed line is a
+>   collection whose split silently failed).
+> - `python -m scripts.diagnose_coach_packs [name] [YYYY-MM]` — pinpoints **where each pack lands in coach
+>   earnings** (its selling coach in its SALE month, else the club) — the sale-based model, for "why isn't
+>   coach X's pack showing?"
+>
 > **Transactional email** is now **LIVE** (interim via the Ten-Fifty5 AWS account, `eu-north-1`,
 > `SES_SENDER=noreply@ten-fifty5.com`): invites + booking/statement confirmations send from the club's
 > From-name + Reply-To. **All 21 email kinds AUDITED + signed off 2026-07-11** — one confirm+receipt email
@@ -49,9 +59,9 @@ the coach sets up services, then the client books against them. Expected results
 > pack/class payment emails suppressed for their own), exact tier/pack names, times on every receipt, aligned
 > layout, Outlook-safe HTML shell, `/portal` links, coach BCC only on his own lesson/class; one canonical
 > status vocabulary shared with Client 360 ([SES-SETUP.md](SES-SETUP.md) has the delivery detail). The
-> booking **`.ics` attachment is OFF** (`EMAIL_ICS_ENABLED=0` — the interim key
-> lacks `ses:SendRawEmail`; add-to-calendar still works in-app). Long-term CourtFlow-domain setup:
-> [SES-SETUP.md](SES-SETUP.md).
+> booking **`.ics` attachment is OFF by choice** (`EMAIL_ICS_ENABLED=0`) — the SES key DOES carry
+> `ses:SendRawEmail` (invoice PDF attachments already use it), so it's set-the-flag-to-enable;
+> add-to-calendar still works in-app. Long-term CourtFlow-domain setup: [SES-SETUP.md](SES-SETUP.md).
 >
 > The manual checklist below exercises the **UI flows** on top of those proven engines.
 
@@ -281,8 +291,8 @@ not the client Home.
 ## 6. Known limitations during testing (do NOT log these as bugs)
 - **Email is LIVE** (interim SES via the Ten-Fifty5 AWS account) → confirmations/invites/statements now
   **send** (from the club's From-name + Reply-To) *and* land in-app. The coach invite link is also shown in
-  the UI to copy. The `.ics` "Add to calendar" works in-app, but the email **attachment is OFF**
-  (`EMAIL_ICS_ENABLED=0` — interim key lacks `ses:SendRawEmail`; flip to `1` once granted). **Klaviyo
+  the UI to copy. The `.ics` "Add to calendar" works in-app, but the email **attachment is OFF by choice**
+  (`EMAIL_ICS_ENABLED=0`; the SES key has `ses:SendRawEmail` — invoice PDFs already attach — so flip to `1` to enable). **Klaviyo
   marketing** is still dark (no key). Long-term CourtFlow-domain setup: [SES-SETUP.md](SES-SETUP.md).
 - **Coach photo upload** needs S3 → until then **paste a photo URL**.
 - **Gated (review-coach) lessons** settle **pay-at-court** — no online prepay for an unconfirmed lesson.
