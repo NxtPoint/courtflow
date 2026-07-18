@@ -29,25 +29,26 @@ jobs:
       fail-fast: false          # one brand failing must not hide the others
       matrix:
         include:
-          # --- NextPoint Tennis (courtflow) — fully instrumented, ENFORCED ---
+          # BOTH public hosts (nextpointtennis.com, ten-fifty5.com) sit behind a Cloudflare zone that
+          # serves GitHub's datacenter IPs a bot-challenge (HTTP 200, no tag) — which false-fails CI
+          # even though the tags are verifiably live from a real browser. So the canary checks each
+          # brand's RENDER ORIGIN instead: Render's own edge does not bot-challenge, and the origin
+          # serves the identical tagged HTML (courtflow-web is a marketing host; the 1050 origin injects
+          # the tag into every page). This bypasses the club's Cloudflare and verifies reliably.
+          # --- NextPoint Tennis (courtflow) — fully instrumented, ENFORCED (via origin) ---
           - brand: nextpoint
             mode: enforce
-            url: "https://nextpointtennis.com/"
-            sitemap: "https://nextpointtennis.com/sitemap.xml"
+            url: "https://courtflow-web.onrender.com/"
+            sitemap: "https://courtflow-web.onrender.com/sitemap.xml"
             # space-separated substrings that MUST be present in the served HTML
             require: "googletagmanager.com/gtag/js G-EKQP47P8M9 AW-17077631191 adsConversions cfConversion attribution.js"
-          # --- Ten-Fifty5 (1050) — GA4 instrumented 2026-07-18 (organic-only, no Ads). WARN-mode. ---
-          # Tag injected by locker_room_app._marketing_head; GA4_MEASUREMENT_ID=G-4167EPFS34 lives
-          # inline in the 1050 render.yaml (locker-room svc). WARN not enforce: ten-fifty5.com sits
-          # behind Cloudflare, which serves GitHub's datacenter IPs a bot-challenge/block page (HTTP
-          # 200, no tag) — so a CI enforce false-fails even though the tag is verifiably live from a
-          # real browser/IP. The backup signal is the daily digest: if the tag truly broke, ten-fifty5
-          # GA4 traffic would flatline there. (To hard-enforce later: verify via the Render origin URL
-          # which bypasses Cloudflare, or add a Cloudflare WAF skip for the canary.)
+          # --- Ten-Fifty5 (1050) — GA4-only (organic, no Ads), ENFORCED (via origin) ---
+          # GA4_MEASUREMENT_ID=G-4167EPFS34; tag injected by locker_room_app._marketing_head into
+          # every served .html. Origin = locker-room-26kd.onrender.com (serves the app HTML w/ the tag).
           - brand: ten-fifty5
-            mode: warn
-            url: "https://www.ten-fifty5.com/"
-            sitemap: "https://www.ten-fifty5.com/sitemap.xml"
+            mode: enforce
+            url: "https://locker-room-26kd.onrender.com/"
+            sitemap: ""
             require: "googletagmanager.com/gtag/js G-4167EPFS34 cfConversion"
     name: canary (${{ matrix.brand }})
     steps:
