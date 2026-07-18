@@ -131,16 +131,17 @@ A **Promotions** section under Admin → Money or Setup (owner + `club_admin`):
   code; automatic (no-code) promos targeted by segment.
 - **Phase 3 (advanced):** stacking rules, referral codes, scheduled auto-activate/expire, free_item.
 
-## 10. Open decisions (Tomo — resolve before Phase 1 build)
-1. **Code model for v1:** one **shared** code per promo (simple, e.g. `MEMBER20`) — recommended — vs unique
-   per-customer codes now (defer to Phase 2)?
-2. **Stacking:** default **OFF** (a promo can't combine with an admin discount or another promo) — agree?
-3. **Member self-serve entry** vs **staff-only** at desk: allow members to enter codes in the booking/
-   checkout UI (recommended, that's the point) — confirm.
-4. **Scope of the first special** you actually want to run (drives which kind ships first): a straight
-   **% off membership**, or the **3-months-get-1-free** (needs Phase 2 `bonus_period`)?
-5. **VAT/receipts:** promos reduce the pre-VAT total; NextPoint is not VAT-registered today, so no change —
-   confirm we ignore VAT interplay for now.
+## 10. Decisions (2026-07-18)
+**LOCKED (Tomo):**
+1. **Code model v1 = one SHARED code per promo** (e.g. `MEMBER20`) with total + per-customer caps. Unique
+   per-recipient codes are deferred to Phase 2.
+4. **First special = a straight % / fixed off** (Phase 1, e.g. 20% off membership). The **3-months-get-1-free**
+   offer comes in **Phase 2** via `bonus_period`. → build **both, in phase order**.
+
+**Default unless Tomo objects (confirm at build):**
+2. **Stacking = OFF** — a promo can't combine with an admin discount or another promo.
+3. **Member self-serve entry = ON** — members type the code in the booking/checkout UI (that's the point).
+5. **VAT = ignored** — NextPoint is not VAT-registered, so promos just reduce the total; no VAT interplay.
 
 ## 11. Gotchas / guards (bake in at build)
 - **Never double-discount:** the `stackable=false` guard keys off `order_line.original_amount_minor` already
