@@ -159,5 +159,49 @@ dashboard reads. No Google credentials ever touch Render.
 ## 8. Progress
 - ✅ **Court-utilisation timezone FIXED** (2026-07-18): `_booked()` now extracts weekday/hour
   `AT TIME ZONE 'Africa/Johannesburg'`, so the heatmap reads in SAST and aligns with availability hours.
-- ⏭️ Next (Phase A): visitor-headline re-lead · members-by-type stacked · trial funnel · bookings-by-type
-  surfaced · logged-in new/returning.
+
+## 9. Phase A — implementation brief (turnkey; build + eyeball each panel live)
+
+> **QA rule for this lane:** every `insights` read is `_guard`-wrapped, so a **wrong column name shows as a
+> silent 0, not an error** (the old NPS `created_at` bug). After each reader, open `#/overview` on real data
+> and confirm the panel is non-zero/plausible before moving on. There is no harness for `insights`.
+
+**Backend — extend `insights.repositories.overview` (reuse the `_fill(rows, *keys)` closure + `p` params):**
+1. **Membership composition (stacked) — `tier_series`**: per-day active PAID subs grouped by
+   `price.membership_tier`, plus `provider='trial'` bucketed as `Trial`. Query: `generate_series(:s,:e-1d)` ×
+   `membership_subscription` on the SAME active predicate the existing `members` block uses
+   (`period_start <= g` AND `cancelled_at` null/after AND `current_period_end` null/≥ g), LEFT JOIN
+   `billing.price pr`. `CASE WHEN ms.provider='trial' THEN 'Trial' ELSE COALESCE(NULLIF(pr.membership_tier,''),
+   'Member') END AS tier`. Pivot to `{tier: [per-day]}` in Python via `pos`.
+2. **Net growth — `joined` / `cancelled` per day**: paid subs (`provider<>'trial'`) by `period_start` in
+   window; and by `cancelled_at::date` in window.
+3. **Trial funnel — `trials_started` / `trials_lapsed` per day + `trial_kpis`**: started = trial subs by
+   `period_start`; lapsed = trial subs with `current_period_end` in window AND `NOT EXISTS` an active paid
+   sub for that user. KPIs (rolling, lifetime): `active_trials`, `total_triallers` (distinct trial user_ids),
+   `converted` (triallers who now hold any paid sub) → `conversion_rate = converted/total_triallers`.
+4. **Logged-in new/returning — `li_new`/`li_return` per day**: over `page_view` where
+   `metadata->>'authed'='true'`; a day's authed `anon_id` is NEW if its first-ever authed `occurred_at` is
+   that day, else returning. (Mirror `analytics.new_vs_returning`, but authed.)
+5. Add all to the `series` + `kpis` return dict. Columns to trust: `membership_subscription`(club_id,user_id,
+   price_id,status,provider,period_start,cancelled_at,current_period_end), `price.membership_tier`,
+   `usage_event.metadata`(anon_id,authed). **Verify each against the live schema first.**
+
+**Frontend — `admin_app.js` `#/overview` (reuse the ECharts seam; add stacked-area + donut helpers):**
+- **Re-lead the header:** headline = **public unique visitors** (`kpis.public_visitors`) + **logged-in
+  visitors** (`kpis.logged_in_visitors`) as a SEPARATE tile. Demote/relabel raw `visits`. This kills the
+  "~400 doesn't make sense" confusion (that number is in-app navigation — put it under "Members-area").
+- **Membership composition** = stacked area from `series.tier_series` (paid tiers + Trial) — the hero growth
+  chart. + a donut of the current mix. + net-growth line (`joined` vs `cancelled`).
+- **Trial funnel** = started vs lapsed per day + a conversion-rate stat tile.
+- **Bookings by type** = stacked `bookings_court`/`bookings_lesson`/`bookings_class` (data already in the
+  payload — just surface it; the lesson double-count is already collapsed in the query).
+- Keep the re-zoned court-utilisation heatmap.
+
+**PAYG (deferred decision):** show a KPI = active PAYG players (distinct clients with a non-covered,
+non-token booking in the trailing 30d, no active paid sub) rather than a per-day series — simplest honest
+measure. Confirm with Tomo whether a per-day PAYG line is wanted.
+
+## 10. Phase B / C (later)
+- **B (Google):** `core.web_daily` table + `POST /api/cron/analytics-ingest` (OPS-guarded) + a digest push of
+  daily GA4/GSC metrics + the acquisition section (channels/geo/GSC/conversions). No Google creds on Render.
+- **C (polish):** membership cohort curves · Google-reviews trend · GA4-vs-beacon cross-check · exports.
