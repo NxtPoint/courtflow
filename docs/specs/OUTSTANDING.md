@@ -66,13 +66,10 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
       current-month only; add month-nav + promote a shared `UI.monthNav` (Home/Insights/360 share ONE pager).
 - [ ] **Coach-lane aliases for holdings/arrears write routes** — discount / wallet adjust-expire / payout sit
       on the **admin** blueprint; add coach-lane aliases guarded to the coach's own clients.
-- [ ] **Re-home a "Record payout" action** — the Money rework retired the standalone Settlement tab, which
-      orphaned the coach-payout UI. The **net balance** now shows in the coach P&L + "Coach payouts due" in the
-      club roll-up (`settlement_overview`), and the backend (`record_coach_payout` + `POST/PATCH/GET
-      /api/admin/coach-payouts` + `AdminAPI.recordCoachPayout/coachPayouts/settlementOverview`) is intact — but
-      there's now **no button** to record a payout (so a coach's ledger balance can't be zeroed in-app after you
-      pay them). Decide: add a lightweight "Record payout" action on the coach P&L card (admin scope, reusing the
-      existing API), or confirm payouts are handled offline and delete the orphaned wrappers.
+- [x] ~~**Re-home a "Record payout" action**~~ — **DONE 2026-07-18** (b33540b): the coach P&L card now shows
+      "Net balance with the club" + an admin-only **Record payout** button (`Widgets.Earnings` `cfg.onRecordPayout`
+      → `recordPayoutModal` → `AdminAPI.recordCoachPayout`), prefilled to settle the balance; `revenue_coach_pnl`
+      returns `ledger_balance_minor`. Posts the netting `coach_ledger` entry (fixture-proven: R700 → R0).
 - [ ] **Guest fee (Phase 2)** — charge a court guest a fixed fee collected **FROM THE GUEST** (not the
       member's account). Guests are non-billable today. Needs a guest-fee price/config + a guest-facing
       collection path (at-court or a guest payment link), kept off the member's statement.

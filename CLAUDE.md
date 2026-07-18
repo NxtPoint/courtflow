@@ -279,9 +279,10 @@ paylink / cash-EFT desk / 'pay-all' statement) through the ONE payment core — 
 with the club) + the roll-up's "Coach payouts due" (`billing.commission.settlement_overview`); a recorded
 **`coach_payout`** (`record_coach_payout`, both directions + offset, idempotent on `ref_id=payout.id`) nets it —
 routes `POST/PATCH/GET /api/admin/coach-payouts` + `GET /api/admin/financials/settlement` remain. The standalone
-**Settlement Money tab + its Record-payout modal were RETIRED** in the rework (figures now live in the P&L); the
-`AdminAPI.recordCoachPayout/coachPayouts/settlementOverview` wrappers stay but currently have **no UI trigger**
-(OUTSTANDING: decide whether to re-home a Record-payout action on the coach P&L). **Month-end sweep**
+Settlement Money tab was retired, but the **Record-payout action was re-homed onto the coach P&L card** —
+`revenue_coach_pnl` returns `ledger_balance_minor`, and the admin drill's coach P&L shows "Net balance with the
+club" + a **Record payout** button (`Widgets.Earnings` `cfg.onRecordPayout` → `recordPayoutModal` →
+`AdminAPI.recordCoachPayout`, prefilled to settle) that posts the netting `coach_ledger` entry. **Month-end sweep**
 (`billing.commission.run_month_end` → `POST /api/cron/month-end`, `OPS_KEY`-guarded): accrues coach arrears +
 rent, then for each client with an OPEN balance **consolidates their open orders into ONE numbered statement
 invoice + a pay-link email** (`invoice_issued`; else a plain `statement_ready` reminder — a client who owes
