@@ -39,7 +39,13 @@ jobs:
       - name: Install deps
         run: pip install -r marketing_digest/requirements.txt
 
-      - name: Build digest
+      - name: Build digest + email each brand
+        env:
+          # Emails each brand's slice to its own inbox via the OPS-guarded API -> platform SES.
+          # No AWS creds in GitHub: OPS_KEY (already a repo secret) authorizes the send; if it's
+          # unset the digest still runs and just skips the emails.
+          MARKETING_DIGEST_API: "https://courtflow-api.onrender.com"
+          OPS_KEY: ${{ secrets.OPS_KEY }}
         run: python marketing_digest/digest.py
 
       - name: Commit report

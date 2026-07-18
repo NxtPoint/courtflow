@@ -1071,3 +1071,30 @@ def cron_ses_selftest():
             out["send_ok"] = False
             out["send_error"] = "%s: %s" % (type(e).__name__, e)
     return jsonify(out), 200
+
+
+@cron_bp.post("/marketing-digest-email")
+def cron_marketing_digest_email():
+    """OPS-only: email a pre-rendered marketing digest to a brand inbox. The daily marketing-digest
+    GitHub Action generates each brand's report (it holds the keyless GA4/GSC access) and POSTs it
+    here, so the platform's own SES sends it — no AWS creds ever leave the server / land in GitHub.
+    Recipients are ALLOWLISTED so this can never be used as an open relay even if OPS_KEY leaked.
+    Body: {to, subject, text, html?, from_name?}. Never touches the DB."""
+    if not _ops_only():
+        return jsonify(error="forbidden"), 403
+    from marketing_crm.email import ses
+    body = request.get_json(silent=True) or {}
+    to = (body.get("to") or "").strip().lower()
+    allow = {"info@nextpointtennis.com", "info@ten-fifty5.com"}
+    if to not in allow:
+        return jsonify(error="recipient_not_allowed", to=to), 400
+    subject = (body.get("subject") or "Marketing digest").strip()
+    text = (body.get("text") or "").strip()
+    html = body.get("html")
+    from_name = (body.get("from_name") or "Marketing Digest").strip()
+    if not (text or html):
+        return jsonify(error="empty_body"), 400
+    if not ses.enabled():
+        return jsonify(sent=False, reason="ses_disabled"), 200
+    ok = ses.send_email(to, subject, text or " ", body_html=html, from_name=from_name)
+    return jsonify(sent=bool(ok), to=to), 200
