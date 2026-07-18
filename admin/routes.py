@@ -290,6 +290,42 @@ def promotion_redemptions(promo_id):
     return jsonify(redemptions=rows), 200
 
 
+@admin_bp.get("/promotions/<promo_id>/codes")
+def promotion_codes(promo_id):
+    p, err = _admin()
+    if err:
+        return err
+    from billing import promotions as promo
+    with session_scope() as s:
+        rows = promo.list_codes(s, club_id=p.club_id, promo_id=promo_id)
+    return jsonify(codes=rows), 200
+
+
+@admin_bp.post("/promotions/<promo_id>/codes")
+def generate_promotion_codes(promo_id):
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    from billing import promotions as promo
+    with session_scope() as s:
+        res = promo.generate_codes(s, club_id=p.club_id, promo_id=promo_id,
+                                   count=b.get("count"), prefix=b.get("prefix"),
+                                   max_uses=b.get("max_uses"))
+    return (jsonify(res), 200) if res.get("ok") else (jsonify(res), 400)
+
+
+@admin_bp.post("/promotions/codes/revoke")
+def revoke_promotion_code():
+    p, err = _admin()
+    if err:
+        return err
+    from billing import promotions as promo
+    with session_scope() as s:
+        res = promo.revoke_code(s, club_id=p.club_id, code=(_body().get("code") or ""))
+    return (jsonify(res), 200) if res.get("ok") else (jsonify(res), 404)
+
+
 # ---------------------------------------------------------------------------
 # resources (courts / coaches / classes)
 # ---------------------------------------------------------------------------

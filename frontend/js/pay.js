@@ -63,9 +63,12 @@
         if (mode) body.settlement_mode = mode;
         return auth().apiJSON(opts.endpoint, { method: "POST", body: body })
           .then(function (res) {
-            // Promo feedback (a successful code discounts the order; a soft failure on an owed buy).
-            if (res && res.promo && UI) UI.toast("Code applied — you saved " + UI.money(res.promo.discount_minor) + ".", "info");
-            else if (res && res.promo_error && UI) UI.toast(res.promo_error, "warn");
+            // Promo feedback (a successful code discounts the order OR adds bonus months; a soft failure).
+            if (res && res.promo && UI) {
+              var pm = res.promo;
+              if (pm.is_bonus) { var n = pm.bonus_qty || 0; UI.toast("Offer applied — " + n + " free month" + (n === 1 ? "" : "s") + " added to your membership.", "info"); }
+              else UI.toast("Code applied — you saved " + UI.money(pm.discount_minor) + ".", "info");
+            } else if (res && res.promo_error && UI) UI.toast(res.promo_error, "warn");
             if (res && (res.settlement_mode === "online" || res.needs_checkout) && res.order_id) {
               return Pay.startYocoCheckout(res.order_id);
             }

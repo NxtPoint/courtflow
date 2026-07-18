@@ -45,15 +45,31 @@ WHERE o.club_id = :c AND o.id = :o
 # Lookup + eligibility
 # ---------------------------------------------------------------------------
 
-def _find_by_code(session, club_id, code):
+def _resolve_code(session, club_id, code):
+    """Resolve a typed code to (promotion_row, code_row). A SHARED code lives on promotion.code
+    (code_row is None); a UNIQUE per-recipient code lives on promotion_code (code_row is that row,
+    carrying its own cap + optional bound recipient). Returns (None, None) if unknown/archived."""
     if not code:
-        return None
-    return session.execute(text(
+        return None, None
+    code = str(code).strip()
+    promo = session.execute(text(
         "SELECT * FROM billing.promotion "
         "WHERE club_id = :c AND lower(code) = lower(:code) AND status <> 'archived' "
         "ORDER BY created_at DESC LIMIT 1"),
-        {"c": str(club_id), "code": str(code).strip()},
-    ).mappings().first()
+        {"c": str(club_id), "code": code}).mappings().first()
+    if promo:
+        return promo, None
+    # Not a shared code — try a unique per-recipient code.
+    child = session.execute(text(
+        "SELECT * FROM billing.promotion_code "
+        "WHERE club_id = :c AND lower(code) = lower(:code) LIMIT 1"),
+        {"c": str(club_id), "code": code}).mappings().first()
+    if not child:
+        return None, None
+    promo = session.execute(text(
+        "SELECT * FROM billing.promotion WHERE id = :p AND status <> 'archived'"),
+        {"p": str(child["promotion_id"])}).mappings().first()
+    return (promo, child) if promo else (None, None)
 
 
 def _compute_discount(promo, amount_minor) -> int:
@@ -111,9 +127,25 @@ def _has_prior_purchase(session, club_id, user_id, kind) -> bool:
     return int(cnt) > 0
 
 
-def _check(session, club_id, promo, *, kind, product_id, amount_minor, user_id, now_sql="now()"):
-    """Shared eligibility → {ok, discount_minor} or {ok:False, error, reason}. Does NOT check stacking
-    (that needs the order); apply_to_order adds it."""
+def _bonus_months_for_order(session, order_id) -> int:
+    """Extra membership months from an applied bonus_period promo on this order (0 if none). Read by the
+    membership activation path so an ONLINE 3+1 grants term+bonus in one shot."""
+    v = session.execute(text(
+        "SELECT COALESCE(SUM(pr.bonus_qty),0) "
+        "FROM billing.promotion_redemption r JOIN billing.promotion pr ON pr.id = r.promotion_id "
+        "WHERE r.order_id = :o AND r.status = 'applied' AND pr.kind = 'bonus_period'"),
+        {"o": str(order_id)}).scalar()
+    return int(v or 0)
+
+
+def _is_bonus(promo) -> bool:
+    return promo["kind"] in ("bonus_period",)
+
+
+def _check(session, club_id, promo, code_row=None, *, kind, product_id, amount_minor, user_id):
+    """Shared eligibility → {ok, discount_minor, is_bonus} or {ok:False, error, reason}. Does NOT check
+    stacking (that needs the order); apply_to_order adds it. `code_row` = the per-recipient code (or None
+    for a shared code) — its own cap + recipient binding are enforced here."""
     if not promo:
         return {"ok": False, "error": "PROMO_NOT_FOUND", "reason": "That code isn't valid."}
     if promo["status"] != "active":
@@ -125,6 +157,14 @@ def _check(session, club_id, promo, *, kind, product_id, amount_minor, user_id, 
         {"s": promo["starts_at"], "e": promo["ends_at"]}).scalar()
     if not within:
         return {"ok": False, "error": "EXPIRED", "reason": "This promotion isn't available right now."}
+    # Unique per-recipient code: its own single-use cap + optional recipient binding.
+    if code_row is not None:
+        if code_row["status"] != "active":
+            return {"ok": False, "error": "CODE_REVOKED", "reason": "That code is no longer valid."}
+        if int(code_row["used_count"] or 0) >= int(code_row["max_uses"] or 1):
+            return {"ok": False, "error": "CODE_USED", "reason": "This code has already been used."}
+        if code_row["user_id"] and user_id and str(code_row["user_id"]) != str(user_id):
+            return {"ok": False, "error": "CODE_NOT_YOURS", "reason": "This code is registered to another member."}
     if not _scope_ok(promo, kind, product_id):
         return {"ok": False, "error": "NOT_ELIGIBLE_SCOPE",
                 "reason": "This code doesn't apply to what you're buying."}
@@ -136,12 +176,17 @@ def _check(session, club_id, promo, *, kind, product_id, amount_minor, user_id, 
     g, u = _redemption_counts(session, promo["id"], user_id)
     if promo["max_redemptions"] is not None and g >= int(promo["max_redemptions"]):
         return {"ok": False, "error": "LIMIT_REACHED", "reason": "This promotion has been fully claimed."}
-    if user_id and u >= int(promo["per_customer_cap"] or 1):
+    # Per-customer cap applies to a SHARED code; a unique code is single-use via its own cap above.
+    if user_id and code_row is None and u >= int(promo["per_customer_cap"] or 1):
         return {"ok": False, "error": "ALREADY_USED", "reason": "You've already used this code."}
+    if _is_bonus(promo):
+        if int(promo["bonus_qty"] or 0) <= 0:
+            return {"ok": False, "error": "NO_BONUS", "reason": "This offer isn't configured."}
+        return {"ok": True, "discount_minor": 0, "is_bonus": True}
     disc = _compute_discount(promo, amount_minor)
     if disc <= 0:
         return {"ok": False, "error": "NO_DISCOUNT", "reason": "Nothing to discount on this order."}
-    return {"ok": True, "discount_minor": disc}
+    return {"ok": True, "discount_minor": disc, "is_bonus": False}
 
 
 # ---------------------------------------------------------------------------
@@ -152,13 +197,16 @@ def validate(session, *, club_id, code, applies_to="all", amount_minor=0, produc
     """Preview a code against an intended purchase (scope + amount) WITHOUT writing anything. The
     checkout UI calls this to show "you'll save RX". Returns {ok, discount_minor, label} or
     {ok:False, error, reason}."""
-    promo = _find_by_code(session, club_id, code)
-    res = _check(session, club_id, promo,
+    promo, code_row = _resolve_code(session, club_id, code)
+    res = _check(session, club_id, promo, code_row,
                  kind=applies_to, product_id=product_id, amount_minor=amount_minor, user_id=user_id)
     if not res.get("ok"):
         return res
-    return {"ok": True, "discount_minor": res["discount_minor"],
-            "label": promo["name"], "promotion_id": str(promo["id"])}
+    out = {"ok": True, "discount_minor": res["discount_minor"], "label": promo["name"],
+           "promotion_id": str(promo["id"]), "is_bonus": bool(res.get("is_bonus"))}
+    if res.get("is_bonus"):
+        out["bonus_qty"] = int(promo["bonus_qty"] or 0)
+    return out
 
 
 def apply_to_order(session, *, club_id, code, order_id, user_id=None, actor_user_id=None):
@@ -167,7 +215,7 @@ def apply_to_order(session, *, club_id, code, order_id, user_id=None, actor_user
     {ok:False, error, reason}. The order must be open/awaiting_payment (discount_order guards that)."""
     from billing import statement
 
-    promo = _find_by_code(session, club_id, code)
+    promo, code_row = _resolve_code(session, club_id, code)
     if not promo:
         return {"ok": False, "error": "PROMO_NOT_FOUND", "reason": "That code isn't valid."}
 
@@ -177,10 +225,12 @@ def apply_to_order(session, *, club_id, code, order_id, user_id=None, actor_user
     if order["status"] not in ("open", "awaiting_payment"):
         return {"ok": False, "error": "NOT_OPEN", "reason": "This order can no longer take a code."}
 
-    res = _check(session, club_id, promo, kind=order["kind"], product_id=order["product_id"],
-                 amount_minor=order["amount_minor"], user_id=(user_id or order["user_id"]))
+    buyer = user_id or order["user_id"]
+    res = _check(session, club_id, promo, code_row, kind=order["kind"], product_id=order["product_id"],
+                 amount_minor=order["amount_minor"], user_id=buyer)
     if not res.get("ok"):
         return res
+    is_bonus = bool(res.get("is_bonus"))
 
     # Stacking guard: unless the promo is stackable, refuse if the order already carries ANY promo or an
     # admin discount (order_line.original_amount_minor set once by discount_order).
@@ -195,42 +245,69 @@ def apply_to_order(session, *, club_id, code, order_id, user_id=None, actor_user
             return {"ok": False, "error": "NOT_STACKABLE",
                     "reason": "This order already has a discount."}
 
-    # Delegate the money move to the ONE discount primitive (pro-rata + coach lockstep + audit).
-    dr = statement.discount_order(session, club_id=club_id, order_id=str(order_id),
-                                  discount_minor=int(res["discount_minor"]),
-                                  reason=f"Promo {promo['code'] or promo['name']}",
-                                  actor_user_id=actor_user_id)
-    if isinstance(dr, dict) and dr.get("ok") is False:
-        return {"ok": False, "error": dr.get("error") or "DISCOUNT_FAILED",
-                "reason": "Couldn't apply the code to this order."}
-    applied = int((dr or {}).get("discount_minor") or res["discount_minor"])
+    typed = (code_row["code"] if code_row else promo["code"]) or promo["name"]
+    dr = None
+    applied = 0
+    if not is_bonus:
+        # Delegate the money move to the ONE discount primitive (pro-rata + coach lockstep + audit).
+        dr = statement.discount_order(session, club_id=club_id, order_id=str(order_id),
+                                      discount_minor=int(res["discount_minor"]),
+                                      reason=f"Promo {typed}", actor_user_id=actor_user_id)
+        if isinstance(dr, dict) and dr.get("ok") is False:
+            return {"ok": False, "error": dr.get("error") or "DISCOUNT_FAILED",
+                    "reason": "Couldn't apply the code to this order."}
+        applied = int((dr or {}).get("discount_minor") or res["discount_minor"])
 
-    # Record the redemption (unique on (promotion, order) — a re-apply to the same order is a no-op error).
+    # Record the redemption. The FRESH insert (RETURNING) gates the one-time side-effects (code usage +
+    # the offline bonus grant), so a re-apply to the same order is a clean no-op.
+    fresh = None
     try:
-        session.execute(text(
+        fresh = session.execute(text(
             "INSERT INTO billing.promotion_redemption "
             "  (club_id, promotion_id, order_id, user_id, discount_minor) "
             "VALUES (:c, :p, :o, :u, :d) "
-            "ON CONFLICT (promotion_id, order_id) DO NOTHING"),
+            "ON CONFLICT (promotion_id, order_id) DO NOTHING RETURNING id"),
             {"c": str(club_id), "p": str(promo["id"]), "o": str(order_id),
-             "u": str(user_id or order["user_id"]) if (user_id or order["user_id"]) else None,
-             "d": applied})
+             "u": str(buyer) if buyer else None, "d": applied}).first()
     except Exception:
         log.exception("promotions: redemption insert failed for order %s", order_id)
+
+    if fresh:
+        if code_row is not None:
+            session.execute(text(
+                "UPDATE billing.promotion_code SET used_count = used_count + 1 WHERE id = :id"),
+                {"id": str(code_row["id"])})
+        # bonus_period on a membership: if the linked sub is ALREADY active (an OFFLINE buy), extend it
+        # now by the bonus months. If it's still pending (ONLINE, awaiting payment), the membership
+        # activation path adds the bonus later via _bonus_months_for_order — so it's never double-granted.
+        if promo["kind"] == "bonus_period" and order["kind"] == "membership":
+            bq = int(promo["bonus_qty"] or 0)
+            if bq > 0:
+                session.execute(text(
+                    "UPDATE billing.membership_subscription "
+                    "SET current_period_end = (GREATEST(COALESCE(current_period_end, CURRENT_DATE), "
+                    "     CURRENT_DATE) + make_interval(months => :bq))::date, updated_at = now() "
+                    "WHERE order_id = :o AND status = 'active'"),
+                    {"bq": bq, "o": str(order_id)})
 
     # Marketing funnel: promo_redeemed → usage_event + Klaviyo (measures which campaign drove it).
     try:
         from marketing_crm.tracking import emit
-        buyer = user_id or order["user_id"]
         emit("promo_redeemed", {"club_id": str(club_id), "user_id": str(buyer) if buyer else None,
-                                "code": promo["code"], "promotion": promo["name"],
-                                "discount_minor": applied, "scope": order["kind"]})
+                                "code": typed, "promotion": promo["name"],
+                                "discount_minor": applied, "scope": order["kind"],
+                                "is_bonus": is_bonus})
     except Exception:
         log.exception("promotions: emit failed (non-fatal)")
 
-    return {"ok": True, "discount_minor": applied,
-            "new_total_minor": int((dr or {}).get("new_total_minor") or 0),
-            "promotion_id": str(promo["id"]), "label": promo["name"]}
+    out = {"ok": True, "discount_minor": applied, "promotion_id": str(promo["id"]),
+           "label": promo["name"], "is_bonus": is_bonus}
+    if is_bonus:
+        out["bonus_qty"] = int(promo["bonus_qty"] or 0)
+        out["new_total_minor"] = int(order["amount_minor"] or 0)   # bonus doesn't change the price
+    else:
+        out["new_total_minor"] = int((dr or {}).get("new_total_minor") or 0)
+    return out
 
 
 def reverse_for_order(session, order_id) -> int:
@@ -250,8 +327,8 @@ def reverse_for_order(session, order_id) -> int:
 # Admin CRUD
 # ---------------------------------------------------------------------------
 
-_EDITABLE = ("code", "name", "description", "kind", "percent_bps", "value_minor", "applies_to",
-             "product_id", "min_spend_minor", "first_time_only", "max_redemptions",
+_EDITABLE = ("code", "name", "description", "kind", "percent_bps", "value_minor", "bonus_qty",
+             "applies_to", "product_id", "min_spend_minor", "first_time_only", "max_redemptions",
              "per_customer_cap", "stackable", "starts_at", "ends_at", "status")
 
 
@@ -338,3 +415,57 @@ def list_redemptions(session, *, club_id, promo_id, limit=200):
         "ORDER BY r.redeemed_at DESC LIMIT :lim"),
         {"c": str(club_id), "p": str(promo_id), "lim": int(limit)}).mappings().all()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Unique per-recipient codes (Phase 2) — mint a batch, list them, revoke one.
+# A campaign mints one code per member, embeds each as a Klaviyo profile property, and the code
+# redeems exactly once. Codes are unguessable (secrets) + unique per club.
+# ---------------------------------------------------------------------------
+
+_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no ambiguous 0/O/1/I
+
+
+def _mint_code_str(prefix, n=6):
+    import secrets
+    body = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(n))
+    pfx = "".join(ch for ch in (prefix or "").upper() if ch.isalnum())[:12]
+    return (pfx + "-" + body) if pfx else body
+
+
+def generate_codes(session, *, club_id, promo_id, count=1, prefix=None, max_uses=1):
+    """Mint `count` unique single-use codes for a promotion. Returns {ok, codes:[...]}. Codes are
+    unique per club (retries on the rare collision). The promotion should have NO shared `code`."""
+    promo = get(session, club_id=club_id, promo_id=promo_id)
+    if not promo:
+        return {"ok": False, "error": "NOT_FOUND"}
+    count = max(1, min(int(count or 1), 2000))
+    out = []
+    for _ in range(count):
+        for _attempt in range(6):
+            code = _mint_code_str(prefix)
+            row = session.execute(text(
+                "INSERT INTO billing.promotion_code (club_id, promotion_id, code, max_uses) "
+                "VALUES (:c, :p, :code, :mu) "
+                "ON CONFLICT (club_id, lower(code)) DO NOTHING RETURNING code"),
+                {"c": str(club_id), "p": str(promo_id), "code": code, "mu": int(max_uses or 1)}).first()
+            if row:
+                out.append(row[0]); break
+    return {"ok": True, "codes": out, "count": len(out)}
+
+
+def list_codes(session, *, club_id, promo_id, limit=2000):
+    rows = session.execute(text(
+        "SELECT code, user_id, max_uses, used_count, status, created_at "
+        "FROM billing.promotion_code WHERE club_id = :c AND promotion_id = :p "
+        "ORDER BY created_at DESC LIMIT :lim"),
+        {"c": str(club_id), "p": str(promo_id), "lim": int(limit)}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def revoke_code(session, *, club_id, code):
+    r = session.execute(text(
+        "UPDATE billing.promotion_code SET status = 'revoked' "
+        "WHERE club_id = :c AND lower(code) = lower(:code)"),
+        {"c": str(club_id), "code": str(code).strip()})
+    return {"ok": bool(r.rowcount)}

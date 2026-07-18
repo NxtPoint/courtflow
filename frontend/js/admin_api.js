@@ -171,6 +171,9 @@
     updatePromotion: function (id, body) { return A().apiJSON("/api/admin/promotions/" + enc(id), { method: "PATCH", body: body || {} }); },
     setPromotionStatus: function (id, status) { return A().apiJSON("/api/admin/promotions/" + enc(id) + "/status", { method: "POST", body: { status: status } }); },
     promotionRedemptions: function (id) { return A().apiJSON("/api/admin/promotions/" + enc(id) + "/redemptions"); },
+    promotionCodes: function (id) { return A().apiJSON("/api/admin/promotions/" + enc(id) + "/codes"); },
+    generatePromotionCodes: function (id, body) { return A().apiJSON("/api/admin/promotions/" + enc(id) + "/codes", { method: "POST", body: body || {} }); },
+    revokePromotionCode: function (code) { return A().apiJSON("/api/admin/promotions/codes/revoke", { method: "POST", body: { code: code } }); },
 
     // ---- resources (courts) ---------------------------------------------
     // GET /api/admin/resources -> {resources:[{id,kind,name,surface,capacity,...}]}
@@ -1927,8 +1930,8 @@
       var f = {
         name: input({ value: p.name || "", placeholder: "e.g. January Membership 20%" }),
         code: input({ value: p.code || "", placeholder: "e.g. MEMBER20" }),
-        kind: el("select", { class: "cf-input" }, [["percent_off", "% off"], ["amount_off", "Amount off"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); })),
-        value: input({ type: "number", value: p.kind === "amount_off" ? fromMinor(p.value_minor) : (p.percent_bps ? (p.percent_bps / 100) : "") }),
+        kind: el("select", { class: "cf-input" }, [["percent_off", "% off"], ["amount_off", "Amount off"], ["bonus_period", "Free membership months (e.g. 3+1)"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); })),
+        value: input({ type: "number", value: p.kind === "amount_off" ? fromMinor(p.value_minor) : (p.kind === "bonus_period" ? (p.bonus_qty || "") : (p.percent_bps ? (p.percent_bps / 100) : "")) }),
         applies_to: el("select", { class: "cf-input" }, [["all", "Everything"], ["membership", "Memberships"], ["pack", "Packs"], ["court", "Court hire"], ["lesson", "Lessons"], ["class", "Classes"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); })),
         max_redemptions: input({ type: "number", placeholder: "blank = unlimited", value: p.max_redemptions != null ? p.max_redemptions : "" }),
         per_customer_cap: input({ type: "number", value: p.per_customer_cap != null ? p.per_customer_cap : 1 }),
@@ -1939,7 +1942,13 @@
       f.kind.value = p.kind || "percent_off"; f.applies_to.value = p.applies_to || "all";
       if (p.first_time_only) f.first_time.checked = true;
       var valLabel = el("label", {});
-      function syncVal() { valLabel.textContent = f.kind.value === "percent_off" ? "Percent off (e.g. 20)" : "Amount off (R)"; }
+      function syncVal() {
+        var k = f.kind.value;
+        valLabel.textContent = k === "percent_off" ? "Percent off (e.g. 20)" : (k === "bonus_period" ? "Free months (on top of the paid term)" : "Amount off (R)");
+        // A free-months offer only makes sense on memberships — force + lock the scope.
+        if (k === "bonus_period") { f.applies_to.value = "membership"; f.applies_to.disabled = true; }
+        else { f.applies_to.disabled = false; }
+      }
       f.kind.addEventListener("change", syncVal); syncVal();
 
       m.body.appendChild(field("Name (internal)", f.name));
@@ -1960,7 +1969,12 @@
       var save = el("button", { class: "cf-btn cf-btn-primary", text: isNew ? "Create" : "Save" });
       footer.appendChild(save);
       m.body.appendChild(footer);
-      if (!isNew) m.body.appendChild(el("button", { class: "cf-link", style: "margin-top:10px", text: "View redemptions →", onclick: function () { m.close(); redemptions(p); } }));
+      if (!isNew) {
+        m.body.appendChild(el("div", { class: "cf-row", style: "gap:14px;margin-top:10px" }, [
+          el("button", { class: "cf-link", text: "View redemptions →", onclick: function () { m.close(); redemptions(p); } }),
+          el("button", { class: "cf-link", text: "Unique codes →", onclick: function () { m.close(); codesModal(p); } }),
+        ]));
+      }
 
       save.addEventListener("click", async function () {
         var body = {
@@ -1972,8 +1986,9 @@
           min_spend_minor: f.min_spend.value.trim() ? Math.round(parseFloat(f.min_spend.value) * 100) : null,
           ends_at: f.ends_at.value || null,
         };
-        if (f.kind.value === "percent_off") { body.percent_bps = Math.round(parseFloat(f.value.value || "0") * 100); body.value_minor = null; }
-        else { body.value_minor = Math.round(parseFloat(f.value.value || "0") * 100); body.percent_bps = null; }
+        if (f.kind.value === "percent_off") { body.percent_bps = Math.round(parseFloat(f.value.value || "0") * 100); body.value_minor = null; body.bonus_qty = null; }
+        else if (f.kind.value === "bonus_period") { body.bonus_qty = parseInt(f.value.value || "0", 10) || 0; body.applies_to = "membership"; body.percent_bps = null; body.value_minor = null; }
+        else { body.value_minor = Math.round(parseFloat(f.value.value || "0") * 100); body.percent_bps = null; body.bonus_qty = null; }
         if (!body.name) { UI.toast("Give it a name.", "warn"); return; }
         save.disabled = true;
         try {
@@ -2003,6 +2018,44 @@
           ]));
         });
       }, function (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+
+    // Unique per-recipient codes: mint a batch (one per member for a Klaviyo campaign), copy them, revoke.
+    function codesModal(p) {
+      var m = UI.modal("Unique codes — " + p.name, { lg: true });
+      m.body.appendChild(el("p", { class: "cf-muted", text: "Mint single-use codes (one per member) to embed in a Klaviyo campaign. Each redeems exactly once. Leave the promo's shared code blank when using these." }));
+      var cnt = input({ type: "number", value: "50", style: "max-width:110px" });
+      var pfx = input({ placeholder: "Prefix (optional, e.g. JAN)", style: "max-width:200px" });
+      var gen = el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Generate" });
+      m.body.appendChild(el("div", { class: "cf-row", style: "gap:8px;align-items:flex-end;margin:8px 0 12px" }, [
+        el("div", { class: "cf-field" }, [el("label", { text: "How many" }), cnt]),
+        el("div", { class: "cf-field" }, [el("label", { text: "Prefix" }), pfx]), gen]));
+      var box = el("div", {});
+      m.body.appendChild(box);
+      function load() {
+        UI.clear(box); box.appendChild(el("div", { class: "cf-muted", text: "Loading…" }));
+        window.AdminAPI.promotionCodes(p.id).then(function (d) {
+          UI.clear(box);
+          var rows = (d && d.codes) || [];
+          if (!rows.length) { box.appendChild(el("div", { class: "cf-empty", text: "No codes yet — generate a batch above." })); return; }
+          var active = rows.filter(function (r) { return r.status === "active"; }).map(function (r) { return r.code; });
+          box.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:6px" }, [
+            el("span", { class: "cf-muted", text: rows.length + " code" + (rows.length > 1 ? "s" : "") }),
+            el("button", { class: "cf-btn cf-btn-sm", text: "Copy all active", onclick: function () {
+              try { navigator.clipboard.writeText(active.join("\n")); UI.toast("Copied " + active.length + " codes.", "info"); } catch (e) { UI.toast("Copy not available — select the list.", "warn"); } } }),
+          ]));
+          var ta = el("textarea", { class: "cf-input", rows: "8", readonly: "readonly", style: "font-family:monospace;font-size:.85rem" });
+          ta.value = rows.map(function (r) { return r.code + (r.used_count ? "  (used)" : "") + (r.status !== "active" ? "  (revoked)" : ""); }).join("\n");
+          box.appendChild(ta);
+        }, function (e) { UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+      }
+      gen.addEventListener("click", function () {
+        gen.disabled = true; gen.textContent = "Generating…";
+        window.AdminAPI.generatePromotionCodes(p.id, { count: parseInt(cnt.value, 10) || 1, prefix: pfx.value.trim() || null })
+          .then(function (r) { UI.toast("Minted " + (r.count || 0) + " codes.", "info"); gen.disabled = false; gen.textContent = "Generate"; load(); },
+                function (e) { gen.disabled = false; gen.textContent = "Generate"; UI.toast(UI.errMsg(e), "error"); });
+      });
+      load();
     }
 
     draw();

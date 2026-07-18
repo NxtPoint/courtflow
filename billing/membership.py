@@ -353,6 +353,15 @@ def activate_membership_for_order(session, *, order_id, provider="yoco",
     if months is None:
         months = _term_months_for_order(session, order_id=order_id)
     months = max(1, int(months or 1))
+    # bonus_period promo on this order → free extra months, added ONCE here (an ONLINE 3+1 grants
+    # term+bonus in a single activation; the already-active guard in _apply_term_grant makes a webhook
+    # replay a no-op, so it's never double-granted). Guarded so a CRM/promotions hiccup never blocks a
+    # paid activation. (An OFFLINE buy grants the bonus in promotions.apply_to_order instead.)
+    try:
+        from billing.promotions import _bonus_months_for_order
+        months += _bonus_months_for_order(session, order_id)
+    except Exception:
+        pass
 
     link = session.execute(
         text("SELECT id, club_id, user_id, price_id, status, current_period_end "

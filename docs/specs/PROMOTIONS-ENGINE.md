@@ -1,8 +1,29 @@
 # Promotions Engine
 
-**Status: PHASE 1 BUILT & LIVE (2026-07-18).** A billing sub-module to run **specials with promo codes
-redeemed at checkout** — e.g. *20% off memberships*, *R100 off a pack*. Phase 2 (bonus_period "3 months +
-1 free" + unique Klaviyo codes) is still planned (§9).
+**Status: PHASE 1 + PHASE 2a BUILT & LIVE (2026-07-18).** A billing sub-module to run **specials with promo
+codes redeemed at checkout**. Phase 1 = %/fixed off. **Phase 2a = `bonus_period` ("3 months → +1 free" on
+membership) + unique per-recipient codes.** Remaining (Phase 2b): `bonus_units` (pack bonus sessions).
+
+## Phase 2a — what shipped (2026-07-18)
+- **`bonus_period`** (membership): a promo grants FREE extra months on top of the paid term — the member pays
+  the 3-month price, gets 4. Reuses the existing period grant: the bonus is just extra `months`. **Online** buy
+  → `activate_membership_for_order` adds `_bonus_months_for_order` at activation (idempotent via the
+  already-active guard). **Offline** buy → `apply_to_order` extends the already-active subscription directly on
+  the fresh redemption. Never double-granted. Scope is locked to memberships in the admin UI.
+- **Unique per-recipient codes** (`billing.promotion_code`): mint a batch (one code per member) for a Klaviyo
+  campaign; each is single-use (`max_uses`), optionally bound to a recipient, unguessable (no 0/O/1/I). Lookup
+  checks the shared `promotion.code` first, then the per-recipient table. Admin: **Setup → Promotions → a promo →
+  "Unique codes →"** (generate N, copy-all for pasting into Klaviyo, revoke). Routes `POST/GET
+  /api/admin/promotions/<id>/codes` + `POST …/codes/revoke`.
+- **Checkout:** unchanged flow — a `bonus_period` code shows "N free months added" instead of a rand discount
+  (`pay.js`); the order price is untouched (bonus ≠ discount).
+- **⚠️ NOT run here (no sandbox DB):** `python -m db` twice + `python -m scripts.test_all` (esp. **billing 311**)
+  — run before trusting the membership-grant path live. Changes are additive + guarded, but it's the money path.
+
+## Phase 2b — still to build
+- **`bonus_units`** (packs): "buy a 10-pack, get 12" — add free sessions via the existing `adjust_wallet`
+  primitive at pack activation (same online/offline pattern as `bonus_period`). Deliberately deferred to keep
+  the token-wallet grant math untouched until the harness can be run.
 
 ## Phase 1 — what shipped
 - **Schema:** `billing.promotion` + `billing.promotion_redemption` (idempotent DDL, `billing/schema.py`).

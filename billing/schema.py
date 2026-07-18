@@ -935,6 +935,47 @@ _DDL = [
     f"CREATE INDEX IF NOT EXISTS ix_redemption_promo ON {SCHEMA}.promotion_redemption (promotion_id, status);",
     f"CREATE INDEX IF NOT EXISTS ix_redemption_user "
     f"ON {SCHEMA}.promotion_redemption (club_id, user_id, status);",
+
+    # --- PROMOTIONS Phase 2: bonus_period (e.g. "3 months + 1 free") + unique per-recipient codes ---
+    # Grow the kind enum on an EXISTING db (a plain CREATE TABLE IF NOT EXISTS never re-applies the
+    # inline CHECK). Idempotent: drop the old constraint if present, then add the full set.
+    f"""
+    DO $$
+    BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.constraint_column_usage
+                   WHERE table_schema = '{SCHEMA}' AND table_name = 'promotion'
+                     AND constraint_name = 'promotion_kind_check') THEN
+            ALTER TABLE {SCHEMA}.promotion DROP CONSTRAINT promotion_kind_check;
+        END IF;
+        ALTER TABLE {SCHEMA}.promotion ADD CONSTRAINT promotion_kind_check
+            CHECK (kind IN ('percent_off','amount_off','bonus_period'));
+    END $$;
+    """,
+    # bonus_period carries its bonus QUANTITY here (e.g. 1 = one free month on top of the paid term).
+    f"ALTER TABLE {SCHEMA}.promotion ADD COLUMN IF NOT EXISTS bonus_qty int;",
+
+    # Unique per-recipient codes: many codes → one promotion, each single-use + optionally bound to a
+    # recipient. A campaign mints a batch (one per member), embeds each as a Klaviyo profile property, and
+    # the code redeems exactly once. The promotion's own `code` (shared) still works — a promo uses one or
+    # the other. Lookup checks the shared code first, then here.
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.promotion_code (
+        id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id       uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        promotion_id  uuid NOT NULL REFERENCES {SCHEMA}.promotion(id) ON DELETE CASCADE,
+        code          text NOT NULL,
+        user_id       uuid,                              -- bound recipient (NULL = anyone may use it)
+        max_uses      int NOT NULL DEFAULT 1,
+        used_count    int NOT NULL DEFAULT 0,
+        status        text NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
+        created_at    timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    # Codes unique per club, case-insensitive (shared with the promotion.code space — a partial index on
+    # each; a duplicate across the two spaces is prevented in code at mint time).
+    f"CREATE UNIQUE INDEX IF NOT EXISTS uq_promotion_code_child "
+    f"ON {SCHEMA}.promotion_code (club_id, lower(code));",
+    f"CREATE INDEX IF NOT EXISTS ix_promotion_code_promo ON {SCHEMA}.promotion_code (promotion_id, status);",
     # --- end promotions ---
 ]
 
