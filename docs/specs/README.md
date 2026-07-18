@@ -27,7 +27,7 @@ operating guide; **this folder is the detail.**
 > responsive drill-through SPA (Home command-center · People → unified person-360 · Money as Setup-style
 > sections incl. **Sales by day** + **Bookings by day** · Diary on the shared Calendar widget · **Overview**
 > [a first-class nav tab as of 2026-07-05: month pager + ECharts sub-tabs Traffic/Bookings/Revenue/Members/
-> NPS/Courts, incl. public-vs-member + logged-in traffic split] · Setup); the classic tab console is preserved at `/admin-classic`
+> NPS/Courts, incl. public-vs-member + logged-in traffic split] · Setup); the classic tab console was retired 2026-07-18 (`/admin-classic` 301→`/admin`)
 > ([ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)). A **Phase-2 insights lane** landed its flagship
 > (`insights/`; [ADMIN-PHASE2.md](ADMIN-PHASE2.md)). The whole front end was then **standardised onto ONE
 > widget per capability — the enshrined GOLDEN RULE** ([FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)):

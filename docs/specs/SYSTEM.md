@@ -14,8 +14,8 @@ Two Render web services + one Postgres:
   static `cf-*` pages + JS, proxies nothing — the SPAs call `courtflow-api` directly. **Nav is
   role-focused** (`Portal.landingFor`): members/guests land on the client **Home · Account**, coaches on
   their **Coach** console, owners on **Admin**. The role apps are the three drill-through SPAs described
-  in the next section; the classic tab consoles have been retired (the owner's is preserved at
-  `/admin-classic` as a fallback).
+  in the next section; the classic tab consoles have all been retired (the owner's classic console +
+  `/admin-classic` were DELETED 2026-07-18 — `/admin-classic` now 301→`/admin`).
 - **Postgres** (`courtflow-db`, a separate Render DB). **One DB, five schemas** (below).
 
 All three run in Render's **Frankfurt** region — both web services are **co-located with the DB** (the API

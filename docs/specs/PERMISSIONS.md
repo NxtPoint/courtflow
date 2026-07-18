@@ -30,7 +30,7 @@ deleted.) The `can()` boundary and role model are unchanged by the SPA rebuild.
    > now the drill-through SPAs: **member/guest → `/`** (client SPA, `frontend/js/client.js`; also `/portal`,
    > `/app`) · **coach → `/coach`** (coach SPA, `coach_app.js`; non-coaches bounced; the classic `coach.js`
    > was **deleted**) · **club_admin/platform_admin → `/admin`** (the new responsive owner SPA, `admin_app.js`
-   > — see [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md); the classic tab console is preserved at **`/admin-classic`**).
+   > — see [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md); the classic tab console was **retired 2026-07-18**, `/admin-classic` 301→`/admin`).
    > All three now share ONE widget layer (`Widgets.TransactionDetail`/`Calendar`/`Setup` — see
    > [FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)). Old `/account.html`, `/my.html`, `/book.html`
    > **302 → the client SPA**. The role gate + `can()` boundary below are unchanged — only the surfaces were
