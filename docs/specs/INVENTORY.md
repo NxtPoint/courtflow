@@ -441,8 +441,9 @@ plus promoted `window.UI` helpers (`card/backBar/kv/modal/statusChip/…`) and
   **Diary** = the shared **`Widgets.Calendar`** (court/coach filters) + Classes — the **Day view is the
   resource-timeline GRID** (courts + coaches as columns, 06:00–22:00 rows, `cf-ev` blocks; config-driven via
   `cfg.grid`, empty coach columns hidden, courts always shown), **Week/Month stay agenda**; any block drills
-  to the shared `Widgets.TransactionDetail` event story. Walk-in / block-time / desk-pay editing were NOT
-  ported — they stay in the classic diary at `/admin-classic` · **Setup**
+  to the shared `Widgets.TransactionDetail` event story. Walk-in (Book a client → guest name), block-time
+  (a **Block time** button → `POST /api/diary/time-off`) and desk-pay (on the transaction record) all live
+  in the new console; only the classic diary's drag-to-create/move gesture is gone · **Setup**
   = the shared **`Widgets.Setup`** (Club profile+payments [+ **Peak hours**] · Courts · Services [court
   services carry a **Members-covered?** toggle + a per-duration **peak price**] · Memberships [+ **Member
   limits** + **Signup trial** on the tier editor] · **Equipment hire** · Coaches) · **Overview** (`#/overview`,
@@ -450,14 +451,14 @@ plus promoted `window.UI` helpers (`card/backBar/kv/modal/statusChip/…`) and
   iframe retired) = month pager + sub-tabs **Traffic · Bookings · Revenue · Members · NPS · Courts**, all
   **daily** graphs for the month via one shared ECharts seam (`GET /api/insights/overview`); Traffic leads
   with a **public-site vs member-area** split + a **logged-in-visitors** line/tile; Courts = the
-  court-utilisation heatmap. The **classic tab console is
-  preserved at `/admin-classic`** (its full drag-timeline is linked from the new Diary).
+  court-utilisation heatmap. The **classic tab console was RETIRED 2026-07-18** (its last unique feature,
+  block-time, was ported into the new Diary).
 - **Web routes / redirects (`web_app.py`):** `/`,`/portal`,`/app` → `app.html` · `/coach`,`/coach.html` →
-  `coach_app.html` · **`/admin`,`/admin.html`,`/admin-app` → `admin_app.html` (the NEW SPA)** ·
-  **`/admin-classic` → `admin.html` (the classic console)**. Old standalone pages **302 → the client SPA**
+  `coach_app.html` · **`/admin`,`/admin.html`,`/admin-app` → `admin_app.html` (the NEW SPA)**. Old standalone pages **302 → the client SPA**
   (`/book.html`→`/portal#/book/court`, `/my`→`/portal#/bookings`, `/account.html`→`/portal#/billing`). The
-  classic **coach** console (`coach.html`/`coach.js`) was **deleted**; `admin.html`/`admin.js` remain for
-  `/admin-classic`. Post-login role routing (`client.js`) lands admins on `/admin`, coaches on `/coach`.
+  classic **coach** console (`coach.html`/`coach.js`) and the classic **owner** console
+  (`admin.html`/`admin.js`) + the `/admin-classic` route were all **deleted** (owner retired 2026-07-18).
+  Post-login role routing (`client.js`) lands admins on `/admin`, coaches on `/coach`.
 
 **Portal SPA shells** (`frontend/app/*.html`, each `cf-*` design system, absolute asset links):
 `portal` (dashboard) · `book` (full-screen booking) · `my` (my bookings) · `plans` (consolidated
@@ -477,11 +478,12 @@ Account no longer show to staff:
 Post-login role routing (`client.js`, the SPA entry) lands members on the client Home, coaches on `/coach`,
 admins on `/admin`; `Portal.landingFor` is the legacy equivalent for the old `*.html` shells.
 
-**Classic tab consoles — RETIRED.** The coach console (`coach.js`/`coach.html`) was **deleted**. The owner
-console (`admin.js`) is preserved at **`/admin-classic`** as a fallback (5 tabs: Dashboard · Diary
-[Timeline + Classes] · People · Money [Billing + financial cockpit] · Insights) — chiefly for its full
-drag-and-drop master-diary timeline until that ports into the new Diary. The live consoles are the three
-SPAs above, all on the shared widget layer.
+**Classic tab consoles — DELETED.** The coach console (`coach.js`/`coach.html`) was **deleted**; the owner
+console (`admin.js`/`admin.html`) + the `/admin-classic` route were **deleted 2026-07-18**. Its last unique
+feature (block time / time-off) was ported into the new admin Diary (a **Block time** button →
+`POST /api/diary/time-off`); walk-in (Book a client → guest name) and desk-pay (on the transaction record)
+already lived in the new console — only the drag-to-create/move gesture is gone. The live consoles are the
+three SPAs above, all on the shared widget layer.
 
 **JS modules** (`frontend/js/*.js`): **`client`** (client SPA — Home/sessions/billing-by-category/event
 story) · **`coach_app`** (coach SPA — bottom-nav Home·Schedule·Clients·Money·Setup + the one coach event

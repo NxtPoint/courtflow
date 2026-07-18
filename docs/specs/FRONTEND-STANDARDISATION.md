@@ -136,8 +136,9 @@ initial selection (the coach app defaults it to the signed-in coach = "just me";
 "All" for the whole club), collapsing the columns to that coach's used courts and filtering events —
 including a lesson's held court (which carries the `coach_user_id`) — to that coach. Every block still drills to the ONE event story via `cfg.onNavigate`
 (→ `Widgets.TransactionDetail`) — never the old minimal popup. **Walk-in / block-time / desk-pay editing
-were deliberately NOT ported** — they remain in the classic diary (`/admin-classic`, via the widget's
-`classicLink`); folding them into the grid is a possible post-launch follow-up.
+now all live in the new console** — walk-in via Book a client → guest name, block-time via a **Block time**
+button (`POST /api/diary/time-off`, ported when the classic console was retired 2026-07-18), desk-pay on the
+transaction record; only the classic diary's drag-to-create/move gesture is gone.
 
 The **coach Schedule keeps its richer hour time-grid** (plus time-off + book-a-client) and the **client
 keeps its Home agenda** — legitimately *different views*, not duplicate renders (see §7). The **critical

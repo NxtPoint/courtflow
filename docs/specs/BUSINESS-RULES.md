@@ -408,7 +408,7 @@ Full spec: [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md).
   collected + discount/write-off); **Dashboard cockpit** (lessons, hours, gross + **net-of-commission**
   earnings, fill rate, new-vs-returning, top clients, trend, **lessons-left-on-plans**, month-end-after-
   commission).
-- **Owner (`/admin`, the `admin_app.js` SPA; classic console at `/admin-classic`):** master diary; resources/courts;
+- **Owner (`/admin`, the `admin_app.js` SPA; the classic console was retired 2026-07-18):** master diary; resources/courts;
   **People** (360 drawer + membership grant); classes; a consolidated **Settings → Pricing** tab (court
   rates · packs · memberships, each with the active/dormant/retired control + membership "Access hours");
   **Coach pay** — a **per-service commission editor** (club / per-coach / per-service, lessons AND classes)

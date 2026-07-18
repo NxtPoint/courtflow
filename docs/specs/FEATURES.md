@@ -263,7 +263,7 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
     decline / reschedule / cancel / mark-completed / no-show **+ Mark collected / Discount / Write off**
     (the money is managed right here) + add-to-calendar. 🔭
 - **Owner / Admin** (`admin_app.html` + `admin_app.js`, at **`/admin`** — **COMPLETE + LIVE**; the
-  classic tab console is preserved at `/admin-classic`). **Responsive**: bottom-nav on mobile, **left
+  classic tab console was **retired 2026-07-18**). **Responsive**: bottom-nav on mobile, **left
   side-rail on desktop**. Nav **Home · People · Money · Diary · Overview · Setup**. **Home = a
   command center** surfacing all four owner focuses, each drilling to its section: **Today at the club**
   (live diary), **Money** (owed to the club / net revenue / coach settlements due / active members),
@@ -275,7 +275,8 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
   **Club earnings** [the club-vs-coach P&L drill] · **Bookings by day** · **Approvals** · **Club activity**),
   each drilling to the shared transaction record / event story (the old Coach-settlement + Online-payments
   tabs were retired). **Diary** = the shared **Calendar widget** (Day/Week/Month + court/coach
-  filters, default today) + Classes; the full drag-and-drop resource-timeline stays at `/admin-classic`.
+  filters, default today) + Classes + a **Block time** button (time-off → `POST /api/diary/time-off`,
+  ported from the retired classic console); only the classic console's drag-to-create/move gesture is gone.
   **Overview** (first-class nav tab since 2026-07-05) = month pager + ECharts sub-tabs
   Traffic/Bookings/Revenue/Members/NPS/Courts (`GET /api/insights/overview`); Traffic splits public-site vs
   member-area + a precise logged-in-visitors metric; Courts = the court-utilisation heatmap.

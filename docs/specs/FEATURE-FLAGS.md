@@ -40,7 +40,7 @@ sweep. When you activate one, tick it and move the detail into the relevant spec
   investing** (see D). *Switch-on:* a nav tab consuming the four live endpoints + finish the four stubs.
 - **B2 — Standalone Business Overview `/overview.html`** (`analytics/`) — fully built, but the admin SPA now
   uses the `insights/` lane for its native Overview tab (the iframe was retired). `/overview.html` is reachable
-  by **direct URL only** (+ `/admin-classic`). `GET /api/analytics/clubs` powers a **multi-club** platform-admin
+  by **direct URL only**. `GET /api/analytics/clubs` powers a **multi-club** platform-admin
   filter with no home in the single-club nav. *Switch-on:* add a platform-owner link, or fold multi-club into
   the SPA — relevant once there's >1 tenant.
 - **B3 — Membership-refill cron** (`diary/crons.py::run_membership_refill`, `/api/cron/membership-refill`) —

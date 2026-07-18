@@ -1,8 +1,9 @@
 # Owner / Admin console redesign — design spec
 
 Status: **COMPLETE + LIVE 2026-07-03.** All 7 build steps shipped; `/admin` now serves this SPA
-(`frontend/app/admin_app.html` + `frontend/js/admin_app.js`), the classic tab console is preserved at
-`/admin-classic`. The third and hardest console redesign, applying the DNA proven on the client
+(`frontend/app/admin_app.html` + `frontend/js/admin_app.js`); the classic tab console was preserved at
+`/admin-classic` at redesign time but has **since been retired 2026-07-18** (block-time ported into the new
+Diary). The third and hardest console redesign, applying the DNA proven on the client
 (`frontend/js/client.js`) and coach (`frontend/js/coach_app.js`) apps to the owner/admin surface.
 Since the redesign, the whole front end was further standardised onto ONE widget per capability —
 see **[FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md)** (the enshrined golden rule); the
@@ -11,8 +12,10 @@ admin event story, calendar and Setup below are now the shared `Widgets.Transact
 Revenue · Coach settlement · Approvals · Payments · Activity); Diary uses the shared Calendar widget —
 its **Day view is now the resource-timeline grid** (courts + coaches as columns, 06:00–22:00 rows;
 config-driven via `cfg.grid`, empty coach columns hidden), **Week/Month stay agenda**, and any block drills
-into the shared event story; the full drag-timeline **editing** (walk-in/block-time/desk-pay) still lives at
-`/admin-classic`. Insights embeds the court-utilisation heatmap + the Business Overview.
+into the shared event story; the full drag-timeline **editing** (walk-in/block-time/desk-pay) lived at
+`/admin-classic` at that point — that console was **since retired 2026-07-18** (block-time ported into the
+new Diary via a **Block time** button; walk-in + desk-pay already in the new console; only the drag-gesture
+is gone). Insights embeds the court-utilisation heatmap + the Business Overview.
 
 **As-built delta (2026-07-12) — the money FOLD + person-360 restructure.** The person-360 is now the
 shared `Widgets.ClientRecord` fed by the ONE `client360.get_client_360` composer, **headline-first**: WHO
