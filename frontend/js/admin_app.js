@@ -787,7 +787,39 @@
         else if (t.kind === "txn") go("#/txn/" + t.id);
         else go("#/event/" + t.id);
       },
+      onRecordPayout: function (pnl, refresh) { recordPayoutModal(pnl, refresh); },
     });
+  }
+  // Record a club↔coach settlement (re-homed onto the coach P&L after the Settlement tab was retired).
+  // A recorded payout nets the coach_ledger so the running balance reflects money actually moved.
+  function recordPayoutModal(pnl, then) {
+    var cur = pnl.currency || clubCur();
+    var bal = pnl.ledger_balance_minor || 0;
+    var m = modal("Record payout · " + (pnl.name || "Coach"));
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 12px;font-size:.86rem", text:
+      "Net balance: " + money(Math.abs(bal), cur) + (bal > 0 ? " owed to the coach" : (bal < 0 ? " owed by the coach" : " — settled")) +
+      ". Recording a payout posts a ledger entry so the balance reflects money that actually moved." }));
+    var dir = el("select", { class: "cf-input" }, [["club_to_coach", "Pay the coach"], ["coach_to_club", "Collect from the coach"], ["offset", "Offset / adjustment"]].map(function (o) {
+      return el("option", { value: o[0], text: o[1], selected: o[0] === (bal >= 0 ? "club_to_coach" : "coach_to_club") });
+    }));
+    var amt = el("input", { class: "cf-input", type: "number", step: "0.01", value: (Math.abs(bal) / 100).toFixed(2) });
+    var meth = el("select", { class: "cf-input" }, [["eft", "EFT"], ["cash", "Cash"], ["offset", "Offset"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); }));
+    var ref = el("input", { class: "cf-input", placeholder: "Bank / reference (optional)" });
+    var note = el("input", { class: "cf-input", placeholder: "Note (optional)" });
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Direction" }), dir]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Amount" }), amt]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Method" }), meth]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Reference" }), ref]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Note" }), note]));
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
+      el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
+      el("button", { class: "cf-btn cf-btn-primary", text: "Record payout", onclick: function () {
+        var f = parseFloat(amt.value);
+        if (isNaN(f) || f <= 0) { UI.toast("Enter a valid amount.", "warn"); return; }
+        window.AdminAPI.recordCoachPayout({ coach_user_id: pnl.coach_user_id, amount_minor: Math.round(f * 100), direction: dir.value, method: meth.value, reference: (ref.value.trim() || null), note: (note.value.trim() || null) })
+          .then(function () { UI.toast("Payout recorded.", "info"); m.close(); (then || function () {})(); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+      } }),
+    ]));
   }
   // The section menu (New invoice, Sales by day, Revenue per service, Bookings, Approvals, Activity).
   function moneyActionsFooter() {

@@ -15,6 +15,7 @@
 //   cfg.data.txns({category?, user_id, earned_by?, month}) -> {transactions[], totals}
 //   cfg.onNavigate({kind:'event'|'class'|'txn'|'person', id})
 //   cfg.homeExtra(data) -> node?              — L0-only footer (coach disputes)
+//   cfg.onRecordPayout(pnl, refresh)          — (admin) record a club↔coach payout from a coach's P&L
 //
 // The club P&L answers "how much do WE make" = court/membership/pack revenue (100% club) + the commission
 // we take from each coach; a coach's row/detail shows their sales split into received (realised commission)
@@ -78,7 +79,8 @@
     }
 
     // The coach P&L card — sales − disc − w/off = net ; net = received + owed ; commission split on each.
-    function pnlCard(p) {
+    // `onRecordPayout` (admin only) adds the running club↔coach balance + a "Record payout" action.
+    function pnlCard(p, onRecordPayout) {
       var box = UI.card([]);
       box.appendChild(el("h1", { style: "margin:0 0 2px;font-size:1.2rem", text: p.name || "Coach" }));
       box.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin-bottom:6px", text: monthLabel(MONTH) + " · " + (p.rate_pct || 0) + "% club commission" }));
@@ -94,6 +96,18 @@
       box.appendChild(stmtLine(keepLabel, money(p.coach_keeps_owed_minor), { indent: true, muted: true }));
       box.appendChild(stmtLine(keepLabel + " (total)", money(p.coach_keeps_total_minor), { strong: true, border: true }));
       box.appendChild(stmtLine("Club commission (total)", money(p.club_comm_total_minor), { strong: true, tone: "good" }));
+      // Running club↔coach ledger balance + (admin) a Record-payout action to net it after paying out.
+      if (p.ledger_balance_minor != null) {
+        var bal = p.ledger_balance_minor || 0;
+        var sub = isCoach ? (bal > 0 ? "the club owes you" : (bal < 0 ? "you owe the club" : "settled"))
+                          : (bal > 0 ? "owed to " + (p.name || "the coach") : (bal < 0 ? "owed by " + (p.name || "the coach") : "settled"));
+        box.appendChild(stmtLine("Net balance with the club", money(Math.abs(bal)), { strong: true, border: true, sub: sub }));
+        if (typeof onRecordPayout === "function") {
+          box.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:8px" }, [
+            el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Record payout", onclick: function () { onRecordPayout(); } }),
+          ]));
+        }
+      }
       return box;
     }
 
@@ -147,7 +161,10 @@
         var wrap = el("div", {});
         if (isL0) wrap.appendChild(titleRow(cfg.title || "Money", function (n) { MONTH = shiftMonth(MONTH, n); renderCoach(coachId, true); }));
         else wrap.appendChild(backBtn(cfg.title || "Club earnings", renderClub));
-        wrap.appendChild(pnlCard(p));
+        var payoutFn = (!isCoach && typeof cfg.onRecordPayout === "function")
+          ? function () { cfg.onRecordPayout(p, function () { renderCoach(coachId, isL0); }); }
+          : null;
+        wrap.appendChild(pnlCard(p, payoutFn));
         // By client (the coach's clients this month) → transactions.
         var q = { month: MONTH };
         if (!isCoach && p.coach_user_id) q.earned_by = p.coach_user_id;   // admin: filter to this coach

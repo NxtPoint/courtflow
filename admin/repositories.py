@@ -2381,7 +2381,19 @@ def revenue_coach_pnl(session, *, club_id, coach_user_id, month=None, coach_scop
         {"c": club_id, "u": str(coach_user_id)},
     ).scalar()
     pnl = _coach_pnl_from_fold(f, rate, name=(name or "Coach"), coach_user_id=str(coach_user_id))
-    pnl.update({"month": ym, "currency": cur, "scope": ("coach" if coach_scope else "admin")})
+    # The running club↔coach ledger balance (+ = club owes coach, − = coach owes club) — the net-owed
+    # figure a "Record payout" settles. Append-only sum of coach_ledger (commission earnings + rent +
+    # recorded payouts). Guarded → 0.
+    bal = 0
+    try:
+        bal = int(session.execute(
+            text("SELECT COALESCE(SUM(amount_minor),0) FROM billing.coach_ledger "
+                 "WHERE club_id = :c AND coach_user_id = :u"),
+            {"c": club_id, "u": str(coach_user_id)}).scalar() or 0)
+    except Exception:
+        session.rollback()
+    pnl.update({"month": ym, "currency": cur, "scope": ("coach" if coach_scope else "admin"),
+                "ledger_balance_minor": bal})
     return pnl
 
 
