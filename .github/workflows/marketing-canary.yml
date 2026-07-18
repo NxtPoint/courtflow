@@ -36,11 +36,16 @@ jobs:
             sitemap: "https://nextpointtennis.com/sitemap.xml"
             # space-separated substrings that MUST be present in the served HTML
             require: "googletagmanager.com/gtag/js G-EKQP47P8M9 AW-17077631191 adsConversions cfConversion attribution.js"
-          # --- Ten-Fifty5 (1050) — GA4 instrumented 2026-07-18 (organic-only, no Ads). ENFORCED. ---
+          # --- Ten-Fifty5 (1050) — GA4 instrumented 2026-07-18 (organic-only, no Ads). WARN-mode. ---
           # Tag injected by locker_room_app._marketing_head; GA4_MEASUREMENT_ID=G-4167EPFS34 lives
-          # inline in the 1050 render.yaml (locker-room svc). No Ads tokens by design (no paid ads yet).
+          # inline in the 1050 render.yaml (locker-room svc). WARN not enforce: ten-fifty5.com sits
+          # behind Cloudflare, which serves GitHub's datacenter IPs a bot-challenge/block page (HTTP
+          # 200, no tag) — so a CI enforce false-fails even though the tag is verifiably live from a
+          # real browser/IP. The backup signal is the daily digest: if the tag truly broke, ten-fifty5
+          # GA4 traffic would flatline there. (To hard-enforce later: verify via the Render origin URL
+          # which bypasses Cloudflare, or add a Cloudflare WAF skip for the canary.)
           - brand: ten-fifty5
-            mode: enforce
+            mode: warn
             url: "https://www.ten-fifty5.com/"
             sitemap: "https://www.ten-fifty5.com/sitemap.xml"
             require: "googletagmanager.com/gtag/js G-4167EPFS34 cfConversion"
@@ -96,6 +101,13 @@ jobs:
             echo "[$BRAND] all marketing canary checks passed."
             exit 0
           fi
+
+          # Diagnostic: show what the runner actually received (reveals a CDN block/challenge page vs
+          # a genuinely tagless page), so detection can be tuned or the URL swapped to a CDN bypass.
+          echo "  --- diagnostic: first 700 chars the runner received from $URL ---"
+          printf '%s' "${HTML:-<empty body>}" | tr '\n\r\t' '   ' | cut -c1-700
+          echo ""
+          echo "  --- end diagnostic ---"
           if [ "$MODE" = "enforce" ]; then
             echo "::error::[$BRAND] marketing canary FAILED across $max attempts — live site is genuinely missing marketing plumbing (see MISS lines). Likely a blueprint sync blanked the tag IDs, or a deploy dropped the head injection."
             exit 1
