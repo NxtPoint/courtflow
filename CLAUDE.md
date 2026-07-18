@@ -357,6 +357,13 @@ so `frontend/marketing/` and `marketing/` (the untracked ad-ops notes) are separ
   brand's RENDER ORIGIN** (`courtflow-web.onrender.com` / `locker-room-26kd.onrender.com`), NOT the public host —
   the public hosts sit behind Cloudflare, which bot-challenges GitHub's datacenter IPs (HTTP 200, no tag =
   false-fail); the origins serve identical tagged HTML without the challenge. Reads only public pages, never a secret.
+- **Repo model (where marketing work lives):** the ENGINE (digest + canary + keyless WIF access) lives HERE and
+  covers BOTH brands; each brand's SITE + blog CONTENT lives in ITS repo — NextPoint here (`frontend/blog/_posts/`,
+  images `/img/`), **Ten-Fifty5 in the 1050 repo** (`frontend/blog/_posts/`, images `/blog/images/`, published via
+  its own `build_blog.py`, commit `CLAUDE_CODE=1`; weekly coworker SEO-scan→post workflow). Full spec:
+  **`docs/specs/MARKETING-ENGINE.md`**. NextPoint also has a Google Business Profile playbook (physical club →
+  local map pack). Ten-Fifty5 is **Render-only for users** (Clerk auth + PayPal, no Wix) but retains dormant,
+  DB-coupled Wix scaffolding — a decommission is scoped (DO NOT rush) in the 1050 repo's `docs/DE-WIX-DECOMMISSION.md`.
 
 ## Ten-Fifty5 embed — match analysis inside the members area (LIVE, private test)
 A logged-in member opens **Ten-Fifty5** (AI match analysis / technique — the 1050 product; web at
