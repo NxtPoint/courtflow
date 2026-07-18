@@ -2,6 +2,7 @@
 title: Book a Tennis Court in Killarney, Johannesburg
 description: Book a hard court or Gauteng's only clay court at NextPoint Tennis, Killarney Country Club — online in seconds, no membership needed. Floodlit, seven days a week.
 date: 2026-07-18
+image: /img/club-courts.webp
 ---
 
 Looking for a tennis court near you in Johannesburg? At **NextPoint Tennis** in Killarney, you can book a court online in under a minute — no membership required — and play on any of our **seven floodlit hard courts** or **the only clay court in Gauteng**.

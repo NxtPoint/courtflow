@@ -2,6 +2,7 @@
 title: How to Book a Clay Court in Johannesburg
 description: Gauteng has exactly one clay court experience — at NextPoint Tennis in Houghton. Here's how to book it, what to expect, and why clay is worth playing.
 date: 2026-06-18
+image: /img/club-clay.webp
 ---
 
 If you've ever wanted to play on clay without flying to Europe, there's good news: **Gauteng's only clay court** is right here in Johannesburg, at NextPoint Tennis in Houghton. This guide walks you through booking it and getting the most out of the surface.
