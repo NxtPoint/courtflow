@@ -37,12 +37,25 @@ TODAY = os.environ.get("DIGEST_DATE") or _dt.datetime.utcnow().strftime("%Y-%m-%
 
 # Brands: a GA4 property display-name or a GSC site URL is matched to a brand by substring, and each
 # brand's slice of the report is emailed to its own inbox. Add a brand = add a row (+ grant the SA).
+# `ads_customer` = the brand's Google Ads customer id (env, digits only) — set to add a Google Ads
+# block to that brand's report. DARK until GOOGLE_ADS_DEVELOPER_TOKEN + the id are set (Ten-Fifty5
+# has no ads by design, so its env stays unset).
 BRANDS = [
     {"name": "NextPoint Tennis", "email": "info@nextpointtennis.com",
-     "match": ["nextpoint"]},
+     "match": ["nextpoint"],
+     # NextPoint Ads account 704-275-3564 (public acct number). Overridable by env; the account is
+     # standalone (no manager), so this is also the login_customer_id. DARK until the dev token is set.
+     "ads_customer": os.environ.get("GOOGLE_ADS_CUSTOMER_ID_NEXTPOINT", "7042753564").replace("-", "").strip()},
     {"name": "Ten-Fifty5", "email": "info@ten-fifty5.com",
-     "match": ["ten-fifty5", "tenfifty5", "fifty5"]},
+     "match": ["ten-fifty5", "tenfifty5", "fifty5"],
+     "ads_customer": os.environ.get("GOOGLE_ADS_CUSTOMER_ID_TENFIFTY5", "").replace("-", "").strip()},
 ]
+
+# Google Ads (optional). DARK until BOTH the developer token AND a brand's ads_customer id are set,
+# so the digest runs unchanged without it. Auth reuses the WIF service-account credentials (adwords
+# scope) — the SA must be added as a user on the Ads account. NEEDS a first live verification on
+# switch-on (the Ads-API auth path is the one thing that can't be tested until the token exists).
+ADS_DEV_TOKEN = os.environ.get("GOOGLE_ADS_DEVELOPER_TOKEN", "").strip()
 
 
 def brand_for(text):
@@ -258,7 +271,46 @@ def gsc_block(creds, site_url):
 
 
 # ---------------------------------------------------------------- main
-def _brand_report(name, ga4_blocks, gsc_blocks):
+def ads_block(customer_id):
+    """Google Ads campaign metrics (last 7 days) for one customer id, as a Markdown block. Returns
+    None when Ads isn't configured (dark). Guarded: any error -> a short note, never crashes the run.
+    Auth = the WIF service-account creds with the adwords scope (SA added as a user on the Ads account)."""
+    if not (ADS_DEV_TOKEN and customer_id):
+        return None
+    lines = ["### 📣 Google Ads (last 7 days)"]
+    try:
+        from google.ads.googleads.client import GoogleAdsClient
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/adwords"])
+        client = GoogleAdsClient(credentials=creds, developer_token=ADS_DEV_TOKEN,
+                                 login_customer_id=customer_id)
+        svc = client.get_service("GoogleAdsService")
+        query = ("SELECT campaign.name, campaign.status, metrics.cost_micros, metrics.clicks, "
+                 "metrics.impressions, metrics.conversions FROM campaign "
+                 "WHERE segments.date DURING LAST_7_DAYS ORDER BY metrics.cost_micros DESC")
+        rows = list(svc.search(customer_id=customer_id, query=query))
+        if not rows:
+            lines.append("- _no ad activity in the window_")
+            return "\n".join(lines)
+        t_cost = t_clicks = t_conv = 0.0
+        camp = []
+        for r in rows:
+            cost = r.metrics.cost_micros / 1e6
+            conv = float(r.metrics.conversions)
+            t_cost += cost; t_clicks += r.metrics.clicks; t_conv += conv
+            cpa = f", {cost / conv:.0f}/conv" if conv else ""
+            camp.append(f"    - {r.campaign.name} ({r.campaign.status.name}): {cost:.0f} spend, "
+                        f"{r.metrics.clicks} clicks, {conv:.0f} conv{cpa}")
+        head = f"- **{t_cost:.0f} spend · {int(t_clicks)} clicks · {t_conv:.0f} conversions**"
+        head += (f" · {t_cost / t_conv:.0f}/conversion" if t_conv
+                 else " · ⚠️ 0 conversions — bidding can't optimise")
+        lines += [head, "- **By campaign:**"] + camp
+        return "\n".join(lines)
+    except Exception as e:
+        lines.append(f"- ⚠️ Ads unavailable ({type(e).__name__}: {e}) — verify dev-token approval + SA access")
+        return "\n".join(lines)
+
+
+def _brand_report(name, ga4_blocks, gsc_blocks, ads_blocks=None):
     p = [f"# 🎾 {name} — marketing digest · {TODAY}",
          "_Organic growth from GA4 + Search Console. The 🎯 striking-distance queries are the "
          "highest-value action: you rank page 1-2 for them, so a post or page nudges them to the top._",
@@ -266,6 +318,8 @@ def _brand_report(name, ga4_blocks, gsc_blocks):
     p += ga4_blocks or ["_no GA4 property granted to the engine yet_"]
     p += ["", "## Search Console — what you rank for (last 28 days)"]
     p += gsc_blocks or ["_no Search Console property granted to the engine yet_"]
+    if ads_blocks:
+        p += ["", "## Google Ads — paid performance"] + ads_blocks
     return "\n".join(p)
 
 
@@ -280,7 +334,7 @@ def main():
     creds = _creds()
 
     # Group each discovered property/site into its brand (unmatched -> "other", kept in the combined view).
-    buckets = {b["name"]: {"brand": b, "ga4": [], "gsc": []} for b in BRANDS}
+    buckets = {b["name"]: {"brand": b, "ga4": [], "gsc": [], "ads": []} for b in BRANDS}
     other = {"ga4": [], "gsc": []}
     notes = []
 
@@ -310,11 +364,17 @@ def main():
         b = brand_for(site)
         (buckets[b["name"]]["gsc"] if b else other["gsc"]).append(block)
 
+    # Google Ads per brand (dark unless GOOGLE_ADS_DEVELOPER_TOKEN + the brand's ads_customer are set).
+    for name, data in buckets.items():
+        blk = ads_block(data["brand"].get("ads_customer"))
+        if blk:
+            data["ads"].append(blk)
+
     # Combined report for GitHub (every brand + anything unmatched).
     combined = [f"# 🎾 Marketing digest — {TODAY}",
                 "_Cross-brand organic growth (GA4 + Search Console)._", ""]
     for name, data in buckets.items():
-        combined.append(_brand_report(name, data["ga4"], data["gsc"]))
+        combined.append(_brand_report(name, data["ga4"], data["gsc"], data["ads"]))
         combined.append("\n---\n")
     if other["ga4"] or other["gsc"]:
         combined += ["## Unmatched properties (add a BRANDS row to route these)"] + other["ga4"] + other["gsc"]
@@ -332,7 +392,7 @@ def main():
             if not (data["ga4"] or data["gsc"]):
                 email_lines.append(f"- {name}: skipped (no data granted to the engine yet)")
                 continue
-            md = _brand_report(name, data["ga4"], data["gsc"])
+            md = _brand_report(name, data["ga4"], data["gsc"], data["ads"])
             subj = f"🎾 {name} — marketing digest ({TODAY})"
             try:
                 status, resp = email_report(api, ops, data["brand"]["email"], subj, md)

@@ -37,7 +37,13 @@ jobs:
           service_account: "marketing-engine@marketing-engine-502809.iam.gserviceaccount.com"
 
       - name: Install deps
-        run: pip install -r marketing_digest/requirements.txt
+        env:
+          ADS_TOKEN: ${{ secrets.GOOGLE_ADS_DEVELOPER_TOKEN }}
+        run: |
+          pip install -r marketing_digest/requirements.txt
+          # Only pull the heavy Google Ads SDK when Ads is actually switched on (token set),
+          # so it can never break the core organic digest.
+          if [ -n "$ADS_TOKEN" ]; then echo "Ads enabled — installing google-ads"; pip install "google-ads>=25.0"; fi
 
       - name: Build digest + email each brand
         env:
@@ -46,6 +52,10 @@ jobs:
           # unset the digest still runs and just skips the emails.
           MARKETING_DIGEST_API: "https://courtflow-api.onrender.com"
           OPS_KEY: ${{ secrets.OPS_KEY }}
+          # Google Ads (Phase 2) — DARK until this secret is set. Set it (once the developer token is
+          # approved) to fold NextPoint ad spend/conversions into its digest. Auth reuses the WIF SA
+          # (adwords scope; SA added as a user on the Ads account). Customer id defaults in digest.py.
+          GOOGLE_ADS_DEVELOPER_TOKEN: ${{ secrets.GOOGLE_ADS_DEVELOPER_TOKEN }}
         run: python marketing_digest/digest.py
 
       - name: Commit report

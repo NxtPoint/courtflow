@@ -2,3 +2,5 @@ google-auth>=2.30
 google-analytics-admin>=0.22
 google-analytics-data>=0.18
 google-api-python-client>=2.130
+# google-ads is installed CONDITIONALLY by the workflow only when GOOGLE_ADS_DEVELOPER_TOKEN is set,
+# so a heavy/ conflicting dep can never break the core organic digest. See marketing-digest.yml.
