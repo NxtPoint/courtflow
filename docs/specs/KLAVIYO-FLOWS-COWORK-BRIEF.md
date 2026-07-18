@@ -1,5 +1,10 @@
 # Klaviyo Flows — Cowork Build Brief
 
+> ⛳ **Consolidated into `docs/specs/KLAVIYO-MASTER-PLAN.md` — work from THAT file.** This brief is kept
+> for reference (its flow/segment/guardrail detail fed the master plan); strategy, ownership, and status
+> now live in the master plan.
+
+
 > **Who does what.** Claude Code (engineering) has wired the **data + triggers**: events fire into
 > Klaviyo as metrics, profiles auto-sync with segmentable traits, opted-in members auto-subscribe to
 > the marketing list, and guardrails are enforced in code. **Cowork builds the creative**: templates +
