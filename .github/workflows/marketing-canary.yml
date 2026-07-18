@@ -56,37 +56,40 @@ jobs:
         run: |
           set -uo pipefail
           echo "Brand: $BRAND  (mode: $MODE)"
-          echo "Fetching $URL"
-          HTML="$(curl -fsSL -A 'marketing-canary' --max-time 90 "$URL")" || {
-            echo "::error::[$BRAND] site fetch failed: $URL"; exit 1; }
 
-          fail=0
-          for token in $REQUIRE; do
-            if printf '%s' "$HTML" | grep -qF -- "$token"; then
-              echo "  ok   : $token"
-            else
-              echo "  MISS : $token"
-              fail=1
+          # Retry the WHOLE check up to 3x — a canary must not cry wolf over a transient blip
+          # (a Render cold-start or a mid-deploy 502). It only goes red if the plumbing is
+          # CONSISTENTLY missing. curl also self-retries transient HTTP errors within each attempt.
+          attempt=0; max=3; fail=1
+          while [ "$attempt" -lt "$max" ]; do
+            attempt=$((attempt+1))
+            echo "--- attempt $attempt/$max: $URL ---"
+            HTML="$(curl -fsSL -A 'marketing-canary' --retry 3 --retry-delay 4 --retry-all-errors --retry-connrefused --max-time 90 "$URL")" \
+              || { echo "  fetch failed (transient?) — retrying"; sleep 15; continue; }
+            fail=0
+            for token in $REQUIRE; do
+              if printf '%s' "$HTML" | grep -qF -- "$token"; then echo "  ok   : $token"; else echo "  MISS : $token"; fail=1; fi
+            done
+            if [ -n "$SITEMAP" ]; then
+              if curl -fsSL -A 'marketing-canary' --retry 3 --retry-delay 4 --retry-all-errors --max-time 60 "$SITEMAP" -o /dev/null; then
+                echo "  ok   : sitemap reachable ($SITEMAP)"
+              else
+                echo "  MISS : sitemap not reachable ($SITEMAP)"; fail=1
+              fi
             fi
+            if [ "$fail" -eq 0 ]; then break; fi
+            echo "  checks incomplete — retrying after 15s (guards against a mid-deploy blip)"
+            sleep 15
           done
-
-          if [ -n "$SITEMAP" ]; then
-            if curl -fsSL -A 'marketing-canary' --max-time 60 "$SITEMAP" -o /dev/null; then
-              echo "  ok   : sitemap reachable ($SITEMAP)"
-            else
-              echo "  MISS : sitemap not reachable ($SITEMAP)"
-              fail=1
-            fi
-          fi
 
           if [ "$fail" -eq 0 ]; then
             echo "[$BRAND] all marketing canary checks passed."
             exit 0
           fi
           if [ "$MODE" = "enforce" ]; then
-            echo "::error::[$BRAND] marketing canary FAILED — live site is missing marketing plumbing (see MISS lines). Likely a blueprint sync blanked the tag IDs, or a deploy dropped the head injection."
+            echo "::error::[$BRAND] marketing canary FAILED across $max attempts — live site is genuinely missing marketing plumbing (see MISS lines). Likely a blueprint sync blanked the tag IDs, or a deploy dropped the head injection."
             exit 1
           else
-            echo "::warning::[$BRAND] marketing plumbing not yet present (MISS lines above) — expected until the tag stack is ported. Tracked in warn mode; not failing the run."
+            echo "::warning::[$BRAND] marketing plumbing not yet present after $max attempts (MISS lines above) — expected until the tag stack is ported. Tracked in warn mode; not failing the run."
             exit 0
           fi
