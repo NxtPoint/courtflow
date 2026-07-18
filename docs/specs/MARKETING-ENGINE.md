@@ -29,7 +29,10 @@ Scheduled GitHub Action (every 2h) that asserts each brand's tag is present on t
 brand; `enforce` fails the run, `warn` only warns. **Both public hosts are behind Cloudflare, which serves
 GitHub's CI IPs a bot-challenge (200, no tag) → false-fail.** Fix: the canary checks the **Render origins**
 (`courtflow-web.onrender.com`, `locker-room-26kd.onrender.com`) which bypass the club Cloudflare zone; plus
-`--compressed`, a browser UA, and 4×20s retries to outlast a redeploy. A red canary = a real regression.
+`--compressed`, a browser UA, and retries. **HOWEVER even the Render origins go through Cloudflare, which
+blocks GitHub's CI IPs — so the canary often can't verify from Actions.** It's therefore **warn-only + daily
+(best-effort, never fails red)**; the REAL tag-breakage monitor is the daily digest (a dark tag flatlines
+that brand's GA4 traffic in the morning email). Could delete the canary entirely and rely on the digest.
 
 ## 3. Daily digest — the "one console" (`marketing_digest/`)
 A daily GitHub Action (`.github/workflows/marketing-digest.yml`, 05:00 UTC) that pulls GA4 + Search Console
