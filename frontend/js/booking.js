@@ -899,6 +899,15 @@
     var nudge = saveWithPlanNudge();
     if (nudge) card.appendChild(nudge);
 
+    // Promo code — only when there's something to pay (a covered / pack-drawn / on-behalf booking has no
+    // payable amount for a member to discount). Applied to the order after it's created, before payment.
+    if (!courtCovered() && !st.tokenWallet && !st.onBehalf) {
+      var promoIn = el("input", { class: "cf-input", placeholder: "Promo code (optional)", value: st.promoCode || "" });
+      promoIn.addEventListener("input", function () { st.promoCode = promoIn.value.trim(); });
+      card.appendChild(el("div", { class: "cf-confirm-sec" }, [
+        el("label", { class: "cf-tiny cf-muted", text: "Have a promo code?" }), promoIn ]));
+    }
+
     var btn = el("button", { class: "cf-btn cf-btn-primary cf-btn-lg cf-btn-block", type: "button", style: "margin-top:16px", text: confirmLabel() });
     btn.addEventListener("click", function () { submit(btn); });
     card.appendChild(btn);
@@ -1079,6 +1088,24 @@
       mergeProfileFields(body);   // Client-360 Step 4: carry captured name/surname/cell
       res = await window.API.createBooking(body);
       var orderId = res.order_id || (res.booking && res.booking.order_id);
+      // Promo code (self-serve only): apply to the freshly-created order BEFORE payment. On an ONLINE
+      // booking a bad code HALTS (the held booking + unpaid order lazy-expire) so no one is charged full
+      // price; on an owed/at-court booking a bad code is a soft warning — the booking still stands.
+      if (st.promoCode && orderId && !st.onBehalf) {
+        var isOnline = (!st.skipOnline && st.settlement === "online");
+        try {
+          var pr = await window.TFAuth.apiJSON("/api/billing/promo/apply", { method: "POST", body: { order_id: orderId, code: st.promoCode } });
+          if (pr && pr.ok) { UI.toast("Code applied — you saved " + UI.money(pr.discount_minor) + ".", "info"); }
+          else {
+            UI.toast((pr && pr.reason) || "That code couldn't be applied.", isOnline ? "error" : "warn");
+            if (isOnline) { btn.disabled = false; btn.textContent = confirmLabel(); return; }
+          }
+        } catch (e3) {
+          var pReason = (e3 && e3.body && (e3.body.reason || e3.body.promo_error)) || "That code couldn't be applied.";
+          UI.toast(pReason, isOnline ? "error" : "warn");
+          if (isOnline) { btn.disabled = false; btn.textContent = confirmLabel(); return; }
+        }
+      }
       // Staff on-behalf never goes to Yoco (they collect at court / pack / account).
       if (!st.skipOnline && st.settlement === "online" && orderId) {
         if (window.Pay) { await window.Pay.startYocoCheckout(orderId); return; }

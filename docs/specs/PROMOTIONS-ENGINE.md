@@ -11,16 +11,17 @@ redeemed at checkout** — e.g. *20% off memberships*, *R100 off a pack*. Phase 
   scope / window / min-spend / first-time / global + per-customer caps / stacking-off.
 - **Admin UI:** **Setup → "Promotions & offers"** (`AdminUI.promotions`) — create/edit/pause/archive a promo
   (name, code, % or R off, scope, caps, min-spend, end date, first-time), and view its redemptions.
-- **Checkout wiring (LIVE):** the **membership** and **pack** purchase flows take an optional promo code
-  (`plan.js` field → `Pay.buyMembership/buyPack` → `promo_code` in the checkout body → applied server-side
-  before payment, so Yoco/owed reflects the discount). A bad code on an online buy aborts cleanly (voids the
-  un-paid order) so no one is charged full price.
+- **Checkout wiring (LIVE — all surfaces):** **membership + pack** purchases pass `promo_code` in the
+  checkout body (`plan.js` → `Pay.buyMembership/buyPack`), applied server-side before payment; a bad code on
+  an online buy aborts cleanly (voids the un-paid order). **Court/lesson bookings** (`booking.js`) apply the
+  code via `POST /api/billing/promo/apply` between `createBooking` and `Pay.startYocoCheckout` — an online
+  booking HALTS on a bad code (the held booking + unpaid order lazy-expire), an owed booking treats it as a
+  soft warning and still stands. The promo field shows only when there's a payable amount (not covered/pack/
+  on-behalf).
 - **Customer API:** `POST /api/billing/promo/validate` (preview) · `POST /api/billing/promo/apply`
-  (staff/desk can apply a code to any open order). Admin: `/api/admin/promotions*`.
+  (owner of the order, or staff/desk). Admin: `/api/admin/promotions*`.
 - **Measurement:** every redemption emits `promo_redeemed` (→ usage_event + Klaviyo) — ties a sale back to
   the campaign that carried the code.
-- **DEFERRED to a fast-follow:** the promo field on **court/lesson booking** checkout (`booking.js`) — the
-  engine + `/api/billing/promo/apply` already support it; only the booking-flow UI field is pending.
 
 > Verify on a sandbox before relying on it in anger: `python -m db` twice (idempotency) +
 > `python -m scripts.test_all` (booking/billing/statement harnesses). The engine is additive; existing
