@@ -85,25 +85,40 @@ def sales_by_day(session, *, club_id, month=None):
         ).mappings().all()
 
     rows = _guard(_rows, [])
+    # Split each day's NET into ONLINE (Yoco / gateway) vs CASH/EFT (desk-recorded manual payments), so
+    # the owner sees online takings and off-platform takings separately without hiding either. A desk
+    # payment (cash/card_at_desk/eft/manual) is real revenue AND accrues the coach's commission exactly
+    # like a gateway charge — the split is display-only.
+    OFFLINE = {"cash", "card_at_desk", "eft", "manual"}
     days = {}
     gross = 0
     refunded = 0
+    online_net = 0
+    offline_net = 0
     currency = None
     for r in rows:
         currency = currency or r["currency_code"]
         amt = int(r["amount_minor"] or 0)
         is_refund = (r["direction"] == "refund")
+        signed = -amt if is_refund else amt
+        is_offline = (r["provider"] or "").strip().lower() in OFFLINE
         if is_refund:
             refunded += amt
         else:
             gross += amt
+        if is_offline:
+            offline_net += signed
+        else:
+            online_net += signed
         dkey = r["created_at"].date().isoformat()
         d = days.setdefault(dkey, {"date": dkey, "gross_minor": 0, "refunded_minor": 0,
-                                   "net_minor": 0, "total_minor": 0, "sales": []})
+                                   "net_minor": 0, "total_minor": 0,
+                                   "online_minor": 0, "offline_minor": 0, "sales": []})
         if is_refund:
             d["refunded_minor"] += amt
         else:
             d["gross_minor"] += amt
+        d["online_minor" if not is_offline else "offline_minor"] += signed
         d["net_minor"] = d["gross_minor"] - d["refunded_minor"]
         d["total_minor"] = d["net_minor"]                  # headline per day = NET
         d["sales"].append({
@@ -128,6 +143,8 @@ def sales_by_day(session, *, club_id, month=None):
         "gross_minor": gross,
         "refunded_minor": refunded,
         "net_minor": net,
+        "online_minor": online_net,        # NET Yoco / gateway takings
+        "offline_minor": offline_net,      # NET cash / EFT / card-at-desk takings
         "count": len(rows),
         "days": day_list,
     }

@@ -1008,7 +1008,12 @@
       ? ("Net " + money(data.net_minor, cur) + "  ·  " + money(data.gross_minor, cur) + " gross − " + money(data.refunded_minor, cur) + " reversed")
       : ("Total " + money(data.total_minor, cur)))
       + " · " + (data.count || 0) + " transaction" + (data.count === 1 ? "" : "s");
-    wrap.appendChild(el("div", { class: "cf-muted", style: "margin:-2px 0 12px;font-size:.9rem", text: headTxt }));
+    wrap.appendChild(el("div", { class: "cf-muted", style: "margin:-2px 0 4px;font-size:.9rem", text: headTxt }));
+    // Online (Yoco) vs Cash/EFT split — both are real takings + both credit the coach; shown separately.
+    if ((data.online_minor || 0) !== 0 || (data.offline_minor || 0) !== 0) {
+      wrap.appendChild(el("div", { class: "cf-muted", style: "margin:0 0 12px;font-size:.84rem", text:
+        money(data.online_minor || 0, cur) + " online (Yoco)  ·  " + money(data.offline_minor || 0, cur) + " cash / EFT" }));
+    }
     var days = data.days || [];
     if (!days.length) wrap.appendChild(el("div", { class: "cf-empty", text: "No takings this month." }));
     else days.forEach(function (d) {
@@ -1016,9 +1021,14 @@
         el("div", { style: "font-weight:600", text: money(d.net_minor != null ? d.net_minor : d.total_minor, cur) }),
       ]);
       if (d.refunded_minor) dayFig.insertBefore(el("span", { class: "cf-muted", style: "font-size:.8rem", text: money(d.gross_minor, cur) + " − " + money(d.refunded_minor, cur) }), dayFig.firstChild);
-      wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:14px 2px 6px" }, [
+      wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:14px 2px 2px" }, [
         el("div", { style: "font-weight:700", text: dayLabel(d.date) }), dayFig,
       ]));
+      // Per-day online vs cash/EFT split (only when both methods appear that day).
+      if ((d.online_minor || 0) !== 0 && (d.offline_minor || 0) !== 0) {
+        wrap.appendChild(el("div", { class: "cf-muted", style: "text-align:right;margin:0 2px 6px;font-size:.78rem", text:
+          money(d.online_minor, cur) + " online · " + money(d.offline_minor, cur) + " cash/EFT" }));
+      }
       var c = card([]), l = el("div", { class: "cf-list" });
       (d.sales || []).forEach(function (x) {
         var isRef = x.direction === "refund";
