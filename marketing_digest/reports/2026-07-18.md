@@ -83,4 +83,6 @@ _Organic growth from GA4 + Search Console. The 🎯 striking-distance queries ar
 
 
 ## 📬 Email delivery (this run)
-- skipped: OPS_KEY secret not set on the repo
+- NextPoint Tennis → info@nextpointtennis.com: HTTP 200 — {"sent":true,"to":"info@nextpointtennis.com"}
+
+- Ten-Fifty5 → info@ten-fifty5.com: HTTP 200 — {"sent":true,"to":"info@ten-fifty5.com"}
