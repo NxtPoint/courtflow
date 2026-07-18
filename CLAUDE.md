@@ -114,7 +114,9 @@ render code.** Full contract: `docs/specs/FRONTEND-STANDARDISATION.md`.
   component styles.
 - **Three SPAs:** client (`app.html` + `client.js`, one page, no bottom nav) · coach (`coach_app.html` +
   `coach_app.js`, bottom-nav) · admin/owner (`admin_app.html` + `admin_app.js`, responsive, served at
-  `/admin`; classic tab console preserved at `/admin-classic`).
+  `/admin`). The old classic tab console (`admin.html`/`admin.js` + `/admin-classic`) was **DELETED
+  2026-07-18** — its last unique surface (**block time / time-off**) was ported into the new Diary
+  (a "Block time" action → `POST /api/diary/time-off`); walk-ins + desk-pay already lived in the new console.
 - **Shared render layer** `frontend/js/widgets/`: `Widgets.TransactionDetail` = the ONE booking "event story"
   everywhere · `Widgets.ClientRecord` = the ONE client/person-360 record across admin/coach/client (fed by the
   `client360` composer; admin scope adds staff edits — discount/wallet-adjust/void/refund) · `Widgets.Calendar`

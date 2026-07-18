@@ -1246,6 +1246,38 @@
 
   // Diary — the shared Calendar widget (Widgets.Calendar) over the whole club (court + coach
   // filters), plus a Classes tab. FRONTEND-STANDARDISATION Wave 5. Router passes an optional date.
+  // Block time (time-off) — mark a court or coach unavailable so nothing can be booked in that slot
+  // (ported from the retired classic diary; the coach app has the same for a coach's own resource).
+  async function blockTimeModal(dateKey) {
+    var lists = await ensureDiaryLists();
+    var coachName = {};
+    (lists.coaches || []).forEach(function (c) { coachName[c.user_id] = c.display_name || [c.first_name, c.surname].filter(Boolean).join(" ") || c.email; });
+    var resources = [];
+    try { resources = ((await window.AdminAPI.resources()).resources || []).filter(function (r) { return (r.kind === "court" || r.kind === "coach") && r.is_active !== false; }); } catch (e) {}
+    var m = modal("Block time (time-off)");
+    if (!resources.length) { m.body.appendChild(el("div", { class: "cf-empty", text: "No courts or coaches to block." })); return; }
+    var resSel = el("select", { class: "cf-input" }, resources.map(function (r) {
+      return el("option", { value: r.id, text: r.kind === "coach" ? "Coach · " + (coachName[r.coach_user_id] || r.name || "Coach") : "Court · " + (r.name || "Court") });
+    }));
+    var day = dateKey || UI.dateKey(new Date());
+    var s = el("input", { class: "cf-input", type: "datetime-local", value: day + "T09:00" });
+    var e = el("input", { class: "cf-input", type: "datetime-local", value: day + "T10:00" });
+    var reason = el("input", { class: "cf-input", placeholder: "Reason (e.g. maintenance, holiday) — optional" });
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem", text: "Mark a court or coach unavailable — it blocks any booking in that window (no double-book)." }));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Resource" }), resSel]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "From" }), s]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "To" }), e]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Reason" }), reason]));
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
+      el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
+      el("button", { class: "cf-btn cf-btn-primary", text: "Block time", onclick: function () {
+        if (!resSel.value || !s.value || !e.value) { UI.toast("Pick a resource + from/to.", "warn"); return; }
+        if (new Date(e.value) <= new Date(s.value)) { UI.toast("The 'to' time must be after 'from'.", "warn"); return; }
+        window.API.timeOff({ resource_id: resSel.value, starts_at: new Date(s.value).toISOString(), ends_at: new Date(e.value).toISOString(), reason: (reason.value.trim() || "blocked") })
+          .then(function () { UI.toast("Time blocked.", "info"); m.close(); renderDiary(dateKey); }, function (er) { UI.toast(UI.errMsg(er), "error"); });
+      } }),
+    ]));
+  }
   async function renderDiary(dateKey) {
     loading();
     var lists = await ensureDiaryLists();
@@ -1253,6 +1285,7 @@
     wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin:0 0 8px" }, [
       el("h1", { style: "margin:0", text: "Diary" }),
       el("div", { class: "cf-row", style: "gap:6px" }, [
+        el("button", { class: "cf-btn cf-btn-sm", text: "Block time", onclick: function () { blockTimeModal(dateKey); } }),
         el("button", { class: "cf-btn cf-btn-sm", text: "Log past", onclick: function () { adminBookForClient(true); } }),
         el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ Book a client", onclick: function () { adminBookForClient(false); } }),
       ]),
@@ -1266,7 +1299,6 @@
     window.Widgets.Calendar.mount(body, {
       date: dateKey || UI.dateKey(new Date()),
       grid: true,                 // Day view = the resource-timeline grid (blocks drill to the event story)
-      classicLink: true,
       filterBar: {
         courts: (lists.courts || []).map(function (c) { return { id: c.id, name: c.name || "Court" }; }),
         coaches: (lists.coaches || []).map(function (c) { return { id: c.user_id, name: c.display_name || [c.first_name, c.surname].filter(Boolean).join(" ") || c.email }; }),
@@ -1618,10 +1650,6 @@
       active: section, sections: ADMIN_SETUP, backHash: "#/setup",
       onOpen: function (k) { go("#/setup/" + k); },
       title: "Setup", intro: "Configure your club. Changes save per section.",
-      footer: el("p", { class: "cf-muted", style: "font-size:.82rem;margin-top:14px" }, [
-        document.createTextNode("Classes are scheduled under Diary → Classes. Prefer the classic console? "),
-        el("a", { href: "/admin-classic", text: "Open classic ›" }),
-      ]),
     });
   }
   function setupPayments(host, policy) {

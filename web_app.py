@@ -544,11 +544,11 @@ def coach_console():
 @app.get("/admin")
 @app.get("/admin.html")
 def admin_console():
-    # /admin now serves the redesigned owner/admin SPA (responsive drill-through — Home · People ·
-    # Money · Diary · Setup + the one event story; docs/specs/ADMIN-REDESIGN.md). We ALSO claim
-    # /admin.html explicitly (like /coach.html) so stray in-app links / old bookmarks land on the new
-    # console instead of falling through to the classic file. The classic tab console stays reachable
-    # at /admin-classic (its full drag-timeline is linked from the new Diary) — nothing is lost.
+    # /admin serves the redesigned owner/admin SPA (responsive drill-through — Home · People · Money ·
+    # Diary · Setup + the one event story; docs/specs/ADMIN-REDESIGN.md). We ALSO claim /admin.html
+    # explicitly (like /coach.html) so stray in-app links / old bookmarks land here. The old classic
+    # tab console (admin.html/admin.js) was RETIRED 2026-07-18 — its remaining unique surface (block
+    # time) was ported into the new Diary; walk-ins + desk-pay already lived in the new console.
     return _app_shell("admin_app.html")
 
 
@@ -556,13 +556,6 @@ def admin_console():
 def admin_console_new():
     # Kept so the /admin-app URL used during the build still resolves to the new SPA.
     return _app_shell("admin_app.html")
-
-
-@app.get("/admin-classic")
-def admin_console_classic():
-    # The classic tab console (admin.html/admin.js) — kept as a fallback + for the full drag-and-drop
-    # master-diary timeline (walk-ins / block time / desk-pay) until that ports into the new SPA.
-    return _app_shell("admin.html")
 
 
 @app.get("/<page>.html")

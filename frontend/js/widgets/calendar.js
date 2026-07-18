@@ -262,12 +262,6 @@
 
       var body = el("div", {}, [el("div", { class: "cf-loading", text: "Loading…" })]);
       wrap.appendChild(body);
-      if (cfg.classicLink) {
-        wrap.appendChild(el("p", { class: "cf-muted", style: "font-size:.82rem;margin-top:12px" }, [
-          document.createTextNode("Need the full drag-and-drop timeline (walk-ins · block time · desk-pay)? "),
-          el("a", { href: "/admin-classic#diary", text: "Open the classic diary ›" }),
-        ]));
-      }
       UI.clear(host); host.appendChild(wrap);
 
       var useGrid = !!cfg.grid && state.view === "day";

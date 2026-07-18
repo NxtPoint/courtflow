@@ -60,8 +60,11 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
       already rides the month-end Action. (See FEATURE-FLAGS B3/B4/C1.)
 
 **P2 (valuable)**
-- [ ] **Diary timeline editing port** (grid VIEW already shipped in the admin Day view) — still to port from
-      `/admin-classic`: click-to-create / **walk-in** / **block time** / **desk-pay** editing actions.
+- [x] ~~**Diary timeline editing port**~~ — **DONE / MOOT 2026-07-18.** The classic console (`/admin-classic` +
+      `admin.html`/`admin.js`) was DELETED. Its editing actions now live in the new admin: **walk-in** (Book a
+      client → guest name), **desk-pay** (transaction record), and **block time** (new Diary "Block time" action
+      → `POST /api/diary/time-off`). Only the drag-to-create/drag-to-move *gesture* is gone (use the buttons +
+      the Day grid instead) — not a tracked gap.
 - [ ] **Client 360 month navigation** — the client Home has a month pager but the person-360 record is
       current-month only; add month-nav + promote a shared `UI.monthNav` (Home/Insights/360 share ONE pager).
 - [ ] **Coach-lane aliases for holdings/arrears write routes** — discount / wallet adjust-expire / payout sit
