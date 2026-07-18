@@ -456,6 +456,138 @@ def overview(session, *, club_id, month=None):
         FROM generate_series(:s, :e - interval '1 day', interval '1 day') g
     """), p).mappings().all(), "active"), {"active": [0]*len(days)})
 
+    # --- Membership composition (STACKED by type) — the growth-mix hero -----------------------------
+    # Per-day ACTIVE subs grouped by paid tier (price.membership_tier), with provider='trial' bucketed
+    # as 'Trial' and an untiered paid sub as 'Member'. Uses the SAME active predicate as the `members`
+    # block above, so the stacked tiers SUM to the active_members line by construction. Tier keys are
+    # dynamic (unknown up front) so this pivots by hand rather than via the fixed-key _fill().
+    def _tier_series():
+        rows = session.execute(text("""
+            SELECT g::date AS day,
+                   CASE WHEN ms.provider = 'trial' THEN 'Trial'
+                        ELSE COALESCE(NULLIF(pr.membership_tier, ''), 'Member') END AS tier,
+                   count(*) AS n
+            FROM generate_series(:s, :e - interval '1 day', interval '1 day') g
+            JOIN billing.membership_subscription ms
+              ON ms.club_id = :c
+             AND ms.period_start <= g::date
+             AND (ms.cancelled_at IS NULL OR ms.cancelled_at::date > g::date)
+             AND (ms.current_period_end IS NULL OR ms.current_period_end >= g::date)
+            LEFT JOIN billing.price pr ON pr.id = ms.price_id
+            GROUP BY 1, 2
+        """), p).mappings().all()
+        out = {}
+        for r in rows:
+            t = r["tier"] or "Member"
+            arr = out.setdefault(t, [0] * len(days))
+            dk = r["day"].isoformat() if hasattr(r["day"], "isoformat") else str(r["day"])
+            i = pos.get(dk)
+            if i is not None:
+                arr[i] = int(r["n"] or 0)
+        return out
+    tier_series = _guard(_tier_series, {})
+    # Current mix (last day of the month) → the donut; sums to active_members by construction.
+    tier_current = {t: (arr[-1] if arr else 0) for t, arr in tier_series.items()}
+
+    # --- Net growth: paid subs (NOT trial) joining (by period_start) vs cancelling (by cancelled_at) -
+    # `provider IS DISTINCT FROM 'trial'` keeps NULL-provider (at-desk) paid subs IN and trials OUT.
+    joined = _guard(lambda: _fill(session.execute(text("""
+        SELECT period_start AS day, count(*) AS joined
+        FROM billing.membership_subscription
+        WHERE club_id = :c AND provider IS DISTINCT FROM 'trial'
+          AND period_start >= :s AND period_start < :e
+        GROUP BY 1
+    """), p).mappings().all(), "joined"), {"joined": [0]*len(days)})
+    cancelled = _guard(lambda: _fill(session.execute(text("""
+        SELECT cancelled_at::date AS day, count(*) AS cancelled
+        FROM billing.membership_subscription
+        WHERE club_id = :c AND provider IS DISTINCT FROM 'trial'
+          AND cancelled_at::date >= :s AND cancelled_at::date < :e
+        GROUP BY 1
+    """), p).mappings().all(), "cancelled"), {"cancelled": [0]*len(days)})
+
+    # --- Trial funnel: started (period_start) vs lapsed (period ended, never converted) per day ------
+    trials_started = _guard(lambda: _fill(session.execute(text("""
+        SELECT period_start AS day, count(*) AS started
+        FROM billing.membership_subscription
+        WHERE club_id = :c AND provider = 'trial'
+          AND period_start >= :s AND period_start < :e
+        GROUP BY 1
+    """), p).mappings().all(), "started"), {"started": [0]*len(days)})
+    # Lapsed = a trial whose period ended in-window AND that user never holds a non-trial (paid) sub.
+    trials_lapsed = _guard(lambda: _fill(session.execute(text("""
+        SELECT ms.current_period_end AS day, count(*) AS lapsed
+        FROM billing.membership_subscription ms
+        WHERE ms.club_id = :c AND ms.provider = 'trial'
+          AND ms.current_period_end >= :s AND ms.current_period_end < :e
+          AND NOT EXISTS (SELECT 1 FROM billing.membership_subscription p2
+                           WHERE p2.club_id = ms.club_id AND p2.user_id = ms.user_id
+                             AND p2.provider IS DISTINCT FROM 'trial')
+        GROUP BY 1
+    """), p).mappings().all(), "lapsed"), {"lapsed": [0]*len(days)})
+    # Rolling (lifetime) trial KPIs: distinct triallers, of whom converted to a paid sub, + live now.
+    trial_k = _guard(lambda: session.execute(text("""
+        WITH triallers AS (
+            SELECT DISTINCT user_id FROM billing.membership_subscription
+            WHERE club_id = :c AND provider = 'trial' AND user_id IS NOT NULL
+        )
+        SELECT
+          (SELECT count(*) FROM triallers) AS total,
+          (SELECT count(DISTINCT t.user_id) FROM triallers t
+             JOIN billing.membership_subscription ms
+               ON ms.club_id = :c AND ms.user_id = t.user_id
+              AND ms.provider IS DISTINCT FROM 'trial') AS converted,
+          (SELECT count(*) FROM billing.membership_subscription
+            WHERE club_id = :c AND provider = 'trial'
+              AND period_start <= CURRENT_DATE
+              AND (cancelled_at IS NULL OR cancelled_at::date > CURRENT_DATE)
+              AND (current_period_end IS NULL OR current_period_end >= CURRENT_DATE)) AS active
+    """), p).mappings().first(), {"total": 0, "converted": 0, "active": 0})
+
+    # --- Logged-in visitors: new (first-ever authed hit is THIS day) vs returning per day -----------
+    # Mirrors analytics.new_vs_returning but over the PRECISE authed signal (metadata.authed='true').
+    li = _guard(lambda: _fill(session.execute(text("""
+        WITH authed AS (
+            SELECT metadata->>'anon_id' AS aid, occurred_at::date AS day
+            FROM core.usage_event
+            WHERE event_type='page_view' AND club_id=:c
+              AND metadata->>'authed'='true' AND metadata->>'anon_id' IS NOT NULL
+              AND occurred_at >= :s AND occurred_at < :e
+        ),
+        firsts AS (
+            SELECT metadata->>'anon_id' AS aid, min(occurred_at)::date AS first_day
+            FROM core.usage_event
+            WHERE event_type='page_view' AND club_id=:c
+              AND metadata->>'authed'='true' AND metadata->>'anon_id' IS NOT NULL
+            GROUP BY 1
+        )
+        SELECT a.day AS day,
+               count(DISTINCT a.aid) FILTER (WHERE f.first_day = a.day) AS li_new,
+               count(DISTINCT a.aid) FILTER (WHERE f.first_day < a.day) AS li_return
+        FROM authed a JOIN firsts f ON f.aid = a.aid
+        GROUP BY 1
+    """), p).mappings().all(), "li_new", "li_return"),
+        {"li_new": [0]*len(days), "li_return": [0]*len(days)})
+
+    # --- PAYG players KPI: active clients paying their own way (no paid sub), booked in the last 30d --
+    # Distinct clients with a real (non-covered, non-token, non-free) booking in the trailing 30 days
+    # who hold NO active paid membership → the live PAYG base (a KPI, not a per-day series; §9).
+    payg_active = _guard(lambda: int(session.execute(text("""
+        SELECT count(DISTINCT bk.booked_by_user_id)
+        FROM diary.booking bk
+        WHERE bk.club_id = :c
+          AND bk.status IN ('confirmed','completed','no_show')
+          AND bk.starts_at >= now() - interval '30 days'
+          AND COALESCE(bk.settlement_mode,'') NOT IN ('membership_covered','token','free')
+          AND bk.booked_by_user_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM billing.membership_subscription ms
+                           WHERE ms.club_id = bk.club_id AND ms.user_id = bk.booked_by_user_id
+                             AND ms.provider IS DISTINCT FROM 'trial'
+                             AND ms.period_start <= CURRENT_DATE
+                             AND (ms.cancelled_at IS NULL OR ms.cancelled_at::date > CURRENT_DATE)
+                             AND (ms.current_period_end IS NULL OR ms.current_period_end >= CURRENT_DATE))
+    """), p).scalar() or 0), 0)
+
     # --- NPS per day (core.nps_response.submitted_at — the CORRECTED source) -----------------------
     nps_daily = _guard(lambda: _fill(session.execute(text("""
         SELECT submitted_at::date AS day, count(*) AS responses,
@@ -483,6 +615,11 @@ def overview(session, *, club_id, month=None):
           AND created_at < :e
     """), p).scalar() or 0), 0)
     currency = _club_currency(session, club_id)
+    # Trial funnel derived KPIs (rolling, lifetime — not month-scoped).
+    trial_total = int((trial_k or {}).get("total") or 0)
+    trial_conv = int((trial_k or {}).get("converted") or 0)
+    trial_active = int((trial_k or {}).get("active") or 0)
+    trial_rate = round(trial_conv / trial_total * 100) if trial_total else None
 
     # ---- Month-scoped traffic breakdowns (top lists) ---------------------------------------------
     def _breakdown(sql, label):
@@ -529,6 +666,13 @@ def overview(session, *, club_id, month=None):
             "refunded_minor": revenue["refunded"],
             "new_clients": clients["signups"],
             "active_members": members["active"],
+            "tier_series": tier_series,
+            "members_joined": joined["joined"],
+            "members_cancelled": cancelled["cancelled"],
+            "trials_started": trials_started["started"],
+            "trials_lapsed": trials_lapsed["lapsed"],
+            "logged_in_new": li["li_new"],
+            "logged_in_returning": li["li_return"],
             "nps_responses": nps_daily["responses"],
         },
         "kpis": {
@@ -548,6 +692,18 @@ def overview(session, *, club_id, month=None):
             "new_clients": sum(clients["signups"]),
             "total_clients": total_clients,
             "active_members": members["active"][-1] if members["active"] else 0,
+            "tier_current": tier_current,
+            "members_joined": sum(joined["joined"]),
+            "members_cancelled": sum(cancelled["cancelled"]),
+            "trials_started_month": sum(trials_started["started"]),
+            "trials_lapsed_month": sum(trials_lapsed["lapsed"]),
+            "trials_active": trial_active,
+            "trials_converted": trial_conv,
+            "trials_total": trial_total,
+            "trial_conversion_rate": trial_rate,
+            "payg_active": payg_active,
+            "logged_in_new": sum(li["li_new"]),
+            "logged_in_returning": sum(li["li_return"]),
             "nps_score": nps_score,
             "nps_responses": nps_total,
         },

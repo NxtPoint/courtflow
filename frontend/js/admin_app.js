@@ -1773,6 +1773,28 @@
       }),
     };
   }
+  function ovSum(a) { return (a || []).reduce(function (x, y) { return x + (y || 0); }, 0); }
+  // Stable colours for membership tiers. 'Trial' is ALWAYS amber (so it reads the same in the stacked
+  // area + the donut + across months); every other tier draws from the palette in sorted order.
+  var OV_TIER_PALETTE = ["#1f7a4d", "#4a7fb5", "#9b6dc4", "#d9694a", "#3fae9c", "#c05780", "#6b8e23", "#b5892f"];
+  function ovTierColors(names) {
+    var m = {}, j = 0;
+    names.forEach(function (n) { m[n] = (n === "Trial") ? "#c79a3e" : OV_TIER_PALETTE[j++ % OV_TIER_PALETTE.length]; });
+    return m;
+  }
+  // ONE donut option-builder (the mix snapshot). pairs = [{name, value, color}].
+  function ovPieOption(pairs) {
+    return {
+      color: pairs.map(function (p) { return p.color; }),
+      tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
+      legend: { bottom: 0, itemWidth: 11, itemHeight: 11, textStyle: { fontSize: 11 } },
+      series: [{
+        type: "pie", radius: ["46%", "70%"], center: ["50%", "44%"], avoidLabelOverlap: true,
+        label: { show: false }, labelLine: { show: false },
+        data: pairs.map(function (p) { return { name: p.name, value: p.value }; }),
+      }],
+    };
+  }
   function mountChart(container, buildOption) {
     container.style.minHeight = "260px";
     ensureECharts().then(function () {
@@ -1853,6 +1875,15 @@
       ]);
     });
     body.appendChild(el("div", { class: "cf-muted", style: "font-size:.78rem;margin:8px 2px 14px", text: "Logged in = pages where a signed-in user was confirmed (precise; accrues from now). Member area = visits to logged-in-only pages by path (portal · book · plan · account · admin · coach) — a broader proxy that also counts shells loaded before sign-in." }));
+    // New vs returning signed-in people — a newly-activated member is first-ever authed in this window.
+    if (ovSum(s.logged_in_new) || ovSum(s.logged_in_returning)) {
+      mountChart(ovChartCard(body, "Logged-in visitors · new vs returning", 240), function () {
+        return ovBase(data.days, [
+          { name: "New", data: s.logged_in_new, color: "#1f7a4d", stack: "li" },
+          { name: "Returning", data: s.logged_in_returning, color: "#9cc4b0", stack: "li" },
+        ]);
+      });
+    }
     body.appendChild(card([window.CRMUI.stats([
       { value: k.visits, label: "All visits" },
       { value: k.unique_visitors, label: "Unique visitors" },
@@ -1902,13 +1933,51 @@
     var s = data.series, k = data.kpis;
     body.appendChild(card([window.CRMUI.stats([
       { value: k.active_members, label: "Active members" },
+      { value: k.payg_active, label: "PAYG players · 30d" },
+      { value: k.trials_active, label: "Trials live" },
       { value: k.new_clients, label: "New clients" },
-      { value: k.total_clients, label: "Total clients" },
     ])]));
-    mountChart(ovChartCard(body, "Active members per day", 260), function () {
-      return ovBase(data.days, [{ name: "Active members", type: "line", data: s.active_members, color: "#4a7fb5", area: true }]);
+    // ── HERO: membership composition, stacked by type (paid tiers + Trial). Sums to Active members.
+    var tiers = s.tier_series || {};
+    var tnames = Object.keys(tiers);
+    // Order: paid tiers (alpha) → untiered 'Member' → 'Trial' last, so the stack reads bottom-up sensibly.
+    tnames.sort(function (a, b) { var r = function (x) { return x === "Trial" ? 2 : x === "Member" ? 1 : 0; }; return r(a) - r(b) || a.localeCompare(b); });
+    var cmap = ovTierColors(tnames);
+    if (tnames.length && ovSum([].concat.apply([], tnames.map(function (n) { return tiers[n]; })))) {
+      mountChart(ovChartCard(body, "Membership composition · active by type", 300), function () {
+        return ovBase(data.days, tnames.map(function (n) {
+          return { name: n, data: tiers[n], type: "line", stack: "mix", area: true, color: cmap[n] };
+        }));
+      });
+      var tc = k.tier_current || {};
+      var pairs = tnames.filter(function (n) { return (tc[n] || 0) > 0; }).map(function (n) { return { name: n, value: tc[n], color: cmap[n] }; });
+      if (pairs.length) mountChart(ovChartCard(body, "Current mix", 260), function () { return ovPieOption(pairs); });
+    } else {
+      body.appendChild(card([window.CRMUI.sectionHead("Membership composition"), el("div", { class: "cf-empty", text: "No active memberships this month yet." })]));
+    }
+    // Net growth: joined (up) vs cancelled (drawn negative) per day.
+    mountChart(ovChartCard(body, "Net growth · joined vs cancelled", 240), function () {
+      return ovBase(data.days, [
+        { name: "Joined", data: s.members_joined, color: "#1f7a4d" },
+        { name: "Cancelled", data: (s.members_cancelled || []).map(function (v) { return -(v || 0); }), color: "#d9694a" },
+      ]);
     });
-    mountChart(ovChartCard(body, "New clients per day", 240), function () {
+    // ── Trial funnel: started vs lapsed per day + the rolling conversion rate.
+    var rate = k.trial_conversion_rate;
+    body.appendChild(card([window.CRMUI.stats([
+      { value: k.trials_started_month, label: "Started · this month" },
+      { value: (rate == null ? "—" : rate + "%"), label: "Conversion · all-time" },
+      { value: k.trials_converted, label: "Converted ever" },
+    ])]));
+    if (ovSum(s.trials_started) || ovSum(s.trials_lapsed)) {
+      mountChart(ovChartCard(body, "Trial funnel · started vs lapsed", 240), function () {
+        return ovBase(data.days, [
+          { name: "Started", data: s.trials_started, color: "#4a7fb5" },
+          { name: "Lapsed", data: (s.trials_lapsed || []).map(function (v) { return -(v || 0); }), color: "#c79a3e" },
+        ]);
+      });
+    }
+    mountChart(ovChartCard(body, "New clients per day", 220), function () {
       return ovBase(data.days, [{ name: "New clients", data: s.new_clients, color: "#1f7a4d" }]);
     });
   }

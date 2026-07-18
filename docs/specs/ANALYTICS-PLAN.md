@@ -159,6 +159,18 @@ dashboard reads. No Google credentials ever touch Render.
 ## 8. Progress
 - ✅ **Court-utilisation timezone FIXED** (2026-07-18): `_booked()` now extracts weekday/hour
   `AT TIME ZONE 'Africa/Johannesburg'`, so the heatmap reads in SAST and aligns with availability hours.
+- ✅ **PHASE A BUILT** (2026-07-18): all §9 readers + panels shipped.
+  - Backend (`insights.overview`): `tier_series` (per-day active subs stacked by tier + `Trial`) +
+    `tier_current` donut snapshot · `members_joined`/`members_cancelled` net growth · `trials_started`/
+    `trials_lapsed` + rolling `trials_total`/`trials_converted`/`trial_conversion_rate`/`trials_active` ·
+    `logged_in_new`/`logged_in_returning` (authed first-seen) · `payg_active` KPI (30-day live PAYG base).
+  - Frontend (`admin_app.js` `#/overview`): Members tab now leads with the **membership-composition
+    stacked area** (hero) + current-mix **donut** + net-growth chart + **trial-funnel** panel + PAYG/Trials
+    KPI tiles; Traffic tab gains **logged-in new-vs-returning**. New helpers `ovTierColors`/`ovPieOption`
+    (Trial always amber). Public-visitor headline re-lead + bookings-by-type were already live.
+  - Verified: every new query run **unguarded** against the live schema (no silent-zero column bug); a
+    seeded rolled-back scenario asserts all aggregates + the per-day invariant **stacked tiers ==
+    active_members**. Numbers to be eyeballed on prod `#/overview` after deploy (dev DB has no live data).
 
 ## 9. Phase A — implementation brief (turnkey; build + eyeball each panel live)
 

@@ -393,8 +393,12 @@
     courtUtilisation: function (days) { return A().apiJSON("/api/insights/court-utilisation" + (days ? ("?days=" + days) : "")); },
     // GET /api/insights/overview?month=YYYY-MM -> {month, currency, days:[iso], series:{visits,
     //   unique_visitors,bookings,bookings_court,bookings_lesson,bookings_class,member_bookings,
-    //   revenue_gross_minor,revenue_net_minor,refunded_minor,new_clients,active_members,nps_responses},
-    //   kpis:{...}, breakdowns:{sources,top_pages,by_device}}
+    //   revenue_gross_minor,revenue_net_minor,refunded_minor,new_clients,active_members,nps_responses,
+    //   tier_series:{tier:[..]},members_joined,members_cancelled,trials_started,trials_lapsed,
+    //   logged_in_new,logged_in_returning},
+    //   kpis:{...,tier_current:{tier:n},payg_active,trials_active,trials_converted,trials_total,
+    //   trial_conversion_rate,trials_started_month,members_joined,members_cancelled},
+    //   breakdowns:{sources,top_pages,by_device}}
     overview: function (month) { return A().apiJSON("/api/insights/overview" + (month ? ("?month=" + month) : "")); },
     // GET /api/insights/sales-by-day?month=YYYY-MM -> {month, currency, total_minor, count,
     //   days:[{date, total_minor, sales:[{payment_id,order_id,booking_id,client_name,service_type,
