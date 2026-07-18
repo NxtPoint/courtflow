@@ -1,0 +1,4 @@
+google-auth>=2.30
+google-analytics-admin>=0.22
+google-analytics-data>=0.18
+google-api-python-client>=2.130
