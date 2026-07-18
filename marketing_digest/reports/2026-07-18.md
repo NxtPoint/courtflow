@@ -80,3 +80,7 @@ _Organic growth from GA4 + Search Console. The 🎯 striking-distance queries ar
     - “action camera” — pos 14.0, 1 impr, 0 clicks
 
 ---
+
+
+## 📬 Email delivery (this run)
+- skipped: OPS_KEY secret not set on the repo
