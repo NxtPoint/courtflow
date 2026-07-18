@@ -27,8 +27,9 @@ promo kinds + unique codes are live across every checkout surface.
   /api/admin/promotions/<id>/codes` + `POST …/codes/revoke`.
 - **Checkout:** unchanged flow — a `bonus_period` code shows "N free months added" instead of a rand discount
   (`pay.js`); the order price is untouched (bonus ≠ discount).
-- **✅ VERIFIED:** Tomo ran `python -m scripts.test_all` — **all harnesses passed** (booking/billing/statement,
-  incl. billing 311) 2026-07-18. The membership-grant path is clean; Phase 2a is safe to switch on.
+- **✅ VERIFIED (Phase 1 + 2, both grant paths):** Tomo ran `python -m scripts.test_all` — **all harnesses
+  passed** (booking/billing/statement, incl. billing 311) after Phase 2a AND after Phase 2b, 2026-07-18. The
+  membership-term grant AND the pack-wallet grant are both clean; the whole engine is safe to switch on.
 
 ## Phase 2b — ✅ SHIPPED (see above). The engine is now feature-complete:
 percent_off · amount_off · bonus_period (membership) · bonus_units (packs) · shared + unique per-recipient codes.
