@@ -177,6 +177,13 @@ def gsc_block(creds, site_url):
 
 # ---------------------------------------------------------------- main
 def main():
+    # Force UTF-8 on stdout/stderr so the emoji/curly-quotes in the report can't crash print()
+    # on a runner whose console encoding isn't UTF-8 (this caused a spurious exit-1 on the first run).
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     creds = _creds()
     parts = [f"# 🎾 Marketing digest — {TODAY}",
              "_Cross-brand organic growth (GA4 + Search Console). Auto-discovers whatever the "
@@ -228,7 +235,10 @@ def main():
         with open(summ, "a", encoding="utf-8") as f:
             f.write(report)
 
-    print(report)
+    try:
+        print(report)
+    except Exception:
+        pass  # report is already written to files + step summary; never fail the job on a log write
     return 0
 
 
