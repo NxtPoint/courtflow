@@ -164,15 +164,18 @@ services:
       # the real domains are here too (also in branding.py registry) for go-live.
       - key: MARKETING_HOSTS
         value: "courtflow-web.onrender.com,nextpointtennis.com,www.nextpointtennis.com"
-      # --- Google marketing tags (go-live cutover §5). All DARK until filled at cutover.
-      # Values are PUBLIC (they appear in page source), so committed inline (blank) not sync:false.
-      # GA4 + Ads inject via web_app._inject_head; conversions fire through window.cfConversion.
+      # --- Google marketing tags (go-live cutover §5). Values are PUBLIC (they appear in
+      # page source), so committed inline HERE (not sync:false, not blank) — a blank value
+      # gets re-clobbered to empty on every blueprint sync, which silently darkens the tag
+      # (this happened once already: a sync reset these to "" and killed GA4 + Ads conversion
+      # tracking site-wide until restored). GA4 + Ads inject via web_app._inject_head;
+      # conversions fire through window.cfConversion. Update in-place here, never blank them.
       - key: GA4_MEASUREMENT_ID          # G-XXXXXXXXXX  (GA4 web stream)
-        value: ""
+        value: "G-EKQP47P8M9"
       - key: GOOGLE_ADS_ID               # AW-XXXXXXXXXX (Google Ads global tag)
-        value: ""
-      - key: GOOGLE_ADS_CONVERSIONS      # JSON {"purchase":"AW-123/abcXYZ","sign_up":"AW-123/defQRS"}
-        value: ""
+        value: "AW-17077631191"
+      - key: GOOGLE_ADS_CONVERSIONS      # JSON {"semantic_event":"AW-123/label", ...}
+        value: '{"start_free_week":"AW-17077631191/rEy7CNKNsc4cENfxn88_","booking":"AW-17077631191/tu5JCNWNsc4cENfxn88_"}'
       # Search Console verification — set EITHER the HTML-file name OR the meta token.
       - key: GSC_VERIFICATION_FILE       # e.g. google1234abcd.html (served at that path)
         value: ""
