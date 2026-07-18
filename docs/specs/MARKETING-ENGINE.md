@@ -24,15 +24,13 @@ the tag. Values are public (they're in page source), so commit them.
 - **Ten-Fifty5** (`locker_room_app._marketing_head`, 1050 locker-room svc): GA4 `G-4167EPFS34`, **GA4-only**
   (no paid ads yet, by choice). Injected into every served `.html`.
 
-## 2. Canary — the tripwire (`.github/workflows/marketing-canary.yml`)
-Scheduled GitHub Action (every 2h) that asserts each brand's tag is present on the live site. Matrix per
-brand; `enforce` fails the run, `warn` only warns. **Both public hosts are behind Cloudflare, which serves
-GitHub's CI IPs a bot-challenge (200, no tag) → false-fail.** Fix: the canary checks the **Render origins**
-(`courtflow-web.onrender.com`, `locker-room-26kd.onrender.com`) which bypass the club Cloudflare zone; plus
-`--compressed`, a browser UA, and retries. **HOWEVER even the Render origins go through Cloudflare, which
-blocks GitHub's CI IPs — so the canary often can't verify from Actions.** It's therefore **warn-only + daily
-(best-effort, never fails red)**; the REAL tag-breakage monitor is the daily digest (a dark tag flatlines
-that brand's GA4 traffic in the morning email). Could delete the canary entirely and rely on the digest.
+## 2. Tag-breakage monitoring — the digest IS the monitor (canary RETIRED 2026-07-18)
+A GitHub-Actions tag "canary" (`marketing-canary.yml`) was tried and **deleted**: both sites — *and* their
+Render origins — sit behind Cloudflare, which blocks GitHub's CI IPs, so it could never reliably fetch the
+live tag from Actions (only false-fails). **The daily digest (§3) is the real, reliable monitor:** if a tag
+goes dark, that brand's GA4 traffic flatlines to zero in the morning email — a louder, more trustworthy
+signal than the canary ever was. (If a fast automated tag check is ever wanted, run it from a non-datacenter
+IP or add a Cloudflare WAF skip — don't reintroduce a GitHub-CI checker.)
 
 ## 3. Daily digest — the "one console" (`marketing_digest/`)
 A daily GitHub Action (`.github/workflows/marketing-digest.yml`, 05:00 UTC) that pulls GA4 + Search Console
