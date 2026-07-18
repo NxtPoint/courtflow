@@ -930,8 +930,24 @@ def _grant_wallet_now(session, *, order_id, provider="yoco") -> Dict[str, Any]:
     )
 
     exp = row["expires_at"] if row else None
+    # bonus_units promo on this order → add FREE sessions on top of the plan, ONCE, at first grant
+    # (this path only runs on a fresh grant — an already-active wallet returns above). Covers BOTH the
+    # ONLINE webhook grant (redemption recorded at checkout) AND is a no-op offline (the offline grant
+    # runs BEFORE the promo is applied, so promotions.apply_to_order adds the sessions there instead).
+    bonus_sessions = 0
+    try:
+        from billing import promotions
+        bonus_sessions = int(promotions._bonus_units_for_order(session, order_id) or 0)
+        if bonus_sessions > 0:
+            adjust_wallet(session, club_id=wallet["club_id"], wallet_id=wallet["id"],
+                          delta_minutes=bonus_sessions * int(base or 60),
+                          reason="Promo bonus sessions", actor_user_id=None)
+    except Exception:
+        bonus_sessions = 0
+        log.debug("bonus_units grant skipped", exc_info=False)
+    total = n + bonus_sessions
     return {"ok": True, "status": "granted", "wallet_id": str(wallet["id"]),
             "user_id": str(wallet["user_id"]) if wallet.get("user_id") else None,
             "label": (plan["label"] if plan else None),
-            "tokens_total": n, "tokens_remaining": n,
+            "tokens_total": total, "tokens_remaining": total,
             "expires_at": exp.isoformat() if hasattr(exp, "isoformat") else exp}

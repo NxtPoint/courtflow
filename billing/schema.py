@@ -948,7 +948,7 @@ _DDL = [
             ALTER TABLE {SCHEMA}.promotion DROP CONSTRAINT promotion_kind_check;
         END IF;
         ALTER TABLE {SCHEMA}.promotion ADD CONSTRAINT promotion_kind_check
-            CHECK (kind IN ('percent_off','amount_off','bonus_period'));
+            CHECK (kind IN ('percent_off','amount_off','bonus_period','bonus_units'));
     END $$;
     """,
     # bonus_period carries its bonus QUANTITY here (e.g. 1 = one free month on top of the paid term).

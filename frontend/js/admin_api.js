@@ -1930,8 +1930,8 @@
       var f = {
         name: input({ value: p.name || "", placeholder: "e.g. January Membership 20%" }),
         code: input({ value: p.code || "", placeholder: "e.g. MEMBER20" }),
-        kind: el("select", { class: "cf-input" }, [["percent_off", "% off"], ["amount_off", "Amount off"], ["bonus_period", "Free membership months (e.g. 3+1)"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); })),
-        value: input({ type: "number", value: p.kind === "amount_off" ? fromMinor(p.value_minor) : (p.kind === "bonus_period" ? (p.bonus_qty || "") : (p.percent_bps ? (p.percent_bps / 100) : "")) }),
+        kind: el("select", { class: "cf-input" }, [["percent_off", "% off"], ["amount_off", "Amount off"], ["bonus_period", "Free membership months (e.g. 3+1)"], ["bonus_units", "Free pack sessions (e.g. 10+2)"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); })),
+        value: input({ type: "number", value: p.kind === "amount_off" ? fromMinor(p.value_minor) : ((p.kind === "bonus_period" || p.kind === "bonus_units") ? (p.bonus_qty || "") : (p.percent_bps ? (p.percent_bps / 100) : "")) }),
         applies_to: el("select", { class: "cf-input" }, [["all", "Everything"], ["membership", "Memberships"], ["pack", "Packs"], ["court", "Court hire"], ["lesson", "Lessons"], ["class", "Classes"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); })),
         max_redemptions: input({ type: "number", placeholder: "blank = unlimited", value: p.max_redemptions != null ? p.max_redemptions : "" }),
         per_customer_cap: input({ type: "number", value: p.per_customer_cap != null ? p.per_customer_cap : 1 }),
@@ -1944,9 +1944,12 @@
       var valLabel = el("label", {});
       function syncVal() {
         var k = f.kind.value;
-        valLabel.textContent = k === "percent_off" ? "Percent off (e.g. 20)" : (k === "bonus_period" ? "Free months (on top of the paid term)" : "Amount off (R)");
-        // A free-months offer only makes sense on memberships — force + lock the scope.
+        valLabel.textContent = k === "percent_off" ? "Percent off (e.g. 20)"
+          : (k === "bonus_period" ? "Free months (on top of the paid term)"
+          : (k === "bonus_units" ? "Free sessions (on top of the pack)" : "Amount off (R)"));
+        // Bonus offers are scope-locked: free months → memberships, free sessions → packs.
         if (k === "bonus_period") { f.applies_to.value = "membership"; f.applies_to.disabled = true; }
+        else if (k === "bonus_units") { f.applies_to.value = "pack"; f.applies_to.disabled = true; }
         else { f.applies_to.disabled = false; }
       }
       f.kind.addEventListener("change", syncVal); syncVal();
@@ -1988,6 +1991,7 @@
         };
         if (f.kind.value === "percent_off") { body.percent_bps = Math.round(parseFloat(f.value.value || "0") * 100); body.value_minor = null; body.bonus_qty = null; }
         else if (f.kind.value === "bonus_period") { body.bonus_qty = parseInt(f.value.value || "0", 10) || 0; body.applies_to = "membership"; body.percent_bps = null; body.value_minor = null; }
+        else if (f.kind.value === "bonus_units") { body.bonus_qty = parseInt(f.value.value || "0", 10) || 0; body.applies_to = "pack"; body.percent_bps = null; body.value_minor = null; }
         else { body.value_minor = Math.round(parseFloat(f.value.value || "0") * 100); body.percent_bps = null; body.bonus_qty = null; }
         if (!body.name) { UI.toast("Give it a name.", "warn"); return; }
         save.disabled = true;

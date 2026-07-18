@@ -138,8 +138,19 @@ def _bonus_months_for_order(session, order_id) -> int:
     return int(v or 0)
 
 
+def _bonus_units_for_order(session, order_id) -> int:
+    """Extra pack SESSIONS from an applied bonus_units promo on this order (0 if none). Read by the pack
+    grant so an ONLINE 'buy 10 get 12' adds the free sessions at activation."""
+    v = session.execute(text(
+        "SELECT COALESCE(SUM(pr.bonus_qty),0) "
+        "FROM billing.promotion_redemption r JOIN billing.promotion pr ON pr.id = r.promotion_id "
+        "WHERE r.order_id = :o AND r.status = 'applied' AND pr.kind = 'bonus_units'"),
+        {"o": str(order_id)}).scalar()
+    return int(v or 0)
+
+
 def _is_bonus(promo) -> bool:
-    return promo["kind"] in ("bonus_period",)
+    return promo["kind"] in ("bonus_period", "bonus_units")
 
 
 def _check(session, club_id, promo, code_row=None, *, kind, product_id, amount_minor, user_id):
@@ -206,6 +217,7 @@ def validate(session, *, club_id, code, applies_to="all", amount_minor=0, produc
            "promotion_id": str(promo["id"]), "is_bonus": bool(res.get("is_bonus"))}
     if res.get("is_bonus"):
         out["bonus_qty"] = int(promo["bonus_qty"] or 0)
+        out["bonus_unit"] = "month" if promo["kind"] == "bonus_period" else "session"
     return out
 
 
@@ -289,6 +301,24 @@ def apply_to_order(session, *, club_id, code, order_id, user_id=None, actor_user
                     "     CURRENT_DATE) + make_interval(months => :bq))::date, updated_at = now() "
                     "WHERE order_id = :o AND status = 'active'"),
                     {"bq": bq, "o": str(order_id)})
+        # bonus_units on a pack: if the wallet is ALREADY active (OFFLINE buy), add the free sessions now
+        # via adjust_wallet. If it's still 'pending' (ONLINE), the pack grant adds them at activation via
+        # _bonus_units_for_order — never double-granted.
+        elif promo["kind"] == "bonus_units" and order["kind"] == "pack":
+            bq = int(promo["bonus_qty"] or 0)
+            if bq > 0:
+                w = session.execute(text(
+                    "SELECT id, base_minutes, status FROM billing.token_wallet "
+                    "WHERE order_id = :o ORDER BY created_at LIMIT 1"),
+                    {"o": str(order_id)}).mappings().first()
+                if w and w["status"] != "pending":
+                    try:
+                        from billing import bundles
+                        bundles.adjust_wallet(session, club_id=club_id, wallet_id=w["id"],
+                                              delta_minutes=bq * int(w["base_minutes"] or 60),
+                                              reason="Promo bonus sessions", actor_user_id=actor_user_id)
+                    except Exception:
+                        log.exception("promotions: bonus_units offline grant failed for order %s", order_id)
 
     # Marketing funnel: promo_redeemed → usage_event + Klaviyo (measures which campaign drove it).
     try:
@@ -304,6 +334,7 @@ def apply_to_order(session, *, club_id, code, order_id, user_id=None, actor_user
            "label": promo["name"], "is_bonus": is_bonus}
     if is_bonus:
         out["bonus_qty"] = int(promo["bonus_qty"] or 0)
+        out["bonus_unit"] = "month" if promo["kind"] == "bonus_period" else "session"
         out["new_total_minor"] = int(order["amount_minor"] or 0)   # bonus doesn't change the price
     else:
         out["new_total_minor"] = int((dr or {}).get("new_total_minor") or 0)

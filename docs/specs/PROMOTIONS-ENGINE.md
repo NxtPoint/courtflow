@@ -1,8 +1,18 @@
 # Promotions Engine
 
-**Status: PHASE 1 + PHASE 2a BUILT & LIVE (2026-07-18).** A billing sub-module to run **specials with promo
-codes redeemed at checkout**. Phase 1 = %/fixed off. **Phase 2a = `bonus_period` ("3 months → +1 free" on
-membership) + unique per-recipient codes.** Remaining (Phase 2b): `bonus_units` (pack bonus sessions).
+**Status: COMPLETE — PHASE 1 + 2 BUILT & LIVE (2026-07-18).** A billing sub-module to run **specials with
+promo codes redeemed at checkout**. Phase 1 = %/fixed off. Phase 2a = `bonus_period` ("3 months → +1 free"
+membership) + unique per-recipient codes. **Phase 2b = `bonus_units` ("buy a 10-pack, get 12").** All four
+promo kinds + unique codes are live across every checkout surface.
+
+## Phase 2b — what shipped (2026-07-18)
+- **`bonus_units`** (packs): a promo grants FREE extra sessions on top of the pack — reuses the existing
+  `adjust_wallet` primitive (raises minutes_total + remaining, audited). Symmetric with `bonus_period`:
+  **online** buy → the sessions are added at the first grant in `bundles._grant_wallet_now` (reads
+  `_bonus_units_for_order`; gated to the fresh grant so a webhook replay never re-adds); **offline** buy →
+  `apply_to_order` adds them to the already-active wallet via `adjust_wallet` on the fresh redemption. Never
+  double-granted. Admin UI locks the scope to packs; checkout shows "N free sessions added".
+- `kind` CHECK grown to include `bonus_units` (same DO-block migration); `bonus_qty` reused as the session count.
 
 ## Phase 2a — what shipped (2026-07-18)
 - **`bonus_period`** (membership): a promo grants FREE extra months on top of the paid term — the member pays
@@ -20,10 +30,8 @@ membership) + unique per-recipient codes.** Remaining (Phase 2b): `bonus_units` 
 - **✅ VERIFIED:** Tomo ran `python -m scripts.test_all` — **all harnesses passed** (booking/billing/statement,
   incl. billing 311) 2026-07-18. The membership-grant path is clean; Phase 2a is safe to switch on.
 
-## Phase 2b — still to build
-- **`bonus_units`** (packs): "buy a 10-pack, get 12" — add free sessions via the existing `adjust_wallet`
-  primitive at pack activation (same online/offline pattern as `bonus_period`). Deliberately deferred to keep
-  the token-wallet grant math untouched until the harness can be run.
+## Phase 2b — ✅ SHIPPED (see above). The engine is now feature-complete:
+percent_off · amount_off · bonus_period (membership) · bonus_units (packs) · shared + unique per-recipient codes.
 
 ## Phase 1 — what shipped
 - **Schema:** `billing.promotion` + `billing.promotion_redemption` (idempotent DDL, `billing/schema.py`).

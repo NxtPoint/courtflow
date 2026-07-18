@@ -264,7 +264,8 @@ def _apply_checkout_promo(s, club_id, user_id, res, body, mode):
     if pr.get("ok"):
         res["amount_minor"] = pr.get("new_total_minor", res["amount_minor"])
         res["promo"] = {"discount_minor": pr["discount_minor"], "label": pr.get("label"),
-                        "is_bonus": bool(pr.get("is_bonus")), "bonus_qty": pr.get("bonus_qty")}
+                        "is_bonus": bool(pr.get("is_bonus")), "bonus_qty": pr.get("bonus_qty"),
+                        "bonus_unit": pr.get("bonus_unit")}
         return None
     # Failed. An ONLINE order isn't activated yet → void it + abort so the member can fix the code.
     if mode == "online":
