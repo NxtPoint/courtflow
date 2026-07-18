@@ -68,12 +68,13 @@ jobs:
           # Retry the WHOLE check up to 3x — a canary must not cry wolf over a transient blip
           # (a Render cold-start or a mid-deploy 502). It only goes red if the plumbing is
           # CONSISTENTLY missing. curl also self-retries transient HTTP errors within each attempt.
-          attempt=0; max=3; fail=1
+          attempt=0; max=4; fail=1
           while [ "$attempt" -lt "$max" ]; do
             attempt=$((attempt+1))
             echo "--- attempt $attempt/$max: $URL ---"
-            HTML="$(curl -fsSL -A "$UA" --retry 3 --retry-delay 4 --retry-all-errors --retry-connrefused --max-time 90 "$URL")" \
-              || { echo "  fetch failed (transient?) — retrying"; sleep 15; continue; }
+            HTML="$(curl -fsSL --compressed -A "$UA" --retry 3 --retry-delay 4 --retry-all-errors --retry-connrefused --max-time 90 "$URL")" \
+              || { echo "  fetch failed (transient?) — retrying"; sleep 20; continue; }
+            echo "  received $(printf '%s' "$HTML" | wc -c) bytes"
             # Cloudflare (in front of some brands) serves CI/datacenter IPs a bot-CHALLENGE page —
             # HTTP 200 but no tag. That is NOT a tag failure; it just can't be verified from a GitHub
             # runner. Detect it and pass with a warning rather than false-alarm. A genuinely missing
@@ -87,15 +88,15 @@ jobs:
               if printf '%s' "$HTML" | grep -qF -- "$token"; then echo "  ok   : $token"; else echo "  MISS : $token"; fail=1; fi
             done
             if [ -n "$SITEMAP" ]; then
-              if curl -fsSL -A "$UA" --retry 3 --retry-delay 4 --retry-all-errors --max-time 60 "$SITEMAP" -o /dev/null; then
+              if curl -fsSL --compressed -A "$UA" --retry 3 --retry-delay 4 --retry-all-errors --max-time 60 "$SITEMAP" -o /dev/null; then
                 echo "  ok   : sitemap reachable ($SITEMAP)"
               else
                 echo "  MISS : sitemap not reachable ($SITEMAP)"; fail=1
               fi
             fi
             if [ "$fail" -eq 0 ]; then break; fi
-            echo "  checks incomplete — retrying after 15s (guards against a mid-deploy blip)"
-            sleep 15
+            echo "  checks incomplete — retrying after 20s (guards against a mid-deploy blip)"
+            sleep 20
           done
 
           if [ "$fail" -eq 0 ]; then
