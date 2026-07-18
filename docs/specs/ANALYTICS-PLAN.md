@@ -145,11 +145,19 @@ dashboard reads. No Google credentials ever touch Render.
   section (channels / geo / GSC / conversions).
 - **Phase C — polish:** membership cohort curves, Google-reviews trend, GA4-vs-beacon cross-check, exports.
 
-## 7. Open decisions (for Tomo, before build)
-1. **Club timezone**: hard-default `Africa/Johannesburg`, or read a per-club setting (future multi-tenant)?
-   Recommend: a `club` TZ column, default Joburg.
-2. **"Member" definition for PAYG**: an active client with no paid membership = PAYG — count *all* such
-   clients, or only those who booked in the window? Recommend: booked-in-window (a live PAYG user).
-3. **Google data granularity**: daily snapshot (recommended) vs on-demand pull. Daily via the digest is
-   cheapest and needs no app credentials.
-4. **Phase order**: confirm A → B → C, or pull Google (B) forward if acquisition insight is the priority.
+## 7. Decisions (2026-07-18)
+**LOCKED (Tomo):**
+- **Phase order = A → B → C.** Build first-party fixes + growth first (no Google dependency).
+- **Timezone = hard-default `Africa/Johannesburg`** (`_CLUB_TZ` in `insights/repositories.py`). A per-club
+  `club.timezone` column comes later when a 2nd club with a different zone onboards.
+
+**Still to confirm at build:**
+- **PAYG definition** — recommend "active client, no paid membership, **booked in the window**" (a live PAYG
+  user, not every dormant account).
+- **Google granularity** (Phase B) — daily snapshot via the digest push (recommended).
+
+## 8. Progress
+- ✅ **Court-utilisation timezone FIXED** (2026-07-18): `_booked()` now extracts weekday/hour
+  `AT TIME ZONE 'Africa/Johannesburg'`, so the heatmap reads in SAST and aligns with availability hours.
+- ⏭️ Next (Phase A): visitor-headline re-lead · members-by-type stacked · trial funnel · bookings-by-type
+  surfaced · logged-in new/returning.

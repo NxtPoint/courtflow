@@ -12,6 +12,12 @@ from datetime import timedelta
 
 from sqlalchemy import text
 
+# Club-local timezone for hour-of-day / weekday bucketing (court-utilisation heatmap etc.). timestamptz
+# columns are stored UTC and EXTRACT reads the session tz (UTC on Render), so time-of-day charts MUST
+# convert to club-local first or they read ~2h off SAST. Hard-default for NextPoint; swap to a per-club
+# `club.timezone` setting when a 2nd club with a different zone onboards (docs/specs/ANALYTICS-PLAN.md).
+_CLUB_TZ = "Africa/Johannesburg"
+
 # A page_view is "member area" (an authenticated / logged-in-only surface) when its path's first
 # segment is one of the portal SPA shells — vs the public marketing site. Path-based because the
 # beacon captures no per-account identity (analytics.js sends no email), so this is the reliable
@@ -237,12 +243,15 @@ def court_utilisation(session, *, club_id, days=30):
              cells:[{weekday,hour,booked_hours,available_hours,pct}]}."""
     days = max(1, min(int(days or 30), 365))
 
-    # Booked court-hours per (weekday, hour) over the window.
+    # Booked court-hours per (weekday, hour) over the window. TIMEZONE: b.starts_at is timestamptz, and
+    # EXTRACT reads the SESSION tz (UTC on Render) — but availability_rule below uses LOCAL wall-clock
+    # times, so we MUST bucket bookings in club-local time or the heatmap shifts ~2h and booked-vs-open
+    # misaligns. Convert to the club TZ (SAST) before extracting weekday/hour.
     def _booked():
         rows = session.execute(
-            text("""
-                SELECT (EXTRACT(ISODOW FROM b.starts_at)::int - 1) AS weekday,
-                       EXTRACT(HOUR FROM b.starts_at)::int AS hour,
+            text(f"""
+                SELECT (EXTRACT(ISODOW FROM b.starts_at AT TIME ZONE '{_CLUB_TZ}')::int - 1) AS weekday,
+                       EXTRACT(HOUR FROM b.starts_at AT TIME ZONE '{_CLUB_TZ}')::int AS hour,
                        COALESCE(SUM(EXTRACT(EPOCH FROM (b.ends_at - b.starts_at)) / 3600.0), 0) AS booked
                 FROM diary.booking b
                 JOIN diary.resource r ON r.id = b.resource_id AND r.kind = 'court'
