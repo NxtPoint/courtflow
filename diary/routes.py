@@ -784,6 +784,33 @@ def time_off():
     return jsonify(time_off_id=str(row["id"])), 201
 
 
+@diary_bp.delete("/time-off/<time_off_id>")
+def delete_time_off_route(time_off_id):
+    """Remove a block (time-off). Staff-only, SAME gate as creating it: an owner/admin may delete any
+    block; a coach only a block on their OWN resource. Frees the window for bookings again."""
+    p = _principal()
+    if not p or not _need_club(p):
+        return jsonify(error="unauthorized"), 401
+    from sqlalchemy import text
+    with session_scope() as s:
+        row = s.execute(
+            text("SELECT t.id, r.coach_user_id FROM diary.time_off t "
+                 "LEFT JOIN diary.resource r ON r.id = t.resource_id "
+                 "WHERE t.club_id = :c AND t.id = :id"),
+            {"c": p.club_id, "id": time_off_id},
+        ).mappings().first()
+        if not row:
+            return jsonify(error="NOT_FOUND"), 404
+        gate = {"club_id": p.club_id, "coach_user_id": row["coach_user_id"]}
+        if not can(p, "manage_own_time_off", gate):
+            return jsonify(error="forbidden"), 403
+        if p.role == "coach" and str(row["coach_user_id"]) != str(p.user_id):
+            return jsonify(error="forbidden"), 403
+        s.execute(text("DELETE FROM diary.time_off WHERE club_id = :c AND id = :id"),
+                  {"c": p.club_id, "id": time_off_id})
+    return jsonify(ok=True), 200
+
+
 # ---------------------------------------------------------------------------
 # master diary (admin)
 # ---------------------------------------------------------------------------
@@ -875,6 +902,32 @@ def master_diary():
                     s, club_id=p.club_id, date_from=q.get("date_from"), date_to=q.get("date_to")))
             except Exception:
                 log.exception("master diary: class_events failed (showing bookings only)")
+            # time_off blocks (court/coach unavailability) — surfaced as 'block' events so the owner can
+            # SEE what's blocked and tap to REMOVE it (DELETE /api/diary/time-off/<id>). Overlap-filtered
+            # to the window. GUARDED: a failure must not 500 the diary.
+            try:
+                trows = s.execute(
+                    text("SELECT t.id, t.resource_id, r.name AS resource_name, r.kind, "
+                         "       t.starts_at, t.ends_at, t.reason "
+                         "FROM diary.time_off t LEFT JOIN diary.resource r ON r.id = t.resource_id "
+                         "WHERE t.club_id = :c "
+                         "  AND (CAST(:df AS timestamptz) IS NULL OR t.ends_at   >  CAST(:df AS timestamptz)) "
+                         "  AND (CAST(:dt AS timestamptz) IS NULL OR t.starts_at <= CAST(:dt AS timestamptz)) "
+                         "ORDER BY t.starts_at"),
+                    {"c": p.club_id, "df": q.get("date_from"), "dt": q.get("date_to")},
+                ).mappings().all()
+                for tr in trows:
+                    out.append({
+                        "id": str(tr["id"]), "time_off_id": str(tr["id"]), "is_time_off": True,
+                        "booking_type": "block", "kind": tr["kind"],
+                        "resource_id": str(tr["resource_id"]) if tr["resource_id"] else None,
+                        "resource_name": tr["resource_name"], "coach_user_id": None, "status": "confirmed",
+                        "starts_at": tr["starts_at"].isoformat() if tr["starts_at"] else None,
+                        "ends_at": tr["ends_at"].isoformat() if tr["ends_at"] else None,
+                        "reason": tr["reason"], "pay_label": None, "booked_by_name": None, "coach_name": None,
+                    })
+            except Exception:
+                log.exception("master diary: time_off failed (showing bookings only)")
     except Exception as e:
         # Surface the real reason (logged to Render + returned in detail) so a 500 is diagnosable.
         log.exception("master diary failed club=%s", p.club_id)

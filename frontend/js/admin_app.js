@@ -1311,7 +1311,16 @@
         if (ev.kind === "class" || ev.booking_type === "class") go("#/roster/" + ev.id);
         else go("#/event/" + ev.id);
       },
+      onRemoveBlock: function (ev) { removeBlockConfirm(ev, dateKey); },
     });
+  }
+  // Tap a time-off block on the diary → confirm + remove it (frees the window for bookings again).
+  function removeBlockConfirm(ev, dateKey) {
+    var when = ""; try { when = window.UI.fmtRange(ev.starts_at, ev.ends_at); } catch (e) {}
+    if (!window.confirm("Remove this block on " + (ev.resource_name || "the resource") + (when ? " (" + when + ")" : "") + "?\n\nBookings will be allowed in that window again.")) return;
+    window.API.deleteTimeOff(ev.time_off_id || ev.id).then(
+      function () { UI.toast("Block removed.", "info"); renderDiary(dateKey); },
+      function (e) { UI.toast(UI.errMsg(e), "error"); });
   }
 
   // The class ROSTER page — click a class on the calendar → the list of enrolled clients, each with

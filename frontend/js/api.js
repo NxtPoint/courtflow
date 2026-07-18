@@ -127,6 +127,10 @@
     timeOff: function (body) {
       return A().apiJSON("/api/diary/time-off", { method: "POST", body: body });
     },
+    // DELETE /api/diary/time-off/<id> — remove a block (staff; coach = own resource only).
+    deleteTimeOff: function (id) {
+      return A().apiJSON("/api/diary/time-off/" + encodeURIComponent(id), { method: "DELETE" });
+    },
     // GET /api/diary/master -> {events:[{id,booking_type,resource_id,resource_name,kind,
     //   coach_user_id,starts_at,ends_at,status,booked_by_user_id,order_id,settlement_mode}], count}
     // opts: {date_from, date_to}

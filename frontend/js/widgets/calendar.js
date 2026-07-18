@@ -68,11 +68,13 @@
     }
 
     function eventRow(ev) {
-      var t = evKind(ev), tappable = !!(ev.id && cfg.onNavigate);
+      var t = evKind(ev), isBlock = !!ev.is_time_off;
+      var tappable = isBlock ? !!cfg.onRemoveBlock : !!(ev.id && cfg.onNavigate);
       // Same per-type rules as the grid: class = class name + coach; lesson = coach only (never the client);
-      // standalone court = booker + payment + equipment.
+      // standalone court = booker + payment + equipment. A time-off block = "Blocked" (tap to remove).
       var title, sub;
-      if (t === "class") { title = ev.resource_name || "Class"; sub = ev.coach_name || ""; }
+      if (isBlock) { title = "Blocked · " + (ev.resource_name || ""); sub = (ev.reason && ev.reason !== "blocked") ? ev.reason : "Tap to remove"; }
+      else if (t === "class") { title = ev.resource_name || "Class"; sub = ev.coach_name || ""; }
       // Lesson: coach as the title, the auto-held COURT as the subtitle (attached by collapseLessonCourts)
       // — one row, "Coach · Court 3", never a second court booking. Falls back to "Lesson" if unknown.
       else if (ev.booking_type === "lesson" || ev.held_for_lesson) { title = ev.coach_name || ev.resource_name || "Lesson"; sub = ev.court_name || "Lesson"; }
@@ -81,13 +83,13 @@
         var bits = []; if (ev.pay_label) bits.push(ev.pay_label); if (ev.equipment) bits.push("＋ " + ev.equipment);
         sub = bits.join(" · ");
       }
-      return el("div", { class: "cf-item" + (tappable ? " cf-item-tap" : ""), onclick: function () { if (tappable) cfg.onNavigate(ev); } }, [
-        el("span", { class: "cf-chip " + (["court", "lesson", "class"].indexOf(t) >= 0 ? t : "court"), text: (function () { try { return UI.fmtTime(ev.starts_at); } catch (e) { return t; } })() }),
+      return el("div", { class: "cf-item" + (tappable ? " cf-item-tap" : ""), onclick: function () { if (isBlock) { if (cfg.onRemoveBlock) cfg.onRemoveBlock(ev); } else if (tappable) cfg.onNavigate(ev); } }, [
+        el("span", { class: "cf-chip " + (isBlock ? "" : (["court", "lesson", "class"].indexOf(t) >= 0 ? t : "court")), text: (function () { try { return UI.fmtTime(ev.starts_at); } catch (e) { return isBlock ? "block" : t; } })() }),
         el("div", { class: "cf-item-main" }, [
           el("div", { class: "cf-item-t", text: title }),
           el("div", { class: "cf-item-s", text: sub || (ev.resource_name || t) }),
         ]),
-        UI.statusChip(ev.status),
+        isBlock ? el("span", { class: "cf-muted", style: "font-size:.8rem", text: "Remove ›" }) : UI.statusChip(ev.status),
       ]);
     }
     function dayView(events) {
@@ -161,12 +163,16 @@
         if (endMin <= 0 || startMin >= (DAY_END - DAY_START) * 60) return;
         var top = Math.max(0, startMin) / SLOT_MIN * ROW_H;
         var height = Math.max(18, (Math.min(endMin, (DAY_END - DAY_START) * 60) - Math.max(0, startMin)) / SLOT_MIN * ROW_H - 2);
-        var t = evKind(ev), klass = ["court", "lesson", "class"].indexOf(t) >= 0 ? t : "court", tappable = !!(ev.id && cfg.onNavigate);
+        var t = evKind(ev), isBlock = !!ev.is_time_off;
+        var klass = isBlock ? "" : (["court", "lesson", "class"].indexOf(t) >= 0 ? t : "court");
+        var tappable = isBlock ? !!cfg.onRemoveBlock : !!(ev.id && cfg.onNavigate);
         // Block label per the owner's rules: a CLASS shows the class name + coach; a LESSON (its auto-held
         // court row carries the coach) shows the COACH only; a standalone COURT shows the primary booker's
         // name + payment status + any equipment (never a guest — the feed sends only booked_by_name).
         var who, sub = "";
-        if (t === "class") {
+        if (isBlock) {
+          who = "Blocked"; sub = (ev.reason && ev.reason !== "blocked") ? ev.reason : "";
+        } else if (t === "class") {
           who = ev.resource_name || "Class"; sub = ev.coach_name || "";
         } else if (ev.booking_type === "lesson" || ev.held_for_lesson) {
           who = ev.coach_name || ev.resource_name || "Lesson";
@@ -182,9 +188,10 @@
         if (sub) kids.push(el("div", { style: "font-size:.72em;opacity:.78;white-space:nowrap;overflow:hidden;text-overflow:ellipsis", text: sub }));
         var block = el("div", {
           class: "cf-ev " + klass + (tappable ? " cf-item-tap" : ""),
-          style: "top:" + top + "px;height:" + height + "px" + (tappable ? ";cursor:pointer" : ""),
-          title: who + (sub ? " · " + sub : "") + " · " + (function () { try { return UI.fmtRange(ev.starts_at, ev.ends_at); } catch (e) { return ""; } })() + (ev.status ? " · " + ev.status : ""),
-          onclick: function (e) { e.stopPropagation(); if (tappable) cfg.onNavigate(ev); },
+          style: "top:" + top + "px;height:" + height + "px" + (tappable ? ";cursor:pointer" : "")
+            + (isBlock ? ";background:repeating-linear-gradient(45deg,#e7ebe9,#e7ebe9 6px,#dde3e0 6px,#dde3e0 12px);color:#4b5a52;border:1px solid #cdd6d1;font-weight:600" : ""),
+          title: (isBlock ? "Blocked" + (sub ? " · " + sub : "") + " · tap to remove" : who + (sub ? " · " + sub : "") + (ev.status ? " · " + ev.status : "")) + " · " + (function () { try { return UI.fmtRange(ev.starts_at, ev.ends_at); } catch (e) { return ""; } })(),
+          onclick: function (e) { e.stopPropagation(); if (isBlock) { if (cfg.onRemoveBlock) cfg.onRemoveBlock(ev); } else if (tappable) cfg.onNavigate(ev); },
         }, kids);
         anchor.appendChild(block);
       });

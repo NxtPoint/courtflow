@@ -64,12 +64,11 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
       `admin.html`/`admin.js`) was DELETED (301→`/admin`). Its editing actions now live in the new admin:
       **walk-in** (Book a client → guest name), **desk-pay** (transaction record), and **block time** (new Diary
       "Block time" action → `POST /api/diary/time-off`). Only the drag-to-create/drag-to-move *gesture* is gone.
-- [ ] **Block-time — show + remove in the new admin Diary** (the create action shipped 2026-07-18). A block
-      correctly stops bookings (availability + `create_booking`/`enrol` all exclude `diary.time_off`), BUT: (a)
-      the block does NOT render on the diary GRID (the master feed returns `diary.booking` + `class_session`,
-      not `diary.time_off`), and (b) there's **no admin route to delete a block** — only `DELETE /api/coach/
-      time-off/<id>` (a coach's OWN resource). To finish: surface time_off on the master/grid feed + add an
-      admin delete (`repo.delete_time_off` exists) with a tap-to-remove on the block. Low-risk, self-contained.
+- [x] ~~**Block-time — show + remove in the new admin Diary**~~ — **DONE 2026-07-18.** The master feed now
+      emits `time_off` as `booking_type='block'` events (`is_time_off`, overlap-filtered), so blocks render on
+      the diary grid/agenda with a hatched "Blocked" style; tapping one → confirm → `DELETE /api/diary/time-off/
+      <id>` (new staff route; owner=any resource, coach=own only) → the window frees again. Create + show +
+      enforce + remove all proven. Block-time is now fully first-class in the new admin.
 - [ ] **Client 360 month navigation** — the client Home has a month pager but the person-360 record is
       current-month only; add month-nav + promote a shared `UI.monthNav` (Home/Insights/360 share ONE pager).
 - [ ] **Coach-lane aliases for holdings/arrears write routes** — discount / wallet adjust-expire / payout sit
