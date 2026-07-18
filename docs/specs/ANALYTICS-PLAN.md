@@ -1,0 +1,155 @@
+# Analytics & Reporting — full plan (build after sign-off)
+
+**Status: PLAN.** A ground-up rethink of the admin **Overview / Analytics** dashboard so it answers the
+questions the owner actually asks — *who's visiting, who's logging in, are members growing, are trials
+converting, what's being booked, and is the court full* — every metric **per day**, blending our
+**first-party data** with **Google (GA4 + Search Console)**. Supersedes the ad-hoc current tab.
+
+The dashboard is driven by the `insights/` lane (`GET /api/insights/overview?month=`) + `court-utilisation`;
+the old platform `/overview.html` (analytics lane) is retired. Numbers reconcile with the Money tab by
+construction (same bases).
+
+---
+
+## 0. Two bugs to fix first (quick wins — bundle into Phase A)
+
+1. **Court utilisation is on the wrong timezone.** `insights.court_utilisation` buckets by
+   `EXTRACT(HOUR/ISODOW FROM b.starts_at)` — but `starts_at` is `timestamptz` and Postgres extracts in the
+   **session TZ (UTC on Render)**, while `diary.availability_rule` uses **local wall-clock** times. So the
+   heatmap is shifted ~2h AND booked-vs-available don't line up. **Fix:** extract in club time —
+   `EXTRACT(HOUR FROM b.starts_at AT TIME ZONE 'Africa/Johannesburg')` (+ ISODOW the same). Use the club's
+   configured timezone with an `Africa/Johannesburg` default. *(The view itself is great — just re-zoned.)*
+
+2. **"Visits" looks 5× too big (~400/day vs ~80 unique).** The headline `visits` counts **every**
+   `page_view`, including a signed-in member firing one on **every SPA route change**. That inflates the
+   number and mixes public traffic with in-app navigation. The data to separate them already exists
+   (`public_visits`, `logged_in_visits`, `vsplit`); the fix is **presentation**: lead with **public unique
+   visitors**, and move in-app navigation into its own "Members-area activity" section (§2). Never headline
+   the mixed `visits` count again.
+
+---
+
+## 1. What we already have (don't rebuild)
+
+- **First-party beacon** → `core.usage_event` (`page_view`): carries `anon_id`, `path`, `referrer`,
+  `utm_*`, `device`, and **`authed`** (`'true'` once Clerk resolves). `club_id` resolved server-side.
+- **`insights.overview`** already returns per-day **series** + month **KPIs** for: visits, unique visitors,
+  public/member/logged-in visits, bookings (total + **court/lesson/class** + member-covered), revenue
+  (gross/net/refunds), new clients, **active members (total)**, NPS; plus breakdowns (sources, top pages,
+  devices). → *A lot of what's wanted is computed but under-surfaced.*
+- **Court utilisation** heatmap (weekday × hour) — keep (re-zone per bug #1).
+- **Google, but only in email:** `marketing_digest/` pulls GA4 (7d) + Search Console (28d) via keyless WIF
+  in GitHub Actions and emails it. **Not in the dashboard yet** — §7 brings it in.
+
+**Gaps to build:** active members **by type** (tier / PAYG / trial), the **trial funnel** (start→convert→
+fall-off), **logged-in new-vs-returning**, and **Google data in the dashboard**.
+
+---
+
+## 2. The redesigned dashboard — sections (every metric per day)
+
+### A. Website & acquisition — PUBLIC visitors (the top of the funnel)
+- **Unique visitors / day** (public only) — THE headline. (`public` distinct `anon_id`.)
+- Public page views / day (secondary, context only).
+- **New vs returning** visitors / day (first-ever `anon_id` in window = new).
+- **Traffic sources / channels** — our UTM/referrer split now; **GA4 channels** (Organic / Paid / Direct /
+  Social / Referral / Email) once §7 lands.
+- Top landing pages · devices · **geography** (GA4 city/region — SA-focused).
+- **Google Ads / GA4 conversions**: `start_free_week`, `booking`, `Offline purchase` (from GA4/Ads).
+
+### B. Members-area activity — LOGGED-IN (separated from public)
+- **Logged-in visitors / day** (distinct people, `authed='true'`).
+- **New vs returning logged-in** — first-seen-authed in window = a newly-activated member.
+- App engagement: sessions / member, most-used in-app pages.
+> This is where the "~400" actually lived — in-app navigation. Surfacing it here (not as "website traffic")
+> makes both numbers make sense.
+
+### C. Membership growth — the core health metric  ⭐
+- **Active members / day, STACKED by type**: each **paid tier** (Student / Family / …) + **PAYG**
+  (active client, no membership) + **Trial**. A stacked area = the mix growing over time.
+- **New members vs cancellations / day** → net growth line.
+- **Membership mix** snapshot (donut): tier shares + PAYG + trial.
+- Source: `billing.membership_subscription` (`provider='trial'` = trial; `price_id → price.membership_tier`
+  = paid tier; active = period covers the day). PAYG = active `iam.membership`/client with no active paid sub.
+
+### D. Trial funnel — start vs convert vs fall-off  ⭐
+- **Trials started / day** vs **converted / day** (`membership_started` after a trial) vs **lapsed / day**
+  (trial period ended, no purchase).
+- **Rolling conversion rate** (converted ÷ started) + trials **currently live**.
+- Optional cohort: of trials started in month M, % converted within 14/30 days.
+- Source: `provider='trial'` subs (`period_start`/`current_period_end`) + `membership_started` events +
+  `scripts.audit_trials` logic. Ties to the Klaviyo "unconverted trial" segment.
+
+### E. Bookings & court usage
+- **Bookings / day by type** (court / lesson / class), stacked — data exists, surface it properly.
+- Membership-covered vs PAYG bookings / day.
+- **Court utilisation heatmap** (re-zoned) + overall % + peak vs off-peak split.
+- (Volume sanity: the query already collapses the lesson's auto-held court row — confirm the UI shows the
+  collapsed count, not the raw two-row count, which is likely why "bookings feel wrong".)
+
+### F. Revenue (reconciles with Money tab)
+- Gross / net / refunds per day (same basis as `sales_by_day`).
+- Revenue **by source** (membership / PAYG court / lessons / classes / packs) — from the `_earnings_cte`.
+
+### G. Experience
+- **NPS / day** + score (already wired) + **Google reviews** count/trend (from the feedback engine + GBP).
+
+---
+
+## 3. Google data in the dashboard (GA4 + Search Console)  — the architecture
+
+**Constraint:** the org blocks downloadable SA keys, so the **live app can't call GA4 directly**; only the
+GitHub Action can (keyless WIF). **Solution — push, don't pull:** extend `marketing_digest` (which already
+has GA4/GSC access) to POST a **daily metrics snapshot** to a new OPS-guarded endpoint, into a new table the
+dashboard reads. No Google credentials ever touch Render.
+
+- **New table** `core.web_daily` (club_id, day, source['ga4'|'gsc'], metric, value) — or a wide row per day.
+- **New cron endpoint** `POST /api/cron/analytics-ingest` (OPS-guarded, like `marketing-digest-email`):
+  upserts the day's GA4 (sessions, engaged sessions, users, channels, conversions, top pages, geo) + GSC
+  (clicks, impressions, CTR, avg position, top queries, striking-distance).
+- **Digest change:** after building the report, also POST the structured metrics (a small addition; it
+  already fetches them). Runs daily (05:00 UTC) — the dashboard shows "Google data as of <date>".
+- **Dashboard reads** `core.web_daily` for the acquisition section (§A). First-party beacon stays the
+  real-time signal; GA4 adds channels/geo/conversions; GSC adds the SEO funnel.
+
+> This makes the dashboard the **one place** for both first-party and Google insight, and reuses the entire
+> keyless-WIF investment. It also unlocks: GA4 sessions vs our beacon visits (a cross-check), and the
+> striking-distance queries surfaced in-app (not just email).
+
+---
+
+## 4. Data model & readers (backend)
+
+- Extend `insights.overview` series/KPIs with: `active_by_tier` (per-day map), `payg`, `trial` counts;
+  `new_members` / `cancellations`; `trials_started` / `trials_converted` / `trials_lapsed`;
+  `logged_in_new` / `logged_in_returning`.
+- New reader `insights.membership_breakdown(club_id, month)` → per-day stacked tiers + PAYG + trial.
+- New reader `insights.trial_funnel(club_id, month)` → started/converted/lapsed + rate.
+- New reader `insights.web_metrics(club_id, days)` → reads `core.web_daily` (GA4/GSC).
+- Everything `_guard`-wrapped (partial DB → empty panel, never a 500), `club_id`-scoped, month-bucketed to
+  match the existing window. **Re-zone all hour/weekday extraction to club TZ.**
+
+## 5. Frontend (admin `#/overview`)
+- Reorganise into the 7 sections above (ECharts, the existing seam). Lead with the **public unique-visitor**
+  headline + **membership-growth stacked area** as the two hero charts.
+- Reuse the existing chart helpers; add a stacked-area + donut. Keep it mobile-responsive (`cf-*`).
+- A date-range/month switcher (already month-scoped) + a "Google data" freshness stamp.
+- **Guarded reads hide column typos as ZEROS** (CLAUDE.md gotcha) — when a panel reads 0, check SQL columns
+  vs schema first (this is exactly how the old NPS `created_at` bug hid).
+
+## 6. Phasing (proposed)
+- **Phase A — first-party fixes + growth (no Google dependency):** court-util TZ fix · visitor headline
+  re-lead · **members-by-type stacked** · **trial funnel** · bookings-by-type surfaced · logged-in
+  new/returning. *Highest value, lowest risk — all from our own DB.*
+- **Phase B — Google ingestion:** `core.web_daily` + `analytics-ingest` cron + digest push + the acquisition
+  section (channels / geo / GSC / conversions).
+- **Phase C — polish:** membership cohort curves, Google-reviews trend, GA4-vs-beacon cross-check, exports.
+
+## 7. Open decisions (for Tomo, before build)
+1. **Club timezone**: hard-default `Africa/Johannesburg`, or read a per-club setting (future multi-tenant)?
+   Recommend: a `club` TZ column, default Joburg.
+2. **"Member" definition for PAYG**: an active client with no paid membership = PAYG — count *all* such
+   clients, or only those who booked in the window? Recommend: booked-in-window (a live PAYG user).
+3. **Google data granularity**: daily snapshot (recommended) vs on-demand pull. Daily via the digest is
+   cheapest and needs no app credentials.
+4. **Phase order**: confirm A → B → C, or pull Google (B) forward if acquisition insight is the priority.
