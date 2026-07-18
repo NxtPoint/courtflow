@@ -104,13 +104,18 @@ def email_report(api_base, ops_key, to, subject, md):
         "to": to, "subject": subject, "text": md, "html": md_to_html(md),
         "from_name": "Marketing Digest",
     }).encode("utf-8")
+    import urllib.error
     req = urllib.request.Request(
         api_base.rstrip("/") + "/api/cron/marketing-digest-email",
         data=payload, method="POST",
         headers={"Content-Type": "application/json", "X-Ops-Key": ops_key},
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return resp.status, resp.read().decode("utf-8", "replace")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        # Return the code + body instead of raising, so a 403/400 is diagnosable in the report.
+        return e.code, e.read().decode("utf-8", "replace")
 
 
 def _creds():
@@ -316,6 +321,32 @@ def main():
     combined += notes
     report = "\n".join(combined)
 
+    # Email each brand its OWN slice to its OWN inbox (via the OPS-guarded API -> platform SES).
+    # Fold the outcome INTO the report so the send status is visible in the digest itself
+    # (step summary + committed file) — no CI-log diving needed to see if delivery worked.
+    email_lines = []
+    api = os.environ.get("MARKETING_DIGEST_API", "").strip()
+    ops = os.environ.get("OPS_KEY", "").strip()
+    if api and ops:
+        for name, data in buckets.items():
+            if not (data["ga4"] or data["gsc"]):
+                email_lines.append(f"- {name}: skipped (no data granted to the engine yet)")
+                continue
+            md = _brand_report(name, data["ga4"], data["gsc"])
+            subj = f"🎾 {name} — marketing digest ({TODAY})"
+            try:
+                status, resp = email_report(api, ops, data["brand"]["email"], subj, md)
+                email_lines.append(f"- {name} → {data['brand']['email']}: HTTP {status} — {resp}")
+            except Exception as e:
+                email_lines.append(f"- {name} → {data['brand']['email']}: FAILED ({type(e).__name__}: {e})")
+    elif not api:
+        email_lines.append("- skipped: MARKETING_DIGEST_API not set on the workflow")
+    else:
+        email_lines.append("- skipped: OPS_KEY secret not set on the repo")
+
+    combined += ["", "## 📬 Email delivery (this run)"] + email_lines
+    report = "\n".join(combined)
+
     # Write report files + Actions step summary.
     outdir = os.path.join(os.path.dirname(__file__), "reports")
     os.makedirs(outdir, exist_ok=True)
@@ -327,24 +358,8 @@ def main():
         with open(summ, "a", encoding="utf-8") as f:
             f.write(report)
 
-    # Email each brand its OWN slice to its OWN inbox (via the OPS-guarded API -> platform SES).
-    api = os.environ.get("MARKETING_DIGEST_API", "").strip()
-    ops = os.environ.get("OPS_KEY", "").strip()
-    if api and ops:
-        for name, data in buckets.items():
-            if not (data["ga4"] or data["gsc"]):
-                print(f"[email] {name}: skipped (no data granted yet)")
-                continue
-            md = _brand_report(name, data["ga4"], data["gsc"])
-            subj = f"🎾 {name} — marketing digest ({TODAY})"
-            try:
-                status, resp = email_report(api, ops, data["brand"]["email"], subj, md)
-                print(f"[email] {name} -> {data['brand']['email']}: HTTP {status} {resp}")
-            except Exception as e:
-                print(f"[email] {name} FAILED: {type(e).__name__}: {e}")
-    else:
-        print("[email] skipped — set MARKETING_DIGEST_API + OPS_KEY to enable inbox delivery")
-
+    for line in email_lines:
+        print("[email] " + line)
     try:
         print(report)
     except Exception:
