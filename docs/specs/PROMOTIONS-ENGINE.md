@@ -17,8 +17,8 @@ membership) + unique per-recipient codes.** Remaining (Phase 2b): `bonus_units` 
   /api/admin/promotions/<id>/codes` + `POST …/codes/revoke`.
 - **Checkout:** unchanged flow — a `bonus_period` code shows "N free months added" instead of a rand discount
   (`pay.js`); the order price is untouched (bonus ≠ discount).
-- **⚠️ NOT run here (no sandbox DB):** `python -m db` twice + `python -m scripts.test_all` (esp. **billing 311**)
-  — run before trusting the membership-grant path live. Changes are additive + guarded, but it's the money path.
+- **✅ VERIFIED:** Tomo ran `python -m scripts.test_all` — **all harnesses passed** (booking/billing/statement,
+  incl. billing 311) 2026-07-18. The membership-grant path is clean; Phase 2a is safe to switch on.
 
 ## Phase 2b — still to build
 - **`bonus_units`** (packs): "buy a 10-pack, get 12" — add free sessions via the existing `adjust_wallet`
