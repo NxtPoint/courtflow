@@ -100,7 +100,7 @@ Touch only your lane; coordinate on shared interface files (`contracts/events.md
 | **Coach / Client** | `coach/`, `me/` | Coach self-service (onboarding, approval queue, clients-360, statement, cockpit) + client self-service (profile, dependents, statement, refund requests). |
 | **Analytics** | `analytics/` | Read-only guarded aggregations → `/api/analytics/*` (the standalone `/overview.html`); first-party beacon in `beacon.py`. |
 | **Frontend** | `frontend/` | Three role SPAs on one widget layer (below). |
-| **Marketing/SEO** | `frontend/marketing/`, `frontend/_shared/`, `build_blog.py`, `migration/` | Host-switched public site, blog, sitemap, Wix→Render migration scripts. |
+| **Marketing/SEO** | `frontend/marketing/`, `frontend/_shared/`, `build_blog.py`, `migration/`, `marketing_digest/` | Host-switched public site, blog, sitemap, Wix→Render migration scripts, cross-brand organic-growth digest + canary (below). |
 
 **Service editing** (`services/`) is the ONE API a service is edited through by BOTH owner and coach —
 `/api/services/*` enforces who may change what (owner = everything incl. commission; coach = their OWN
@@ -337,6 +337,26 @@ Know which ad clicks become paying members, and feed that back to Google so bidd
   GA4↔Search Console linked; a "High-intent visitors (booking/pricing)" remarketing audience. Full runbook +
   final state: `docs/specs/GOOGLE-ADS-PLAN.md`. Bidding: Maximize Clicks R15 cap → revert to Max Conversions
   after ~15–30 conversions accrue.
+
+## Cross-brand marketing measurement — digest + canary (GitHub Actions, keyless)
+Two **CI-only** guardrails cover organic growth **across BOTH brands** (NextPoint + Ten-Fifty5). They live in
+`.github/workflows/` + `marketing_digest/`, ride the free-Actions keep-warm pattern, and touch NO app code —
+so `frontend/marketing/` and `marketing/` (the untracked ad-ops notes) are separate concerns from these.
+- **`marketing-digest.yml`** (07:00 SAST daily) runs `marketing_digest/digest.py`: a per-brand GA4 (7d) +
+  Search Console (28d) organic-growth report — active users, sessions, top pages/queries, and **striking-distance
+  queries** (avg position 8–20 = what to write next). Auth is **KEYLESS Workload Identity Federation** (org policy
+  blocks SA key downloads) → the `marketing-engine@marketing-engine-502809` SA reads whatever GA4/GSC properties
+  it's been **granted in the consoles** — coverage is grant-controlled, **add a brand = add a `BRANDS` row +
+  grant the SA, no other code**. Output commits to `marketing_digest/reports/` (the frequent `chore(marketing):
+  daily digest` commits) + emails each brand its own slice via the OPS-guarded API (`OPS_KEY` unset → digest
+  still runs, skips email).
+- **`marketing-canary.yml`** (every 2h, 08:00–22:00 SAST) is the **tripwire** for silently-dark measurement —
+  it exists because a blueprint sync once blanked the GA4/Ads tag IDs and NOTHING flagged it for a week. Each
+  brand is a matrix leg asserting required tokens (gtag, GA4/Ads IDs, `cfConversion`, `attribution.js`) are in
+  the served HTML; `mode: enforce` fails red + emails, `mode: warn` reports without failing. **It checks each
+  brand's RENDER ORIGIN** (`courtflow-web.onrender.com` / `locker-room-26kd.onrender.com`), NOT the public host —
+  the public hosts sit behind Cloudflare, which bot-challenges GitHub's datacenter IPs (HTTP 200, no tag =
+  false-fail); the origins serve identical tagged HTML without the challenge. Reads only public pages, never a secret.
 
 ## Ten-Fifty5 embed — match analysis inside the members area (LIVE, private test)
 A logged-in member opens **Ten-Fifty5** (AI match analysis / technique — the 1050 product; web at
