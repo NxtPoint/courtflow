@@ -1747,7 +1747,7 @@
   // (ovBase/mountChart) — every panel is config, never a forked chart. ECharts is lazy-loaded (the
   // one sanctioned charting dep, already used by /overview.html); the old iframe is retired.
   var OV_MONTH = null, OV_TAB = "traffic", OV_DATA = null, OV_CHARTS = [];
-  var OV_TABS = [["traffic", "Traffic"], ["bookings", "Bookings"], ["revenue", "Revenue"], ["members", "Members"], ["experience", "NPS"], ["courts", "Courts"]];
+  var OV_TABS = [["traffic", "Traffic"], ["acquisition", "Acquisition"], ["bookings", "Bookings"], ["revenue", "Revenue"], ["members", "Members"], ["experience", "NPS"], ["courts", "Courts"]];
   function ensureECharts() { return window.echarts ? Promise.resolve() : loadScript("https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"); }
   function disposeCharts() { (OV_CHARTS || []).forEach(function (c) { try { window.removeEventListener("resize", c.ro); c.chart.dispose(); } catch (e) {} }); OV_CHARTS = []; }
   function mjr(v) { return (v || 0) / 100; }
@@ -1857,6 +1857,7 @@
     if (OV_TAB === "members") return ovMembers(body, data, cur);
     if (OV_TAB === "experience") return ovExperience(body, data, cur);
     if (OV_TAB === "courts") return ovCourts(body);
+    if (OV_TAB === "acquisition") return ovAcquisition(body);
     return ovTraffic(body, data, cur);
   }
   function ovTraffic(body, data, cur) {
@@ -1991,6 +1992,74 @@
     mountChart(ovChartCard(body, "NPS responses per day", 260), function () {
       return ovBase(data.days, [{ name: "Responses", data: s.nps_responses, color: "#1f7a4d" }]);
     });
+  }
+  // A generic label→value list card (reused for channels / pages / geo / queries). `rows` =
+  // [{label, value, sub?}] — `sub` is an optional dimmed line under the label (e.g. "pos 12 · 4 clicks").
+  function ovMetricList(title, rows, opts) {
+    opts = opts || {};
+    var c = card([window.CRMUI.sectionHead(title)]);
+    if (opts.note) c.appendChild(el("div", { class: "cf-muted", style: "font-size:.8rem;margin:-4px 0 8px", text: opts.note }));
+    if (!rows || !rows.length) { c.appendChild(el("div", { class: "cf-empty", text: "No data in the window." })); return c; }
+    var l = el("div", { class: "cf-list" });
+    rows.forEach(function (r) {
+      var main = [el("div", { class: "cf-item-t", text: r.label || "—" })];
+      if (r.sub) main.push(el("div", { class: "cf-item-s", text: r.sub }));
+      l.appendChild(el("div", { class: "cf-item" }, [
+        el("div", { class: "cf-item-main" }, main),
+        el("span", { style: "font-weight:700;white-space:nowrap", text: (opts.fmt ? opts.fmt(r.value) : Math.round(r.value || 0)) }),
+      ]));
+    });
+    c.appendChild(l); return c;
+  }
+  function ovInt(v) { return Math.round(v || 0).toLocaleString(); }
+  // ---- ACQUISITION (Google: GA4 + Search Console, from the marketing-digest ingest) --------------
+  // Reads the LATEST snapshot in core.web_daily via /api/insights/web-metrics. Dark (a friendly
+  // "not connected" state) until the daily digest first pushes — no Google creds ever touch Render.
+  async function ovAcquisition(body) {
+    var box = card([window.CRMUI.sectionHead("Acquisition · Google"), el("div", { class: "cf-loading", text: "Loading…" })]);
+    body.appendChild(box);
+    var w;
+    try { w = await window.AdminAPI.webMetrics(); }
+    catch (e) { UI.clear(box); box.appendChild(window.CRMUI.sectionHead("Acquisition · Google")); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); return; }
+    UI.clear(box);
+    if (!w || !w.connected) {
+      box.appendChild(window.CRMUI.sectionHead("Acquisition · Google"));
+      box.appendChild(el("div", { class: "cf-empty", text: "Google data isn't connected yet. It lights up automatically once the daily marketing digest runs its first push (GA4 traffic + Search Console rankings). No setup needed here." }));
+      return;
+    }
+    // Move the freshness stamp to the top of the body and drop the placeholder card.
+    body.removeChild(box);
+    body.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin:2px 2px 12px", text: "Google data as of " + w.as_of + " · GA4 last " + (w.ga4.window_days || 7) + " days · Search Console last " + (w.gsc.window_days || 28) + " days." }));
+
+    // ── GA4: traffic + how they arrive.
+    var g = w.ga4 || {}, t = g.totals || {};
+    body.appendChild(card([window.CRMUI.sectionHead("GA4 · website traffic"), window.CRMUI.stats([
+      { value: ovInt(t.active_users), label: "Active users" },
+      { value: ovInt(t.sessions), label: "Sessions" },
+      { value: ovInt(t.page_views), label: "Page views" },
+    ])]));
+    if ((g.channels || []).length) {
+      var cmap = ovTierColors((g.channels).map(function (r) { return r.label; }));
+      var pairs = g.channels.map(function (r) { return { name: r.label, value: r.value, color: cmap[r.label] }; });
+      mountChart(ovChartCard(body, "How visitors arrive · sessions by channel", 280), function () { return ovPieOption(pairs); });
+    }
+    body.appendChild(ovMetricList("Top landing pages", g.top_pages, { fmt: ovInt }));
+    if ((g.geo || []).length) body.appendChild(ovMetricList("Where they are · users by city", g.geo, { fmt: ovInt }));
+
+    // ── Search Console: what they find you for.
+    var gs = w.gsc || {}, gt = gs.totals || {};
+    body.appendChild(card([window.CRMUI.sectionHead("Search Console · organic search"), window.CRMUI.stats([
+      { value: ovInt(gt.clicks), label: "Clicks" },
+      { value: ovInt(gt.impressions), label: "Impressions" },
+      { value: (gt.ctr == null ? "—" : (gt.ctr + "%")), label: "CTR" },
+      { value: (gt.position == null ? "—" : gt.position), label: "Avg position" },
+    ])]));
+    body.appendChild(ovMetricList("Top queries", (gs.top_queries || []).map(function (r) {
+      return { label: r.label, value: r.value, sub: (r.impressions != null ? (ovInt(r.impressions) + " impr") : "") + (r.position != null ? (" · pos " + r.position) : "") };
+    }), { fmt: function (v) { return ovInt(v) + " clicks"; } }));
+    body.appendChild(ovMetricList("🎯 Striking-distance queries", (gs.striking || []).map(function (r) {
+      return { label: r.label, value: r.value, sub: (r.position != null ? ("pos " + r.position) : "") + (r.clicks != null ? (" · " + ovInt(r.clicks) + " clicks") : "") };
+    }), { fmt: function (v) { return ovInt(v) + " impr"; }, note: "You rank page 1–2 for these — a post or page tweak nudges them to the top. The highest-value thing to write next." }));
   }
   async function ovCourts(body) {
     var box = card([window.CRMUI.sectionHead("Court utilisation"), el("div", { class: "cf-loading", text: "Loading…" })]);

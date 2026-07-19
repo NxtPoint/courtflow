@@ -61,6 +61,57 @@ _NOTIFICATION_FKS = [
     ("fk_notification_user", "user_id", "iam.user(id)", "CASCADE"),
 ]
 
+# ---------------------------------------------------------------------------
+# core.web_daily — the Google (GA4 + Search Console) metrics snapshot store (ANALYTICS-PLAN Phase B).
+#
+# The org blocks downloadable service-account keys, so the LIVE app can't call GA4/GSC — only the
+# keyless-WIF GitHub Action can. So we PUSH, not pull: the daily marketing-digest (which already holds
+# that access) POSTs a structured metrics snapshot to POST /api/cron/analytics-ingest, which upserts
+# here; the admin Overview → Acquisition panel reads it (no Google credentials ever touch Render).
+#
+# Row model = one (source, metric, label) datum per snapshot day. `label` is the dimension value
+# (channel / page / query / city; '' for a scalar total); `value` the number; `meta` carries extra
+# dims a single value can't (a GSC query's position + clicks alongside its impressions). `day` is the
+# ingest run-date (the snapshot as-of), NOT a per-day series — the dashboard reads the LATEST snapshot.
+# Idempotent per (club_id, day, source, metric, label): a same-day re-run replaces the datum.
+# ---------------------------------------------------------------------------
+_WEB_DAILY_DDL = [
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.web_daily (
+        id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id     uuid NOT NULL,
+        day         date NOT NULL,                 -- snapshot as-of (the ingest run date)
+        source      text NOT NULL,                 -- 'ga4' | 'gsc'
+        metric      text NOT NULL,                 -- 'active_users','sessions_by_channel','clicks','striking',…
+        label       text NOT NULL DEFAULT '',      -- dimension value (channel/page/query/city); '' for a scalar
+        value       double precision NOT NULL DEFAULT 0,
+        window_days int,                           -- lookback the value covers (GA4 7d, GSC 28d)
+        meta        jsonb,                         -- extra dims (e.g. a query's position + clicks)
+        updated_at  timestamptz NOT NULL DEFAULT now()
+    )
+    """,
+    f"CREATE UNIQUE INDEX IF NOT EXISTS uq_web_daily "
+    f"ON {SCHEMA}.web_daily (club_id, day, source, metric, label)",
+    f"CREATE INDEX IF NOT EXISTS ix_web_daily_club_day "
+    f"ON {SCHEMA}.web_daily (club_id, day DESC)",
+]
+
+_WEB_DAILY_FKS = [
+    ("fk_web_daily_club", "club_id", "club.club(id)", "CASCADE"),
+]
+
+# Generic guarded ADD CONSTRAINT (the notification one hardcodes its table); used for web_daily.
+_ADD_TABLE_FK = """
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '{conname}') THEN
+        ALTER TABLE {schema}.{table}
+            ADD CONSTRAINT {conname}
+            FOREIGN KEY ({col}) REFERENCES {ref} ON DELETE {ondelete};
+    END IF;
+END $$;
+"""
+
 _ADD_NOTIFICATION_FK = """
 DO $$
 BEGIN
@@ -171,6 +222,18 @@ def init(engine=None):
         except Exception:
             # Referenced table not present yet in an isolated boot — the FK is added on a
             # later full boot. The table + indexes are already in place. Idempotent.
+            pass
+
+    # core.web_daily — the Google metrics snapshot store (same raw-DDL + guarded-FK pattern).
+    with engine.begin() as conn:
+        for stmt in _WEB_DAILY_DDL:
+            conn.execute(text(stmt))
+    for conname, col, ref, ondelete in _WEB_DAILY_FKS:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(_ADD_TABLE_FK.format(
+                    schema=SCHEMA, table="web_daily", conname=conname, col=col, ref=ref, ondelete=ondelete)))
+        except Exception:
             pass
 
     return engine

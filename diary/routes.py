@@ -1151,3 +1151,71 @@ def cron_marketing_digest_email():
         return jsonify(sent=False, reason="ses_disabled"), 200
     ok = ses.send_email(to, subject, text or " ", body_html=html, from_name=from_name)
     return jsonify(sent=bool(ok), to=to), 200
+
+
+@cron_bp.post("/analytics-ingest")
+def cron_analytics_ingest():
+    """OPS-only: ingest a daily GA4 + Search Console metrics SNAPSHOT into core.web_daily, which the
+    admin Overview → Acquisition panel reads. The org blocks downloadable SA keys, so the live app
+    can't call GA4/GSC — only the keyless-WIF marketing-digest GitHub Action can. It POSTs the day's
+    structured metrics here (ANALYTICS-PLAN Phase B) so no Google credentials ever touch Render.
+
+    Body: {as_of?: 'YYYY-MM-DD' (default today), host?/club_slug?: to resolve the club (else the sole
+    club), metrics: [{source:'ga4'|'gsc', metric, label?, value, window_days?, meta?}]}. The snapshot
+    for (club, as_of) is REPLACED atomically (delete-then-insert) so a same-day re-run is idempotent
+    and a shrunk top-list never leaves stragglers. Club-scoped; never trusts a client."""
+    if not _ops_only():
+        return jsonify(error="forbidden"), 403
+    from sqlalchemy import text as _sql
+    import json as _json
+    body = request.get_json(silent=True) or {}
+    metrics = body.get("metrics")
+    if not isinstance(metrics, list):
+        return jsonify(error="metrics_required"), 400
+    as_of = (body.get("as_of") or "").strip() or None
+    host = (body.get("host") or "").strip() or None
+    slug = (body.get("club_slug") or "").strip() or None
+    with session_scope() as s:
+        # Resolve the club server-side: explicit slug > host mapping > the deployment's sole club.
+        club_id = None
+        if slug:
+            club_id = s.execute(_sql("SELECT id FROM club.club WHERE slug = :sl "
+                                     "AND COALESCE(is_template,false)=false LIMIT 1"),
+                                {"sl": slug}).scalar()
+        if club_id is None and host:
+            club_id = iam_repo.resolve_club_by_host(s, host)
+        if club_id is None:
+            club_id = iam_repo.sole_club_id(s)
+        if club_id is None:
+            return jsonify(error="club_unresolved"), 400
+        day = s.execute(_sql("SELECT COALESCE(to_date(:d,'YYYY-MM-DD'), CURRENT_DATE) AS d"),
+                        {"d": as_of}).scalar()
+        # Replace the whole snapshot for (club, day) so re-runs and shrunk top-lists stay clean.
+        s.execute(_sql("DELETE FROM core.web_daily WHERE club_id = :c AND day = :d"),
+                  {"c": str(club_id), "d": day})
+        n = 0
+        for m in metrics:
+            if not isinstance(m, dict):
+                continue
+            source = (m.get("source") or "").strip().lower()
+            metric = (m.get("metric") or "").strip()
+            if source not in ("ga4", "gsc") or not metric:
+                continue
+            try:
+                value = float(m.get("value") or 0)
+            except (TypeError, ValueError):
+                continue
+            label = (m.get("label") or "")[:400]
+            wd = m.get("window_days")
+            meta = m.get("meta")
+            s.execute(_sql("""
+                INSERT INTO core.web_daily (club_id, day, source, metric, label, value, window_days, meta)
+                VALUES (:c, :d, :src, :met, :lbl, :val, :wd, CAST(:meta AS jsonb))
+                ON CONFLICT (club_id, day, source, metric, label)
+                DO UPDATE SET value = EXCLUDED.value, window_days = EXCLUDED.window_days,
+                              meta = EXCLUDED.meta, updated_at = now()
+            """), {"c": str(club_id), "d": day, "src": source, "met": metric[:120],
+                   "lbl": label, "val": value, "wd": int(wd) if wd is not None else None,
+                   "meta": _json.dumps(meta) if meta is not None else None})
+            n += 1
+    return jsonify(ingested=n, club_id=str(club_id), day=day.isoformat()), 200

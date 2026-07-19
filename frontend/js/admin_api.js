@@ -391,6 +391,9 @@
     // GET /api/insights/court-utilisation?days= -> {days, overall_pct, booked_hours,
     //   available_hours, cells:[{weekday,hour,booked_hours,available_hours,pct}]}
     courtUtilisation: function (days) { return A().apiJSON("/api/insights/court-utilisation" + (days ? ("?days=" + days) : "")); },
+    // GET /api/insights/web-metrics -> latest Google snapshot {connected,as_of,ga4:{totals,channels,
+    //   top_pages,geo,conversions},gsc:{totals,top_queries,striking}} (fed by the marketing-digest ingest).
+    webMetrics: function () { return A().apiJSON("/api/insights/web-metrics"); },
     // GET /api/insights/overview?month=YYYY-MM -> {month, currency, days:[iso], series:{visits,
     //   unique_visitors,bookings,bookings_court,bookings_lesson,bookings_class,member_bookings,
     //   revenue_gross_minor,revenue_net_minor,refunded_minor,new_clients,active_members,nps_responses,

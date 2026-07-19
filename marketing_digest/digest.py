@@ -43,6 +43,11 @@ TODAY = os.environ.get("DIGEST_DATE") or _dt.datetime.utcnow().strftime("%Y-%m-%
 BRANDS = [
     {"name": "NextPoint Tennis", "email": "info@nextpointtennis.com",
      "match": ["nextpoint"],
+     # NextPoint is THIS platform's own club, so its Google snapshot is pushed into the dashboard
+     # (core.web_daily via /api/cron/analytics-ingest). `ingest_host` both flags "ingest this brand"
+     # and resolves the club server-side. Ten-Fifty5 is a separate product/DB → no ingest_host, so
+     # its metrics stay email-only. See docs/specs/ANALYTICS-PLAN.md Phase B.
+     "ingest_host": os.environ.get("ANALYTICS_INGEST_HOST", "nextpointtennis.com").strip(),
      # NextPoint Ads account 704-275-3564 (public acct number). Overridable by env; the account is
      # standalone (no manager), so this is also the login_customer_id. DARK until the dev token is set.
      "ads_customer": os.environ.get("GOOGLE_ADS_CUSTOMER_ID_NEXTPOINT", "7042753564").replace("-", "").strip()},
@@ -270,6 +275,135 @@ def gsc_block(creds, site_url):
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------- structured snapshot (dashboard ingest)
+# The digest already fetches these numbers for the report; here we re-fetch them as STRUCTURED rows to
+# POST into the platform dashboard (core.web_daily). Every query is guarded independently — a failing
+# metric drops out of the snapshot, never crashes the run — and the request shapes mirror the proven
+# ga4_block/gsc_block ones. Metric names match the /api/cron/analytics-ingest ⇄ insights.web_metrics
+# contract (docs/specs/ANALYTICS-PLAN.md Phase B).
+GA4_WINDOW = 7
+GSC_WINDOW = 28
+
+
+def ga4_metrics(creds, property_id):
+    """Structured GA4 metrics for one property over the last 7 days → [{source,metric,label,value,...}]."""
+    client = BetaAnalyticsDataClient(credentials=creds)
+    prop = f"properties/{property_id}"
+    dr = [DateRange(start_date="7daysAgo", end_date="yesterday")]
+    out = []
+
+    def add(metric, label, value, meta=None):
+        out.append({"source": "ga4", "metric": metric, "label": label,
+                    "value": float(value), "window_days": GA4_WINDOW, "meta": meta})
+
+    def _guard(fn):
+        try:
+            fn()
+        except Exception:
+            pass  # one metric failing must not sink the snapshot
+
+    def totals():
+        r = client.run_report(RunReportRequest(property=prop, date_ranges=dr,
+            metrics=[Metric(name="activeUsers"), Metric(name="sessions"), Metric(name="screenPageViews")]))
+        if r.rows:
+            v = r.rows[0].metric_values
+            add("active_users", "", v[0].value); add("sessions", "", v[1].value); add("page_views", "", v[2].value)
+
+    def channels():
+        r = client.run_report(RunReportRequest(property=prop, date_ranges=dr,
+            dimensions=[Dimension(name="sessionDefaultChannelGroup")], metrics=[Metric(name="sessions")],
+            order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name="sessions"), desc=True)], limit=8))
+        for row in r.rows:
+            add("sessions_by_channel", row.dimension_values[0].value, row.metric_values[0].value)
+
+    def top_pages():
+        r = client.run_report(RunReportRequest(property=prop, date_ranges=dr,
+            dimensions=[Dimension(name="pagePath")], metrics=[Metric(name="screenPageViews")],
+            order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name="screenPageViews"), desc=True)], limit=10))
+        for row in r.rows:
+            add("page_views_by_path", row.dimension_values[0].value, row.metric_values[0].value)
+
+    def geo():
+        r = client.run_report(RunReportRequest(property=prop, date_ranges=dr,
+            dimensions=[Dimension(name="city")], metrics=[Metric(name="activeUsers")],
+            order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name="activeUsers"), desc=True)], limit=10))
+        for row in r.rows:
+            city = row.dimension_values[0].value
+            if city and city != "(not set)":
+                add("users_by_city", city, row.metric_values[0].value)
+
+    for fn in (totals, channels, top_pages, geo):
+        _guard(fn)
+    return out
+
+
+def gsc_metrics(creds, site_url):
+    """Structured Search Console metrics for one site over the last 28 days → [{source,metric,...}]."""
+    svc = gbuild("searchconsole", "v1", credentials=creds, cache_discovery=False)
+    end = (_dt.date.fromisoformat(TODAY) - _dt.timedelta(days=1)).isoformat()
+    start = (_dt.date.fromisoformat(TODAY) - _dt.timedelta(days=28)).isoformat()
+    out = []
+
+    def add(metric, label, value, meta=None):
+        out.append({"source": "gsc", "metric": metric, "label": label,
+                    "value": float(value), "window_days": GSC_WINDOW, "meta": meta})
+
+    def _guard(fn):
+        try:
+            fn()
+        except Exception:
+            pass
+
+    def query(dimensions, row_limit=25):
+        return svc.searchanalytics().query(siteUrl=site_url, body={
+            "startDate": start, "endDate": end, "dimensions": dimensions, "rowLimit": row_limit,
+        }).execute().get("rows", [])
+
+    def totals():
+        rows = svc.searchanalytics().query(siteUrl=site_url, body={
+            "startDate": start, "endDate": end}).execute().get("rows", [])
+        if rows:
+            r = rows[0]
+            add("clicks", "", int(r["clicks"])); add("impressions", "", int(r["impressions"]))
+            add("ctr", "", round(r["ctr"] * 100, 2)); add("position", "", round(r["position"], 1))
+
+    def top_queries():
+        for r in query(["query"], 10):
+            add("top_query", r["keys"][0], int(r["clicks"]),
+                meta={"impressions": int(r["impressions"]), "position": round(r["position"], 1)})
+
+    def striking():
+        rows = query(["query"], 200)
+        s = [r for r in rows if 8.0 <= r["position"] <= 20.0]
+        s.sort(key=lambda r: r["impressions"], reverse=True)
+        for r in s[:10]:
+            add("striking", r["keys"][0], int(r["impressions"]),
+                meta={"position": round(r["position"], 1), "clicks": int(r["clicks"])})
+
+    for fn in (totals, top_queries, striking):
+        _guard(fn)
+    return out
+
+
+def ingest_metrics(api_base, ops_key, host, metrics):
+    """POST a structured Google snapshot to the OPS-guarded dashboard ingest endpoint. Returns
+    (status, body); never raises (a 4xx/5xx is returned so it's diagnosable in the digest)."""
+    import json as _json
+    import urllib.request
+    import urllib.error
+    payload = _json.dumps({"as_of": TODAY, "host": host, "metrics": metrics}).encode("utf-8")
+    req = urllib.request.Request(
+        api_base.rstrip("/") + "/api/cron/analytics-ingest",
+        data=payload, method="POST",
+        headers={"Content-Type": "application/json", "X-Ops-Key": ops_key},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+
+
 # ---------------------------------------------------------------- main
 def ads_block(customer_id):
     """Google Ads campaign metrics (last 7 days) for one customer id, as a Markdown block. Returns
@@ -334,7 +468,8 @@ def main():
     creds = _creds()
 
     # Group each discovered property/site into its brand (unmatched -> "other", kept in the combined view).
-    buckets = {b["name"]: {"brand": b, "ga4": [], "gsc": [], "ads": []} for b in BRANDS}
+    buckets = {b["name"]: {"brand": b, "ga4": [], "gsc": [], "ads": [],
+                           "ga4_ids": [], "gsc_sites": []} for b in BRANDS}
     other = {"ga4": [], "gsc": []}
     notes = []
 
@@ -350,6 +485,8 @@ def main():
             block = f"### {name}\n- ⚠️ failed ({type(e).__name__}: {e})"
         b = brand_for(name)
         (buckets[b["name"]]["ga4"] if b else other["ga4"]).append(block)
+        if b:
+            buckets[b["name"]]["ga4_ids"].append(pid)
 
     try:
         sites = gsc_sites(creds)
@@ -363,6 +500,8 @@ def main():
             block = f"### {site}\n- ⚠️ failed ({type(e).__name__}: {e})"
         b = brand_for(site)
         (buckets[b["name"]]["gsc"] if b else other["gsc"]).append(block)
+        if b:
+            buckets[b["name"]]["gsc_sites"].append(site)
 
     # Google Ads per brand (dark unless GOOGLE_ADS_DEVELOPER_TOKEN + the brand's ads_customer are set).
     for name, data in buckets.items():
@@ -405,6 +544,41 @@ def main():
         email_lines.append("- skipped: OPS_KEY secret not set on the repo")
 
     combined += ["", "## 📬 Email delivery (this run)"] + email_lines
+
+    # Push each OWN-brand's structured Google snapshot into the platform dashboard (core.web_daily via
+    # the OPS-guarded ingest). Only brands with an `ingest_host` are this platform's own club — a
+    # separate-product brand (Ten-Fifty5) has none, so its data stays email-only. Guarded + folded into
+    # the report so a bad push is visible without CI-log diving. Reuses the email path's API base + key.
+    ingest_lines = []
+    if api and ops:
+        for name, data in buckets.items():
+            host = (data["brand"].get("ingest_host") or "").strip()
+            if not host:
+                continue
+            metrics = []
+            for pid in data["ga4_ids"]:
+                try:
+                    metrics += ga4_metrics(creds, pid)
+                except Exception as e:
+                    ingest_lines.append(f"- {name} GA4 {pid}: fetch FAILED ({type(e).__name__})")
+            for site in data["gsc_sites"]:
+                try:
+                    metrics += gsc_metrics(creds, site)
+                except Exception as e:
+                    ingest_lines.append(f"- {name} GSC {site}: fetch FAILED ({type(e).__name__})")
+            if not metrics:
+                ingest_lines.append(f"- {name}: no Google metrics to ingest (nothing granted / all fetches empty)")
+                continue
+            try:
+                status, resp = ingest_metrics(api, ops, host, metrics)
+                ingest_lines.append(f"- {name} → dashboard ({host}): HTTP {status} — {resp} ({len(metrics)} metrics)")
+            except Exception as e:
+                ingest_lines.append(f"- {name} → dashboard: FAILED ({type(e).__name__}: {e})")
+    elif not api:
+        ingest_lines.append("- skipped: MARKETING_DIGEST_API not set on the workflow")
+    else:
+        ingest_lines.append("- skipped: OPS_KEY secret not set on the repo")
+    combined += ["", "## 📈 Dashboard ingest (this run)"] + ingest_lines
     report = "\n".join(combined)
 
     # Write report files + Actions step summary.

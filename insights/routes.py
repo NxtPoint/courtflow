@@ -54,6 +54,20 @@ def bookings_by_day():
     return jsonify(data), 200
 
 
+@insights_bp.get("/web-metrics")
+def web_metrics():
+    """Latest Google (GA4 + Search Console) snapshot for the Overview → Acquisition panel — GA4
+    totals/channels/top-pages/geo + GSC totals/top-queries/striking-distance, with the snapshot
+    date. Reads core.web_daily (fed by the marketing-digest ingest). {connected:false} until the
+    first ingest runs. Guarded → never 500s."""
+    p, err = _admin()
+    if err:
+        return err
+    with session_scope() as s:
+        data = repo.web_metrics(s, club_id=p.club_id)
+    return jsonify(data), 200
+
+
 @insights_bp.get("/court-utilisation")
 def court_utilisation():
     """Court occupancy heatmap (weekday x hour) + overall utilisation % over the last ?days (default

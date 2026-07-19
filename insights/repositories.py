@@ -336,6 +336,78 @@ def _month_bounds(session, month):
     return b["ym"], b["start_d"], b["end_d"]
 
 
+def web_metrics(session, *, club_id):
+    """The latest Google (GA4 + Search Console) snapshot for the admin Overview → Acquisition panel,
+    read from core.web_daily (fed by the marketing-digest ingest — ANALYTICS-PLAN Phase B). Returns
+    the most-recent snapshot day's rows, bucketed into GA4 (totals/channels/top_pages/geo/conversions)
+    and GSC (totals/top_queries/striking-distance). Guarded → {connected: False} when nothing ingested
+    yet (the panel then shows a 'not connected' state, never a 500). club_id-scoped.
+
+    Row contract (source, metric, label, value, meta) written by /api/cron/analytics-ingest:
+      GA4  scalar totals   metric in active_users|sessions|page_views, label=''
+           by channel      metric=sessions_by_channel, label=<channel>, value=sessions
+           top pages       metric=page_views_by_path,  label=<path>,    value=views
+           geo             metric=users_by_city,       label=<city>,    value=users
+           conversions     metric=conversions,         label=<event>,   value=count
+      GSC  scalar totals   metric in clicks|impressions|ctr|position, label=''
+           top queries     metric=top_query, label=<query>, value=clicks,      meta={impressions,position}
+           striking        metric=striking,  label=<query>, value=impressions, meta={position,clicks}
+    """
+    def _load():
+        as_of = session.execute(text(
+            "SELECT max(day) FROM core.web_daily WHERE club_id = :c"), {"c": str(club_id)}).scalar()
+        if as_of is None:
+            return {"connected": False, "as_of": None,
+                    "ga4": {"totals": {}, "channels": [], "top_pages": [], "geo": [], "conversions": []},
+                    "gsc": {"totals": {}, "top_queries": [], "striking": []}}
+        rows = session.execute(text("""
+            SELECT source, metric, label, value, window_days, meta
+            FROM core.web_daily WHERE club_id = :c AND day = :d
+        """), {"c": str(club_id), "d": as_of}).mappings().all()
+        ga4 = {"totals": {}, "channels": [], "top_pages": [], "geo": [], "conversions": [],
+               "window_days": None}
+        gsc = {"totals": {}, "top_queries": [], "striking": [], "window_days": None}
+        for r in rows:
+            src, met, lbl, val = r["source"], r["metric"], r["label"], r["value"]
+            meta = r["meta"] or {}
+            if src == "ga4":
+                if r["window_days"] is not None:
+                    ga4["window_days"] = r["window_days"]
+                if met in ("active_users", "sessions", "page_views"):
+                    ga4["totals"][met] = val
+                elif met == "sessions_by_channel":
+                    ga4["channels"].append({"label": lbl, "value": val})
+                elif met == "page_views_by_path":
+                    ga4["top_pages"].append({"label": lbl, "value": val})
+                elif met == "users_by_city":
+                    ga4["geo"].append({"label": lbl, "value": val})
+                elif met == "conversions":
+                    ga4["conversions"].append({"label": lbl, "value": val})
+            elif src == "gsc":
+                if r["window_days"] is not None:
+                    gsc["window_days"] = r["window_days"]
+                if met in ("clicks", "impressions", "ctr", "position"):
+                    gsc["totals"][met] = val
+                elif met == "top_query":
+                    gsc["top_queries"].append({"label": lbl, "value": val,
+                                               "impressions": meta.get("impressions"),
+                                               "position": meta.get("position")})
+                elif met == "striking":
+                    gsc["striking"].append({"label": lbl, "value": val,
+                                            "position": meta.get("position"),
+                                            "clicks": meta.get("clicks")})
+        # Sort every top-list by value desc (the ingest may send them unordered).
+        for k in ("channels", "top_pages", "geo", "conversions"):
+            ga4[k].sort(key=lambda x: x["value"] or 0, reverse=True)
+        gsc["top_queries"].sort(key=lambda x: x["value"] or 0, reverse=True)
+        gsc["striking"].sort(key=lambda x: x["value"] or 0, reverse=True)
+        return {"connected": True, "as_of": as_of.isoformat(), "ga4": ga4, "gsc": gsc}
+
+    return _guard(_load, {"connected": False, "as_of": None,
+                          "ga4": {"totals": {}, "channels": [], "top_pages": [], "geo": [], "conversions": []},
+                          "gsc": {"totals": {}, "top_queries": [], "striking": []}})
+
+
 def overview(session, *, club_id, month=None):
     """Month-scoped, day-bucketed business overview for the admin 'Overview' tab. ONE guarded read
     powering every panel, so the numbers RECONCILE with the Money lists by construction:

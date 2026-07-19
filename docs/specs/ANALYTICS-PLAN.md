@@ -214,6 +214,30 @@ non-token booking in the trailing 30d, no active paid sub) rather than a per-day
 measure. Confirm with Tomo whether a per-day PAYG line is wanted.
 
 ## 10. Phase B / C (later)
-- **B (Google):** `core.web_daily` table + `POST /api/cron/analytics-ingest` (OPS-guarded) + a digest push of
-  daily GA4/GSC metrics + the acquisition section (channels/geo/GSC/conversions). No Google creds on Render.
-- **C (polish):** membership cohort curves · Google-reviews trend · GA4-vs-beacon cross-check · exports.
+- ✅ **PHASE B BUILT** (2026-07-19): Google (GA4 + Search Console) now flows INTO the dashboard via
+  PUSH (no Google creds on Render).
+  - **`core.web_daily`** snapshot store (`core/schema.py`, raw idempotent DDL + guarded club FK): one
+    `(source, metric, label, value, meta jsonb)` datum per snapshot `day`; `meta` carries a query's
+    position/clicks alongside impressions. Unique `(club,day,source,metric,label)`.
+  - **`POST /api/cron/analytics-ingest`** (`diary/routes.py` cron_bp, OPS-guarded): resolves the club
+    server-side (slug > host > sole club), then **delete-then-insert replaces the whole (club,day)
+    snapshot** so re-runs + shrunk top-lists stay clean. Idempotent.
+  - **`insights.web_metrics(club_id)`** reader + **`GET /api/insights/web-metrics`**: latest snapshot →
+    `{connected, as_of, ga4:{totals,channels,top_pages,geo,conversions}, gsc:{totals,top_queries,striking}}`,
+    guarded → `{connected:false}` until first ingest.
+  - **Digest push** (`marketing_digest/digest.py`): `ga4_metrics`/`gsc_metrics` structured fetchers (each
+    query guarded, request shapes mirror the proven `*_block` ones) + `ingest_metrics` POST. Only a brand
+    with `ingest_host` (NextPoint) is pushed — Ten-Fifty5 stays email-only. **Reuses the digest's existing
+    `MARKETING_DIGEST_API` + `OPS_KEY` — NO new secrets**; runs in the same 07:00-SAST daily job.
+  - **Frontend**: new **Acquisition** tab in `#/overview` — GA4 totals + a **channels donut** + top-pages +
+    geo; GSC totals + top-queries + **striking-distance** list; a "Google data as of <date>" stamp and a
+    dark "not connected yet" state. Reuses `ovPieOption`/`ovTierColors`/`ovMetricList` (config, no fork).
+  - **Verified locally end-to-end**: the real ingest endpoint driven via Flask test-client (auth-guard 403,
+    17-row ingest with 2 invalid dropped, idempotent re-run no-dupes) → read back through `web_metrics`
+    (channels sorted, `meta` passthrough, window_days). `db` twice = no-op. The GA4/GSC *extraction* is
+    CI-only (no creds locally) — fully guarded, mirrors working shapes; first live run visible in the
+    digest's new "📈 Dashboard ingest" section. **GA4 conversions (start_free_week/booking/purchase)
+    deferred to Phase C** — they couple to conversion-event config that can't be verified without creds;
+    the store already accepts `metric='conversions'` when added.
+- **C (polish):** GA4 **conversions** in the acquisition panel · membership cohort curves · Google-reviews
+  trend · GA4-vs-beacon cross-check · exports.
