@@ -1883,20 +1883,28 @@
   }
   function ovTraffic(body, data, cur) {
     var s = data.series, k = data.kpis;
-    // Headline: public browsers vs signed-in people (precise) vs member-area reach (path proxy).
+    // HEADLINE = public unique PEOPLE (not-signed-in) vs signed-in people. Public = authed≠true, so a
+    // logged-in member's in-app navigation counts as members-area, never as public traffic.
     body.appendChild(card([window.CRMUI.stats([
       { value: k.public_visitors, label: "Public visitors" },
       { value: k.logged_in_visitors, label: "Logged-in visitors" },
-      { value: k.member_visitors, label: "Member-area visitors" },
+      { value: k.unique_visitors, label: "Total unique" },
     ])]));
-    mountChart(ovChartCard(body, "Public site vs member area · visits per day"), function () {
+    // Hero: public unique visitors per day (PEOPLE — the honest top-of-funnel number).
+    mountChart(ovChartCard(body, "Public unique visitors per day"), function () {
       return ovBase(data.days, [
-        { name: "Public site", data: s.public_visits, color: "#9cc4b0", stack: "a" },
-        { name: "Member area", data: s.member_visits, color: "#1f7a4d", stack: "a" },
-        { name: "Logged in", data: s.logged_in_visits, type: "line", color: "#c79a3e" },
+        { name: "Public visitors", data: s.public_visitors, color: "#1f7a4d", area: true, type: "line" },
       ]);
     });
-    body.appendChild(el("div", { class: "cf-muted", style: "font-size:.78rem;margin:8px 2px 14px", text: "Logged in = pages where a signed-in user was confirmed (precise; accrues from now). Member area = visits to logged-in-only pages by path (portal · book · plan · account · admin · coach) — a broader proxy that also counts shells loaded before sign-in." }));
+    body.appendChild(el("div", { class: "cf-muted", style: "font-size:.78rem;margin:8px 2px 14px", text: "Public = people who are NOT signed in (your marketing-site audience). A logged-in member browsing the app is counted under members-area below, not here — so this is genuine top-of-funnel reach." }));
+    // Page views context (clearly labelled as PAGE VIEWS, not people) — public vs in-app.
+    mountChart(ovChartCard(body, "Page views per day · public vs signed-in", 240), function () {
+      return ovBase(data.days, [
+        { name: "Public", data: s.public_visits, color: "#9cc4b0", stack: "pv" },
+        { name: "Signed-in (in-app)", data: s.logged_in_visits, color: "#1f7a4d", stack: "pv" },
+      ]);
+    });
+    body.appendChild(el("div", { class: "cf-muted", style: "font-size:.78rem;margin:8px 2px 14px", text: "Page views (not people). Signed-in members fire many views navigating the app — that's why in-app page views run high; it's app engagement, not website traffic." }));
     // New vs returning signed-in people — a newly-activated member is first-ever authed in this window.
     if (ovSum(s.logged_in_new) || ovSum(s.logged_in_returning)) {
       mountChart(ovChartCard(body, "Logged-in visitors · new vs returning", 240), function () {
@@ -1906,16 +1914,6 @@
         ]);
       });
     }
-    body.appendChild(card([window.CRMUI.stats([
-      { value: k.visits, label: "All visits" },
-      { value: k.unique_visitors, label: "Unique visitors" },
-    ])]));
-    mountChart(ovChartCard(body, "Visitors per day"), function () {
-      return ovBase(data.days, [
-        { name: "Visits", data: s.visits, color: "#9cc4b0" },
-        { name: "Unique", data: s.unique_visitors, color: "#1f7a4d" },
-      ]);
-    });
     if (!k.visits) body.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin:8px 2px", text: "No website visits recorded for this month yet." }));
     body.appendChild(ovBreakdown("Top sources", data.breakdowns.sources));
     body.appendChild(ovBreakdown("Top pages", data.breakdowns.top_pages));

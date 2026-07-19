@@ -524,25 +524,34 @@ def overview(session, *, club_id, month=None):
         GROUP BY 1
     """), p).mappings().all(), "visits", "uniques"), {"visits": [0]*len(days), "uniques": [0]*len(days)})
 
-    # --- Access split: public-site vs member-area (logged-in-only pages) visits per day -----------
-    # `member` = path-based proxy (reached a logged-in-only page); `logged_in` = the PRECISE signal
-    # (metadata.authed=true, set client-side via window.cfAuthed once Clerk resolves).
+    # --- Access split: PUBLIC (not-signed-in) vs MEMBERS-AREA (signed-in) page views per day ------
+    # AUTH-BASED, not path-based. The old split classified a page as "member area" only if its path's
+    # first segment was app/book/plan/… — but the client SPA is served at `/app.html` (first segment
+    # 'app.html' ≠ 'app'), so a signed-in member's in-app navigation was miscounted as PUBLIC, inflating
+    # public traffic ~5×. `authed` (metadata.authed='true', set once Clerk resolves) is the reliable
+    # "this is a signed-in person" signal. `member` (path proxy) is KEPT for reference only.
+    # ANALYTICS-PLAN §2: public traffic = genuinely public visitors; in-app nav lives under members-area.
     access = _guard(lambda: _fill(session.execute(text(f"""
         SELECT occurred_at::date AS day,
-               count(*) FILTER (WHERE {_MEMBER_AREA})       AS member,
-               count(*) FILTER (WHERE NOT ({_MEMBER_AREA}))  AS public,
-               count(*) FILTER (WHERE metadata->>'authed' = 'true') AS logged_in
+               count(*) FILTER (WHERE {_MEMBER_AREA})                             AS member,
+               count(*) FILTER (WHERE COALESCE(metadata->>'authed','') <> 'true') AS public,
+               count(*) FILTER (WHERE metadata->>'authed' = 'true')               AS logged_in,
+               count(DISTINCT metadata->>'anon_id')
+                   FILTER (WHERE COALESCE(metadata->>'authed','') <> 'true')      AS public_uniq
         FROM core.usage_event
         WHERE event_type = 'page_view' AND club_id = :c
           AND occurred_at >= :s AND occurred_at < :e
         GROUP BY 1
-    """), p).mappings().all(), "member", "public", "logged_in"),
-        {"member": [0]*len(days), "public": [0]*len(days), "logged_in": [0]*len(days)})
+    """), p).mappings().all(), "member", "public", "logged_in", "public_uniq"),
+        {"member": [0]*len(days), "public": [0]*len(days), "logged_in": [0]*len(days),
+         "public_uniq": [0]*len(days)})
     # Distinct visitors (anon_id) reaching each surface this month — "how many people".
     vsplit = _guard(lambda: session.execute(text(f"""
-        SELECT count(DISTINCT metadata->>'anon_id') FILTER (WHERE {_MEMBER_AREA})       AS member_visitors,
-               count(DISTINCT metadata->>'anon_id') FILTER (WHERE NOT ({_MEMBER_AREA})) AS public_visitors,
-               count(DISTINCT metadata->>'anon_id') FILTER (WHERE metadata->>'authed' = 'true') AS logged_in_visitors
+        SELECT count(DISTINCT metadata->>'anon_id') FILTER (WHERE {_MEMBER_AREA}) AS member_visitors,
+               count(DISTINCT metadata->>'anon_id')
+                   FILTER (WHERE COALESCE(metadata->>'authed','') <> 'true')      AS public_visitors,
+               count(DISTINCT metadata->>'anon_id')
+                   FILTER (WHERE metadata->>'authed' = 'true')                    AS logged_in_visitors
         FROM core.usage_event
         WHERE event_type = 'page_view' AND club_id = :c
           AND occurred_at >= :s AND occurred_at < :e
@@ -795,6 +804,7 @@ def overview(session, *, club_id, month=None):
             "visits": traffic["visits"],
             "unique_visitors": traffic["uniques"],
             "public_visits": access["public"],
+            "public_visitors": access["public_uniq"],
             "member_visits": access["member"],
             "logged_in_visits": access["logged_in"],
             "bookings": bookings["total"],
