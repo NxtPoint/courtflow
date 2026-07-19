@@ -54,6 +54,22 @@ def bookings_by_day():
     return jsonify(data), 200
 
 
+@insights_bp.get("/trial-cohorts")
+def trial_cohorts():
+    """Trial→paid conversion by start-month cohort over the last ?months (default 6) — started +
+    converted-within-14d/30d/ever + rates. Powers the Overview → Members cohort panel."""
+    p, err = _admin()
+    if err:
+        return err
+    try:
+        months = int(request.args.get("months") or 6)
+    except (TypeError, ValueError):
+        months = 6
+    with session_scope() as s:
+        data = repo.trial_cohorts(s, club_id=p.club_id, months=months)
+    return jsonify(data), 200
+
+
 @insights_bp.get("/web-metrics")
 def web_metrics():
     """Latest Google (GA4 + Search Console) snapshot for the Overview → Acquisition panel — GA4

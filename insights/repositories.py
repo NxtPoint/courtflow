@@ -336,6 +336,58 @@ def _month_bounds(session, month):
     return b["ym"], b["start_d"], b["end_d"]
 
 
+def trial_cohorts(session, *, club_id, months=6):
+    """Trial→paid conversion by START-MONTH cohort (ANALYTICS-PLAN Phase C). For each of the last
+    `months` calendar months: how many trials STARTED that month, and of those how many CONVERTED to
+    a paid (non-trial) membership within 14 days / 30 days / ever. A trialler = distinct user with a
+    provider='trial' sub; converted = that user later took a paid sub whose period_start is on/after
+    their trial start. Guarded → []. club_id-scoped.
+
+    Returns {months, cohorts:[{month:'YYYY-MM', started, conv_14, conv_30, conv_ever,
+             rate_14, rate_30, rate_ever}]} — rates are whole-percent ints (null when started=0)."""
+    months = max(1, min(int(months or 6), 24))
+
+    def _rows():
+        return session.execute(text("""
+            WITH trials AS (
+                SELECT user_id, min(period_start) AS trial_start
+                FROM billing.membership_subscription
+                WHERE club_id = :c AND provider = 'trial' AND user_id IS NOT NULL
+                  AND period_start >= (date_trunc('month', now()) - make_interval(months => :m - 1))::date
+                GROUP BY user_id
+            ),
+            paid AS (
+                SELECT user_id, min(period_start) AS paid_start
+                FROM billing.membership_subscription
+                WHERE club_id = :c AND provider IS DISTINCT FROM 'trial' AND user_id IS NOT NULL
+                GROUP BY user_id
+            )
+            SELECT to_char(date_trunc('month', t.trial_start), 'YYYY-MM') AS month,
+                   count(*) AS started,
+                   count(*) FILTER (WHERE p.paid_start IS NOT NULL AND p.paid_start >= t.trial_start
+                                      AND p.paid_start <= t.trial_start + 14) AS conv_14,
+                   count(*) FILTER (WHERE p.paid_start IS NOT NULL AND p.paid_start >= t.trial_start
+                                      AND p.paid_start <= t.trial_start + 30) AS conv_30,
+                   count(*) FILTER (WHERE p.paid_start IS NOT NULL AND p.paid_start >= t.trial_start) AS conv_ever
+            FROM trials t LEFT JOIN paid p ON p.user_id = t.user_id
+            GROUP BY 1 ORDER BY 1
+        """), {"c": str(club_id), "m": months}).mappings().all()
+
+    def _rate(n, d):
+        return round(n / d * 100) if d else None
+
+    rows = _guard(_rows, [])
+    cohorts = [{
+        "month": r["month"], "started": int(r["started"] or 0),
+        "conv_14": int(r["conv_14"] or 0), "conv_30": int(r["conv_30"] or 0),
+        "conv_ever": int(r["conv_ever"] or 0),
+        "rate_14": _rate(int(r["conv_14"] or 0), int(r["started"] or 0)),
+        "rate_30": _rate(int(r["conv_30"] or 0), int(r["started"] or 0)),
+        "rate_ever": _rate(int(r["conv_ever"] or 0), int(r["started"] or 0)),
+    } for r in rows]
+    return {"months": months, "cohorts": cohorts}
+
+
 def web_metrics(session, *, club_id):
     """The latest Google (GA4 + Search Console) snapshot for the admin Overview → Acquisition panel,
     read from core.web_daily (fed by the marketing-digest ingest — ANALYTICS-PLAN Phase B). Returns
@@ -401,7 +453,24 @@ def web_metrics(session, *, club_id):
             ga4[k].sort(key=lambda x: x["value"] or 0, reverse=True)
         gsc["top_queries"].sort(key=lambda x: x["value"] or 0, reverse=True)
         gsc["striking"].sort(key=lambda x: x["value"] or 0, reverse=True)
-        return {"connected": True, "as_of": as_of.isoformat(), "ga4": ga4, "gsc": gsc}
+        # Cross-check GA4's sessions against our OWN first-party beacon (public page_views) over the
+        # same trailing window — a health signal that the two independent measurements roughly agree
+        # (they measure slightly different things: GA4 sessions vs our page_views/visitors, so this is
+        # a sanity ribbon, not an exact reconciliation). ANALYTICS-PLAN Phase C.
+        win = ga4.get("window_days") or 7
+        beacon = session.execute(text("""
+            SELECT count(*) AS views, count(DISTINCT metadata->>'anon_id') AS uniques
+            FROM core.usage_event
+            WHERE event_type = 'page_view' AND club_id = :c
+              AND COALESCE(metadata->>'authed', '') <> 'true'
+              AND occurred_at >= now() - make_interval(days => :w)
+        """), {"c": str(club_id), "w": int(win)}).mappings().first()
+        cross = {"window_days": int(win),
+                 "ga4_sessions": ga4["totals"].get("sessions"),
+                 "ga4_users": ga4["totals"].get("active_users"),
+                 "beacon_public_views": int((beacon or {}).get("views") or 0),
+                 "beacon_public_visitors": int((beacon or {}).get("uniques") or 0)}
+        return {"connected": True, "as_of": as_of.isoformat(), "ga4": ga4, "gsc": gsc, "cross_check": cross}
 
     return _guard(_load, {"connected": False, "as_of": None,
                           "ga4": {"totals": {}, "channels": [], "top_pages": [], "geo": [], "conversions": []},

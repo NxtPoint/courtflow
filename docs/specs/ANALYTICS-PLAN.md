@@ -239,5 +239,25 @@ measure. Confirm with Tomo whether a per-day PAYG line is wanted.
     digest's new "📈 Dashboard ingest" section. **GA4 conversions (start_free_week/booking/purchase)
     deferred to Phase C** — they couple to conversion-event config that can't be verified without creds;
     the store already accepts `metric='conversions'` when added.
-- **C (polish):** GA4 **conversions** in the acquisition panel · membership cohort curves · Google-reviews
-  trend · GA4-vs-beacon cross-check · exports.
+- ✅ **PHASE C BUILT** (2026-07-19) — polish, mostly first-party:
+  - **GA4 conversions** (C1): digest `ga4_metrics.conversions()` fetches key events by name (tries
+    `keyEvents` then `conversions`, guarded); stored as `metric='conversions'`, rendered as a
+    "Conversions · key events" list in the Acquisition panel. (First live values appear after the next
+    digest run; dark until then.)
+  - **Trial cohort curves** (C2): `insights.trial_cohorts(club_id, months)` +
+    `GET /api/insights/trial-cohorts` — per start-month: started + converted-within-14d/30d/ever + rates;
+    a compact table in the Members tab. **Locally verified** (seeded rollback: 3 trials → 14d/30d/ever = 1/2/2, rates 33/67/67%).
+  - **GA4-vs-beacon cross-check** (C3): `web_metrics.cross_check` compares GA4 sessions to our own
+    first-party beacon (public views/visitors) over the GA4 window — a health ribbon in the Acquisition
+    panel (honestly labelled: the two measure slightly different things). **Verified** (authed hits
+    excluded; 2 public views / 1 visitor).
+  - **CSV export** (C4): a "⤓ CSV" button on the Overview header downloads the month's daily series
+    (flat series + membership tiers; money in minor units). Pure frontend.
+  - ⏭️ **Google-reviews trend (C5) — DEFERRED / needs a data source.** It requires EITHER (a) the gated
+    **/feedback page + emit** (Klaviyo backlog — captures a promoter's review intent into
+    `core.nps_response`), OR (b) **Google Business Profile API ingestion** (a new `source='gbp'` push into
+    `core.web_daily` — the store is already generic enough to hold it; only the GBP fetch + SA grant are
+    missing). Not built rather than faked. NPS/feedback volume already lives in the Experience tab.
+  - Verified: `db` twice no-op; every new reader run against the live schema; the ingest/conversions/
+    cross-check driven through the real endpoint via Flask test-client. GA4 conversion *extraction* is
+    CI-only (guarded).

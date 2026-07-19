@@ -1774,6 +1774,26 @@
     };
   }
   function ovSum(a) { return (a || []).reduce(function (x, y) { return x + (y || 0); }, 0); }
+  // Export the month's daily series as CSV (one row per day; flat series + the membership tiers).
+  // Money columns are in minor units (cents) — the raw stored value; kept exact for spreadsheets.
+  function ovExportCsv(data) {
+    var days = data.days || [], s = data.series || {};
+    var flatKeys = Object.keys(s).filter(function (k) { return Array.isArray(s[k]); });
+    var tiers = (s.tier_series && typeof s.tier_series === "object") ? Object.keys(s.tier_series) : [];
+    var header = ["date"].concat(flatKeys).concat(tiers.map(function (t) { return "tier_" + t; }));
+    var lines = [header.join(",")];
+    days.forEach(function (day, i) {
+      var row = [day];
+      flatKeys.forEach(function (k) { var v = s[k][i]; row.push(v == null ? 0 : v); });
+      tiers.forEach(function (t) { row.push((s.tier_series[t] || [])[i] || 0); });
+      lines.push(row.join(","));
+    });
+    var blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var a = el("a", { href: url, download: "overview-" + (data.month || "export") + ".csv" });
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
   // Stable colours for membership tiers. 'Trial' is ALWAYS amber (so it reads the same in the stacked
   // area + the donut + across months); every other tier draws from the palette in sorted order.
   var OV_TIER_PALETTE = ["#1f7a4d", "#4a7fb5", "#9b6dc4", "#d9694a", "#3fae9c", "#c05780", "#6b8e23", "#b5892f"];
@@ -1843,6 +1863,7 @@
         el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹", onclick: function () { shift(-1); } }),
         el("span", { style: "font-weight:600;min-width:104px;text-align:center", text: monthLabel(data.month) }),
         el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { shift(1); } }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", title: "Download this month's daily figures as CSV", text: "⤓ CSV", onclick: function () { ovExportCsv(data); } }),
       ]),
     ]));
     wrap.appendChild(UI.subtabs(OV_TAB, OV_TABS, function (k) { OV_TAB = k; paintOverview(); }));
@@ -1981,6 +2002,42 @@
     mountChart(ovChartCard(body, "New clients per day", 220), function () {
       return ovBase(data.days, [{ name: "New clients", data: s.new_clients, color: "#1f7a4d" }]);
     });
+    // Trial cohort curves — lazy-loaded (its own multi-month endpoint, not the month payload).
+    ovTrialCohorts(body);
+  }
+  // Trial→paid conversion by START-MONTH cohort: a compact table with 14d / 30d / ever rates.
+  async function ovTrialCohorts(body) {
+    var box = card([window.CRMUI.sectionHead("Trial cohorts · conversion by start month")]);
+    box.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+    body.appendChild(box);
+    var d;
+    try { d = await window.AdminAPI.trialCohorts(6); }
+    catch (e) { UI.clear(box); box.appendChild(window.CRMUI.sectionHead("Trial cohorts")); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); return; }
+    UI.clear(box);
+    box.appendChild(window.CRMUI.sectionHead("Trial cohorts · conversion by start month"));
+    var cohorts = (d.cohorts || []).filter(function (c) { return c.started > 0; });
+    if (!cohorts.length) { box.appendChild(el("div", { class: "cf-empty", text: "No trials started in the last 6 months yet." })); return box; }
+    box.appendChild(el("div", { class: "cf-muted", style: "font-size:.8rem;margin:-4px 0 8px", text: "Of the trials that STARTED each month, how many became paying members — within 14 days, 30 days, or ever." }));
+    var scroller = el("div", { style: "overflow-x:auto" });
+    var tbl = el("table", { style: "width:100%;border-collapse:collapse;font-size:.88rem;min-width:360px" });
+    var head = el("tr", {});
+    ["Month", "Started", "≤14 days", "≤30 days", "Ever"].forEach(function (h, i) {
+      head.appendChild(el("th", { style: "text-align:" + (i ? "right" : "left") + ";padding:6px 8px;border-bottom:1px solid var(--line,#e5e7eb);color:var(--muted);font-weight:600", text: h }));
+    });
+    tbl.appendChild(head);
+    function cell(txt, right) { return el("td", { style: "padding:6px 8px;border-bottom:1px solid var(--line,#f0f2ef);text-align:" + (right ? "right" : "left"), text: txt }); }
+    function pct(n, r) { return (r == null ? "—" : (n + " · " + r + "%")); }
+    cohorts.forEach(function (c) {
+      var tr = el("tr", {});
+      tr.appendChild(cell(monthLabel(c.month), false));
+      tr.appendChild(cell(String(c.started), true));
+      tr.appendChild(cell(pct(c.conv_14, c.rate_14), true));
+      tr.appendChild(cell(pct(c.conv_30, c.rate_30), true));
+      tr.appendChild(cell(pct(c.conv_ever, c.rate_ever), true));
+      tbl.appendChild(tr);
+    });
+    scroller.appendChild(tbl); box.appendChild(scroller);
+    return box;
   }
   function ovExperience(body, data, cur) {
     var s = data.series, k = data.kpis;
@@ -2045,6 +2102,18 @@
     }
     body.appendChild(ovMetricList("Top landing pages", g.top_pages, { fmt: ovInt }));
     if ((g.geo || []).length) body.appendChild(ovMetricList("Where they are · users by city", g.geo, { fmt: ovInt }));
+    if ((g.conversions || []).length) body.appendChild(ovMetricList("Conversions · key events", g.conversions, { fmt: ovInt, note: "Sign-up + booking + purchase events GA4 counts as conversions." }));
+
+    // ── Cross-check: GA4 vs our own first-party beacon (a health ribbon, not an exact reconciliation).
+    var x = w.cross_check;
+    if (x) {
+      body.appendChild(card([window.CRMUI.sectionHead("Cross-check · GA4 vs our beacon"), window.CRMUI.stats([
+        { value: (x.ga4_sessions == null ? "—" : ovInt(x.ga4_sessions)), label: "GA4 sessions" },
+        { value: ovInt(x.beacon_public_views), label: "Beacon views" },
+        { value: ovInt(x.beacon_public_visitors), label: "Beacon visitors" },
+      ])]));
+      body.appendChild(el("div", { class: "cf-muted", style: "font-size:.8rem;margin:-2px 2px 12px", text: "Two independent measurements of public traffic over the last " + x.window_days + " days. They measure slightly different things (GA4 sessions vs our page views / visitors), so treat this as a sanity check that both are alive and roughly agree — not an exact match." }));
+    }
 
     // ── Search Console: what they find you for.
     var gs = w.gsc || {}, gt = gs.totals || {};

@@ -394,6 +394,9 @@
     // GET /api/insights/web-metrics -> latest Google snapshot {connected,as_of,ga4:{totals,channels,
     //   top_pages,geo,conversions},gsc:{totals,top_queries,striking}} (fed by the marketing-digest ingest).
     webMetrics: function () { return A().apiJSON("/api/insights/web-metrics"); },
+    // GET /api/insights/trial-cohorts?months= -> {months, cohorts:[{month,started,conv_14,conv_30,
+    //   conv_ever,rate_14,rate_30,rate_ever}]} — trial→paid conversion by start-month cohort.
+    trialCohorts: function (months) { return A().apiJSON("/api/insights/trial-cohorts" + (months ? ("?months=" + months) : "")); },
     // GET /api/insights/overview?month=YYYY-MM -> {month, currency, days:[iso], series:{visits,
     //   unique_visitors,bookings,bookings_court,bookings_lesson,bookings_class,member_bookings,
     //   revenue_gross_minor,revenue_net_minor,refunded_minor,new_clients,active_members,nps_responses,

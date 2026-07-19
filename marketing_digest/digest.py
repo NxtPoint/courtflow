@@ -332,7 +332,28 @@ def ga4_metrics(creds, property_id):
             if city and city != "(not set)":
                 add("users_by_city", city, row.metric_values[0].value)
 
-    for fn in (totals, channels, top_pages, geo):
+    def conversions():
+        # Key events (conversions) by event name — start_free_week / booking / purchase etc. GA4 renamed
+        # 'conversions' → 'keyEvents' (2024); try the new name first, fall back to the old one. Each is
+        # guarded, so an unknown-metric property just yields no conversion rows (never crashes the run).
+        for metric_name in ("keyEvents", "conversions"):
+            try:
+                r = client.run_report(RunReportRequest(property=prop, date_ranges=dr,
+                    dimensions=[Dimension(name="eventName")], metrics=[Metric(name=metric_name)],
+                    order_bys=[OrderBy(metric=OrderBy.MetricOrderBy(metric_name=metric_name), desc=True)],
+                    limit=15))
+            except Exception:
+                continue
+            got = False
+            for row in r.rows:
+                val = float(row.metric_values[0].value or 0)
+                if val > 0:
+                    add("conversions", row.dimension_values[0].value, val)
+                    got = True
+            if got:
+                return  # first metric that yields data wins; don't double-count with the fallback
+
+    for fn in (totals, channels, top_pages, geo, conversions):
         _guard(fn)
     return out
 
