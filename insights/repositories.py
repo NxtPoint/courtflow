@@ -847,6 +847,8 @@ def overview(session, *, club_id, month=None):
             "logged_in_returning": sum(li["li_return"]),
             "nps_score": nps_score,
             "nps_responses": nps_total,
+            "nps_promoters": nps_prom,
+            "nps_detractors": nps_detr,
         },
         "breakdowns": {"sources": sources, "top_pages": top_pages, "by_device": by_device},
     }

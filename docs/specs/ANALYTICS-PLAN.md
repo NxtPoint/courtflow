@@ -253,11 +253,14 @@ measure. Confirm with Tomo whether a per-day PAYG line is wanted.
     excluded; 2 public views / 1 visitor).
   - **CSV export** (C4): a "⤓ CSV" button on the Overview header downloads the month's daily series
     (flat series + membership tiers; money in minor units). Pure frontend.
-  - ⏭️ **Google-reviews trend (C5) — DEFERRED / needs a data source.** It requires EITHER (a) the gated
-    **/feedback page + emit** (Klaviyo backlog — captures a promoter's review intent into
-    `core.nps_response`), OR (b) **Google Business Profile API ingestion** (a new `source='gbp'` push into
-    `core.web_daily` — the store is already generic enough to hold it; only the GBP fetch + SA grant are
-    missing). Not built rather than faked. NPS/feedback volume already lives in the Experience tab.
+  - **Feedback & review funnel (C5) — BUILT from real data** (the `/feedback` page is already live and
+    writes `core.nps_response`). The Experience tab is now a **review/feedback funnel**: NPS score +
+    responses + promoter % KPIs, a **sentiment donut** (promoters → Google review CTA / passives /
+    detractors → private form), and the daily responses chart. `overview` KPIs gained `nps_promoters`/
+    `nps_detractors`. **Review CLICK-THROUGHS already surface** as the GA4 `review_click` conversion in the
+    Acquisition tab (via C1). ⏭️ The **only deferred piece = actual Google review COUNT/rating**, which
+    needs a **Google Business Profile API feed** (a `source='gbp'` push into `core.web_daily` — the store +
+    reader are already generic enough; only the GBP fetch + SA grant are missing). **← REVIEW/CONFIG item.**
   - Verified: `db` twice no-op; every new reader run against the live schema; the ingest/conversions/
     cross-check driven through the real endpoint via Flask test-client. GA4 conversion *extraction* is
     CI-only (guarded).

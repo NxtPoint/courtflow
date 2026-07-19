@@ -2041,14 +2041,27 @@
   }
   function ovExperience(body, data, cur) {
     var s = data.series, k = data.kpis;
+    var prom = k.nps_promoters || 0, detr = k.nps_detractors || 0, tot = k.nps_responses || 0;
+    var pass = Math.max(0, tot - prom - detr);
     body.appendChild(card([window.CRMUI.stats([
       { value: (k.nps_score == null ? "—" : k.nps_score), label: "NPS score" },
-      { value: k.nps_responses, label: "Responses" },
+      { value: tot, label: "Feedback responses" },
+      { value: (tot ? Math.round(prom / tot * 100) + "%" : "—"), label: "Promoters" },
     ])]));
-    if (!k.nps_responses) { body.appendChild(el("div", { class: "cf-empty", text: "No NPS responses this month." })); return; }
-    mountChart(ovChartCard(body, "NPS responses per day", 260), function () {
+    if (!tot) { body.appendChild(el("div", { class: "cf-empty", text: "No feedback responses this month yet. The /feedback page (post-lesson + review emails) writes them here." })); return; }
+    // Review/feedback funnel: promoters (4–5★) are routed to the Google review CTA; detractors (1–3★)
+    // to the private form. Real data from core.nps_response via the gated feedback page.
+    mountChart(ovChartCard(body, "Feedback sentiment · this month", 260), function () {
+      return ovPieOption([
+        { name: "Promoters → Google review", value: prom, color: "#1f7a4d" },
+        { name: "Passives", value: pass, color: "#c79a3e" },
+        { name: "Detractors → private form", value: detr, color: "#d9694a" },
+      ]);
+    });
+    mountChart(ovChartCard(body, "Feedback responses per day", 240), function () {
       return ovBase(data.days, [{ name: "Responses", data: s.nps_responses, color: "#1f7a4d" }]);
     });
+    body.appendChild(el("div", { class: "cf-muted", style: "font-size:.8rem;margin:8px 2px", text: "Promoters are sent to your Google review page — those click-throughs show as a “review_click” conversion in the Acquisition tab (GA4). Actual Google review counts need a Google Business Profile feed (not yet connected)." }));
   }
   // A generic label→value list card (reused for channels / pages / geo / queries). `rows` =
   // [{label, value, sub?}] — `sub` is an optional dimmed line under the label (e.g. "pos 12 · 4 clicks").
