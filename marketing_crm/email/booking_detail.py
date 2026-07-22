@@ -100,11 +100,19 @@ def _money(minor, currency=None):
     return "%s%.2f" % (sym, n / 100)
 
 
-def _pay_status(settlement_mode, charge):
+def _pay_status(settlement_mode, charge, state_override=None):
     """The human payment status — delegates to the ONE canonical vocabulary (billing.statement.
     settlement_status_label) so the email, the receipt, and the client record always say the same
-    thing. Resolves the settled `state` from the shared charge reader, then labels it."""
-    state = (charge or {}).get("state") or (charge or {}).get("status")
+    thing. Resolves the settled `state` from the shared charge reader, then labels it.
+
+    `state_override` is THE PRODUCER'S TRUTH and always wins. emit() dispatches on a background
+    thread with its OWN session, so this read happens in a transaction that CANNOT see the caller's
+    uncommitted work — on a `payment_succeeded` email the order is still at its PRE-payment status.
+    That silently mislabelled every online confirmation ("Awaiting online payment" on a paid
+    booking), and once expiry began voiding abandoned orders it started reading "Cancelled" on
+    payments that had genuinely succeeded — including every order recovered by a reconcile sweep.
+    The producer knows the outcome; the email must not re-derive it from a racing read."""
+    state = state_override or (charge or {}).get("state") or (charge or {}).get("status")
     try:
         from billing.statement import settlement_status_label
         return settlement_status_label(state, settlement_mode)
@@ -169,7 +177,10 @@ def load(session, club_id, ctx):
                 {"o": str(oid)},
             ).scalar()
             if bk:
-                return _load_booking(session, club_id, {"booking_id": str(bk)})
+                # Carry payment_state through — this IS the payment_succeeded path, and dropping it
+                # here would leave the label to a racing pre-commit read (the whole bug).
+                return _load_booking(session, club_id, {
+                    "booking_id": str(bk), "payment_state": ctx.get("payment_state")})
             en = session.execute(
                 text("SELECT id, class_session_id, user_id FROM diary.enrolment "
                      "WHERE order_id = :o ORDER BY enrolled_at LIMIT 1"),
@@ -178,7 +189,8 @@ def load(session, club_id, ctx):
             if en:
                 return _load_class(session, club_id, {
                     "class_session_id": str(en["class_session_id"]),
-                    "user_id": str(en["user_id"]) if en["user_id"] else None})
+                    "user_id": str(en["user_id"]) if en["user_id"] else None,
+                    "payment_state": ctx.get("payment_state")})
             return _load_order(session, club_id, oid)
     except Exception:
         log.debug("booking_detail.load failed", exc_info=False)
@@ -285,6 +297,7 @@ def _load_booking(session, club_id, ctx):
         booked_by_name=(actor_name or owner_name),
         membership_label=b.get("membership_label"),
         pack_label=b.get("pack_label"),
+        pay_state_override=(ctx or {}).get("payment_state"),
         settlement_mode=b["settlement_mode"], charge=charge,
         equipment=b.get("equipment"),
     )
@@ -360,6 +373,7 @@ def _load_class(session, club_id, ctx):
         cl_first=cl_first, cl_surname=cl_surname, cl_email=cl_email, cl_phone=cl_phone,
         booked_by_name=booked_by_name, membership_label=membership_label,
         settlement_mode=settlement_mode, charge=charge,
+        pay_state_override=(ctx or {}).get("payment_state"),
     )
 
 
@@ -485,7 +499,8 @@ def _charge(session, club_id, order_id, settlement_mode):
 
 def _normalize(*, service, booking_type, starts, ends, tzname, court, coach_name, coach_email,
                cl_first, cl_surname, cl_email, cl_phone, settlement_mode, charge, equipment=None,
-               booked_by_name=None, pack_label=None, membership_label=None):
+               booked_by_name=None, pack_label=None, membership_label=None,
+               pay_state_override=None):
     s, e = _as_dt(starts), _as_dt(ends)
     dur = int((e - s).total_seconds() // 60) if (s and e) else None
     # Name is the real name ONLY — never the email as a fallback (that duplicated the email into the
@@ -495,7 +510,7 @@ def _normalize(*, service, booking_type, starts, ends, tzname, court, coach_name
     if charge and charge.get("amount_minor"):
         price = _money(charge.get("amount_minor"), charge.get("currency"))
     # "Paid by package" — name WHICH pack when the booking drew a prepaid token.
-    pay_status = _pay_status(settlement_mode, charge)
+    pay_status = _pay_status(settlement_mode, charge, state_override=pay_state_override)
     if pack_label and settlement_mode == "token":
         pay_status = "Paid by package: " + pack_label
     return {

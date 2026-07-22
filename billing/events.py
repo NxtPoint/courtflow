@@ -172,7 +172,15 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
               ref_type="order", ref_id=str(order_id) if order_id else None,
               user_id=str(order["user_id"]) if (order and order.get("user_id")) else None,
               amount_minor=event.amount_minor, currency=event.currency,
-              provider=event.provider)
+              provider=event.provider,
+              # THE PRODUCER'S TRUTH. emit() dispatches on a background thread with its own
+              # session, so the email's payment-status read runs in a transaction that cannot see
+              # the `paid` we just wrote — it sees the PRE-payment status and labels the
+              # confirmation from that. Before expiry started voiding abandoned orders that read
+              # "Awaiting online payment" on a paid booking; after, it reads "Cancelled", and every
+              # order recovered by a reconcile sweep emails the payer that their payment was
+              # cancelled. Stating it explicitly removes the race instead of narrowing it.
+              payment_state="paid")
 
     elif kind == "charge_failed":
         _record_payment(session, event, order, club_id, direction="charge", status="failed")

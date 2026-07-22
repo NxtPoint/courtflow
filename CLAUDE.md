@@ -22,7 +22,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 241 / billing 402 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 241 / billing 407 / statement 47**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -51,7 +51,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      its service through `diary.resource.product_id` (the DURABLE link, set at create_class_type and
      boot-backfilled), never a name join; an orphaned class REFUSES with PRICE_NOT_CONFIGURED rather
      than billing another class's rate, and a retired price variation can never enrol at R0**.
-   - `test_billing_scenarios` (402) — settlement modes, commission, tokens, membership (offline + per-tier),
+   - `test_billing_scenarios` (407) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
      class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
@@ -616,7 +616,15 @@ member by email on the first authenticated hit.
   class, the guardian when a child's seat is paid by them) and the client's **exact membership tier**
   ("Adult Anytime Play", via `_MEMBERSHIP_LABEL_SQL`) — PAYG simply omits the row. Guarded by
   `sc_confirmation_email_block`; `deliver` SUPPRESSES the
-  `payment_succeeded` email for pack + class orders (their own email is the one). **Payment-status wording is
+  `payment_succeeded` email for pack + class orders (their own email is the one). **`emit()` DISPATCHES ON A BACKGROUND THREAD WITH ITS OWN SESSION**, so anything the email re-reads
+  runs in a transaction that CANNOT see the caller's uncommitted work. A `payment_succeeded` email
+  therefore read the PRE-payment order status and labelled the confirmation from it — "Awaiting online
+  payment" on a paid booking, and once expiry began voiding abandoned orders, **"Cancelled" on a
+  payment that succeeded** (including every order a reconcile sweep recovers). The producer now states
+  the outcome — `payment_state="paid"` on the emit payload → `ctx["payment_state"]` →
+  `_pay_status(state_override=)` — and the email stops re-deriving it. **Any new emit whose email
+  reflects state the caller just wrote must pass that state explicitly.** Guarded by
+  `sc_email_payment_status_not_racy`. **Payment-status wording is
   single-sourced** in `billing.statement.settlement_status_label(state, mode)` — email AND `client360` both
   delegate, so a receipt/email/client-record never disagree. **Coach BCC only on his own lesson/class.** Every
   order-keyed email needs `booking_detail.load` to import `text` (a missing import silently blanks the block).

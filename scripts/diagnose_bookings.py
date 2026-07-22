@@ -318,6 +318,46 @@ def main():
         """, p, "none — no stale pending online order",
             ["order_id", "created_at", "amount", "client"])
 
+        _hdr("DOUBLE-CHARGE CHECK (run after any reconcile sweep)")
+        # Recovering a long-stale online payment is right, but if the club chased that member in the
+        # meantime and took cash/EFT at the desk, the order now carries TWO successful charges. The
+        # money is real and refundable — but only if someone looks. apply_payment_event dedupes on
+        # its own event hash, which cannot see a desk payment taken through a different path.
+        total += max(0, _rows(s, "orders with MORE THAN ONE successful charge (refund one)", """
+            SELECT o.id AS order_id, u.email AS client, (o.amount_minor/100.0) AS order_amount,
+                   count(*) AS charges,
+                   (sum(p.amount_minor)/100.0) AS total_taken,
+                   string_agg(DISTINCT p.provider, ', ') AS providers
+            FROM billing."order" o
+            JOIN billing.payment p ON p.order_id = o.id
+                 AND p.direction = 'charge' AND p.status = 'succeeded'
+            LEFT JOIN iam."user" u ON u.id = o.user_id
+            GROUP BY o.id, u.email, o.amount_minor
+            HAVING count(*) > 1
+            ORDER BY count(*) DESC, o.id
+        """, {}, "none — no order has been charged twice",
+            ["order_id", "client", "order_amount", "charges", "total_taken", "providers"]))
+
+        # A recovered payment must also have re-instated its booking — otherwise the member has paid
+        # for a session that still reads 'cancelled'. _confirm_held_bookings does this for a
+        # hold_expired booking; this proves it actually happened.
+        total += max(0, _rows(s, "PAID orders whose booking is still cancelled (paid for nothing)", """
+            SELECT o.id AS order_id, u.email AS client, (o.amount_minor/100.0) AS amount,
+                   b.booking_type, b.starts_at, b.status AS booking_status, b.cancellation_reason
+            FROM billing."order" o
+            JOIN billing.order_line ol ON ol.order_id = o.id AND ol.booking_id IS NOT NULL
+            JOIN diary.booking b ON b.id = ol.booking_id
+            LEFT JOIN iam."user" u ON u.id = o.user_id
+            WHERE o.status = 'paid' AND b.status IN ('cancelled', 'expired')
+              AND NOT EXISTS (SELECT 1 FROM billing.payment p2
+                              WHERE p2.order_id = o.id AND p2.direction = 'refund'
+                                AND p2.status IN ('succeeded','refunded'))
+              """ + win("o.created_at") + """
+            ORDER BY o.created_at DESC
+        """, p, "none — every paid booking is live (or already refunded)",
+            ["order_id", "client", "amount", "booking_type", "starts_at", "booking_status",
+             "cancellation_reason"]))
+
         _hdr("CONTEXT — how each service is currently configured")
         # WHY THIS ONE MATTERS: the payment gate resolves a court's service via
         # resource.product_id, falling back to the club's DEFAULT court product. If some courts have

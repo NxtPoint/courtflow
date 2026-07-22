@@ -2360,6 +2360,61 @@ def sc_confirmation_email_block(s, fx):
           "Membership" not in BD.html_block(d3))
 
 
+def sc_email_payment_status_not_racy(s, fx):
+    """THE REPORTED SYMPTOM: confirmation emails saying "Payment status: Cancelled" for payments that
+    genuinely went through Yoco.
+
+    emit() dispatches on a background thread with its OWN session, so the email's payment-status read
+    runs in a transaction that cannot see the `paid` the caller just wrote — it reads the PRE-payment
+    order status and labels the confirmation from that. Every online confirmation has therefore been
+    mislabelled ("Awaiting online payment" on a paid booking); once expiry began VOIDING abandoned
+    orders the same race started rendering "Cancelled", and every order recovered by a reconcile
+    sweep emails the payer that their payment was cancelled. The producer knows the outcome, so it
+    now states it and the email stops re-deriving it."""
+    print("\n# Confirmation email: the payment status comes from the PRODUCER, not a racing read")
+    from marketing_crm.email import booking_detail as BD
+
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)),
+                         settlement_mode="online")
+    oid = r["booking"]["order_id"]
+
+    # (1) THE RACE, reproduced: the order still reads awaiting_payment (what the email thread sees
+    #     before the caller commits). Without the producer's truth the label is wrong.
+    racy = BD.load(s, fx.club_id, {"order_id": oid})
+    check("without the override a PAID payment mislabels as unpaid",
+          racy and racy.get("pay_status") == "Awaiting online payment",
+          str(racy and racy.get("pay_status")))
+
+    # (2) WITH the producer's truth — what apply_payment_event now sends — it reads correctly.
+    fixed = BD.load(s, fx.club_id, {"order_id": oid, "payment_state": "paid"})
+    check("with payment_state='paid' the email says Paid online",
+          fixed and fixed.get("pay_status") == "Paid online", str(fixed and fixed.get("pay_status")))
+
+    # (3) THE EXACT REPORTED SYMPTOM: the order was VOIDED by hold expiry, then the payment landed
+    #     (or a reconcile sweep recovered it). The racing read says "Cancelled"; the fix must not.
+    s.execute(text('UPDATE billing."order" SET status = \'void\' WHERE id = :o'), {"o": oid})
+    voided_racy = BD.load(s, fx.club_id, {"order_id": oid})
+    check("a voided order is what produced the reported 'Cancelled'",
+          voided_racy and voided_racy.get("pay_status") == "Cancelled",
+          str(voided_racy and voided_racy.get("pay_status")))
+    voided_fixed = BD.load(s, fx.club_id, {"order_id": oid, "payment_state": "paid"})
+    check("...and the producer's truth overrides it — the payer is told they PAID",
+          voided_fixed and voided_fixed.get("pay_status") == "Paid online",
+          str(voided_fixed and voided_fixed.get("pay_status")))
+
+    # (4) The override must not paper over a genuinely unpaid booking — an at-court booking with no
+    #     payment_state still reads as owed, so this can't become a blanket "everything is paid".
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="court", resource_id=fx.courts[1],
+                          starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)),
+                          settlement_mode="at_court")
+    owed = BD.load(s, fx.club_id, {"booking_id": r2["booking"]["id"]})
+    check("an owed booking with no override still reads Pay at court",
+          owed and owed.get("pay_status") == "Pay at court", str(owed and owed.get("pay_status")))
+
+
 def sc_membership_started_emit(s, fx):
     """`membership_started` must fire on a REAL membership activation — online AND offline — exactly
     once, carrying the email the Klaviyo forward keys on. It must NOT fire on a replayed activation,
@@ -2816,6 +2871,7 @@ def sc_promo_bonus_grants(s, fx):
 
 SCENARIOS = [
     sc_confirmation_email_block,
+    sc_email_payment_status_not_racy,
     sc_membership_started_emit,
     sc_promo_discount,
     sc_promo_eligibility,
