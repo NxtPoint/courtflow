@@ -18,6 +18,8 @@ from sqlalchemy.orm import Session
 from db import get_engine
 from diary import bookings as B
 from billing import statement as S
+from billing.events import apply_payment_event
+from billing.gateway import NormalizedPaymentEvent
 from billing import orders as O
 from billing import commission as CM
 
@@ -153,6 +155,102 @@ def sc_pay_all(s, fx):
                           provider="card_at_desk", provider_payment_id="SETTLE-1", user_id=fx.member)
     check("balance still ZERO after replay", owed(s, fx)["total_owed_minor"] == 0)
     check("coach earnings unchanged after replay", coach_earnings(s, fx) == earn1, str(coach_earnings(s, fx)))
+
+
+def _fresh_court(s, fx, name):
+    """A court NOBODY else has booked. This harness shares one accumulating fixture, so hunting for a
+    free hour on a shared court is guesswork that breaks the moment a scenario is added above."""
+    rid = s.execute(
+        text("INSERT INTO diary.resource (club_id, kind, name, surface, rank) "
+             "VALUES (:c,'court',:n,'hard',99) RETURNING id"),
+        {"c": fx.club_id, "n": name}).scalar_one()
+    s.execute(text("INSERT INTO diary.availability_rule (club_id, resource_id, weekday, "
+                   "start_time, end_time, slot_minutes) VALUES (:c,:r,:wd,'08:00','18:00',30)"),
+              {"c": fx.club_id, "r": rid, "wd": fx.target.weekday()})
+    return rid
+
+
+def sc_settlement_refund_restores_debt(s, fx):
+    """Refunding a "Pay all" payment used to return the cash AND erase the debt. settle_settlement_order
+    marks N real debts 'paid' off ONE payment; the refund branch only ever touched the wrapper, so the
+    client got their money back and their statement stayed at zero — club out the cash AND the
+    receivable, with no way back (void_order refuses anything not open/awaiting_payment). Commission
+    was already unwound correctly; only the money leg was missing."""
+    print("\n# Refunding a 'Pay all' payment RESTORES the child debts (cash back ≠ debt forgiven)")
+    # DELTA-BASED + on the second court: this harness accumulates, so absolute counts and court[0]
+    # hours are both already spoken for by earlier scenarios.
+    start = owed(s, fx)
+    # Drain any pack the earlier scenarios left: an owed-mode booking correctly AUTO-DRAWS a
+    # matching wallet, which would make these bookings R0 and never owed. We need real debt here.
+    s.execute(text("UPDATE billing.token_wallet SET status='expired', minutes_remaining=0 "
+                   "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.member})
+    c = _fresh_court(s, fx, "Refund Court")
+    book_court(s, fx, 9, "at_court", court=c)     # R150
+    book_court(s, fx, 10, "at_court", court=c)    # R150
+    before = owed(s, fx)
+    check("two more owed lines before paying", before["count"] == start["count"] + 2,
+          "%s -> %s" % (start["count"], before["count"]))
+
+    so = S.create_settlement_order(s, club_id=fx.club_id, user_id=fx.member)
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=so["order_id"],
+                          amount_minor=so["amount_minor"], provider="card_at_desk",
+                          provider_payment_id="SETTLE-REFUND-1", user_id=fx.member)
+    check("balance clears after Pay all", owed(s, fx)["count"] == 0, str(owed(s, fx)))
+
+    # Refund the settlement payment in full — the ordinary Admin → Online payments → Refund action.
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="yoco", kind="refunded", order_ref=so["order_id"],
+        provider_payment_id="rf-settle-1", amount_minor=so["amount_minor"], currency="ZAR",
+        status="refunded", direction="refund", club_id=str(fx.club_id),
+        user_id=str(fx.member)), session=s)
+
+    after = owed(s, fx)
+    check("the child debts COME BACK after the refund", after["count"] == before["count"],
+          "%s -> %s" % (before["count"], after["count"]))
+    check("...for the full original amount",
+          after["total_owed_minor"] == before["total_owed_minor"], str(after["total_owed_minor"]))
+
+
+def sc_settlement_survives_reclaim(s, fx):
+    """A "Pay all" payment landing AFTER the 30-minute reclaim used to settle NOTHING. The reclaim
+    NULLs child.settled_by_order_id so an abandoned checkout stops hiding the debt — but that was the
+    wrapper's only record of its contents, and Yoco retries/reconcile run for 72 HOURS against that
+    30-minute window. The charge marked the wrapper paid, settled zero children, and the member was
+    asked to pay a debt they had already paid."""
+    print("\n# A 'Pay all' payment that lands AFTER the reclaim still settles its children")
+    # NOTE: this harness shares ONE accumulating fixture (no per-scenario savepoints), so assert on
+    # DELTAS, never absolute counts — earlier scenarios legitimately leave debts behind.
+    start = owed(s, fx)
+    # Drain any pack the earlier scenarios left: an owed-mode booking correctly AUTO-DRAWS a
+    # matching wallet, which would make these bookings R0 and never owed. We need real debt here.
+    s.execute(text("UPDATE billing.token_wallet SET status='expired', minutes_remaining=0 "
+                   "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.member})
+    c = _fresh_court(s, fx, "Reclaim Court")
+    book_court(s, fx, 9, "at_court", court=c)     # R150
+    book_court(s, fx, 10, "at_court", court=c)    # R150
+    before = owed(s, fx)
+    check("two more owed lines added", before["count"] == start["count"] + 2, str(before["count"]))
+
+    so = S.create_settlement_order(s, club_id=fx.club_id, user_id=fx.member)
+    check("children are hidden while the checkout is live", owed(s, fx)["count"] == 0)
+
+    # The member abandons the tab; a later statement read reclaims the children (grace 0 forces it).
+    S._reclaim_abandoned_settlements(s, club_id=fx.club_id, user_id=fx.member, grace_minutes=0)
+    check("after the reclaim the debts are visible again",
+          owed(s, fx)["count"] == before["count"], str(owed(s, fx)["count"]))
+    unlinked = s.execute(text('SELECT count(*) FROM billing."order" '
+                              "WHERE settled_by_order_id = :s"), {"s": so["order_id"]}).scalar()
+    check("...and the child back-references are gone (the trap)", unlinked == 0, str(unlinked))
+    check("the wrapper is STILL recognised as a settlement order (snapshot, not back-reference)",
+          S.is_settlement_order(s, order_id=so["order_id"]) is True, "lost its identity")
+
+    # The Yoco retry finally lands, hours later.
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=so["order_id"],
+                          amount_minor=so["amount_minor"], provider="card_at_desk",
+                          provider_payment_id="SETTLE-LATE-1", user_id=fx.member)
+    after = owed(s, fx)
+    check("the late payment DOES settle the children (member isn't billed twice)",
+          after["count"] == 0 and after["total_owed_minor"] == 0, str(after))
 
 
 def sc_partial_and_reclaim(s, fx):
@@ -328,7 +426,12 @@ def sc_discount_reconcile(s, fx):
 
 
 SCENARIOS = [sc_no_double_count, sc_membership_r0, sc_pay_all, sc_partial_and_reclaim, sc_void,
-             sc_discount_reconcile, sc_arrears_lockstep, sc_pack_offline, sc_cancelled_class_not_owed]
+             sc_discount_reconcile, sc_arrears_lockstep, sc_pack_offline, sc_cancelled_class_not_owed,
+             # Appended LAST on purpose: unlike the booking/billing harnesses, this one shares ONE
+             # accumulating fixture with no per-scenario savepoints, so a scenario inserted mid-list
+             # shifts the balances every later scenario asserts on.
+             sc_settlement_refund_restores_debt, sc_settlement_survives_reclaim,
+             ]
 
 
 def main():

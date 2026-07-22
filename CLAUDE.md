@@ -22,7 +22,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 246 / billing 407 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 246 / billing 407 / statement 57**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -71,7 +71,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      ONCE per real activation (online + offline) carrying the email, never on a replay, and NEVER on the
      7-day trial (a `_EmitRecorder` context manager swaps the stubbed `marketing_crm.tracking.emit` for a
      recorder — late binding is what makes that work)**.
-   - `test_statement_reconciliation` (47) — no double-count, pay-all-once, part-settle, reclaim,
+   - `test_statement_reconciliation` (57) — no double-count, pay-all-once, part-settle, reclaim,
      membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
 
 ## Deployment (LIVE on Render)
@@ -345,6 +345,19 @@ acts; a coach/admin **on-behalf** booking ALWAYS auto-confirms. Coach actions `P
 accepts/declines/withdraws in My Bookings → "Needs your attention"); decline → `cancelled`. `requested`/
 `proposed` are in the status CHECK but NOT the GiST exclusion (they hold no slot).
 
+**"Pay all" settlement orders — the wrapper OWNS its contents.** A settlement order stands in for N real
+debts. Its coverage is snapshotted **immutably** on `billing."order".covered_order_ids` at creation; the
+child-side `settled_by_order_id` is MUTABLE (`_reclaim_abandoned_settlements` NULLs it after 30 min so an
+abandoned checkout stops hiding the debt) and must **never** be the only record — Yoco retries/reconcile run
+for **72 hours** against that 30-minute reclaim, and a payment landing after it used to mark the wrapper paid
+and settle **ZERO** children (debt survived a successful payment; the member was billed twice; the orphaned
+wrapper double-counted as revenue). `settle_settlement_order` and `is_settlement_order` read the snapshot
+first, back-reference second. **Refunding a wrapper must UN-SETTLE its children** (`unsettle_settlement_order`
+→ `open` **and** `settled_by_order_id = NULL`, or the debt returns invisible) — otherwise the club loses the
+cash AND the receivable. That un-settle runs **strictly AFTER `_accrue_refund_clawback`**, which only reverses
+commission on children still `paid`. A PARTIAL refund of a wrapper can't be allocated per child — it logs and
+flags rather than half-settling. Guarded by `sc_settlement_refund_restores_debt` +
+`sc_settlement_survives_reclaim`.
 **Unified client statement** (`billing/statement.py`): one debt = one `billing.order`, settled once. The account
 page shows ONE reconciled "Your statement", grouped by category with tick-to-part-settle; admin void/write-off;
 coach `coach_arrears` kept in **lockstep** with orders so commission accrues exactly once. Design:

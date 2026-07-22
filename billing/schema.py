@@ -130,6 +130,15 @@ _DDL = [
     # we mark each child paid + fan out its consequence (commission split). NULL = a standalone order.
     f'ALTER TABLE {SCHEMA}.order ADD COLUMN IF NOT EXISTS settled_by_order_id uuid '
     f'REFERENCES {SCHEMA}."order"(id) ON DELETE SET NULL;',
+    # THE SETTLEMENT ORDER'S OWN RECORD OF WHAT IT IS PAYING FOR — written once at creation and never
+    # mutated. The child-side `settled_by_order_id` above is MUTABLE: _reclaim_abandoned_settlements
+    # NULLs it after 30 minutes so an abandoned checkout stops hiding the debt. That is right for the
+    # read path, but it also erased the wrapper's only record of its own contents — so a payment
+    # arriving after the reclaim (a Yoco retry runs for 72 HOURS against a 30-minute reclaim) marked
+    # the wrapper 'paid' and settled ZERO children: the member's debt survived, they were asked to pay
+    # it again, and the orphaned wrapper double-counted as revenue. It also left a refund unable to
+    # find the debts it should restore. The snapshot makes the coverage durable in both directions.
+    f"ALTER TABLE {SCHEMA}.order ADD COLUMN IF NOT EXISTS covered_order_ids uuid[];",
     # Per-price payment preference — lets a SINGLE membership tier (one price row, or the rows of a
     # tier) carry its OWN payment options, since all membership tiers share one product. NULL =
     # inherit the product's payment_modes, then the club's global enabled methods. CSV of modes.

@@ -220,12 +220,42 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
                     promotions.reverse_for_order(session, order_id)
                 except Exception:
                     pass
+            elif order_id:
+                # A PARTIAL refund of a wrapper cannot be allocated across its children — there is no
+                # per-child breakdown of what was returned. Flag it rather than silently leaving a
+                # half-refunded statement that reconciles to nothing.
+                try:
+                    from billing.statement import is_settlement_order
+                    if is_settlement_order(session, order_id=order_id):
+                        log.warning("PARTIAL refund on settlement order %s — children left settled; "
+                                    "allocate manually or refund the child orders individually",
+                                    order_id)
+                        result["settlement_partial_refund_unallocated"] = True
+                except Exception:
+                    pass
             # Reverse the coach's commission PROPORTIONALLY so the club doesn't eat the coach's
             # share of a refunded lesson (and the coach sees the refund). Savepoint-guarded +
             # idempotent, exactly like the charge fan-out — never blocks the refund record.
             clawback = _accrue_refund_clawback(session, event, club_id, order_id, refund_pay_id)
             if clawback:
                 result["commission_clawback"] = clawback
+
+            # A "Pay all" wrapper stands in for N REAL debts it marked 'paid'. Refunding it returned
+            # the cash but left those debts settled — the club lost the money AND the receivable,
+            # with no way back (void_order refuses anything not open/awaiting_payment, so restoring
+            # them needed manual SQL). Reopen them so the statement is true again.
+            #
+            # STRICTLY AFTER THE CLAWBACK: _accrue_refund_clawback walks the children and only
+            # reverses commission on ones still 'paid'. Reopening them first silently disabled it and
+            # the coach kept commission on a refunded lesson — the harness caught exactly that.
+            if is_full:
+                try:
+                    from billing.statement import is_settlement_order, unsettle_settlement_order
+                    if is_settlement_order(session, order_id=order_id):
+                        res_un = unsettle_settlement_order(session, settlement_order_id=order_id)
+                        result["settlement_children_restored"] = res_un.get("restored", 0)
+                except Exception:
+                    log.exception("settlement un-settle skipped on refund of %s", order_id)
         result["payment_recorded"] = True
         result["note"] = "refund recorded; booking NOT auto-reversed"
         _emit("payment_refunded",

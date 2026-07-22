@@ -292,10 +292,17 @@ def create_settlement_order(session, *, club_id, user_id, order_ids=None) -> Opt
          "desc": f"Statement settlement — {len(items)} item" + ("" if len(items) == 1 else "s"),
          "amt": total},
     )
+    covered = [i["order_id"] for i in items]
     session.execute(
         text('UPDATE billing."order" SET settled_by_order_id = :s, updated_at = now() '
              "WHERE club_id = :c AND id = ANY(:ids)"),
-        {"s": settle_id, "c": str(club_id), "ids": [i["order_id"] for i in items]},
+        {"s": settle_id, "c": str(club_id), "ids": covered},
+    )
+    # IMMUTABLE SNAPSHOT of what this wrapper is paying for. The child-side link above gets NULLed by
+    # _reclaim_abandoned_settlements, so it cannot be the only record — see the schema comment.
+    session.execute(
+        text('UPDATE billing."order" SET covered_order_ids = CAST(:ids AS uuid[]) WHERE id = :s'),
+        {"ids": covered, "s": settle_id},
     )
     return {"order_id": settle_id, "amount_minor": total, "currency": currency, "items": len(items)}
 
@@ -310,11 +317,26 @@ def settle_settlement_order(session, *, settlement_order_id) -> Dict[str, Any]:
              "AND status = 'succeeded' ORDER BY created_at LIMIT 1"),
         {"o": str(settlement_order_id)},
     ).scalar()
+    # Settle from the wrapper's OWN immutable snapshot, falling back to the child back-reference for
+    # pre-snapshot rows. Using only the back-reference meant a payment arriving after
+    # _reclaim_abandoned_settlements had unlinked the children settled NOTHING — the member's debt
+    # survived a successful payment and they were billed again. `status='open'` still gates the write,
+    # so a child already settled by another path is never double-settled and this stays idempotent.
     children = session.execute(
         text('SELECT id, club_id FROM billing."order" '
-             "WHERE settled_by_order_id = :s AND status = 'open'"),
+             "WHERE status = 'open' AND ("
+             "      settled_by_order_id = :s"
+             "   OR id = ANY(COALESCE((SELECT covered_order_ids FROM billing.\"order\" "
+             "                          WHERE id = :s), ARRAY[]::uuid[]))"
+             ")"),
         {"s": str(settlement_order_id)},
     ).mappings().all()
+    if not children:
+        # A paid wrapper that settles nothing is either a duplicate call (fine) or the failure above
+        # (money taken, debt still owed). Nothing else surfaces it, so say so loudly.
+        log.warning("settle_settlement_order: settlement order %s settled ZERO children — "
+                    "if this was a first settle, the payer's debt is still outstanding",
+                    settlement_order_id)
     settled = 0
     splits = 0
     for ch in children:
@@ -336,11 +358,68 @@ def settle_settlement_order(session, *, settlement_order_id) -> Dict[str, Any]:
 
 
 def is_settlement_order(session, *, order_id) -> bool:
-    """True if this order is a 'pay all' settlement vehicle (has child orders pointing at it)."""
+    """True if this order is a 'pay all' settlement vehicle.
+
+    Checks the wrapper's OWN snapshot first — a purely relational test (does any child point here?)
+    reported False the moment _reclaim_abandoned_settlements unlinked the children, so an abandoned-
+    then-paid wrapper stopped being recognised as a settlement order at all. The back-reference is
+    still honoured for rows created before the snapshot existed."""
     return session.execute(
-        text('SELECT 1 FROM billing."order" WHERE settled_by_order_id = :o LIMIT 1'),
+        text('SELECT 1 FROM billing."order" o '
+             " WHERE (o.id = :o AND COALESCE(array_length(o.covered_order_ids, 1), 0) > 0) "
+             "    OR o.settled_by_order_id = :o LIMIT 1"),
         {"o": str(order_id)},
     ).first() is not None
+
+
+def settlement_children(session, *, settlement_order_id):
+    """Every order this wrapper covers, whatever its status — snapshot first, back-reference as a
+    fallback. Used by the REFUND path, which must reach children that have already been marked paid
+    (and are therefore invisible to the 'open'-gated settle query)."""
+    rows = session.execute(
+        text('SELECT id, club_id, amount_minor, status FROM billing."order" '
+             " WHERE settled_by_order_id = :s"
+             "    OR id = ANY(COALESCE((SELECT covered_order_ids FROM billing.\"order\" "
+             "                           WHERE id = :s), ARRAY[]::uuid[]))"),
+        {"s": str(settlement_order_id)},
+    ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def unsettle_settlement_order(session, *, settlement_order_id) -> Dict[str, Any]:
+    """A settlement order was REFUNDED — put its children back to 'open' so the debt returns.
+
+    settle_settlement_order marks N real debts 'paid' off ONE payment. Refunding that payment used to
+    touch only the wrapper: the client got the cash back AND their statement stayed at zero, so the
+    club lost the money and the receivable, with no way back (void_order refuses anything not
+    open/awaiting_payment, so restoring it needed manual SQL). Commission was already unwound
+    correctly by the clawback, which walks the children — the money leg simply never did.
+
+    Only 'paid' children are reopened: one already refunded, voided or written off in its own right
+    must not be resurrected. Idempotent; guarded — a refund must never fail because of this."""
+    restored = 0
+    try:
+        for ch in settlement_children(session, settlement_order_id=settlement_order_id):
+            if ch.get("status") != "paid":
+                continue
+            # Clear settled_by_order_id TOO. unpaid_orders hides any child still pointing at a
+            # settlement order (that is how a live checkout stops showing the debt twice), so
+            # reopening the status alone brings the debt back INVISIBLE — owed but absent from the
+            # statement, which is barely better than the bug. The covered_order_ids snapshot keeps
+            # the history, so nothing is lost by unlinking.
+            r = session.execute(
+                text('UPDATE billing."order" SET status = \'open\', settled_by_order_id = NULL, '
+                     "updated_at = now() WHERE id = :id AND status = 'paid' RETURNING id"),
+                {"id": ch["id"]},
+            ).first()
+            if r:
+                restored += 1
+        if restored:
+            log.info("refund of settlement order %s restored %d child debt(s)",
+                     settlement_order_id, restored)
+    except Exception:
+        log.exception("unsettle_settlement_order failed for %s (non-fatal)", settlement_order_id)
+    return {"restored": restored}
 
 
 def void_order(session, *, club_id, order_id, write_off=False, reason=None) -> Dict[str, Any]:
