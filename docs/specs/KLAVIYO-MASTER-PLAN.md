@@ -284,8 +284,10 @@ would double-message).
   preferences one-off campaign (draft), **B1 Court→membership FLOW `Rrs48q` (Draft)** — segment `SZ3UFX` →
   Wait 1 day → email `VZ8DiM`. **Pre-built templates waiting on a trigger:** C1 `RJDzuj`, F3 `T5Ub7j`.
 - **Metrics now live in Klaviyo (fired ≥once):** `trial_started`, `booking_confirmed`, `payment_succeeded`,
-  `class_enrolled`, consent events, `invoice_issued`, `refund_requested`. **Still NOT fired (so unusable as
-  triggers/segments yet):** `lesson_completed`, `membership_started`, `membership_lapsed`.
+  `class_enrolled`, consent events, `invoice_issued`, `refund_requested`. ~~**Still NOT fired:**
+  `lesson_completed`, `membership_started`, `membership_lapsed`.~~ ✅ **ALL THREE ARE NOW LIVE UNDER THE API
+  SOURCE (audited 2026-07-22 — see §7g for the exact metric ids to bind to, and mind the MCP test twins).**
+  Nothing is Code-blocked any more.
 - **What Posts needs from Code to light up the rest (in priority):**
   1. **Fire the first `lesson_completed`** (a coach marks any lesson done — even a test) → the metric appears
      in Klaviyo → Posts wires **C1** (the star-rating email uses `{{ event.feedback_url }}`, which Code already
@@ -325,14 +327,14 @@ would double-message).
 **METRIC-SOURCE PROOF for why C1 + converter-guard are blocked (inspected account metrics 2026-07-19):**
 Every REAL NextPoint app event flows through the **"API"** integration (`booking_confirmed`, `trial_started`, `payment_succeeded`, `membership_lapsed`, `class_enrolled`, `invoice_issued`, …). But **`lesson_completed`** (`RfeMhj`) and **`membership_started`** (`VZvpc9`) exist **ONLY under the "Klaviyo MCP Server" integration** — i.e. they are my *test* events, not the app's. Binding a flow to those = it listens only to the test source; when the real app finally emits those two via the **API** integration, Klaviyo makes a *separate* same-named metric and the flow (trigger locked at save) never fires. This is the hard blocker, now proven.
 
-**Still blocked — needs Code to emit + one real event (then ~10 min each in the Builder):**
-1. **C1 Post-lesson feedback** — shell `Y2YxEZ` (trigger UNCONFIGURED). **Unblock:** Code wires the app to emit `lesson_completed` via the **API integration** (already done for `booking_confirmed` etc.), then mark one real lesson complete → an API-source `lesson_completed` metric appears → wire trigger to THAT → re-entry 21 days → email `RJDzuj`.
-2. **Trial converter-guard** — the Code half is ✅ **fixed 2026-07-22** (§7f: the emit was on an unreachable
-   gateway branch; it now fires from the real activation path). Unblocks the same way C1 does — the
-   API-source metric appears on the first real activation after deploy, then wire the skip-filter. ⚠️ **Do
-   NOT send to the Unconverted-trial segment `XxUZCt` until `scripts/klaviyo_membership_backfill` has run** —
-   the fix is forward-only, so past converters are still `on_trial`=true with 0 `membership_started` and would
-   get a "you haven't converted yet" pitch.
+**~~Still blocked~~ ✅ BOTH UNBLOCKED 2026-07-22 — now pure Builder work (~10 min each), see §7g:**
+1. **C1 Post-lesson feedback** — shell `Y2YxEZ` (trigger still UNCONFIGURED). The API-source
+   `lesson_completed` metric **`SzgJKC`** has existed since **2026-07-20** (a real lesson was marked done —
+   this went unnoticed). Wire the trigger to **`SzgJKC`**, NOT the MCP test twin `RfeMhj` → re-entry 21 days →
+   email `RJDzuj`.
+2. **Trial converter-guard** — the API-source `membership_started` metric is **`WRb7TK`** (live since the
+   2026-07-22 backfill; the MCP twin is `VZvpc9`). Wire the skip-filter against `WRb7TK`. ✅ The backfill has
+   now RUN (12 members corrected), so re-check that `XxUZCt` has shrunk, then the Jan offer is safe to send.
 
 **⚠️ Metric-source caveat (Code + Posts, important):** Klaviyo keys a metric by (name, **source/integration**). Code's real events land under the **"API"** integration. To unblock C1's trigger tonight Posts fired **test** `lesson_completed` + `membership_started` events (profile **`cowork-flowtest@nextpointtennis.com`**, `is_test`=true). The first attempt created them under the **"Klaviyo MCP Server"** source (wrong); a second used `service="api"`. **Before turning C1 live, verify its trigger is bound to the SAME `lesson_completed` metric Code emits** (check the metric's source = API) — re-point if needed. Cleanest long-term: wire C1's trigger after Code's FIRST real `lesson_completed` fires, then the source is guaranteed correct.
 
@@ -444,6 +446,49 @@ paid plan.
 **Note for C1 / the converter-guard:** the metric still won't exist under the **API** source in Klaviyo until
 the first real activation fires post-deploy (or the backfill runs). At that point §7d's original assumption
 finally holds — it genuinely is "fire one real event, then wire the trigger".
+
+## 7g. Metric-source audit — 2026-07-22 after the backfill ran (Claude Code, read-only)
+
+Tomo ran `scripts/klaviyo_membership_backfill --commit` on Render: **12 members corrected.** Audited every
+metric in the account afterwards. **All three previously-dark events are now LIVE under the API source — the
+"Still NOT fired" list in §7c is now EMPTY, and every remaining blocker is a Builder task, not a Code one.**
+
+| Event | API-source metric | First real fire | Status |
+|---|---|---|---|
+| `membership_started` | **`WRb7TK`** | 2026-07-22 (the backfill) | ✅ unblocked — converter-guard can be wired |
+| `lesson_completed` | **`SzgJKC`** | **2026-07-20** (a real lesson was marked done) | ✅ **C1 unblocked — nobody noticed** |
+| `membership_lapsed` | **`SJ37Jn`** | 2026-07-19 (the daily sweep) | ✅ E2 win-back unblocked |
+
+Also now live under API and unused: `booking_rescheduled` `TKmnuR`, `class_waitlisted` `QTLwy4`,
+`booking_cancelled` `WUMrLq`, `booking_reminder` `WCFU76`, `lesson_requested` `WLESGK`.
+
+**⚠️ Use the API-source ids above, NOT the MCP test twins.** Both duplicates still exist —
+`lesson_completed` `RfeMhj` and `membership_started` `VZvpc9` are the **Klaviyo MCP Server** test metrics from
+§7d. A flow bound to those listens to the wrong source and will never fire on real traffic, and a trigger
+can't be changed after save. The C1 shell `Y2YxEZ` is still `trigger_type: Unconfigured` — wire it to
+**`SzgJKC`**.
+
+**✅ The backfill sent nobody an email.** `WRb7TK`'s `flow-triggers` is empty, and the only two LIVE flows —
+`RkGxYG` (Trial Conversion) and `SS9m2w` (Member Preferences) — both trigger on `trial_started` `VjW79Y`. So
+the 12 events corrected profile state and triggered nothing. Re-check that `XxUZCt` has shrunk before sending
+it anything (segments repopulate asynchronously).
+
+### ⚠️ Design consequence worth a decision: all 12 were `provider='manual'`
+
+Not one active membership is `provider='yoco'` — every single one was created by the **admin manual grant**
+(`admin.repositories.grant_membership`) or the **Wix take-on** (`scripts/import_wix`), both of which set
+`provider='manual'` and **INSERT their subscription row directly, bypassing `_apply_term_grant`**.
+
+That exclusion was deliberate (§7f: an admin grant isn't a purchase) — but 12-out-of-12 says **manual granting
+is how this club actually sells memberships today**, which means the forward emit will rarely fire and
+`on_trial` will drift stale again for every future manual convert. Two options, owner's call:
+
+- **(a) Emit from the admin grant too** — treat "now holds a membership" as the conversion regardless of how
+  it was created. Matches what the flag is actually used for (don't market "convert!" at a member). Recommended.
+- **(b) Leave it** and re-run `scripts/klaviyo_membership_backfill` periodically (it's idempotent in effect —
+  re-setting `on_trial=false` on someone already false is a no-op, though it does re-fire the event).
+
+Until one is chosen, treat the backfill as **a recurring chore, not a one-off.**
 
 ## 8. Measurement
 - **Conversion:** `membership_started` metric + the `utm_campaign` in GA4. The trial flow's success =

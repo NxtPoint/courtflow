@@ -10,12 +10,14 @@ switches, unwired endpoints) live in their own doc: **[FEATURE-FLAGS.md](FEATURE
 > **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 180 /
 > billing 383 / statement 47** (2026-07-22).
 >
-> **⚠️ ONE ACTION OWED BEFORE ANY KLAVIYO SEND:** `membership_started` never fired on the live path (it was
-> wired to a gateway branch nothing produces) — **fixed in code 2026-07-22, but the fix is FORWARD-ONLY.**
-> Members who converted BEFORE it still read `on_trial=true` with zero `membership_started`, so Klaviyo's
-> Unconverted-trial segment `XxUZCt` **still contains paying members**. Run
-> `python -m scripts.klaviyo_membership_backfill` (dry-run first, then `--commit`) before sending that
-> segment anything. Full detail: `KLAVIYO-MASTER-PLAN.md` §7f.
+> **Klaviyo, 2026-07-22 — `membership_started` never fired** (wired to a gateway branch nothing produces);
+> **fixed in code + backfill RUN on prod** (12 members corrected, no emails sent). `KLAVIYO-MASTER-PLAN.md`
+> §7f/§7g. Two follow-ups remain:
+> - **Owner decision:** all 12 active memberships are `provider='manual'` (admin grant / Wix import), which
+>   bypasses the new emit by design — so either also emit from `admin.grant_membership`, or treat
+>   `scripts/klaviyo_membership_backfill` as a recurring chore. (§7g)
+> - **Builder, not Code:** C1 and the converter-guard are now unblocked — bind to the **API-source** metrics
+>   `SzgJKC` (`lesson_completed`) and `WRb7TK` (`membership_started`), never the MCP test twins.
 
 > Per-sprint changelog is NOT kept here anymore — it lives in git history + the memory index
 > (`.claude/.../MEMORY.md`). This file is the forward-looking backlog only.
