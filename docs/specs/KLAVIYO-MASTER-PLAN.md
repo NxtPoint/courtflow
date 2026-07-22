@@ -117,7 +117,7 @@ Each row is a flow/campaign to run. **Code** = what engineering must ship first 
 |---|---|---|---|---|---|---|
 | F1 | **Lapsed win-back** (ongoing) | segment: no booking in 60/90d + opted-in | opt-in | — | "we've missed you" + soft offer | 📋 |
 | F2 | **Dormant reactivation** (opted-in) | list `NextPoint Reactivation` | opt-in | script `--commit` | "your account's ready in the new app" | 📋 |
-| F3 | **Google review campaign** | segment: happy active members (§4 gate) | opt-in | feedback gate (§4) | template **`T5Ub7j`** built (direct `g.page` CTA) | ◐ **ready** — needs an audience segment (engaged/active opted-in, or NPS≥4 once feedback data exists) |
+| F3 | **Google review campaign** | segment: happy active members (§4 gate) | opt-in | feedback gate (§4) | template **`T5Ub7j`** built (direct `g.page` CTA) | ✅ **BUILT — campaign `01KXV8ZYTDXHJWYGMZDKMM0QTP`, in DRAFT**; audience = Engaged segment **`YcX4pB`**. **Tomo: review render + count → Send.** |
 
 **Reminder flow (`booking_reminder`)** — ✅ **now LIVE via SES** (hourly `reminders.yml` cron → T-24h/T-2h,
 deduped). **Cowork: do NOT build a Klaviyo reminder flow** — SES already sends the reminder, so a Klaviyo send
@@ -236,10 +236,10 @@ no remaining engineering blocker — the rest is Cowork building templates + flo
 
 **Then (segment-based — build the segment, then the campaign/flow):**
 5. **F1 Lapsed win-back** — segment: no `booking_confirmed` in 60/90d + `marketing_opt_in`.
-6. **B1 Court→membership "maths"** — segment: ≥2 `booking_confirmed` (booking_type=court, settlement≠membership_covered), no `membership_started`.
+6. ✅ **B1 Court→membership "maths"** — **BUILT** (flow `Rrs48q`, Draft; segment `SZ3UFX` = ≥2 `booking_confirmed`, booking_type=court, settlement≠membership_covered — which excludes members + trialists without needing `membership_started`).
 7. **E1 Membership renewal** — segment/date before period end.
 8. **E3 Pack top-up** — trigger `pack_low` (fires at 1 session left).
-9. **F3 Google review campaign** — template `T5Ub7j` built; point it at an engaged/active opted-in segment.
+9. ✅ **F3 Google review campaign** — **BUILT** (campaign `01KXV8ZYTDXHJWYGMZDKMM0QTP`, Draft; audience = Engaged segment `YcX4pB`). Tomo sends.
 10. **C2 Coaching intro · D1 Class re-enrol · D2 Family/juniors · B2 Clay showcase** — segment-based, build as capacity allows.
 
 **Do NOT build:** a Klaviyo **reminder** flow (`booking_reminder` is SES-owned — see §3 note; a Klaviyo send
@@ -356,7 +356,10 @@ Every REAL NextPoint app event flows through the **"API"** integration (`booking
 | `pack_low` emit on wallet draw-down (E3) | Code | ✅ BUILT — Cowork builds the top-up flow |
 | **Code side of the roadmap** | Code | ✅ **DONE — every trigger wired; see §6b checklist** |
 | Welcome / activation flow (A2) | Posts | ✅ built (Draft → flip Live) · trigger = Added to `NextPoint Members` → Welcome 1 (immediate) → wait 2d → Welcome 2 |
-| Court→membership "maths" (B1) | Posts | 📋 |
+| Court→membership "maths" (B1) | Posts | ✅ built (Draft → flip Live) · flow `Rrs48q` · trigger = Added to segment `SZ3UFX` → wait 1d → email `VZ8DiM` |
+| Google review campaign (F3) | Posts | ✅ built (Draft) · campaign `01KXV8ZYTDXHJWYGMZDKMM0QTP` → audience = Engaged `YcX4pB` · Tomo sends |
+| Court-experience feedback | Posts | ◐ built (Draft) · flow `WSWr2C` → email `VwcB8a`, re-entry 21d · ⚠️ **BLOCKER before Live: add the trigger filter `booking_type` = `court`** — as saved it fires on lesson + class bookings too |
+| Cross-sell court→lesson | Posts | ✅ built (Draft) · flow `Rhsfy6` · trigger = Added to segment `Rv24hw` (court players, no lesson) → email `VJ5mZP` |
 | Guardrails (freq cap, sunset, smart send) | Posts | ✅ Smart Sending on + Sunset segment `XUkJFa` built · ⚠️ freq-cap = manual settings check (no API) |
 
 ---
