@@ -336,6 +336,31 @@ _DDL = [
         created_at timestamptz NOT NULL DEFAULT now()
     );
     """,
+
+    # --- BACKFILL: link every CLASS resource to its billing.product ------------------------------
+    # Class services used to be resolved by JOINING ON NAMES. Renaming a service updates only
+    # billing.product.name, so the join silently broke and sessions scheduled afterwards got
+    # price_id NULL -> billed at another class's rate under another class's payment rules.
+    # create_class_type now sets diary.resource.product_id at birth; this heals the rows that
+    # pre-date that. Deliberately CONSERVATIVE: it fills only NULL links, and only where exactly ONE
+    # active class product matches on (name, coach) — an ambiguous or already-drifted name is left
+    # alone for a human rather than guessed at. Idempotent: a second run matches nothing.
+    """
+    UPDATE diary.resource r
+       SET product_id = m.pid, updated_at = now()
+      FROM (
+            SELECT r2.id AS rid, MIN(p.id::text)::uuid AS pid
+              FROM diary.resource r2
+              JOIN billing.product p
+                ON p.club_id = r2.club_id AND p.kind = 'class' AND p.active = true
+               AND lower(p.name) = lower(r2.name)
+               AND p.coach_user_id IS NOT DISTINCT FROM r2.coach_user_id
+             WHERE r2.kind = 'class' AND r2.product_id IS NULL
+             GROUP BY r2.id
+            HAVING count(*) = 1
+           ) m
+     WHERE r.id = m.rid AND r.product_id IS NULL;
+    """,
 ]
 
 

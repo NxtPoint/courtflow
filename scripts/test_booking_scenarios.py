@@ -685,6 +685,109 @@ def _enrolled_n(s, sid):
                      {"cs": sid}).scalar()
 
 
+def sc_class_price_survives_rename(s, fx):
+    """A class's service was resolved by JOINING ON NAMES. Renaming the service updates
+    billing.product.name and nothing syncs diary.resource.name, so every session scheduled afterwards
+    resolved to NO product: price_id NULL, then a kind-level fallback billed it at some OTHER class's
+    rate under that class's payment rules. Two live enrolments were billed 'Adult beginner group'
+    against 'Social Tennis' and 'Cardio Tennis'. A name is not an identifier."""
+    print("\n# Class pricing survives a SERVICE RENAME (durable product link, not a name join)")
+    # The class resource's own service, resolved the way the fixture names it.
+    rname = s.execute(text("SELECT name FROM diary.resource WHERE id = :r"),
+                      {"r": fx.class_res}).scalar()
+    prod = s.execute(text("SELECT id FROM billing.product WHERE club_id=:c AND kind='class' "
+                          "AND active=true AND lower(name)=lower(:n)"),
+                     {"c": fx.club_id, "n": rname}).scalar()
+    check("the class fixture has a product (fixture sanity)", bool(prod), "resource=%s" % rname)
+
+    # A DECOY class product — cheaper, and the kind-level fallback's ORDER BY created_at makes it a
+    # plausible wrong winner. If pricing ever reaches for "some class product", it lands here.
+    decoy = s.execute(text("INSERT INTO billing.product (club_id, kind, name) "
+                           "VALUES (:c,'class','Zzz Decoy Class') RETURNING id"),
+                      {"c": fx.club_id}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, unit, duration_minutes, active, status) "
+                   "VALUES (:c,:p,'any',1000,'ZAR','per_booking',90,true,'active')"),
+              {"c": fx.club_id, "p": decoy})      # R10 — obviously wrong if it ever wins
+
+    # (1) A LEGACY row with no link yet, names still agreeing: the lookup heals it and PINS the link.
+    s.execute(text("UPDATE diary.resource SET product_id = NULL WHERE id = :r"), {"r": fx.class_res})
+    sid0 = _class_at(s, fx, 9, capacity=3)
+    linked = s.execute(text("SELECT product_id FROM diary.resource WHERE id = :r"),
+                       {"r": fx.class_res}).scalar()
+    check("a legacy unlinked class is self-healed and PINNED to its product",
+          str(linked) == str(prod), str(linked))
+    check("...and that session prices off its own service",
+          str(s.execute(text("SELECT product_id FROM billing.price WHERE id = "
+                             "(SELECT price_id FROM diary.class_session WHERE id=:s)"),
+                        {"s": sid0}).scalar()) == str(prod), "priced off the wrong product")
+
+    # (2) NOW rename the service exactly as the editor does (product only — the resource keeps its
+    # old name). With the link pinned, the rename is a non-event.
+    s.execute(text("UPDATE billing.product SET name = 'Renamed Adult Group', updated_at = now() "
+                   "WHERE id = :p"), {"p": prod})
+    sid = _class_at(s, fx, 11, capacity=3)
+    resolved = s.execute(text("SELECT price_id FROM diary.class_session WHERE id = :s"),
+                         {"s": sid}).scalar()
+    check("a session scheduled AFTER the rename STILL resolves a price",
+          resolved is not None, "price_id is NULL — this is the bug")
+    got_prod = s.execute(text("SELECT product_id FROM billing.price WHERE id = :p"),
+                         {"p": resolved}).scalar() if resolved else None
+    check("...and it is THIS class's own product, never the decoy",
+          str(got_prod) == str(prod), "got %s, wanted %s" % (got_prod, prod))
+
+    # (3) THE UNRECOVERABLE CASE, stated honestly: an OLD row that was never linked AND whose name
+    # has already drifted cannot be resolved by any means — there is nothing left to match on. What
+    # matters is that it now REFUSES rather than silently billing the decoy's R10. Relinking such a
+    # class is a human job (the boot backfill deliberately skips ambiguous/drifted rows).
+    s.execute(text("UPDATE diary.resource SET product_id = NULL WHERE id = :r"), {"r": fx.class_res})
+    sid2 = _class_at(s, fx, 15, capacity=3)
+    orphan_price = s.execute(text("SELECT price_id FROM diary.class_session WHERE id = :s"),
+                             {"s": sid2}).scalar()
+    check("an orphaned class (no link + drifted name) resolves NO price", orphan_price is None,
+          str(orphan_price))
+    r = C.enrol(s, club_id=fx.club_id, class_session_id=sid2, user_id=fx.members[0],
+                settlement_mode="at_court", role="member")
+    check("...and enrolling is REFUSED, not billed at another class's rate",
+          r.get("ok") is not True and r.get("error") == "PRICE_NOT_CONFIGURED", str(r))
+
+
+def sc_class_retired_price_never_free(s, fx):
+    """Removing a price variation deactivates the price row; billing's price read requires
+    active=true, so the order was written at R0 while the class list still showed the old amount.
+    Shown != charged, and silently across every already-scheduled session."""
+    print("\n# Class with a RETIRED price variation: refuses / re-resolves — never enrols at R0")
+    sid = _class_at(s, fx, 11, capacity=3)
+    pid = s.execute(text("SELECT price_id FROM diary.class_session WHERE id = :s"),
+                    {"s": sid}).scalar()
+    check("the session froze a price (fixture sanity)", bool(pid), str(pid))
+
+    # Retire THAT variation, as the service editor's "Remove" does.
+    s.execute(text("UPDATE billing.price SET active = false WHERE id = :p"), {"p": pid})
+    r = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[0],
+                settlement_mode="at_court", role="member")
+    if r.get("ok"):
+        # Acceptable ONLY if it re-resolved to another ACTIVE price of the same service and charged it.
+        amt = s.execute(text('SELECT o.amount_minor FROM diary.enrolment e '
+                             'JOIN billing."order" o ON o.id = e.order_id '
+                             'WHERE e.class_session_id=:cs AND e.user_id=:u'),
+                        {"cs": sid, "u": fx.members[0]}).scalar()
+        check("if it enrolled, it was CHARGED (never a silent R0)", (amt or 0) > 0,
+              "enrolled at amount_minor=%s" % amt)
+    else:
+        check("otherwise it is refused up-front with PRICE_NOT_CONFIGURED",
+              r.get("error") == "PRICE_NOT_CONFIGURED", str(r))
+
+    # A token seat is legitimately R0 and must NOT be blocked by the price guard.
+    sid2 = _class_at(s, fx, 15, capacity=3)
+    s.execute(text("UPDATE billing.price SET active = false WHERE id = "
+                   "(SELECT price_id FROM diary.class_session WHERE id = :s)"), {"s": sid2})
+    rt = C.enrol(s, club_id=fx.club_id, class_session_id=sid2, user_id=fx.members[1],
+                 settlement_mode="free", role="club_admin")
+    check("a legitimately-R0 (free/admin) seat is NOT blocked by the price guard",
+          rt.get("ok") is True, str(rt))
+
+
 def sc_class_online_hold_expiry(s, fx):
     print("\n# Class: unpaid ONLINE seat is HELD, lazily released on abandonment, waitlister promoted")
     C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
@@ -1640,6 +1743,8 @@ SCENARIOS = [
     sc_coach_class_conflict,
     sc_slot_granularity,
     sc_class_waitlist,
+    sc_class_price_survives_rename,
+    sc_class_retired_price_never_free,
     sc_class_roster_shows_payment,
     sc_class_checkin_settles_debt,
     sc_class_promotion_never_free,

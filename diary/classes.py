@@ -66,13 +66,63 @@ def _enrolled_count(session, class_session_id):
     ).scalar() or 0
 
 
-def _class_payment_modes(session, club_id, price_id):
-    """The class SERVICE's allowed payment methods (a subset) or None (no per-service restriction).
-    Scoped to THIS class's own product so a card-only class actually refuses at-court / month-end."""
+def _class_product_for_session(session, club_id, cs):
+    """The billing.product for a class SESSION — via its frozen price_id, else via the class
+    resource's own durable service link. The second path is what saves a session whose price_id is
+    NULL (scheduled after a service rename) from being priced and gated as some other class."""
+    pid = _class_product_id(session, club_id, (cs or {}).get("price_id"))
+    if pid:
+        return str(pid)
+    if not cs:
+        return None
+    return _class_service_product_id(
+        session, club_id=club_id, resource_id=cs.get("resource_id"),
+        name=cs.get("class_name") or cs.get("name"), coach_user_id=cs.get("coach_user_id"))
+
+
+def _class_effective_price_id(session, club_id, cs):
+    """The price to actually charge for this class session, or None if it has none.
+
+    Prefers the session's FROZEN price_id — but only while that price row is still ACTIVE. Removing a
+    variation from a service (the "Remove" button on the variations card) deactivates the price row,
+    and billing's price read requires active=true, so the order was silently written at R0 while the
+    class list still displayed the old amount. Falls back to the service's current active price
+    rather than billing nothing."""
+    frozen = (cs or {}).get("price_id")
+    if frozen:
+        try:
+            ok = session.execute(
+                text("SELECT 1 FROM billing.price WHERE club_id = :c AND id = :p AND active = true"),
+                {"c": club_id, "p": str(frozen)},
+            ).first()
+            if ok:
+                return str(frozen)
+        except Exception:
+            return str(frozen)          # can't check → keep today's behaviour, never block a class
+    product_id = _class_product_for_session(session, club_id, cs)
+    if not product_id:
+        return None
     try:
+        return session.execute(
+            text("SELECT id FROM billing.price WHERE club_id = :c AND product_id = :p "
+                 "AND active = true ORDER BY created_at LIMIT 1"),
+            {"c": club_id, "p": product_id},
+        ).scalar()
+    except Exception:
+        return None
+
+
+def _class_payment_modes(session, club_id, cs):
+    """The class SERVICE's allowed payment methods (a subset) or None (no per-service restriction).
+    Scoped to THIS class's own product — resolved from the session, so a NULL price_id falls back to
+    the resource's service link and NOT to `kind='class'`. A kind-level read picks the club's OLDEST
+    class product and applies a completely unrelated class's rules (or none at all)."""
+    try:
+        product_id = _class_product_for_session(session, club_id, cs)
+        if not product_id:
+            return None
         from diary.pricing import payment_modes_for
-        return payment_modes_for(session, club_id=club_id, kind="class",
-                                 product_id=_class_product_id(session, club_id, price_id))
+        return payment_modes_for(session, club_id=club_id, kind="class", product_id=product_id)
     except Exception:
         return None
 
@@ -106,10 +156,20 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
         if not _settlement_allowed(settlement_mode, _policy(session, club_id), role):
             return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=settlement_mode)
         if settlement_mode in ("online", "at_court", "monthly_account"):
-            pm = _class_payment_modes(session, club_id, cs.get("price_id"))
+            pm = _class_payment_modes(session, club_id, cs)
             if pm is not None and settlement_mode not in pm:
                 return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=settlement_mode,
                             message="this class doesn't offer that payment method")
+
+    # A BILLABLE seat must have a CONFIGURED price — the same up-front guard create_booking applies
+    # (PRICE_NOT_CONFIGURED). Without it, a class whose price variation was REMOVED (the price row is
+    # deactivated, and billing's price read requires active=true) enrolled members at R0 while the
+    # class list still displayed the old amount: shown != charged, zero revenue, zero commission,
+    # silently, across every already-scheduled session. Covered/token/free seats are legitimately R0.
+    if settlement_mode not in ("token", "free"):
+        if not _class_effective_price_id(session, club_id, cs):
+            return _err("PRICE_NOT_CONFIGURED", 422,
+                        message="this class has no configured price — set one on its service first")
 
     # Free any lapsed unpaid-online seats on THIS session first, so a new enrolee can take a freed
     # seat instead of queueing on the waitlist behind someone's abandoned checkout.
@@ -171,7 +231,7 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
             token_wallet = _match_token_wallet_guarded(
                 session, club_id=club_id, user_id=payer_user_id, booking_type="class",
                 duration_minutes=None, coach_user_id=cs["coach_user_id"],
-                product_id=_class_product_id(session, club_id, cs.get("price_id")))
+                product_id=_class_product_for_session(session, club_id, cs))
             if token_wallet is None:
                 return _err("NO_TOKEN", 422,
                             message="no matching prepaid class token — choose another way to pay")
@@ -181,7 +241,9 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
             resource_id=cs["resource_id"], starts_at=cs["starts_at"], ends_at=cs["ends_at"],
             enrolment_id=str(enrol_id), audience=audience, token_wallet=token_wallet,
             token_ref=str(enrol_id),
-            price_id=cs.get("price_id"),   # charge THIS class's own rate (not the cheapest class)
+            # Charge THIS class's own rate. _class_effective_price_id re-resolves when the frozen
+            # price row has been retired, so a removed variation can never bill R0.
+            price_id=_class_effective_price_id(session, club_id, cs),
         )
         if order.get("order_id"):
             session.execute(
@@ -393,7 +455,7 @@ def _bill_promoted_enrolment(session, *, club_id, cs, enrol):
             token_wallet = _match_token_wallet_guarded(
                 session, club_id=club_id, user_id=payer, booking_type="class",
                 duration_minutes=None, coach_user_id=cs["coach_user_id"],
-                product_id=_class_product_id(session, club_id, cs.get("price_id")))  # coach+product-scoped pack
+                product_id=_class_product_for_session(session, club_id, cs))  # coach+product-scoped pack
         except Exception:
             token_wallet = None
         if token_wallet is None:
@@ -404,7 +466,7 @@ def _bill_promoted_enrolment(session, *, club_id, cs, enrol):
             settlement_mode=mode, parties=[], resource_id=cs["resource_id"],
             starts_at=cs["starts_at"], ends_at=cs["ends_at"], enrolment_id=enrol_id,
             audience=audience, token_wallet=token_wallet, token_ref=enrol_id,
-            price_id=cs.get("price_id"))   # charge THIS class's own rate (not the cheapest class)
+            price_id=_class_effective_price_id(session, club_id, cs))   # THIS class's own rate
         if order.get("order_id"):
             session.execute(
                 text("UPDATE diary.enrolment SET order_id=:o WHERE id=:id"),
@@ -684,6 +746,14 @@ def create_class_type(session, *, club_id, name, capacity, price_amount_minor,
              "active) VALUES (:c, 'class', :n, :d, :coach, true) RETURNING id"),
         {"c": club_id, "n": name, "d": description, "coach": coach_user_id},
     ).scalar_one()
+    # LINK THE RESOURCE TO ITS PRODUCT AT BIRTH — the same explicit allocation courts use. Without
+    # it, every later lookup had to JOIN ON NAMES, and renaming the service (which updates only
+    # billing.product.name) silently orphaned the class: price_id NULL, then a kind-level fallback
+    # billed it at another class's rate under another class's payment rules.
+    session.execute(
+        text("UPDATE diary.resource SET product_id = :p, updated_at = now() WHERE id = :r"),
+        {"p": pid, "r": rid},
+    )
     price_id = session.execute(
         text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
              "currency_code, unit, duration_minutes, active) "
@@ -768,18 +838,66 @@ def _resource_for_schedule(session, *, club_id, resource_id):
     ).mappings().first()
 
 
-def _class_price_id(session, *, club_id, resource_id, name, coach_user_id):
+def _class_service_product_id(session, *, club_id, resource_id, name, coach_user_id):
+    """The billing.product a class resource belongs to — THE durable link.
+
+    Resolution order:
+      1. `diary.resource.product_id` — the same explicit allocation courts use. Authoritative.
+      2. A name+coach match (legacy rows created before the link existed) — and when that hits we
+         BACKFILL resource.product_id so the class can never drift again.
+
+    WHY: this used to be a NAME JOIN ONLY. Renaming a class service updates billing.product.name and
+    nothing syncs diary.resource.name, so every session scheduled after a rename resolved to NO
+    product -> price_id NULL -> the order fell back to a kind-level lookup and was billed at some
+    OTHER class's rate under some other class's payment rules. Two live enrolments were billed
+    'Adult beginner group' against 'Social Tennis' and 'Cardio Tennis'. A name is not an identifier.
+    """
+    try:
+        pid = session.execute(
+            text("SELECT product_id FROM diary.resource WHERE id = :r AND club_id = :c"),
+            {"r": resource_id, "c": club_id},
+        ).scalar()
+        if pid:
+            return str(pid)
+    except Exception:
+        pass
     row = session.execute(
         text("""
-            SELECT pr.id, pr.duration_minutes
+            SELECT p.id
             FROM billing.product p
-            JOIN billing.price pr ON pr.product_id = p.id AND pr.club_id = p.club_id
             WHERE p.club_id = :c AND p.kind = 'class' AND p.active = true
-              AND pr.active = true AND lower(p.name) = lower(:n)
+              AND lower(p.name) = lower(:n)
               AND p.coach_user_id IS NOT DISTINCT FROM :coach
-            ORDER BY pr.created_at LIMIT 1
+            ORDER BY p.created_at LIMIT 1
         """),
         {"c": club_id, "n": name, "coach": coach_user_id},
+    ).mappings().first()
+    if not row:
+        return None
+    # Self-heal: pin the link so a later rename can't break this class again.
+    try:
+        session.execute(
+            text("UPDATE diary.resource SET product_id = :p, updated_at = now() "
+                 "WHERE id = :r AND club_id = :c AND product_id IS NULL"),
+            {"p": row["id"], "r": resource_id, "c": club_id},
+        )
+    except Exception:
+        log.debug("class product backfill skipped", exc_info=False)
+    return str(row["id"])
+
+
+def _class_price_id(session, *, club_id, resource_id, name, coach_user_id):
+    """(price_id, duration_minutes) for a class resource's own service — resolved through the
+    durable product link, never a bare name join."""
+    product_id = _class_service_product_id(session, club_id=club_id, resource_id=resource_id,
+                                           name=name, coach_user_id=coach_user_id)
+    if not product_id:
+        return (None, None)
+    row = session.execute(
+        text("SELECT id, duration_minutes FROM billing.price "
+             "WHERE club_id = :c AND product_id = :p AND active = true "
+             "ORDER BY created_at LIMIT 1"),
+        {"c": club_id, "p": product_id},
     ).mappings().first()
     return (str(row["id"]) if row else None,
             (row["duration_minutes"] if row else None))

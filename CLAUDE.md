@@ -22,11 +22,11 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 217 / billing 402 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 227 / billing 402 / statement 47**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   - `test_booking_scenarios` (217) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   - `test_booking_scenarios` (227) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
      waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused,
@@ -47,7 +47,10 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      is invisible to statement/month-end/invoicing and the sweep only matches 'enrolled', so marking
      attendance used to strand it forever), promotion treats a VOIDED order_id as NOT-billed (a stale id
      used to hand out a FREE class), and a LATE payment RE-INSTATES a swept seat — but never overbooks a
-     full class (that logs a refund case)**.
+     full class (that logs a refund case), **CLASS PRICE SURVIVES A SERVICE RENAME — a class resolves
+     its service through `diary.resource.product_id` (the DURABLE link, set at create_class_type and
+     boot-backfilled), never a name join; an orphaned class REFUSES with PRICE_NOT_CONFIGURED rather
+     than billing another class's rate, and a retired price variation can never enrol at R0**.
    - `test_billing_scenarios` (402) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
@@ -533,6 +536,15 @@ member by email on the first authenticated hit.
   (no at-court fallback for a restricted pack — refuse if unpayable); `diary.classes.enrol` gates the mode
   (and never lets a member conjure a free seat via `membership_covered`/`free`). Don't regress these to a
   kind-level check.
+- **A CLASS resolves its service through `diary.resource.product_id`, NEVER by joining on names.**
+  `create_class_type` links the resource to its `billing.product` at birth, and `diary/schema.py` boot-
+  backfills legacy rows (conservatively — only a NULL link with exactly ONE name+coach match; ambiguous
+  or already-drifted rows are left for a human). The old name join broke silently on a service RENAME
+  (which updates `billing.product.name` only), leaving `class_session.price_id` NULL → a kind-level
+  fallback billed the class at some OTHER class's rate under that class's payment rules. Resolvers:
+  `_class_service_product_id` (durable link) · `_class_product_for_session` (price → else resource) ·
+  `_class_effective_price_id` (re-resolves when the frozen price row was RETIRED, so a removed
+  variation can't bill R0). `enrol` refuses `PRICE_NOT_CONFIGURED` like `create_booking` does.
 - **`membership_started` is emitted from `billing.membership.emit_membership_started`, NOT from the gateway.**
   `apply_payment_event`'s `subscription_active` branch looks like the producer but **nothing produces that
   kind** — NextPoint sells memberships as ONE-OFF ORDERS (`charge_succeeded` → `activate_membership_for_order`),
