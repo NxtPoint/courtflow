@@ -212,6 +212,51 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
     return resp
 
 
+def _reinstate_late_paid_enrolments(session, *, club_id, order_id):
+    """Re-enrol seats that lazy expiry cancelled before this order's payment landed. Returns the
+    count re-instated. Capacity is re-checked under the session lock — a waitlister may already hold
+    the seat, in which case we do NOT bump them; the payment becomes a refund case and is logged.
+    Guarded end to end: this runs inside the payment path and must never break a settlement."""
+    n = 0
+    try:
+        rows = session.execute(
+            text("SELECT e.id, e.class_session_id FROM diary.enrolment e "
+                 "JOIN billing.order_line ol ON ol.enrolment_id = e.id "
+                 "WHERE ol.order_id = :o AND e.club_id = :c AND e.status = 'cancelled'"),
+            {"o": str(order_id), "c": str(club_id)},
+        ).mappings().all()
+    except Exception:
+        return 0
+    for r in rows:
+        try:
+            cs = _session_row(session, club_id, str(r["class_session_id"]), lock=True)
+            if not cs or cs.get("status") == "cancelled":
+                continue
+            capacity = cs["capacity"] or 0
+            if capacity and _enrolled_count(session, str(r["class_session_id"])) >= capacity:
+                log.warning("late class payment but the seat is GONE (class full) — REFUND DUE: "
+                            "order=%s enrolment=%s session=%s",
+                            order_id, r["id"], r["class_session_id"])
+                continue
+            session.execute(
+                text("UPDATE diary.enrolment SET status='enrolled', held_until=NULL, "
+                     "updated_at=now() WHERE id=:id AND status='cancelled'"),
+                {"id": r["id"]},
+            )
+            log.info("re-instated a class seat on late payment: order=%s enrolment=%s",
+                     order_id, r["id"])
+            try:
+                enrolment = _enrolment_dict(session, r["id"])
+                if enrolment:
+                    events.emit("class_enrolled", _payload(cs, enrolment))
+            except Exception:
+                pass
+            n += 1
+        except Exception:
+            log.exception("late-payment re-instate skipped for enrolment %s", r.get("id"))
+    return n
+
+
 def confirm_paid_enrolments(session, *, club_id, order_id):
     """Called on a class order's PAYMENT SUCCESS (billing.events → webhook AND reconcile): clear the
     online hold on the paid enrolment(s) and emit the class_enrolled confirmation NOW — the online
@@ -219,6 +264,15 @@ def confirm_paid_enrolments(session, *, club_id, order_id):
     Yoco charge is still pending). Idempotent + guarded: a re-run finds no still-held enrolment and
     emits nothing. Returns the count confirmed."""
     try:
+        # LATE-PAYMENT RE-INSTATE. If the 30-minute hold lapsed before the Yoco webhook landed
+        # (routine on a sleeping free-tier service), lazy expiry has already cancelled the seat and
+        # voided the order — and the member would be charged for nothing, with no seat and no email.
+        # Bookings are protected from exactly this (billing.events._confirm_held_bookings re-instates
+        # a booking cancelled as hold_expired); classes never were. Re-enrol the cancelled seat when
+        # its own paid order arrives — but ONLY if capacity still allows, since a waitlister may have
+        # taken it in the meantime. If it doesn't, leave it cancelled and log loudly: that is a
+        # refund case for a human, and silently keeping the money is the one outcome we won't have.
+        _reinstate_late_paid_enrolments(session, club_id=club_id, order_id=order_id)
         rows = session.execute(
             text("SELECT e.id, e.class_session_id FROM diary.enrolment e "
                  "JOIN billing.order_line ol ON ol.enrolment_id = e.id "
@@ -298,13 +352,34 @@ def cancel_enrolment(session, *, club_id, class_session_id, user_id, actor_user_
     return {"ok": True, "promoted": promoted}
 
 
+def _order_is_live(session, order_id):
+    """True if this order still represents real money (open / awaiting_payment / paid). A voided or
+    written-off order is DEAD — a stale enrolment.order_id pointing at one must never be mistaken for
+    'already billed'. Guarded: on any read failure assume LIVE, so a hiccup can only ever cause a
+    refused double-bill, never a silent free seat."""
+    if not order_id:
+        return False
+    try:
+        st = session.execute(
+            text('SELECT status FROM billing."order" WHERE id = :o'), {"o": str(order_id)}).scalar()
+    except Exception:
+        return True
+    return st in ("open", "awaiting_payment", "paid", "part_refunded")
+
+
 def _bill_promoted_enrolment(session, *, club_id, cs, enrol):
     """Bill a seat just promoted off the waitlist — the waitlist itself never billed. Async promotion
     can't drive an online checkout, so an 'online' intent becomes an OWED at-court order; a 'token'
     intent draws a still-matching prepaid class wallet (else falls back to at-court rather than
     rejecting a promotion). Guarded — a billing hiccup never blocks the promotion."""
-    if enrol.get("order_id"):
-        return                                   # already billed (defensive) — leave it
+    # ALREADY-BILLED GUARD — must test that the linked order is still LIVE, not merely that a
+    # order_id is present. Cancelling an enrolment VOIDS its order but leaves enrolment.order_id
+    # pointing at the dead row (nothing in the repo NULLs it). Re-enrolling into a now-full class
+    # reactivates that same row as 'waitlisted' with the stale id, so a non-NULL test made promotion
+    # skip billing entirely: seat enrolled, confirmation email sent, NOTHING charged and no coach
+    # commission — a silent free class. Only a live order means "already billed".
+    if enrol.get("order_id") and _order_is_live(session, enrol.get("order_id")):
+        return
     mode = enrol.get("settlement_mode") or "at_court"
     if mode == "online":
         mode = "at_court"                        # collect at the club; can't check out asynchronously
@@ -1381,6 +1456,26 @@ def session_owner_coach(session, *, club_id, session_id):
     return (str(cs["coach_user_id"]) if cs.get("coach_user_id") else None, cs)
 
 
+def _seat_payment_label(r):
+    """Human wording for a roster seat's money state. Single-sourced here so the admin roster, the
+    coach roster and any future surface can never disagree about what 'Enrolled' means."""
+    st = r.get("order_status")
+    mode = (r.get("settlement_mode") or "").strip()
+    if mode in ("membership_covered", "free"):
+        return "Covered"
+    if mode == "token":
+        return "Paid by package"
+    if st == "paid":
+        return "Paid"
+    if st == "awaiting_payment":
+        return "AWAITING PAYMENT" if not r.get("held_until") else "Awaiting payment (holding)"
+    if st == "open":
+        return "Owed"
+    if st in ("void", "written_off"):
+        return "No charge"
+    return None
+
+
 def roster(session, *, club_id, session_id):
     """{session:{...}, enrolled:[{user_id,name,email,phone,status}], waitlisted:[...]} for a class
     session — drives the admin roster page (check-in / no-show)."""
@@ -1394,12 +1489,21 @@ def roster(session, *, club_id, session_id):
              "WHERE cs.id = :s AND cs.club_id = :c"),
         {"s": session_id, "c": club_id},
     ).mappings().first()
+    # Sweep lapsed unpaid holds BEFORE listing, so the roster can't show a seat that has already
+    # been given up (every other read path does this; the roster was the one that didn't).
+    release_expired_enrolments(session, club_id=club_id, class_session_id=session_id)
+    # PAYMENT STATE ON THE ROSTER. The club used to see a bare "Enrolled" chip whether or not the
+    # seat was paid, because this query never joined billing."order" — an unpaid online seat looked
+    # identical to a settled one, and check-in then stranded the debt. The client's own view has
+    # always shown it (list_my_enrolments); only the club was blind.
     rows = session.execute(
         text("""
-            SELECT e.user_id, e.status, e.settlement_mode, e.order_id,
+            SELECT e.user_id, e.status, e.settlement_mode, e.order_id, e.held_until,
+                   o.status AS order_status, o.amount_minor,
                    u.first_name, u.surname, u.email, u.phone
             FROM diary.enrolment e
             LEFT JOIN iam.user u ON u.id = e.user_id
+            LEFT JOIN billing."order" o ON o.id = e.order_id
             WHERE e.club_id = :c AND e.class_session_id = :s
               AND e.status IN ('enrolled','waitlisted','attended','no_show')
             ORDER BY e.status, e.waitlist_seq
@@ -1412,7 +1516,13 @@ def roster(session, *, club_id, session_id):
         entry = {"user_id": str(r["user_id"]) if r.get("user_id") else None,
                  "name": name, "email": r.get("email"), "phone": r.get("phone"),
                  "status": r["status"], "settlement_mode": r.get("settlement_mode"),
-                 "order_id": str(r["order_id"]) if r.get("order_id") else None}
+                 "order_id": str(r["order_id"]) if r.get("order_id") else None,
+                 "order_status": r.get("order_status"),
+                 "amount_minor": (int(r["amount_minor"]) if r.get("amount_minor") is not None else None),
+                 # The single flag the roster UI needs: this seat has NOT been settled. Covers a live
+                 # online hold AND the stranded case (an awaiting_payment order with no hold left).
+                 "unpaid": bool(r.get("order_status") == "awaiting_payment"),
+                 "payment_label": _seat_payment_label(r)}
         if r["status"] == "waitlisted":
             waitlisted.append(entry)
         else:
@@ -1429,6 +1539,42 @@ def roster(session, *, club_id, session_id):
     return {"ok": True, "session": sess_block, "enrolled": enrolled, "waitlisted": waitlisted}
 
 
+def _settle_held_seat_for_attendance(session, *, club_id, session_id, user_id):
+    """Turn an unpaid ONLINE seat into a normal OWED debt at check-in. Returns True if it converted.
+
+    'awaiting_payment' is a PENDING-CHECKOUT state, not a debt: it is deliberately excluded from the
+    statement, month-end and invoicing so an in-flight Yoco charge is never double-collected. That is
+    right while the checkout is live — but once the club checks the player in, the class was
+    delivered and the money is genuinely owed. Flipping the order to 'open' moves it onto exactly the
+    same collection rails as a pay-at-court seat. Idempotent + guarded."""
+    try:
+        row = session.execute(
+            text("SELECT e.id, e.order_id, o.status AS order_status "
+                 "FROM diary.enrolment e "
+                 "LEFT JOIN billing.\"order\" o ON o.id = e.order_id "
+                 "WHERE e.club_id = :c AND e.class_session_id = :s AND e.user_id = :u"),
+            {"c": club_id, "s": session_id, "u": user_id},
+        ).mappings().first()
+        if not row or row.get("order_status") != "awaiting_payment":
+            return False
+        session.execute(
+            text("UPDATE billing.\"order\" SET status = 'open', settlement_mode = 'at_court', "
+                 "updated_at = now() WHERE id = :o AND status = 'awaiting_payment'"),
+            {"o": str(row["order_id"])},
+        )
+        session.execute(
+            text("UPDATE diary.enrolment SET held_until = NULL, settlement_mode = 'at_court', "
+                 "updated_at = now() WHERE id = :id"),
+            {"id": row["id"]},
+        )
+        log.info("class check-in settled a held unpaid seat: enrolment=%s order=%s",
+                 row["id"], row["order_id"])
+        return True
+    except Exception:
+        log.exception("check-in settle skipped (non-fatal)")
+        return False
+
+
 def mark_attendance(session, *, club_id, session_id, user_id, attended):
     """Mark an enrolment attended/no_show. 'attended' True -> status='attended'; False ->
     'no_show'. The enrolment must exist for this (session, user)."""
@@ -1436,6 +1582,14 @@ def mark_attendance(session, *, club_id, session_id, user_id, attended):
     if not cs:
         return _err("SESSION_NOT_FOUND", 404)
     new_status = "attended" if attended else "no_show"
+    # SETTLE BEFORE MARKING. An unpaid ONLINE seat sits on an 'awaiting_payment' order, which is
+    # excluded from the statement, "pay all", month-end and invoicing — and the expiry sweep only
+    # matches status='enrolled', so once this row becomes 'attended' the debt could never be swept
+    # OR collected, and the console offered no button to recover it. Checking someone in is the club
+    # asserting the class WAS delivered, so the debt becomes real and owed: convert the held online
+    # order to an at-desk 'open' debt and drop the hold, so it lands on their statement like any
+    # other owed session. Guarded — a billing hiccup must never block the register.
+    _settle_held_seat_for_attendance(session, club_id=club_id, session_id=session_id, user_id=user_id)
     row = session.execute(
         text("UPDATE diary.enrolment SET status=:st, updated_at=now() "
              "WHERE club_id=:c AND class_session_id=:s AND user_id=:u "

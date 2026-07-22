@@ -508,6 +508,183 @@ def sc_class_waitlist(s, fx):
     check("cancel promotes the waitlister", cr.get("promoted") is not None, str(cr))
 
 
+def _class_at(s, fx, hour, capacity=2, mins=90):
+    """Schedule a fresh one-off class at `hour` and return its session id. Raises if the session
+    wasn't created — two classes on the SAME class resource must not overlap (a 90-min class at 12
+    runs to 13:30, so the next one can't start at 13), and a silent None here surfaces much later as
+    an unrelated TypeError."""
+    C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                        dates=[fx.target.isoformat()], start_time="%02d:00" % hour,
+                        duration_minutes=mins, capacity=capacity)
+    sid = s.execute(
+        text("SELECT id FROM diary.class_session WHERE club_id=:c AND resource_id=:r "
+             "AND starts_at = :sa"),
+        {"c": fx.club_id, "r": fx.class_res, "sa": at(fx, hour)},
+    ).scalar()
+    if not sid:
+        raise AssertionError(
+            "no class session created at %02d:00 — does it overlap another class on this "
+            "resource, or fall outside its availability?" % hour)
+    return sid
+
+
+def _order_of_enrolment(s, fx, sid, uid):
+    return s.execute(
+        text('SELECT o.id, o.status, o.settlement_mode FROM diary.enrolment e '
+             'JOIN billing."order" o ON o.id = e.order_id '
+             'WHERE e.class_session_id=:cs AND e.user_id=:u'),
+        {"cs": sid, "u": uid}).mappings().first()
+
+
+def sc_class_roster_shows_payment(s, fx):
+    """The club roster must never paint an unpaid seat as a plain 'Enrolled'. It used not to join
+    billing."order" at all, so an awaiting_payment seat looked identical to a settled one — which is
+    how five real seats were delivered unpaid without anyone seeing it."""
+    print("\n# Class roster: an UNPAID seat is visibly unpaid to the club (not a bare 'Enrolled')")
+    sid = _class_at(s, fx, 9, capacity=3)
+    C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[0],
+            settlement_mode="online")
+    C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[1],
+            settlement_mode="at_court")
+    rr = C.roster(s, club_id=fx.club_id, session_id=sid)
+    seats = {e["user_id"]: e for e in (rr.get("enrolled") or [])}
+    online = seats.get(str(fx.members[0]))
+    owed = seats.get(str(fx.members[1]))
+    check("roster returns the online seat", bool(online), str(rr))
+    check("the unpaid online seat is FLAGGED unpaid", online and online.get("unpaid") is True,
+          str(online))
+    check("...with its order status surfaced", online and online.get("order_status") == "awaiting_payment",
+          str(online and online.get("order_status")))
+    check("...and a human label the UI can print", online and "waiting payment" in
+          (online.get("payment_label") or "").lower(), str(online and online.get("payment_label")))
+    check("an at-court seat is NOT flagged unpaid (it's a normal owed debt)",
+          owed and owed.get("unpaid") is False, str(owed))
+    check("...and reads as Owed", owed and owed.get("payment_label") == "Owed",
+          str(owed and owed.get("payment_label")))
+
+
+def sc_class_checkin_settles_debt(s, fx):
+    """Checking a player in asserts the class WAS delivered. An awaiting_payment order is excluded
+    from the statement, month-end and invoicing, and the expiry sweep only matches 'enrolled' — so
+    marking attendance used to strand the debt where nothing could ever collect or clear it."""
+    print("\n# Class check-in: an unpaid held seat becomes a REAL owed debt (never stranded)")
+    sid = _class_at(s, fx, 10, capacity=2)
+    C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[0],
+            settlement_mode="online")
+    before = _order_of_enrolment(s, fx, sid, fx.members[0])
+    check("the online seat starts awaiting_payment", before and before["status"] == "awaiting_payment",
+          str(dict(before) if before else None))
+
+    C.mark_attendance(s, club_id=fx.club_id, session_id=sid, user_id=fx.members[0], attended=True)
+    after = _order_of_enrolment(s, fx, sid, fx.members[0])
+    check("check-in converts it to an OPEN (collectable) debt", after and after["status"] == "open",
+          str(dict(after) if after else None))
+    check("...settled at the desk, so it lands on the statement",
+          after and after["settlement_mode"] == "at_court", str(after and after["settlement_mode"]))
+    held = s.execute(text("SELECT held_until FROM diary.enrolment "
+                          "WHERE class_session_id=:cs AND user_id=:u"),
+                     {"cs": sid, "u": fx.members[0]}).scalar()
+    check("...and the stale hold is cleared", held is None, str(held))
+    st = s.execute(text("SELECT status FROM diary.enrolment WHERE class_session_id=:cs AND user_id=:u"),
+                   {"cs": sid, "u": fx.members[0]}).scalar()
+    check("the seat is marked attended", st == "attended", str(st))
+    # A PAID seat must be left completely alone by the same path.
+    C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[1],
+            settlement_mode="at_court")
+    paid_before = _order_of_enrolment(s, fx, sid, fx.members[1])
+    C.mark_attendance(s, club_id=fx.club_id, session_id=sid, user_id=fx.members[1], attended=True)
+    paid_after = _order_of_enrolment(s, fx, sid, fx.members[1])
+    check("an already-owed seat is untouched by check-in",
+          paid_after and paid_after["status"] == paid_before["status"], str(dict(paid_after)))
+
+
+def sc_class_promotion_never_free(s, fx):
+    """THE SILENT ONE: cancelling voids the order but leaves enrolment.order_id pointing at the dead
+    row. Re-enrolling into a full class reactivates that row as waitlisted WITH the stale id, and the
+    old 'already billed?' guard only tested for a non-NULL id — so promotion skipped billing and
+    handed out a free class with a confirmation email and no commission."""
+    print("\n# Class promotion: a stale VOIDED order_id must NOT be mistaken for 'already billed'")
+    sid = _class_at(s, fx, 11, capacity=1)
+    # members[0] takes the only seat; members[1] enrols, cancels (voiding their order), then re-enrols
+    # into the now-full class -> waitlisted, carrying the DEAD order_id.
+    C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[1])
+    dead = _order_of_enrolment(s, fx, sid, fx.members[1])
+    C.cancel_enrolment(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[1])
+    voided = s.execute(text('SELECT status FROM billing."order" WHERE id=:o'),
+                       {"o": dead["id"]}).scalar()
+    check("cancelling voided the original order", voided in ("void", "written_off"), str(voided))
+    C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[0])
+    again = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[1])
+    check("re-enrolling into the full class waitlists them", again.get("status_value") == "waitlisted",
+          str(again))
+    stale = s.execute(text("SELECT order_id FROM diary.enrolment "
+                           "WHERE class_session_id=:cs AND user_id=:u"),
+                      {"cs": sid, "u": fx.members[1]}).scalar()
+    check("...still carrying the DEAD order_id (the trap)", str(stale) == str(dead["id"]), str(stale))
+
+    # Free the seat -> promotion must BILL them on a fresh live order, not skip on the dead one.
+    C.cancel_enrolment(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[0])
+    promoted = _order_of_enrolment(s, fx, sid, fx.members[1])
+    check("the promoted seat IS billed (no free class)", bool(promoted), "no order at all")
+    check("...on a NEW live order, not the voided one",
+          promoted and str(promoted["id"]) != str(dead["id"]), str(promoted and promoted["id"]))
+    check("...which is a real collectable debt",
+          promoted and promoted["status"] in ("open", "awaiting_payment"), str(promoted))
+
+
+def sc_class_late_payment_reinstates(s, fx):
+    """A Yoco webhook arriving after the 30-minute hold lapsed used to take the money and give
+    nothing: lazy expiry had cancelled the seat, and confirm_paid_enrolments only matched still-held
+    seats. Bookings already re-instate in this case; classes now do too."""
+    print("\n# Class late payment: a lapsed-then-paid seat is RE-INSTATED (never money-for-nothing)")
+    sid = _class_at(s, fx, 12, capacity=2)
+    C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[0],
+            settlement_mode="online")
+    o = _order_of_enrolment(s, fx, sid, fx.members[0])
+    # Force the hold to lapse, then sweep — exactly what an abandoned checkout does.
+    s.execute(text("UPDATE diary.enrolment SET held_until = now() - interval '1 minute' "
+                   "WHERE class_session_id=:cs AND user_id=:u"), {"cs": sid, "u": fx.members[0]})
+    C.release_expired_enrolments(s, club_id=fx.club_id, class_session_id=sid)
+    gone = s.execute(text("SELECT status FROM diary.enrolment WHERE class_session_id=:cs AND user_id=:u"),
+                     {"cs": sid, "u": fx.members[0]}).scalar()
+    check("the abandoned seat was swept to cancelled", gone == "cancelled", str(gone))
+
+    # The webhook finally lands: mark the order paid, then run the payment-side confirm.
+    s.execute(text('UPDATE billing."order" SET status = \'paid\' WHERE id = :o'), {"o": o["id"]})
+    C.confirm_paid_enrolments(s, club_id=fx.club_id, order_id=o["id"])
+    back = s.execute(text("SELECT status, held_until FROM diary.enrolment "
+                          "WHERE class_session_id=:cs AND user_id=:u"),
+                     {"cs": sid, "u": fx.members[0]}).mappings().first()
+    check("the paid seat is RE-INSTATED, not left cancelled", back["status"] == "enrolled",
+          str(dict(back)))
+    check("...with no lingering hold", back["held_until"] is None, str(back["held_until"]))
+
+    # And when the class filled up in the meantime, we must NOT bump the waitlister who took it —
+    # the seat stays gone and it becomes a refund case (logged), never a silent overbooking.
+    sid2 = _class_at(s, fx, 15, capacity=1)
+    C.enrol(s, club_id=fx.club_id, class_session_id=sid2, user_id=fx.members[0],
+            settlement_mode="online")
+    o2 = _order_of_enrolment(s, fx, sid2, fx.members[0])
+    s.execute(text("UPDATE diary.enrolment SET held_until = now() - interval '1 minute' "
+                   "WHERE class_session_id=:cs AND user_id=:u"), {"cs": sid2, "u": fx.members[0]})
+    C.release_expired_enrolments(s, club_id=fx.club_id, class_session_id=sid2)
+    C.enrol(s, club_id=fx.club_id, class_session_id=sid2, user_id=fx.members[1])   # takes the seat
+    s.execute(text('UPDATE billing."order" SET status = \'paid\' WHERE id = :o'), {"o": o2["id"]})
+    C.confirm_paid_enrolments(s, club_id=fx.club_id, order_id=o2["id"])
+    still = s.execute(text("SELECT status FROM diary.enrolment WHERE class_session_id=:cs AND user_id=:u"),
+                      {"cs": sid2, "u": fx.members[0]}).scalar()
+    check("a full class does NOT overbook on a late payment (refund case instead)",
+          still == "cancelled", str(still))
+    seated = _enrolled_n(s, sid2)
+    check("...and capacity is still respected", seated == 1, str(seated))
+
+
+def _enrolled_n(s, sid):
+    return s.execute(text("SELECT count(*) FROM diary.enrolment "
+                          "WHERE class_session_id=:cs AND status IN ('enrolled','attended')"),
+                     {"cs": sid}).scalar()
+
+
 def sc_class_online_hold_expiry(s, fx):
     print("\n# Class: unpaid ONLINE seat is HELD, lazily released on abandonment, waitlister promoted")
     C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
@@ -1463,6 +1640,10 @@ SCENARIOS = [
     sc_coach_class_conflict,
     sc_slot_granularity,
     sc_class_waitlist,
+    sc_class_roster_shows_payment,
+    sc_class_checkin_settles_debt,
+    sc_class_promotion_never_free,
+    sc_class_late_payment_reinstates,
     sc_class_online_hold_expiry,
     sc_lesson_lifecycle,
     sc_offpeak_slot_pricing,

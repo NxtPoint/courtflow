@@ -559,12 +559,21 @@
       var acts = el("div", { class: "cf-row", style: "gap:6px" });
       if (p.status !== "attended") acts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Check in", onclick: function () { mark(true); } }));
       if (p.status !== "no_show") acts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "No-show", onclick: function () { mark(false); } }));
+      // Same payment chip the admin roster shows — the coach taking the register is usually the one
+      // who can actually collect, so they must see an unpaid seat too.
+      var pay = p.payment_label
+        ? el("span", { class: "cf-chip" + (p.unpaid ? " cf-btn-danger" : ""), text: p.payment_label })
+        : null;
       var main = el("div", { class: "cf-item-main" + (p.user_id ? " cf-item-tap" : "") }, [
         el("div", { class: "cf-item-t", text: p.name || p.email || "Player" }),
         el("div", { class: "cf-item-s", text: [p.email, p.phone].filter(Boolean).join(" · ") || "—" }),
-      ]);
+        p.unpaid ? el("div", { class: "cf-item-s", style: "color:var(--danger,#b3261e);font-weight:600",
+                               text: "Not paid — checking in will put this on their statement." }) : null,
+      ].filter(Boolean));
       if (p.user_id) main.addEventListener("click", function () { go("#/client/" + p.user_id); });
-      return el("div", { class: "cf-item" }, [main, el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [chip, acts])]);
+      return el("div", { class: "cf-item" }, [main,
+        el("div", { class: "cf-row", style: "gap:8px;align-items:center" },
+           [pay, chip, acts].filter(Boolean))]);
     }
     window.CoachAPI.classRoster(sessionId).then(function (r) {
       var sess = r.session || {}, enrolled = r.enrolled || [], waitlisted = r.waitlisted || [];

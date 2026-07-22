@@ -22,11 +22,11 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 194 / billing 402 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 217 / billing 402 / statement 47**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   - `test_booking_scenarios` (194) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   - `test_booking_scenarios` (217) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
      waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused,
@@ -41,7 +41,13 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      **RESCHEDULE CAN MOVE THE COURT (a court booking's own resource; a lesson keeps the coach and its
      held-court row moves), a busy target refuses with COURT_NOT_AVAILABLE, re-picking the SAME court
      doesn't block itself; COACH PREFERRED COURT honoured when free → falls back when busy (never
-     blocks a lesson) → an explicit court still wins**.
+     blocks a lesson) → an explicit court still wins,
+     **CLASS PAYMENT STATE — the roster FLAGS an unpaid seat (`unpaid` + `payment_label`, never a bare
+     "Enrolled"), CHECK-IN settles a held online seat into a real owed debt (an `awaiting_payment` order
+     is invisible to statement/month-end/invoicing and the sweep only matches 'enrolled', so marking
+     attendance used to strand it forever), promotion treats a VOIDED order_id as NOT-billed (a stale id
+     used to hand out a FREE class), and a LATE payment RE-INSTATES a swept seat — but never overbooks a
+     full class (that logs a refund case)**.
    - `test_billing_scenarios` (402) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
