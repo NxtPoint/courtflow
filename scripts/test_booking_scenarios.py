@@ -124,6 +124,7 @@ def setup(s):
              "VALUES (:c, 'court_booking', 'Court Hire', true) RETURNING id"),
         {"c": fx.club_id},
     ).scalar_one()
+    fx.court_product = court_prod      # the DEFAULT court service (courts resolve here)
     s.execute(
         text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
              "currency_code, duration_minutes, active) "
@@ -321,6 +322,63 @@ def sc_reschedule_court_move(s, fx):
                           "AND booking_type='court' AND id<>:id"),
                      {"c": fx.club_id, "o": lesson["order_id"], "id": lid}).scalar()
     check("the lesson's HELD COURT moved to the chosen court", str(held) == str(c1), str(held))
+
+
+def sc_court_move_guards(s, fx):
+    """A court move must re-run the guards a TIME move already runs. It originally checked only that
+    the target was free, so a member could move a booking onto a court from a DIFFERENT court service
+    (keeping the old cheap price AND the old settlement mode — reprice_booking_order re-prices on the
+    same product, so it could never correct that), or move a membership-covered R0 booking onto a
+    court their membership never covers."""
+    print("\n# Court move re-runs the money guards (service change refused, coverage re-checked)")
+    m = fx.members[0]
+    # Put courts[1] on its OWN court service (a second, pricier one) — the Hardcourt/Clay shape.
+    clay = s.execute(text("INSERT INTO billing.product (club_id, kind, name) "
+                          "VALUES (:c,'court_booking','Clay Hire') RETURNING id"),
+                     {"c": fx.club_id}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, unit, duration_minutes, active, status) "
+                   "VALUES (:c,:p,'any',99000,'ZAR','per_booking',60,true,'active')"),
+              {"c": fx.club_id, "p": clay})
+    s.execute(text("UPDATE diary.resource SET product_id = :p WHERE id = :r"),
+              {"p": clay, "r": fx.courts[1]})
+    # Allocate the OTHER courts to the default service explicitly — mirroring production, where every
+    # court carries an explicit product_id. (With two court products an unallocated court resolves to
+    # an AMBIGUOUS service, which the guard now also refuses to move across; covered at the end.)
+    for _c in [fx.courts[0]] + (fx.courts[2:3] if len(fx.courts) > 2 else []):
+        s.execute(text("UPDATE diary.resource SET product_id = :p WHERE id = :r"),
+                  {"p": fx.court_product, "r": _c})
+
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)))
+    bid = r["booking"]["id"]
+    check("a booking on the default court service was created", r.get("ok"), str(r))
+
+    cross = B.reschedule_booking(s, club_id=fx.club_id, booking_id=bid,
+                                 new_starts_at=utc_iso(at(fx, 9)), new_ends_at=utc_iso(at(fx, 10)),
+                                 actor_user_id=m, role="member", new_court_resource_id=fx.courts[1])
+    check("moving onto a DIFFERENT court service is refused",
+          cross.get("error") == "COURT_SERVICE_CHANGED", str(cross))
+    still = B.get_booking(s, club_id=fx.club_id, booking_id=bid)
+    check("...and the booking kept its original court",
+          str(still["resource_id"]) == str(fx.courts[0]), str(still["resource_id"]))
+
+    # THE GUARD MUST NOT OVER-BLOCK: a move WITHIN the same service is the common case and must
+    # still work. Add a third court on the DEFAULT service to prove it.
+    sibling = s.execute(
+        text("INSERT INTO diary.resource (club_id, kind, name, surface, rank, product_id) "
+             "VALUES (:c,'court','Court Sibling','hard',9,:p) RETURNING id"),
+        {"c": fx.club_id, "p": fx.court_product}).scalar()
+    s.execute(text("INSERT INTO diary.availability_rule (club_id, resource_id, weekday, "
+                   "start_time, end_time, slot_minutes) VALUES (:c,:r,:wd,'08:00','18:00',30)"),
+              {"c": fx.club_id, "r": sibling, "wd": fx.target.weekday()})
+    same = B.reschedule_booking(s, club_id=fx.club_id, booking_id=bid,
+                                new_starts_at=utc_iso(at(fx, 9)), new_ends_at=utc_iso(at(fx, 10)),
+                                actor_user_id=m, role="member", new_court_resource_id=sibling)
+    check("a move WITHIN the same court service is still allowed", same.get("ok"), str(same))
+    check("...and it landed on the sibling court",
+          str(B.get_booking(s, club_id=fx.club_id, booking_id=bid)["resource_id"]) == str(sibling))
 
 
 def sc_coach_preferred_court(s, fx):
@@ -1736,6 +1794,7 @@ SCENARIOS = [
     sc_court_book_cancel,
     sc_court_reschedule,
     sc_reschedule_court_move,
+    sc_court_move_guards,
     sc_coach_preferred_court,
     sc_lesson_two_rows,
     sc_lesson_list_collapse,

@@ -1004,6 +1004,36 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
         if not _court_is_free(session, club_id, new_court_resource_id, new_s, new_e, own_ids):
             return _err("COURT_NOT_AVAILABLE", 422,
                         message="that court isn't free at the new time — pick another")
+        # A court booking is PRICED BY ITS COURT SERVICE (Hardcourt vs Clay), and each service has its
+        # own rate, payment rules and membership eligibility. A move ACROSS services would keep the
+        # old price and the old settlement mode — a R100 pay-at-court Hardcourt booking could become a
+        # card-only R250 Clay court and stay both cheap and owed. reprice_booking_order re-prices on
+        # the SAME product, so it cannot correct a service change either. Refuse and let them cancel
+        # and rebook, exactly as a PAID booking refuses to be extended. (A lesson is priced by its
+        # LESSON service, so its held court may move freely between court services.)
+        if bk.get("booking_type") == "court":
+            now_service = _court_service_guarded(session, club_id, bk.get("resource_id"))
+            new_service = _court_service_guarded(session, club_id, new_court_resource_id)
+            # Compare with None NORMALISED, not `a and b and a != b`. In a MULTI-service club an
+            # unallocated court (resource.product_id NULL) resolves to None — ambiguous — and a
+            # short-circuit would wave through a move from that court onto an allocated one, which
+            # changes the effective service just as much. Both-None (the single-service club, or a
+            # club with no court product) still compares equal and is allowed, so nothing regresses.
+            if str(now_service or "") != str(new_service or ""):
+                return _err("COURT_SERVICE_CHANGED", 422,
+                            message="that court belongs to a different court service — "
+                                    "cancel and rebook to change service")
+        # A membership-COVERED court is free only for courts the membership actually covers (clay is
+        # commonly excluded). The time-window check above is not enough — re-run the FULL entitlement
+        # against the TARGET court, or a member could move a free booking onto a court they are never
+        # covered for and keep it free.
+        if bk.get("settlement_mode") == "membership_covered" and bk.get("booked_by_user_id"):
+            if not _court_covered_guarded(session, club_id=club_id, user_id=bk["booked_by_user_id"],
+                                          starts_at=new_s, ends_at=new_e,
+                                          resource_id=new_court_resource_id):
+                return _err("COURT_NOT_COVERED", 422,
+                            message="your membership doesn't cover that court — pick another, "
+                                    "or book it as a paid court")
         move_court_to = str(new_court_resource_id)
 
     # A lesson's auto-held court was auto-assigned, so on a move we reassign it to a FREE court at the

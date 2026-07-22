@@ -22,11 +22,11 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 227 / billing 402 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 232 / billing 402 / statement 47**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   - `test_booking_scenarios` (227) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   - `test_booking_scenarios` (232) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
      waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused,
@@ -323,6 +323,15 @@ fetch.
 front (`_court_is_free`, excluding the booking's OWN rows via `_linked_booking_ids` so it can't block itself)
 → `COURT_NOT_AVAILABLE` rather than a bare `SLOT_TAKEN`. Court moves are single-booking only, never a series
 (`COURT_MOVE_SINGLE_ONLY`). Omitting the key preserves the old behaviour exactly.
+**A court move re-runs the MONEY guards a time move runs** — a COURT booking may not cross court
+SERVICES (`COURT_SERVICE_CHANGED`: it is priced by its service, and `reprice_booking_order` re-prices
+on the SAME product so it could never correct the change), and a `membership_covered` booking
+re-runs the FULL entitlement against the TARGET court (`COURT_NOT_COVERED` — the time-window check
+alone let a free booking move onto a clay court members are never covered for). The service compare
+NORMALISES None (`str(a or "") != str(b or "")`): in a multi-service club an unallocated court
+resolves to an ambiguous None, and a short-circuit would wave that move through. A lesson's held
+court may move freely — a lesson is priced by its LESSON service. `CRMUI.rescheduleModal` filters the
+court list to the booking's own service so the UI never offers a move the server will refuse.
 **Frontend: `CRMUI.rescheduleModal` is the ONE reschedule UI** (date/time + configured durations + court),
 shared by client · coach · admin · home — it replaced four drifted forks, none of which could move a court.
 Role differences are config: `canChangeCourt` is false for a member's LESSON (the court is club-allocated)

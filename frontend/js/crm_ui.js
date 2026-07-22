@@ -605,14 +605,26 @@
       m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Court" }), court]));
       var load = cfg.loadCourts || function () { return window.API.resources(); };
       Promise.resolve(load()).then(function (r) {
-        var courts = ((r && r.resources) || r || []).filter(function (x) {
+        var all = ((r && r.resources) || r || []).filter(function (x) {
           return x.kind === "court" && x.is_active !== false;
         });
+        var cur = b.court_resource_id || (b.booking_type === "court" ? b.resource_id : null);
+        // ONLY OFFER SERVER-VALID MOVES. A COURT booking is priced by its court SERVICE, so the
+        // server refuses a cross-service move (COURT_SERVICE_CHANGED) — offering Clay next to
+        // Hardcourt would just produce an error the member can't act on. Filter to the booking's own
+        // service. A LESSON is priced by its lesson service, so its held court may move anywhere.
+        var courts = all;
+        if (b.booking_type === "court" && cur) {
+          var mine = all.filter(function (c) { return String(c.id) === String(cur); })[0];
+          var svc = mine && mine.product_id;
+          if (svc) {
+            courts = all.filter(function (c) { return String(c.product_id || "") === String(svc); });
+          }
+        }
         courts.forEach(function (c) {
           court.appendChild(el("option", { value: c.id, text: c.name }));
         });
         // Pre-select the court it's on now, so the picker reads as "where it is" not "blank".
-        var cur = b.court_resource_id || (b.booking_type === "court" ? b.resource_id : null);
         if (cur) court.value = String(cur);
       }, function () { /* courts unavailable → the "keep current" default still works */ });
     }
