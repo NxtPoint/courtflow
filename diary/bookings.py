@@ -292,15 +292,49 @@ def release_expired_holds(session, club_id, now=None):
     """Lazy expiry (NO cron): cancel 'held' bookings whose held_until has passed, freeing the
     slot. Called opportunistically at the start of availability + booking creation, so an
     abandoned online checkout (held → never paid) is released the moment anyone looks at that
-    diary again. Cheap, indexed UPDATE; safe to run on every request."""
-    session.execute(
+    diary again. Cheap, indexed UPDATE; safe to run on every request.
+
+    ALSO VOIDS THE ABANDONED ORDER. This used to cancel the booking and leave its unpaid order
+    behind, which is where 37 phantom 'awaiting_payment' orders on cancelled bookings came from in
+    production. They bill nobody (awaiting_payment is excluded from the statement) but they pollute
+    every money read and make an abandoned checkout look like an unpaid debt forever — and the
+    statement self-heal (billing.statement._void_phantom_cancelled_orders) only rescues 'open' ones.
+    Mirrors cancel_booking, which has always voided the order it cancels.
+
+    A late payment is still safe: billing.events._confirm_held_bookings deliberately RE-INSTATES a
+    booking cancelled with reason 'hold_expired' when its charge finally lands."""
+    rows = session.execute(
         text("UPDATE diary.booking "
              "SET status='cancelled', cancellation_reason='hold_expired', "
              "    cancelled_at=now(), updated_at=now() "
              "WHERE club_id=:c AND status='held' "
-             "  AND held_until IS NOT NULL AND held_until < now()"),
+             "  AND held_until IS NOT NULL AND held_until < now() "
+             "RETURNING id, order_id"),
         {"c": club_id},
-    )
+    ).mappings().all()
+    _void_orders_with_no_live_bookings(
+        session, club_id, {str(r["order_id"]) for r in rows if r.get("order_id")})
+
+
+def _void_orders_with_no_live_bookings(session, club_id, order_ids):
+    """Void each unpaid order that has NO live booking left on it. Scoped this way because one order
+    can carry several rows — a lesson plus its auto-held court, or a squad's per-head partners — and
+    voiding while any of them is still held/confirmed would erase a real debt. void_order is a no-op
+    on a PAID order, so the refund path is untouched. Guarded: money hygiene must never break the
+    read that triggered it."""
+    for oid in (order_ids or set()):
+        try:
+            live = session.execute(
+                text("SELECT 1 FROM diary.booking WHERE club_id = :c AND order_id = :o "
+                     "  AND status IN ('held','confirmed','requested','proposed') LIMIT 1"),
+                {"c": club_id, "o": oid},
+            ).first()
+            if live:
+                continue
+            from billing.statement import void_order
+            void_order(session, club_id=club_id, order_id=oid, reason="hold expired")
+        except Exception:
+            log.debug("expired-hold order void skipped", exc_info=False)
 
 
 # booking_type -> billing.product.kind (docs/02 §5). The diary speaks booking types;

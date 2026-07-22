@@ -324,6 +324,48 @@ def sc_reschedule_court_move(s, fx):
     check("the lesson's HELD COURT moved to the chosen court", str(held) == str(c1), str(held))
 
 
+def sc_expired_hold_voids_order(s, fx):
+    """An abandoned online checkout left its order behind: lazy expiry cancelled the booking but
+    never touched the order, leaving an 'awaiting_payment' row pointing at a cancelled booking (37 in
+    production). It bills nobody, but it pollutes every money read — and the statement self-heal only
+    rescues 'open' orders, so these never cleared."""
+    print("\n# Expired hold VOIDS its abandoned order (no phantom awaiting_payment left behind)")
+    m = fx.members[0]
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                         settlement_mode="online")
+    bid = r["booking"]["id"]
+    oid = r["booking"]["order_id"]
+    check("an online booking starts held + awaiting_payment",
+          r["booking"]["status"] == "held" and bool(oid), str(r["booking"]["status"]))
+
+    # Abandon it: force the hold to lapse, then let any read trigger lazy expiry.
+    s.execute(text("UPDATE diary.booking SET held_until = now() - interval '1 minute' WHERE id=:b"),
+              {"b": bid})
+    B.release_expired_holds(s, fx.club_id)
+    bk = B.get_booking(s, club_id=fx.club_id, booking_id=bid)
+    check("the lapsed booking is cancelled", bk["status"] == "cancelled", bk["status"])
+    ost = s.execute(text('SELECT status FROM billing."order" WHERE id=:o'), {"o": oid}).scalar()
+    check("...and its abandoned order is VOIDED, not left awaiting_payment",
+          ost in ("void", "written_off"), str(ost))
+
+    # A LESSON carries two rows on one order (coach + auto-held court). The order must only be voided
+    # once BOTH are dead — never while one is still live, or a real debt would be erased.
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res,
+                          coach_user_id=fx.coach_uid,
+                          starts_at=utc_iso(at(fx, 11)), ends_at=utc_iso(at(fx, 12)),
+                          settlement_mode="at_court")
+    oid2 = r2["booking"]["order_id"]
+    n_rows = s.execute(text("SELECT count(*) FROM diary.booking WHERE club_id=:c AND order_id=:o"),
+                       {"c": fx.club_id, "o": oid2}).scalar()
+    check("the lesson holds 2 rows on one order (coach + court)", n_rows == 2, str(n_rows))
+    B.release_expired_holds(s, fx.club_id)     # nothing lapsed — must not touch a live order
+    ost2 = s.execute(text('SELECT status FROM billing."order" WHERE id=:o'), {"o": oid2}).scalar()
+    check("a LIVE order is never voided by the sweep", ost2 not in ("void", "written_off"), str(ost2))
+
+
 def sc_court_move_guards(s, fx):
     """A court move must re-run the guards a TIME move already runs. It originally checked only that
     the target was free, so a member could move a booking onto a court from a DIFFERENT court service
@@ -1794,6 +1836,7 @@ SCENARIOS = [
     sc_court_book_cancel,
     sc_court_reschedule,
     sc_reschedule_court_move,
+    sc_expired_hold_voids_order,
     sc_court_move_guards,
     sc_coach_preferred_court,
     sc_lesson_two_rows,

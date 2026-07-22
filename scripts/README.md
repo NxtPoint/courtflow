@@ -26,6 +26,7 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
 
 ## Spent one-offs (job done for club #1 — kept for provenance / future tenants)
 - `klaviyo_trial_cohort.py` — ONE-TIME trial-cohort backfill to Klaviyo (for members trialed before the emit shipped). Only re-run for a NEW cohort/tenant.
+- `void_orphaned_orders.py` — ONE-OFF: voids unpaid orders whose bookings were ALL cancelled (abandoned online checkouts that lazy expiry left behind — 37 in prod). Only touches orders with no live booking and no succeeded payment. Dry-run by default; `--commit` to write. The root cause is fixed in `release_expired_holds`, so this shouldn't need re-running.
 - `klaviyo_membership_backfill.py` — ONE-TIME: sets `on_trial=false` + fires `membership_started` for members who converted BEFORE that emit was fixed (2026-07-22). **Run this before sending the Unconverted-trial segment anything** — until it does, that segment still contains paying members. Dry-run by default; `--commit` to push. See `docs/specs/KLAVIYO-MASTER-PLAN.md` §7f.
 - `backfill_pack_products.py` — ONE-TIME map of legacy NULL-product packs → their service. Spent for club #1; reusable for a migrated tenant.
 - `backfill_person_links.py` — ONE-TIME `iam.user ↔ core.person` backfill (911/911 done). Forward-linking now lives in the app path (`link_person_for_user`).
