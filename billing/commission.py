@@ -1189,6 +1189,10 @@ def month_end_client(session, *, club_id, period, user_id, owed, cur) -> str:
     ).first()
     if not fresh:
         return "already"
+    # Consolidate this client's open orders into ONE numbered statement invoice document (orders
+    # already on an active invoice are skipped). If there's genuinely nothing new to invoice (all
+    # already invoiced intra-month), fall back to a plain balance reminder so the client is still
+    # nudged. The orders themselves are never modified (still card-settleable live).
     invoice_id = None
     try:
         from billing import invoicing
