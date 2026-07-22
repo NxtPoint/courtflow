@@ -2300,6 +2300,68 @@ class _EmitRecorder:
         return [p for (e, p) in self.calls if e == event]
 
 
+def sc_service_editor_child_ownership(s, fx):
+    """The services lane authorised the PRODUCT in the URL but took the SECOND id on trust, and both
+    patch_price and set_plan_status scope by (club_id, id) only. So a coach who owns one lesson
+    service could PATCH /api/services/<their product>/variations/<the CLUB's court price_id> and make
+    court hire R0 club-wide, DELETE it and make courts unbookable, or reprice/retire/adopt any pack in
+    the club. Court price_ids are handed to any authenticated user by GET /api/diary/durations."""
+    print("\n# Service editor: a child price/pack must belong to the service in the URL")
+    from services import routes as SR
+
+    class _P:                       # a coach principal, as the route sees it
+        club_id = None
+        user_id = None
+        role = "coach"
+    p = _P(); p.club_id = fx.club_id; p.user_id = fx.coach_uid
+
+    # The coach's OWN lesson service…
+    mine = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                          "VALUES (:c,'lesson','Coach Own',:u) RETURNING id"),
+                     {"c": fx.club_id, "u": fx.coach_uid}).scalar()
+    mine_price = _price(s, fx.club_id, mine, 40000, dur=60)
+    # …and the CLUB's court service, which they must never be able to touch.
+    theirs = s.execute(text("INSERT INTO billing.product (club_id, kind, name) "
+                            "VALUES (:c,'court_booking','Club Courts') RETURNING id"),
+                       {"c": fx.club_id}).scalar()
+    club_price = _price(s, fx.club_id, theirs, 15000, dur=60)
+
+    check("their OWN price passes the ownership check",
+          SR._own_price(s, p, str(mine), str(mine_price)) is True)
+    check("the CLUB'S COURT price is refused under their service",
+          SR._own_price(s, p, str(mine), str(club_price)) is False,
+          "a coach could zero-rate court hire club-wide")
+
+    # Packs: their own is fine; another coach's is not.
+    from billing import bundles as BN
+    my_plan = BN.create_plan(s, club_id=fx.club_id, product_id=str(mine), service_kind="lesson",
+                             sessions_count=5, price_minor=100000, duration_minutes=60,
+                             coach_user_id=fx.coach_uid, label="Mine")
+    other_uid = _mk_user(s, "svc_other_coach@bill.test", "Other")
+    s.execute(text("INSERT INTO iam.coach_profile (club_id, user_id, display_name, is_bookable) "
+                   "VALUES (:c,:u,'Other',true)"), {"c": fx.club_id, "u": other_uid})
+    other_prod = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                                "VALUES (:c,'lesson','Other Coach Svc',:u) RETURNING id"),
+                           {"c": fx.club_id, "u": other_uid}).scalar()
+    other_plan = BN.create_plan(s, club_id=fx.club_id, product_id=str(other_prod),
+                                service_kind="lesson", sessions_count=5, price_minor=100000,
+                                duration_minutes=60, coach_user_id=other_uid, label="Theirs")
+
+    svc = {"id": str(mine), "service_kind": "lesson", "coach_user_id": str(fx.coach_uid)}
+    check("their OWN pack passes", SR._own_plan(s, p, svc, str(my_plan["id"])) is True)
+    check("ANOTHER coach's pack is refused",
+          SR._own_plan(s, p, svc, str(other_plan["id"])) is False,
+          "a coach could reprice or retire another coach's pack")
+
+    # A LEGACY unscoped pack (product_id NULL, same kind + coach) must still be manageable — that is
+    # exactly what the editor cross-shows and what `adopt` exists to re-home.
+    legacy = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=5,
+                            price_minor=100000, duration_minutes=60, coach_user_id=fx.coach_uid,
+                            label="Legacy")
+    check("a LEGACY unscoped pack of theirs is still manageable (adopt must keep working)",
+          SR._own_plan(s, p, svc, str(legacy["id"])) is True, "the assign flow would break")
+
+
 def sc_removed_variation_stays_removed(s, fx):
     """The owner kept deleting three blank-duration price rows and they kept coming back. "Remove"
     doesn't DELETE a variation — it PATCHes status='retired' (which sets active=false) — but the
@@ -2910,6 +2972,7 @@ def sc_promo_bonus_grants(s, fx):
 
 
 SCENARIOS = [
+    sc_service_editor_child_ownership,
     sc_removed_variation_stays_removed,
     sc_confirmation_email_block,
     sc_email_payment_status_not_racy,

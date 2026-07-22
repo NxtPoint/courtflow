@@ -11,6 +11,7 @@
 import logging
 
 from flask import Blueprint, jsonify, request
+from sqlalchemy import text
 
 from auth import resolve_principal
 from db import session_scope
@@ -121,6 +122,44 @@ def _load_manageable(s, p, product_id):
     return svc, None
 
 
+def _own_price(s, p, product_id, price_id) -> bool:
+    """True if a `price_id` from the URL actually belongs to `<product_id>`. A PREDICATE, so the
+    route owns the response and this stays callable outside a Flask app context (the harness).
+
+    _load_manageable authorises the PRODUCT in the path; the SECOND id was then used verbatim, and
+    both patch_price and set_plan_status scope by (club_id, id) only — neither joins back to its
+    parent. So a coach who owns one lesson service could
+    `PATCH /api/services/<their product>/variations/<the club's court price_id>` with
+    {"amount_minor": 0} and make court hire free club-wide, or DELETE it and make courts unbookable
+    (PRICE_NOT_CONFIGURED). Court price_ids are handed to any authenticated user by
+    `GET /api/diary/durations?kind=court`. The coach lane's older equivalent
+    (coach/repositories.py) always did this check; the unified services lane dropped it."""
+    ok = s.execute(
+        text("SELECT 1 FROM billing.price WHERE club_id = :c AND id = :pid AND product_id = :prod"),
+        {"c": str(p.club_id), "pid": str(price_id), "prod": str(product_id)},
+    ).first()
+    return bool(ok)
+
+
+def _own_plan(s, p, svc, plan_id) -> bool:
+    """True if a `plan_id` from the URL is one THIS service's editor may manage.
+
+    Deliberately mirrors the packages query in repositories.get_service — the editor legitimately
+    shows a LEGACY unscoped pack (product_id NULL) cross-matched by kind + coach, and `adopt` exists
+    precisely to re-home those. So the boundary is "what this editor would display", not "product_id
+    matches": anything else (another coach's pack, another service's scoped pack) is a 404. Without
+    it, a coach could reprice or retire any pack in the club, or adopt someone else's."""
+    ok = s.execute(
+        text("SELECT 1 FROM billing.bundle_plan WHERE club_id = :c AND id = :plan "
+             "  AND (product_id = :prod "
+             "       OR (product_id IS NULL AND service_kind = :sk "
+             "           AND (coach_user_id IS NULL OR coach_user_id = :coach)))"),
+        {"c": str(p.club_id), "plan": str(plan_id), "prod": str(svc["id"]),
+         "sk": svc.get("service_kind"), "coach": svc.get("coach_user_id")},
+    ).first()
+    return bool(ok)
+
+
 @services_bp.patch("/<product_id>")
 def patch_service(product_id):
     """Service-level edit: name, description, payment preference (any manager); commission % (OWNER
@@ -204,6 +243,8 @@ def patch_variation(product_id, price_id):
         svc, err = _load_manageable(s, p, product_id)
         if err:
             return err
+        if not _own_price(s, p, product_id, price_id):    # must belong to THIS service
+            return jsonify(error="NOT_FOUND"), 404
         # peak_amount_minor passed ONLY when present (None clears it, sentinel = leave unchanged).
         _peak_kw = {}
         if "peak_amount_minor" in b:
@@ -226,6 +267,8 @@ def delete_variation(product_id, price_id):
         svc, err = _load_manageable(s, p, product_id)
         if err:
             return err
+        if not _own_price(s, p, product_id, price_id):    # must belong to THIS service
+            return jsonify(error="NOT_FOUND"), 404
         admin_repo.patch_price(s, club_id=p.club_id, price_id=price_id, status="retired")
         out = repo.get_service(s, club_id=p.club_id, product_id=product_id)
     return jsonify(service=out), 200
@@ -265,6 +308,8 @@ def patch_package(product_id, plan_id):
         svc, err = _load_manageable(s, p, product_id)
         if err:
             return err
+        if not _own_plan(s, p, svc, plan_id):             # must be a pack THIS editor manages
+            return jsonify(error="NOT_FOUND"), 404
         from billing import bundles
         # Explicit "assign this legacy pack to THIS service" — scopes an unscoped (product_id NULL)
         # pack to `svc` so it stops cross-showing under the coach's other same-kind services. Guarded
