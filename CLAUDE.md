@@ -9,11 +9,11 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
 ## Quick orientation (30-second map)
 - **Entrypoints:** API = `wsgi:app` (has DB) · web/portal = `web_wsgi:app` (DB-less, host-switched in `web_app.py`).
 - **Boot/schema runner:** `python -m db` (idempotent — run **twice**, second run must be a no-op).
-- **Source of truth for current state:** start at **`docs/specs/README.md`** (not the `docs/00→12` design docs).
+- **Source of truth for current state:** start at **`docs/specs/README.md`** (not the `docs/00→11` design docs).
   Where the specs and the original design docs differ, `docs/specs/` reflects as-built reality.
-- **Ignore the root `README.md` for build state.** It calls itself "the master index", but its status table
-  and session log are frozen in the planning/cutover era — it is a HISTORICAL document. This file +
-  `docs/specs/` are current; where they disagree with `README.md`, they win.
+- **The root `README.md` is the front door, not a source of truth** (rewritten 2026-07-22 to defer to this
+  file + `docs/specs/`, so it can't rot into a competing index). Keep it short — status, how to run it
+  locally, the repo map, the doc map. Build detail belongs here; as-built detail belongs in `docs/specs/`.
 - **Iron rule:** every domain row is `club_id`-scoped — **never query domain data without it.** (Phase 8
   adds RLS; until then this is a discipline, not a guardrail.)
 
@@ -554,11 +554,13 @@ member by email on the first authenticated hit.
   only. Secrets are `sync:false` in `render.yaml`; go-live flags (`PAYMENTS_ENABLED`, provider env) are
   committed so a blueprint sync can't wipe them.
 - Payments are **provider-agnostic** (Yoco adapter first, behind a flag); the diary launches without mandatory
-  online pay. Klaviyo sends confirmations; marketing email is opt-in only, no minor PII in any payload.
+  online pay. **SES sends the transactional confirmations** (`marketing_crm/email/ses.py` — the original plan
+  was Klaviyo-sends-confirmations; as-built it is the other way round). Klaviyo is MARKETING-only, opt-in
+  only, still dark until `KLAVIYO_API_KEY` — and no minor PII goes in any payload.
 
 ## Build history
 This file is present-state only. For the dated build history (the booking-flow audit sprint, Frankfurt
 migration, admin console redesign, frontend standardisation, unified statement, etc.), see the memory index at
 `MEMORY.md` and the authoritative specs under `docs/specs/` (START at `README.md` → `SYSTEM.md` →
-`BUSINESS-RULES.md` → `INVENTORY.md` → `OUTSTANDING.md`). `docs/` (`00`→`12`) are the original design docs;
+`BUSINESS-RULES.md` → `INVENTORY.md` → `OUTSTANDING.md`). `docs/` (`00`→`11`) are the original design docs;
 `docs/11` = locked decisions + the 1050 reuse map.
