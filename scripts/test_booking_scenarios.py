@@ -366,6 +366,81 @@ def sc_expired_hold_voids_order(s, fx):
     check("a LIVE order is never voided by the sweep", ost2 not in ("void", "written_off"), str(ost2))
 
 
+def sc_posted_service_must_be_real(s, fx):
+    """`product_id` arrives straight off the request body and was validated ONLY on the court branch.
+    For a LESSON it then drove the payment gate, the price guard AND the order price — and
+    price_for's product branch has no kind/coach/active predicate, falling through to
+    `amount_minor ASC LIMIT 1`. Posting another service's id therefore billed the cheapest price in
+    the club, evaluated the card-only rule against the substituted service, and (if the id named a
+    COURT product) made commission classify a delivered lesson as court, so the coach earned nothing.
+    Service ids are public to any authenticated member via GET /api/diary/services."""
+    print("\n# A posted product_id must be a REAL service of this kind, for THIS coach")
+    m = fx.members[0]
+
+    # A cheap CLASS service — the classic substitution target for a lesson booking.
+    cheap_class = s.execute(text("INSERT INTO billing.product (club_id, kind, name) "
+                                 "VALUES (:c,'class','Cheap Class') RETURNING id"),
+                            {"c": fx.club_id}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, unit, duration_minutes, active, status) "
+                   "VALUES (:c,:p,'any',1200,'ZAR','per_booking',60,true,'active')"),
+              {"c": fx.club_id, "p": cheap_class})
+
+    def _book(pid):
+        return B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                                booking_type="lesson", resource_id=fx.coach_res,
+                                coach_user_id=fx.coach_uid, product_id=pid,
+                                starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                                settlement_mode="at_court")
+
+    r1 = _book(str(cheap_class))
+    check("a CLASS product posted on a LESSON booking is refused",
+          r1.get("error") == "SERVICE_NOT_VALID", str(r1))
+
+    # A COURT product — the worst case: commission would classify the lesson as court and pay the
+    # coach nothing on a lesson they actually delivered.
+    court_prod = s.execute(text("SELECT id FROM billing.product WHERE club_id=:c "
+                                "AND kind='court_booking' AND active=true LIMIT 1"),
+                           {"c": fx.club_id}).scalar()
+    check("a COURT product posted on a LESSON booking is refused",
+          _book(str(court_prod)).get("error") == "SERVICE_NOT_VALID", "commission would be lost")
+
+    # ANOTHER coach's lesson service — right kind, wrong rate card.
+    other = _mk_user(s, "svc_thief_coach@scratch.test", "Thief")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'coach','active')"), {"c": fx.club_id, "u": other})
+    s.execute(text("INSERT INTO iam.coach_profile (club_id, user_id, display_name, is_bookable) "
+                   "VALUES (:c,:u,'Thief',true)"), {"c": fx.club_id, "u": other})
+    other_svc = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                               "VALUES (:c,'lesson','Other Rate Card',:u) RETURNING id"),
+                          {"c": fx.club_id, "u": other}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, unit, duration_minutes, active, status) "
+                   "VALUES (:c,:p,'any',500,'ZAR','per_booking',60,true,'active')"),
+              {"c": fx.club_id, "p": other_svc})
+    check("ANOTHER coach's lesson service is refused",
+          _book(str(other_svc)).get("error") == "SERVICE_NOT_VALID", "would price off their rate card")
+
+    # A DEACTIVATED service must not be bookable either (its payment rule silently disappears —
+    # payment_modes_for requires active=true while price_for did not).
+    dead = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id, active) "
+                          "VALUES (:c,'lesson','Retired Svc',:u,false) RETURNING id"),
+                     {"c": fx.club_id, "u": fx.coach_uid}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, unit, duration_minutes, active, status) "
+                   "VALUES (:c,:p,'any',900,'ZAR','per_booking',60,true,'active')"),
+              {"c": fx.club_id, "p": dead})
+    check("a DEACTIVATED service is refused", _book(str(dead)).get("error") == "SERVICE_NOT_VALID",
+          str(_book(str(dead))))
+
+    # And the legitimate path is untouched: the coach's OWN active lesson service still books.
+    good = s.execute(text("SELECT id FROM billing.product WHERE club_id=:c AND kind='lesson' "
+                          "AND active=true AND (coach_user_id IS NULL OR coach_user_id=:u) LIMIT 1"),
+                     {"c": fx.club_id, "u": fx.coach_uid}).scalar()
+    ok = _book(str(good))
+    check("the coach's OWN service still books normally", ok.get("ok") is True, str(ok))
+
+
 def sc_gated_lesson_bills_the_booked_service(s, fx):
     """A review-gated lesson used to be billed the coach's CHEAPEST service. A 'requested' booking
     creates NO order, and diary.booking had nowhere to remember which service was chosen — so on
@@ -1986,6 +2061,7 @@ SCENARIOS = [
     sc_court_reschedule,
     sc_reschedule_court_move,
     sc_expired_hold_voids_order,
+    sc_posted_service_must_be_real,
     sc_gated_lesson_bills_the_booked_service,
     sc_member_cannot_bypass_online_only,
     sc_expired_void_is_recoverable,

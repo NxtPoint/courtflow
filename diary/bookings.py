@@ -596,6 +596,36 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     if not res or not res["is_active"]:
         return _err("RESOURCE_NOT_FOUND", 404)
 
+    # THE POSTED SERVICE MUST BE A REAL SERVICE OF THIS KIND. `product_id` arrives straight off the
+    # request body (diary/routes.py) and was validated ONLY on the court branch below. For a LESSON or
+    # CLASS it then drove all three of: the per-service payment gate, the PRICE_NOT_CONFIGURED probe,
+    # and the ORDER PRICE — and pricing.price_for's product branch carries no kind, coach or
+    # product.active predicate (those live in its kind branch), falling through to
+    # `amount_minor ASC LIMIT 1`. So posting another service's id billed a R400 lesson at the club's
+    # cheapest price, evaluated the card-only rule against the SUBSTITUTED service, and — if the id
+    # named a court product — made commission classify a delivered lesson as court, so the coach
+    # accrued nothing. Service ids are public to any authenticated member via GET /api/diary/services.
+    # The booking UI always posts the right id; this refuses a crafted one, exactly as the guards
+    # below are documented to do.
+    if product_id:
+        want_kind = _PRODUCT_KIND_BY_BOOKING.get(booking_type, booking_type)
+        prod_ok = session.execute(
+            text("SELECT coach_user_id FROM billing.product "
+                 "WHERE club_id = :c AND id = CAST(:p AS uuid) AND kind = :k AND active = true"),
+            {"c": club_id, "p": str(product_id), "k": want_kind},
+        ).mappings().first()
+        if not prod_ok:
+            return _err("SERVICE_NOT_VALID", 422,
+                        message="that service doesn't exist for this booking type")
+        # A LESSON/CLASS service is either shared (NULL coach) or the RESOLVED coach's own — never
+        # another coach's, which would price this lesson off a rate card its coach never set.
+        _svc_coach = prod_ok.get("coach_user_id")
+        if _svc_coach is not None and booking_type in ("lesson", "class"):
+            _for_coach = coach_user_id or res.get("coach_user_id")
+            if not _for_coach or str(_svc_coach) != str(_for_coach):
+                return _err("SERVICE_NOT_VALID", 422,
+                            message="that service belongs to a different coach")
+
     # Court SERVICE resolution + guard (Hardcourt vs Clay). `product_id` from the caller is the CHOSEN
     # court service; the court MUST belong to it (its own resource.product_id, else the club's default
     # court product) — a mismatch is rejected so a hard court can't be booked (and cheaply priced)

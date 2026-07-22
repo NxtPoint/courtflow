@@ -22,11 +22,11 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 251 / billing 417 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 256 / billing 417 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   - `test_booking_scenarios` (251) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   - `test_booking_scenarios` (256) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
      waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused,
@@ -582,6 +582,16 @@ member by email on the first authenticated hit.
 - **Never let an agent change DNS.** The Wix→Render SEO cutover is supervised by Tomo.
 - **The booking API returns `{booking:{order_id,status}, checkout}`** — read `res.booking.order_id`, NOT
   `res.order_id` (that bug silently confirmed online bookings without redirecting).
+- **A posted `product_id` is VALIDATED before anything uses it** (`SERVICE_NOT_VALID`): it must be an
+  ACTIVE product of this club whose `kind` matches the booking type, and for a lesson/class either shared
+  (NULL coach) or the RESOLVED coach's own. It arrives off the request body and used to be checked only on
+  the court branch — yet it drives the payment gate, the price guard AND the order price, and
+  `pricing.price_for`'s product branch carries **no kind, coach or `product.active` predicate** (those live
+  in its kind branch), falling through to `amount_minor ASC LIMIT 1`. Posting another service's id billed
+  the club's cheapest price, evaluated the card-only rule against the SUBSTITUTED service, and — if the id
+  named a court product — made commission classify a delivered lesson as court, so **the coach accrued
+  nothing**. Service ids are public to any member via `GET /api/diary/services`. Guarded by
+  `sc_posted_service_must_be_real`.
 - **A service's `payment_modes` is enforced SERVER-SIDE per the EXACT `product_id`** — resolve allowed modes
   by the resolved service product, NEVER by `kind` alone (a kind-only resolve reads the club's default court
   product and lets a card-only Clay court/pack/class be taken pay-at-court on an owed/unpaid order). Bookings
