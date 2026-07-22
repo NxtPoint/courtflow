@@ -115,8 +115,17 @@ def get_service(session, *, club_id, product_id):
          "amount_minor": int(r["amount_minor"] or 0), "status": r["status"],
          "peak_amount_minor": (int(r["peak_amount_minor"]) if r["peak_amount_minor"] is not None else None)}
         for r in session.execute(
+            # `active = true` — the SAME rule the packages read below already applies, and for the
+            # same reason: "Remove" does not DELETE a variation, it PATCHes status='retired' (which
+            # sets active=false). Without this filter a removed variation reappears every time the
+            # editor is opened, so it looks like deleting it does nothing. Filtering on `active`
+            # rather than `status` also hides rows deactivated WITHOUT a status change — notably the
+            # legacy NULL-duration court prices the boot seed retires (seed_nextpoint sets
+            # active=false and leaves status alone), which is what surfaced this: three blank-duration
+            # rows that came back after every delete.
             text("SELECT id, duration_minutes, amount_minor, peak_amount_minor, status FROM billing.price "
                  "WHERE club_id = :c AND product_id = :p AND term_months IS NULL "
+                 "  AND active = true "
                  "ORDER BY duration_minutes NULLS FIRST, amount_minor"),
             {"c": club_id, "p": str(product_id)},
         ).mappings().all()

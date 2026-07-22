@@ -2300,6 +2300,46 @@ class _EmitRecorder:
         return [p for (e, p) in self.calls if e == event]
 
 
+def sc_removed_variation_stays_removed(s, fx):
+    """The owner kept deleting three blank-duration price rows and they kept coming back. "Remove"
+    doesn't DELETE a variation — it PATCHes status='retired' (which sets active=false) — but the
+    service editor's detail read returned EVERY price row for the product, so a removed one
+    reappeared on the next open. The packages read directly below it already had this guard, with a
+    comment describing this exact failure; the variations read never got it."""
+    print("\n# A REMOVED price variation stays removed (and a deactivated one never resurfaces)")
+    from services import repositories as SVC
+    from admin import repositories as ADM
+
+    prod = s.execute(text("INSERT INTO billing.product (club_id, kind, name) "
+                          "VALUES (:c,'court_booking','Editor Court') RETURNING id"),
+                     {"c": fx.club_id}).scalar()
+    keep = _price(s, fx.club_id, prod, 15000, dur=60)
+    drop = _price(s, fx.club_id, prod, 21000, dur=90)
+    # The shape that actually bit: a legacy NULL-duration row the boot seed deactivates WITHOUT
+    # touching status — so a status-only filter would still have shown it.
+    seedy = _price(s, fx.club_id, prod, 0, dur=None)
+    s.execute(text("UPDATE billing.price SET active = false WHERE id = :p"), {"p": seedy})
+
+    before = SVC.get_service(s, club_id=fx.club_id, product_id=prod)
+    ids = {v["price_id"] for v in (before or {}).get("variations", [])}
+    check("the editor shows the live variations", str(keep) in ids and str(drop) in ids, str(ids))
+    check("a seed-deactivated (blank-duration) row is NOT shown", str(seedy) not in ids, str(ids))
+
+    # Remove one, exactly as the editor's Remove button does.
+    ADM.patch_price(s, club_id=fx.club_id, price_id=str(drop), status="retired")
+    after = SVC.get_service(s, club_id=fx.club_id, product_id=prod)
+    ids2 = {v["price_id"] for v in (after or {}).get("variations", [])}
+    check("the removed variation does NOT come back on the next open", str(drop) not in ids2, str(ids2))
+    check("...and the one we kept is still there", str(keep) in ids2, str(ids2))
+
+    # And the deactivated rows can never be CHARGED — price_for requires active=true, so the R0 row
+    # could not have billed a free court even while it was visible.
+    from diary.pricing import price_for
+    px = price_for(s, club_id=fx.club_id, audience="any", product_id=str(prod), duration_minutes=60)
+    check("pricing resolves the LIVE 60-min rate, never the deactivated R0 row",
+          px and int(px.get("amount_minor") or 0) == 15000, str(px))
+
+
 def sc_confirmation_email_block(s, fx):
     """The confirmation email's rich block must name WHO booked it and the client's EXACT plan
     ("Adult Anytime Play"), not just "member". This block is assembled by raw SQL and is only ever
@@ -2870,6 +2910,7 @@ def sc_promo_bonus_grants(s, fx):
 
 
 SCENARIOS = [
+    sc_removed_variation_stays_removed,
     sc_confirmation_email_block,
     sc_email_payment_status_not_racy,
     sc_membership_started_emit,

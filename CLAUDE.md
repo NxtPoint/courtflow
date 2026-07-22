@@ -22,7 +22,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 251 / billing 407 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 251 / billing 412 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -51,7 +51,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      its service through `diary.resource.product_id` (the DURABLE link, set at create_class_type and
      boot-backfilled), never a name join; an orphaned class REFUSES with PRICE_NOT_CONFIGURED rather
      than billing another class's rate, and a retired price variation can never enrol at R0**.
-   - `test_billing_scenarios` (407) — settlement modes, commission, tokens, membership (offline + per-tier),
+   - `test_billing_scenarios` (412) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
      class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
