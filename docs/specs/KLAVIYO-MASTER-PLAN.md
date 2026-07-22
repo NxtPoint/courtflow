@@ -215,8 +215,10 @@ revise the wording there if you want; build the **Welcome flow (A2)** so opt-ins
 | 5 | Reminder cron → `booking_reminder` (hourly `reminders.yml`; **SES sends it**) | reminders | ✅ BUILT |
 | 6 | `pack_low` event on wallet draw-down | E3 top-up | ✅ BUILT |
 
-**🎉 The Code side of the roadmap is DONE.** Every event/trait/trigger any flow below needs is live. There is
-no remaining engineering blocker — the rest is Cowork building templates + flows in Flow Builder.
+**🎉 The Code side of the roadmap is DONE — WITH ONE EXCEPTION found 2026-07-22.** Every event/trait/trigger
+below is live **except `membership_started`, which is wired to a code path that never runs on the live
+platform** (proof + consequences in **§7f**). So there IS one remaining engineering blocker, and the
+`on_trial=false` conversion flip that depends on it is built-but-dead.
 
 ---
 
@@ -324,7 +326,13 @@ Every REAL NextPoint app event flows through the **"API"** integration (`booking
 
 **Still blocked — needs Code to emit + one real event (then ~10 min each in the Builder):**
 1. **C1 Post-lesson feedback** — shell `Y2YxEZ` (trigger UNCONFIGURED). **Unblock:** Code wires the app to emit `lesson_completed` via the **API integration** (already done for `booking_confirmed` etc.), then mark one real lesson complete → an API-source `lesson_completed` metric appears → wire trigger to THAT → re-entry 21 days → email `RJDzuj`.
-2. **Trial converter-guard** — same: needs an **API-source** `membership_started` before the skip-filter can safely reference it. (Unconverted-trial segment `XxUZCt` already built for the Jan offer.)
+2. **Trial converter-guard** — ⚠️ **harder than "fire one real event" (see §7f):** `membership_started` is
+   emitted ONLY from the gateway's `subscription_active` branch, which NOTHING produces — a real NextPoint
+   membership sale is a one-off order (`charge_succeeded`), never a provider subscription. **Code must move
+   the emit onto the real activation path before this is unblockable.** ⚠️ **And do NOT send to the
+   Unconverted-trial segment `XxUZCt` until it is fixed** — that segment is `on_trial`=true AND
+   `membership_started` 0×, and since NOBODY has that event, **members who DID convert are still in it** and
+   would get a "you haven't converted yet" pitch.
 
 **⚠️ Metric-source caveat (Code + Posts, important):** Klaviyo keys a metric by (name, **source/integration**). Code's real events land under the **"API"** integration. To unblock C1's trigger tonight Posts fired **test** `lesson_completed` + `membership_started` events (profile **`cowork-flowtest@nextpointtennis.com`**, `is_test`=true). The first attempt created them under the **"Klaviyo MCP Server"** source (wrong); a second used `service="api"`. **Before turning C1 live, verify its trigger is bound to the SAME `lesson_completed` metric Code emits** (check the metric's source = API) — re-point if needed. Cleanest long-term: wire C1's trigger after Code's FIRST real `lesson_completed` fires, then the source is guaranteed correct.
 
@@ -357,6 +365,55 @@ WSWr2C  "Court feedback (throttled)"   status: draft
 `booking_type` **equals** `court` → Save. Then re-read the flow and confirm `trigger_filter` is no longer
 `null` **before** flipping it Live — same verify-before-trusting rule §7d landed on.
 
+> ### ⚠️ Re-checked 2026-07-22 after an attempted fix — IT DID NOT SAVE. Still open.
+> `WSWr2C.trigger_filter` is **still `null`**, and `updated` is still **`2026-07-19T08:31:00Z`** — byte-identical
+> to before the attempt, so Klaviyo never accepted a write. Listing every flow sorted by `-updated` confirms
+> the **whole account's** most recent flow change is `Rhsfy6` at `2026-07-19T08:39:53Z`, i.e. **nothing in
+> Klaviyo has been modified since 19 July** — so the edit didn't land on a lookalike flow either (there are
+> only 7 flows; no duplicate "Court feedback"). The message-level `additional_filters` is also still `null`,
+> so it didn't go in the wrong slot — nothing persisted at all.
+>
+> **Most likely the Builder froze again** — exactly the failure §7d already recorded on this same dropdown.
+> When retrying: after adding the filter, **close the trigger-config panel** (Klaviyo won't enable Save while
+> it's open), Save, then **hard-refresh and look at the trigger card again**. The reliable tell is the
+> `updated` timestamp — if it hasn't moved, no write happened, whatever the UI shows.
+
+## 7f. `membership_started` is DEAD CODE on the live path — 2026-07-22 (Claude Code)
+
+§7d assumed C1 and the trial converter-guard were blocked only by "nobody has fired a real one yet". For
+**`lesson_completed` that is true**. For **`membership_started` it is not** — the emit sits on a branch the
+live platform never reaches, so no amount of real membership selling will ever produce it.
+
+**The evidence:**
+- `membership_started` is emitted from exactly ONE place: `billing/events.py:234`, inside
+  `apply_payment_event` under `elif kind == "subscription_active":`.
+- `subscription_active` appears in only three places repo-wide: that branch, a docstring, and the list of
+  legal kinds in `billing/gateway.py:29`. **No adapter ever produces it.** NextPoint memberships are sold as
+  **one-off orders** — Yoco fires `charge_succeeded`, then `membership.activate_membership_for_order` grants
+  the term. There is no provider-managed subscription, so the branch is unreachable.
+- `billing/membership.py` — the module that ACTUALLY activates every membership (`create_membership_order`,
+  `activate_membership_for_order`, `_apply_term_grant`, `grant_membership`) — **emits nothing at all.**
+- ✅ By contrast `lesson_completed` is genuinely fine: `diary/routes.py:534` → `diary.bookings.set_status`,
+  which emits it when a lesson is marked completed. That one really does just need a coach to mark one past
+  lesson done in prod.
+
+**What this breaks (three things, all currently mis-stated as done):**
+1. **The `on_trial=false` conversion flip** (`marketing_crm/crm_sync/sync.py:195`) runs ONLY on
+   `event_type == "membership_started"` → it never runs. Trial members stay `on_trial=true` forever, even
+   after they pay.
+2. **The Unconverted-trial segment `XxUZCt`** (`on_trial`=true AND `membership_started` 0×) therefore
+   **still contains members who converted**. ⚠️ **Sending the Jan offer to it as-is pitches "you haven't
+   converted" at paying members.** Same class of mis-send as the WSWr2C filter gap.
+3. **The trial converter-guard** can't be built on a metric that will never exist under the API source.
+
+**The fix (CODE — deliberately NOT applied unilaterally).** Move/duplicate the emit onto the real activation
+path so it fires wherever a membership actually starts — `activate_membership_for_order` (online) **and** the
+offline/desk grant, keyed for idempotency the same way the term grant is (an already-active row must not
+re-emit, or a webhook replay double-counts a conversion). Needs a decision on whether an **admin manual
+grant** and the **7-day trial** should also count as `membership_started` (they arguably should not — the
+trial is what the flag tracks). This touches live billing→CRM and, once Klaviyo flows are on, changes who
+gets marketing email, so it wants a review + a harness scenario rather than a quick patch.
+
 ## 8. Measurement
 - **Conversion:** `membership_started` metric + the `utm_campaign` in GA4. The trial flow's success =
   trial→membership rate.
@@ -377,7 +434,7 @@ WSWr2C  "Court feedback (throttled)"   status: draft
 | Verified sender `info@nextpointtennis.com` | Tomo | ✅ |
 | `/feedback` page + review gate (§4) | Code | ✅ BUILT — Cowork builds the C1 post-lesson flow |
 | Re-permission page + send to the 500 (§5) | Code | ✅ BUILT — Tomo: test `--to` → confirm basis → `--commit` |
-| `on_trial=false` on conversion (§6.3) | Code | ✅ BUILT |
+| `on_trial=false` on conversion (§6.3) | Code | ⚠️ **BUILT BUT DEAD** — the flip only runs on `membership_started`, which never fires on the live path (§7f). Fix that emit and this starts working as written |
 | `membership_lapsed` emit — daily `membership-refill.yml` (§6.4) | Code | ✅ BUILT |
 | Reminders live via SES — hourly `reminders.yml` (booking_reminder) | Code | ✅ BUILT — Cowork: don't build a Klaviyo reminder flow |
 | `pack_low` emit on wallet draw-down (E3) | Code | ✅ BUILT — Cowork builds the top-up flow |
