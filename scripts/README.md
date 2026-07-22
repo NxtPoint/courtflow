@@ -26,6 +26,7 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
 
 ## Spent one-offs (job done for club #1 — kept for provenance / future tenants)
 - `klaviyo_trial_cohort.py` — ONE-TIME trial-cohort backfill to Klaviyo (for members trialed before the emit shipped). Only re-run for a NEW cohort/tenant.
+- `klaviyo_membership_backfill.py` — ONE-TIME: sets `on_trial=false` + fires `membership_started` for members who converted BEFORE that emit was fixed (2026-07-22). **Run this before sending the Unconverted-trial segment anything** — until it does, that segment still contains paying members. Dry-run by default; `--commit` to push. See `docs/specs/KLAVIYO-MASTER-PLAN.md` §7f.
 - `backfill_pack_products.py` — ONE-TIME map of legacy NULL-product packs → their service. Spent for club #1; reusable for a migrated tenant.
 - `backfill_person_links.py` — ONE-TIME `iam.user ↔ core.person` backfill (911/911 done). Forward-linking now lives in the app path (`link_person_for_user`).
 - **Wix→Render cutover bundle** (supervised, `--dry-run` default; runbook `migration/CUTOVER_RUNBOOK.md`) — `import_wix.py` (core importer) + the three wrappers `import_members.py`, `import_subscriptions.py`, `import_lessons.py`. **Interdependent — treat as a unit.** Spent for NextPoint; the only Wix-migration path for a future club.

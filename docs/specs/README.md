@@ -208,6 +208,19 @@ operating guide; **this folder is the detail.**
 > engine is now covered by the billing harness** (4 scenarios, +60 checks: the no-second-debt invariant, every
 > refusal by error code, unique per-recipient codes, and the bonus grant/replay guards) — **new gate baseline
 > `python -m scripts.test_all` → booking 180 / billing 371 / statement 47.**
+>
+> **2026-07-22 — `membership_started` WAS NEVER FIRING (found + fixed).** While verifying the Klaviyo
+> blockers, the event turned out to be emitted only from `apply_payment_event`'s `subscription_active`
+> branch — which **nothing produces**, since NextPoint sells memberships as one-off orders, not
+> provider-managed subscriptions. It therefore never fired on the live platform, and silently took the
+> `on_trial=false` conversion flip down with it (that flip runs only on this event), leaving Klaviyo's
+> "Unconverted trial" segment full of **paying** members. Fixed by emitting from
+> `billing.membership._emit_membership_started`, fired from the two non-replay branches of
+> **`_apply_term_grant`** — the one function every genuine activation flows through — so replay-safety is
+> structural and the trial / admin-grant / Wix-import paths are excluded by construction. Guarded by
+> `sc_membership_started_emit` (+12 checks). **The fix is forward-only** — run
+> `scripts/klaviyo_membership_backfill` (new, dry-run by default) before sending that segment anything.
+> **New gate baseline: booking 180 / billing 383 / statement 47.**
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,

@@ -8,7 +8,14 @@ switches, unwired endpoints) live in their own doc: **[FEATURE-FLAGS.md](FEATURE
 > feature-complete for launch. What remains is (A) config owed by Tomo, (B) code backlog, (C) owner
 > decisions, (D) hardening, and (E) two large well-specced roadmaps (Admin Phase 2 + CRM Missions).
 > **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 180 /
-> billing 371 / statement 47** (2026-07-22).
+> billing 383 / statement 47** (2026-07-22).
+>
+> **⚠️ ONE ACTION OWED BEFORE ANY KLAVIYO SEND:** `membership_started` never fired on the live path (it was
+> wired to a gateway branch nothing produces) — **fixed in code 2026-07-22, but the fix is FORWARD-ONLY.**
+> Members who converted BEFORE it still read `on_trial=true` with zero `membership_started`, so Klaviyo's
+> Unconverted-trial segment `XxUZCt` **still contains paying members**. Run
+> `python -m scripts.klaviyo_membership_backfill` (dry-run first, then `--commit`) before sending that
+> segment anything. Full detail: `KLAVIYO-MASTER-PLAN.md` §7f.
 
 > Per-sprint changelog is NOT kept here anymore — it lives in git history + the memory index
 > (`.claude/.../MEMORY.md`). This file is the forward-looking backlog only.

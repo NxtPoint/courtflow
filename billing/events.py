@@ -229,6 +229,12 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
               provider=event.provider)
 
     elif kind == "subscription_active":
+        # NOTE: NOTHING currently produces this kind — NextPoint sells memberships as ONE-OFF ORDERS
+        # (charge_succeeded -> membership.activate_membership_for_order), not provider-managed
+        # subscriptions. Kept for a future gateway that genuinely does subscriptions. The REAL
+        # membership_started emit lives in billing.membership._emit_membership_started (fired from
+        # _apply_term_grant, the one function every genuine activation flows through). If a
+        # subscription-style provider is ever added, make sure it doesn't double-emit with that path.
         sub_id = _upsert_membership(session, event, club_id, status="active")
         result["membership_subscription_id"] = sub_id
         _emit("membership_started",

@@ -2273,6 +2273,108 @@ def _period_months_out(s, oid, months):
         {"m": int(months), "o": str(oid)}).scalar()
 
 
+class _EmitRecorder:
+    """Capture marketing_crm.tracking.emit calls for the duration of a `with` block.
+
+    main() stubs that emit to a no-op (the CRM feed writes in its OWN tx and can't see our
+    uncommitted scratch club), so a scenario that needs to ASSERT on emits swaps in a recorder and
+    restores the stub afterwards. Late binding is what makes this work — the producer resolves
+    `emit` off the module at call time, never at import."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __enter__(self):
+        import marketing_crm.tracking as mt
+        self._mt = mt
+        self._prev = getattr(mt, "emit", None)
+        mt.emit = lambda event, payload=None, **kw: self.calls.append(
+            (event, dict(payload or {}, **kw)))
+        return self
+
+    def __exit__(self, *exc):
+        self._mt.emit = self._prev
+        return False
+
+    def of(self, event):
+        return [p for (e, p) in self.calls if e == event]
+
+
+def sc_membership_started_emit(s, fx):
+    """`membership_started` must fire on a REAL membership activation — online AND offline — exactly
+    once, carrying the email the Klaviyo forward keys on. It must NOT fire on a replayed activation,
+    and NOT on the signup free-week (a trial is not a conversion; emitting there would clear
+    on_trial the moment it's set and destroy the trial cohort).
+
+    REGRESSION GUARD: this event was previously emitted ONLY from apply_payment_event's
+    `subscription_active` branch, which nothing produces — so it never fired on the live platform and
+    the on_trial=false conversion flip was silently dead. See docs/specs/KLAVIYO-MASTER-PLAN.md §7f."""
+    print("\n# membership_started: fires once per REAL activation (online+offline), never on replay/trial")
+
+    def _member(email, name):
+        u = _mk_user(s, email, name)
+        s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                       "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": u})
+        return u
+
+    # --- OFFLINE (desk buy): activated at purchase → must emit there.
+    u1 = _member("ms_offline@bill.test", "MsOffline")
+    with _EmitRecorder() as rec:
+        off = MB.create_membership_order(s, club_id=fx.club_id, user_id=u1,
+                                         price_id=fx.membership_price, settlement_mode="at_court")
+        started = rec.of("membership_started")
+    check("offline desk buy emits membership_started exactly once", len(started) == 1,
+          f"got {len(started)}: {rec.calls}")
+    if started:
+        ev = started[0]
+        check("payload carries the EMAIL the Klaviyo forward keys on (the on_trial flip needs it)",
+              ev.get("email") == "ms_offline@bill.test", str(ev.get("email")))
+        check("payload carries club + user + term", str(ev.get("club_id")) == str(fx.club_id)
+              and str(ev.get("user_id")) == str(u1) and int(ev.get("term_months") or 0) >= 1, str(ev))
+        check("payload is NOT flagged as a trial", (ev.get("provider") or "") != "trial", str(ev.get("provider")))
+
+    # --- ONLINE: nothing at checkout; the emit lands at activation, once, and NOT again on replay.
+    u2 = _member("ms_online@bill.test", "MsOnline")
+    with _EmitRecorder() as rec:
+        onl = MB.create_membership_order(s, club_id=fx.club_id, user_id=u2,
+                                         price_id=fx.membership_price, settlement_mode="online")
+        check("online checkout alone emits NOTHING (not yet paid)",
+              len(rec.of("membership_started")) == 0, str(rec.calls))
+        oid = onl["order_id"]
+        apply_payment_event(NormalizedPaymentEvent(
+            provider="yoco", kind="charge_succeeded", order_ref=oid, provider_payment_id="p_ms_1",
+            amount_minor=22000, currency="ZAR", status="succeeded", direction="charge",
+            club_id=str(fx.club_id), user_id=str(u2), raw={"t": 51}), session=s)
+        MB.activate_membership_for_order(s, order_id=oid)
+        after_first = len(rec.of("membership_started"))
+        # A replayed webhook/reconcile activation must be a no-op — no second conversion.
+        replay = MB.activate_membership_for_order(s, order_id=oid)
+        after_replay = len(rec.of("membership_started"))
+    check("online activation emits membership_started exactly once", after_first == 1, f"got {after_first}")
+    check("replayed activation is already_active", replay.get("status") == "already_active", str(replay))
+    check("REPLAY GUARD: no second membership_started on replay", after_replay == 1, f"got {after_replay}")
+
+    # --- The signup FREE WEEK must never count as a conversion.
+    u3 = _member("ms_trial@bill.test", "MsTrial")
+    with _EmitRecorder() as rec:
+        tr = MB.grant_signup_trial(s, club_id=fx.club_id, user_id=u3, days=7)
+        trial_emits = len(rec.of("membership_started"))
+    check("trial was granted (fixture sanity)", tr.get("granted") is True, str(tr))
+    check("the 7-day trial does NOT emit membership_started (a free week is not a conversion)",
+          trial_emits == 0, f"got {trial_emits}")
+
+    # --- And a real paid plan bought BY a trialist DOES convert them (the trial is superseded).
+    with _EmitRecorder() as rec:
+        MB.create_membership_order(s, club_id=fx.club_id, user_id=u3,
+                                   price_id=fx.membership_price, settlement_mode="at_court")
+        conv = rec.of("membership_started")
+    check("a trialist upgrading to a PAID plan emits the conversion", len(conv) == 1,
+          f"got {len(conv)}: {rec.calls}")
+    if conv:
+        check("the conversion carries the trialist's email", conv[0].get("email") == "ms_trial@bill.test",
+              str(conv[0].get("email")))
+
+
 def sc_promo_discount(s, fx):
     """THE promotions invariant: redeeming a code DISCOUNTS the one order through discount_order —
     it never invents a second debt store. The money must land exactly where an admin discount lands,
@@ -2608,6 +2710,7 @@ def sc_promo_bonus_grants(s, fx):
 
 
 SCENARIOS = [
+    sc_membership_started_emit,
     sc_promo_discount,
     sc_promo_eligibility,
     sc_promo_unique_codes,
