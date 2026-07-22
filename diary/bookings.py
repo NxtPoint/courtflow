@@ -201,7 +201,10 @@ def _booking_dict(session, booking_id):
     row = session.execute(
         text("SELECT id, club_id, booking_type, resource_id, coach_user_id, starts_at, "
              "ends_at, status, held_until, booked_by_user_id, recurrence_id, order_id, "
-             "settlement_mode, notes, cancellation_reason, cancelled_at, cancelled_by "
+             "settlement_mode, notes, cancellation_reason, cancelled_at, cancelled_by, "
+             # The service this was booked against — accept_booking prices off it, so it MUST be
+             # selected here or the read silently returns None and the fallback bites again.
+             "product_id "
              "FROM diary.booking WHERE id = :id"),
         {"id": booking_id},
     ).mappings().first()
@@ -209,7 +212,7 @@ def _booking_dict(session, booking_id):
         return None
     d = dict(row)
     for k in ("id", "club_id", "resource_id", "coach_user_id", "booked_by_user_id",
-              "recurrence_id", "order_id", "cancelled_by"):
+              "recurrence_id", "order_id", "cancelled_by", "product_id"):
         if d.get(k) is not None:
             d[k] = str(d[k])
     for k in ("starts_at", "ends_at", "held_until", "cancelled_at"):
@@ -643,7 +646,8 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                 session, club_id=club_id, booking_type="lesson", resource_id=resource_id,
                 coach_user_id=_gate_coach, starts_at=starts, ends_at=ends, status=_gate_status,
                 held_until=None, booked_by_user_id=owner_user_id, recurrence_id=recurrence_id,
-                created_by_user_id=booked_by_user_id, settlement_mode=_gate_sm, notes=notes)
+                created_by_user_id=booked_by_user_id, settlement_mode=_gate_sm, notes=notes,
+                product_id=product_id)   # REMEMBER the chosen service — accept_booking prices off it
             for _party in parties:
                 _insert_party(session, booking_id=_gid, club_id=club_id, party=_party)
             _gb = _booking_dict(session, _gid)
@@ -800,6 +804,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                 held_until=held_until, booked_by_user_id=owner_user_id,
                 created_by_user_id=booked_by_user_id,   # the ACTOR (staff/parent/self), for the audit + email
                 recurrence_id=recurrence_id, settlement_mode=settlement_mode, notes=notes,
+                product_id=product_id,
             )
             linked_court_id = None
             if booking_type == "lesson" and court_resource_id:
@@ -883,18 +888,23 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
 
 def _insert_booking(session, *, club_id, booking_type, resource_id, coach_user_id,
                     starts_at, ends_at, status, held_until, booked_by_user_id,
-                    recurrence_id, settlement_mode, notes, created_by_user_id=None):
+                    recurrence_id, settlement_mode, notes, created_by_user_id=None,
+                    product_id=None):
     row = session.execute(
         text("INSERT INTO diary.booking "
              "(club_id, booking_type, resource_id, coach_user_id, starts_at, ends_at, "
              " status, held_until, booked_by_user_id, created_by_user_id, recurrence_id, "
-             " settlement_mode, notes) "
-             "VALUES (:c, :bt, :rid, :coach, :sa, :ea, :st, :hu, :by, :cby, :rec, :sm, :notes) "
+             " settlement_mode, notes, product_id) "
+             "VALUES (:c, :bt, :rid, :coach, :sa, :ea, :st, :hu, :by, :cby, :rec, :sm, :notes, "
+             "        CAST(:pid AS uuid)) "
              "RETURNING id"),
         {"c": club_id, "bt": booking_type, "rid": resource_id, "coach": coach_user_id,
          "sa": starts_at, "ea": ends_at, "st": status, "hu": held_until,
          "by": booked_by_user_id, "cby": created_by_user_id, "rec": recurrence_id,
-         "sm": settlement_mode, "notes": notes},
+         "sm": settlement_mode, "notes": notes,
+         # Remember WHICH service this was booked against. A gated lesson creates no order, so
+         # without this the chosen service is lost by the time it's accepted.
+         "pid": str(product_id) if product_id else None},
     ).mappings().first()
     return row["id"]
 
@@ -1461,13 +1471,23 @@ def accept_booking(session, *, club_id, booking_id, actor_user_id, role, now=Non
     # Same GUARDRAIL as create_booking: a matching prepaid pack is drawn even when an OWED method was
     # picked, so a paid pack is never bypassed (no duplicate owed order). Explicit 'token' with no
     # wallet still errors NO_TOKEN.
+    # THE SERVICE THIS LESSON WAS ACTUALLY BOOKED AGAINST, remembered on the booking row at request
+    # time. A gated lesson creates no order, so without it the chosen service was gone by now and
+    # pricing fell back to the coach's CHEAPEST service (price_for's tie-break is amount_minor ASC) —
+    # a R400 Private billed as a R250 Semi-private, with commission and earnings attribution wrong to
+    # match. NULL for rows predating the column: behaviour is then exactly as before.
+    gated_product_id = bk.get("product_id")
+
     token_wallet = None
     _wants_token = (settlement_mode == "token")
     if _wants_token or settlement_mode in ("at_court", "monthly_account"):
         dur = int((ends - starts).total_seconds() // 60)
         token_wallet = _match_token_wallet_guarded(
             session, club_id=club_id, user_id=owner_user_id, booking_type="lesson",
-            duration_minutes=dur, coach_user_id=coach_uid)
+            duration_minutes=dur, coach_user_id=coach_uid,
+            # Scope the pack to the SAME service too — a NULL request product matches anything and
+            # prefers a product-scoped wallet, so a pack bought for another service was being burned.
+            product_id=gated_product_id)
         if token_wallet is not None:
             settlement_mode = "token"
         elif _wants_token:
@@ -1501,7 +1521,8 @@ def accept_booking(session, *, club_id, booking_id, actor_user_id, role, now=Non
         resource_id=bk["resource_id"], starts_at=starts, ends_at=ends,
         linked_booking_id=linked_court_id, audience="member",
         duration_minutes=duration_minutes, token_wallet=token_wallet,
-        coach_user_id=coach_uid)   # price on THIS coach's own rate card
+        coach_user_id=coach_uid,       # price on THIS coach's own rate card…
+        product_id=gated_product_id)   # …and on the EXACT service they booked, not its cheapest sibling
     order_id = order.get("order_id")
     if order_id:
         _attach_order(session, booking_id, order_id)

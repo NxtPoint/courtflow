@@ -337,6 +337,17 @@ _DDL = [
     );
     """,
 
+    # THE SERVICE A BOOKING WAS ACTUALLY BOOKED AGAINST. A coach can sell several lesson services
+    # (Private R400, Semi-private R250, Cardio R120) and create_booking resolves exactly which one —
+    # then discarded it, because the booking row had nowhere to keep it. That was invisible until the
+    # review-gate: a 'requested' lesson creates NO order, so on accept the service was simply gone and
+    # _create_order_guarded fell back to price_for(kind='lesson', coach), whose tie-break is
+    # `amount_minor ASC LIMIT 1` — the coach's CHEAPEST service. A R400 lesson billed R250, commission
+    # accrued on the wrong base, the sale was attributed to the wrong service in earnings, and the
+    # pack match degraded the same way (a NULL request product matches anything). Nullable: existing
+    # rows and non-gated paths that never needed it stay valid.
+    f"ALTER TABLE {SCHEMA}.booking ADD COLUMN IF NOT EXISTS product_id uuid;",
+
     # --- BACKFILL: link every CLASS resource to its billing.product ------------------------------
     # Class services used to be resolved by JOINING ON NAMES. Renaming a service updates only
     # billing.product.name, so the join silently broke and sessions scheduled afterwards got

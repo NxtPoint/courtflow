@@ -366,6 +366,64 @@ def sc_expired_hold_voids_order(s, fx):
     check("a LIVE order is never voided by the sweep", ost2 not in ("void", "written_off"), str(ost2))
 
 
+def sc_gated_lesson_bills_the_booked_service(s, fx):
+    """A review-gated lesson used to be billed the coach's CHEAPEST service. A 'requested' booking
+    creates NO order, and diary.booking had nowhere to remember which service was chosen — so on
+    accept, pricing fell back to price_for(kind='lesson', coach), whose tie-break is
+    `amount_minor ASC LIMIT 1`. A R400 Private billed R250 if that coach also sold a Semi-private,
+    with commission accruing on the wrong base and the sale attributed to the wrong service."""
+    print("\n# A gated lesson is billed the service the client BOOKED, not the coach's cheapest")
+    m = fx.members[0]
+    # The coach's EXPENSIVE service (the one actually booked)…
+    dear = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                          "VALUES (:c,'lesson','Private (dear)',:u) RETURNING id"),
+                     {"c": fx.club_id, "u": fx.coach_uid}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, unit, duration_minutes, active, status) "
+                   "VALUES (:c,:p,'any',90000,'ZAR','per_booking',60,true,'active')"),
+              {"c": fx.club_id, "p": dear})
+    # …and a CHEAPER sibling on the same coach + duration, which the fallback would grab.
+    cheap = s.execute(text("INSERT INTO billing.product (club_id, kind, name, coach_user_id) "
+                           "VALUES (:c,'lesson','Semi-private (cheap)',:u) RETURNING id"),
+                      {"c": fx.club_id, "u": fx.coach_uid}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, unit, duration_minutes, active, status) "
+                   "VALUES (:c,:p,'any',10000,'ZAR','per_booking',60,true,'active')"),
+              {"c": fx.club_id, "p": cheap})
+    # Turn the coach's review gate ON — this is the path that loses the service.
+    s.execute(text("UPDATE iam.coach_profile SET review_bookings = true "
+                   "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.coach_uid})
+
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         product_id=dear,        # the client chose the R900 service
+                         starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                         settlement_mode="at_court")
+    bid = r["booking"]["id"]
+    check("a gated lesson starts as 'requested' with no order",
+          r["booking"]["status"] == "requested" and not r["booking"].get("order_id"),
+          str(r["booking"]["status"]))
+    remembered = s.execute(text("SELECT product_id FROM diary.booking WHERE id=:b"),
+                           {"b": bid}).scalar()
+    check("...but the chosen SERVICE is remembered on the booking",
+          str(remembered) == str(dear), str(remembered))
+
+    acc = B.accept_booking(s, club_id=fx.club_id, booking_id=bid,
+                           actor_user_id=fx.coach_uid, role="coach")
+    check("the coach accepts it", acc.get("ok"), str(acc))
+    amt = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                    {"o": B.get_booking(s, club_id=fx.club_id, booking_id=bid)["order_id"]}).scalar()
+    check("it is billed the BOOKED service (R900), not the cheapest (R100)", amt == 90000,
+          "billed %s" % amt)
+    billed_prod = s.execute(text("SELECT pr.product_id FROM billing.order_line ol "
+                                 "JOIN billing.price pr ON pr.id = ol.price_id "
+                                 "WHERE ol.booking_id = :b LIMIT 1"), {"b": bid}).scalar()
+    check("...and attributed to the right service in earnings", str(billed_prod) == str(dear),
+          str(billed_prod))
+    s.execute(text("UPDATE iam.coach_profile SET review_bookings = false "
+                   "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.coach_uid})
+
+
 def sc_member_cannot_bypass_online_only(s, fx):
     """PRODUCTION REPLICA. Three plain members (no coach/admin role) booked an online-only court as
     pay-at-court: lucaaclark, prjshamma262, kbsolr. This mirrors that exact config — a court whose
@@ -1928,6 +1986,7 @@ SCENARIOS = [
     sc_court_reschedule,
     sc_reschedule_court_move,
     sc_expired_hold_voids_order,
+    sc_gated_lesson_bills_the_booked_service,
     sc_member_cannot_bypass_online_only,
     sc_expired_void_is_recoverable,
     sc_court_move_guards,

@@ -7,7 +7,7 @@ switches, unwired endpoints) live in their own doc: **[FEATURE-FLAGS.md](FEATURE
 > **▶ NO CURRENT BUILD PHASE.** The platform is **LIVE on `https://nextpointtennis.com`** and
 > feature-complete for launch. What remains is (A) config owed by Tomo, (B) code backlog, (C) owner
 > decisions, (D) hardening, and (E) two large well-specced roadmaps (Admin Phase 2 + CRM Missions).
-> **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 246 /
+> **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 251 /
 > billing 407 / statement 64** (2026-07-22).
 >
 > **Klaviyo, 2026-07-22 — `membership_started` never fired** (wired to a gateway branch nothing produces);

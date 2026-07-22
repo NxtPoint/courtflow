@@ -22,11 +22,11 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 246 / billing 407 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 251 / billing 407 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   - `test_booking_scenarios` (246) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   - `test_booking_scenarios` (251) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
      waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused,
@@ -337,6 +337,17 @@ court list to the booking's own service so the UI never offers a move the server
 shared by client · coach · admin · home — it replaced four drifted forks, none of which could move a court.
 Role differences are config: `canChangeCourt` is false for a member's LESSON (the court is club-allocated)
 and true for their court hire and for all staff.
+
+**`diary.booking.product_id` remembers WHICH service was booked.** A coach can sell several lesson
+services (Private R400, Semi-private R250, Cardio R120). `create_booking` resolves the exact one — and
+used to discard it, which was invisible until the review gate: a `requested` lesson creates **no order**,
+so on accept the service was gone and `_create_order_guarded` fell back to `price_for(kind='lesson',
+coach)`, whose tie-break is **`amount_minor ASC LIMIT 1`** — the coach's CHEAPEST service. A R400 lesson
+billed R250, commission accrued on the wrong base, earnings attributed the sale to the wrong service, and
+the pack match degraded identically (a NULL request product matches anything). `accept_booking` now prices
+AND matches the pack off `bk["product_id"]`. **If you add a column here, add it to `_booking_dict`'s SELECT
+too** — it returns `None` otherwise and the fallback silently bites again. Guarded by
+`sc_gated_lesson_bills_the_booked_service`.
 
 **Lesson approval lifecycle (accept / propose / decline).** Per-coach `iam.coach_profile.review_bookings`:
 ON → a CLIENT self-booking with that coach creates a **`requested`** booking reserving NOTHING until the coach
