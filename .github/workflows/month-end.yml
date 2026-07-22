@@ -6,6 +6,16 @@
 # Render cron needed (all four render.yaml crons stay commented out; rides the keep-warm CI pattern).
 # 08:00 SAST is inside the keep-warm window, so the API is awake when it fires.
 #
+# THIS JOB MUST FAIL LOUDLY. It runs ONCE a month and issues real numbered invoices to real people:
+# a silent failure is invisible for 30 days, by which time the period has moved on. It used to end
+# in `|| echo "…failed"`, so the run went GREEN whether or not a single invoice was issued. Now a
+# transport failure, a non-2xx, or an `ok:false` body (any per-client failure) fails the job, and
+# the per-club counts land in the run summary as evidence it actually did something.
+#
+# The sweep commits PER CLIENT, so a timeout is not corruption — everything already done stays
+# done, and a re-run from the Actions tab skips it via billing.month_end_notice and picks up the
+# rest. Re-running after a failure is always the right move.
+#
 # REQUIRES a repository secret OPS_KEY set to the SAME value as the API service's OPS_KEY env var
 # (Settings → Secrets and variables → Actions). Without it the job no-ops (it won't fail the run).
 name: month-end
@@ -31,11 +41,56 @@ jobs:
         run: |
           if [ -z "$OPS_KEY" ]; then
             echo "OPS_KEY secret not set — skipping the sweep (add it in repo Settings → Secrets)."
+            echo "### month-end SKIPPED — no OPS_KEY secret" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          curl -fsS --max-time 120 -X POST \
-            https://courtflow-api.onrender.com/api/cron/month-end \
-            -H "X-Ops-Key: $OPS_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"period\": \"${PERIOD}\"}" \
-          || echo "month-end sweep call failed (idempotent — safe to re-run from the Actions tab)."
+
+          # Wake the service before starting the clock — a cold start otherwise eats the budget.
+          curl -fsS --max-time 90 https://courtflow-api.onrender.com/healthz >/dev/null 2>&1 || true
+
+          # The endpoint is TIME-BOXED (it stops at ~90s, under gunicorn's 120s reaper) and
+          # RESUMABLE — each pass commits per client and claims them in month_end_notice, so the
+          # next pass continues where this one stopped. Loop until it reports complete. The cap
+          # is a runaway guard, not an expectation: one pass covers most months.
+          echo "### month-end sweep" >> "$GITHUB_STEP_SUMMARY"
+          pass=0
+          while [ "$pass" -lt 12 ]; do
+            pass=$((pass + 1))
+            code=$(curl -sS --max-time 150 -o response.json -w '%{http_code}' -X POST \
+              https://courtflow-api.onrender.com/api/cron/month-end \
+              -H "X-Ops-Key: $OPS_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"period\": \"${PERIOD}\"}") || {
+                echo "❌ pass $pass: the request itself failed (timeout or network)" >> "$GITHUB_STEP_SUMMARY"
+                echo "Per-client commits mean any clients already swept are DONE. Re-run this workflow." >> "$GITHUB_STEP_SUMMARY"
+                exit 1
+              }
+
+            echo "pass $pass — HTTP $code"
+            cat response.json || true
+            {
+              echo "**Pass $pass** — HTTP $code"
+              echo '```json'
+              head -c 3000 response.json 2>/dev/null
+              echo
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            if [ "$code" != "200" ]; then
+              echo "month-end returned HTTP $code — failing so this is visible today, not next month."
+              exit 1
+            fi
+            # ok:false means at least one client errored mid-sweep. The rest still committed; re-run.
+            if grep -q '"ok": *false' response.json; then
+              echo "month-end reported per-client failures — re-run from the Actions tab."
+              exit 1
+            fi
+            if grep -q '"complete": *true' response.json; then
+              echo "✅ Sweep complete after $pass pass(es)." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Sweep hit its time box — going again."
+          done
+
+          echo "❌ Still incomplete after $pass passes — investigate before the next billing day." >> "$GITHUB_STEP_SUMMARY"
+          exit 1

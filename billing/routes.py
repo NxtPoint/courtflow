@@ -348,12 +348,83 @@ def cron_month_end():
     club_id = (body.get("club_id") or request.args.get("club_id") or "").strip() or None
     period = (body.get("period") or request.args.get("period") or "").strip() or None
 
+    # PER-CLIENT TRANSACTIONS. This used to run every club and every client inside ONE session_scope.
+    # The sweep allocates GAPLESS invoice numbers and emails them — and emit() dispatches on a
+    # background thread with its own session, so the email leaves immediately and does NOT roll back.
+    # With gunicorn's 120s timeout and ~900 members, a worker killed at client #400 rolled back 400
+    # invoices whose numbered emails had already been delivered, and a re-run allocated different
+    # numbers. Committing per client means a failure costs exactly one client; billing.month_end_notice
+    # makes the re-run skip everyone already done. Partial progress is now a feature, not corruption.
+    #
+    # RESUMABLE, TIME-BOXED. Per-client commits make a kill survivable, but gunicorn still reaps the
+    # worker at --timeout 120s (render.yaml) — so with a few hundred owing clients the sweep would be
+    # cut off mid-way EVERY month and never finish. Rather than bet on one long request, stop
+    # cleanly under our own budget and report `remaining`; the caller loops until it hits zero.
+    # Because every completed client is committed and claimed in month_end_notice, each pass simply
+    # continues where the last stopped. Default 90s keeps a margin under the 120s reaper.
+    import time
+    t0 = time.time()
+    try:
+        budget = float(body.get("max_seconds") or request.args.get("max_seconds") or 90)
+    except (TypeError, ValueError):
+        budget = 90.0
+    budget = max(5.0, min(budget, 600.0))
+    remaining_clients = 0
+    timed_out = False
+
     results = []
     with session_scope() as s:
         clubs = [club_id] if club_id else [str(r[0]) for r in s.execute(text("SELECT id FROM club.club")).all()]
-        for cid in clubs:
+
+    for cid in clubs:
+        if timed_out:
+            break
+        stats = {"club_id": cid, "notified": 0, "already": 0, "failed": 0,
+                 "rent_charges": 0, "clients_owing": 0, "period": period}
+        try:
+            with session_scope() as s:          # phase 1+2: accruals + the worklist, one commit
+                stats["period"] = comm.month_end_period(s, period)
+                stats["rent_charges"] = comm.month_end_accrue(
+                    s, club_id=cid, period=stats["period"])
+                targets = comm.month_end_targets(s, club_id=cid)
+            stats["clients_owing"] = len(targets)
+        except Exception:
+            log.warning("month-end setup failed for club=%s", cid, exc_info=True)
+            results.append(dict(stats, error="setup_failed"))
+            continue
+
+        for idx, tgt in enumerate(targets):
+            if time.time() - t0 >= budget:
+                # Out of budget — stop cleanly rather than being reaped mid-client. Everyone
+                # already swept is committed; `remaining` tells the caller to come back.
+                timed_out = True
+                remaining_clients += len(targets) - idx
+                break
             try:
-                results.append(comm.run_month_end(s, club_id=cid, period_label=period))
+                with session_scope() as s:      # phase 3: ONE client, ONE commit
+                    outcome = comm.month_end_client(
+                        s, club_id=cid, period=stats["period"], user_id=tgt["user_id"],
+                        owed=tgt["owed"], cur=tgt["cur"])
+                stats["already" if outcome == "already" else "notified"] += 1
             except Exception:
-                log.warning("month-end sweep failed for club=%s", cid, exc_info=False)
-    return jsonify(clubs=len(results), results=results), 200
+                # One client's failure must never stop the sweep — and because it committed
+                # nothing, the next run picks them up (no month_end_notice row was claimed).
+                stats["failed"] += 1
+                log.warning("month-end failed for club=%s user=%s", cid, tgt["user_id"],
+                            exc_info=True)
+        results.append(stats)
+
+    if timed_out:
+        # Clubs we never reached at all still owe a pass.
+        remaining_clients += sum(1 for c in clubs if not any(r["club_id"] == c for r in results))
+
+    elapsed = round(time.time() - t0, 1)
+    total_failed = sum(r.get("failed", 0) for r in results)
+    log.info("month-end sweep: %ss failed=%s remaining=%s %s",
+             elapsed, total_failed, remaining_clients, results)
+    # `ok:false` when anything failed, so the caller (and the Action) can go RED instead of silently
+    # reporting success — the sweep runs once a month and a silent no-op is invisible for 30 days.
+    # `remaining > 0` is NOT a failure: it means "call me again", and the caller loops.
+    return jsonify(ok=(total_failed == 0), clubs=len(results), results=results,
+                   failed=total_failed, remaining=remaining_clients,
+                   complete=(not timed_out), elapsed_seconds=elapsed), 200

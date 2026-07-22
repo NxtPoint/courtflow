@@ -22,7 +22,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 263 / billing 417 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 263 / billing 423 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -51,7 +51,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      its service through `diary.resource.product_id` (the DURABLE link, set at create_class_type and
      boot-backfilled), never a name join; an orphaned class REFUSES with PRICE_NOT_CONFIGURED rather
      than billing another class's rate, and a retired price variation can never enrol at R0**.
-   - `test_billing_scenarios` (417) — settlement modes, commission, tokens, membership (offline + per-tier),
+   - `test_billing_scenarios` (423) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
      class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
@@ -421,8 +421,19 @@ club" + a **Record payout** button (`Widgets.Earnings` `cfg.onRecordPayout` → 
 (`billing.commission.run_month_end` → `POST /api/cron/month-end`, `OPS_KEY`-guarded): accrues coach arrears +
 rent, then for each client with an OPEN balance **consolidates their open orders into ONE numbered statement
 invoice + a pay-link email** (`invoice_issued`; else a plain `statement_ready` reminder — a client who owes
-nothing gets NO email), idempotent per `(club,user,period)` via `billing.month_end_notice`. Fired by
-**`.github/workflows/month-end.yml`** on the **25th** (the club billing day; rides the keep-warm CI pattern — the
+nothing gets NO email), idempotent per `(club,user,period)` via `billing.month_end_notice`. **The sweep is
+PER-CLIENT-TRANSACTIONAL, TIME-BOXED and RESUMABLE** — `run_month_end` is the single-transaction form (one
+club, harness); the CRON ROUTE instead drives `month_end_period`/`month_end_accrue`/`month_end_targets` then
+`month_end_client` in **its own `session_scope()` per client**, stopping at `max_seconds` (default 90, under
+gunicorn's 120s reaper) and returning `{ok, complete, remaining, failed}` for the caller to loop. This is not
+optional polish: the sweep allocates **gapless invoice numbers** and `emit()`s the email from a **background
+thread with its own session**, so the email does NOT roll back — one big transaction meant a worker reaped at
+client #400 rolled back 400 invoices whose numbered emails had already landed, and a re-run allocated
+different numbers. One client's failure now costs one client, and `month_end_notice` makes every later pass
+skip the done. Fired by
+**`.github/workflows/month-end.yml`** on the **25th** (the club billing day) — it **loops until `complete`** and
+**FAILS THE JOB LOUDLY** on any non-200/`ok:false` (it used to end in `|| echo`, so the run went green even if
+nothing was billed — invisible for 30 days). Rides the keep-warm CI pattern — the
 four `render.yaml` crons stay commented out).
 
 **Client month-at-a-glance + the ONE month-aware 360.** `billing.me.activity_summary(month)` →

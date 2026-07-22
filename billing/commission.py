@@ -1141,68 +1141,100 @@ def list_coach_payouts(session, *, club_id, coach_user_id=None, limit=100) -> Li
     return [dict(r) for r in rows]
 
 
+def month_end_period(session, period_label=None) -> str:
+    return period_label or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+
+
+def month_end_accrue(session, *, club_id, period) -> int:
+    """Phase 1 — coach arrears + rent for the period. Cheap and idempotent; safe to repeat."""
+    try:
+        accrue_arrears_for_club(session, club_id=club_id)
+    except Exception:
+        log.info("run_month_end: arrears accrual skipped club=%s", club_id)
+    try:
+        return accrue_rent_for_club(session, club_id=club_id, year_month=period)
+    except Exception:
+        log.info("run_month_end: rent accrual skipped club=%s", club_id)
+        return 0
+
+
+def month_end_targets(session, *, club_id):
+    """Phase 2 — every client with an OPEN statement balance (the unified debt = the sum of open,
+    unsettled orders). Read-only, so it is safe to take once and then process client-by-client in
+    separate transactions."""
+    return [dict(r) for r in session.execute(
+        text('SELECT user_id, COALESCE(SUM(amount_minor),0) AS owed, MIN(currency_code) AS cur '
+             'FROM billing."order" WHERE club_id = :c AND status = \'open\' '
+             '  AND settled_by_order_id IS NULL AND user_id IS NOT NULL '
+             'GROUP BY user_id HAVING COALESCE(SUM(amount_minor),0) > 0'),
+        {"c": club_id},
+    ).mappings().all()]
+
+
+def month_end_client(session, *, club_id, period, user_id, owed, cur) -> str:
+    """Phase 3 — ONE client: claim the idempotency row, issue their consolidated statement invoice,
+    then notify. Returns 'notified' | 'already'.
+
+    THIS IS THE UNIT OF WORK THAT MUST COMMIT ON ITS OWN. It allocates a GAPLESS invoice number and
+    emits an email — and emit() dispatches on a background thread with its own session, so the email
+    goes out immediately and does NOT roll back with us. Run the whole club in one transaction (as
+    this did) and a timeout at client #400 rolls back 400 invoices whose numbered emails have already
+    been delivered, while a re-run allocates different numbers. Per-client commits mean a failure
+    costs exactly one client, and month_end_notice makes the re-run skip everyone already done."""
+    fresh = session.execute(
+        text("INSERT INTO billing.month_end_notice (club_id, user_id, period_label, owed_minor) "
+             "VALUES (:c, :u, :p, :owed) "
+             "ON CONFLICT (club_id, user_id, period_label) DO NOTHING RETURNING user_id"),
+        {"c": club_id, "u": user_id, "p": period, "owed": int(owed or 0)},
+    ).first()
+    if not fresh:
+        return "already"
+    invoice_id = None
+    try:
+        from billing import invoicing
+        res = invoicing.issue_statement_invoice(
+            session, club_id=club_id, user_id=str(user_id), period_label=period)
+        if res.get("ok"):
+            invoice_id = res.get("invoice_id")
+    except Exception:
+        log.info("run_month_end: invoice issue skipped user=%s", user_id)
+    try:
+        from marketing_crm.tracking import emit
+        if invoice_id:
+            emit("invoice_issued", {"club_id": str(club_id), "user_id": str(user_id),
+                                    "invoice_id": invoice_id, "amount_minor": int(owed or 0),
+                                    "currency": cur or "ZAR"})
+        else:
+            emit("statement_ready", {"club_id": str(club_id), "user_id": str(user_id),
+                                     "amount_minor": int(owed or 0), "currency": cur or "ZAR"})
+    except Exception:
+        log.info("run_month_end: notify skipped user=%s", user_id)
+    return "notified"
+
+
 def run_month_end(session, *, club_id, period_label=None) -> Dict[str, Any]:
     """The month-end sweep (C3, OPS-triggered — no always-on cron, fired by the keep-warm Action):
     (1) accrue coach arrears + rent for the period so the coach tabs are current, then (2) notify
     EVERY client who owes an open statement balance with a `statement_ready` message (in-app + email
     best-effort). Idempotent per (club, user, period) via billing.month_end_notice, so a re-run never
     re-notifies. Respects the LIVE-statement model (soft snapshot + notify, never a hard month lock).
-    Returns {period, clients_owing, notified, already, rent_charges}. Never raises per-user."""
-    period = period_label or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
-    try:
-        accrue_arrears_for_club(session, club_id=club_id)
-    except Exception:
-        log.info("run_month_end: arrears accrual skipped club=%s", club_id)
-    rent_charges = 0
-    try:
-        rent_charges = accrue_rent_for_club(session, club_id=club_id, year_month=period)
-    except Exception:
-        log.info("run_month_end: rent accrual skipped club=%s", club_id)
-    # Every client with an OPEN statement balance (the unified debt = sum of open, unsettled orders).
-    rows = session.execute(
-        text('SELECT user_id, COALESCE(SUM(amount_minor),0) AS owed, MIN(currency_code) AS cur '
-             'FROM billing."order" WHERE club_id = :c AND status = \'open\' '
-             '  AND settled_by_order_id IS NULL AND user_id IS NOT NULL '
-             'GROUP BY user_id HAVING COALESCE(SUM(amount_minor),0) > 0'),
-        {"c": club_id},
-    ).mappings().all()
+    Returns {period, clients_owing, notified, already, rent_charges}. Never raises per-user.
+
+    SINGLE-TRANSACTION orchestration, for one club and for the harness. The CRON ROUTE does NOT use
+    this — it drives month_end_client per client in its own transaction, so a timeout costs one
+    client instead of rolling back a whole club's already-emailed invoices (see month_end_client)."""
+    period = month_end_period(session, period_label)
+    rent_charges = month_end_accrue(session, club_id=club_id, period=period)
+    rows = month_end_targets(session, club_id=club_id)
     notified = 0
     already = 0
     for r in rows:
-        fresh = session.execute(
-            text("INSERT INTO billing.month_end_notice (club_id, user_id, period_label, owed_minor) "
-                 "VALUES (:c, :u, :p, :owed) "
-                 "ON CONFLICT (club_id, user_id, period_label) DO NOTHING RETURNING user_id"),
-            {"c": club_id, "u": r["user_id"], "p": period, "owed": int(r["owed"] or 0)},
-        ).first()
-        if not fresh:
+        outcome = month_end_client(session, club_id=club_id, period=period,
+                                   user_id=r["user_id"], owed=r["owed"], cur=r["cur"])
+        if outcome == "already":
             already += 1
-            continue
-        # Consolidate this client's open orders into ONE numbered statement invoice document
-        # (orders already on an active invoice are skipped). If there's genuinely nothing new to
-        # invoice (all already invoiced intra-month), fall back to a plain balance reminder so the
-        # client is still nudged. The orders are never modified (still card-settleable live).
-        invoice_id = None
-        try:
-            from billing import invoicing
-            res = invoicing.issue_statement_invoice(
-                session, club_id=club_id, user_id=str(r["user_id"]), period_label=period)
-            if res.get("ok"):
-                invoice_id = res.get("invoice_id")
-        except Exception:
-            log.info("run_month_end: invoice issue skipped user=%s", r["user_id"])
-        try:
-            from marketing_crm.tracking import emit
-            if invoice_id:
-                emit("invoice_issued", {"club_id": str(club_id), "user_id": str(r["user_id"]),
-                                        "invoice_id": invoice_id, "amount_minor": int(r["owed"] or 0),
-                                        "currency": r["cur"] or "ZAR"})
-            else:
-                emit("statement_ready", {"club_id": str(club_id), "user_id": str(r["user_id"]),
-                                         "amount_minor": int(r["owed"] or 0), "currency": r["cur"] or "ZAR"})
-        except Exception:
-            log.info("run_month_end: notify skipped user=%s", r["user_id"])
-        notified += 1
+        else:
+            notified += 1
     return {"period": period, "clients_owing": len(rows), "notified": notified,
             "already": already, "rent_charges": rent_charges}
 

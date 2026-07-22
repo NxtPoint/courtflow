@@ -2109,6 +2109,48 @@ def sc_month_end_sweep(s, fx):
           r2["notified"] == 0 and r2["already"] >= 1, str(r2))
 
 
+def sc_month_end_resumable(s, fx):
+    """The month-end sweep must be RESUMABLE, because the cron route now drives it client-by-client
+    in its OWN transaction and stops under a time box (gunicorn reaps the worker at 120s). That only
+    works if the unit of work is safe to stop between: every completed client must be COMMITTED,
+    CLAIMED, and skipped by the next pass. Guards the three pieces the route depends on."""
+    print("\n# Month-end resumability: targets → per-client unit → a second pass skips the done")
+    ym = s.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                     booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                     starts_at=iso(at(fx, 14)), ends_at=iso(at(fx, 15)), settlement_mode="at_court")
+
+    # Accrual is phase 1 and runs on EVERY pass of a resumed sweep — it must tolerate repeating.
+    CM.month_end_accrue(s, club_id=fx.club_id, period=ym)
+    CM.month_end_accrue(s, club_id=fx.club_id, period=ym)
+
+    targets = CM.month_end_targets(s, club_id=fx.club_id)
+    mine = [t for t in targets if str(t["user_id"]) == str(fx.member)]
+    check("targets lists the client who owes", len(mine) == 1, str(targets))
+    check("every target actually owes money (nobody is emailed a zero balance)",
+          all(int(t["owed"]) > 0 for t in targets), str(targets))
+
+    inv_before = s.execute(text("SELECT count(*) FROM billing.invoice WHERE club_id = :c AND user_id = :u"),
+                           {"c": fx.club_id, "u": fx.member}).scalar()
+    out1 = CM.month_end_client(s, club_id=fx.club_id, period=ym, user_id=fx.member,
+                              owed=mine[0]["owed"], cur=mine[0]["cur"])
+    check("first pass NOTIFIES the client", out1 == "notified", out1)
+    inv_after = s.execute(text("SELECT count(*) FROM billing.invoice WHERE club_id = :c AND user_id = :u"),
+                          {"c": fx.club_id, "u": fx.member}).scalar()
+    check("…and issues them a numbered statement invoice", inv_after == inv_before + 1,
+          f"{inv_before} -> {inv_after}")
+
+    # THE RESUMABILITY GUARD. A time-boxed sweep re-reads targets on the next pass, so the same
+    # client comes back around. If this ever returned 'notified' again, a slow month would invoice
+    # and email the same person once per pass.
+    out2 = CM.month_end_client(s, club_id=fx.club_id, period=ym, user_id=fx.member,
+                              owed=mine[0]["owed"], cur=mine[0]["cur"])
+    check("a SECOND pass skips them (claimed in month_end_notice)", out2 == "already", out2)
+    inv_end = s.execute(text("SELECT count(*) FROM billing.invoice WHERE club_id = :c AND user_id = :u"),
+                        {"c": fx.club_id, "u": fx.member}).scalar()
+    check("…and issues NO second invoice", inv_end == inv_after, f"{inv_after} -> {inv_end}")
+
+
 def sc_pack_service_isolation(s, fx):
     """A LEGACY unscoped pack (product_id NULL) cross-shows under every same-kind service of a coach;
     the service editor can ASSIGN it to ONE service, after which it stops polluting the others — and
@@ -2992,6 +3034,7 @@ SCENARIOS = [
     sc_pack_service_isolation,
     sc_coach_payout,
     sc_month_end_sweep,
+    sc_month_end_resumable,
     sc_desk_amount_guard,
     sc_partial_refund_state,
     sc_coach_scoped_pricing,
