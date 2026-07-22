@@ -354,7 +354,33 @@ def settle_settlement_order(session, *, settlement_order_id) -> Dict[str, Any]:
             splits += int(res.get("splits") or 0)
         except Exception:
             log.info("settle_settlement_order: split skipped for child=%s", ch["id"], exc_info=False)
-    return {"settled": settled, "splits": splits}
+
+    # OVER-COLLECTION CHECK. The wrapper's total froze at creation. If a covered debt was voided,
+    # written off or discounted afterwards — or a member paid a checkout still open in their browser
+    # after invalidate_live_settlement_for killed the wrapper — we just took more than we settled.
+    # Nothing else surfaces that: the money fold still reconciles, because a voided child is simply
+    # excluded. Report it so it can be refunded rather than silently kept.
+    surplus = 0
+    try:
+        taken = int(session.execute(
+            text("SELECT COALESCE(SUM(amount_minor),0) FROM billing.payment "
+                 "WHERE order_id = :o AND direction = 'charge' AND status = 'succeeded'"),
+            {"o": str(settlement_order_id)}).scalar() or 0)
+        applied = int(session.execute(
+            text('SELECT COALESCE(SUM(amount_minor),0) FROM billing."order" '
+                 " WHERE status = 'paid' AND ("
+                 "       settled_by_order_id = :s"
+                 "    OR id = ANY(COALESCE((SELECT covered_order_ids FROM billing.\"order\" "
+                 "                           WHERE id = :s), ARRAY[]::uuid[])))"),
+            {"s": str(settlement_order_id)}).scalar() or 0)
+        if taken > applied:
+            surplus = taken - applied
+            log.warning("settlement order %s COLLECTED %s but settled only %s — surplus %s is owed "
+                        "back to the payer (a covered debt changed after the checkout opened)",
+                        settlement_order_id, taken, applied, surplus)
+    except Exception:
+        log.debug("settlement surplus check skipped", exc_info=False)
+    return {"settled": settled, "splits": splits, "surplus_minor": surplus}
 
 
 def is_settlement_order(session, *, order_id) -> bool:
@@ -422,10 +448,58 @@ def unsettle_settlement_order(session, *, settlement_order_id) -> Dict[str, Any]
     return {"restored": restored}
 
 
+def invalidate_live_settlement_for(session, *, club_id, order_id) -> Dict[str, Any]:
+    """A child debt is about to be VOIDED or DISCOUNTED. If an unpaid "Pay all" wrapper is currently
+    covering it, that wrapper's total is a FROZEN SNAPSHOT that no longer matches reality — paying it
+    would collect R900 for R600 of debt, and the surplus lands nowhere and is unauditable (the money
+    fold still reconciles, because the voided child is excluded). `cancel_booking` voids
+    unconditionally, so a member cancelling their own booking mid-checkout does this to themselves.
+
+    So: detach EVERY child from the stale wrapper and void the wrapper itself. The debts resurface on
+    the statement and the member is offered a correct total the moment they click Pay all again.
+
+    What this canNOT do is retract a Yoco checkout that is already open in the member's browser. If
+    they pay it anyway, settle_settlement_order settles the children it still finds and reports the
+    surplus loudly rather than silently keeping it. Prevention where possible, detection where not.
+
+    A wrapper already 'paid' is left completely alone — its children are settled and nothing is in
+    flight. Guarded: money hygiene must never break the void/discount it is protecting."""
+    try:
+        wrapper = session.execute(
+            text('SELECT settled_by_order_id FROM billing."order" WHERE id = :o AND club_id = :c'),
+            {"o": str(order_id), "c": str(club_id)},
+        ).scalar()
+        if not wrapper:
+            return {"invalidated": False}
+        st = session.execute(
+            text('SELECT status FROM billing."order" WHERE id = :w'), {"w": str(wrapper)}).scalar()
+        if st == "paid":
+            return {"invalidated": False, "reason": "already_settled"}
+        session.execute(
+            text('UPDATE billing."order" SET settled_by_order_id = NULL, updated_at = now() '
+                 "WHERE settled_by_order_id = :w"),
+            {"w": str(wrapper)},
+        )
+        session.execute(
+            text('UPDATE billing."order" SET status = \'void\', updated_at = now() '
+                 "WHERE id = :w AND status IN ('open','awaiting_payment')"),
+            {"w": str(wrapper)},
+        )
+        log.info("voided stale settlement order %s — a covered debt (%s) changed mid-checkout",
+                 wrapper, order_id)
+        return {"invalidated": True, "settlement_order_id": str(wrapper)}
+    except Exception:
+        log.exception("invalidate_live_settlement_for failed for %s (non-fatal)", order_id)
+        return {"invalidated": False}
+
+
 def void_order(session, *, club_id, order_id, write_off=False, reason=None) -> Dict[str, Any]:
     """Clear an UNPAID order: 'void' (a mistake — never owed) or 'written_off' (a real debt forgiven).
     Only acts on an owed/in-flight order (open / awaiting_payment); a paid order must be refunded, not
     voided. Drops the line off the statement + the balance. Returns {ok, status} or {ok:False, error}."""
+    # An in-flight "Pay all" covering this debt is now priced wrong — kill it before we change the
+    # debt, so the member can never pay a total that no longer exists.
+    invalidate_live_settlement_for(session, club_id=club_id, order_id=order_id)
     new_status = "written_off" if write_off else "void"
     row = session.execute(
         text('UPDATE billing."order" SET status = :ns, updated_at = now() '
@@ -509,6 +583,10 @@ def discount_order(session, *, club_id, order_id, discount_minor=None, new_amoun
         return {"ok": False, "error": "ORDER_NOT_FOUND"}
     if head["status"] not in ("open", "awaiting_payment"):
         return {"ok": False, "error": "NOT_OPEN", "status": head["status"]}
+    # Same reason as void_order: an in-flight "Pay all" covering this debt is priced on the OLD
+    # amount. Kill the stale wrapper before the amount changes under it. (After the guards above, so
+    # a rejected discount never disturbs a live checkout.)
+    invalidate_live_settlement_for(session, club_id=club_id, order_id=order_id)
 
     # The lines are the authoritative basis (the order total is their sum). Use line_sum as the current
     # total so the pro-rata split always re-sums exactly to the new total (no drift vs the stored value).

@@ -211,6 +211,54 @@ def sc_settlement_refund_restores_debt(s, fx):
           after["total_owed_minor"] == before["total_owed_minor"], str(after["total_owed_minor"]))
 
 
+def sc_settlement_invalidated_when_a_debt_changes(s, fx):
+    """A "Pay all" wrapper's total is a FROZEN SNAPSHOT. Voiding or discounting one of its covered
+    debts mid-checkout used to leave that stale total payable — member pays R900 for R600 of debt,
+    and the surplus lands nowhere and is unauditable (the fold still reconciles, because the voided
+    child is excluded). cancel_booking voids unconditionally, so a member cancelling their own
+    booking mid-checkout did this to themselves. The wrapper is now killed the moment its contents
+    change, so they are re-offered a correct total."""
+    print("\n# Changing a covered debt mid-checkout KILLS the stale 'Pay all' (no over-collection)")
+    s.execute(text("UPDATE billing.token_wallet SET status='expired', minutes_remaining=0 "
+                   "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.member})
+    c = _fresh_court(s, fx, "Stale Court")
+    start = owed(s, fx)
+    b1 = book_court(s, fx, 9, "at_court", court=c)
+    book_court(s, fx, 10, "at_court", court=c)
+    before = owed(s, fx)
+    check("two more owed lines", before["count"] == start["count"] + 2, str(before["count"]))
+
+    so = S.create_settlement_order(s, club_id=fx.club_id, user_id=fx.member)
+    frozen = so["amount_minor"]
+    check("the wrapper froze a total", frozen > 0, str(so))
+
+    # The member cancels one of the covered bookings while the checkout is open.
+    B.cancel_booking(s, club_id=fx.club_id, booking_id=b1["booking"]["id"],
+                     actor_user_id=fx.member, role="member")
+
+    wst = s.execute(text('SELECT status FROM billing."order" WHERE id = :o'),
+                    {"o": so["order_id"]}).scalar()
+    check("the stale wrapper is VOIDED, so the old total can't be paid",
+          wst in ("void", "written_off"), str(wst))
+    still_linked = s.execute(text('SELECT count(*) FROM billing."order" '
+                                  "WHERE settled_by_order_id = :o"), {"o": so["order_id"]}).scalar()
+    check("...and every child is detached from it", still_linked == 0, str(still_linked))
+
+    after = owed(s, fx)
+    check("the REMAINING debt is visible again (one cancelled, one still owed)",
+          after["count"] == start["count"] + 1, "%s -> %s" % (start["count"], after["count"]))
+
+    # Re-clicking Pay all now prices the CURRENT truth, not the frozen one.
+    so2 = S.create_settlement_order(s, club_id=fx.club_id, user_id=fx.member)
+    check("a fresh Pay all totals LESS than the stale one", so2["amount_minor"] < frozen,
+          "%s vs %s" % (so2["amount_minor"], frozen))
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=so2["order_id"],
+                          amount_minor=so2["amount_minor"], provider="card_at_desk",
+                          provider_payment_id="SETTLE-STALE-1", user_id=fx.member)
+    check("paying the fresh wrapper clears the balance exactly", owed(s, fx)["count"] == 0,
+          str(owed(s, fx)))
+
+
 def sc_settlement_survives_reclaim(s, fx):
     """A "Pay all" payment landing AFTER the 30-minute reclaim used to settle NOTHING. The reclaim
     NULLs child.settled_by_order_id so an abandoned checkout stops hiding the debt — but that was the
@@ -431,6 +479,7 @@ SCENARIOS = [sc_no_double_count, sc_membership_r0, sc_pay_all, sc_partial_and_re
              # accumulating fixture with no per-scenario savepoints, so a scenario inserted mid-list
              # shifts the balances every later scenario asserts on.
              sc_settlement_refund_restores_debt, sc_settlement_survives_reclaim,
+             sc_settlement_invalidated_when_a_debt_changes,
              ]
 
 

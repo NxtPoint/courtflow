@@ -22,7 +22,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 246 / billing 407 / statement 57**. Each uses its own scratch club and always rolls back.
+   **booking 246 / billing 407 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -71,7 +71,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      ONCE per real activation (online + offline) carrying the email, never on a replay, and NEVER on the
      7-day trial (a `_EmitRecorder` context manager swaps the stubbed `marketing_crm.tracking.emit` for a
      recorder — late binding is what makes that work)**.
-   - `test_statement_reconciliation` (57) — no double-count, pay-all-once, part-settle, reclaim,
+   - `test_statement_reconciliation` (64) — no double-count, pay-all-once, part-settle, reclaim,
      membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
 
 ## Deployment (LIVE on Render)
@@ -356,8 +356,15 @@ first, back-reference second. **Refunding a wrapper must UN-SETTLE its children*
 → `open` **and** `settled_by_order_id = NULL`, or the debt returns invisible) — otherwise the club loses the
 cash AND the receivable. That un-settle runs **strictly AFTER `_accrue_refund_clawback`**, which only reverses
 commission on children still `paid`. A PARTIAL refund of a wrapper can't be allocated per child — it logs and
-flags rather than half-settling. Guarded by `sc_settlement_refund_restores_debt` +
-`sc_settlement_survives_reclaim`.
+flags rather than half-settling. **Changing a COVERED debt kills the wrapper**: `void_order` and
+`discount_order` call `invalidate_live_settlement_for` first, which detaches every child and voids the
+stale wrapper — its total froze at creation, so paying it would collect R900 for R600 of debt with the
+surplus landing nowhere (the fold still reconciles, because a voided child is excluded). `cancel_booking`
+voids unconditionally, so a member cancelling mid-checkout used to do this to themselves. We cannot
+retract a Yoco page already open, so `settle_settlement_order` also reports a **`surplus_minor`** when it
+collects more than it settles — prevention where possible, detection where not. Guarded by
+`sc_settlement_refund_restores_debt` + `sc_settlement_survives_reclaim` +
+`sc_settlement_invalidated_when_a_debt_changes`.
 **Unified client statement** (`billing/statement.py`): one debt = one `billing.order`, settled once. The account
 page shows ONE reconciled "Your statement", grouped by category with tick-to-part-settle; admin void/write-off;
 coach `coach_arrears` kept in **lockstep** with orders so commission accrues exactly once. Design:
