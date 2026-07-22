@@ -229,6 +229,95 @@ def main():
         """, p, "none — every enrolment used a mode its class service offers",
             ["enrolment_id", "starts_at", "class_name", "service", "allowed", "used", "order_status", "member"]))
 
+        _hdr("WHY A MEMBER GOT PAY-AT-COURT ON AN ONLINE-ONLY SERVICE")
+        print("   Round 2 produced several candidate mechanisms and one NON-bug explanation.")
+        print("   These three reads decide between them — check ROLES first, it's the cheapest exit.")
+
+        # (a) THE NON-BUG EXPLANATION, checked first. auth/principal.role_for picks the MOST
+        #     PRIVILEGED role a user holds, and the per-service gate binds only member/guest. A
+        #     "member" who also holds a coach/admin membership row legitimately bypasses everything —
+        #     in which case there is no defect to chase at all.
+        _rows(s, "did any of these bookers ALSO hold a privileged role? (if yes: NOT a bug)", """
+            SELECT u.email, string_agg(DISTINCT mem.role, '/') AS roles,
+                   count(*) FILTER (WHERE mem.role IN ('coach','club_admin','platform_admin')) AS privileged
+            FROM iam."user" u
+            JOIN iam.membership mem ON mem.user_id = u.id
+            WHERE u.id IN (SELECT DISTINCT b.created_by_user_id
+                             FROM diary.booking b
+                             JOIN billing."order" o ON o.id = b.order_id
+                             JOIN LATERAL (SELECT price_id FROM billing.order_line
+                                            WHERE order_id = o.id AND price_id IS NOT NULL
+                                            ORDER BY created_at LIMIT 1) ol ON true
+                             JOIN billing.price p ON p.id = ol.price_id
+                             JOIN billing.product pr ON pr.id = p.product_id
+                            WHERE pr.payment_modes IS NOT NULL AND btrim(pr.payment_modes) <> ''
+                              AND o.settlement_mode IN """ + _MONEY_MODES + """
+                              AND NOT (o.settlement_mode = ANY(
+                                       string_to_array(replace(pr.payment_modes,' ',''), ',')))
+                              AND b.created_at > pr.updated_at)
+            GROUP BY u.email ORDER BY privileged DESC, u.email
+        """, {}, "no such bookers (nothing to explain)", ["email", "roles", "privileged"])
+
+        # (b) THE FAIL-OPEN SURFACE. payment_modes_for returns None for an EMPTY csv, and None SKIPS
+        #     the gate entirely. Any service with no modes set is unrestricted by design — but if
+        #     that's most of them, "I set it to online" may simply not have applied where you expected.
+        _rows(s, "services with NO payment restriction at all (the gate is skipped for these)", """
+            SELECT pr.kind, pr.name AS service, pr.active,
+                   COALESCE(c.display_name, 'shared / no coach') AS coach
+            FROM billing.product pr
+            LEFT JOIN iam.coach_profile c ON c.user_id = pr.coach_user_id AND c.club_id = pr.club_id
+            WHERE pr.kind IN ('court_booking','lesson','class')
+              AND (pr.payment_modes IS NULL OR btrim(pr.payment_modes) = '')
+            ORDER BY pr.active DESC, pr.kind, pr.name
+        """, {}, "every service carries an explicit payment rule",
+            ["kind", "service", "active", "coach"])
+
+        # (c) THE DEACTIVATED-SERVICE HOLE (round-2 finding G). payment_modes_for requires
+        #     active=true, so a DEACTIVATED product's restriction silently disappears — while
+        #     price_for has no active check, so it still bills. Any court still pointing at an
+        #     inactive service is billing with NO payment rule.
+        _rows(s, "courts pointing at a DEACTIVATED service (bills, but its rule is ignored)", """
+            SELECT r.name AS court, pr.name AS service, pr.active AS service_active,
+                   COALESCE(NULLIF(pr.payment_modes,''), '(none)') AS rule_on_paper
+            FROM diary.resource r
+            JOIN billing.product pr ON pr.id = r.product_id
+            WHERE r.kind = 'court' AND pr.active = false
+            ORDER BY r.name
+        """, {}, "no court points at a deactivated service",
+            ["court", "service", "service_active", "rule_on_paper"])
+
+        _hdr("MISSED PAYMENTS — money possibly taken with nothing given")
+        # Round-2 finding C: an order voided because its hold lapsed is invisible in every pending
+        # view. If the member paid anyway and the webhook was missed, the money sits with Yoco.
+        # reconcile now reaches these (fixed), but count the existing backlog.
+        _rows(s, "online orders VOIDED after a hold lapsed (check these against Yoco)", """
+            SELECT o.id AS order_id, o.created_at, (o.amount_minor/100.0) AS amount,
+                   u.email AS client, b.booking_type, b.starts_at
+            FROM billing."order" o
+            JOIN billing.order_line ol ON ol.order_id = o.id AND ol.booking_id IS NOT NULL
+            JOIN diary.booking b ON b.id = ol.booking_id
+            LEFT JOIN iam."user" u ON u.id = o.user_id
+            WHERE o.settlement_mode = 'online' AND o.status IN ('void','written_off')
+              AND b.cancellation_reason = 'hold_expired'
+              AND NOT EXISTS (SELECT 1 FROM billing.payment p
+                              WHERE p.order_id = o.id AND p.direction = 'charge'
+                                AND p.status = 'succeeded')
+              """ + win("o.created_at") + """
+            ORDER BY o.created_at DESC
+        """, p, "none — no abandoned-then-voided online order to check",
+            ["order_id", "created_at", "amount", "client", "booking_type", "starts_at"])
+
+        _rows(s, "online orders still AWAITING PAYMENT for >2h (reconcile candidates)", """
+            SELECT o.id AS order_id, o.created_at, (o.amount_minor/100.0) AS amount, u.email AS client
+            FROM billing."order" o
+            LEFT JOIN iam."user" u ON u.id = o.user_id
+            WHERE o.settlement_mode = 'online' AND o.status = 'awaiting_payment'
+              AND o.created_at < now() - interval '2 hours'
+              """ + win("o.created_at") + """
+            ORDER BY o.created_at DESC
+        """, p, "none — no stale pending online order",
+            ["order_id", "created_at", "amount", "client"])
+
         _hdr("CONTEXT — how each service is currently configured")
         # WHY THIS ONE MATTERS: the payment gate resolves a court's service via
         # resource.product_id, falling back to the club's DEFAULT court product. If some courts have

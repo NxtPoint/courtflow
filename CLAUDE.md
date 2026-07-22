@@ -22,11 +22,11 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 237 / billing 402 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 241 / billing 402 / statement 47**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   - `test_booking_scenarios` (237) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   - `test_booking_scenarios` (241) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
      waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused,
@@ -108,6 +108,7 @@ re-run or a doubled schedule is safe. When adding a recurring job, add a workflo
 | `reminders.yml` | hourly, 07:00–22:00 SAST | `diary.crons.run_reminders` — T-24h/T-2h booking + class reminders, deduped via `diary.reminder_log`, emits `booking_reminder` (LIVE via SES; a no-show reducer) |
 | `membership-refill.yml` | daily 07:30 SAST | membership-lapse sweep — `current_period_end` passed → `expired` + emits `membership_lapsed` (drives the Klaviyo E2 win-back) |
 | `month-end.yml` | monthly, the **25th** 08:00 SAST | `billing.commission.run_month_end` — coach arrears + rent, then one consolidated statement invoice + pay-link per client owing |
+| `reconcile-payments.yml` | hourly, 07:00–22:00 SAST | `yoco_billing.reconcile.reconcile_pending` — recovers payments whose webhook never arrived (Render Free sleeps, so CLAUDE.md calls reconcile "the common path"). The handler shipped at launch but **nothing ever called it** until 2026-07-22 |
 | `marketing-digest.yml` | daily 07:00 SAST | cross-brand GA4/GSC organic report + the `core.web_daily` ingest push (see the analytics section) |
 
 **Capacity-sweep needs no job at all** — abandoned holds are released by lazy expiry (see Gotchas).
@@ -598,7 +599,12 @@ member by email on the first authenticated hit.
   It used to cancel the booking and orphan the order, leaving `awaiting_payment` rows pointing at
   cancelled bookings that the statement self-heal (`_void_phantom_cancelled_orders`, `open`-only)
   never cleared. A late payment is still safe — `_confirm_held_bookings` re-instates a booking
-  cancelled as `hold_expired`. Backlog cleanup: `scripts/void_orphaned_orders.py`. The four `render.yaml`
+  cancelled as `hold_expired`. Backlog cleanup: `scripts/void_orphaned_orders.py`.
+  **RECONCILE MUST ALSO REACH THAT VOID** — `yoco_billing.reconcile._is_expired_hold_void` re-opens the
+  door for an order voided *purely* by hold expiry (the member paid after the hold lapsed and the
+  webhook was missed → money with Yoco, no booking, no receipt, invisible in every pending view). An
+  order an ADMIN voided has no `hold_expired` booking behind it and stays untouchable, so a cancelled
+  sale can't be resurrected. Guarded by `sc_expired_void_is_recoverable`. The four `render.yaml`
   crons stay commented out. **Classes have the same seam:** an `online` class enrolment holds its seat
   (`diary.enrolment.held_until`) pending the Yoco payment; `release_expired_enrolments` (top of
   `list_sessions` + `enrol`) cancels the lapsed-unpaid seat, voids its `awaiting_payment` order, and promotes

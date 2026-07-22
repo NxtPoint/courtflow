@@ -1,0 +1,54 @@
+# reconcile-payments — recover payments whose Yoco webhook never arrived.
+#
+# WHY THIS IS NEEDED. Render Free sleeps after ~15 min idle, so a webhook can miss entirely — CLAUDE.md
+# calls the reconcile path "the common path", not the exception. `yoco_billing/reconcile.py` asks Yoco
+# for the truth on each pending order and replays `charge_succeeded` (idempotent), which also ACTIVATES
+# the purchase. The handler and the OPS-guarded route have existed since launch — but NOTHING EVER
+# CALLED THEM: no workflow, and all four render.yaml crons are commented out. Recovery only happened if
+# a human ran it by hand, which means "customer paid, got nothing" could sit undetected indefinitely.
+#
+# It also sweeps orders VOIDED because their online hold lapsed (the member paid after the 30-minute
+# hold expired). Those are the worst case — money taken, booking cancelled, order void, invisible in
+# every pending view. An admin's deliberate void is never touched (it has no hold_expired booking).
+#
+# Hourly inside the keep-warm window so the API is awake. Idempotent by construction: an already-paid
+# order is skipped, and apply_payment_event dedupes on its event hash — so a re-run can only ever
+# recover, never double-charge.
+#
+# REQUIRES the repo secret OPS_KEY (= the API service's OPS_KEY). Without it the job no-ops (won't fail).
+name: reconcile-payments
+
+on:
+  schedule:
+    - cron: "20 5-20 * * *"    # :20 past each hour, 05:00-20:00 UTC (07:00-22:00 SAST)
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "How far back to look (default 72)"
+        required: false
+        default: "72"
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Recover missed Yoco payments
+        env:
+          OPS_KEY: ${{ secrets.OPS_KEY }}
+          HOURS: ${{ github.event.inputs.hours }}
+        run: |
+          if [ -z "$OPS_KEY" ]; then
+            echo "OPS_KEY secret not set — skipping (add it in repo Settings → Secrets)."
+            exit 0
+          fi
+          HOURS="${HOURS:-72}"
+          echo "Reconciling online orders from the last ${HOURS}h…"
+          # --max-time is generous: the sweep calls Yoco once per pending order.
+          RESP=$(curl -fsS --max-time 300 -X POST \
+            -H "X-Ops-Key: ${OPS_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"hours\": ${HOURS}}" \
+            https://courtflow-api.onrender.com/api/cron/reconcile-payments) || {
+              echo "reconcile call failed (will retry next hour)"; exit 0; }
+          echo "$RESP"
+          echo "$RESP" >> "$GITHUB_STEP_SUMMARY"

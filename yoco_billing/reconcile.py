@@ -53,6 +53,29 @@ def _checkout_is_paid(co: Dict[str, Any]) -> bool:
     return bool(co.get("paymentId")) and status in _PAID_STATUSES
 
 
+def _is_expired_hold_void(session, order_id) -> bool:
+    """True if this order is 'void' ONLY because its booking's online hold lapsed.
+
+    WHY THIS EXISTS: release_expired_holds voids the abandoned order when a hold lapses (so an
+    abandoned checkout stops looking like a permanent unpaid debt). The WEBHOOK path tolerates that —
+    _confirm_held_bookings deliberately re-instates a booking cancelled as 'hold_expired'. The
+    RECOVERY path did not: reconcile refused any order that wasn't 'awaiting_payment', so a member
+    who paid AFTER their hold lapsed and whose webhook was missed (Render Free sleeps — the common
+    case) had their money taken with no booking, no receipt and no trace. This re-opens exactly that
+    door and no other: an order an ADMIN deliberately voided has no hold_expired booking behind it,
+    so it stays untouchable. Guarded → False (never widen the door on an error)."""
+    try:
+        return bool(session.execute(
+            text("SELECT 1 FROM billing.order_line ol "
+                 "JOIN diary.booking b ON b.id = ol.booking_id "
+                 "WHERE ol.order_id = :o AND b.status = 'cancelled' "
+                 "  AND b.cancellation_reason = 'hold_expired' LIMIT 1"),
+            {"o": str(order_id)},
+        ).first())
+    except Exception:
+        return False
+
+
 def reconcile_order(session, *, order_id: str) -> Dict[str, Any]:
     """Reconcile a single order against Yoco. Returns a result dict:
       {ok, changed, status, reason, verifiable?}.
@@ -62,8 +85,8 @@ def reconcile_order(session, *, order_id: str) -> Dict[str, Any]:
         return {"ok": False, "changed": False, "reason": "order_not_found"}
     if (order.get("settlement_mode") or "") != "online":
         return {"ok": True, "changed": False, "reason": "not_online", "status": order.get("status")}
-    if order.get("status") != "awaiting_payment":
-        # Already settled/void/refunded — nothing to recover.
+    if order.get("status") != "awaiting_payment" and not _is_expired_hold_void(session, order_id):
+        # Already settled/refunded, or deliberately voided — nothing to recover.
         return {"ok": True, "changed": False, "reason": "not_pending", "status": order.get("status")}
 
     checkout_id = _checkout_id_for_order(session, order_id)
@@ -132,7 +155,18 @@ def reconcile_pending(session, *, club_id: Optional[str] = None, hours: int = 72
             SELECT o.id
             FROM billing."order" o
             WHERE o.settlement_mode = 'online'
-              AND o.status = 'awaiting_payment'
+              AND (
+                    o.status = 'awaiting_payment'
+                    -- ALSO sweep orders voided purely because their hold lapsed. Those are the
+                    -- "paid after the hold expired, webhook missed" cases — money taken with
+                    -- nothing given. An admin's deliberate void has no hold_expired booking
+                    -- behind it and is therefore never picked up here.
+                    OR (o.status = 'void' AND EXISTS (
+                          SELECT 1 FROM billing.order_line ol
+                            JOIN diary.booking b ON b.id = ol.booking_id
+                           WHERE ol.order_id = o.id AND b.status = 'cancelled'
+                             AND b.cancellation_reason = 'hold_expired'))
+                  )
               AND o.created_at >= now() - (:hours || ' hours')::interval
               {clause}
             ORDER BY o.created_at DESC

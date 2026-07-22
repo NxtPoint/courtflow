@@ -366,6 +366,45 @@ def sc_expired_hold_voids_order(s, fx):
     check("a LIVE order is never voided by the sweep", ost2 not in ("void", "written_off"), str(ost2))
 
 
+def sc_expired_void_is_recoverable(s, fx):
+    """REGRESSION GUARD for the fix that voids an abandoned order on hold expiry. Voiding was right,
+    but reconcile refused ANY order that wasn't awaiting_payment — so a member who paid AFTER their
+    hold lapsed, with the webhook missed (Render Free sleeps), had money taken with no booking, no
+    receipt and no trace. reconcile must now reach an expired-hold void — and ONLY that: an order an
+    admin deliberately voided must stay untouchable, or a cancelled sale could be resurrected."""
+    print("\n# An expired-hold VOID stays recoverable by reconcile; a deliberate void does NOT")
+    from yoco_billing.reconcile import _is_expired_hold_void
+    m = fx.members[0]
+
+    # (1) Abandoned online booking → hold lapses → booking cancelled 'hold_expired', order voided.
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                         settlement_mode="online")
+    oid = r["booking"]["order_id"]
+    s.execute(text("UPDATE diary.booking SET held_until = now() - interval '1 minute' WHERE id=:b"),
+              {"b": r["booking"]["id"]})
+    B.release_expired_holds(s, fx.club_id)
+    st = s.execute(text('SELECT status FROM billing."order" WHERE id=:o'), {"o": oid}).scalar()
+    check("the abandoned order is voided", st in ("void", "written_off"), str(st))
+    check("...and reconcile can still REACH it (money may already be with Yoco)",
+          _is_expired_hold_void(s, oid) is True, "reconcile would refuse it — the regression")
+
+    # (2) A DELIBERATE void (admin cancels an unpaid booking) must NOT be reconcilable — recovering
+    #     it would resurrect a sale the club deliberately cancelled.
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=utc_iso(at(fx, 11)), ends_at=utc_iso(at(fx, 12)),
+                          settlement_mode="online")
+    oid2 = r2["booking"]["order_id"]
+    B.cancel_booking(s, club_id=fx.club_id, booking_id=r2["booking"]["id"],
+                     actor_user_id=m, role="member")
+    st2 = s.execute(text('SELECT status FROM billing."order" WHERE id=:o'), {"o": oid2}).scalar()
+    check("a cancelled booking's order is voided too", st2 in ("void", "written_off"), str(st2))
+    check("...but a DELIBERATE void is NOT reconcilable (no hold_expired behind it)",
+          _is_expired_hold_void(s, oid2) is False, "reconcile would resurrect a cancelled sale")
+
+
 def sc_court_move_guards(s, fx):
     """A court move must re-run the guards a TIME move already runs. It originally checked only that
     the target was free, so a member could move a booking onto a court from a DIFFERENT court service
@@ -1837,6 +1876,7 @@ SCENARIOS = [
     sc_court_reschedule,
     sc_reschedule_court_move,
     sc_expired_hold_voids_order,
+    sc_expired_void_is_recoverable,
     sc_court_move_guards,
     sc_coach_preferred_court,
     sc_lesson_two_rows,
