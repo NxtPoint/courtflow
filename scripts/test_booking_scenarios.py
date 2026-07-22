@@ -366,6 +366,58 @@ def sc_expired_hold_voids_order(s, fx):
     check("a LIVE order is never voided by the sweep", ost2 not in ("void", "written_off"), str(ost2))
 
 
+def sc_member_cannot_bypass_online_only(s, fx):
+    """PRODUCTION REPLICA. Three plain members (no coach/admin role) booked an online-only court as
+    pay-at-court: lucaaclark, prjshamma262, kbsolr. This mirrors that exact config — a court whose
+    resource.product_id points at a court service restricted to 'online' — and drives every route a
+    member can reach. If the gate holds here, the live path must have differed (config drift or a
+    stale client); if it doesn't, this is the bug."""
+    print("\n# A plain MEMBER cannot take an online-only court pay-at-court (prod replica)")
+    m = fx.members[0]
+    online_only = s.execute(
+        text("INSERT INTO billing.product (club_id, kind, name, payment_modes, active) "
+             "VALUES (:c,'court_booking','Court Hire - Hard Court','online',true) RETURNING id"),
+        {"c": fx.club_id}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, unit, duration_minutes, active, status) "
+                   "VALUES (:c,:p,'any',15000,'ZAR','per_booking',60,true,'active')"),
+              {"c": fx.club_id, "p": online_only})
+    s.execute(text("UPDATE diary.resource SET product_id = :p WHERE id = :r"),
+              {"p": online_only, "r": fx.courts[0]})
+
+    def _try(mode, product_id=None, label=""):
+        return B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                                booking_type="court", resource_id=fx.courts[0],
+                                starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                                settlement_mode=mode, product_id=product_id)
+
+    # (a) EXACTLY what the UI posts: the resolved product_id + the member's chosen mode.
+    r1 = _try("at_court", product_id=online_only)
+    check("at_court WITH the correct product_id is refused",
+          r1.get("error") == "SETTLEMENT_NOT_ALLOWED", str(r1))
+
+    # (b) The client omits product_id entirely (single-service club shape, or an older bundle) —
+    #     the server must still resolve the court's own service and enforce it.
+    r2 = _try("at_court")
+    check("at_court with NO product_id posted is still refused (server resolves the court's service)",
+          r2.get("error") == "SETTLEMENT_NOT_ALLOWED", str(r2))
+
+    # (c) month-end is the other money mode those bookings used.
+    r3 = _try("monthly_account")
+    check("monthly_account is refused too", r3.get("error") == "SETTLEMENT_NOT_ALLOWED", str(r3))
+
+    # (d) The allowed mode must still work — the gate must not block the legitimate path.
+    r4 = _try("online", product_id=online_only)
+    check("online (the one allowed mode) IS accepted", r4.get("ok") is True, str(r4))
+
+    # (e) STAFF override remains intentional and documented — a coach booking the same court is fine.
+    r5 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 14)),
+                          settlement_mode="at_court")
+    check("a COACH may still override (by design, BUSINESS-RULES.md:63)", r5.get("ok") is True, str(r5))
+
+
 def sc_expired_void_is_recoverable(s, fx):
     """REGRESSION GUARD for the fix that voids an abandoned order on hold expiry. Voiding was right,
     but reconcile refused ANY order that wasn't awaiting_payment — so a member who paid AFTER their
@@ -1876,6 +1928,7 @@ SCENARIOS = [
     sc_court_reschedule,
     sc_reschedule_court_move,
     sc_expired_hold_voids_order,
+    sc_member_cannot_bypass_online_only,
     sc_expired_void_is_recoverable,
     sc_court_move_guards,
     sc_coach_preferred_court,

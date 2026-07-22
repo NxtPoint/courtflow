@@ -349,6 +349,9 @@ def main():
             JOIN diary.booking b ON b.id = ol.booking_id
             LEFT JOIN iam."user" u ON u.id = o.user_id
             WHERE o.status = 'paid' AND b.status IN ('cancelled', 'expired')
+              -- Only orders that actually took MONEY. A membership-covered court is a R0 order that
+              -- reads 'paid'; cancelling one is completely normal and was 12 of the first 14 hits.
+              AND o.amount_minor > 0
               AND NOT EXISTS (SELECT 1 FROM billing.payment p2
                               WHERE p2.order_id = o.id AND p2.direction = 'refund'
                                 AND p2.status IN ('succeeded','refunded'))

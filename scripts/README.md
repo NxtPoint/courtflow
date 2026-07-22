@@ -6,7 +6,7 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
 ## Gates (run before every merge — KEEP)
 - `test_all.py` — runs the three scenario harnesses below. **The merge gate.**
 - `test_booking_scenarios.py` · `test_billing_scenarios.py` · `test_statement_reconciliation.py`
-  — rollback-only scratch-DB harnesses (**booking 241 / billing 407 / statement 47**).
+  — rollback-only scratch-DB harnesses (**booking 246 / billing 407 / statement 47**).
 
 ## Load-bearing at runtime (KEEP — do not touch)
 - `seed_nextpoint.py` — re-seeds club #1 on every prod boot (`SEED_NEXTPOINT=1`, imported by `app.py`). Idempotent.
