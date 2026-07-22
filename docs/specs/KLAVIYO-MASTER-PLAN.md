@@ -90,7 +90,7 @@ Each row is a flow/campaign to run. **Code** = what engineering must ship first 
 ### B. Court hire (hard + clay)
 | # | Flow | Trigger | Consent | Code | Posts | Status |
 |---|---|---|---|---|---|---|
-| B1 | **Court booker → membership** ("the maths") | segment: ≥2 PAYG court bookings, no membership | opt-in | — | template **`VZ8DiM`** built (R450-vs-R220 maths) | ◐ **wire on 1st `booking_confirmed`** (need it to build the segment) |
+| B1 | **Court booker → membership** ("the maths") | Added to segment **`SZ3UFX`** | opt-in | — | template **`VZ8DiM`** built (R450-vs-R220 maths) | ✅ **BUILT — flow `Rrs48q`, in DRAFT** (Trigger→Wait 1 day→email; no re-entry; Smart Sending). **Tomo: review + turn on.** |
 | B2 | **Clay-court showcase** | segment: opted-in, never booked clay | opt-in | — | "only clay in Gauteng" cross-sell | 📋 |
 
 ### C. Lessons & coaching
@@ -277,14 +277,20 @@ would double-message).
 4. Prices in Rand (R). Membership from **R220/month** (covers courts only). Courts from R90, lessons from R250.
 
 ## 7c. Posts ↔ Code sync (keep this current — it's our handshake)
-- **Posts has built (templates ready in Klaviyo, no Code needed to wire):** A1 trial (live), A2 Welcome (built,
-  Draft), Member-Preferences 1-day (built, Draft), preferences one-off campaign (draft). **Pre-built and
-  waiting on a trigger/segment:** C1 `RJDzuj`, B1 `VZ8DiM`, F3 `T5Ub7j`.
-- **What Posts needs from Code to light these up (in priority):**
+- **Posts has built (in Klaviyo):** A1 trial (live), A2 Welcome (Draft), Member-Preferences 1-day (Draft),
+  preferences one-off campaign (draft), **B1 Court→membership FLOW `Rrs48q` (Draft)** — segment `SZ3UFX` →
+  Wait 1 day → email `VZ8DiM`. **Pre-built templates waiting on a trigger:** C1 `RJDzuj`, F3 `T5Ub7j`.
+- **Metrics now live in Klaviyo (fired ≥once):** `trial_started`, `booking_confirmed`, `payment_succeeded`,
+  `class_enrolled`, consent events, `invoice_issued`, `refund_requested`. **Still NOT fired (so unusable as
+  triggers/segments yet):** `lesson_completed`, `membership_started`, `membership_lapsed`.
+- **What Posts needs from Code to light up the rest (in priority):**
   1. **Fire the first `lesson_completed`** (a coach marks any lesson done — even a test) → the metric appears
      in Klaviyo → Posts wires **C1** (the star-rating email uses `{{ event.feedback_url }}`, which Code already
      attaches to `lesson_completed`).
-  2. **Fire the first `booking_confirmed`** (one court booking) → Posts builds the **B1** court-booker segment.
+  2. ✅ `booking_confirmed` is firing → **B1 built** (segment `SZ3UFX` = `booking_type=court` AND
+     `settlement_mode`≠`membership_covered`, count ≥2, email-subscribed — this cleanly excludes members AND
+     trialists, whose court bookings are `membership_covered`). No member-exclusion gap; `membership_started`
+     not required for B1.
   3. `membership_started` + flip `on_trial=false` (§6.3) → unblocks the trial converter-guard + Jan "Unconverted"
      segment.
   4. `membership_lapsed` emit (§6.4) → E2 win-back.
@@ -293,6 +299,36 @@ would double-message).
   emails. No blocker on Posts' side meanwhile; we keep pre-building templates.
 - **Guardrails still to set (Posts, in Klaviyo settings):** frequency cap 3/7d, Smart Sending default,
   sunset-unengaged segment (§7).
+
+## 7d. Build log — 2026-07-18 evening (Posts / Cowork)
+**Big overnight build session. Everything below is DRAFT unless noted — Tomo reviews + turns on in the morning.**
+
+**Fully built & reviewable now:**
+- **Flows:** A1 Trial (LIVE) · A2 Welcome (Draft) · Member-Preferences 1-day (Draft) · **B1 Court→membership `Rrs48q` (Draft)**.
+- **Campaign (Draft, ready to send):** **F3 Google-review ask** (campaign `01KXV8ZYTDXHJWYGMZDKMM0QTP`) → audience = **Engaged segment `YcX4pB`**, template `T5Ub7j`. Tomo: Campaigns → review render + count → Send.
+- **Segments (API-built):** B1 court-bookers `SZ3UFX` · **Unconverted trial `XxUZCt`** (`on_trial`=true AND `membership_started` 0×) · **Engaged `YcX4pB`** (2+ bookings, subscribed) · **Court-players-no-lesson `Rv24hw`** (court ≥1, lesson 0×, subscribed).
+- **Templates (all on-brand, no coach names, no free-lesson promises):** C1 post-lesson `RJDzuj` · B1 `VZ8DiM` · F3 `T5Ub7j` · **Court-feedback `VwcB8a`** · **Cross-sell (court→lesson) `VJ5mZP`**.
+
+**UPDATE 2026-07-19 morning (Posts):**
+- ✅ **Court-experience feedback BUILT** — flow **`WSWr2C`** (Draft): trigger `booking_confirmed` → re-entry after **21 days** (the throttle) → email `VwcB8a` ("How's it going at NextPoint?"). **TODO before go-live:** add trigger filter **`booking_type` equals `court`** (the Builder froze on the filter dropdown — 30-sec add when stable) so it doesn't also fire on lesson/class bookings.
+- ✅ **Cross-sell (court→lesson) BUILT** — flow **`Rhsfy6`** (Draft): trigger **Added to segment `Rv24hw`** (court players, no lesson) → email `VJ5mZP` ("Loving the courts? Add a lesson."), no re-entry. (Optional: add a 1-day delay before the email — skipped to keep it simple; fires on segment entry.)
+- 🗑️ Deleted a mis-built flow (a click landed on the wrong metric row → bound to `class_enrolled`); rebuilt correctly as `WSWr2C`. **Builder tip that finally worked:** the page renders at a viewport that's scaled vs the screenshot, so click a metric row using coordinates = `cssRect × (1568/window.innerWidth)`, and ALWAYS verify the chosen trigger (API `get_flow` `definition.triggers`) before saving — triggers can't be changed after save.
+
+**UPDATE 2026-07-19 midday (Posts, autonomous continuation):**
+- ✅ **Guardrail — Sunset segment BUILT** via API: **`XUkJFa`** "Sunset · unengaged 90d (suppress/win-back)" = can-receive-email-marketing AND received ≥1 email in 90d AND opened 0 AND clicked 0 in 90d. Use as a send-exclusion / win-back audience. (Populating now; fills as send history accrues.)
+- ✅ **Guardrail — Smart Sending** is ON by default on every email built ("Skip recently emailed profiles" checked) — Klaviyo's per-message dedupe (16h window).
+- ⚠️ **Guardrail — account frequency cap (3/7d):** no API for this, and Klaviyo has no universal account-level *email* frequency cap toggle (Smart Sending + the sunset segment are the practical controls). If your plan exposes a Sending-settings frequency cap, set it there — flagged as a manual 1-min check, not code.
+
+**METRIC-SOURCE PROOF for why C1 + converter-guard are blocked (inspected account metrics 2026-07-19):**
+Every REAL NextPoint app event flows through the **"API"** integration (`booking_confirmed`, `trial_started`, `payment_succeeded`, `membership_lapsed`, `class_enrolled`, `invoice_issued`, …). But **`lesson_completed`** (`RfeMhj`) and **`membership_started`** (`VZvpc9`) exist **ONLY under the "Klaviyo MCP Server" integration** — i.e. they are my *test* events, not the app's. Binding a flow to those = it listens only to the test source; when the real app finally emits those two via the **API** integration, Klaviyo makes a *separate* same-named metric and the flow (trigger locked at save) never fires. This is the hard blocker, now proven.
+
+**Still blocked — needs Code to emit + one real event (then ~10 min each in the Builder):**
+1. **C1 Post-lesson feedback** — shell `Y2YxEZ` (trigger UNCONFIGURED). **Unblock:** Code wires the app to emit `lesson_completed` via the **API integration** (already done for `booking_confirmed` etc.), then mark one real lesson complete → an API-source `lesson_completed` metric appears → wire trigger to THAT → re-entry 21 days → email `RJDzuj`.
+2. **Trial converter-guard** — same: needs an **API-source** `membership_started` before the skip-filter can safely reference it. (Unconverted-trial segment `XxUZCt` already built for the Jan offer.)
+
+**⚠️ Metric-source caveat (Code + Posts, important):** Klaviyo keys a metric by (name, **source/integration**). Code's real events land under the **"API"** integration. To unblock C1's trigger tonight Posts fired **test** `lesson_completed` + `membership_started` events (profile **`cowork-flowtest@nextpointtennis.com`**, `is_test`=true). The first attempt created them under the **"Klaviyo MCP Server"** source (wrong); a second used `service="api"`. **Before turning C1 live, verify its trigger is bound to the SAME `lesson_completed` metric Code emits** (check the metric's source = API) — re-point if needed. Cleanest long-term: wire C1's trigger after Code's FIRST real `lesson_completed` fires, then the source is guaranteed correct.
+
+**🧹 Test artifacts to ignore/clean:** profile `cowork-flowtest@nextpointtennis.com`; any `lesson_completed`/`membership_started` events tagged `is_test:true`; a duplicate MCP-sourced `lesson_completed` metric may exist. None are in marketing segments (test profile isn't subscribed).
 
 ## 8. Measurement
 - **Conversion:** `membership_started` metric + the `utm_campaign` in GA4. The trial flow's success =
@@ -321,7 +357,7 @@ would double-message).
 | **Code side of the roadmap** | Code | ✅ **DONE — every trigger wired; see §6b checklist** |
 | Welcome / activation flow (A2) | Posts | ✅ built (Draft → flip Live) · trigger = Added to `NextPoint Members` → Welcome 1 (immediate) → wait 2d → Welcome 2 |
 | Court→membership "maths" (B1) | Posts | 📋 |
-| Guardrails (freq cap, sunset, smart send) | Posts | 📋 verify all set |
+| Guardrails (freq cap, sunset, smart send) | Posts | ✅ Smart Sending on + Sunset segment `XUkJFa` built · ⚠️ freq-cap = manual settings check (no API) |
 
 ---
 
