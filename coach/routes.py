@@ -87,6 +87,8 @@ def get_onboarding():
             "is_bookable": profile.get("is_bookable"),
             "public_visibility": profile.get("public_visibility"),
             "review_bookings": profile.get("review_bookings"),
+            "preferred_court_resource_id": profile.get("preferred_court_resource_id"),
+            "preferred_court_name": profile.get("preferred_court_name"),
             "phone": profile.get("phone"),
             "first_name": profile.get("first_name"),
             "surname": profile.get("surname"),
@@ -144,6 +146,11 @@ def patch_profile():
             years_experience=b.get("years_experience"),
             is_bookable=b.get("is_bookable"), public_visibility=b.get("public_visibility"),
             review_bookings=b.get("review_bookings"),
+            # Preferred court is set-or-leave, not COALESCE: only forward it when the key is
+            # actually present, so a partial PATCH can't silently wipe it — and an explicit
+            # null/"" DOES clear it back to "no preference".
+            **({"preferred_court_resource_id": (b.get("preferred_court_resource_id") or None)}
+               if "preferred_court_resource_id" in b else {}),
             phone=b.get("phone"),
             first_name=b.get("first_name"), surname=b.get("surname"),
         )

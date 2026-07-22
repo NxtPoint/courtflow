@@ -697,36 +697,15 @@
     if (reason === null) return;
     window.API.requestRefund({ order_id: orderId, reason: reason }).then(function () { UI.toast("Refund requested — the club or your coach will review it.", "info"); route(); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
   }
+  // Reschedule is the ONE shared CRMUI.rescheduleModal (its configured-durations behaviour came FROM
+  // this fork). A member may move their own COURT booking to another court; a LESSON's court stays
+  // club-allocated — the standing rule is that a client picks the coach, never the court.
   function rescheduleSheet(b) {
-    var m = modal("Reschedule");
-    var start = el("input", { class: "cf-input", type: "datetime-local", value: toLocal(b.starts_at) });
-    var cur = b.duration_minutes || 60;
-    var dur = el("select", { class: "cf-input" });
-    function setDurations(mins) {
-      UI.clear(dur);
-      mins.forEach(function (d) { dur.appendChild(el("option", { value: String(d), text: d + " min" })); });
-      dur.value = String(cur);
-    }
-    setDurations([cur]);   // sensible default while the configured list loads
-    // Offer the service's CONFIGURED, priced durations for this booking type (not a hardcoded list);
-    // always keep the booking's own duration selectable. Falls back to the current one on any error.
-    window.TFAuth.apiJSON("/api/diary/durations?kind=" + encodeURIComponent(b.booking_type)).then(function (r) {
-      var mins = (r.durations || []).map(function (x) { return x.duration_minutes; }).filter(Boolean);
-      if (mins.indexOf(cur) === -1) mins.push(cur);
-      mins.sort(function (a, c) { return a - c; });
-      if (mins.length) setDurations(mins);
-    }, function () {});
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "New time" }), start]));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), dur]));
-    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
-      el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
-      el("button", { class: "cf-btn cf-btn-primary", text: "Reschedule", onclick: function () {
-        if (!start.value) { UI.toast("Pick a time.", "warn"); return; }
-        var s = new Date(start.value), e = new Date(s.getTime() + parseInt(dur.value, 10) * 60000);
-        window.API.rescheduleBooking(b.id, { starts_at: s.toISOString(), ends_at: e.toISOString(), scope: "this" })
-          .then(function () { UI.toast("Rescheduled.", "info"); m.close(); route(); }, function (er) { UI.toast(UI.errMsg(er), "error"); });
-      } }),
-    ]));
+    CRMUI.rescheduleModal({
+      booking: b,
+      canChangeCourt: b.booking_type === "court",
+      onDone: route,
+    });
   }
 
   // Pay a set of owed orders (null = pay all) via the unified statement settlement → Yoco.

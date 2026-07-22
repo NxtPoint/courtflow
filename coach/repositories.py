@@ -14,6 +14,10 @@ import logging
 
 from sqlalchemy import text
 
+# Sentinel for "field not supplied" on partial updates, where None is a MEANINGFUL value
+# (clearing the coach's preferred court) and so can't double as "leave unchanged".
+_UNSET = object()
+
 log = logging.getLogger("coach.repositories")
 
 
@@ -52,7 +56,9 @@ def get_profile(session, *, club_id, user_id):
             SELECT cp.id, cp.club_id, cp.user_id, cp.display_name, cp.headline, cp.bio,
                    cp.photo_url, cp.specialties, cp.languages, cp.qualifications,
                    cp.years_experience, cp.is_bookable, cp.public_visibility, cp.rank,
-                   cp.review_bookings,
+                   cp.review_bookings, cp.preferred_court_resource_id,
+                   (SELECT r.name FROM diary.resource r
+                     WHERE r.id = cp.preferred_court_resource_id) AS preferred_court_name,
                    cp.default_lesson_price_id, cp.onboarding_completed,
                    u.first_name, u.surname, u.email, u.phone,
                    cp.created_at, cp.updated_at
@@ -90,7 +96,8 @@ def ensure_profile(session, *, club_id, user_id):
 def patch_profile(session, *, club_id, user_id, display_name=None, headline=None, bio=None,
                   photo_url=None, specialties=None, languages=None, qualifications=None,
                   years_experience=None, is_bookable=None, public_visibility=None,
-                  review_bookings=None, phone=None, first_name=None, surname=None):
+                  review_bookings=None, phone=None, first_name=None, surname=None,
+                  preferred_court_resource_id=_UNSET):
     """COALESCE-style partial update of the coach's OWN profile + linked user. Only supplied
     (non-None) fields change. `specialties`/`languages`/`qualifications` are text[] (a Python
     list or None); `is_bookable`/`public_visibility` are booleans (None = leave unchanged).
@@ -111,6 +118,11 @@ def patch_profile(session, *, club_id, user_id, display_name=None, headline=None
                 is_bookable       = COALESCE(:is_bookable, is_bookable),
                 public_visibility = COALESCE(:public_visibility, public_visibility),
                 review_bookings   = COALESCE(:review_bookings, review_bookings),
+                -- COALESCE can't express "clear it", and a coach must be able to go back to no
+                -- preference — so this one is set-or-leave via an explicit flag, with '' = clear.
+                preferred_court_resource_id = CASE WHEN :pref_set
+                    THEN CAST(NULLIF(:pref_court, '') AS uuid)
+                    ELSE preferred_court_resource_id END,
                 updated_at        = now()
             WHERE club_id = :c AND user_id = :u
         """),
@@ -118,7 +130,10 @@ def patch_profile(session, *, club_id, user_id, display_name=None, headline=None
          "bio": bio, "photo_url": photo_url, "specialties": specialties,
          "languages": languages, "qualifications": qualifications,
          "years_experience": years_experience, "is_bookable": is_bookable,
-         "public_visibility": public_visibility, "review_bookings": review_bookings},
+         "public_visibility": public_visibility, "review_bookings": review_bookings,
+         "pref_set": preferred_court_resource_id is not _UNSET,
+         "pref_court": ("" if preferred_court_resource_id in (None, _UNSET)
+                        else str(preferred_court_resource_id))},
     )
     # Names + phone live on iam.user (the global identity row).
     session.execute(

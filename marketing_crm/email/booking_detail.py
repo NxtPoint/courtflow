@@ -196,6 +196,22 @@ def _club_tzname(session, club_id):
         return "Africa/Johannesburg"
 
 
+# The client's EXACT active plan name ("Adult Anytime Play") for the confirmation's Membership row.
+# Correlated on (club, user) so it can be dropped into any loader's SELECT — `:U` is substituted with
+# the owning-user column of that query. Falls back to a generic label when the tier has no name
+# (legacy/imported rows), and to NULL when there's no active plan at all (PAYG → the row is omitted).
+_MEMBERSHIP_LABEL_SQL = """
+                   (SELECT COALESCE(NULLIF(pl.label, ''),
+                                    CASE WHEN ms.provider = 'trial' THEN 'Trial' ELSE 'Member' END)
+                      FROM billing.membership_subscription ms
+                      LEFT JOIN billing.price pl ON pl.id = ms.price_id
+                     WHERE ms.club_id = %(club)s AND ms.user_id = %(user)s
+                       AND ms.status = 'active'
+                       AND (ms.current_period_end IS NULL OR ms.current_period_end >= CURRENT_DATE)
+                     ORDER BY ms.current_period_end DESC NULLS LAST LIMIT 1) AS membership_label
+"""
+
+
 def _load_booking(session, club_id, ctx):
     from sqlalchemy import text
     b = session.execute(
@@ -233,7 +249,8 @@ def _load_booking(session, club_id, ctx):
                    -- lists it. NULL when none.
                    (SELECT string_agg(er.name || (CASE WHEN be.qty > 1 THEN ' x' || be.qty ELSE '' END), ', ')
                       FROM diary.booking_equipment be JOIN diary.resource er ON er.id = be.resource_id
-                      WHERE be.booking_id = b.id) AS equipment
+                      WHERE be.booking_id = b.id) AS equipment,
+""" + (_MEMBERSHIP_LABEL_SQL % {"club": "b.club_id", "user": "b.booked_by_user_id"}) + """
             FROM diary.booking b
             LEFT JOIN diary.resource r ON r.id = b.resource_id
             LEFT JOIN iam."user" cl ON cl.id = b.booked_by_user_id
@@ -263,7 +280,10 @@ def _load_booking(session, club_id, ctx):
         coach_email=(b["coach_email"] if is_lesson else None),
         cl_first=b["cl_first"], cl_surname=b["cl_surname"],
         cl_email=b["cl_email"], cl_phone=b["cl_phone"],
-        booked_by_name=(actor_name if (actor_name and actor_name != owner_name) else None),
+        # "Booked by" is now ALWAYS populated (owner ask): the actor when someone booked on the
+        # client's behalf, else the client themselves on a self-book.
+        booked_by_name=(actor_name or owner_name),
+        membership_label=b.get("membership_label"),
         pack_label=b.get("pack_label"),
         settlement_mode=b["settlement_mode"], charge=charge,
         equipment=b.get("equipment"),
@@ -294,23 +314,38 @@ def _load_class(session, club_id, ctx):
 
     # The enrolled player (the recipient) + their charge, resolved from the enrolment/order.
     cl_first = cl_surname = cl_email = cl_phone = None
+    membership_label = booked_by_name = None
     charge = None
     settlement_mode = None
     uid = ctx.get("user_id")
     if uid:
         u = session.execute(
-            text('SELECT first_name, surname, email, phone FROM iam."user" WHERE id = :u'),
-            {"u": str(uid)},
+            text('SELECT first_name, surname, email, phone, '
+                 + (_MEMBERSHIP_LABEL_SQL % {"club": "CAST(:c AS uuid)", "user": "u.id"})
+                 + ' FROM iam."user" u WHERE u.id = :u'),
+            {"u": str(uid), "c": str(club_id)},
         ).mappings().first()
         if u:
             cl_first, cl_surname = u["first_name"], u["surname"]
             cl_email, cl_phone = u["email"], u["phone"]
+            membership_label = u["membership_label"]
+            booked_by_name = " ".join(x for x in [u["first_name"], u["surname"]] if x).strip() or None
         en = session.execute(
-            text("SELECT order_id, settlement_mode FROM diary.enrolment "
+            text("SELECT order_id, settlement_mode, payer_user_id FROM diary.enrolment "
                  "WHERE class_session_id = :cs AND user_id = :u ORDER BY enrolled_at DESC LIMIT 1"),
             {"cs": str(cs["id"]), "u": str(uid)},
         ).mappings().first()
         if en:
+            # A child's seat is paid by the GUARDIAN — name them as "Booked by" (mirrors how a
+            # booking names its actor); a self-enrol keeps the player's own name.
+            if en.get("payer_user_id") and str(en["payer_user_id"]) != str(uid):
+                payer = session.execute(
+                    text('SELECT first_name, surname FROM iam."user" WHERE id = :p'),
+                    {"p": str(en["payer_user_id"])},
+                ).mappings().first()
+                if payer:
+                    booked_by_name = (" ".join(x for x in [payer["first_name"], payer["surname"]] if x).strip()
+                                      or booked_by_name)
             # Use the enrolment's REAL settlement mode (was hardcoded None → the class Payment line
             # was mislabelled). Feeds both the charge read and the pay-status wording.
             settlement_mode = en["settlement_mode"]
@@ -323,6 +358,7 @@ def _load_class(session, club_id, ctx):
         starts=cs["starts_at"], ends=cs["ends_at"], tzname=tzname, court=cs["court_name"],
         coach_name=cs["coach_name"], coach_email=cs["coach_email"],
         cl_first=cl_first, cl_surname=cl_surname, cl_email=cl_email, cl_phone=cl_phone,
+        booked_by_name=booked_by_name, membership_label=membership_label,
         settlement_mode=settlement_mode, charge=charge,
     )
 
@@ -449,7 +485,7 @@ def _charge(session, club_id, order_id, settlement_mode):
 
 def _normalize(*, service, booking_type, starts, ends, tzname, court, coach_name, coach_email,
                cl_first, cl_surname, cl_email, cl_phone, settlement_mode, charge, equipment=None,
-               booked_by_name=None, pack_label=None):
+               booked_by_name=None, pack_label=None, membership_label=None):
     s, e = _as_dt(starts), _as_dt(ends)
     dur = int((e - s).total_seconds() // 60) if (s and e) else None
     # Name is the real name ONLY — never the email as a fallback (that duplicated the email into the
@@ -472,7 +508,12 @@ def _normalize(*, service, booking_type, starts, ends, tzname, court, coach_name
         "coach": {"name": coach_name, "email": (coach_email or None)},
         "client": {"first": cl_first, "surname": cl_surname, "name": name,
                    "email": cl_email, "phone": cl_phone},
+        # ALWAYS present (owner ask): a self-book names the client themselves; a staff/parent/coach
+        # on-behalf booking names the actor. The caller falls back to the owner name when they match.
         "booked_by": booked_by_name,
+        # The client's EXACT active plan ("Adult Anytime Play"), not just "member". None = PAYG, and
+        # _rows_html drops the row entirely rather than printing a misleading blank.
+        "membership": membership_label,
         "price": price,
         "pay_status": pay_status,
     }
@@ -523,7 +564,8 @@ def html_block(d):
         ("Name", cl.get("name")),
         ("Email", cl.get("email")),
         ("Cell", cl.get("phone")),
-        ("Booked by", d.get("booked_by")),        # the actor, only when different from the owner above
+        ("Membership", d.get("membership")),      # the EXACT plan ("Adult Anytime Play"); omitted for PAYG
+        ("Booked by", d.get("booked_by")),        # always shown — self-book names the client themselves
     ])
     if d.get("is_purchase"):
         purchase_rows = _rows_html([
@@ -554,7 +596,8 @@ def text_block(d):
     cl = d.get("client") or {}
     lines = ["CLIENT DETAILS"]
     for label, value in [("Name", cl.get("name")), ("Email", cl.get("email")),
-                         ("Cell", cl.get("phone")), ("Booked by", d.get("booked_by"))]:
+                         ("Cell", cl.get("phone")), ("Membership", d.get("membership")),
+                         ("Booked by", d.get("booked_by"))]:
         if value:
             lines.append("  %s: %s" % (label, value))
     lines.append("")

@@ -2300,6 +2300,66 @@ class _EmitRecorder:
         return [p for (e, p) in self.calls if e == event]
 
 
+def sc_confirmation_email_block(s, fx):
+    """The confirmation email's rich block must name WHO booked it and the client's EXACT plan
+    ("Adult Anytime Play"), not just "member". This block is assembled by raw SQL and is only ever
+    exercised in prod, so a column typo blanks it silently (CLAUDE.md's standing warning about
+    booking_detail) — assert on the real loader, not the template."""
+    print("\n# Confirmation email: 'Booked by' + the client's EXACT membership tier")
+    from marketing_crm.email import booking_detail as BD
+
+    # A member on a NAMED tier, booking their own court.
+    tier_user = _mk_user(s, "tier@bill.test", "Tiera")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": tier_user})
+    named = _price(s, fx.club_id, s.execute(
+        text("SELECT product_id FROM billing.price WHERE id=:p"), {"p": fx.membership_price}).scalar(),
+        30000, unit="per_month", term=1, label="Adult Anytime Play")
+    MB.create_membership_order(s, club_id=fx.club_id, user_id=tier_user,
+                               price_id=named, settlement_mode="at_court")
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=tier_user, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)),
+                         settlement_mode="at_court")
+    d = BD.load(s, fx.club_id, {"booking_id": r["booking"]["id"]})
+    check("the block loads for a booking", bool(d), str(d))
+    check("it names the EXACT tier, not a generic 'member'",
+          d and d.get("membership") == "Adult Anytime Play", str(d and d.get("membership")))
+    check("a self-book still names 'Booked by' (the client themselves)",
+          d and d.get("booked_by") == "Tiera", str(d and d.get("booked_by")))
+    html = BD.html_block(d)
+    check("the rendered HTML carries both rows",
+          "Membership" in html and "Adult Anytime Play" in html and "Booked by" in html, html[:160])
+    check("the plain-text mirror carries them too",
+          "Membership: Adult Anytime Play" in BD.text_block(d), BD.text_block(d)[:160])
+
+    # ON-BEHALF: 'Booked by' must name the STAFF actor, not the client.
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+                          booking_type="court", resource_id=fx.courts[1],
+                          starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)),
+                          settlement_mode="at_court", booked_for_user_id=tier_user)
+    d2 = BD.load(s, fx.club_id, {"booking_id": r2["booking"]["id"]})
+    check("an on-behalf booking names the ACTOR as 'Booked by'",
+          d2 and d2.get("booked_by") == "Coachy", str(d2 and d2.get("booked_by")))
+    check("...while the client rows still describe the CLIENT",
+          d2 and (d2.get("client") or {}).get("name") == "Tiera",
+          str(d2 and (d2.get("client") or {}).get("name")))
+
+    # A PAYG client (no membership) simply omits the row — never a blank or misleading label.
+    payg = _mk_user(s, "payg@bill.test", "Payg")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": payg})
+    r3 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=payg, role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=iso(at(fx, 14)), ends_at=iso(at(fx, 15)),
+                          settlement_mode="at_court")
+    d3 = BD.load(s, fx.club_id, {"booking_id": r3["booking"]["id"]})
+    check("a PAYG client has no membership label", d3 and d3.get("membership") is None,
+          str(d3 and d3.get("membership")))
+    check("...and the Membership row is omitted entirely (not rendered blank)",
+          "Membership" not in BD.html_block(d3))
+
+
 def sc_membership_started_emit(s, fx):
     """`membership_started` must fire on a REAL membership activation — online AND offline — exactly
     once, carrying the email the Klaviyo forward keys on. It must NOT fire on a replayed activation,
@@ -2755,6 +2815,7 @@ def sc_promo_bonus_grants(s, fx):
 
 
 SCENARIOS = [
+    sc_confirmation_email_block,
     sc_membership_started_emit,
     sc_promo_discount,
     sc_promo_eligibility,

@@ -547,8 +547,102 @@
     });
   }
 
+  // THE one reschedule UI, shared by client · coach · admin · home (GOLDEN RULE: one widget per
+  // capability, role differences are CONFIG). It replaced four near-identical forks that had drifted
+  // apart — and none of which could move a court, which is what clients and coaches kept asking for.
+  //
+  // cfg: {booking, onDone, canChangeCourt (default true), loadCourts (-> Promise<[{id,name,kind}]>),
+  //       scope ('this'), title, submit (override the API call)}
+  // A court booking sits ON its court (resource_id); a lesson sits on the COACH and its auto-held
+  // court moves with it — the server works that out, so the picker just sends court_resource_id.
+  // Leaving the court on "Keep current" sends nothing, preserving today's exact behaviour.
+  function rescheduleModal(cfg) {
+    cfg = cfg || {};
+    var b = cfg.booking || {};
+    var m = UI.modal(cfg.title || "Reschedule", {});
+    var canCourt = cfg.canChangeCourt !== false && b.booking_type !== "class";
+
+    function toLocal(iso) {
+      if (!iso) return "";
+      var d = new Date(iso);
+      return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    }
+    var when = el("input", { class: "cf-input", type: "datetime-local", value: toLocal(b.starts_at) });
+    var mins = parseInt(b.duration_minutes, 10);
+    if (!mins && b.starts_at && b.ends_at) {
+      mins = Math.round((new Date(b.ends_at) - new Date(b.starts_at)) / 60000);
+    }
+    mins = mins || 60;
+    var dur = el("select", { class: "cf-input" });
+    function setDurations(list) {
+      UI.clear(dur);
+      list.forEach(function (d) { dur.appendChild(el("option", { value: String(d), text: d + " min" })); });
+      dur.value = String(mins);
+    }
+    setDurations([mins]);              // sensible default while the configured list loads
+    // BOOKING-VALIDATION PRINCIPLE: offer the service's CONFIGURED, priced durations — never a
+    // hardcoded list (a hardcoded one let a member move onto a length that has no price row).
+    // The booking's own duration always stays selectable; any failure just keeps it.
+    if (b.booking_type) {
+      Promise.resolve(
+        (cfg.loadDurations || function (kind) {
+          return window.TFAuth.apiJSON("/api/diary/durations?kind=" + encodeURIComponent(kind));
+        })(b.booking_type)
+      ).then(function (r) {
+        var list = ((r && r.durations) || []).map(function (x) { return x.duration_minutes; }).filter(Boolean);
+        if (list.indexOf(mins) === -1) list.push(mins);
+        list.sort(function (a, c) { return a - c; });
+        if (list.length) setDurations(list);
+      }, function () { /* keep the current duration */ });
+    }
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "New time" }), when]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), dur]));
+
+    var court = null;
+    if (canCourt) {
+      court = el("select", { class: "cf-input" }, [
+        el("option", { value: "", text: "Keep current court" })]);
+      m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Court" }), court]));
+      var load = cfg.loadCourts || function () { return window.API.resources(); };
+      Promise.resolve(load()).then(function (r) {
+        var courts = ((r && r.resources) || r || []).filter(function (x) {
+          return x.kind === "court" && x.is_active !== false;
+        });
+        courts.forEach(function (c) {
+          court.appendChild(el("option", { value: c.id, text: c.name }));
+        });
+        // Pre-select the court it's on now, so the picker reads as "where it is" not "blank".
+        var cur = b.court_resource_id || (b.booking_type === "court" ? b.resource_id : null);
+        if (cur) court.value = String(cur);
+      }, function () { /* courts unavailable → the "keep current" default still works */ });
+    }
+
+    var go = el("button", { class: "cf-btn cf-btn-primary", text: "Reschedule" });
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" },
+      [el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), go]));
+    go.addEventListener("click", function () {
+      if (!when.value) { UI.toast("Pick a time.", "warn"); return; }
+      var st = new Date(when.value);
+      var en = new Date(st.getTime() + parseInt(dur.value, 10) * 60000);
+      var body = { starts_at: st.toISOString(), ends_at: en.toISOString(), scope: cfg.scope || "this" };
+      // Only send a court when one was actually chosen AND it differs from the current one — an
+      // unchanged pick must not trip the server's "is that court free?" check against itself.
+      var curCourt = b.court_resource_id || (b.booking_type === "court" ? b.resource_id : null);
+      if (court && court.value && String(court.value) !== String(curCourt || "")) {
+        body.court_resource_id = court.value;
+      }
+      go.disabled = true;
+      var call = cfg.submit ? cfg.submit(body) : window.API.rescheduleBooking(b.id, body);
+      Promise.resolve(call).then(function (res) {
+        UI.toast("Rescheduled.", "info"); m.close(); if (cfg.onDone) cfg.onDone(res);
+      }, function (e) { go.disabled = false; UI.toast(UI.errMsg(e), "error"); });
+    });
+    return m;
+  }
+
   window.CRMUI = {
     money: money,
+    rescheduleModal: rescheduleModal,
     stats: stats,
     moneySummary: moneySummary,
     statementFold: statementFold,

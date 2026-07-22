@@ -494,6 +494,9 @@
       } else {
         var coachSel = el("select", { class: "cf-select", onchange: async function (ev) {
           st.selCoach = ctx.coaches.filter(function (c) { return c.id === ev.target.value; })[0] || "ANY";
+          // Reset the court too so the NEW coach's preferred court re-defaults (else the previous
+          // coach's court would stick).
+          st.selCourt = "ANY";
           st.selService = null; st.slot = null; st.slotsCache = {}; await loadDurations(); render();
         } });
         if (st.selCoach === "ANY") coachSel.appendChild(el("option", { value: "", text: "Choose a coach…", selected: "selected" }));
@@ -502,6 +505,31 @@
             selected: (st.selCoach !== "ANY" && st.selCoach.id === c.id) ? "selected" : null }));
         });
         fields.push(el("div", { class: "cf-field" }, [ el("label", { text: "Coach" }), coachSel ]));
+      }
+      // COURT — STAFF ONLY. The standing rule is that a client picks the COACH and the club allocates
+      // the court, so a self-booking member never sees this. A coach/admin booking on-behalf does get
+      // it, defaulted to the coach's preferred court (coaches asked to stop their lessons scattering);
+      // leaving it on "Club allocates" keeps the server's preferred-then-first-free pick.
+      if (st.onBehalf || st.coachLock) {
+        var lCourt = el("select", { class: "cf-select", onchange: function (ev) {
+          var v = ev.target.value;
+          st.selCourt = v ? (ctx.courts.filter(function (c) { return c.id === v; })[0] || "ANY") : "ANY";
+          refreshSummary();
+        } });
+        lCourt.appendChild(el("option", { value: "", text: "Club allocates (coach's preferred court)" }));
+        ctx.courts.forEach(function (c) {
+          lCourt.appendChild(el("option", { value: c.id, text: c.name || "Court",
+            selected: (st.selCourt !== "ANY" && st.selCourt.id === c.id) ? "selected" : null }));
+        });
+        // Default to THIS coach's preference on first render so the common case is one tap. Read
+        // straight off the selected coach resource (the resources API carries it) — no extra state
+        // to drift when the coach changes.
+        var prefId = (st.selCoach !== "ANY" && st.selCoach && st.selCoach.preferred_court_resource_id) || null;
+        if (st.selCourt === "ANY" && prefId) {
+          var pref = ctx.courts.filter(function (c) { return String(c.id) === String(prefId); })[0];
+          if (pref) { st.selCourt = pref; lCourt.value = String(pref.id); }
+        }
+        fields.push(el("div", { class: "cf-field" }, [ el("label", { text: "Court" }), lCourt ]));
       }
       // SERVICE (Private / Semi-private …) — a dropdown when the coach offers several; else the one.
       if (st.services && st.services.length > 1) {

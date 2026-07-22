@@ -220,7 +220,7 @@ operating guide; **this folder is the detail.**
 > structural and the trial / admin-grant / Wix-import paths are excluded by construction. Guarded by
 > `sc_membership_started_emit` (+12 checks). **The fix is forward-only** — run
 > `scripts/klaviyo_membership_backfill` (new, dry-run by default) before sending that segment anything.
-> **New gate baseline: booking 180 / billing 393 / statement 47.**
+> **New gate baseline: booking 194 / billing 402 / statement 47.**
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,

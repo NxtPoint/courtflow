@@ -181,25 +181,15 @@
       setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
     } catch (e) { UI.toast("Couldn't generate the calendar file.", "error"); }
   }
+  // Reschedule is the ONE shared CRMUI.rescheduleModal — this hand-rolled sheet (start-time only, no
+  // duration, no court) was the most drifted of the four forks. Court moves follow the same rule as
+  // the client SPA: a member may move their own court booking, never a lesson's allocated court.
   function rescheduleModal(b) {
-    var bg = el("div", { class: "cf-modal-bg" });
-    var input = el("input", { class: "cf-input", type: "datetime-local", value: b.starts_at.slice(0, 16) });
-    bg.appendChild(el("div", { class: "cf-modal" }, [
-      el("h2", { text: "Reschedule" }), el("p", { class: "cf-muted", text: "Pick a new start time. The same duration is kept; conflicts are rejected." }),
-      el("div", { class: "cf-field" }, [el("label", { text: "New start" }), input]),
-      el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:12px;gap:8px" }, [
-        el("button", { class: "cf-btn", text: "Cancel", onclick: function () { document.body.removeChild(bg); } }),
-        el("button", { class: "cf-btn cf-btn-primary", text: "Save", onclick: function () { doReschedule(b, input.value, bg); } }),
-      ]),
-    ]));
-    document.body.appendChild(bg);
-  }
-  async function doReschedule(b, v, bg) {
-    if (!v) return;
-    var durMs = new Date(b.ends_at) - new Date(b.starts_at);
-    var ns = new Date(v), ne = new Date(ns.getTime() + durMs);
-    try { await window.API.rescheduleBooking(b.id, { starts_at: ns.toISOString(), ends_at: ne.toISOString(), scope: "this" }); document.body.removeChild(bg); UI.toast("Rescheduled.", "info"); await reloadBookings(); }
-    catch (e) { UI.toast(UI.errMsg(e), "error"); }
+    CRMUI.rescheduleModal({
+      booking: b,
+      canChangeCourt: b.booking_type === "court",
+      onDone: reloadBookings,
+    });
   }
   function refundModal(b) {
     if (!b.order_id) { UI.toast("This booking has no payment to refund.", "error"); return; }

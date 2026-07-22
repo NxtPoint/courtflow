@@ -296,7 +296,11 @@ def resources():
                  # (booking-validation sprint). Courts have coach_user_id NULL -> is_bookable true.
                  "       EXISTS (SELECT 1 FROM diary.availability_rule ar "
                  "               WHERE ar.club_id = r.club_id AND ar.resource_id = r.id) AS has_hours, "
-                 "       COALESCE(cp.is_bookable, true) AS is_bookable "
+                 "       COALESCE(cp.is_bookable, true) AS is_bookable, "
+                 # The coach's preferred court — the on-behalf booking flow defaults its court picker
+                 # to this so a coach's lessons land on their usual court. NULL on courts + on any
+                 # coach who hasn't set one (the server then falls back to the first free court).
+                 "       cp.preferred_court_resource_id "
                  "FROM diary.resource r "
                  "LEFT JOIN iam.coach_profile cp ON cp.club_id = r.club_id AND cp.user_id = r.coach_user_id "
                  "WHERE r.club_id=:c AND r.is_active=true "
@@ -306,7 +310,7 @@ def resources():
     out = []
     for r in rows:
         d = dict(r)
-        for k in ("id", "coach_user_id", "product_id"):
+        for k in ("id", "coach_user_id", "product_id", "preferred_court_resource_id"):
             if d.get(k) is not None:
                 d[k] = str(d[k])
         out.append(d)
@@ -447,6 +451,9 @@ def reschedule_booking(booking_id):
             s, club_id=p.club_id, booking_id=booking_id,
             new_starts_at=b.get("starts_at"), new_ends_at=b.get("ends_at"),
             actor_user_id=p.user_id, role=p.role, scope=b.get("scope", "this"),
+            # Optional court move (clients + coaches asked to swap courts without cancelling).
+            # Same edit gate as the time move — `can(reschedule_booking)` already ran above.
+            new_court_resource_id=(b.get("court_resource_id") or None),
         )
     return _result(res)
 

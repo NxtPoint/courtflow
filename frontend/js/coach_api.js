@@ -296,8 +296,11 @@
   var WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   // ---- small form helpers (same shapes as AdminUI) ---------------------------
-  function field(label, control) {
-    return el("div", { class: "cf-field" }, [el("label", { text: label }), control]);
+  function field(label, control, hint) {
+    return el("div", { class: "cf-field" }, [
+      el("label", { text: label }), control,
+      hint ? el("div", { class: "cf-muted", style: "margin-top:4px;font-size:.8rem", text: hint }) : null,
+    ].filter(Boolean));
   }
   function input(opts) { return el("input", Object.assign({ class: "cf-input" }, opts || {})); }
   function textarea(opts) { return el("textarea", Object.assign({ class: "cf-input" }, opts || {})); }
@@ -450,6 +453,17 @@
     var review = toggle("Review bookings before they confirm",
       !!p.review_bookings,
       "New lesson requests wait for you to accept (or propose a new time) before they're confirmed.");
+    // PREFERRED COURT. Clients pick the coach, never the court — the club allocates it — which used to
+    // scatter a coach's lessons across the site. This is a PREFERENCE, not a lock: the server holds
+    // this court whenever it's free at the requested time and falls back to any free court otherwise,
+    // so setting it can never make a lesson unbookable.
+    var prefCourt = el("select", { class: "cf-input" }, [
+      el("option", { value: "", text: "No preference — any free court" })]);
+    window.API.resources().then(function (r) {
+      ((r && r.resources) || []).filter(function (x) { return x.kind === "court" && x.is_active !== false; })
+        .forEach(function (c) { prefCourt.appendChild(el("option", { value: c.id, text: c.name })); });
+      if (p.preferred_court_resource_id) prefCourt.value = String(p.preferred_court_resource_id);
+    }, function () { /* courts unavailable → "no preference" still saves fine */ });
 
     var card = el("div", { class: "cf-card" }, [
       el("h2", { text: "Your coaching profile" }),
@@ -464,6 +478,8 @@
       field("Qualifications", quals.el),
       field("Years of experience", f.years),
       field("Cell phone", f.phone),
+      field("Preferred court", prefCourt,
+            "Your lessons are held on this court whenever it's free — otherwise the next free one."),
       el("div", { class: "cf-grid cf-grid-2", style: "margin-top:4px" }, [bookable.el, visible.el]),
       el("div", { style: "margin-top:10px" }, [review.el]),
     ]);
@@ -488,6 +504,9 @@
           is_bookable: bookable.checked(),
           public_visibility: visible.checked(),
           review_bookings: review.checked(),
+          // Always sent (even empty) so a coach can clear the preference — the repo treats a
+          // present-but-empty value as "no preference" rather than "leave unchanged".
+          preferred_court_resource_id: prefCourt.value || null,
           phone: f.phone.value.trim(),
           first_name: f.first.value.trim(),
           surname: f.surname.value.trim(),

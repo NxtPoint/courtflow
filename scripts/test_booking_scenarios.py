@@ -263,6 +263,111 @@ def sc_court_reschedule(s, fx):
           still["starts_at"] == utc_iso(s2), still["starts_at"])
 
 
+def sc_reschedule_court_move(s, fx):
+    """Clients + coaches kept asking to MOVE COURTS without cancelling. A reschedule can now carry a
+    court: a court booking's own resource changes; a lesson stays on the coach and its auto-held court
+    row moves instead. A busy target is refused up front with a precise error, not a bare SLOT_TAKEN."""
+    print("\n# Reschedule can also change the COURT (court booking + lesson's held court)")
+    m = fx.members[0]
+    c0, c1 = fx.courts[0], fx.courts[1]
+    s1, e1 = at(fx, 9), at(fx, 10)
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                         booking_type="court", resource_id=c0,
+                         starts_at=utc_iso(s1), ends_at=utc_iso(e1))
+    bid = r["booking"]["id"]
+
+    # Same time, different court — a pure court swap.
+    rr = B.reschedule_booking(s, club_id=fx.club_id, booking_id=bid,
+                              new_starts_at=utc_iso(s1), new_ends_at=utc_iso(e1),
+                              actor_user_id=m, role="member", new_court_resource_id=c1)
+    check("court swap at the same time is accepted", rr.get("ok"), str(rr))
+    moved = B.get_booking(s, club_id=fx.club_id, booking_id=bid)
+    check("the booking now sits on the NEW court", str(moved["resource_id"]) == str(c1),
+          str(moved["resource_id"]))
+    check("the old court is free again", has_slot(court_slots(s, fx, c0), s1))
+
+    # A court that's already taken at that time is refused with a precise error.
+    B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[1], role="member",
+                     booking_type="court", resource_id=c0,
+                     starts_at=utc_iso(s1), ends_at=utc_iso(e1))
+    busy = B.reschedule_booking(s, club_id=fx.club_id, booking_id=bid,
+                                new_starts_at=utc_iso(s1), new_ends_at=utc_iso(e1),
+                                actor_user_id=m, role="member", new_court_resource_id=c0)
+    check("moving onto a BUSY court is refused (COURT_NOT_AVAILABLE)",
+          busy.get("error") == "COURT_NOT_AVAILABLE", str(busy))
+    check("the refused move left it on its court",
+          str(B.get_booking(s, club_id=fx.club_id, booking_id=bid)["resource_id"]) == str(c1))
+
+    # A no-op "move" to the court it's already on must not trip the busy-check against ITSELF.
+    same = B.reschedule_booking(s, club_id=fx.club_id, booking_id=bid,
+                                new_starts_at=utc_iso(at(fx, 16)), new_ends_at=utc_iso(at(fx, 17)),
+                                actor_user_id=m, role="member", new_court_resource_id=c1)
+    check("re-selecting the SAME court doesn't block itself", same.get("ok"), str(same))
+
+    # A LESSON sits on the coach; its auto-held COURT row is what moves.
+    lr = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res,
+                          coach_user_id=fx.coach_uid,
+                          starts_at=utc_iso(at(fx, 11)), ends_at=utc_iso(at(fx, 12)))
+    lid = lr["booking"]["id"]
+    lrr = B.reschedule_booking(s, club_id=fx.club_id, booking_id=lid,
+                               new_starts_at=utc_iso(at(fx, 11)), new_ends_at=utc_iso(at(fx, 12)),
+                               actor_user_id=m, role="member", new_court_resource_id=c1)
+    check("a lesson accepts a court move", lrr.get("ok"), str(lrr))
+    lesson = B.get_booking(s, club_id=fx.club_id, booking_id=lid)
+    check("the lesson itself still sits on the COACH (not the court)",
+          str(lesson["resource_id"]) == str(fx.coach_res), str(lesson["resource_id"]))
+    held = s.execute(text("SELECT resource_id FROM diary.booking WHERE club_id=:c AND order_id=:o "
+                          "AND booking_type='court' AND id<>:id"),
+                     {"c": fx.club_id, "o": lesson["order_id"], "id": lid}).scalar()
+    check("the lesson's HELD COURT moved to the chosen court", str(held) == str(c1), str(held))
+
+
+def sc_coach_preferred_court(s, fx):
+    """A coach's preferred court: when a lesson doesn't name a court, hold the coach's usual one if
+    it's free (their lessons were scattering across the club), else fall back to any free court so a
+    busy favourite can never make a lesson unbookable."""
+    print("\n# Coach preferred court: honoured when free, falls back when busy, never blocks a lesson")
+    m = fx.members[0]
+    pref = fx.courts[1]                      # deliberately NOT courts[0] (the first-free default)
+    s.execute(text("UPDATE iam.coach_profile SET preferred_court_resource_id = :p "
+                   "WHERE club_id = :c AND user_id = :u"),
+              {"p": pref, "c": fx.club_id, "u": fx.coach_uid})
+
+    def held_court_of(bid):
+        bk = B.get_booking(s, club_id=fx.club_id, booking_id=bid)
+        return s.execute(text("SELECT resource_id FROM diary.booking WHERE club_id=:c AND order_id=:o "
+                              "AND booking_type='court' AND id<>:id"),
+                         {"c": fx.club_id, "o": bk["order_id"], "id": bid}).scalar()
+
+    r1 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)))
+    check("lesson booked without naming a court", r1.get("ok"), str(r1))
+    check("it landed on the coach's PREFERRED court (not merely the first free one)",
+          str(held_court_of(r1["booking"]["id"])) == str(pref), str(held_court_of(r1["booking"]["id"])))
+
+    # Preferred court busy at the new time → fall back rather than refuse the lesson.
+    B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[1], role="member",
+                     booking_type="court", resource_id=pref,
+                     starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 14)))
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 14)))
+    check("a busy preference never blocks the lesson", r2.get("ok"), str(r2))
+    check("it fell back to a different, free court",
+          str(held_court_of(r2["booking"]["id"])) != str(pref), str(held_court_of(r2["booking"]["id"])))
+
+    # An EXPLICIT court still wins over the preference (staff override).
+    r3 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          court_resource_id=fx.courts[0],
+                          starts_at=utc_iso(at(fx, 15)), ends_at=utc_iso(at(fx, 16)))
+    check("an explicitly chosen court overrides the preference",
+          str(held_court_of(r3["booking"]["id"])) == str(fx.courts[0]),
+          str(held_court_of(r3["booking"]["id"])))
+
+
 def sc_lesson_two_rows(s, fx):
     print("\n# Lesson: one booking → coach + court rows; cancel frees BOTH")
     m = fx.members[0]
@@ -1350,6 +1455,8 @@ SCENARIOS = [
     sc_unpriced_booking_refused,
     sc_court_book_cancel,
     sc_court_reschedule,
+    sc_reschedule_court_move,
+    sc_coach_preferred_court,
     sc_lesson_two_rows,
     sc_lesson_list_collapse,
     sc_lesson_needs_court,

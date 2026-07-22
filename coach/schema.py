@@ -48,6 +48,16 @@ _DDL = [
     #    new time / decline) instead of auto-confirming. Default false = today's behaviour.
     "ALTER TABLE iam.coach_profile ADD COLUMN IF NOT EXISTS "
     "review_bookings boolean NOT NULL DEFAULT false;",
+
+    # 5) per-coach PREFERRED COURT. Clients never pick a court for a lesson (the system allocates it),
+    #    which scattered a coach's lessons across the club. When set, diary.bookings._pick_court_for_lesson
+    #    holds THIS court whenever it's free at the requested time, else falls back to the first free
+    #    court — a preference, never a hard lock, so a lesson is never blocked by a busy favourite.
+    #    Nullable = no preference (unchanged behaviour). Deliberately NOT a FK: diary.resource is a
+    #    cross-lane table (same convention as billing.product.coach_user_id above); a deleted court
+    #    just stops matching and the fallback takes over.
+    "ALTER TABLE iam.coach_profile ADD COLUMN IF NOT EXISTS "
+    "preferred_court_resource_id uuid;",
 ]
 
 

@@ -22,11 +22,11 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 180 / billing 393 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 194 / billing 402 / statement 47**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   - `test_booking_scenarios` (180) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   - `test_booking_scenarios` (194) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
      waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused,
@@ -37,8 +37,12 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      SEMI-PRIVATE (squad) lessons — per-head billing (one owed order per client), add-a-player-later,
      a parent's kids bill the guardian, a member can't add a stranger/another family's child, cancel
      voids every head; a card-only SERVICE refuses pay-at-court on the booking; a class enrolment is
-     payment-gated (no free seat via membership_covered/free, card-only class refuses pay-at-court)**.
-   - `test_billing_scenarios` (393) — settlement modes, commission, tokens, membership (offline + per-tier),
+     payment-gated (no free seat via membership_covered/free, card-only class refuses pay-at-court),
+     **RESCHEDULE CAN MOVE THE COURT (a court booking's own resource; a lesson keeps the coach and its
+     held-court row moves), a busy target refuses with COURT_NOT_AVAILABLE, re-picking the SAME court
+     doesn't block itself; COACH PREFERRED COURT honoured when free → falls back when busy (never
+     blocks a lesson) → an explicit court still wins**.
+   - `test_billing_scenarios` (402) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
      class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
@@ -294,6 +298,27 @@ durations with an active `billing.price` row (`durations_for`). A **lesson reser
 `create_booking` auto-assigns a free court and refuses if no coach OR no court is free
 (`COACH_REQUIRED`/`NO_COURT_AVAILABLE`); only coaches with weekly hours + `is_bookable` are offered.
 
+**Courts on a lesson — the client picks the COACH, the club allocates the COURT.** A client never sees a
+court picker for a lesson (they do for court hire). When `create_booking` isn't given a `court_resource_id`
+it calls `diary.bookings._pick_court_for_lesson`: the **coach's preferred court**
+(`iam.coach_profile.preferred_court_resource_id`, set at Coach → profile → "Preferred court") when it's FREE,
+else `_first_free_court`. It is a **preference, never a lock** — a busy favourite must never make a lesson
+unbookable. An explicitly-passed court always wins. The **staff** on-behalf booking flow shows a court
+dropdown pre-defaulted to that coach's preference (`booking.js`, gated on `st.onBehalf || st.coachLock`);
+`/api/diary/resources` carries `preferred_court_resource_id` on each coach row so the picker needs no extra
+fetch.
+
+**Reschedule moves TIME and/or COURT** — `reschedule_booking(..., new_court_resource_id=)`, body key
+`court_resource_id` on `PATCH /api/diary/bookings/<id>`. A **court** booking's own `resource_id` changes; a
+**lesson** stays on the coach resource and its auto-held court row moves instead. The target is validated up
+front (`_court_is_free`, excluding the booking's OWN rows via `_linked_booking_ids` so it can't block itself)
+→ `COURT_NOT_AVAILABLE` rather than a bare `SLOT_TAKEN`. Court moves are single-booking only, never a series
+(`COURT_MOVE_SINGLE_ONLY`). Omitting the key preserves the old behaviour exactly.
+**Frontend: `CRMUI.rescheduleModal` is the ONE reschedule UI** (date/time + configured durations + court),
+shared by client · coach · admin · home — it replaced four drifted forks, none of which could move a court.
+Role differences are config: `canChangeCourt` is false for a member's LESSON (the court is club-allocated)
+and true for their court hire and for all staff.
+
 **Lesson approval lifecycle (accept / propose / decline).** Per-coach `iam.coach_profile.review_bookings`:
 ON → a CLIENT self-booking with that coach creates a **`requested`** booking reserving NOTHING until the coach
 acts; a coach/admin **on-behalf** booking ALWAYS auto-confirms. Coach actions `POST /api/diary/bookings/<id>/
@@ -547,7 +572,11 @@ member by email on the first authenticated hit.
   the waitlist — a **paid** seat (order no longer `awaiting_payment`) is never touched.
 - **Transactional email = ONE confirm+receipt per purchase** (`marketing_crm/notifications.py::deliver`):
   `booking_detail.load` resolves an order-keyed event (`payment_succeeded`) to its booking/class → the RICH
-  block (retitled "Booking confirmed"), else a purchase block for membership/pack; `deliver` SUPPRESSES the
+  block (retitled "Booking confirmed"), else a purchase block for membership/pack. The client block always
+  names **"Booked by"** (the actor on an on-behalf/staff booking, the client themselves on a self-book; for a
+  class, the guardian when a child's seat is paid by them) and the client's **exact membership tier**
+  ("Adult Anytime Play", via `_MEMBERSHIP_LABEL_SQL`) — PAYG simply omits the row. Guarded by
+  `sc_confirmation_email_block`; `deliver` SUPPRESSES the
   `payment_succeeded` email for pack + class orders (their own email is the one). **Payment-status wording is
   single-sourced** in `billing.statement.settlement_status_label(state, mode)` — email AND `client360` both
   delegate, so a receipt/email/client-record never disagree. **Coach BCC only on his own lesson/class.** Every

@@ -94,6 +94,55 @@ def _first_free_court(session, club_id, starts, ends):
     ).scalar()
 
 
+def _court_is_free(session, club_id, court_id, starts, ends, ignore_booking_ids=()):
+    """True if `court_id` is an ACTIVE court of this club with nothing held/confirmed and no time-off
+    overlapping [starts, ends). `ignore_booking_ids` excludes the rows we're about to move (a booking
+    must not block itself on a reschedule). Same shape as _first_free_court, scoped to one court."""
+    if not court_id:
+        return False
+    ignore = [str(x) for x in (ignore_booking_ids or []) if x]
+    return bool(session.execute(
+        text("SELECT 1 FROM diary.resource r "
+             "WHERE r.id = :court AND r.club_id = :c AND r.kind = 'court' AND r.is_active = true "
+             "  AND NOT EXISTS (SELECT 1 FROM diary.booking b "
+             "      WHERE b.club_id = :c AND b.resource_id = r.id "
+             "        AND b.status IN ('held','confirmed') "
+             "        AND (:no_ignore OR NOT (b.id = ANY(CAST(:ignore AS uuid[])))) "
+             "        AND b.ends_at > :s AND b.starts_at < :e) "
+             "  AND NOT EXISTS (SELECT 1 FROM diary.time_off t "
+             "      WHERE t.club_id = :c AND t.resource_id = r.id "
+             "        AND t.ends_at > :s AND t.starts_at < :e)"),
+        {"court": str(court_id), "c": club_id, "s": starts, "e": ends,
+         "ignore": ignore, "no_ignore": not ignore},
+    ).first())
+
+
+def _coach_preferred_court(session, club_id, coach_user_id):
+    """The coach's configured preferred court (iam.coach_profile.preferred_court_resource_id), or None.
+    Guarded: the column is added by the coach lane's boot DDL, so a pre-migration DB just gets None."""
+    if not coach_user_id:
+        return None
+    try:
+        return session.execute(
+            text("SELECT preferred_court_resource_id FROM iam.coach_profile "
+                 "WHERE club_id = :c AND user_id = :u"),
+            {"c": club_id, "u": str(coach_user_id)},
+        ).scalar()
+    except Exception:
+        return None
+
+
+def _pick_court_for_lesson(session, club_id, coach_user_id, starts, ends, ignore_booking_ids=()):
+    """Choose the court a lesson holds when the caller didn't name one. The COACH'S PREFERRED COURT
+    wins when it's free (coaches asked for their lessons to stop scattering — Colbert always wants
+    court 6); otherwise fall back to the first free court so a lesson is never blocked by a busy
+    preference. Returns None only when NO court is free."""
+    pref = _coach_preferred_court(session, club_id, coach_user_id)
+    if pref and _court_is_free(session, club_id, pref, starts, ends, ignore_booking_ids):
+        return pref
+    return _first_free_court(session, club_id, starts, ends)
+
+
 _PRODUCT_KIND_BY_BOOKING = {"court": "court_booking", "lesson": "lesson", "class": "class"}
 
 
@@ -584,7 +633,9 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
             return _err("COACH_BUSY", 409,
                         message="the coach is running a class at this time")
         if not court_resource_id:
-            court_resource_id = _first_free_court(session, club_id, starts, ends)
+            # No court named → the coach's PREFERRED court if it's free, else the first free one.
+            court_resource_id = _pick_court_for_lesson(
+                session, club_id, coach_user_id or res.get("coach_user_id"), starts, ends)
         if not court_resource_id:
             return _err("NO_COURT_AVAILABLE", 422,
                         message="no court is free at this time — a lesson needs a court")
@@ -873,11 +924,19 @@ def _order_has_succeeded_charge(session, order_id):
 
 
 def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_at,
-                       actor_user_id, role, scope="this", now=None):
-    """Atomically move a booking to a new time. The exclusion constraint validates the new
-    slot; on conflict we roll back the savepoint so the ORIGINAL time is preserved
+                       actor_user_id, role, scope="this", now=None, new_court_resource_id=None):
+    """Atomically move a booking to a new time AND/OR a new court. The exclusion constraint validates
+    the new slot; on conflict we roll back the savepoint so the ORIGINAL booking is preserved
     (docs/03 §10). Honours cancellation_cutoff for member-initiated moves; admins/coaches
-    override. `scope` ∈ this|this_future|series for recurring (docs/03 §5)."""
+    override. `scope` ∈ this|this_future|series for recurring (docs/03 §5).
+
+    `new_court_resource_id` moves the COURT (clients + coaches kept asking to swap courts):
+      · a COURT booking  — its own `resource_id` becomes that court;
+      · a LESSON         — the lesson stays on the COACH resource and its auto-held court row moves
+                           instead (a lesson is coach + held court, one order_id).
+    Omit it to keep today's behaviour (a court booking keeps its court; a lesson's court is
+    re-picked automatically, preferring the coach's court). Applies to the PRIMARY booking only —
+    a series/this_future move shifts the other occurrences in time, never onto one court."""
     now = now or datetime.now(timezone.utc)
     bk = _booking_dict(session, booking_id)
     if not bk or bk["club_id"] != str(club_id):
@@ -929,11 +988,32 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
     if _coach_class_conflict(session, club_id, bk.get("coach_user_id"), new_s, new_e):
         return _err("COACH_BUSY", 409, message="the coach runs a class at the new time")
 
+    # An explicit court change is validated up front so the caller gets a precise error instead of a
+    # bare SLOT_TAKEN from the exclusion constraint. The booking's OWN rows are excluded from the
+    # busy-check — a court booking staying on its court (or shifting within its own slot) must not
+    # block itself. Court moves apply to the primary booking only, never a whole series.
+    move_court_to = None
+    if new_court_resource_id:
+        if scope != "this":
+            return _err("COURT_MOVE_SINGLE_ONLY", 422,
+                        message="change the court on a single booking, not a whole series")
+        if bk.get("booking_type") not in ("court", "lesson"):
+            return _err("COURT_MOVE_UNSUPPORTED", 422,
+                        message="only a court or lesson booking sits on a court")
+        own_ids = [booking_id] + _linked_booking_ids(session, club_id, bk.get("order_id"))
+        if not _court_is_free(session, club_id, new_court_resource_id, new_s, new_e, own_ids):
+            return _err("COURT_NOT_AVAILABLE", 422,
+                        message="that court isn't free at the new time — pick another")
+        move_court_to = str(new_court_resource_id)
+
     # A lesson's auto-held court was auto-assigned, so on a move we reassign it to a FREE court at the
-    # new time rather than failing if the original court is busy there. Pre-check one is free. (L2.)
+    # new time rather than failing if the original court is busy there. An explicit choice wins;
+    # otherwise prefer the COACH'S preferred court, else the first free one. Pre-check one is free. (L2.)
     reassign_court_to = None
     if bk.get("order_id") and bk.get("booking_type") == "lesson" and scope == "this":
-        reassign_court_to = _first_free_court(session, club_id, new_s, new_e)
+        reassign_court_to = move_court_to or _pick_court_for_lesson(
+            session, club_id, bk.get("coach_user_id"), new_s, new_e,
+            [booking_id] + _linked_booking_ids(session, club_id, bk.get("order_id")))
         if reassign_court_to is None:
             return _err("NO_COURT_AVAILABLE", 422, message="no court is free at the new time")
 
@@ -946,11 +1026,20 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
             for t_id, t_start, t_end in targets:
                 ts = (new_s, new_e) if t_id == booking_id else (
                     _parse_dt(t_start) + delta, _parse_dt(t_end) + delta)
-                session.execute(
-                    text("UPDATE diary.booking SET starts_at=:sa, ends_at=:ea, updated_at=now() "
-                         "WHERE id=:id"),
-                    {"sa": ts[0], "ea": ts[1], "id": t_id},
-                )
+                # A COURT booking's own resource IS the court, so an explicit court move rewrites it
+                # here. A LESSON sits on the coach resource — its court moves on the linked row below.
+                if move_court_to and t_id == booking_id and bk.get("booking_type") == "court":
+                    session.execute(
+                        text("UPDATE diary.booking SET starts_at=:sa, ends_at=:ea, resource_id=:r, "
+                             "updated_at=now() WHERE id=:id"),
+                        {"sa": ts[0], "ea": ts[1], "r": move_court_to, "id": t_id},
+                    )
+                else:
+                    session.execute(
+                        text("UPDATE diary.booking SET starts_at=:sa, ends_at=:ea, updated_at=now() "
+                             "WHERE id=:id"),
+                        {"sa": ts[0], "ea": ts[1], "id": t_id},
+                    )
                 # Move the linked court (lesson's auto-held court, same order_id). Reassign it to a
                 # free court at the new time when we resolved one (L2); else move it as-is (by delta).
                 if bk.get("order_id") and reassign_court_to and t_id == booking_id:
@@ -990,6 +1079,16 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
     res = _resource(session, club_id, booking["resource_id"])
     events.emit("booking_rescheduled", _payload(booking, res))
     return {"ok": True, "booking": booking}
+
+
+def _linked_booking_ids(session, club_id, order_id):
+    """Every other booking row sharing this order (a lesson's auto-held court, squad partners). Used
+    to exclude a booking's OWN rows from an availability check so it can't block itself on a move."""
+    if not order_id:
+        return []
+    return [str(r[0]) for r in session.execute(
+        text("SELECT id FROM diary.booking WHERE club_id = :c AND order_id = :o"),
+        {"c": club_id, "o": str(order_id)}).all()]
 
 
 def _reschedule_targets(session, bk, scope):

@@ -607,16 +607,10 @@
       el("button", { class: "cf-btn cf-btn-primary", text: "Propose", onclick: function () { if (!s.value) { UI.toast("Pick a time.", "warn"); return; } var st = new Date(s.value), en = new Date(st.getTime() + parseInt(dur.value, 10) * 60000); window.API.proposeTime(id, { starts_at: st.toISOString(), ends_at: en.toISOString() }).then(function () { UI.toast("Proposed.", "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }),
     ]));
   }
+  // Reschedule is the ONE shared CRMUI.rescheduleModal (date/time + duration + COURT) — the local
+  // fork was deleted so coaches get court-swapping everywhere it's offered.
   function rescheduleModal(b, then) {
-    var m = modal("Reschedule");
-    var s = el("input", { class: "cf-input", type: "datetime-local", value: toLocal(b.starts_at) });
-    var dur = el("select", { class: "cf-input" }, [30, 45, 60, 90, 120].map(function (d) { return el("option", { value: String(d), text: d + " min" }); })); dur.value = String(b.duration_minutes || 60);
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "New time" }), s]));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), dur]));
-    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
-      el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
-      el("button", { class: "cf-btn cf-btn-primary", text: "Reschedule", onclick: function () { if (!s.value) { UI.toast("Pick a time.", "warn"); return; } var st = new Date(s.value), en = new Date(st.getTime() + parseInt(dur.value, 10) * 60000); window.API.rescheduleBooking(b.id, { starts_at: st.toISOString(), ends_at: en.toISOString(), scope: "this" }).then(function () { UI.toast("Rescheduled.", "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }),
-    ]));
+    CRMUI.rescheduleModal({ booking: b, onDone: then || route });
   }
 
   // ---- MONEY (the coach's slice of the ONE shared Widgets.Earnings) --------------

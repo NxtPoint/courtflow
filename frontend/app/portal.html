@@ -18,6 +18,9 @@
 
 <script src="/js/auth_client.js"></script>
 <script src="/js/ui.js"></script>
+<!-- crm_ui.js = the shared CRMUI.* render layer. home.js uses CRMUI.rescheduleModal (the ONE
+     reschedule widget), so it must load here, after ui.js and before home.js. -->
+<script src="/js/crm_ui.js"></script>
 <script src="/js/api.js"></script>
 <script src="/js/admin_api.js"></script>
 <script src="/js/coach_api.js"></script>
