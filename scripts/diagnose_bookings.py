@@ -148,12 +148,25 @@ def main():
         print("   (payment_modes is a CSV on billing.product. Only the MONEY modes are compared —")
         print("    membership_covered / token / free are coverage outcomes, not payment choices.)")
 
+        # RETROACTIVE NOISE IS THE TRAP HERE: this compares TODAY's payment_modes against bookings
+        # made at any time, so every legitimate at-court booking taken BEFORE an owner switched the
+        # service to online-only shows up as a "violation". `when_booked` (b.created_at, not
+        # starts_at — the session date tells you nothing about when the rule applied) and
+        # `service_changed` (the product row's last edit) let you separate the two: only rows where
+        # when_booked > service_changed are candidate REAL bypasses. Roles are aggregated in a
+        # scalar subquery because a person can hold several iam.membership rows (member AND coach),
+        # which previously duplicated every one of their bookings.
         total += max(0, _rows(s, "BOOKINGS whose settlement mode is NOT offered by their service", """
-            SELECT b.id AS booking_id, b.booking_type, b.starts_at,
+            SELECT b.id AS booking_id, b.booking_type,
+                   b.created_at AS when_booked, pr.updated_at AS service_changed,
+                   CASE WHEN b.created_at > pr.updated_at THEN 'REAL?' ELSE 'pre-change' END AS verdict,
                    pr.name AS service, pr.payment_modes AS allowed, o.settlement_mode AS used,
                    o.status AS order_status,
                    client.email AS client, actor.email AS booked_by,
-                   COALESCE(mem.role, 'unknown') AS booked_by_role
+                   COALESCE((SELECT string_agg(DISTINCT mem.role, '/')
+                               FROM iam.membership mem
+                              WHERE mem.club_id = b.club_id
+                                AND mem.user_id = b.created_by_user_id), 'unknown') AS booked_by_role
             FROM diary.booking b
             JOIN billing."order" o ON o.id = b.order_id
             JOIN LATERAL (SELECT price_id FROM billing.order_line
@@ -163,16 +176,34 @@ def main():
             JOIN billing.product pr ON pr.id = p.product_id
             LEFT JOIN iam."user" client ON client.id = b.booked_by_user_id
             LEFT JOIN iam."user" actor ON actor.id = b.created_by_user_id
-            LEFT JOIN iam.membership mem ON mem.club_id = b.club_id AND mem.user_id = b.created_by_user_id
             WHERE pr.payment_modes IS NOT NULL AND btrim(pr.payment_modes) <> ''
               AND o.settlement_mode IN """ + _MONEY_MODES + """
               AND NOT (o.settlement_mode = ANY(
                        string_to_array(replace(pr.payment_modes, ' ', ''), ',')))
-              """ + win("b.starts_at") + """
-            ORDER BY b.starts_at DESC
-        """, p, "none — every booking used a mode its service actually offers",
-            ["booking_id", "booking_type", "starts_at", "service", "allowed", "used",
+              AND b.created_at > pr.updated_at        -- ONLY post-config-change bookings
+              """ + win("b.created_at") + """
+            ORDER BY b.created_at DESC
+        """, p, "none — every booking made SINCE its service was configured used an allowed mode",
+            ["booking_id", "booking_type", "when_booked", "service", "allowed", "used",
              "order_status", "client", "booked_by", "booked_by_role"]))
+
+        # The same comparison WITHOUT the post-change filter, counted only — so you can see how much
+        # of the raw number is retroactive noise rather than a live leak.
+        _rows(s, "…of which are PRE-CONFIG-CHANGE (booked when the mode was still allowed)", """
+            SELECT count(*) AS retroactive_rows,
+                   count(*) FILTER (WHERE b.created_at > pr.updated_at) AS real_candidates
+            FROM diary.booking b
+            JOIN billing."order" o ON o.id = b.order_id
+            JOIN LATERAL (SELECT price_id FROM billing.order_line
+                           WHERE order_id = o.id AND price_id IS NOT NULL
+                           ORDER BY created_at LIMIT 1) ol ON true
+            JOIN billing.price p ON p.id = ol.price_id
+            JOIN billing.product pr ON pr.id = p.product_id
+            WHERE pr.payment_modes IS NOT NULL AND btrim(pr.payment_modes) <> ''
+              AND o.settlement_mode IN """ + _MONEY_MODES + """
+              AND NOT (o.settlement_mode = ANY(
+                       string_to_array(replace(pr.payment_modes, ' ', ''), ',')))
+        """, {}, "nothing to split", ["retroactive_rows", "real_candidates"])
 
         total += max(0, _rows(s, "CLASS ENROLMENTS whose settlement mode is NOT offered by their service", """
             SELECT e.id AS enrolment_id, cs.starts_at, r.name AS class_name,
