@@ -22,7 +22,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 180 / billing 383 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 180 / billing 393 / statement 47**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -38,7 +38,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      a parent's kids bill the guardian, a member can't add a stranger/another family's child, cancel
      voids every head; a card-only SERVICE refuses pay-at-court on the booking; a class enrolment is
      payment-gated (no free seat via membership_covered/free, card-only class refuses pay-at-court)**.
-   - `test_billing_scenarios` (383) — settlement modes, commission, tokens, membership (offline + per-tier),
+   - `test_billing_scenarios` (393) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
      class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
@@ -502,16 +502,21 @@ member by email on the first authenticated hit.
   (no at-court fallback for a restricted pack — refuse if unpayable); `diary.classes.enrol` gates the mode
   (and never lets a member conjure a free seat via `membership_covered`/`free`). Don't regress these to a
   kind-level check.
-- **`membership_started` is emitted from `billing.membership._emit_membership_started`, NOT from the gateway.**
+- **`membership_started` is emitted from `billing.membership.emit_membership_started`, NOT from the gateway.**
   `apply_payment_event`'s `subscription_active` branch looks like the producer but **nothing produces that
   kind** — NextPoint sells memberships as ONE-OFF ORDERS (`charge_succeeded` → `activate_membership_for_order`),
   never provider-managed subscriptions, so that branch is unreachable and the event silently never fired
   (which also killed the `on_trial=false` conversion flip that keys off it). The real emit sits in
-  **`_apply_term_grant`** — the ONE function every genuine activation flows through (online webhook/reconcile
-  AND the offline desk buy) — fired only from its two non-replay branches, so a replayed webhook can't
-  double-count a conversion. The trial (`grant_signup_trial`), the admin manual grant and the Wix import all
-  INSERT directly and never reach it, so they're excluded structurally. **It must carry `email`** — that's what
-  the Klaviyo forward keys on. Guarded by `sc_membership_started_emit`.
+  **`_apply_term_grant`** — the ONE function every PURCHASE flows through (online webhook/reconcile AND the
+  offline desk buy) — fired only from its two non-replay branches, so a replayed webhook can't double-count.
+  **`admin.repositories.grant_membership` emits it too** (`source='admin_grant'`; an extension carries
+  `is_renewal=true` so the on_trial flip still runs but conversion measurement can filter renewals) — this club
+  grants most memberships by hand, so excluding them left the flag stale. It passes `provider='manual'`
+  **explicitly, never read off the row**: the extend branch matches ANY active subscription including a TRIAL
+  row, and the emitter drops `provider='trial'`, so reading it back would silently skip the very trialist you
+  need flipped. The trial (`grant_signup_trial`) and the Wix import stay excluded — they INSERT directly and
+  never reach either path. **It must carry `email`** — that's what the Klaviyo forward keys on. Guarded by
+  `sc_membership_started_emit`.
 - **`marketing/` is NOT platform code** — local-only ad-ops notes, **gitignored as `/marketing/` since
   2026-07-22** (previously untracked-but-committable, one `git add -A` away from being published). The
   **leading slash is load-bearing**: a bare `marketing/` would also match the tracked public site at

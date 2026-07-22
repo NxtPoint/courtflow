@@ -2374,6 +2374,51 @@ def sc_membership_started_emit(s, fx):
         check("the conversion carries the trialist's email", conv[0].get("email") == "ms_trial@bill.test",
               str(conv[0].get("email")))
 
+    # --- ADMIN MANUAL GRANT also counts (KLAVIYO-MASTER-PLAN §7g option (a)) — this club grants most
+    #     memberships by hand, and the flag's job is "don't market 'convert!' at a member".
+    from admin import repositories as ADM
+    u4 = _member("ms_admin@bill.test", "MsAdmin")
+    with _EmitRecorder() as rec:
+        g1 = ADM.grant_membership(s, club_id=fx.club_id, user_id=u4, months=3)
+        granted = rec.of("membership_started")
+    check("admin grant reports 'granted'", g1.get("status") == "granted", str(g1))
+    check("an ADMIN MANUAL GRANT emits membership_started", len(granted) == 1,
+          f"got {len(granted)}: {rec.calls}")
+    if granted:
+        ev = granted[0]
+        check("admin grant is tagged source=admin_grant, provider=manual",
+              ev.get("source") == "admin_grant" and ev.get("provider") == "manual", str(ev))
+        check("a FRESH admin grant is NOT a renewal", ev.get("is_renewal") is False, str(ev.get("is_renewal")))
+        check("admin grant carries the member's email", ev.get("email") == "ms_admin@bill.test",
+              str(ev.get("email")))
+
+    # Re-granting EXTENDS the existing membership → still emits (keeps on_trial correct), but tagged
+    # is_renewal so conversion-rate measurement can filter it out instead of double-counting.
+    with _EmitRecorder() as rec:
+        g2 = ADM.grant_membership(s, club_id=fx.club_id, user_id=u4, months=3)
+        extended = rec.of("membership_started")
+    check("re-granting reports 'extended'", g2.get("status") == "extended", str(g2))
+    check("an extension still emits (so on_trial can't go stale)", len(extended) == 1,
+          f"got {len(extended)}")
+    if extended:
+        check("an extension IS flagged is_renewal (don't count it as a conversion)",
+              extended[0].get("is_renewal") is True, str(extended[0].get("is_renewal")))
+
+    # A TRIALIST given an admin grant must still emit. grant_membership's extend branch matches ANY
+    # active subscription — including the trial row, whose provider stays 'trial' — so reading the
+    # provider back off the row would hit the emitter's trial-skip and silently drop exactly the
+    # person we most need flipped off the trial cohort.
+    u5 = _member("ms_trial_admin@bill.test", "MsTrialAdmin")
+    MB.grant_signup_trial(s, club_id=fx.club_id, user_id=u5, days=7)
+    with _EmitRecorder() as rec:
+        ADM.grant_membership(s, club_id=fx.club_id, user_id=u5, months=1)
+        trial_admin = rec.of("membership_started")
+    check("an admin grant to a TRIALIST still emits (trial-skip must not swallow it)",
+          len(trial_admin) == 1, f"got {len(trial_admin)}: {rec.calls}")
+    if trial_admin:
+        check("...and reports provider=manual, not the trial row's provider",
+              trial_admin[0].get("provider") == "manual", str(trial_admin[0].get("provider")))
+
 
 def sc_promo_discount(s, fx):
     """THE promotions invariant: redeeming a code DISCOUNTS the one order through discount_order —

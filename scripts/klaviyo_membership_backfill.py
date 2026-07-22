@@ -5,7 +5,7 @@
 # `subscription_active` branch, which NOTHING produces (NextPoint sells one-off membership orders,
 # not provider-managed subscriptions) — so it NEVER fired, and the `on_trial=false` conversion flip in
 # marketing_crm/crm_sync/sync.py (which only runs on that event) never ran either. The code fix lives
-# in billing.membership._emit_membership_started and is FORWARD-ONLY: it fires for people who convert
+# in billing.membership.emit_membership_started and is FORWARD-ONLY: it fires for people who convert
 # from now on. Everyone who converted BEFORE the fix still shows `on_trial=true` with zero
 # membership_started, so Klaviyo's "Unconverted trial" segment (XxUZCt) still contains PAYING members.
 # This is the backfill that closes that gap. See docs/specs/KLAVIYO-MASTER-PLAN.md §7f.

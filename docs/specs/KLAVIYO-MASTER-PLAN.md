@@ -480,15 +480,27 @@ Not one active membership is `provider='yoco'` — every single one was created 
 `provider='manual'` and **INSERT their subscription row directly, bypassing `_apply_term_grant`**.
 
 That exclusion was deliberate (§7f: an admin grant isn't a purchase) — but 12-out-of-12 says **manual granting
-is how this club actually sells memberships today**, which means the forward emit will rarely fire and
-`on_trial` will drift stale again for every future manual convert. Two options, owner's call:
+is how this club actually sells memberships today**, which means the forward emit would rarely fire and
+`on_trial` would drift stale again for every future manual convert.
 
-- **(a) Emit from the admin grant too** — treat "now holds a membership" as the conversion regardless of how
-  it was created. Matches what the flag is actually used for (don't market "convert!" at a member). Recommended.
-- **(b) Leave it** and re-run `scripts/klaviyo_membership_backfill` periodically (it's idempotent in effect —
-  re-setting `on_trial=false` on someone already false is a no-op, though it does re-fire the event).
+### ✅ RESOLVED — option (a), shipped 2026-07-22
 
-Until one is chosen, treat the backfill as **a recurring chore, not a one-off.**
+**`admin.repositories.grant_membership` now emits `membership_started` too**, on BOTH its branches, through
+the same shared emitter (now `billing.membership.emit_membership_started` — ONE implementation, two callers).
+Tagged `source='admin_grant'`; an extension carries **`is_renewal=true`** so the `on_trial` flip still runs
+(it must — a renewed member is still a member) while conversion-rate measurement can filter renewals out
+instead of double-counting them (§8).
+
+Two subtleties the harness pins down:
+- **`provider` is passed as `'manual'` explicitly, never read back off the row.** `grant_membership`'s extend
+  branch matches ANY active subscription **including a trial row** (whose `provider` stays `'trial'`), and the
+  emitter rightly drops `provider='trial'` — so reading it back would have silently skipped exactly the
+  trialist we most need flipped off the cohort. Guarded by *"an admin grant to a TRIALIST still emits"*.
+- **The trial and the Wix import remain excluded.** A free week isn't a conversion, and re-running the import
+  would otherwise blast the whole take-on roster.
+
+**The backfill is therefore a one-off after all, not a recurring chore.** Billing baseline 383 → **393**
+(+10 checks on the admin-grant paths).
 
 ## 8. Measurement
 - **Conversion:** `membership_started` metric + the `utm_campaign` in GA4. The trial flow's success =

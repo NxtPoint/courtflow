@@ -8,14 +8,15 @@ switches, unwired endpoints) live in their own doc: **[FEATURE-FLAGS.md](FEATURE
 > feature-complete for launch. What remains is (A) config owed by Tomo, (B) code backlog, (C) owner
 > decisions, (D) hardening, and (E) two large well-specced roadmaps (Admin Phase 2 + CRM Missions).
 > **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 180 /
-> billing 383 / statement 47** (2026-07-22).
+> billing 393 / statement 47** (2026-07-22).
 >
 > **Klaviyo, 2026-07-22 — `membership_started` never fired** (wired to a gateway branch nothing produces);
 > **fixed in code + backfill RUN on prod** (12 members corrected, no emails sent). `KLAVIYO-MASTER-PLAN.md`
 > §7f/§7g. Two follow-ups remain:
-> - **Owner decision:** all 12 active memberships are `provider='manual'` (admin grant / Wix import), which
->   bypasses the new emit by design — so either also emit from `admin.grant_membership`, or treat
->   `scripts/klaviyo_membership_backfill` as a recurring chore. (§7g)
+> - ~~**Owner decision:** all 12 active memberships are `provider='manual'`…~~ ✅ **RESOLVED — option (a),
+>   2026-07-22.** `admin.grant_membership` now emits too (`source='admin_grant'`; extensions tagged
+>   `is_renewal=true` so conversion measurement can filter them). The backfill is no longer a recurring
+>   chore. Trial + Wix import stay excluded. (§7g)
 > - **Builder, not Code:** C1 and the converter-guard are now unblocked — bind to the **API-source** metrics
 >   `SzgJKC` (`lesson_completed`) and `WRb7TK` (`membership_started`), never the MCP test twins.
 

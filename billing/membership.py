@@ -387,28 +387,38 @@ def activate_membership_for_order(session, *, order_id, provider="yoco",
     return _apply_term_grant(session, link=link, months=months, provider=provider)
 
 
-def _emit_membership_started(session, *, link, months, provider, current_period_end) -> None:
-    """Fire `membership_started` for a REAL membership activation. Called ONLY from the two
-    non-replay branches of _apply_term_grant, so it is replay-safe by construction: a webhook
-    replay short-circuits at the already-active guard and never reaches here.
+def emit_membership_started(session, *, club_id, user_id, provider, months=None,
+                            current_period_end=None, subscription_id=None,
+                            source="purchase", is_renewal=False) -> None:
+    """THE one place `membership_started` is fired. Two callers, both of which are the moment a member
+    genuinely starts (or continues) holding a membership:
 
-    WHY HERE: _apply_term_grant is the ONE function every genuine membership start flows through
-    (online webhook/reconcile via activate_membership_for_order, AND the offline desk buy via
-    create_membership_order). The paths that must NOT count as a conversion — the signup free-week
-    (`grant_signup_trial`), the admin manual grant (`admin.repositories.grant_membership`) and the
-    Wix take-on (`scripts/import_wix`) — all INSERT their subscription row directly and never call
-    this, so they are excluded structurally rather than by a filter that can rot.
-    (Historic bug: this event used to be emitted only from apply_payment_event's `subscription_active`
-    branch, which NOTHING produces — NextPoint sells one-off membership orders, not provider-managed
-    subscriptions — so it never fired at all. See docs/specs/KLAVIYO-MASTER-PLAN.md §7f.)
+      1. `_apply_term_grant` (below) — every PURCHASE: the online webhook/reconcile via
+         activate_membership_for_order AND the offline desk buy via create_membership_order. Called
+         only from its two NON-REPLAY branches, so a replayed webhook can't double-count.
+      2. `admin.repositories.grant_membership` — the ADMIN MANUAL GRANT (`source='admin_grant'`).
+         Included deliberately: in practice this club grants most memberships manually, and the point
+         of the event is the `on_trial=false` flip — "don't market 'convert!' at someone who already
+         has a membership" is true however the row was created. See KLAVIYO-MASTER-PLAN §7g.
+
+    STILL EXCLUDED, on purpose: the signup free-week (`grant_signup_trial` — a free week is not a
+    conversion, and emitting there would clear on_trial the moment it's set) and the Wix take-on
+    (`scripts/import_wix` — a data migration, not a conversion; emitting would blast the whole
+    imported roster). Both INSERT their row directly and never call this.
+
+    `is_renewal=True` marks an EXTENSION of an existing membership rather than a fresh start — the
+    on_trial flip wants both, but conversion-rate measurement should filter to `is_renewal=false`
+    (docs/specs/KLAVIYO-MASTER-PLAN.md §8) or renewals inflate the count.
 
     Carries `email`: marketing_crm.tracking.emit keys the Klaviyo forward on it, and the
-    on_trial=false conversion flip (crm_sync/sync.py) only runs on a forwarded membership_started.
-    Best-effort throughout — tracking must NEVER break a settlement."""
+    on_trial=false flip (crm_sync/sync.py) only runs on a FORWARDED membership_started — without the
+    email the whole point is lost. Best-effort throughout: tracking must NEVER break a settlement.
+    (Historic bug: this event used to be emitted only from apply_payment_event's `subscription_active`
+    branch, which NOTHING produces — NextPoint sells one-off membership orders, not provider-managed
+    subscriptions — so it never fired at all. See §7f.)"""
     try:
         if (provider or "").strip().lower() == "trial":
             return                                    # belt-and-braces: a free week is not a conversion
-        user_id = link["user_id"]
         if not user_id:
             return
         email = session.execute(
@@ -420,7 +430,7 @@ def _emit_membership_started(session, *, link, months, provider, current_period_
         if fn is None:
             return
         fn("membership_started", {
-            "club_id": str(link["club_id"]) if link["club_id"] else None,
+            "club_id": str(club_id) if club_id else None,
             "user_id": str(user_id),
             "email": email,
             "provider": provider,
@@ -428,8 +438,10 @@ def _emit_membership_started(session, *, link, months, provider, current_period_
             "current_period_end": (current_period_end.isoformat()
                                    if hasattr(current_period_end, "isoformat")
                                    else (str(current_period_end) if current_period_end else None)),
+            "source": source,
+            "is_renewal": bool(is_renewal),
             "ref_type": "membership_subscription",
-            "ref_id": str(link["id"]),
+            "ref_id": str(subscription_id) if subscription_id else None,
         })
     except Exception:
         log.exception("membership_started emit failed (non-fatal)")
@@ -441,7 +453,7 @@ def _apply_term_grant(session, *, link, months, provider) -> Dict[str, Any]:
     the member already holds one. Used by both the paid-webhook path and the offline immediate path.
 
     Emits `membership_started` on a genuine grant (never on the already-active replay) —
-    see _emit_membership_started."""
+    see emit_membership_started."""
     def _iso(v):
         return v.isoformat() if hasattr(v, "isoformat") else (str(v) if v is not None else None)
 
@@ -488,8 +500,10 @@ def _apply_term_grant(session, *, link, months, provider) -> Dict[str, Any]:
                  "    current_period_end = :pe, updated_at = now() WHERE id = :id"),
             {"prov": provider, "pe": new_row["current_period_end"], "id": link["id"]},
         )
-        _emit_membership_started(session, link=link, months=months, provider=provider,
-                                 current_period_end=new_row["current_period_end"])
+        emit_membership_started(session, club_id=link["club_id"], user_id=link["user_id"],
+                                provider=provider, months=months,
+                                current_period_end=new_row["current_period_end"],
+                                subscription_id=existing["id"], is_renewal=True)
         return {"ok": True, "status": "extended",
                 "membership_subscription_id": str(existing["id"]),
                 "term_months": months,
@@ -516,8 +530,10 @@ def _apply_term_grant(session, *, link, months, provider) -> Dict[str, Any]:
         """),
         {"prov": provider, "m": months, "id": link["id"]},
     ).mappings().first()
-    _emit_membership_started(session, link=link, months=months, provider=provider,
-                             current_period_end=row["current_period_end"])
+    emit_membership_started(session, club_id=link["club_id"], user_id=link["user_id"],
+                            provider=provider, months=months,
+                            current_period_end=row["current_period_end"],
+                            subscription_id=link["id"])
     return {"ok": True, "status": "activated",
             "membership_subscription_id": str(link["id"]),
             "term_months": months,

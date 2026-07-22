@@ -1458,23 +1458,42 @@ def grant_membership(session, *, club_id, user_id, months=None, price_id=None, s
     params = {"c": club_id, "u": user_id, "m": months, "pid": price_id, "sd": start_date}
     # COALESCE(CAST(:sd AS date), CURRENT_DATE): the CAST is required so psycopg can type the NULL
     # placeholder (bare ":sd IS NULL"/COALESCE on an untyped param → AmbiguousParameter).
+    # `membership_started` fires on BOTH branches (KLAVIYO-MASTER-PLAN §7g, option (a)): this club
+    # grants most memberships manually, and the event drives the `on_trial=false` flip — "don't market
+    # 'convert!' at someone who already holds a membership" is true however the row was created. The
+    # extend branch is tagged is_renewal=True so conversion-rate measurement can filter it out.
+    # provider is passed as 'manual' EXPLICITLY rather than read off the row: the extend branch matches
+    # ANY active subscription including a trial one, and the shared emitter (rightly) drops
+    # provider='trial' — reading it back would silently skip exactly the trialist we most need flipped.
+    from billing.membership import emit_membership_started
     if existing:
         params["id"] = existing
-        session.execute(
+        row = session.execute(
             text("UPDATE billing.membership_subscription "
                  "SET current_period_end = (COALESCE(CAST(:sd AS date), CURRENT_DATE) "
                  "        + make_interval(months => :m))::date, "
-                 "    price_id = COALESCE(:pid, price_id), updated_at = now() WHERE id = :id"),
+                 "    price_id = COALESCE(:pid, price_id), updated_at = now() WHERE id = :id "
+                 "RETURNING id, current_period_end"),
             params,
-        )
+        ).mappings().first()
+        emit_membership_started(session, club_id=club_id, user_id=user_id, provider="manual",
+                                months=months,
+                                current_period_end=(row["current_period_end"] if row else None),
+                                subscription_id=(row["id"] if row else existing),
+                                source="admin_grant", is_renewal=True)
         return {"ok": True, "status": "extended"}
-    session.execute(
+    row = session.execute(
         text("INSERT INTO billing.membership_subscription "
              "(club_id, user_id, price_id, status, provider, current_period_end) "
              "VALUES (:c, :u, :pid, 'active', 'manual', "
-             "        (COALESCE(CAST(:sd AS date), CURRENT_DATE) + make_interval(months => :m))::date)"),
+             "        (COALESCE(CAST(:sd AS date), CURRENT_DATE) + make_interval(months => :m))::date) "
+             "RETURNING id, current_period_end"),
         params,
-    )
+    ).mappings().first()
+    emit_membership_started(session, club_id=club_id, user_id=user_id, provider="manual",
+                            months=months,
+                            current_period_end=(row["current_period_end"] if row else None),
+                            subscription_id=(row["id"] if row else None), source="admin_grant")
     return {"ok": True, "status": "granted"}
 
 
