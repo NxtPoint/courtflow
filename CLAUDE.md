@@ -22,7 +22,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 180 / billing 311 / statement 47**. Each uses its own scratch club and always rolls back.
+   **booking 180 / billing 371 / statement 47**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -38,7 +38,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      a parent's kids bill the guardian, a member can't add a stranger/another family's child, cancel
      voids every head; a card-only SERVICE refuses pay-at-court on the booking; a class enrolment is
      payment-gated (no free seat via membership_covered/free, card-only class refuses pay-at-court)**.
-   - `test_billing_scenarios` (311) — settlement modes, commission, tokens, membership (offline + per-tier),
+   - `test_billing_scenarios` (371) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
      class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
@@ -47,13 +47,16 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      tamper-proof), client activity-summary (counts/minutes/by-service/by-week), a pack respects its
      SERVICE's payment rule (a card-only pack is card-only — no at-court fallback that grants it unpaid),
      PAID PACK NEVER BYPASSED (owed-mode booking auto-draws a matching pack), RECONCILE activates the
-     pack/wallet (behavioural GUARD — reconcile must call activate_purchase, not just mark paid)**.
+     pack/wallet (behavioural GUARD — reconcile must call activate_purchase, not just mark paid),
+     **PROMOTIONS** — a redeemed code discounts the ONE order (asserted: no second debt row + coach-arrears
+     lockstep + `original_amount_minor` was→now), `validate()` writes nothing, `amount_off` clamps at the
+     total, reverse frees the usage slot, every refusal by ERROR CODE (window/scope/min-spend/per-customer +
+     global caps/first-time/stacking/paid-order), unique per-recipient codes (single-use, own cap not the
+     shared one, revoke, recipient-bound), and the **bonus REPLAY GUARDS** — `bonus_period` 3+1 and
+     `bonus_units` "buy 10 get 12" grant exactly once on BOTH the online (at activation) and offline (at
+     redemption) paths, and a replayed activation/grant does NOT re-add them**.
    - `test_statement_reconciliation` (47) — no double-count, pay-all-once, part-settle, reclaim,
      membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
-   - **Known coverage gap: the Promotions engine has NO harness assertions.** The baseline was green across
-     Phases 1/2a/2b only because promo redemption delegates to `discount_order` (which IS covered) — nothing
-     exercises eligibility, caps, unique codes, or the `bonus_period`/`bonus_units` grant paths. Verify promo
-     changes by hand, and prefer adding billing-harness scenarios over trusting the count.
 
 ## Deployment (LIVE on Render)
 - Repo `NxtPoint/courtflow`; Render auto-deploys `master`. Two web services + a Postgres DB, **all

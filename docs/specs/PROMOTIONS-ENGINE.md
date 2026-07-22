@@ -5,6 +5,20 @@ promo codes redeemed at checkout**. Phase 1 = %/fixed off. Phase 2a = `bonus_per
 membership) + unique per-recipient codes. **Phase 2b = `bonus_units` ("buy a 10-pack, get 12").** All four
 promo kinds + unique codes are live across every checkout surface.
 
+## Automated coverage (added 2026-07-22)
+The engine is covered by **4 scenarios in `scripts/test_billing_scenarios.py`** (+60 checks; the billing
+baseline moved 311 → **371**). They lock, in order: `sc_promo_discount` — the invariant that a redemption
+discounts the ONE order (no second debt row, coach-arrears lockstep, `original_amount_minor` was→now),
+`validate()` writing nothing, `amount_off` clamping at the total, and a reversal freeing the usage slot;
+`sc_promo_eligibility` — every refusal asserted **by error code** (window, scope, min-spend, per-customer and
+global caps, first-time-only, stacking both ways, and a paid order); `sc_promo_unique_codes` — single-use,
+governed by its OWN cap rather than the shared per-customer cap, revocation, and recipient binding; and
+`sc_promo_bonus_grants` — **the replay guards**: `bonus_period` (3+1) and `bonus_units` (buy 10 get 12) grant
+exactly once on BOTH the online (at activation/first wallet grant) and offline (at redemption) paths, and a
+replayed activation/grant does **not** re-add them. Note a behavioural detail the tests pin down: re-applying
+a code to the same order is refused by the **per-customer cap first** (`ALREADY_USED`) — `NOT_STACKABLE` only
+surfaces once that cap allows a second redemption.
+
 ## Phase 2b — what shipped (2026-07-18)
 - **`bonus_units`** (packs): a promo grants FREE extra sessions on top of the pack — reuses the existing
   `adjust_wallet` primitive (raises minutes_total + remaining, audited). Symmetric with `bonus_period`:

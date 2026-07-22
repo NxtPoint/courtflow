@@ -204,9 +204,10 @@ operating guide; **this folder is the detail.**
 > SPA, so a signed-in member's route changes were swamping "website traffic"; public panels now filter
 > `metadata.authed != 'true'`). **Also: every recurring job now fires from GitHub Actions, never a Render
 > cron** — `reminders.yml` (hourly) and `membership-refill.yml` (daily) joined `month-end.yml`,
-> `marketing-digest.yml` and `keep-warm.yml`; the four `render.yaml` crons stay commented out. **Gate baseline
-> unchanged (booking 180 / billing 311 / statement 47) — note the Promotions engine has no harness
-> assertions of its own.**
+> `marketing-digest.yml` and `keep-warm.yml`; the four `render.yaml` crons stay commented out. **The Promotions
+> engine is now covered by the billing harness** (4 scenarios, +60 checks: the no-second-debt invariant, every
+> refusal by error code, unique per-recipient codes, and the bonus grant/replay guards) — **new gate baseline
+> `python -m scripts.test_all` → booking 180 / billing 371 / statement 47.**
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,

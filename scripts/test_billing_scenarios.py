@@ -27,6 +27,7 @@ from billing import orders as O
 from billing import commission as CM
 from billing import bundles as BN
 from billing import membership as MB
+from billing import promotions as PROMO
 from billing import refunds as RF
 from billing import statement as ST
 from billing.events import apply_payment_event
@@ -2238,7 +2239,379 @@ def sc_pack_respects_service_payment_mode(s, fx):
     check("unrestricted pack still allows pay-at-court", "at_court" in allowed2, f"allowed={allowed2}")
 
 
+# ---------------------------------------------------------------------------
+# Promotions engine (billing/promotions.py — docs/specs/PROMOTIONS-ENGINE.md)
+# ---------------------------------------------------------------------------
+
+def _promo(s, fx, **fields):
+    """Create a promotion in the scratch club → its id. Raises loudly (a broken fixture is not a
+    silent PASS)."""
+    fields.setdefault("name", fields.get("code") or "Promo")
+    r = PROMO.create(s, club_id=fx.club_id, created_by=fx.member, **fields)
+    if not r.get("ok"):
+        raise AssertionError(f"promo create failed: {r}")
+    return r["id"]
+
+
+def _redemptions(s, oid):
+    return s.execute(text("SELECT status, discount_minor FROM billing.promotion_redemption "
+                          "WHERE order_id = :o"), {"o": str(oid)}).mappings().all()
+
+
+def _wallet_of(s, oid):
+    return s.execute(text("SELECT status, tokens_total, minutes_total, minutes_remaining "
+                          "FROM billing.token_wallet WHERE order_id = :o"),
+                     {"o": str(oid)}).mappings().first()
+
+
+def _period_months_out(s, oid, months):
+    """True if the subscription linked to `oid` ends exactly `months` from today (the grant maths is
+    always CURRENT_DATE-based, so this is exact, not approximate)."""
+    return s.execute(text(
+        "SELECT current_period_end = (CURRENT_DATE + make_interval(months => :m))::date "
+        "FROM billing.membership_subscription WHERE order_id = :o"),
+        {"m": int(months), "o": str(oid)}).scalar()
+
+
+def sc_promo_discount(s, fx):
+    """THE promotions invariant: redeeming a code DISCOUNTS the one order through discount_order —
+    it never invents a second debt store. The money must land exactly where an admin discount lands,
+    coach arrears included."""
+    print("\n# Promo: percent_off discounts the ONE order (no 2nd debt) + coach lockstep + reverse frees the slot")
+    _promo(s, fx, code="SAVE20", name="20% off", kind="percent_off", percent_bps=2000)
+
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res,
+                         coach_user_id=fx.coach_uid, starts_at=iso(at(fx, 11)),
+                         ends_at=iso(at(fx, 12)), settlement_mode="at_court")
+    oid = r["booking"]["order_id"]
+    bid = r["booking"]["id"]
+    CM.accrue_arrears_for_club(s, club_id=fx.club_id)
+
+    # validate() is a PURE PREVIEW — the checkout calls it on every keystroke, so it must not write.
+    prev = PROMO.validate(s, club_id=fx.club_id, code="SAVE20", applies_to="lesson",
+                          amount_minor=40000, user_id=fx.member)
+    check("validate previews R80 off R400 (20%)",
+          prev.get("ok") and prev["discount_minor"] == 8000, str(prev))
+    check("validate wrote NOTHING (no redemption, order untouched)",
+          len(_redemptions(s, oid)) == 0 and _order(s, oid)["amount_minor"] == 40000)
+
+    res = PROMO.apply_to_order(s, club_id=fx.club_id, code="SAVE20", order_id=oid, user_id=fx.member)
+    check("apply → R80 off, new total R320",
+          res.get("ok") and res["discount_minor"] == 8000 and res["new_total_minor"] == 32000, str(res))
+    check("the ONE order dropped to R320", _order(s, oid)["amount_minor"] == 32000,
+          str(_order(s, oid)["amount_minor"]))
+    ol = s.execute(text("SELECT amount_minor, original_amount_minor FROM billing.order_line "
+                        "WHERE order_id=:o AND booking_id=:b"),
+                   {"o": str(oid), "b": bid}).mappings().first()
+    check("line carries was→now (400 preserved, 320 charged)",
+          ol["amount_minor"] == 32000 and ol["original_amount_minor"] == 40000, str(dict(ol)))
+    # The invariant, asserted directly: one debt = one order, before AND after a promo.
+    n_orders = s.execute(text('SELECT count(*) FROM billing."order" o JOIN billing.order_line l '
+                              "ON l.order_id = o.id WHERE l.booking_id = :b"), {"b": bid}).scalar()
+    check("promo created NO second debt row (still exactly ONE order for the booking)",
+          n_orders == 1, f"got {n_orders}")
+    ar = s.execute(text("SELECT gross_minor, status FROM billing.coach_arrears "
+                        "WHERE club_id=:c AND booking_id=:b"),
+                   {"c": fx.club_id, "b": bid}).mappings().first()
+    check("coach_arrears follows in LOCKSTEP → R320 owed",
+          ar and ar["gross_minor"] == 32000 and ar["status"] == "owed", str(dict(ar) if ar else None))
+    red = _redemptions(s, oid)
+    check("exactly one 'applied' redemption logged at R80",
+          len(red) == 1 and red[0]["status"] == "applied" and red[0]["discount_minor"] == 8000, str(red))
+
+    # Re-applying the same code to the same order must never discount twice. The per-customer cap is
+    # what refuses it here (it is checked before the stacking guard).
+    again = PROMO.apply_to_order(s, club_id=fx.club_id, code="SAVE20", order_id=oid, user_id=fx.member)
+    check("re-applying the same code is refused (per-customer cap fires first)",
+          again.get("ok") is False and again.get("error") == "ALREADY_USED", str(again))
+    check("order still R320 after the refused re-apply", _order(s, oid)["amount_minor"] == 32000)
+    # ...and with the cap raised, the ONE-PROMO-PER-ORDER guard is what catches the self-stack.
+    _promo(s, fx, code="TWICE", name="10% (cap 2)", kind="percent_off", percent_bps=1000,
+           per_customer_cap=2)
+    r4 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="court", resource_id=fx.courts[1], starts_at=iso(at(fx, 9)),
+                          ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    oid4 = r4["booking"]["order_id"]
+    check("cap-2 code applies once", PROMO.apply_to_order(
+        s, club_id=fx.club_id, code="TWICE", order_id=oid4, user_id=fx.member).get("ok") is True)
+    self_stack = PROMO.apply_to_order(s, club_id=fx.club_id, code="TWICE", order_id=oid4,
+                                      user_id=fx.member)
+    check("the same order refuses a second promo → NOT_STACKABLE",
+          self_stack.get("error") == "NOT_STACKABLE", str(self_stack))
+    check("no double discount on that order (R150 − 10% = R135)",
+          _order(s, oid4)["amount_minor"] == 13500, str(_order(s, oid4)["amount_minor"]))
+
+    # amount_off clamps at the order total — a promo can never drive a debt negative.
+    _promo(s, fx, code="BIG", name="R1000 off", kind="amount_off", value_minor=100000)
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="court", resource_id=fx.courts[0], starts_at=iso(at(fx, 9)),
+                          ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    oid2 = r2["booking"]["order_id"]
+    res2 = PROMO.apply_to_order(s, club_id=fx.club_id, code="BIG", order_id=oid2, user_id=fx.member)
+    check("amount_off clamps to the order total (R150 off R150, never negative)",
+          res2.get("ok") and res2["discount_minor"] == 15000 and res2["new_total_minor"] == 0, str(res2))
+
+    # A refund/void reverses the redemption, which frees the customer's usage slot.
+    n_rev = PROMO.reverse_for_order(s, oid)
+    check("reverse marks the redemption 'reversed'",
+          n_rev == 1 and _redemptions(s, oid)[0]["status"] == "reversed", str(_redemptions(s, oid)))
+    r3 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res,
+                          coach_user_id=fx.coach_uid, starts_at=iso(at(fx, 13)),
+                          ends_at=iso(at(fx, 14)), settlement_mode="at_court")
+    res3 = PROMO.apply_to_order(s, club_id=fx.club_id, code="SAVE20",
+                                order_id=r3["booking"]["order_id"], user_id=fx.member)
+    check("after a reversal the same customer may redeem again", res3.get("ok") is True, str(res3))
+
+
+def sc_promo_eligibility(s, fx):
+    """Every refusal path. A promo code is money, so each guard is asserted by its ERROR CODE — a
+    refusal that silently becomes a discount is the failure mode that matters."""
+    print("\n# Promo eligibility: window / scope / min-spend / caps / first-time / stacking / paid-order")
+    other = _mk_user(s, "promo_other@bill.test", "Other")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": other})
+
+    def _court(hour, uid=None):
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=(uid or fx.member),
+                             role="member", booking_type="court", resource_id=fx.courts[0],
+                             starts_at=iso(at(fx, hour)), ends_at=iso(at(fx, hour + 1)),
+                             settlement_mode="at_court")
+        return r["booking"]["order_id"]
+
+    def _err(code, oid, uid=None):
+        return PROMO.apply_to_order(s, club_id=fx.club_id, code=code, order_id=oid,
+                                    user_id=(uid or fx.member)).get("error")
+
+    o1 = _court(9)   # a refused apply writes nothing, so one order serves every refusal below
+    check("unknown code → PROMO_NOT_FOUND", _err("NOSUCHCODE", o1) == "PROMO_NOT_FOUND")
+
+    _promo(s, fx, code="PAUSED1", kind="percent_off", percent_bps=1000, status="paused")
+    check("paused promotion → INACTIVE", _err("PAUSED1", o1) == "INACTIVE")
+
+    now = datetime.now(timezone.utc)
+    _promo(s, fx, code="ENDED1", kind="percent_off", percent_bps=1000, ends_at=now - timedelta(days=1))
+    check("window already closed → EXPIRED", _err("ENDED1", o1) == "EXPIRED")
+    _promo(s, fx, code="SOON1", kind="percent_off", percent_bps=1000, starts_at=now + timedelta(days=1))
+    check("window not open yet → EXPIRED", _err("SOON1", o1) == "EXPIRED")
+
+    _promo(s, fx, code="MEMONLY", kind="percent_off", percent_bps=1000, applies_to="membership")
+    check("membership-scoped code on a COURT order → NOT_ELIGIBLE_SCOPE",
+          _err("MEMONLY", o1) == "NOT_ELIGIBLE_SCOPE")
+
+    _promo(s, fx, code="MIN500", kind="percent_off", percent_bps=1000, min_spend_minor=50000)
+    check("R150 order under a R500 floor → MIN_SPEND", _err("MIN500", o1) == "MIN_SPEND")
+
+    # Per-customer cap (default 1): the SAME customer cannot redeem a shared code twice.
+    _promo(s, fx, code="ONCE", kind="percent_off", percent_bps=1000)
+    first = PROMO.apply_to_order(s, club_id=fx.club_id, code="ONCE", order_id=o1, user_id=fx.member)
+    check("first redemption of a shared code succeeds", first.get("ok") is True, str(first))
+    o2 = _court(10)
+    check("same customer, second order → ALREADY_USED", _err("ONCE", o2) == "ALREADY_USED")
+
+    # Global cap: one redemption total, whoever gets there first.
+    _promo(s, fx, code="ONLYONE", kind="percent_off", percent_bps=1000, max_redemptions=1)
+    claimed = PROMO.apply_to_order(s, club_id=fx.club_id, code="ONLYONE", order_id=o2, user_id=fx.member)
+    check("the single global redemption is claimed", claimed.get("ok") is True, str(claimed))
+    o3 = _court(11, uid=other)
+    check("a DIFFERENT customer is then refused → LIMIT_REACHED",
+          _err("ONLYONE", o3, uid=other) == "LIMIT_REACHED")
+
+    # Stacking: an order already carrying an admin discount refuses a non-stackable code.
+    o4 = _court(12)
+    ST.discount_order(s, club_id=fx.club_id, order_id=o4, discount_minor=1000, reason="admin goodwill")
+    _promo(s, fx, code="NOSTACK", kind="percent_off", percent_bps=1000)
+    check("non-stackable code on an already-discounted order → NOT_STACKABLE",
+          _err("NOSTACK", o4) == "NOT_STACKABLE")
+    _promo(s, fx, code="STACKOK", kind="percent_off", percent_bps=1000, stackable=True)
+    stacked = PROMO.apply_to_order(s, club_id=fx.club_id, code="STACKOK", order_id=o4, user_id=fx.member)
+    check("an explicitly STACKABLE code is allowed on top", stacked.get("ok") is True, str(stacked))
+
+    # first_time_only, scoped to courts: a prior PAID court order disqualifies.
+    _promo(s, fx, code="FIRSTONLY", kind="percent_off", percent_bps=1000, applies_to="court",
+           first_time_only=True)
+    o5 = _court(13)
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=o5, amount_minor=15000,
+                          provider="cash", provider_payment_id="RCPT-PROMO", user_id=fx.member)
+    check("the paid order settled", _order(s, o5)["status"] == "paid")
+    o6 = _court(14)
+    check("a returning customer fails first_time_only → NOT_FIRST_TIME",
+          _err("FIRSTONLY", o6) == "NOT_FIRST_TIME")
+
+    # A settled debt can no longer take a code (checked before eligibility — nothing to discount).
+    _promo(s, fx, code="LATE", kind="percent_off", percent_bps=1000)
+    check("a PAID order refuses any code → NOT_OPEN", _err("LATE", o5) == "NOT_OPEN")
+
+
+def sc_promo_unique_codes(s, fx):
+    """Unique per-recipient codes (the Klaviyo campaign path): each is single-use and governed by its
+    OWN cap, not the shared per-customer cap — plus revocation and recipient binding."""
+    print("\n# Promo unique codes: single-use, own cap (not the shared one), revocable, recipient-bound")
+    other = _mk_user(s, "promo_uc_other@bill.test", "UCOther")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": other})
+
+    def _court(hour, uid=None):
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=(uid or fx.member),
+                             role="member", booking_type="court", resource_id=fx.courts[0],
+                             starts_at=iso(at(fx, hour)), ends_at=iso(at(fx, hour + 1)),
+                             settlement_mode="at_court")
+        return r["booking"]["order_id"]
+
+    # NOTE: no shared `code` — this promo is reachable ONLY through its minted codes.
+    pid = _promo(s, fx, name="Win-back 10%", kind="percent_off", percent_bps=1000)
+    gen = PROMO.generate_codes(s, club_id=fx.club_id, promo_id=pid, count=3, prefix="WB")
+    codes = gen.get("codes") or []
+    check("minted 3 distinct codes", gen.get("ok") and len(codes) == 3 and len(set(codes)) == 3, str(gen))
+    check("codes are prefixed and avoid ambiguous 0/O/1/I",
+          all(c.startswith("WB-") for c in codes)
+          and not any(ch in c.split("-", 1)[1] for c in codes for ch in "01OI"), str(codes))
+
+    o1 = _court(9)
+    r1 = PROMO.apply_to_order(s, club_id=fx.club_id, code=codes[0], order_id=o1, user_id=fx.member)
+    check("a minted code redeems (R15 off R150)",
+          r1.get("ok") and r1["discount_minor"] == 1500, str(r1))
+    used = s.execute(text("SELECT used_count FROM billing.promotion_code WHERE code = :c"),
+                     {"c": codes[0]}).scalar()
+    check("used_count incremented once", used == 1, f"got {used}")
+
+    o2 = _court(10)
+    r2 = PROMO.apply_to_order(s, club_id=fx.club_id, code=codes[0], order_id=o2, user_id=fx.member)
+    check("re-using a spent code → CODE_USED", r2.get("error") == "CODE_USED", str(r2))
+    # A unique code carries its OWN single-use cap, so the shared per_customer_cap must NOT block a
+    # second code from the same batch for the same member.
+    r3 = PROMO.apply_to_order(s, club_id=fx.club_id, code=codes[1], order_id=o2, user_id=fx.member)
+    check("a SECOND minted code still works for the same member (own cap, not the shared one)",
+          r3.get("ok") is True, str(r3))
+
+    PROMO.revoke_code(s, club_id=fx.club_id, code=codes[2])
+    o3 = _court(11)
+    r4 = PROMO.apply_to_order(s, club_id=fx.club_id, code=codes[2], order_id=o3, user_id=fx.member)
+    check("a revoked code → CODE_REVOKED", r4.get("error") == "CODE_REVOKED", str(r4))
+
+    # Bound to a named recipient (how a Klaviyo send addresses one member).
+    bound = (PROMO.generate_codes(s, club_id=fx.club_id, promo_id=pid, count=1, prefix="WB")
+             .get("codes") or [None])[0]
+    s.execute(text("UPDATE billing.promotion_code SET user_id = :u WHERE club_id = :c AND code = :code"),
+              {"u": str(fx.member), "c": fx.club_id, "code": bound})
+    o4 = _court(12, uid=other)
+    r5 = PROMO.apply_to_order(s, club_id=fx.club_id, code=bound, order_id=o4, user_id=other)
+    check("someone else's bound code → CODE_NOT_YOURS", r5.get("error") == "CODE_NOT_YOURS", str(r5))
+    o5 = _court(13)
+    r6 = PROMO.apply_to_order(s, club_id=fx.club_id, code=bound, order_id=o5, user_id=fx.member)
+    check("the named recipient can redeem their own bound code", r6.get("ok") is True, str(r6))
+
+
+def sc_promo_bonus_grants(s, fx):
+    """Phase 2 — a BONUS is not a discount: the price is untouched and the free months/sessions are
+    granted exactly ONCE, on whichever path applies (online = at activation, offline = at redemption).
+    The replay assertions are the point: the docs claim 'never double-granted'."""
+    print("\n# Promo bonuses: membership 3+1 and pack 'buy 10 get 12' — granted once, replay-safe")
+
+    def _member(email, name):
+        u = _mk_user(s, email, name)
+        s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                       "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": u})
+        return u
+
+    # --- bonus_period, OFFLINE: the desk buy activates the sub, so the bonus extends it right away.
+    _promo(s, fx, code="PLUS1", name="3 months + 1 free", kind="bonus_period", bonus_qty=2,
+           applies_to="membership")
+    u1 = _member("promo_mem_off@bill.test", "MemOff")
+    off = MB.create_membership_order(s, club_id=fx.club_id, user_id=u1,
+                                     price_id=fx.membership_price, settlement_mode="at_court")
+    oid1 = off["order_id"]
+    check("offline membership is active for its 1-month term before the promo",
+          _period_months_out(s, oid1, 1) is True)
+    res1 = PROMO.apply_to_order(s, club_id=fx.club_id, code="PLUS1", order_id=oid1, user_id=u1)
+    check("bonus reports MONTHS, not rands",
+          res1.get("ok") and res1.get("is_bonus") is True and res1.get("bonus_qty") == 2
+          and res1.get("bonus_unit") == "month", str(res1))
+    check("a BONUS never changes the price (order still R220, R0 discounted)",
+          _order(s, oid1)["amount_minor"] == 22000 and res1["discount_minor"] == 0,
+          str(_order(s, oid1)["amount_minor"]))
+    check("offline: the 2 free months land immediately (1 + 2 = 3)",
+          _period_months_out(s, oid1, 3) is True)
+    red = _redemptions(s, oid1)
+    check("a zero-rand redemption is still ledgered (caps + reporting)",
+          len(red) == 1 and red[0]["discount_minor"] == 0, str(red))
+
+    # --- bonus_period, ONLINE: the sub is pending at checkout, so the bonus must land at activation.
+    u2 = _member("promo_mem_onl@bill.test", "MemOnl")
+    onl = MB.create_membership_order(s, club_id=fx.club_id, user_id=u2,
+                                     price_id=fx.membership_price, settlement_mode="online")
+    oid2 = onl["order_id"]
+    res2 = PROMO.apply_to_order(s, club_id=fx.club_id, code="PLUS1", order_id=oid2, user_id=u2)
+    check("the code applies to an awaiting-payment membership order", res2.get("ok") is True, str(res2))
+    check("online: NOTHING granted before payment",
+          not PR.has_active_membership(s, club_id=fx.club_id, user_id=u2))
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="yoco", kind="charge_succeeded", order_ref=oid2, provider_payment_id="p_promo_mem",
+        amount_minor=22000, currency="ZAR", status="succeeded", direction="charge",
+        club_id=str(fx.club_id), user_id=str(u2), raw={"t": 41}), session=s)
+    MB.activate_membership_for_order(s, order_id=oid2)
+    check("online: activation grants term + bonus in ONE shot (1 + 2 = 3 months)",
+          _period_months_out(s, oid2, 3) is True)
+    replay = MB.activate_membership_for_order(s, order_id=oid2)
+    check("a replayed activation is a no-op (already_active)",
+          replay.get("status") == "already_active", str(replay))
+    check("REPLAY GUARD: the bonus was not granted twice (still 3 months, not 5)",
+          _period_months_out(s, oid2, 3) is True)
+
+    # --- bonus_units, OFFLINE: the wallet is granted at purchase, so the bonus tops it up now.
+    _promo(s, fx, code="TEN12", name="Buy 10 get 12", kind="bonus_units", bonus_qty=2,
+           applies_to="pack")
+    plan = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=10,
+                          price_minor=300000, duration_minutes=60, coach_user_id=fx.coach_uid,
+                          label="10 lessons")
+    ord_off = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                     bundle_plan_id=plan["id"], settlement_mode="at_court")
+    oid3 = ord_off["order_id"]
+    w0 = _wallet_of(s, oid3)
+    check("offline pack is usable immediately at 600 min (10 x 60)",
+          w0 and w0["status"] == "active" and w0["minutes_total"] == 600, str(dict(w0) if w0 else None))
+    res3 = PROMO.apply_to_order(s, club_id=fx.club_id, code="TEN12", order_id=oid3, user_id=fx.member)
+    check("bonus reports SESSIONS, not rands",
+          res3.get("ok") and res3.get("is_bonus") is True and res3.get("bonus_qty") == 2
+          and res3.get("bonus_unit") == "session", str(res3))
+    w1 = _wallet_of(s, oid3)
+    check("offline: 2 free sessions added to the live wallet (600 → 720 min)",
+          w1["minutes_total"] == 720 and w1["minutes_remaining"] == 720, str(dict(w1)))
+    check("a BONUS never changes the pack price (still R3000)",
+          _order(s, oid3)["amount_minor"] == 300000 and res3["discount_minor"] == 0)
+
+    # --- bonus_units, ONLINE: the wallet is pending at checkout, so the bonus lands at the grant.
+    u3 = _member("promo_pack_onl@bill.test", "PackOnl")
+    ord_onl = BN.create_bundle_order(s, club_id=fx.club_id, user_id=u3,
+                                     bundle_plan_id=plan["id"], settlement_mode="online")
+    oid4 = ord_onl["order_id"]
+    res4 = PROMO.apply_to_order(s, club_id=fx.club_id, code="TEN12", order_id=oid4, user_id=u3)
+    check("the code applies to an awaiting-payment pack order", res4.get("ok") is True, str(res4))
+    wp = _wallet_of(s, oid4)
+    check("online: the wallet is still pending, nothing granted",
+          wp and wp["status"] == "pending", str(dict(wp) if wp else None))
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="yoco", kind="charge_succeeded", order_ref=oid4, provider_payment_id="p_promo_pack",
+        amount_minor=300000, currency="ZAR", status="succeeded", direction="charge",
+        club_id=str(fx.club_id), user_id=str(u3), raw={"t": 42}), session=s)
+    g1 = BN.activate_wallet_for_order(s, order_id=oid4)
+    check("online: the grant is plan + bonus (10 + 2 = 12 sessions)",
+          g1.get("tokens_total") == 12, str(g1))
+    w2 = _wallet_of(s, oid4)
+    check("online: wallet holds 720 min (12 x 60)", w2["minutes_total"] == 720, str(dict(w2)))
+    g2 = BN.activate_wallet_for_order(s, order_id=oid4)
+    check("a replayed grant is a no-op (already_active)", g2.get("status") == "already_active", str(g2))
+    w3 = _wallet_of(s, oid4)
+    check("REPLAY GUARD: the bonus was not re-added (still 720 min, not 840)",
+          w3["minutes_total"] == 720 and w3["minutes_remaining"] == 720, str(dict(w3)))
+
+
 SCENARIOS = [
+    sc_promo_discount,
+    sc_promo_eligibility,
+    sc_promo_unique_codes,
+    sc_promo_bonus_grants,
     sc_pack_autodraw_guardrail,
     sc_reconcile_activates_pack,
     sc_reconcile_guard_activates_pack,
