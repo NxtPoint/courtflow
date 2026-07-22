@@ -310,7 +310,7 @@ would double-message).
 - **Templates (all on-brand, no coach names, no free-lesson promises):** C1 post-lesson `RJDzuj` · B1 `VZ8DiM` · F3 `T5Ub7j` · **Court-feedback `VwcB8a`** · **Cross-sell (court→lesson) `VJ5mZP`**.
 
 **UPDATE 2026-07-19 morning (Posts):**
-- ✅ **Court-experience feedback BUILT** — flow **`WSWr2C`** (Draft): trigger `booking_confirmed` → re-entry after **21 days** (the throttle) → email `VwcB8a` ("How's it going at NextPoint?"). **TODO before go-live:** add trigger filter **`booking_type` equals `court`** (the Builder froze on the filter dropdown — 30-sec add when stable) so it doesn't also fire on lesson/class bookings.
+- ✅ **Court-experience feedback BUILT** — flow **`WSWr2C`** (Draft): trigger `booking_confirmed` → re-entry after **21 days** (the throttle) → email `VwcB8a` (the flow's ACTUAL `template_id` is **`RjGvJ4`** — Klaviyo clones a template when it's attached to a flow message; see §7e) ("How's it going at NextPoint?"). **TODO before go-live:** add trigger filter **`booking_type` equals `court`** (the Builder froze on the filter dropdown — 30-sec add when stable) so it doesn't also fire on lesson/class bookings.
 - ✅ **Cross-sell (court→lesson) BUILT** — flow **`Rhsfy6`** (Draft): trigger **Added to segment `Rv24hw`** (court players, no lesson) → email `VJ5mZP` ("Loving the courts? Add a lesson."), no re-entry. (Optional: add a 1-day delay before the email — skipped to keep it simple; fires on segment entry.)
 - 🗑️ Deleted a mis-built flow (a click landed on the wrong metric row → bound to `class_enrolled`); rebuilt correctly as `WSWr2C`. **Builder tip that finally worked:** the page renders at a viewport that's scaled vs the screenshot, so click a metric row using coordinates = `cssRect × (1568/window.innerWidth)`, and ALWAYS verify the chosen trigger (API `get_flow` `definition.triggers`) before saving — triggers can't be changed after save.
 
@@ -329,6 +329,33 @@ Every REAL NextPoint app event flows through the **"API"** integration (`booking
 **⚠️ Metric-source caveat (Code + Posts, important):** Klaviyo keys a metric by (name, **source/integration**). Code's real events land under the **"API"** integration. To unblock C1's trigger tonight Posts fired **test** `lesson_completed` + `membership_started` events (profile **`cowork-flowtest@nextpointtennis.com`**, `is_test`=true). The first attempt created them under the **"Klaviyo MCP Server"** source (wrong); a second used `service="api"`. **Before turning C1 live, verify its trigger is bound to the SAME `lesson_completed` metric Code emits** (check the metric's source = API) — re-point if needed. Cleanest long-term: wire C1's trigger after Code's FIRST real `lesson_completed` fires, then the source is guaranteed correct.
 
 **🧹 Test artifacts to ignore/clean:** profile `cowork-flowtest@nextpointtennis.com`; any `lesson_completed`/`membership_started` events tagged `is_test:true`; a duplicate MCP-sourced `lesson_completed` metric may exist. None are in marketing segments (test profile isn't subscribed).
+
+## 7e. WSWr2C verification — 2026-07-22 (Claude Code, read-only via the Klaviyo API)
+
+Inspected the saved flow to establish whether the missing trigger filter forces a **rebuild** (§7d warns
+triggers can't be changed after save). **It does not — the trigger and the email are both correct. The filter
+is the only gap.** Saved state:
+
+```
+WSWr2C  "Court feedback (throttled)"   status: draft
+  trigger:  metric Snn8dN  ->  booking_confirmed, integration {key:"api", name:"API"}
+  filter:   null                        <-- the ONLY problem
+  re-entry: 21 days
+  action:   send-email WYhFpQ -> template RjGvJ4 ("Court feedback · how's the club"), smart_sending on
+```
+
+- ✅ **Trigger metric is the REAL one.** `Snn8dN` is API-sourced `booking_confirmed` — *not* the
+  `Klaviyo MCP Server` test source that blocks C1 (§7d). The metric-source trap does not apply here.
+- ✅ **Email content is right.** The flow sends `RjGvJ4`, not `VwcB8a` as §7d records. Klaviyo **clones a
+  template when you attach it to a flow message**, so `VwcB8a` is the standalone original and `RjGvJ4` is the
+  flow's live copy. Editing `VwcB8a` will NOT change what this flow sends — edit `RjGvJ4`.
+- ⚠️ **`trigger_filter` is `null`** → as saved, this fires on **every** `booking_confirmed`, i.e. lesson and
+  class bookers get a *court*-experience survey. This is why the status board keeps it at ◐, not ✅.
+
+**The fix (UI only — flows are read-only over the API; there is no `update_flow`):**
+`https://www.klaviyo.com/flow/WSWr2C/edit` → trigger card → **Trigger Filters** → *Add filter* →
+`booking_type` **equals** `court` → Save. Then re-read the flow and confirm `trigger_filter` is no longer
+`null` **before** flipping it Live — same verify-before-trusting rule §7d landed on.
 
 ## 8. Measurement
 - **Conversion:** `membership_started` metric + the `utm_campaign` in GA4. The trial flow's success =
@@ -358,7 +385,7 @@ Every REAL NextPoint app event flows through the **"API"** integration (`booking
 | Welcome / activation flow (A2) | Posts | ✅ built (Draft → flip Live) · trigger = Added to `NextPoint Members` → Welcome 1 (immediate) → wait 2d → Welcome 2 |
 | Court→membership "maths" (B1) | Posts | ✅ built (Draft → flip Live) · flow `Rrs48q` · trigger = Added to segment `SZ3UFX` → wait 1d → email `VZ8DiM` |
 | Google review campaign (F3) | Posts | ✅ built (Draft) · campaign `01KXV8ZYTDXHJWYGMZDKMM0QTP` → audience = Engaged `YcX4pB` · Tomo sends |
-| Court-experience feedback | Posts | ◐ built (Draft) · flow `WSWr2C` → email `VwcB8a`, re-entry 21d · ⚠️ **BLOCKER before Live: add the trigger filter `booking_type` = `court`** — as saved it fires on lesson + class bookings too |
+| Court-experience feedback | Posts | ◐ built (Draft) · flow `WSWr2C` → email `RjGvJ4`, re-entry 21d · ⚠️ **ONE BLOCKER before Live: add the trigger filter `booking_type` = `court`** — as saved it fires on lesson + class bookings too. Trigger + email VERIFIED correct (§7e) — filter is the only gap; **no rebuild needed** |
 | Cross-sell court→lesson | Posts | ✅ built (Draft) · flow `Rhsfy6` · trigger = Added to segment `Rv24hw` (court players, no lesson) → email `VJ5mZP` |
 | Guardrails (freq cap, sunset, smart send) | Posts | ✅ Smart Sending on + Sunset segment `XUkJFa` built · ⚠️ freq-cap = manual settings check (no API) |
 
