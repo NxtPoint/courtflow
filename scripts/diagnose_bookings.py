@@ -230,6 +230,36 @@ def main():
             ["enrolment_id", "starts_at", "class_name", "service", "allowed", "used", "order_status", "member"]))
 
         _hdr("CONTEXT — how each service is currently configured")
+        # WHY THIS ONE MATTERS: the payment gate resolves a court's service via
+        # resource.product_id, falling back to the club's DEFAULT court product. If some courts have
+        # a NULL product_id they resolve to a default product that may have NO payment_modes — and
+        # payment_modes_for returns None for an empty CSV, which SKIPS the gate entirely. Listing
+        # UNRESTRICTED products (and which courts point where) is what distinguishes that from a
+        # genuine bypass. Duplicate service names with different rules are the same trap.
+        _rows(s, "ALL bookable services, including UNRESTRICTED ones (NULL = gate is skipped)", """
+            SELECT pr.kind, pr.name AS service,
+                   COALESCE(NULLIF(pr.payment_modes, ''), '(none — any club mode)') AS allowed,
+                   pr.active,
+                   COALESCE(c.display_name, 'shared / no coach') AS coach,
+                   (SELECT count(*) FROM diary.resource r
+                     WHERE r.club_id = pr.club_id AND r.product_id = pr.id) AS courts_pointing_here
+            FROM billing.product pr
+            LEFT JOIN iam.coach_profile c ON c.user_id = pr.coach_user_id AND c.club_id = pr.club_id
+            WHERE pr.kind IN ('court_booking', 'lesson', 'class')
+            ORDER BY pr.kind, pr.name, pr.created_at
+        """, {}, "no bookable services configured",
+            ["kind", "service", "allowed", "active", "coach", "courts_pointing_here"])
+
+        _rows(s, "COURTS and the service each one resolves to (NULL product_id = falls back)", """
+            SELECT r.name AS court, r.is_active,
+                   COALESCE(pr.name, '(NULL — falls back to the club default court product)') AS resolves_to,
+                   COALESCE(NULLIF(pr.payment_modes, ''), '(none — gate skipped)') AS that_service_allows
+            FROM diary.resource r
+            LEFT JOIN billing.product pr ON pr.id = r.product_id
+            WHERE r.kind = 'court'
+            ORDER BY r.rank, r.name
+        """, {}, "no courts configured", ["court", "is_active", "resolves_to", "that_service_allows"])
+
         _rows(s, "services with a payment-mode restriction", """
             SELECT pr.kind, pr.name AS service, pr.payment_modes AS allowed,
                    COALESCE(c.display_name, 'shared / no coach') AS coach
