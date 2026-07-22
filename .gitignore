@@ -11,3 +11,8 @@ node_modules/
 *.egg-info/
 .pytest_cache/
 migration/url_inventory.csv
+
+# Local-only ad-ops notes (NOT platform code). The LEADING SLASH anchors this to the repo root on
+# purpose: a bare `marketing/` would also match the tracked public site at frontend/marketing/, so a
+# new page added there would be silently ignored. Does not affect marketing_crm/ or marketing_digest/.
+/marketing/

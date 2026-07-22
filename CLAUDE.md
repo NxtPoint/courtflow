@@ -499,8 +499,11 @@ member by email on the first authenticated hit.
   (no at-court fallback for a restricted pack — refuse if unpayable); `diary.classes.enrol` gates the mode
   (and never lets a member conjure a free seat via `membership_covered`/`free`). Don't regress these to a
   kind-level check.
-- **`marketing/` (untracked) is NOT platform code** — ad-ops notes. Don't commit it with platform changes
-  (`git add <paths>`, NOT `git add -A`); don't confuse it with `frontend/marketing/` or `marketing_crm/`.
+- **`marketing/` is NOT platform code** — local-only ad-ops notes, **gitignored as `/marketing/` since
+  2026-07-22** (previously untracked-but-committable, one `git add -A` away from being published). The
+  **leading slash is load-bearing**: a bare `marketing/` would also match the tracked public site at
+  `frontend/marketing/`, silently ignoring any new page added there. Don't confuse the three: `marketing/`
+  (ad-ops, ignored) · `frontend/marketing/` (the public site) · `marketing_crm/` (the CRM lane).
 - **`UI.clear(node)` must drop the `cf-loading` class** (it does, in `frontend/js/ui.js`) — `.cf-loading` paints
   a CSS `::before` spinner; emptying children without removing the class leaves the spinner over new content.
   Render results with `UI.clear(box)` before appending.

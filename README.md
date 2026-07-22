@@ -112,9 +112,9 @@ where they differ from `docs/specs/`, the specs reflect reality.
 | `10-reuse-from-1050-port-map.md` | File-by-file port map: Ten-Fifty5 source → new module. |
 | `11-build-readiness-and-decisions.md` | Locked decisions + the validated reuse map. |
 
-> **`marketing/` is local-only ad-ops notes** — untracked, and *not* platform code. Don't confuse it with
-> `frontend/marketing/` (the public site) or `marketing_crm/` (the CRM lane), and never `git add -A` it
-> alongside platform changes.
+> **`marketing/` is local-only ad-ops notes** — *not* platform code, and **gitignored** so it can't be
+> committed by accident. Don't confuse it with `frontend/marketing/` (the public site) or `marketing_crm/`
+> (the CRM lane).
 
 ---
 
