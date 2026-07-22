@@ -184,6 +184,29 @@ operating guide; **this folder is the detail.**
 > month-end: `scripts/reconcile_coach_commission` (every paid coaching line has its coach split — should read
 > CLEAN) and `scripts/diagnose_coach_packs` (where each pack lands in coach earnings, sale-based). **Current
 > gate baseline: `python -m scripts.test_all` → booking 180 / billing 311 / statement 47.**
+>
+> **2026-07-18/22 — LIFECYCLE EMAIL, PROMOTIONS, AND THE ANALYTICS RETHINK.** Three sprints landed on top
+> of the close-out. **(1) The Klaviyo programme's code side is done** ([KLAVIYO-MASTER-PLAN.md](KLAVIYO-MASTER-PLAN.md)):
+> a gated **`/feedback`** review engine (a signed token IS the auth — no login; a happy score routes to the
+> Google `g.page` review link, an unhappy one to a private form, both writing `core.nps_response`), a
+> **re-permission opt-in** flow at `/subscribe` for the ~500 non-consented members (consent recorded in OUR
+> DB first, then fire-and-forget to Klaviyo), `on_trial` flipped false on conversion, plus the
+> `booking_reminder` and `pack_low` triggers. **(2) The [Promotions Engine](PROMOTIONS-ENGINE.md) is
+> feature-complete** — `percent_off` / `amount_off` / `bonus_period` (membership 3+1) / `bonus_units` (pack
+> "buy 10 get 12"), shared **and** unique per-recipient codes, all redeeming through `discount_order` so a
+> promotion is never a second debt store. **(3) The analytics/reporting rethink**
+> ([ANALYTICS-PLAN.md](ANALYTICS-PLAN.md)) shipped Phases A/B/C: membership growth + trial funnel + PAYG
+> (A), **Google GA4 + Search Console in the dashboard** (B) — the marketing-digest Action PUSHES a daily
+> snapshot to `POST /api/cron/analytics-ingest` → **`core.web_daily`**, because the org blocks SA-key
+> downloads so the live app can never call Google itself — and cohorts / conversions / cross-check / CSV +
+> the feedback-and-review funnel (C). Two measurement bugs fixed: court utilisation now computes in club-local
+> time (SAST, not UTC), and **public vs members-area traffic is AUTH-based, not path-based** (the portal is an
+> SPA, so a signed-in member's route changes were swamping "website traffic"; public panels now filter
+> `metadata.authed != 'true'`). **Also: every recurring job now fires from GitHub Actions, never a Render
+> cron** — `reminders.yml` (hourly) and `membership-refill.yml` (daily) joined `month-end.yml`,
+> `marketing-digest.yml` and `keep-warm.yml`; the four `render.yaml` crons stay commented out. **Gate baseline
+> unchanged (booking 180 / billing 311 / statement 47) — note the Promotions engine has no harness
+> assertions of its own.**
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,

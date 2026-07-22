@@ -11,6 +11,9 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
 - **Boot/schema runner:** `python -m db` (idempotent — run **twice**, second run must be a no-op).
 - **Source of truth for current state:** start at **`docs/specs/README.md`** (not the `docs/00→12` design docs).
   Where the specs and the original design docs differ, `docs/specs/` reflects as-built reality.
+- **Ignore the root `README.md` for build state.** It calls itself "the master index", but its status table
+  and session log are frozen in the planning/cutover era — it is a HISTORICAL document. This file +
+  `docs/specs/` are current; where they disagree with `README.md`, they win.
 - **Iron rule:** every domain row is `club_id`-scoped — **never query domain data without it.** (Phase 8
   adds RLS; until then this is a discipline, not a guardrail.)
 
@@ -47,6 +50,10 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      pack/wallet (behavioural GUARD — reconcile must call activate_purchase, not just mark paid)**.
    - `test_statement_reconciliation` (47) — no double-count, pay-all-once, part-settle, reclaim,
      membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
+   - **Known coverage gap: the Promotions engine has NO harness assertions.** The baseline was green across
+     Phases 1/2a/2b only because promo redemption delegates to `discount_order` (which IS covered) — nothing
+     exercises eligibility, caps, unique codes, or the `bonus_period`/`bonus_units` grant paths. Verify promo
+     changes by hand, and prefer adding billing-harness scenarios over trusting the count.
 
 ## Deployment (LIVE on Render)
 - Repo `NxtPoint/courtflow`; Render auto-deploys `master`. Two web services + a Postgres DB, **all
@@ -67,7 +74,24 @@ model: the **diary**. Same shape as 1050, fewer services (no ML/GPU/video).
 (host-switched marketing site **and** the portal SPAs) + **four cron services** (reminders / capacity-sweep /
 monthly-invoice / membership-refill), each running `python -m crons.trigger <job>`. The trigger is a thin
 dispatcher — no business logic, no DB — it POSTs once to `/api/cron/<job>` (guarded by `OPS_KEY`); lanes own
-the handlers. **All four crons are currently commented out** — see the capacity-sweep note under Gotchas.
+the handlers. **All four `render.yaml` crons are commented out and stay that way** — every recurring job
+now fires from GitHub Actions instead (below).
+
+**Scheduled jobs — ALL of them are GitHub Actions, never Render crons.** The pattern: a free CI job POSTs to
+an `OPS_KEY`-guarded `/api/cron/<job>` inside the keep-warm window (so the API is awake). Each **no-ops
+without the `OPS_KEY` repo secret rather than failing the run**, and each handler is **idempotent**, so a
+re-run or a doubled schedule is safe. When adding a recurring job, add a workflow here — do NOT uncomment a
+`render.yaml` cron.
+
+| Workflow | Cadence | Fires |
+|---|---|---|
+| `keep-warm.yml` | every 10 min, 07:00–22:00 SAST | pings both services (free tier sleeps after ~15 min) |
+| `reminders.yml` | hourly, 07:00–22:00 SAST | `diary.crons.run_reminders` — T-24h/T-2h booking + class reminders, deduped via `diary.reminder_log`, emits `booking_reminder` (LIVE via SES; a no-show reducer) |
+| `membership-refill.yml` | daily 07:30 SAST | membership-lapse sweep — `current_period_end` passed → `expired` + emits `membership_lapsed` (drives the Klaviyo E2 win-back) |
+| `month-end.yml` | monthly, the **25th** 08:00 SAST | `billing.commission.run_month_end` — coach arrears + rent, then one consolidated statement invoice + pay-link per client owing |
+| `marketing-digest.yml` | daily 07:00 SAST | cross-brand GA4/GSC organic report + the `core.web_daily` ingest push (see the analytics section) |
+
+**Capacity-sweep needs no job at all** — abandoned holds are released by lazy expiry (see Gotchas).
 
 **One Postgres DB, five schemas** (idempotent boot DDL, no migration framework; `db.py` runs `BOOT_MODULES`):
 - `club.*` — tenants/config/branding/location/policies
@@ -94,7 +118,7 @@ Touch only your lane; coordinate on shared interface files (`contracts/events.md
 | **Foundation** | `app.py`, `wsgi.py`, `db.py`, `render.yaml`, `auth/`, `iam/`, `club/`, `core/`, `scripts/`, `crons/` | Boot/schema runner, Clerk JWKS + club-scoped `Principal`, seed/provision. |
 | **Diary** | `diary/` | Court/lesson/class lifecycle, GiST constraint, availability, classes, recurrence, book-on-behalf, `/api/diary/*`. |
 | **Billing** | `billing/`, `yoco_billing/` | orders/ledger, `apply_payment_event` (idempotent), membership/bundles/commission/refunds/statement engines, Yoco adapter, `/api/billing/*`. |
-| **CRM** | `core/`, `marketing_crm/`, `offline_conversions/` | `emit()`→`core.usage_event`, notifications (in-app inbox + transactional email), Klaviyo sync, consent. **Identity bridge** `core.repositories.persons.link_person_for_user` (iam.user ↔ `core.person.iam_user_id`, adopt-or-create by email; 911 backfilled) — feeds Client-360. **gclid capture** → `core.acquisition` + the **Google Ads offline-conversion feed** (`offline_conversions/`). |
+| **CRM** | `core/`, `marketing_crm/`, `offline_conversions/` | `emit()`→`core.usage_event`, notifications (in-app inbox + transactional email), Klaviyo sync, consent. **Identity bridge** `core.repositories.persons.link_person_for_user` (iam.user ↔ `core.person.iam_user_id`, adopt-or-create by email; 911 backfilled) — feeds Client-360. **gclid capture** → `core.acquisition` + the **Google Ads offline-conversion feed** (`offline_conversions/`). Two **public, token-guarded** surfaces (no login — the SIGNED token IS the authorization and names the recipient + club, so club scope never comes from the body): `marketing_crm/feedback/` → `GET/POST /api/feedback` (the gated NPS→Google-review funnel; page `frontend/app/feedback.html`, writes `core.nps_response`, routes a happy score to the `g.page` review link and an unhappy one to a private form) and `marketing_crm/repermission/` → `GET/POST /api/subscribe` (re-permission opt-in for the non-consented members; records consent in OUR DB first, THEN fire-and-forget subscribes to Klaviyo). |
 | **Client 360** | `client360/` | The ONE cross-lane read-model — `get_client_360(scope, coach_user_id, month)` composes existing lane readers into a single client payload (identity/memberships/packages/statement/payments/bookings/refunds/coaching/activity + `month_events` + the reconciling `statement_fold` + `can{}`; booking rows carry service + pay-status + their own head's amount). Read-only, reuse-first. **`scope='coach'` is a STRICT SERVER-SIDE filter** (the coach fork was retired — coach = a filter, not a fork): it returns ONLY the coach's own events + own coaching fold + own packages + coaching; membership/card-payments/full-statement/dependents/refunds/PII/activity are OMITTED server-side (never sent to a coach's browser). **Each block runs in a SAVEPOINT (`_guard`→`begin_nested`), NEVER a bare `session.rollback()`** — the composer runs inside the caller's `session_scope`, so a full rollback would discard the caller's writes. `admin.get_person` delegates here; coach `/clients/<id>/360` + client `/me/360` call it. **The single source of truth every client view is a view off**, and the money everywhere is the ONE reconciling fold: **Billed − Discount − Written-off = Invoiced = Paid + Outstanding** (`CRMUI.statementFold`/`moneySummary`, coach + admin + client all reconcile). |
 | **Admin** | `admin/`, `services/`, `insights/` | Owner write APIs + onboarding, per-service commission editor, financial cockpit, person-360, the insights composer, **general order discount + pack-wallet adjust/expire**. |
 | **Coach / Client** | `coach/`, `me/` | Coach self-service (onboarding, approval queue, clients-360, statement, cockpit) + client self-service (profile, dependents, statement, refund requests). |
@@ -189,6 +213,22 @@ defaults a pack-holder to "Covered by your pack"). Don't regress the draw to fir
   a booking — `membership_covered` is downgraded to at-court (classes are court-only-free), `free` is
   admin-only, and the money mode must be club-enabled AND offered by that class's service. Members/guests
   are bound to these; admins/coaches override. (Membership checkout already scoped to its own modes.)
+
+**Promotions — specials with promo codes, redeemed at checkout (`billing/promotions.py`, LIVE).** A promotion
+is an OFFER + a redeemable CODE (`billing.promotion` + `promotion_redemption` + `promotion_code`). **The
+invariant, same shape as the invoice rule: redeeming DELEGATES to `billing.statement.discount_order` — it
+NEVER invents a second debt store** (one debt = one order), so the pro-rata multi-line split, the
+coach-commission lockstep and the "was → now" audit all come for free. Four kinds, all live:
+`percent_off` · `amount_off` · **`bonus_period`** (membership "3 months → +1 free" — the bonus is just extra
+`months` on the existing period grant) · **`bonus_units`** (pack "buy a 10-pack, get 12" — reuses
+`adjust_wallet`). **A bonus is NOT a discount** — the order price is untouched and checkout says "N free
+months/sessions added". Both bonus kinds grant on BOTH paths (online → at activation/first wallet grant;
+offline → on the fresh redemption) and are **guarded against double-granting on a webhook replay** — don't
+regress that. Codes are either one shared `promotion.code` or a batch of **unique per-recipient codes**
+(`billing.promotion_code`, single-use, unguessable — minted for a Klaviyo campaign); lookup checks shared
+first, then per-recipient. Eligibility = scope/window/caps/min-spend/first-time/stacking; a refund or void
+reverses the redemption. Admin UI: **Setup → Promotions & offers** (+ "Unique codes →"). Emits
+`promo_redeemed`. Spec: `docs/specs/PROMOTIONS-ENGINE.md`.
 
 **Online payments (Yoco) — wired & verified.** `yoco_billing/` is a pure adapter behind
 `register_gateway`/`get_gateway` (`billing/` core untouched). An `online` booking creates an `awaiting_payment`
@@ -314,6 +354,19 @@ every route change — which used to swamp the "website traffic" numbers. Every 
 `analytics/repositories.py` now filters `metadata.authed != 'true'` (marketing traffic = PUBLIC visitors only)
 and `members_area()` reports signed-in in-app activity separately; the KPI headline is **Unique visitors**
 (people), "Website visits" was relabelled **Page views**.
+
+**The `insights/` read-layer is six admin-gated endpoints** (`/api/insights/…`, all `club_admin`+, club_id
+FROM THE PRINCIPAL never the body, every repo read `_guard`-wrapped): `overview` · `bookings-by-day` ·
+`sales-by-day` · `court-utilisation` · `trial-cohorts` (trial→paid by start-month cohort, 14d/30d/ever) ·
+`web-metrics`.
+
+**Google data reaches the dashboard by CI PUSH, not an API call — this is the seam to understand.** The org
+security policy blocks downloadable service-account keys, so **the live app can never call GA4/GSC**; only
+the keyless-WIF `marketing-digest` GitHub Action can. It therefore POSTs the day's structured metrics to
+`POST /api/cron/analytics-ingest` (`OPS_KEY`-guarded, in `diary/routes.py`) → **`core.web_daily`** (the
+snapshot store, `core/schema.py`) → `insights.web_metrics` renders it. **No Google credentials ever touch
+Render.** Consequence: if the Acquisition panel goes stale, suspect the Action or the ingest, not the app —
+and never "fix" it by adding a Google API client to the API service.
 
 ## Growth & acquisition measurement (Google Ads / GA4 / gclid) — LIVE
 Know which ad clicks become paying members, and feed that back to Google so bidding chases buyers, not clickers.
