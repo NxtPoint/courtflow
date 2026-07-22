@@ -366,6 +366,63 @@ def sc_expired_hold_voids_order(s, fx):
     check("a LIVE order is never voided by the sweep", ost2 not in ("void", "written_off"), str(ost2))
 
 
+def sc_booking_type_must_match_resource(s, fx):
+    """`booking_type` came off the request body, and the resource-kind check lived only inside the
+    LESSON branch while the court-service guard lived only inside the COURT branch. 'class' is legal
+    in the schema CHECK (that is how a class GiST-reserves its court), so POSTing a COURT resource as
+    a 'class' skipped the court block entirely — cheapest class rate, class payment rules (usually
+    none), a class pack drawn for a court, and worst of all a court genuinely GiST-blocked but
+    INVISIBLE to staff, because the master feed excludes booking_type='class' and there is no
+    class_session behind a crafted row."""
+    print("\n# booking_type must match the resource, and 'class' is not bookable via this route")
+    m = fx.members[0]
+
+    ghost = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                             booking_type="class", resource_id=fx.courts[0],
+                             starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                             settlement_mode="at_court")
+    check("a COURT posted as a 'class' is refused",
+          ghost.get("error") == "BOOKING_TYPE_NOT_ALLOWED", str(ghost))
+    blocked = s.execute(text("SELECT count(*) FROM diary.booking WHERE club_id=:c "
+                             "AND resource_id=:r AND booking_type='class'"),
+                        {"c": fx.club_id, "r": fx.courts[0]}).scalar()
+    check("...and no invisible court hold was created", blocked == 0, str(blocked))
+
+    # A COACH resource booked as a 'court', and a COURT booked as a 'lesson' — both nonsense.
+    check("a COACH resource booked as a 'court' is refused",
+          B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                           booking_type="court", resource_id=fx.coach_res,
+                           starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                           settlement_mode="at_court").get("error") == "RESOURCE_KIND_MISMATCH")
+    check("a COURT resource booked as a 'lesson' is refused",
+          B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                           booking_type="lesson", resource_id=fx.courts[0],
+                           coach_user_id=fx.coach_uid,
+                           starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                           settlement_mode="at_court").get("error") == "RESOURCE_KIND_MISMATCH")
+
+    # The legitimate paths are untouched.
+    check("a real COURT booking still works",
+          B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                           booking_type="court", resource_id=fx.courts[0],
+                           starts_at=utc_iso(at(fx, 11)), ends_at=utc_iso(at(fx, 12)),
+                           settlement_mode="at_court").get("ok") is True)
+    check("a real LESSON booking still works",
+          B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                           booking_type="lesson", resource_id=fx.coach_res,
+                           coach_user_id=fx.coach_uid,
+                           starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 14)),
+                           settlement_mode="at_court").get("ok") is True)
+    # And a real CLASS still reserves its court — that path inserts directly, never via this route.
+    C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                        dates=[fx.target.isoformat()], start_time="16:00",
+                        duration_minutes=60, capacity=4)
+    sess = s.execute(text("SELECT count(*) FROM diary.class_session WHERE club_id=:c "
+                          "AND resource_id=:r AND starts_at=:sa"),
+                     {"c": fx.club_id, "r": fx.class_res, "sa": at(fx, 16)}).scalar()
+    check("REAL class scheduling is unaffected (it never used this route)", sess == 1, str(sess))
+
+
 def sc_posted_service_must_be_real(s, fx):
     """`product_id` arrives straight off the request body and was validated ONLY on the court branch.
     For a LESSON it then drove the payment gate, the price guard AND the order price — and
@@ -2061,6 +2118,7 @@ SCENARIOS = [
     sc_court_reschedule,
     sc_reschedule_court_move,
     sc_expired_hold_voids_order,
+    sc_booking_type_must_match_resource,
     sc_posted_service_must_be_real,
     sc_gated_lesson_bills_the_booked_service,
     sc_member_cannot_bypass_online_only,

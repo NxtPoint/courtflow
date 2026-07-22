@@ -22,11 +22,11 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 256 / billing 417 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 263 / billing 417 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   - `test_booking_scenarios` (256) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   - `test_booking_scenarios` (263) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
      waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused,
@@ -582,6 +582,15 @@ member by email on the first authenticated hit.
 - **Never let an agent change DNS.** The Wix→Render SEO cutover is supervised by Tomo.
 - **The booking API returns `{booking:{order_id,status}, checkout}`** — read `res.booking.order_id`, NOT
   `res.order_id` (that bug silently confirmed online bookings without redirecting).
+- **`booking_type` must match the resource, and `'class'` is NOT bookable via `/api/diary/bookings`**
+  (`BOOKING_TYPE_NOT_ALLOWED` / `RESOURCE_KIND_MISMATCH`). The kind check used to live only inside the
+  lesson branch and the court-service guard only inside the court branch, while `'class'` is legal in the
+  schema CHECK (that's how a class GiST-reserves its court) — so POSTing a COURT as a `'class'` skipped
+  the court block entirely: cheapest class rate, class payment rules (usually none), a class pack drawn
+  for a court, and **a court GiST-blocked but INVISIBLE to staff** (the master feed excludes
+  `booking_type='class'` and a crafted row has no `class_session` behind it) — a phantom hold nobody could
+  see or cancel. A real class court hold is inserted by `diary.classes._reserve_court_for_class`, and
+  `create_booking` has exactly ONE caller (the route). Guarded by `sc_booking_type_must_match_resource`.
 - **A posted `product_id` is VALIDATED before anything uses it** (`SERVICE_NOT_VALID`): it must be an
   ACTIVE product of this club whose `kind` matches the booking type, and for a lesson/class either shared
   (NULL coach) or the RESOLVED coach's own. It arrives off the request body and used to be checked only on

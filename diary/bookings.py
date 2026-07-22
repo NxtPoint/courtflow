@@ -596,6 +596,30 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     if not res or not res["is_active"]:
         return _err("RESOURCE_NOT_FOUND", 404)
 
+    # BOOKING TYPE MUST MATCH THE RESOURCE, AND 'class' IS NOT BOOKABLE HERE.
+    #
+    # `booking_type` comes off the request body. The resource-kind check used to live only inside the
+    # lesson branch, and the court-service resolution + COURT_NOT_IN_SERVICE guard only inside the
+    # court branch — while 'class' is legal in the schema CHECK (that is how a class GiST-reserves its
+    # court). So POSTing a COURT resource as booking_type='class' skipped the court block entirely:
+    # the payment gate resolved the club's OLDEST class product (usually no payment_modes → gate
+    # skipped) and the price resolved to the cheapest class row, so a 120-min hard court billed R120
+    # instead of R280, pay-at-court, on a service that may be card-only — and a class PACK holder
+    # drew it for a court.
+    #
+    # Worse than the money: diary/routes.py's staff master feed EXCLUDES booking_type='class' (a class
+    # is rendered from its class_session), and a crafted row has no class_session behind it. The court
+    # was genuinely GiST-blocked but INVISIBLE to the club — a phantom hold nobody could see or
+    # cancel. A real class court hold is inserted by diary.classes._reserve_court_for_class, never by
+    # a client POST, and create_booking has exactly one caller (the route), so refusing it here is safe.
+    if booking_type not in ("court", "lesson"):
+        return _err("BOOKING_TYPE_NOT_ALLOWED", 422,
+                    message="only a court or lesson can be booked here")
+    _want_res_kind = "coach" if booking_type == "lesson" else "court"
+    if res["kind"] != _want_res_kind:
+        return _err("RESOURCE_KIND_MISMATCH", 422,
+                    message="that resource can't be booked as a " + booking_type)
+
     # THE POSTED SERVICE MUST BE A REAL SERVICE OF THIS KIND. `product_id` arrives straight off the
     # request body (diary/routes.py) and was validated ONLY on the court branch below. For a LESSON or
     # CLASS it then drove all three of: the per-service payment gate, the PRICE_NOT_CONFIGURED probe,
