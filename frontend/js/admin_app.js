@@ -228,11 +228,15 @@
     wrap.appendChild(focusCard({ title: "People needing attention", to: "#/people", cta: "View people ›", body: pBody }));
 
     // 4) Approvals / decisions
+    // "Nothing waiting" must mean NOTHING IS WAITING — never "the read failed". A silent zero here
+    // is a false all-clear on somebody's money, and it looks identical to the real thing.
     var nRef = ap.refund_requests_pending || 0;
-    wrap.appendChild(focusCard({ title: "To approve / decide", to: "#/money", cta: "Go to approvals ›", body: [
-      nRef ? el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/money"); } }, [
+    var refErr = ap.refund_requests_error === true;
+    wrap.appendChild(focusCard({ title: "To approve / decide", to: "#/money/approvals", cta: "Go to requests ›", body: [
+      refErr ? el("div", { class: "cf-empty", text: "Couldn't check refund requests — open Money → Refund requests." })
+      : nRef ? el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/money/approvals"); } }, [
         el("span", { class: "cf-chip held", text: nRef }),
-        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: "Refund request" + (nRef === 1 ? "" : "s") + " awaiting you" }), el("div", { class: "cf-item-s", text: "Approve or decline in Money" })]),
+        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: "Refund request" + (nRef === 1 ? "" : "s") + " awaiting you" }), el("div", { class: "cf-item-s", text: "Tap to open the transaction and decide" })]),
         el("span", { class: "cf-muted", text: "›" }),
       ]) : el("div", { class: "cf-empty", text: "Nothing waiting for a decision. 🎉" }),
     ] }));
@@ -711,7 +715,7 @@
     ["sales", "Sales by day", "Daily takings incl. Yoco reversals — net income"],
     ["revenue", "Club earnings", "Courts + memberships + commission from coaches → coach → client → transaction"],
     ["bookings", "Bookings by day", "Every booking — client, service and coach"],
-    ["approvals", "Approvals", "Refund requests awaiting your decision"],
+    ["approvals", "Refund requests", "Members asking for money back — opens the transaction to decide"],
     ["activity", "Club activity", "Every payment, refund and adjustment"],
   ];
   function clubCur() { return (CLUB && CLUB.currency_code) || "ZAR"; }
@@ -1138,20 +1142,25 @@
   function dayLabel(iso) { try { return new Date(iso + "T12:00:00").toLocaleDateString("en-ZA", { weekday: "short", day: "numeric", month: "short" }); } catch (e) { return iso; } }
   async function moneyApprovals() {
     loading();
-    var reqs = [];
+    var reqs = null;
     try { reqs = (await window.AdminAPI.refundRequests({ status: "pending" })).requests || []; } catch (e) {}
     var cur = clubCur();
-    var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Approvals" })]);
-    // Shared CRMUI.lineItems — the same refund-queue widget the coach money uses.
+    var wrap = el("div", {}, [backBar("Money", "#/money"), el("h1", { style: "margin:0 0 12px", text: "Refund requests" })]);
+    // A FAILED read must never render as "nothing to decide" — that is a false all-clear on money.
+    if (reqs === null) {
+      wrap.appendChild(card([el("div", { class: "cf-empty", text: "Couldn't load refund requests. Reload to try again." })]));
+      set(wrap); return;
+    }
+    // THE QUEUE IS AN INBOX, NOT A SECOND PLACE THAT MOVES MONEY. Deciding used to happen here
+    // through window.prompt/confirm, a surface with no order context, no payment history and no
+    // audit trail — so when the gateway refused, there was nowhere to go and nothing to see. Each
+    // row now opens the transaction record, which already owns every money action for an order.
     wrap.appendChild(card([window.CRMUI.lineItems(reqs.map(function (r) { return Object.assign({}, r, { gross_minor: (r.amount_minor != null ? r.amount_minor : r.order_amount_minor) }); }), {
       currency: cur,
       empty: "Nothing waiting for a decision. 🎉",
       label: function (it) { return it.requester_name || "A member"; },
-      sub: function (it) { return [it.item_description || "Order", it.reason ? "“" + it.reason + "”" : ""].filter(Boolean).join(" · "); },
-      actions: [
-        { label: "Approve", tone: "primary", onClick: function (it) { decideRefund(it, "approve"); } },
-        { label: "Decline", tone: "danger", onClick: function (it) { decideRefund(it, "decline"); } },
-      ],
+      sub: function (it) { return [it.item_description || "Order", it.reason ? "“" + it.reason + "”" : "", "Tap to review"].filter(Boolean).join(" · "); },
+      onClick: function (it) { go("#/txn/" + it.order_id); },
     })]));
     set(wrap);
   }
@@ -1165,14 +1174,14 @@
     set(wrap);
   }
 
-  async function decideRefund(rq, action) {
+  async function decideRefund(rq, action, then) {
     var isA = action === "approve";
     var note = window.prompt(isA ? "Approve & refund this via Yoco? Optional note:" : "Decline this request? Reason (shown to the member):", "");
     if (note === null) return;
     try {
       if (isA) { var alsoCancel = window.confirm("Also CANCEL the booking + free the slot?\n\nOK = refund + cancel.   Cancel = refund only."); await window.AdminAPI.approveRefundRequest(rq.id, { note: note, cancel_booking: alsoCancel }); }
       else await window.AdminAPI.declineRefundRequest(rq.id, { note: note });
-      UI.toast(isA ? "Approved." : "Declined.", "info"); moneyApprovals();
+      UI.toast(isA ? "Approved." : "Declined.", "info"); (then || moneyApprovals)();
     } catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
@@ -1455,9 +1464,40 @@
   // SAME TransactionDetail widget (money card + audit log + actions), fed by order_story. This is where
   // a package/membership event drills to now (instead of a read-only receipt), so it can be voided/
   // cancelled/refunded/marked-paid with the full audit trail beneath it.
-  function renderTxn(orderId) {
+  // A pending refund REQUEST is shown on the record it belongs to, so the decision is made where the
+  // money, the payment history and the audit trail already are. Approve runs the same gateway refund
+  // the "Refund" action does; Decline moves no money.
+  function refundRequestBanner(rq, orderId) {
+    var cur = clubCur();
+    var amt = (rq.amount_minor != null ? rq.amount_minor : rq.order_amount_minor);
+    return card([
+      el("div", { class: "cf-row", style: "gap:8px;align-items:center;margin-bottom:6px" }, [
+        el("span", { class: "cf-chip held", text: "Decision needed" }),
+        el("strong", { text: "Refund requested · " + money(amt, cur) }),
+      ]),
+      el("div", { class: "cf-muted", style: "font-size:.9rem", text:
+        [(rq.requester_name || rq.requester_email || "A member") + " asked for this back",
+         rq.reason ? "“" + rq.reason + "”" : ""].filter(Boolean).join(" · ") }),
+      el("div", { class: "cf-row", style: "gap:8px;margin-top:10px" }, [
+        el("button", { class: "cf-btn cf-btn-primary", type: "button", text: "Approve & refund",
+          onclick: function () { decideRefund(rq, "approve", function () { renderTxn(orderId); }); } }),
+        el("button", { class: "cf-btn cf-btn-danger", type: "button", text: "Decline",
+          onclick: function () { decideRefund(rq, "decline", function () { renderTxn(orderId); }); } }),
+      ]),
+    ]);
+  }
+
+  async function renderTxn(orderId) {
+    var pend = null;
+    try {
+      var rr = (await window.AdminAPI.refundRequests({ status: "pending" })).requests || [];
+      pend = rr.filter(function (r) { return String(r.order_id) === String(orderId); })[0] || null;
+    } catch (e) {}
     var host = el("div", {});
-    set(host);
+    var wrap = el("div", {});
+    if (pend) wrap.appendChild(refundRequestBanner(pend, orderId));
+    wrap.appendChild(host);
+    set(wrap);
     window.Widgets.TransactionDetail.mount(host, {
       role: "admin",
       scope: { id: orderId },

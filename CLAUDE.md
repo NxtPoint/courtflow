@@ -22,7 +22,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 263 / billing 432 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 263 / billing 439 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -51,7 +51,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      its service through `diary.resource.product_id` (the DURABLE link, set at create_class_type and
      boot-backfilled), never a name join; an orphaned class REFUSES with PRICE_NOT_CONFIGURED rather
      than billing another class's rate, and a retired price variation can never enrol at R0**.
-   - `test_billing_scenarios` (432) — settlement modes, commission, tokens, membership (offline + per-tier),
+   - `test_billing_scenarios` (439) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
      class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
@@ -292,6 +292,20 @@ boot re-seed can't reset it).
   fan-out — no booking confirm, no pack grant, no commission, no "payment succeeded" email — and returns
   `needs_attention='payment_on_closed_order'` for a human. Guarded by
   `sc_payment_cannot_reopen_a_closed_debt`.
+- **Refund REQUESTS are decided on the transaction record, not in a separate queue.** Money → **Refund
+  requests** is an INBOX: each row opens `#/txn/<order_id>`, where a `Decision needed` banner offers
+  Approve & refund / Decline beside the payment history and audit trail. Deciding used to happen in the
+  list itself via `window.prompt`/`confirm` — no order context, nowhere to go when the gateway refused.
+  Three fixes behind it: (a) `approve_refund_request` passed the member's REQUESTED figure to Yoco, so
+  the ordinary "give me all of it back" sent an explicit amount equal to the order total and Yoco
+  refused — while the transaction record's button (which sends **no** amount = full refund) worked
+  seconds later; anything that isn't a strict partial now resolves to a full refund. (b) A direct refund
+  now calls `refunds.resolve_pending_requests_for_order`, so the member's ask closes instead of nagging
+  forever for money already paid back. (c) The queue hid any request whose order was `void` — but **void
+  ≠ the money came back**, and `_mark_order_paid` deliberately leaves a succeeded charge on a void order;
+  `_PENDING_STILL_REFUNDABLE` keeps those visible, hiding only `refunded`/`written_off`. The home
+  approvals count no longer reports a FAILED read as `0` (`refund_requests_error`) — a false all-clear on
+  money is indistinguishable from the real thing. Guarded by `sc_refund_request_visibility`.
 - **Receipts:** `GET /api/billing/receipt/<order_id>` (online AND desk payments) → `frontend/app/receipt.html`
   (+ a professional PDF at `GET /api/billing/receipt/<order_id>/pdf`).
 

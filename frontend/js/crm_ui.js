@@ -115,7 +115,15 @@
         });
         kids.push(row);
       }
-      list.appendChild(el("div", { class: "cf-item" + (written ? " cf-item-off" : "") }, kids));
+      // opts.onClick makes the whole row a tap-through (config, not a fork). Used by the refund
+      // queue, which is an INBOX that routes to the transaction record rather than a second place
+      // that moves money.
+      var tappable = !written && typeof opts.onClick === "function";
+      if (tappable) kids.push(el("span", { class: "cf-muted", text: "›" }));
+      list.appendChild(el("div", {
+        class: "cf-item" + (written ? " cf-item-off" : "") + (tappable ? " cf-item-tap" : ""),
+        onclick: tappable ? function () { opts.onClick(it); } : null,
+      }, kids));
     });
     return list;
   }

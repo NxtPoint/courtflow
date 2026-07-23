@@ -242,6 +242,18 @@ def approve_refund_request(session, *, club_id, request_id, decided_by,
     # return the error and DO NOT mark the request refunded (it stays 'pending' — no UPDATE ran).
     from yoco_billing import execute_order_refund, RefundError
     amt = amount_minor if amount_minor is not None else req.get("amount_minor")
+    # A FULL refund must send NO amount — that is the path Yoco accepts reliably and the one the
+    # admin "Refund" button on the transaction record has always used. Approving used to pass the
+    # member's REQUESTED figure verbatim, so the ordinary case (they asked for all of it back) sent
+    # an explicit amount equal to the order total and Yoco refused it — while the very same refund
+    # went through from the transaction record seconds later. The request is a REQUEST, not an
+    # instruction to the gateway: anything that is not a strict partial resolves to a full refund.
+    _total = session.execute(
+        text('SELECT amount_minor FROM billing."order" WHERE id = :o'), {"o": str(req["order_id"])},
+    ).scalar()
+    _total = int(_total or 0)
+    if amt is None or int(amt) <= 0 or (_total and int(amt) >= _total):
+        amt = None
     try:
         execute_order_refund(session, order_id=req["order_id"], amount_minor=amt)
     except RefundError as e:
@@ -290,6 +302,22 @@ def decline_refund_request(session, *, club_id, request_id, decided_by, note=Non
 # admin: read-only queue (the thin admin follow-up; approve/decline is another lane)
 # ---------------------------------------------------------------------------
 
+# A pending request is MOOT only when there is genuinely nothing left to give back. It used to be
+# hidden whenever the order was refunded/void/written_off — but VOID DOES NOT MEAN THE MONEY CAME
+# BACK. cancel_booking voids unconditionally, so the single commonest refund story in the club —
+# member pays online, booking is cancelled, member asks for their money — voided the order and made
+# their request VANISH from the queue while the cash was still sitting with the club. The admin saw
+# "Nothing waiting for a decision" on a request that was the whole point of the queue.
+# So: still hide refunded (the money went back) and written_off (none was ever taken), but keep a
+# VOID order visible while it still holds a succeeded charge.
+_PENDING_STILL_REFUNDABLE = (
+    " AND o.status NOT IN ('refunded','written_off')"
+    " AND (o.status <> 'void' OR EXISTS ("
+    "        SELECT 1 FROM billing.payment p WHERE p.order_id = o.id"
+    "          AND p.direction = 'charge' AND p.status = 'succeeded'))"
+)
+
+
 def _list_requests_enriched(session, *, where, params) -> List[Dict[str, Any]]:
     """Shared reader: refund requests + order amount/currency + requester + routed-to coach name,
     most-recent first. `where`/`params` scope it (whole club for admin, one coach for the coach)."""
@@ -329,6 +357,29 @@ def _list_requests_enriched(session, *, where, params) -> List[Dict[str, Any]]:
     return out
 
 
+def resolve_pending_requests_for_order(session, *, order_id, decided_by=None,
+                                       note="Refunded from the transaction record") -> int:
+    """Close any PENDING request on an order that has just been refunded directly. Returns the count.
+
+    The queue is not the only way money goes back — the admin "Refund" action on the transaction
+    record is, in practice, the main one (it takes the proven full-refund path). But it knew nothing
+    about the request, so the member's ask stayed 'pending' forever: still open in every count, still
+    "awaiting your decision" on the home card, for a refund that had already been paid out. The admin
+    is then invited to approve it a second time. Resolving it here makes the decision surface
+    irrelevant — refund it wherever, the request closes either way."""
+    rows = session.execute(
+        text("UPDATE billing.refund_request "
+             "SET status = 'refunded', decided_by = COALESCE(:by, decided_by), "
+             "    decided_at = now(), note = COALESCE(note, :note), updated_at = now() "
+             "WHERE order_id = :o AND status = 'pending' RETURNING id"),
+        {"o": str(order_id), "by": str(decided_by) if decided_by else None, "note": note},
+    ).all()
+    if rows:
+        log.info("resolved %d pending refund request(s) for order=%s (refunded directly)",
+                 len(rows), order_id)
+    return len(rows)
+
+
 def list_refund_requests_admin(session, *, club_id, status=None) -> List[Dict[str, Any]]:
     """The club's refund-request queue for the admin view (whole club — the owner sees + can decide
     every dispute, coaching or not: oversight/override). Optionally filtered by status."""
@@ -337,10 +388,8 @@ def list_refund_requests_admin(session, *, club_id, status=None) -> List[Dict[st
     if status:
         where += " AND rr.status = :st"
         params["st"] = status
-        # A PENDING request on an already-resolved order (refunded/voided/written-off) is moot — the
-        # money is done. Hide it so it can't be "approved" into a 400 "already refunded".
         if status == "pending":
-            where += " AND o.status NOT IN ('refunded','void','written_off')"
+            where += _PENDING_STILL_REFUNDABLE
     return _list_requests_enriched(session, where=where, params=params)
 
 
@@ -352,6 +401,6 @@ def list_refund_requests_coach(session, *, club_id, coach_user_id, status=None) 
     if status:
         where += " AND rr.status = :st"
         params["st"] = status
-        if status == "pending":   # hide moot requests on already-resolved orders (see admin queue)
-            where += " AND o.status NOT IN ('refunded','void','written_off')"
+        if status == "pending":   # hide only genuinely moot requests (see _PENDING_STILL_REFUNDABLE)
+            where += _PENDING_STILL_REFUNDABLE
     return _list_requests_enriched(session, where=where, params=params)

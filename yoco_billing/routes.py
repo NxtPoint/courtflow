@@ -581,6 +581,17 @@ def yoco_refund():
             res = execute_order_refund(s, order_id=order_id, amount_minor=amount_in)
         except RefundError as e:
             return jsonify(error=e.code, message=e.message, detail=str(e)), e.status
+        # If the member had ASKED for this refund, their request is now answered. Without this it
+        # stayed 'pending' forever — still counted on the home card, still "awaiting your decision"
+        # for money already paid back, and inviting the admin to approve it a second time. Refund
+        # from wherever you like; the request closes either way. Guarded: never fail a real refund
+        # over its bookkeeping.
+        try:
+            from billing.refunds import resolve_pending_requests_for_order
+            resolve_pending_requests_for_order(
+                s, order_id=order_id, decided_by=getattr(p, "user_id", None))
+        except Exception:
+            log.info("refund: pending-request resolve skipped order=%s", order_id)
 
     # Optional: also cancel the booking(s) and free the slot. The refund itself is record-only
     # (booking NOT auto-reversed, docs/05 §8); "Refund & cancel" is an explicit admin choice.

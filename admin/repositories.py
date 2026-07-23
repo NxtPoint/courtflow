@@ -9,9 +9,12 @@
 # resources CRUD, hours (availability_rule) replace, products+prices CRUD, coaches +
 # coach_invite. Idempotent where the contract says so (location upsert, hours replace).
 
+import logging
 import re
 
 from sqlalchemy import text
+
+log = logging.getLogger("admin.repositories")
 
 
 # Sentinel for partial-update args where None is a MEANINGFUL value (explicitly clear the field) and must
@@ -2583,13 +2586,19 @@ def admin_home(session, *, club_id):
     }
 
     # Approvals / decisions
+    # A FAILED read must not be reported as ZERO. This card is the club's only prompt that somebody
+    # is waiting on a money decision, and "0" renders as "Nothing waiting for a decision" — a false
+    # all-clear indistinguishable from the real thing. Flag the failure so the UI can say so.
     refunds_pending = 0
+    refunds_error = False
     try:
         from billing.refunds import list_refund_requests_admin
         refunds_pending = len(list_refund_requests_admin(session, club_id=club_id, status="pending"))
     except Exception:
-        refunds_pending = 0
-    approvals = {"refund_requests_pending": refunds_pending}
+        log.exception("home approvals: refund-request count failed club=%s", club_id)
+        refunds_error = True
+    approvals = {"refund_requests_pending": refunds_pending,
+                 "refund_requests_error": refunds_error}
 
     return {"money": money, "people": people, "approvals": approvals}
 

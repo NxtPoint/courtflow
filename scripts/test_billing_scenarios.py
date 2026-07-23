@@ -2179,6 +2179,62 @@ def sc_payment_cannot_reopen_a_closed_debt(s, fx):
     check("…and is NOT flagged as needing attention", res4.get("needs_attention") is None, str(res4))
 
 
+def sc_refund_request_visibility(s, fx):
+    """Two ways the refund queue lied about what was waiting.
+
+    (1) Refunding from the TRANSACTION RECORD - in practice the main way money goes back, because it
+    takes the proven full-refund path - knew nothing about the member's request, so the ask stayed
+    'pending' forever: still counted on the home card, still "awaiting your decision" for money
+    already paid out, inviting a second approval.
+
+    (2) The queue hid every request whose order was refunded/void/written_off as "moot - the money is
+    done". VOID DOES NOT MEAN THE MONEY CAME BACK: _mark_order_paid now deliberately leaves a
+    succeeded charge sitting on a void order (payment_on_closed_order), which is precisely a refund
+    somebody must action - and it was invisible."""
+    print("")
+    print("# Refund queue tells the truth: resolved when refunded, visible while cash is held")
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         starts_at=iso(at(fx, 16)), ends_at=iso(at(fx, 17)), settlement_mode="at_court")
+    oid = r["booking"]["order_id"]
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=oid, amount_minor=15000,
+                          provider="cash", provider_payment_id="RCPT-VIS-1", user_id=fx.member)
+    req, err = RF.create_refund_request(s, club_id=fx.club_id, user_id=fx.member, order_id=oid,
+                                        reason="court flooded")
+    check("request created on the paid order", err is None and req, str(err))
+
+    def _pending(rid):
+        return [x for x in RF.list_refund_requests_admin(s, club_id=fx.club_id, status="pending")
+                if str(x["id"]) == str(rid)]
+    check("it is waiting in the queue", len(_pending(req["id"])) == 1)
+
+    # (1) The admin refunds from the transaction record instead of the queue.
+    n = RF.resolve_pending_requests_for_order(s, order_id=oid, decided_by=fx.member)
+    check("a direct refund RESOLVES the pending request", n == 1, str(n))
+    check("...so it stops nagging on the home card", not _pending(req["id"]))
+    check("...and resolving again is a no-op (idempotent)",
+          RF.resolve_pending_requests_for_order(s, order_id=oid) == 0)
+
+    # (2) A VOID order that still holds a succeeded charge - the state _mark_order_paid leaves when
+    # a late payment lands on a closed debt. The money is with the club, so a request MUST show.
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=iso(at(fx, 17)), ends_at=iso(at(fx, 18)), settlement_mode="at_court")
+    oid2 = r2["booking"]["order_id"]
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=oid2, amount_minor=15000,
+                          provider="cash", provider_payment_id="RCPT-VIS-2", user_id=fx.member)
+    req2, _ = RF.create_refund_request(s, club_id=fx.club_id, user_id=fx.member, order_id=oid2)
+    SET_STATUS = text('UPDATE billing."order" SET status = :st WHERE id = :o')
+    s.execute(SET_STATUS, {"st": "void", "o": oid2})
+    check("a VOID order still holding cash KEEPS its request visible", len(_pending(req2["id"])) == 1,
+          "the admin would see 'nothing waiting' on a live refund")
+
+    # A written-off debt took no money, so a request against it genuinely is moot.
+    s.execute(SET_STATUS, {"st": "written_off", "o": oid2})
+    check("a WRITTEN-OFF order's request is correctly hidden (no money was kept)",
+          not _pending(req2["id"]))
+
+
 def sc_month_end_resumable(s, fx):
     """The month-end sweep must be RESUMABLE, because the cron route now drives it client-by-client
     in its OWN transaction and stops under a time box (gunicorn reaps the worker at 120s). That only
@@ -3106,6 +3162,7 @@ SCENARIOS = [
     sc_month_end_sweep,
     sc_month_end_resumable,
     sc_payment_cannot_reopen_a_closed_debt,
+    sc_refund_request_visibility,
     sc_desk_amount_guard,
     sc_partial_refund_state,
     sc_coach_scoped_pricing,
