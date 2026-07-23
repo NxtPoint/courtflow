@@ -14,6 +14,10 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
 
 ## Ongoing tools / diagnostics (KEEP — re-runnable)
 - `verify_live.py` — read-only check against the real Render Postgres (uses gitignored `.env.local`).
+- `preview_month_end.py` — READ-ONLY dry run of the month-end sweep: who gets invoiced on the
+  25th and for how much, PLUS the money it will skip and why (abandoned checkouts, debt hidden
+  behind a live 'Pay all' wrapper, unattributed orders). Run it before every billing day — a
+  bare R0 from a hand-written query can't tell "all settled" from "looking at the wrong club".
 - `test_ses.py` — manual SES send test.
 - `audit_trials.py` — audits/cleans the 7-day trial grants.
 - `audit_class_packs.py` — reports class-pack vs session price (read-only).
