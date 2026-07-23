@@ -51,11 +51,15 @@ closed out in the 2026-07-22/23 sweep (see `README.md`'s dated entry).
       **(c)** re-check the Unconverted-trial segment **`XxUZCt`** has shrunk now the `membership_started`
       backfill has run, *before* sending the January offer — otherwise it aims "you haven't converted" at
       paying members.
-- [ ] **Peak pricing on reschedule** — `reschedule_booking` re-prices on the same product but does not
-      re-evaluate PEAK vs off-peak for the new time, so moving a booking between peak bands keeps the
-      original band's price. **Dormant**: no club has peak pricing configured, so it cannot bite today. Fix
-      before enabling peak pricing anywhere. (Off-peak per-slot pricing at CREATE time is correct and
-      harness-covered.)
+- [ ] **Peak pricing is LOST on reschedule.** `billing.orders.reprice_booking_order` takes
+      `duration_minutes` only — no start time — and selects `p2.amount_minor`, which is the **BASE
+      (off-peak) amount**. It never reads `peak_amount_minor` and never calls `in_peak_window`, so a
+      reschedule re-prices at base regardless of the new time: **moving a booking INTO a peak window
+      under-charges it.** (It does not "keep the original band" — peak is dropped entirely.) The fix is to
+      thread the new `starts_at` through and price the way `diary.pricing.price_for(at_local=…)` does at
+      CREATE time, which is correct and harness-covered. **Dormant**: no club has peak pricing configured
+      (`peak_amount_minor` is NULL everywhere), so it cannot bite today — but this MUST be fixed before peak
+      pricing is enabled anywhere.
 - [ ] **3 abandoned-checkout orders** were held back by `void_orphaned_orders.py`'s 7-day age floor on
       2026-07-23 (created 18-22 July). Cosmetic only — Yoco confirmed all unpaid. Re-run the script whenever;
       they will clear once past 7 days.
