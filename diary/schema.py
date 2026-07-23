@@ -306,6 +306,15 @@ _DDL = [
     f"ALTER TABLE {SCHEMA}.enrolment ADD COLUMN IF NOT EXISTS held_until timestamptz;",
     f"CREATE INDEX IF NOT EXISTS ix_enrolment_held "
     f"ON {SCHEMA}.enrolment (held_until) WHERE held_until IS NOT NULL;",
+    # THE ACTOR who took the seat, as distinct from user_id (the player it is FOR) and payer_user_id
+    # (who is billed). diary.booking has carried created_by_user_id for exactly this reason; enrolment
+    # never did, so the commonest audit question about a class — "who enrolled them?" — was
+    # unanswerable from the data. It matters because enrol() applies the service's payment-mode gate
+    # ONLY to role in (member, guest): staff enrol on-behalf at the court and legitimately override
+    # it. Without the actor, a staff at-court seat on a card-only class is indistinguishable from a
+    # member who slipped through a leak, and every audit ends in a guess. Nullable — historical rows
+    # stay NULL rather than being back-filled with a lie.
+    f"ALTER TABLE {SCHEMA}.enrolment ADD COLUMN IF NOT EXISTS created_by_user_id uuid;",
 
     # --- diary.waitlist : generic waitlist (court slot freeing up) -------
     f"""

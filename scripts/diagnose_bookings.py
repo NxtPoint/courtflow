@@ -208,11 +208,19 @@ def main():
         total += max(0, _rows(s, "CLASS ENROLMENTS whose settlement mode is NOT offered by their service", """
             SELECT e.id AS enrolment_id, cs.starts_at, r.name AS class_name,
                    pr.name AS service, pr.payment_modes AS allowed,
-                   e.settlement_mode AS used, o.status AS order_status, u.email AS member
+                   e.settlement_mode AS used, o.status AS order_status, u.email AS member,
+                   CASE
+                     WHEN e.created_by_user_id IS NULL THEN 'unknown (pre-audit)'
+                     WHEN e.created_by_user_id = e.user_id THEN 'SELF'
+                     ELSE COALESCE(m.role, 'other') || ' ' || COALESCE(a.email, '?')
+                   END AS enrolled_by
             FROM diary.enrolment e
             JOIN diary.class_session cs ON cs.id = e.class_session_id
             LEFT JOIN diary.resource r ON r.id = cs.resource_id
             LEFT JOIN iam."user" u ON u.id = e.user_id
+            LEFT JOIN iam."user" a ON a.id = e.created_by_user_id
+            LEFT JOIN iam.membership m
+                   ON m.user_id = e.created_by_user_id AND m.club_id = e.club_id
             LEFT JOIN billing."order" o ON o.id = e.order_id
             JOIN LATERAL (SELECT price_id FROM billing.order_line
                            WHERE order_id = e.order_id AND price_id IS NOT NULL
@@ -227,7 +235,12 @@ def main():
               """ + win("cs.starts_at") + """
             ORDER BY cs.starts_at DESC
         """, p, "none — every enrolment used a mode its class service offers",
-            ["enrolment_id", "starts_at", "class_name", "service", "allowed", "used", "order_status", "member"]))
+            ["enrolment_id", "starts_at", "class_name", "service", "allowed", "used", "order_status", "member",
+             "enrolled_by"]))
+        print("   ^ enrolled_by decides this table: enrol() applies the payment-mode gate ONLY to")
+        print("     role in (member, guest), so a coach/admin enrolling at the court legitimately")
+        print("     overrides it. 'SELF' on a restricted service is the only real leak. Rows from")
+        print("     before the actor column shipped read 'unknown (pre-audit)'.")
 
         _hdr("WHY A MEMBER GOT PAY-AT-COURT ON AN ONLINE-ONLY SERVICE")
         print("   Round 2 produced several candidate mechanisms and one NON-bug explanation.")

@@ -694,7 +694,8 @@ def enrol(class_session_id):
         res = classes_mod.enrol(
             s, club_id=p.club_id, class_session_id=class_session_id, user_id=target_user,
             settlement_mode=b.get("settlement_mode", "at_court"),
-            audience=b.get("audience", "member"), payer_user_id=payer_user, role=p.role)
+            audience=b.get("audience", "member"), payer_user_id=payer_user, role=p.role,
+            created_by_user_id=p.user_id)
     return _result(res)
 
 

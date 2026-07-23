@@ -128,7 +128,7 @@ def _class_payment_modes(session, club_id, cs):
 
 
 def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_court",
-          audience="member", payer_user_id=None, role="member"):
+          audience="member", payer_user_id=None, role="member", created_by_user_id=None):
     """Enrol a player; over-capacity -> waitlisted. Capacity-safe via FOR UPDATE on the
     session row. Idempotent-ish: a prior cancelled enrolment is reactivated; an existing
     active/waitlisted enrolment is returned as-is.
@@ -209,9 +209,11 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
     else:
         row = session.execute(
             text("INSERT INTO diary.enrolment (club_id, class_session_id, user_id, status, "
-                 "payer_user_id, settlement_mode, audience, held_until) "
-                 "VALUES (:c, :cs, :u, :st, :payer, :mode, :aud, " + held_expr + ") RETURNING id"),
-            dict(intent, c=club_id, cs=class_session_id, u=user_id, st=target, hold_mins=hold_mins),
+                 "payer_user_id, settlement_mode, audience, held_until, created_by_user_id) "
+                 "VALUES (:c, :cs, :u, :st, :payer, :mode, :aud, " + held_expr + ", :actor) "
+                 "RETURNING id"),
+            dict(intent, c=club_id, cs=class_session_id, u=user_id, st=target, hold_mins=hold_mins,
+                 actor=created_by_user_id or user_id),
         ).mappings().first()
         enrol_id = row["id"]
 

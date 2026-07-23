@@ -18,6 +18,9 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
   25th and for how much, PLUS the money it will skip and why (abandoned checkouts, debt hidden
   behind a live 'Pay all' wrapper, unattributed orders). Run it before every billing day — a
   bare R0 from a hand-written query can't tell "all settled" from "looking at the wrong club".
+- `settle_stranded_class_seats.py` — remediates class seats stuck in `awaiting_payment`
+  forever (seat taken, class played, order never settled). `--settle` turns each into a
+  normal owed debt so month-end invoices it; `--void` cancels it. Dry-run by default.
 - `test_ses.py` — manual SES send test.
 - `audit_trials.py` — audits/cleans the 7-day trial grants.
 - `audit_class_packs.py` — reports class-pack vs session price (read-only).
