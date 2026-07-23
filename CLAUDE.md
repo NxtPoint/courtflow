@@ -22,7 +22,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 263 / billing 423 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 263 / billing 432 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -51,7 +51,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      its service through `diary.resource.product_id` (the DURABLE link, set at create_class_type and
      boot-backfilled), never a name join; an orphaned class REFUSES with PRICE_NOT_CONFIGURED rather
      than billing another class's rate, and a retired price variation can never enrol at R0**.
-   - `test_billing_scenarios` (423) — settlement modes, commission, tokens, membership (offline + per-tier),
+   - `test_billing_scenarios` (432) — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
      class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
@@ -281,6 +281,17 @@ boot re-seed can't reset it).
   replay, so a webhook-after-reconcile REPAIRS an un-granted pack. **Never let reconcile settle without calling
   it** — the historic gap left online packs `paid` but `pending`/unusable with no email (Render Free sleeps →
   webhook missed → reconcile is the common path). Remediate stragglers with `scripts/fix_bypassed_packs.py`.
+- **A successful charge may NOT re-open a CLOSED debt.** `_mark_order` was an unconditional UPDATE, so a
+  late/replayed `charge_succeeded` flipped **any** status to `paid` — and Yoco retries for 72h while
+  reconcile sweeps 100 days back, so 'late' is routine. `refunded`→`paid` re-books returned cash as
+  collected revenue; `written_off`→`paid` silently reverses the club's own decision; `void`→`paid`
+  resurrects a cancelled sale. `_mark_order_paid` allows only `open`/`awaiting_payment`/`paid`, **plus
+  the one void that IS recoverable** — a lapsed hold (`order_void_is_recoverable`, the SINGLE source of
+  truth; `yoco_billing.reconcile._is_expired_hold_void` delegates to it so the two can't drift apart and
+  silently widen the door). A refusal still RECORDS the payment (cash stays visible) but skips the whole
+  fan-out — no booking confirm, no pack grant, no commission, no "payment succeeded" email — and returns
+  `needs_attention='payment_on_closed_order'` for a human. Guarded by
+  `sc_payment_cannot_reopen_a_closed_debt`.
 - **Receipts:** `GET /api/billing/receipt/<order_id>` (online AND desk payments) → `frontend/app/receipt.html`
   (+ a professional PDF at `GET /api/billing/receipt/<order_id>/pdf`).
 

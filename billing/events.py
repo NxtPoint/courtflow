@@ -136,8 +136,22 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
     if kind == "charge_succeeded":
         payment_id = _record_payment(session, event, order, club_id,
                                      direction="charge", status="succeeded")
+        settled = True
         if order_id:
-            _mark_order(session, order_id, "paid")
+            settled = _mark_order_paid(session, order_id, order)
+        if order_id and not settled:
+            # Money arrived against a debt somebody already closed (refunded / written off / an
+            # admin-voided sale). Do NOT settle it and do NOT run the downstream fan-out: confirming
+            # bookings, granting packs, accruing commission or emailing "payment succeeded" would all
+            # be acting on a sale that no longer exists. The payment row is recorded, so the cash is
+            # visible on the order for a human to refund or re-book deliberately.
+            result["order_status"] = _order_status(session, order_id)
+            result["needs_attention"] = "payment_on_closed_order"
+            log.warning("payment landed on a CLOSED order: order=%s status=%s provider=%s ref=%s "
+                        "— recorded but NOT settled; needs a human decision",
+                        order_id, result["order_status"], event.provider,
+                        event.provider_payment_id)
+        elif order_id:
             confirmed = _confirm_held_bookings(session, order_id, club_id)
             result["bookings_confirmed"] = confirmed
             # Classes are the enrolment sibling of held bookings: an ONLINE seat deferred its
@@ -164,6 +178,11 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
             if unified:
                 result["statement_settled"] = unified
         result["payment_recorded"] = True
+        # A closed order gets NO confirmation email — there is no live booking or purchase to
+        # confirm, and telling the payer "payment succeeded" would contradict the refund/write-off
+        # they were already given.
+        if not settled:
+            return result
         # ref_type/ref_id + the order's user_id let the notifications engine resolve the payer
         # (iam.user; child→guardian) and link the receipt notification to /receipt.html?order=<id>.
         _emit("payment_succeeded",
@@ -399,6 +418,69 @@ def _mark_order(session, order_id, status: str) -> None:
         text('UPDATE billing."order" SET status = :s, updated_at = now() WHERE id = :id'),
         {"s": status, "id": str(order_id)},
     )
+
+
+def _order_status(session, order_id):
+    row = session.execute(
+        text('SELECT status FROM billing."order" WHERE id = :id'), {"id": str(order_id)},
+    ).mappings().first()
+    return row["status"] if row else None
+
+
+def order_void_is_recoverable(session, order_id) -> bool:
+    """True when an order is void ONLY because its hold lapsed — the one void a late payment may
+    legitimately reverse. An order an ADMIN voided (a cancelled sale, a killed 'Pay all' wrapper)
+    has no hold_expired booking behind it, so it stays untouchable.
+
+    THE SINGLE SOURCE OF TRUTH for that question. yoco_billing.reconcile delegates here rather than
+    keeping its own copy: two hand-maintained versions of "may this void be undone?" would drift,
+    and the drift that matters is the one that silently WIDENS the door. Guarded → False, because
+    an error must never be read as permission."""
+    try:
+        return bool(session.execute(
+            text("SELECT 1 FROM billing.order_line ol "
+                 "JOIN diary.booking b ON b.id = ol.booking_id "
+                 "WHERE ol.order_id = :o AND b.status = 'cancelled' "
+                 "  AND b.cancellation_reason = 'hold_expired' LIMIT 1"),
+            {"o": str(order_id)},
+        ).first())
+    except Exception:
+        return False
+
+
+# The states a successful charge may move an order to 'paid' FROM. Everything else is terminal:
+# somebody already decided this debt's fate and a webhook must not silently overturn it.
+_PAID_FROM = ("open", "awaiting_payment", "paid")
+
+
+def _mark_order_paid(session, order_id, order) -> bool:
+    """Flip an order to 'paid' for a successful charge — but ONLY from a state where that is true.
+    Returns False (and writes nothing) when the order is terminal.
+
+    _mark_order was an unconditional UPDATE, so a late or replayed charge_succeeded overwrote ANY
+    status. The three that matter:
+      refunded   -> paid : the worst. The money went BACK, and flipping the order re-books it as
+                           collected revenue — the club shows income for cash it no longer holds.
+      written_off-> paid : the club deliberately forgave this debt; a webhook silently reversing
+                           that decision hides it from whoever made it.
+      void       -> paid : resurrects a cancelled sale, EXCEPT for the hold-expiry case, which is a
+                           real recovery we must keep (see order_void_is_recoverable).
+    Yoco retries for 72h and reconcile sweeps 100 days back, so 'late' is routine, not exotic.
+
+    Refusing is not the same as losing the money: _record_payment has ALREADY written the payment
+    row, so the cash stays visible and auditable on the order — it just doesn't silently re-settle a
+    debt somebody closed. The caller flags it for a human instead."""
+    row = session.execute(
+        text('SELECT status FROM billing."order" WHERE id = :id'), {"id": str(order_id)},
+    ).mappings().first()
+    status = row["status"] if row else (order or {}).get("status")
+    if status in _PAID_FROM:
+        _mark_order(session, order_id, "paid")
+        return True
+    if status == "void" and order_void_is_recoverable(session, order_id):
+        _mark_order(session, order_id, "paid")
+        return True
+    return False
 
 
 def _confirm_held_bookings(session, order_id, club_id) -> int:

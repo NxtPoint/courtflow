@@ -63,17 +63,15 @@ def _is_expired_hold_void(session, order_id) -> bool:
     who paid AFTER their hold lapsed and whose webhook was missed (Render Free sleeps — the common
     case) had their money taken with no booking, no receipt and no trace. This re-opens exactly that
     door and no other: an order an ADMIN deliberately voided has no hold_expired booking behind it,
-    so it stays untouchable. Guarded → False (never widen the door on an error)."""
-    try:
-        return bool(session.execute(
-            text("SELECT 1 FROM billing.order_line ol "
-                 "JOIN diary.booking b ON b.id = ol.booking_id "
-                 "WHERE ol.order_id = :o AND b.status = 'cancelled' "
-                 "  AND b.cancellation_reason = 'hold_expired' LIMIT 1"),
-            {"o": str(order_id)},
-        ).first())
-    except Exception:
-        return False
+    so it stays untouchable. Guarded → False (never widen the door on an error).
+
+    DELEGATES to billing.events.order_void_is_recoverable — the same predicate now also gates the
+    WEBHOOK path's void→paid transition, and two hand-maintained copies of "may this void be undone?"
+    would eventually drift. The drift that matters is the one that silently WIDENS the door, so this
+    question gets exactly one implementation. (Adapter → core is the correct direction; billing/ must
+    never import yoco_billing/.)"""
+    from billing.events import order_void_is_recoverable
+    return order_void_is_recoverable(session, order_id)
 
 
 def reconcile_order(session, *, order_id: str) -> Dict[str, Any]:

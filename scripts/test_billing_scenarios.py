@@ -2109,6 +2109,76 @@ def sc_month_end_sweep(s, fx):
           r2["notified"] == 0 and r2["already"] >= 1, str(r2))
 
 
+def sc_payment_cannot_reopen_a_closed_debt(s, fx):
+    """A successful charge must not silently overturn a debt somebody already closed. _mark_order was
+    an unconditional UPDATE, and Yoco retries for 72h while reconcile sweeps 100 days back — so a
+    LATE or REPLAYED charge_succeeded landing on a refunded / written-off / admin-voided order flipped
+    it straight back to 'paid'. The refunded case re-books returned cash as collected revenue.
+
+    The one void a late payment MAY reverse is a lapsed HOLD — that recovery is the whole reason
+    reconcile exists, so it is asserted here too."""
+    print("\n# A late/replayed charge can't resurrect a closed debt (but hold-expiry still recovers)")
+
+    def _charge(oid, ref, amount=15000):
+        ev = NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
+                                    provider_payment_id=ref, amount_minor=amount,
+                                    currency="ZAR", status="succeeded", direction="charge",
+                                    club_id=str(fx.club_id), user_id=str(fx.member), raw={"r": ref})
+        return apply_payment_event(ev, session=s)
+
+    def _owed_order(hour):
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                             booking_type="court", resource_id=fx.courts[0],
+                             starts_at=iso(at(fx, hour)), ends_at=iso(at(fx, hour + 1)),
+                             settlement_mode="at_court")
+        return r["booking"]["order_id"]
+
+    # (1) REFUNDED -> a replayed charge must NOT re-mark it paid (the money went back).
+    oid = _owed_order(19)
+    _charge(oid, "p_guard_1")
+    check("baseline: an open order still settles normally", _order(s, oid)["status"] == "paid")
+    ST.void_order(s, club_id=fx.club_id, order_id=oid)   # not the refund path, but a closed state
+    s.execute(text('UPDATE billing."order" SET status = \'refunded\' WHERE id = :o'), {"o": oid})
+    res = _charge(oid, "p_guard_1_late")
+    check("a late charge does NOT flip a REFUNDED order back to paid",
+          _order(s, oid)["status"] == "refunded", _order(s, oid)["status"])
+    check("…and it is flagged for a human", res.get("needs_attention") == "payment_on_closed_order",
+          str(res))
+    check("…while the payment itself is still RECORDED (cash stays visible)",
+          len([p for p in _payments(s, oid) if p["direction"] == "charge"]) == 2)
+
+    # (2) WRITTEN OFF -> the club forgave it; a webhook must not silently reverse that.
+    oid2 = _owed_order(20)
+    ST.void_order(s, club_id=fx.club_id, order_id=oid2, write_off=True)
+    check("order is written off", _order(s, oid2)["status"] == "written_off")
+    _charge(oid2, "p_guard_2")
+    check("a late charge does NOT collect a WRITTEN-OFF debt",
+          _order(s, oid2)["status"] == "written_off", _order(s, oid2)["status"])
+
+    # (3) ADMIN-VOIDED -> a cancelled sale stays cancelled. No hold_expired booking behind it.
+    oid3 = _owed_order(21)
+    ST.void_order(s, club_id=fx.club_id, order_id=oid3, reason="admin cancelled the sale")
+    _charge(oid3, "p_guard_3")
+    check("a late charge does NOT resurrect an ADMIN-VOIDED sale",
+          _order(s, oid3)["status"] == "void", _order(s, oid3)["status"])
+
+    # (4) THE DOOR THAT MUST STAY OPEN. An order voided purely because its online hold lapsed is
+    # exactly the recovery reconcile exists for — the member paid late and the webhook was missed.
+    r4 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=iso(at(fx, 22)), ends_at=iso(at(fx, 23)),
+                          settlement_mode="online")
+    oid4 = r4["booking"]["order_id"]
+    s.execute(text("UPDATE diary.booking SET status = 'cancelled', "
+                   "cancellation_reason = 'hold_expired' WHERE id = :b"),
+              {"b": r4["booking"]["id"]})
+    s.execute(text('UPDATE billing."order" SET status = \'void\' WHERE id = :o'), {"o": oid4})
+    res4 = _charge(oid4, "p_guard_4")
+    check("a hold-expiry void IS still recoverable by a late payment",
+          _order(s, oid4)["status"] == "paid", _order(s, oid4)["status"])
+    check("…and is NOT flagged as needing attention", res4.get("needs_attention") is None, str(res4))
+
+
 def sc_month_end_resumable(s, fx):
     """The month-end sweep must be RESUMABLE, because the cron route now drives it client-by-client
     in its OWN transaction and stops under a time box (gunicorn reaps the worker at 120s). That only
@@ -3035,6 +3105,7 @@ SCENARIOS = [
     sc_coach_payout,
     sc_month_end_sweep,
     sc_month_end_resumable,
+    sc_payment_cannot_reopen_a_closed_debt,
     sc_desk_amount_guard,
     sc_partial_refund_state,
     sc_coach_scoped_pricing,
