@@ -44,13 +44,11 @@ sweep. When you activate one, tick it and move the detail into the relevant spec
   filter with no home in the single-club nav. *Switch-on:* add a platform-owner link, or fold multi-club into
   the SPA — relevant once there's >1 tenant.
 - **B3 — Membership-refill cron** (`diary/crons.py::run_membership_refill`, `/api/cron/membership-refill`) —
-  rolls membership periods / marks lapsed. Implemented, **not scheduled**. *Switch-on:* uncomment the
-  `render.yaml` cron (with `CRON_API_BASE`+`OPS_KEY`) or add a keep-warm-style GitHub Action. Needed once
-  **recurring** (non-manual) memberships go live.
+  rolls membership periods / marks lapsed. **SCHEDULED + LIVE** via `.github/workflows/membership-refill.yml`
+  (daily 07:30 SAST); emits `membership_lapsed`, which drives the Klaviyo E2 win-back. Not a flag any more.
 - **B4 — Booking reminders cron** (`diary/crons.py::run_reminders`, T-24h/T-2h, deduped via
-  `diary.reminder_log`, `/api/cron/reminders`) — implemented + idempotent, **not scheduled**, so no reminder
-  emails go out. *Switch-on:* schedule `python -m crons.trigger reminders` hourly, or a workflow hitting the
-  endpoint.
+  `diary.reminder_log`, `/api/cron/reminders`) — **SCHEDULED + LIVE** via `.github/workflows/reminders.yml`
+  (hourly 07:00-22:00 SAST). Reminder emails DO go out (SES); a no-show reducer. Not a flag any more.
 - **B5 — OPS diagnostic endpoints** (`OPS_KEY`-guarded, curl-only by design): `/api/cron/db-fingerprint`,
   `/api/cron/ses-suppress`, `/api/cron/ses-account`, `/api/cron/ses-selftest`. Keep headless; documented here
   rather than wired to UI.
@@ -58,15 +56,17 @@ sweep. When you activate one, tick it and move the detail into the relevant spec
 ## C. Commented-out / scaffolding
 
 - **C1 — The four `render.yaml` cron services** (`reminders`, `capacity-sweep`, `monthly-invoice`,
-  `membership-refill`) are commented out. **capacity-sweep is intentionally never needed** (abandoned holds
-  self-release via lazy expiry in `compute_availability`/`create_booking` + the class equivalent). The other
-  three are real work waiting on a scheduler; **month-end already rides `.github/workflows/month-end.yml`**
-  instead of a Render cron.
-- **C2 — 301 redirect engine** (`migration/redirects.py`) — a full, tested engine (`load_redirects`,
-  chain-flattening, `register_redirects`) **deliberately not registered** (Wix→Render SEO cutover is
-  Tomo-supervised; agents never touch DNS). *Switch-on (supervised):* fill `migration/url_inventory.csv` +
-  `redirects.csv` from GSC/Ahrefs/Wix crawl, add `register_redirects(app)` to `web_app.py` **before** the
-  catch-all, then cut DNS. This is the one item that materially protects SEO during cutover.
+  `membership-refill`) are commented out **and stay that way — this is the design, not a backlog.** Every
+  recurring job runs on **GitHub Actions** instead (free, and it rides the keep-warm window so the API is
+  awake): `reminders.yml`, `membership-refill.yml`, `reconcile-payments.yml`, `reconcile-deep.yml`,
+  `month-end.yml`, `marketing-digest.yml`, `keep-warm.yml`. **capacity-sweep is intentionally never needed**
+  (abandoned holds self-release via lazy expiry in `compute_availability`/`create_booking` + the class
+  equivalent). **monthly-invoice was RETIRED, not deferred** — it has no handler (`crons/trigger.py` drops it
+  from `JOB_ROUTES`); month-end does consolidated invoicing. Adding a recurring job = adding a workflow.
+- **C2 — 301 redirect engine** (`migration/redirects.py`) — **REGISTERED + LIVE.** `web_app.py` calls
+  `register_redirects(app)` at boot, before the catch-all, and `migration/redirects.csv` carries the Wix
+  to Render map that has been serving since cutover. Not a flag any more. (DNS itself remains
+  Tomo-supervised; agents never touch it.)
 
 ## D. Decisions / consolidation candidates (not dead, but review)
 
@@ -99,6 +99,7 @@ defaults keep existing behaviour unchanged (same pattern as the equipment / peak
 1. **Google measurement** (A2 + A3) — verify GA4/Ads IDs set + turn on the offline-conversions feed creds.
 2. **Klaviyo** (A1) — one key lights up sync + reactivation/trial cohorts (then schedule the two scripts).
 3. **Launch the TF5 embed** (A4) — clear one env var.
-4. **Schedule reminders + membership-refill** (B4, B3) — uncomment crons / add a workflow.
-5. **Wire the 301 engine** (C2) at supervised SEO cutover.
-6. **Surface or retire** the CRM cockpit lane (B1) and `/overview.html` (B2).
+4. **Surface or retire** the CRM cockpit lane (B1) and `/overview.html` (B2).
+
+*(Previously listed here and now DONE: scheduling reminders + membership-refill, and wiring the 301
+engine — both live. See B3/B4/C2 above.)*

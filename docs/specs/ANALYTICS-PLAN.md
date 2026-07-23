@@ -1,6 +1,6 @@
 # Analytics & Reporting — full plan (build after sign-off)
 
-**Status: PLAN.** A ground-up rethink of the admin **Overview / Analytics** dashboard so it answers the
+**Status: BUILT (Phases A, B and C shipped 2026-07-18/19 - see sections 8 and 10).** A ground-up rethink of the admin **Overview / Analytics** dashboard so it answers the
 questions the owner actually asks — *who's visiting, who's logging in, are members growing, are trials
 converting, what's being booked, and is the court full* — every metric **per day**, blending our
 **first-party data** with **Google (GA4 + Search Console)**. Supersedes the ad-hoc current tab.

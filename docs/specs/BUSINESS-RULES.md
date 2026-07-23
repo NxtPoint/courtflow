@@ -30,7 +30,8 @@ a membership tier's lifecycle derives from its term plans' status.
   (`is_active=false`, filtered out of the courts list). `DELETE /api/admin/resources/<id>` → `{ok, outcome}`.
 
 ## 2. The diary / booking
-- **Services:** book a **court**, a **lesson** (with a named or "Any" coach), or **attend a class**.
+- **Services:** book a **court**, a **lesson** (**COACH-FIRST** — you pick the coach up front; there is
+  deliberately no "Any coach", because services and rates are per-coach), or **attend a class**.
 - **No double-booking:** a Postgres GiST EXCLUDE constraint guarantees one booking per resource per
   time; concurrent clashes → exactly one wins (`SLOT_TAKEN`).
 - **Lessons reserve a court:** availability for a lesson = slots where a **coach AND a court are both
@@ -346,7 +347,7 @@ show active items — dormant/retired vanish for customers but stay visible to t
   guard scripts: `scripts/reconcile_coach_commission.py`, `scripts/diagnose_coach_packs.py`.)
 - **Coach pricing modes:** PAYG (online) · bundles (online) · **monthly arrears** (off-platform: the
   coach sends a statement and chases EFT, then **marks collected** → commission accrues).
-- **Coach month-end statement** (`/statement.html` + in the console): per client — lessons, paid-via-Yoco
+- **Coach month-end statement** (the coach app's **Money** tab = `Widgets.Earnings`; the standalone
   + owed (arrears) = **net balance**; mark arrears collected, and **discount / write-off** owed lines
   (`PATCH /api/admin/coach-statement/arrears/<id>`). The **client sees the same statement** (`GET
   /api/me/statement`) — one engine, two lenses.
@@ -394,7 +395,7 @@ Full spec: [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md).
   paid charge is a **refund** (the separate path), not a discount.
 
 ## 7. Self-service per role
-- **Client (`/account.html` + action-first `/portal` cockpit):** edit profile/demographics (**email
+- **Client (the client SPA `app.html`/`client.js`; the old `/account.html` was deleted and 302s here):** edit profile/demographics (**email
   read-only = identity**); manage **children/dependents**; **Financials** + the **unified statement**
   (`/api/me/statement` — unpaid orders grouped by category, with **pay-all or tick-to-part-settle**); raise
   **refund requests**. Buy membership + packs on the consolidated **`/plan`** page (each via the one payment
@@ -422,7 +423,8 @@ Full spec: [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md).
   requested/proposed/accepted/declined**.
 - **Calendar:** every booking has a downloadable **`.ics`** (`GET /api/diary/bookings/<id>/calendar.ics`);
   the confirmation payload carries `ics_url`. The in-app **"Add to calendar"** works now; the email
-  *attachment* is gated OFF (`EMAIL_ICS_ENABLED=0`) until the interim SES key gains `ses:SendRawEmail`.
+  *attachment* is gated OFF (`EMAIL_ICS_ENABLED=0`) **by choice** — the SES key already carries
+  `ses:SendRawEmail` (that is how the invoice PDF attaches), so this is flag-only.
 - **Email** (SES transactional) is **LIVE** — interim via the Ten-Fifty5 AWS account (`eu-north-1`,
   `SES_SENDER=noreply@ten-fifty5.com`): invites + booking/statement confirmations send from each club's
   From-name + Reply-To, alongside the in-app inbox. Child events notify the **guardian**. Booking emails

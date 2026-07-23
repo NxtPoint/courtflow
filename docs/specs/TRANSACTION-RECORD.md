@@ -8,7 +8,7 @@
 > the fold. **Class events drill to the SAME shared widget** (no separate class record). The rest of
 > this doc is the original design that got there; the reconciliation invariants below still hold.
 
-**Status: DESIGNED, not yet built.** The owner's mandate: there is ONE and only one place a
+**Status: BUILT + LIVE.** The owner's mandate: there is ONE and only one place a
 transaction is ever seen — identical for client, coach and admin. It opens with a **summary** of the
 event and its current status, drills to a **plain-English chronological log**, **reconciles to
 billing** (paid vs owed) and lets you **settle the owed** or request a **reversal** — all from inside

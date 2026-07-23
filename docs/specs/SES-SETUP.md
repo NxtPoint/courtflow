@@ -4,7 +4,7 @@ Status: **LIVE (2026-07-03) — running on an INTERIM setup; this doc is the lon
 Email sends today via the **Ten-Fifty5 AWS account** (`SES_REGION=eu-north-1`,
 `SES_SENDER=noreply@ten-fifty5.com`, dedicated `SES_AWS_*` creds) — invites + booking/statement
 confirmations go out club-branded. **Two follow-ups:** (1) the `.ics` attachment is gated OFF
-(`EMAIL_ICS_ENABLED=0`) until the sending key carries `ses:SendRawEmail`; (2) move to the **proper
+(`EMAIL_ICS_ENABLED=0`) **by choice** - the key already carries `ses:SendRawEmail`; (2) move to the **proper
 CourtFlow-domain** setup below (verify `courtflow.app` / `nextpointtennis.com` in the CourtFlow AWS
 account once it's unlocked). The transactional path self-gates on creds (no keys → in-app only, never
 errors); switching accounts/domain is env, not code.

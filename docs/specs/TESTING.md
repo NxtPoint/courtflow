@@ -90,7 +90,7 @@ the coach sets up services, then the client books against them. Expected results
 >   **Money** as Setup-style sections (incl. **Sales by day**); **Diary** on the shared Calendar widget
 >   (Day/Week/Month + court/coach filters); **Setup**; **Insights** (court-utilisation heatmap + Overview).
 >   Every list drills to the **ONE admin event story**. The classic tab console is at **`/admin-classic`**
->   (keep for its drag-timeline). See [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md).
+  `/book` (302 into the SPA) / `/plan` / the client SPA at `/portal` / `/coach` / `/admin` / `/settings.html` /
 
 **The three profiles** (use **three separate Clerk accounts / emails** — a user has one role by default):
 - **Owner/Admin** — the seeded platform admin **`info@nextpointtennis.com`** (full admin).
@@ -98,12 +98,12 @@ the coach sets up services, then the client books against them. Expected results
 - **Client/Member** — any other email; **auto-becomes a member** on first login (+ a 7-day free week).
 
 **Before you start:**
-- [ ] **Cold start is normal.** Free-tier services sleep after ~15 min idle; the **first call wakes them
-      (~30–60s)** — you'll see a spinner then a result, or a clear timeout error (never an endless spinner).
-      Not a bug. The keep-warm Action runs 07:00–21:59 SAST.
-- [ ] **Payments:** online pay shows only when **Admin → Settings → Payments** is ON (per-club). Yoco is
-      live — use a **Yoco test card** if the keys are in test mode, else a real card (refund after).
-- [ ] Have the **in-app bell/inbox** open as you go — confirmations land there (email is dark, see §6).
+>   Every list drills to the **ONE admin event story**. The classic tab console was RETIRED 2026-07-18
+>   (`/admin-classic` 301s to `/admin`). See [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md).
+- [ ] **Cold starts do NOT apply** - both web services are on the Render **Starter** plan (`render.yaml`),
+      so they do not sleep. The keep-warm Action (07:00-21:59 SAST) stays as belt-and-braces and to keep
+      the API awake for the OPS-guarded cron windows. A 70s `apiFetch` timeout guards any slow call.
+- [ ] **Payments:** online pay shows only when **Admin -> Settings -> Payments** is ON (per-club). Yoco is
 
 ---
 
@@ -112,7 +112,7 @@ the coach sets up services, then the client books against them. Expected results
 **Console shape** — the admin SPA (`/admin`) is a responsive drill-through: nav **Home · People · Money ·
 Diary · Setup** (+ Insights), landing on **Home**. Your nav is role-focused — you land on Admin, not the
 client Home. *(The classic five-tab console is preserved at `/admin-classic` for its drag-timeline; the
-checklist below maps 1:1.)*
+client Home. *(The classic five-tab console was RETIRED 2026-07-18; the
 - [ ] **Home** — the **command center**: **Today at the club** (live diary) · **Money** (owed to the club ·
       net revenue · coach settlements due · active members) · **People needing attention** (new signups ·
       pending coach invites · expiring memberships) · **To approve / decide** (pending refund requests) —
@@ -120,9 +120,9 @@ checklist below maps 1:1.)*
 - [ ] **People** — roster + category slicer → **person 360** (`GET /api/admin/people/<id>`): identity/roles,
       membership grant/revoke, owed + void/write-off, payments, bookings → the event story (if coach, settlement).
 - [ ] **Money** — Setup-style sections: **Sales by day** (month filter, grouped by day → txn detail) ·
-      Revenue · Coach settlement · Approvals (refund queue) · Payments (refund only / refund & cancel) · Activity.
+      New invoice / Sales by day / Club earnings / Bookings by day / Refund requests / Club activity.
 - [ ] **Diary** — the shared **Calendar widget** (Day/Week/Month, **default today**, filter per court and/or
-      coach) + Classes. Any booking → the admin event story. (Full drag-timeline: `/admin-classic`.)
+      coach) + Classes. Any booking -> the admin event story. (Drag-timeline editing was retired with the classic console.)
 - [ ] **Setup** — all club config in-app (`Widgets.Setup`): profile & payments · courts & hours · services &
       pricing · memberships · packs · coaches & commission.
 - [ ] **Overview** (first-class nav tab; `#/insights` also routes here) — month pager + sub-tabs
@@ -146,8 +146,8 @@ checklist below maps 1:1.)*
       hours", e.g. weekdays 06:00–17:00) on a tier.
 
 **Coaches & commission**
-- [ ] **Invite a coach** (People/Settings → invite) → an `iam.coach_invite` is created. **Email is dark**,
-      so **copy the invite link from the UI** and use it for the coach profile (see §2).
+- [ ] **Invite a coach** (People/Settings -> invite) -> an `iam.coach_invite` is created. SES email is LIVE,
+      so the invite emails - but you can also **copy the invite link from the UI** (see section 2).
 - [ ] **Coach pay** (Settings → Coach pay) — set **rent** and/or a **commission %**: club-wide, per-coach,
       and **per-service** (a lesson AND a class). → saved as `commission_rule`; the **effective %** preview
       resolves `coach+product > product > coach > club`.
@@ -235,7 +235,7 @@ not the client Home.
 - [ ] **Off-peak coverage (per slot)** — with a **windowed** membership (e.g. weekdays 06:00–16:00), only
       **in-window** court slots show **R0 / "Covered"**; **out-of-window** slots show the normal PAYG price on
       the SAME day (the display now matches what you're charged).
-- [ ] **Lesson** — pick the coach (or "Any") → confirms only if **a coach AND a court are free** (the
+- [ ] **Lesson** - pick the COACH first (there is no "Any") -> confirms only if **a coach AND a court are free** (the
       lesson holds a court too). Only **bookable** coaches (hours set) are offered.
 - [ ] **Class** — pick a session → enrol; fill a class past capacity → **waitlist** (auto-promote on a cancel).
 - [ ] **Pay online (Yoco)** — choose **online** → redirected to Yoco hosted page (card / Apple/Google Pay)
@@ -296,7 +296,7 @@ not the client Home.
   marketing** is still dark (no key). Long-term CourtFlow-domain setup: [SES-SETUP.md](SES-SETUP.md).
 - **Coach photo upload** needs S3 → until then **paste a photo URL**.
 - **Gated (review-coach) lessons** settle **pay-at-court** — no online prepay for an unconfirmed lesson.
-- **Cold starts** (~30–60s first call after idle) on the Free plan — not a bug.
+- **Cold starts** do not apply on the **Starter** plan (both web services). Not a concern.
 - **Website-traffic analytics** accrue from go-live (no historical page-views/geo).
 
 ## 7. Logging bugs (so the next session can act fast)

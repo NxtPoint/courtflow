@@ -108,7 +108,9 @@ it's an internal audit journal, not the headline number.
 
 > **Month-end sweep (shipped).** `POST /api/cron/month-end` (`billing.commission.run_month_end`,
 > OPS-guarded, fired by `.github/workflows/month-end.yml`) accrues coach arrears + rent for the period,
-> then notifies every client with an OPEN statement balance via a `statement_ready` message (in-app +
+> then notifies every client with an OPEN statement balance by consolidating their open orders into ONE numbered statement invoice + pay-link email
+(`invoice_issued`); a plain `statement_ready` is only the FALLBACK when there is nothing new to
+invoice. The sweep commits PER CLIENT, is time-boxed and resumable (in-app +
 > best-effort email). Idempotent per `(club, user, period)` through `billing.month_end_notice`, so a
 > re-run never re-notifies. It's a **soft snapshot + notify** — it does NOT month-box or freeze the live
 > statement, which stays current-unpaid with no month-boxing (§9.4).

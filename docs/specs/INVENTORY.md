@@ -8,7 +8,7 @@ Exhaustive as-built inventory (generated from the live code, 2026-06-21; refresh
 - **`courtflow-web`** (`web_wsgi:app`) — DB-less; host-switched marketing site + portal SPA shells +
   `/login`. `https://courtflow-web.onrender.com` (an entry in `MARKETING_HOSTS`, so `/` = public site,
   app lives at `/portal`, `/book`, `/admin`, …).
-- **Postgres** — `courtflow-db`, a separate Render DB (Frankfurt). **Clerk DEV app** for auth (`pk_test_…`).
+- **Postgres** — `courtflow-db`, a separate Render DB (Frankfurt). **Clerk PRODUCTION app** for auth (`pk_live_...`, `clerk.nextpointtennis.com`) - see ENV-STATUS.md.
 - **Region — all three in Frankfurt, co-located** (`region: frankfurt` + `plan: starter` pinned on both web
   services in `render.yaml`; the api uses the DB's internal same-region URL). Until 2026-07-05 the web
   services ran in Oregon while the DB was in Frankfurt (cross-Atlantic ~150ms/query); recreated in-region.
@@ -274,12 +274,45 @@ the weekly-chart buckets; `billing/me.py::activity_summary`) ·
 **Web service (`web_app.py`, marketing host):** `GET/POST /contact` (the public contact form posts
 here — emails the club via SES, self-gating; logs the lead if SES unset).
 
-**Crons `/api/cron/*`** (handlers exist; cron services off): `POST capacity-sweep` · `POST reminders` ·
-`POST monthly-invoice` · `POST membership-refill` · `POST reconcile-payments` · **`POST ses-selftest`**
-(OPS-guarded — sends a live SES test + surfaces the real SES error; `diary/routes.py`) · **`POST month-end`**
-(OPS-guarded month-end sweep — notifies every client with an open statement balance once per period via
-`billing.month_end_notice`; fired by the `.github/workflows/month-end.yml` Action, NOT an always-on cron;
-`billing/routes.py` → `commission.run_month_end`).
+**Crons `/api/cron/*`** (OPS_KEY-guarded; every recurring one is fired by a **GitHub Action**, never a
+Render cron — the four `render.yaml` crons stay commented out by design): `POST capacity-sweep` (exists but
+NEVER needed — holds self-release by lazy expiry) · `POST reminders` · `POST membership-refill` ·
+`POST reconcile-payments` (72h lookback by default; `reconcile-deep.yml` sweeps 100 days weekly so nothing
+ages out unverified) · `POST analytics-ingest` (the CI push of GA4/GSC metrics into `core.web_daily`) ·
+`POST db-fingerprint` · `POST ses-suppress` · `POST ses-account` · **`POST ses-selftest`** (sends a live SES
+test + surfaces the real SES error; `diary/routes.py`) · `POST marketing-digest-email` · **`POST month-end`**.
+`monthly-invoice` was **RETIRED** — no handler exists (`crons/trigger.py` drops it from `JOB_ROUTES`).
+
+**`POST month-end` is PER-CLIENT-TRANSACTIONAL, TIME-BOXED and RESUMABLE.** It does NOT call
+`run_month_end` (that is the single-transaction form kept for one club + the harness). The route drives
+`commission.month_end_period` / `month_end_accrue` / `month_end_targets`, then `month_end_client` **in its
+own `session_scope()` per client**, stopping at `max_seconds` (default 90, under gunicorn's 120s reaper) and
+returning `{ok, complete, remaining, failed, elapsed_seconds}` for the caller to loop. It accrues coach
+arrears + rent, then consolidates each owing client's open orders into ONE numbered statement invoice +
+pay-link email (`invoice_issued`; else a plain `statement_ready`), idempotent per `(club,user,period)` via
+`billing.month_end_notice`. Fired by `.github/workflows/month-end.yml` on the 25th, which loops until
+`complete` and FAILS THE JOB on any non-200 / `ok:false`.
+
+**Also live, and previously missing from this list:** `GET/POST /api/feedback` (token-guarded NPS to
+Google-review funnel) · `GET/POST /api/subscribe` (token-guarded re-permission opt-in) ·
+`GET /api/insights/{overview,bookings-by-day,sales-by-day,court-utilisation,trial-cohorts,web-metrics}` ·
+the INVOICE surface `GET /api/billing/invoice/<id>` (+ `/pdf`, `POST .../mark-paid`, `POST .../void`),
+`GET /api/me/invoices`, `GET /api/admin/clients/<id>/invoices`, `POST /api/admin/clients/<id>/statement-invoice`,
+`GET /api/billing/receipt/<id>/pdf` · the PROMOTIONS surface `/api/admin/promotions*` +
+`POST /api/billing/promo/{validate,apply}` · `DELETE /api/diary/time-off/<id>` ·
+`POST /api/diary/bookings/<id>/add-player` · `GET /api/diary/members/search`.
+
+**Tables previously missing from section 4:** `club.billing_profile` · `billing.invoice` ·
+`billing.invoice_line` · `billing.promotion` · `billing.promotion_code` · `billing.promotion_redemption` ·
+`billing.coach_payout` · `billing.month_end_notice` · `core.web_daily` · `core.offline_conversion` ·
+`core.acquisition` · `diary.class_session_court`. **Columns added since:** `billing."order".covered_order_ids`
+(the immutable "Pay all" snapshot) · `diary.booking.product_id` (the service actually booked) ·
+`diary.enrolment.created_by_user_id` (WHO enrolled a player - the actor, distinct from the player and the
+payer; enrol() gates payment modes only for member/guest, so without it a staff on-behalf seat was
+indistinguishable from a leak).
+
+**Lane files previously missing from section 2:** `billing/invoicing.py`, `billing/invoice_pdf.py`,
+`billing/promotions.py`, `marketing_crm/feedback/`, `marketing_crm/repermission/`.
 
 **Analytics `/api/analytics/*`:** `GET overview` (`?days`, `?club_id`) · `GET clubs`. **Tracking:**
 `POST /api/track/page` (first-party page-view beacon; geolocation via Cloudflare `CF-IPCountry`) ·
@@ -457,17 +490,20 @@ plus promoted `window.UI` helpers (`card/backBar/kv/modal/statusChip/…`) and
   `coach_app.html` · **`/admin`,`/admin.html`,`/admin-app` → `admin_app.html` (the NEW SPA)**. Old standalone pages **302 → the client SPA**
   (`/book.html`→`/portal#/book/court`, `/my`→`/portal#/bookings`, `/account.html`→`/portal#/billing`). The
   classic **coach** console (`coach.html`/`coach.js`) and the classic **owner** console
-  (`admin.html`/`admin.js`) + the `/admin-classic` route were all **deleted** (owner retired 2026-07-18).
+  (`admin.html`/`admin.js`) were **deleted** (owner retired 2026-07-18); **the `/admin-classic` PATH still
+  exists as a 301 to `/admin`** (`web_app.py`) so old bookmarks don't 404.
   Post-login role routing (`client.js`) lands admins on `/admin`, coaches on `/coach`.
 
-**Portal SPA shells** (`frontend/app/*.html`, each `cf-*` design system, absolute asset links):
-`portal` (dashboard) · `book` (full-screen booking) · `my` (my bookings) · `plans` (consolidated
-Membership/Packs/PAYG — served at `/plan`; `/membership` + `/packs` 301 here) · `account` (profile/family/
-financials) · `coach` (+`coach-onboarding`) · *(the `statement` shell — `frontend/app/statement.html` +
-`frontend/js/statement.js` — was **DELETED 2026-07-11** as an orphaned coach-statement duplicate; the coach
-month-end statement lives in the coach console's **Money** tab)* · `admin` · `onboarding` (owner) ·
-`settings` · `overview` (**Business Overview dashboard**, ECharts) ·
-`receipt` · `pay-return` · `styleguide`.
+**Portal SPA shells** — the EXACT contents of `frontend/app/` (each `cf-*` design system, absolute asset
+links). The three role SPAs are **`app`** (client) · **`coach_app`** (+`coach-onboarding`) · **`admin_app`**
+(served at `/admin`); the rest are standalone pages: `portal` (shell/dashboard) · `plans` (consolidated
+Membership/Packs/PAYG — served at `/plan`; `/membership` + `/packs` 301 here) · `onboarding` (owner) ·
+`settings` · `overview` (**Business Overview dashboard**, ECharts) · `invoice` · `receipt` · `pay-return` ·
+**`feedback`** (the token-guarded NPS to Google-review funnel) · **`subscribe`** (token-guarded
+re-permission opt-in) · `styleguide`.
+*Deleted, do not look for them:* `book`, `my`, `account`, `coach`, `admin` and `statement` shells — the
+booking flow, my-bookings, account and statement are all ROUTES inside the SPAs now, and the old paths 301
+or 302 into them.
 
 **Role-focused nav (`frontend/js/portal.js` + `home.js`).** Nav is role-precise — the client booking Home +
 Account no longer show to staff:
@@ -479,7 +515,8 @@ Post-login role routing (`client.js`, the SPA entry) lands members on the client
 admins on `/admin`; `Portal.landingFor` is the legacy equivalent for the old `*.html` shells.
 
 **Classic tab consoles — DELETED.** The coach console (`coach.js`/`coach.html`) was **deleted**; the owner
-console (`admin.js`/`admin.html`) + the `/admin-classic` route were **deleted 2026-07-18**. Its last unique
+console (`admin.js`/`admin.html`) was **deleted 2026-07-18** (the `/admin-classic` path survives only as a
+301 to `/admin`). Its last unique
 feature (block time / time-off) was ported into the new admin Diary (a **Block time** button →
 `POST /api/diary/time-off`); walk-in (Book a client → guest name) and desk-pay (on the transaction record)
 already lived in the new console — only the drag-to-create/move gesture is gone. The live consoles are the
@@ -489,9 +526,12 @@ three SPAs above, all on the shared widget layer.
 story) · **`coach_app`** (coach SPA — bottom-nav Home·Schedule·Clients·Money·Setup + the one coach event
 story) · **`admin_app`** (admin SPA — COMPLETE + LIVE at `/admin`; responsive shell + command-center Home) ·
 `portal` (role-focused nav + `landingFor` + notification bell) ·
-`home` (client Home + staff redirect) · `booking` (full-screen; replaced `book`/`quickbook`) · `my` ·
-`plan` · `account` · `coach` (5-tab console; +`coach_api`, `coach_onboarding`) *(`statement.js` DELETED 2026-07-11)* ·
-`admin` (5-tab console; +`admin_api`, `class_ui`; `AdminUI.courtsManage` = per-court click-to-edit hours) ·
+`home` (client Home + staff redirect) · `booking` (full-screen; replaced `book`/`quickbook`) ·
+`plan` · `coach_api` · `coach_onboarding` · `admin_api` · `class_ui` (`AdminUI.courtsManage` = per-court
+click-to-edit hours) · `invoice` · `receipt` · `pay` · `pay_return` · `service_editor` · `notifications` ·
+`analytics` · `attribution` · `auth_client` · `api` · `ui` · `wizard` · `overview` · `settings` ·
+`onboarding` *(**DELETED, do not look for them:** `my.js`, `account.js`, `coach.js` and `admin.js` — the
+5-tab consoles and their pages are gone; their capabilities are routes inside the three SPAs)* ·
 **`crm_ui`** (shared CRMUI components for both consoles — now incl. **`CRMUI.activityBlock`/`spendBlock`/
 `weekChart`**, the shared month-at-a-glance activity + spend-by-service + weekly-chart blocks rendered on the
 client Home AND the Client 360 rollup; plus the MONEY-FOLD renderers **`CRMUI.moneySummary`** (the
@@ -501,8 +541,8 @@ Billed→Collected→Outstanding band) + **`CRMUI.statementFold`** (the authorit
 `settings` · `onboarding` · `notifications` ·
 `pay` (`Pay.purchase`/`buyMembership`/`buyPack` — THE payment rule) · `pay_return` · `receipt` ·
 `analytics` (page-view beacon) · `overview` (Business Overview dashboard) · `api` · `auth_client` ·
-`ui` (+`UI.lifecycleBar`/`lifeActions`/`statusChip`/`subtabs` lifecycle helpers). `account.js` renders the
-grouped tick-to-pay "Your statement" card. **One design system:** `frontend/app/app.css` (all `cf-*`
+`ui` (+`UI.lifecycleBar`/`lifeActions`/`statusChip`/`subtabs` lifecycle helpers). The grouped
+tick-to-pay "Your statement" card is rendered by the client SPA (`client.js`) - `account.js` is gone. **One design system:** `frontend/app/app.css` (all `cf-*`
 classes — incl. `.cf-lifefilter`/`.cf-subtabs`/`.cf-cal*`; the SPA redesign added `.cf-bottomnav*`,
 `.cf-appbar`, `.cf-avatar`, `.cf-kv*`, `.cf-owe`, `.cf-amountbig`, and `.cf-admin` for the desktop
 side-rail). Marketing site: `frontend/marketing/`, `frontend/_shared/`.
@@ -516,8 +556,9 @@ Live now: `DATABASE_URL`, `OPS_KEY`, Clerk `AUTH_*`, Yoco (`PAYMENTS_ENABLED=1`,
 `AUTH_ISSUERS` on the "Sport AI - API call" service + `TF_TRUSTED_PARENT_ORIGINS` on `locker-room`), and
 **transactional email** — LIVE via the interim Ten-Fifty5 AWS account
 (`SES_SENDER=noreply@ten-fifty5.com`, `SES_AWS_ACCESS_KEY_ID`/`SES_AWS_SECRET_ACCESS_KEY`,
-`SES_REGION=eu-north-1`; **`EMAIL_ICS_ENABLED=0`** — the .ics attachment is OFF until the key gains
-`ses:SendRawEmail`, so confirmations attach nothing yet). Dark until keyed: `KLAVIYO_API_KEY`
+`SES_REGION=eu-north-1`; **`EMAIL_ICS_ENABLED=0`** — the .ics attachment is off BY CHOICE, not blocked: the
+sending key carries `AmazonSESFullAccess` (`ses:*`, incl. `ses:SendRawEmail`), which is why the invoice-PDF
+attachment already sends. Flip the flag to turn .ics on). Dark until keyed: `KLAVIYO_API_KEY`
 (CRM/marketing — self-gates), `S3_BUCKET`+AWS keys (photo uploads), Google-tag/GSC vars
 (`GA4_MEASUREMENT_ID`/`GOOGLE_ADS_*`/`GSC_*` — set at go-live cutover).
 **Note:** the old `*_ENABLED` toggles (`YOCO_/TRACKING_/CONSENT_/CRM_SYNC_`) plus the dead
@@ -531,7 +572,7 @@ dashboard (`sync:false`).
 - Compile: `python -m py_compile $(git ls-files '*.py')`.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 180 / billing 311 / statement 47** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 263 / billing 439 / statement 64** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
   on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +

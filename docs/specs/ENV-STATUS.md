@@ -98,6 +98,17 @@ Everything above is already set on the **dev/onrender** config. At cutover, chan
 | `SES_AWS_ACCESS_KEY_ID` | 🟢 | **Dedicated** SES credential (separate from the S3 `AWS_*` pair) | access key id |
 | `SES_AWS_SECRET_ACCESS_KEY` | 🟢 | Dedicated SES secret | secret key |
 | `SES_REGION` | 🟢 | SES region — **pinned `eu-north-1` in `render.yaml`** (was blank; blank fell through to `AWS_REGION=af-south-1` and would break email). Must match the verified SES identity | `eu-north-1` |
+| `FEEDBACK_SECRET` | 🟢 | Signs the `/feedback` link token (the token IS the authorization and names the recipient + club) | set |
+| `FEEDBACK_BASE_URL` | 🟢 | Base URL used when minting feedback links | prod host |
+| `GOOGLE_REVIEW_URL` | 🟢 | The `g.page` link a HAPPY NPS score is routed to | set |
+| `PUBLIC_APP_URL` | 🟢 | Public base URL used in emails/links | prod host |
+| `ANALYTICS_INGEST_HOST` | 🟢 | Where `marketing-digest.yml` POSTs the GA4/GSC metrics (`/api/cron/analytics-ingest`) | api host |
+| `MARKETING_DIGEST_API` | 🟢 | API base the digest emails through | api host |
+| `SIGNUP_TRIAL_DAYS` | 🟢 | Length of the signup trial (default 7) | `7` |
+| `KLAVIYO_MARKETING_LIST` / `KLAVIYO_REACTIVATION_LIST` | 🔴 | Klaviyo list ids — dark until `KLAVIYO_API_KEY` | unset |
+| `HUBSPOT_*` | 🔴 | Legacy/unused CRM vars read defensively; not part of the live path | unset |
+| `CLUB_FROM_NAME` / `CLUB_REPLY_TO` | 🟢 | Club identity threaded into every transactional email | set |
+| `TRANSACTIONAL_BCC` | 🟡 | Optional BCC on transactional email (coach BCC is separate, per own lesson/class) | optional |
 | `EMAIL_INVOICE_PDF_ENABLED` | 🟢 | Attach the invoice **PDF** to the `invoice_issued` email (MIME `SendRawEmail`) — **`1`, ON** (verified 2026-07-18; the SES key carries `AmazonSESFullAccess` = `ses:*`, which includes `ses:SendRawEmail`) | `1` |
 | `EMAIL_ICS_ENABLED` | 🟡 | Attach the booking `.ics` to emails — **`0` by default** (optional). The SES key **now has** `ses:SendRawEmail`, so flip to `1` anytime to enable it; add-to-calendar already works in-app | `0` |
 

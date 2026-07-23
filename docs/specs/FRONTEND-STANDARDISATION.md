@@ -51,6 +51,16 @@ local `money()`/`card()`/`modal()`.
 
 ---
 
+> **Missing from the inventory below until 2026-07-23, all shipped and live:**
+> **`Widgets.Earnings`** (`frontend/js/widgets/earnings.js`) - the ONE club-vs-coach P&L across admin +
+> coach Money, config-only (the coach app says "You keep", the admin drills coach -> client -> transaction).
+> **`CRMUI.rescheduleModal`** - the ONE reschedule UI shared by client/coach/admin/home, which replaced four
+> drifted forks, none of which could move a court; role differences are config (`canChangeCourt` is false for
+> a member's lesson, true for their court hire and for all staff).
+> **`CRMUI.activityBlock` / `spendBlock` / `weekChart`** - the shared month-at-a-glance blocks used by both
+> the client Home and the Client 360. **`CRMUI.lineItems`** gained an `onClick` option so a list can route
+> instead of acting (the refund-request inbox uses it to open the transaction record).
+
 ## 1. As-built widget inventory (what exists on disk)
 
 Shared layers, in load order per shell (`auth_client → ui → crm_ui → *_api → service_editor →

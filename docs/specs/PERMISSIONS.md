@@ -7,7 +7,7 @@ misplaced, and we build to the corrected version. Nothing here changes behaviour
 
 Grounded in the live code: `iam/permissions.py` (`can()`), the role SPAs `frontend/js/client.js` /
 `coach_app.js` / `admin_app.js` (post-login routing + surfaces), and — for the sensitivity map below —
-the classic `settings.js` tabs. (The classic `admin.js` survives at `/admin-classic`; `coach.js` was
+the classic `settings.js` tabs. (The classic `admin.js` was DELETED 2026-07-18 - `/admin-classic` is now only a 301 to `/admin`; `coach.js` was
 deleted.) The `can()` boundary and role model are unchanged by the SPA rebuild.
 
 ---
@@ -71,10 +71,10 @@ A ✓ = a **nav link** the role sees; a page a role can still *reach* (e.g. staf
 | platform_admin | (reach) | (reach) | (reach) | (reach) | (reach) | (reach) | ✓ (landing) | ✓ |
 
 *(guest ≈ member minus account depth.)* Staff **land on their console** on sign-in (`landingFor`); the
-standalone `/statement.html` is kept as an unlinked fallback (its content now lives in the coach Money tab).
+standalone `/statement.html` was DELETED 2026-07-11 - its content lives in the coach Money tab
 
 ## 4. Owner/Admin surface — what each tab does + sensitivity
-*(Described against the classic tab console — now at `/admin-classic`; the new `/admin` SPA reorganises
+*(Described against the classic tab console, which was RETIRED 2026-07-18; the new `/admin` SPA reorganises
 these same capabilities into Home · People · Money · Diary · Setup · Insights, sensitivity unchanged.)*
 **Admin console — 5 tabs (+ ⚙ Settings link); default = Dashboard:**
 | Tab | What it does | Sensitivity |
@@ -118,7 +118,7 @@ Cockpit and Overview tabs are folded into the five above (Diary/Money/Insights).
   never club-wide direct-service revenue, never the club earnings roll-up (that whole club overview —
   direct services + all coaches + club-keeps-vs-coaches-keep — is **ADMIN-only**,
   `GET /api/admin/financials/revenue-club`). Still carries the month-end settlement actions (mark-collected +
-  discount/write-off on own sessions); supersedes the standalone `/statement.html`.
+  discount/write-off on own sessions); replaced the standalone `/statement.html` (deleted).
   - **Transaction record for an order they earned** (a pack they sold) — `GET /api/coach/orders/<order_id>/record`
     = `diary.bookings.order_story(scope='coach')`: **READ-ONLY** (fold + audit log + receipt), **never** the club
     money actions (`desk_pay`/`void`/`write_off`/`refund` stay owner-only), and **GUARDED to orders the coach

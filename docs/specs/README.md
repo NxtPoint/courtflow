@@ -183,7 +183,7 @@ operating guide; **this folder is the detail.**
 > is ON** (`EMAIL_INVOICE_PDF_ENABLED=1`). Two new **read-only** integrity scripts back coach payouts /
 > month-end: `scripts/reconcile_coach_commission` (every paid coaching line has its coach split — should read
 > CLEAN) and `scripts/diagnose_coach_packs` (where each pack lands in coach earnings, sale-based). **Current
-> gate baseline: `python -m scripts.test_all` → booking 180 / billing 311 / statement 47.**
+> gate baseline AT THE TIME: `python -m scripts.test_all` -> booking 180 / billing 311 / statement 47.**
 >
 > **2026-07-18/22 — LIFECYCLE EMAIL, PROMOTIONS, AND THE ANALYTICS RETHINK.** Three sprints landed on top
 > of the close-out. **(1) The Klaviyo programme's code side is done** ([KLAVIYO-MASTER-PLAN.md](KLAVIYO-MASTER-PLAN.md)):
@@ -221,6 +221,38 @@ operating guide; **this folder is the detail.**
 > `sc_membership_started_emit` (+12 checks). **The fix is forward-only** — run
 > `scripts/klaviyo_membership_backfill` (new, dry-run by default) before sending that segment anything.
 > **New gate baseline: booking 263 / billing 417 / statement 64.**
+
+> **2026-07-23 - PRE-BILLING-DAY HARDENING + a live-money audit.** Two days before the 25th fires:
+> **(1) the month-end sweep ran every club and every client in ONE transaction.** It allocates GAPLESS
+> invoice numbers and `emit()`s from a background thread with its own session, so **the email does not roll
+> back** - a worker reaped at gunicorn's 120s timeout rolled back hundreds of invoices whose numbered emails
+> had already landed, and a re-run allocated different numbers. `run_month_end` split into
+> `month_end_period`/`_accrue`/`_targets`/`_client`; the CRON ROUTE drives `month_end_client` per client in
+> its OWN `session_scope()`, is time-boxed (`max_seconds`, default 90) and returns `{ok, complete, remaining}`
+> so the workflow **loops until complete**. **(2) The workflow could not fail** - it ended in `|| echo`, so a
+> month where nothing was billed went green and stayed invisible for 30 days. It now fails loudly.
+> **(3) `_mark_order` was an unconditional UPDATE**, so a late/replayed `charge_succeeded` flipped
+> `refunded`/`written_off`/admin-`void` straight to `paid` (the refunded case re-books returned cash as
+> revenue). `_mark_order_paid` allows only open/awaiting_payment/paid **plus the one void that IS
+> recoverable** - a lapsed hold (`order_void_is_recoverable`, now the SINGLE source of truth;
+> `yoco_billing.reconcile._is_expired_hold_void` delegates to it). A refusal records the payment but skips
+> the fan-out and returns `needs_attention='payment_on_closed_order'`. **(4) Refund requests:**
+> `approve_refund_request` passed the member's REQUESTED figure to Yoco, so "give me all of it back" sent an
+> explicit amount equal to the order total and Yoco refused - while the transaction record's button (no
+> amount = full refund) worked; anything not a strict partial now resolves to full. A direct refund
+> **resolves** the pending request (`resolve_pending_requests_for_order`) instead of nagging forever, the
+> queue no longer hides a request whose order is `void` **while the club still holds the cash**
+> (`_PENDING_STILL_REFUNDABLE`), and the home count no longer reports a FAILED read as `0`. The queue is now
+> an INBOX routing to `#/txn/<order_id>` - **one decision surface, not two**. **(5) `reconcile_pending`
+> defaults to `hours=72`** and the hourly job passes nothing, so anything slipping past 3 days aged out
+> **never checked**; `reconcile-deep.yml` (weekly, 100 days) closes it. **(6) `diary.enrolment` gained
+> `created_by_user_id`** - enrol() gates payment modes only for member/guest, so without the actor a staff
+> on-behalf seat was indistinguishable from a leak. New scripts: `preview_month_end`,
+> `settle_stranded_class_seats`, and `void_orphaned_orders` **pass 2** (the original joined
+> `order_line.booking_id`, so it never saw memberships/packs/class seats - most of the value).
+> **Audit outcome: no money missing.** 33 clients / R41,170 for the 25th; 61 pending orders verified against
+> Yoco (0 recovered, all genuinely abandoned) then voided.
+> **New gate baseline: booking 263 / billing 439 / statement 64.**
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,

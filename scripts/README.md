@@ -6,7 +6,7 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
 ## Gates (run before every merge — KEEP)
 - `test_all.py` — runs the three scenario harnesses below. **The merge gate.**
 - `test_booking_scenarios.py` · `test_billing_scenarios.py` · `test_statement_reconciliation.py`
-  — rollback-only scratch-DB harnesses (**booking 263 / billing 417 / statement 64**).
+  — rollback-only scratch-DB harnesses (**booking 263 / billing 439 / statement 64**).
 
 ## Load-bearing at runtime (KEEP — do not touch)
 - `seed_nextpoint.py` — re-seeds club #1 on every prod boot (`SEED_NEXTPOINT=1`, imported by `app.py`). Idempotent.
@@ -14,6 +14,13 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
 
 ## Ongoing tools / diagnostics (KEEP — re-runnable)
 - `verify_live.py` — read-only check against the real Render Postgres (uses gitignored `.env.local`).
+- `diagnose_bookings.py` - READ-ONLY production diagnostic: confirmed-looking-but-unpaid bookings and
+  class seats, expired holds never released, orphaned unpaid orders, settlement modes that a service
+  does not offer (separating retroactive config changes from real candidates), and a double-charge
+  check. Every read is `_guard`-wrapped, so a wrong column reports `[skipped]` rather than failing -
+  check the SQL against the schema when a panel looks suspiciously clean.
+- `repermission_campaign.py` - the one-off re-permission send for the non-consented members
+  (pairs with the token-guarded `/subscribe` page).
 - `preview_month_end.py` — READ-ONLY dry run of the month-end sweep: who gets invoiced on the
   25th and for how much, PLUS the money it will skip and why (abandoned checkouts, debt hidden
   behind a live 'Pay all' wrapper, unattributed orders). Run it before every billing day — a
@@ -33,7 +40,14 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
 
 ## Spent one-offs (job done for club #1 — kept for provenance / future tenants)
 - `klaviyo_trial_cohort.py` — ONE-TIME trial-cohort backfill to Klaviyo (for members trialed before the emit shipped). Only re-run for a NEW cohort/tenant.
-- `void_orphaned_orders.py` — ONE-OFF: voids unpaid orders whose bookings were ALL cancelled (abandoned online checkouts that lazy expiry left behind — 37 in prod). Only touches orders with no live booking and no succeeded payment. Dry-run by default; `--commit` to write. The root cause is fixed in `release_expired_holds`, so this shouldn't need re-running.
+- `void_orphaned_orders.py` - TWO passes. (1) unpaid orders whose bookings are ALL cancelled and
+  which took no money; the root cause is fixed (`release_expired_holds` voids on expiry), so pass 1
+  should stay empty. (2) **abandoned checkouts with NO booking behind them** - memberships, packs and
+  class seats, which pass 1 could never see because it joins `order_line.booking_id`; that is where
+  most of the value sits and nothing else ever cleans it. Four guards: no live booking, no live
+  enrolment, no succeeded payment, older than `--min-age-days` (default 7). Dry-run by default.
+  **Run reconcile with a wide `hours` FIRST** so Yoco - not our DB - has confirmed they were never
+  paid; voiding a genuinely-paid order would hide real money instead of tidying noise.
 - `klaviyo_membership_backfill.py` — ONE-TIME: sets `on_trial=false` + fires `membership_started` for members who converted BEFORE that emit was fixed (2026-07-22). **Run this before sending the Unconverted-trial segment anything** — until it does, that segment still contains paying members. Dry-run by default; `--commit` to push. See `docs/specs/KLAVIYO-MASTER-PLAN.md` §7f.
 - `backfill_pack_products.py` — ONE-TIME map of legacy NULL-product packs → their service. Spent for club #1; reusable for a migrated tenant.
 - `backfill_person_links.py` — ONE-TIME `iam.user ↔ core.person` backfill (911/911 done). Forward-linking now lives in the app path (`link_person_for_user`).

@@ -22,7 +22,7 @@ Postgres, AWS SES/S3, Klaviyo, provider-agnostic payments).
 | Track | State |
 |---|---|
 | **Platform** | ✅ **LIVE in production**, feature-complete for launch. **No current build phase** — what remains is config + backlog. |
-| **Verification gates** | `python -m scripts.test_all` → **booking 180 / billing 371 / statement 47** (rollback-only scratch-DB harnesses; there is no pytest suite). |
+| **Verification gates** | `python -m scripts.test_all` → **booking 263 / billing 439 / statement 64** (rollback-only scratch-DB harnesses; there is no pytest suite). |
 | **SEO migration** | ✅ Wix→Render cutover executed 2026-07-05 — 48-rule 301 map live, canonical→apex, prod Clerk + Google login. |
 | **Measurement** | GA4 + Google Ads live; gclid capture → `core.acquisition`; the Google Ads offline-conversion CSV feed is built (still needs its scheduled upload configured). |
 | **Transactional email** | ✅ LIVE via SES (interim: rides the Ten-Fifty5 AWS account). Invoice PDFs attach. |

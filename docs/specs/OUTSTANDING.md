@@ -8,7 +8,7 @@ switches, unwired endpoints) live in their own doc: **[FEATURE-FLAGS.md](FEATURE
 > feature-complete for launch. What remains is (A) config owed by Tomo, (B) code backlog, (C) owner
 > decisions, (D) hardening, and (E) two large well-specced roadmaps (Admin Phase 2 + CRM Missions).
 > **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 263 /
-> billing 417 / statement 64** (2026-07-22).
+> billing 439 / statement 64** (2026-07-23).
 >
 > **Klaviyo, 2026-07-22 — `membership_started` never fired** (wired to a gateway branch nothing produces);
 > **fixed in code + backfill RUN on prod** (12 members corrected, no emails sent). `KLAVIYO-MASTER-PLAN.md`
@@ -59,15 +59,17 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
 
 ## B. Code — backlog (real deferred functionality)
 
-**P1 (correctness / launch-adjacent)**
-- [ ] **Orphaned `awaiting_payment` order cleanup** — when an online booking's `held` slot is lazy-expired,
-      its linked unpaid order is NOT auto-voided → a phantom owed order. Mirror `cancel_booking`'s void on
-      hold-expiry, or a periodic sweep.
-- [ ] **A scheduler for reminders / reconcile / membership-refill** — the handlers exist
-      (`/api/cron/{reminders,reconcile-payments,membership-refill}`) but the four `render.yaml` crons are
-      commented out, so no reminders go out and no recurring memberships roll. Options: re-enable a Render
-      cron (off Free), an external pinger, or a keep-warm GitHub Action (as month-end does). Rent accrual
-      already rides the month-end Action. (See FEATURE-FLAGS B3/B4/C1.)
+**P1 (correctness / launch-adjacent)** — *empty. The two items that lived here are DONE:*
+- [x] **Orphaned `awaiting_payment` order cleanup** — DONE. `release_expired_holds` now calls
+      `_void_orders_with_no_live_bookings`, voiding the abandoned order once EVERY booking on it is dead.
+      Reconcile can still re-open a purely hold-expiry void (`order_void_is_recoverable`), so a late
+      payment is never stranded. Backlog cleared with `scripts/void_orphaned_orders.py` (which gained a
+      second pass for abandoned checkouts that never had a booking — memberships, packs, class seats).
+- [x] **A scheduler for reminders / reconcile / membership-refill** — DONE, all on **GitHub Actions**, not
+      Render crons: `reminders.yml` (hourly), `membership-refill.yml` (daily), `reconcile-payments.yml`
+      (hourly, 72h lookback) + `reconcile-deep.yml` (weekly, 100-day — the safety net for anything that
+      ages out of 72h), `month-end.yml` (25th), `marketing-digest.yml` (daily), `keep-warm.yml`. The four
+      `render.yaml` crons stay commented out **by design** — add a workflow, never uncomment one.
 
 **P2 (valuable)**
 - [x] ~~**Diary timeline editing port**~~ — **DONE / MOOT 2026-07-18.** The classic console (`/admin-classic` +
@@ -142,8 +144,9 @@ These are whole programmes of work with their own specs — pull items into A–
   gate (admin name+email DONE; **phone + first-booking-checkout gate still open**), `UNIQUE(lower(email))`
   after de-dup, unify the two `marketing_opt_in` flags; **1.2** true Client-360 (demographics/consent + unified
   activity timeline); **1.3** interaction capture (`account_created`/`payment_succeeded`/`login` events);
-  **1.4** NPS & surveys (`core.nps_response` exists but has **no submit UI/callers** — wire a post-lesson
-  prompt); **1.5** preferences model (`iam.preference`). Then Mission 2 (marketing engine: Klaviyo activation,
+  **1.4** NPS & surveys (**DONE** — the gated `/feedback` page writes `core.nps_response` via
+  `GET/POST /api/feedback` and routes a happy score to the Google review link; a post-lesson prompt is the
+  remaining nice-to-have); **1.5** preferences model (`iam.preference`). Then Mission 2 (marketing engine: Klaviyo activation,
   segmentation, churn/fill scoring, WhatsApp/SMS). **§6 shared-code convergence** (extract the drifted
   CRM/analytics/beacon/SES forks into a pinned package) is a cross-cutting decision already made.
 

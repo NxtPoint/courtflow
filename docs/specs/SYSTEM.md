@@ -317,8 +317,8 @@ verification. Each club rides it with its OWN identity — a **From display name
 `marketing_crm/email/ses.py` self-gates on creds and takes its OWN AWS keys (`SES_AWS_ACCESS_KEY_ID` /
 `SES_AWS_SECRET_ACCESS_KEY` / `SES_REGION`) so it can ride a different AWS account from S3; `send_email`
 takes `from_name`/`reply_to` and `send_booking_confirmation` is club-branded; `send_raw_email` (MIME
-`SendRawEmail`) attaches the booking **.ics** — **gated by `EMAIL_ICS_ENABLED` (default `0`)** until the
-sending key carries `ses:SendRawEmail`. `notifications.deliver` threads the club identity into every mapped
+`SendRawEmail`) attaches the booking **.ics** - **gated by `EMAIL_ICS_ENABLED` (default `0`) BY CHOICE.**
+The key already carries `ses:SendRawEmail` (`AmazonSESFullAccess`) - that is how the invoice PDF attaches; flip the flag to enable .ics. `notifications.deliver` threads the club identity into every mapped
 event. No new endpoints, no schema change. **Running now** via the **interim** Ten-Fifty5 AWS account
 (`eu-north-1`, `SES_SENDER=noreply@ten-fifty5.com`) — the long-term proper CourtFlow-domain setup is in
 [SES-SETUP.md](SES-SETUP.md). Klaviyo lifecycle flows hang off the same event feed (dark without

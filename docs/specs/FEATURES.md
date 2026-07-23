@@ -37,7 +37,7 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   (login-less child players billed to the guardian). 🔭
 
 ## 3. The diary — booking engine (the heart)
-- Book a **court**, a **lesson** (named or "Any" coach), or **enrol in a class**. ✅
+- Book a **court**, a **lesson** (**coach-first** — no "Any coach"; rates are per-coach), or **enrol in a class**. ✅
 - **No double-booking** — a Postgres GiST exclusion constraint guarantees one booking per resource
   per time; concurrent clashes → exactly one wins (`SLOT_TAKEN`). ✅
 - **Lessons reserve a court** — availability = where a coach **and** a court are both free
@@ -289,7 +289,7 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
   spot-open, coach invited, lesson requested/proposed/accepted/declined. 🔭
 - **Child → guardian** notification routing. 🔭
 - Booking **`.ics` calendar** (in-app add-to-calendar works now; the email attachment is gated OFF via
-  `EMAIL_ICS_ENABLED=0` until the interim SES key gains `ses:SendRawEmail`). 🔭
+  `EMAIL_ICS_ENABLED=0` **by choice** - the SES key already has `ses:SendRawEmail`, so it is flag-only). Invoice PDFs already attach with it.
 - **Transactional email — per-club branded, multi-tenant SES — LIVE** ✅ (interim via the Ten-Fifty5 AWS
   account, `eu-north-1`, `SES_SENDER=noreply@ten-fifty5.com`): confirmations + invites go out from **one
   verified domain** but under **each club's own From name and Reply-To**, so a new tenant needs no new
