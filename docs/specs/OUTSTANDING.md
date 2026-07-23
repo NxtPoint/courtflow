@@ -36,6 +36,30 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
       is already live. (`GOOGLE-ADS-PLAN.md`.)
 - [ ] **Complete Google advertiser verification** (in progress). (`GOOGLE-ADS-PLAN.md`.)
 
+**CARRY-OVER as of 2026-07-23 — the ONLY things known to be open.** Everything else in section B was
+closed out in the 2026-07-22/23 sweep (see `README.md`'s dated entry).
+
+- [ ] **Klaviyo console work** (3 items, all in the Klaviyo UI, no code — full detail in
+      `KLAVIYO-MASTER-PLAN.md` §7e/§8):
+      **(a)** flow **`WSWr2C`** ("Court feedback") has `trigger_filter = null` — add **`booking_type` equals
+      `court`** or it fires on lessons and classes too. It is still **Draft**, so nothing is misfiring today;
+      this must happen *before* it goes live.
+      **(b)** build the **C1 post-lesson email** in Flow Builder, triggered on the REAL `lesson_completed`
+      metric **`SzgJKC`** — NOT the MCP test twin `RfeMhj`. **Verify the trigger via `get_flow`
+      `definition.triggers` BEFORE saving**: triggers cannot be changed after save (one flow already had to be
+      deleted and rebuilt for this).
+      **(c)** re-check the Unconverted-trial segment **`XxUZCt`** has shrunk now the `membership_started`
+      backfill has run, *before* sending the January offer — otherwise it aims "you haven't converted" at
+      paying members.
+- [ ] **Peak pricing on reschedule** — `reschedule_booking` re-prices on the same product but does not
+      re-evaluate PEAK vs off-peak for the new time, so moving a booking between peak bands keeps the
+      original band's price. **Dormant**: no club has peak pricing configured, so it cannot bite today. Fix
+      before enabling peak pricing anywhere. (Off-peak per-slot pricing at CREATE time is correct and
+      harness-covered.)
+- [ ] **3 abandoned-checkout orders** were held back by `void_orphaned_orders.py`'s 7-day age floor on
+      2026-07-23 (created 18-22 July). Cosmetic only — Yoco confirmed all unpaid. Re-run the script whenever;
+      they will clear once past 7 days.
+
 **P2**
 - [ ] **Ten-Fifty5 embed → all members** — clear `TF5_EMBED_ALLOW_EMAILS` (currently one test email; others
       see a "Coming soon" card). Depends on the TF5-side env staying set.
