@@ -61,10 +61,48 @@ WHERE o.club_id = :c
 ORDER BY o.created_at DESC
 """
 
+# ABANDONED CHECKOUTS THAT NEVER HAD A BOOKING. The query above joins order_line.booking_id, so it
+# only ever sees court/lesson orders - yet most abandoned checkout VALUE is memberships and packs
+# (no booking row at all) and class seats (linked by diary.enrolment.order_id, not booking_id).
+# Those accumulate forever: awaiting_payment is excluded from the statement, month-end and
+# invoicing, so nothing bills them and nothing cleans them, and every audit has to re-reason about
+# a five-figure pile of noise before it can trust the real numbers.
+#
+# SAFETY. Voiding is only correct when nothing LIVE depends on the order and no money was taken, so
+# all four guards must hold: no live booking, no live enrolment (a held seat is still someone's
+# place in a class), no succeeded/refunded payment, and older than --min-age-days so an in-flight
+# checkout is never killed under the customer. Membership/pack activation happens ON PAYMENT, so an
+# unpaid order granted nothing there is nothing to unwind.
+#
+# RUN RECONCILE FIRST (POST /api/cron/reconcile-payments with a wide `hours`) so YOCO - not our own
+# DB - has confirmed these were never paid. Voiding a genuinely-paid order would hide real money.
+_ABANDONED_SQL = """
+SELECT o.id, o.status, o.settlement_mode, o.amount_minor, o.created_at,
+       u.email AS client
+FROM billing."order" o
+LEFT JOIN iam."user" u ON u.id = o.user_id
+WHERE o.club_id = :c
+  AND o.status = 'awaiting_payment'
+  AND o.created_at < now() - (:days || ' days')::interval
+  AND NOT EXISTS (SELECT 1 FROM billing.order_line l2
+                   JOIN diary.booking b2 ON b2.id = l2.booking_id
+                  WHERE l2.order_id = o.id
+                    AND b2.status NOT IN ('cancelled', 'expired'))
+  AND NOT EXISTS (SELECT 1 FROM diary.enrolment e
+                  WHERE e.order_id = o.id
+                    AND e.status NOT IN ('cancelled', 'expired'))
+  AND NOT EXISTS (SELECT 1 FROM billing.payment p
+                  WHERE p.order_id = o.id AND p.direction = 'charge'
+                    AND p.status IN ('succeeded', 'refunded'))
+ORDER BY o.created_at DESC
+"""
+
 
 def main():
     ap = argparse.ArgumentParser(description="Void unpaid orders whose bookings are all cancelled.")
     ap.add_argument("--commit", action="store_true", help="actually void (default: report only)")
+    ap.add_argument("--min-age-days", type=int, default=7,
+                    help="only void abandoned checkouts older than this (default 7)")
     args = ap.parse_args()
     _load_env_local()
     import db
@@ -90,6 +128,34 @@ def main():
                     try:
                         void_order(s, club_id=str(c["id"]), order_id=str(r["id"]),
                                    reason="abandoned checkout — booking already cancelled")
+                        done += 1
+                    except Exception as e:
+                        print("   !! %s: %s" % (r["id"], e.__class__.__name__))
+                print("   -> voided %d/%d" % (done, len(rows)))
+
+        # Pass 2: the abandoned checkouts with no booking behind them (memberships, packs, seats).
+        for c in clubs:
+            rows = s.execute(text(_ABANDONED_SQL),
+                             {"c": str(c["id"]), "days": args.min_age_days}).mappings().all()
+            if not rows:
+                continue
+            value = sum((r["amount_minor"] or 0) for r in rows) / 100.0
+            print("")
+            print("== %s - %d abandoned checkout(s), R%.2f (nothing live behind them)" % (
+                c["name"], len(rows), value))
+            print("   %-38s %10s  %-28s %s" % ("order_id", "amount", "client", "created"))
+            for r in rows:
+                print("   %-38s %10.2f  %-28s %s" % (
+                    r["id"], (r["amount_minor"] or 0) / 100.0,
+                    (r["client"] or "-")[:28], r["created_at"].strftime("%Y-%m-%d")))
+            total += len(rows)
+            if args.commit:
+                from billing.statement import void_order
+                done = 0
+                for r in rows:
+                    try:
+                        void_order(s, club_id=str(c["id"]), order_id=str(r["id"]),
+                                   reason="abandoned checkout - never paid at the provider")
                         done += 1
                     except Exception as e:
                         print("   !! %s: %s" % (r["id"], e.__class__.__name__))
