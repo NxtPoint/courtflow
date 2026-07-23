@@ -1,0 +1,77 @@
+# reconcile-deep — the WEEKLY safety net behind the hourly reconcile sweep.
+#
+# reconcile_pending defaults to hours=72 (it matches Yoco's own retry horizon, and the hourly job
+# passes nothing, so that default is what runs). That is the right window for the routine sweep —
+# but it means an order that slips past three days AGES OUT AND IS NEVER CHECKED AGAIN. If its
+# webhook was missed and the hourly sweep didn't catch it inside 72h, the club has money at Yoco
+# with no booking, no receipt and no activated pack/membership, and NOTHING will ever look at it.
+#
+# That gap was real and invisible: at the 2026-07-23 audit, 34 orders worth R37,960 had been sitting
+# in awaiting_payment for up to a month, every one of them outside the window and never once asked
+# about. (Yoco confirmed all were genuinely abandoned — but that was luck, not design.)
+#
+# So: once a week, sweep back far enough that nothing can hide. Reconcile is idempotent, activates
+# the purchase (yoco_billing/activation.py) as well as settling, and a genuinely-unpaid order just
+# reports not_paid_yet — so a wide window costs only Yoco API calls, never correctness.
+#
+# Kept SEPARATE from the hourly job on purpose: the hourly stays cheap and narrow, this one goes
+# deep and rare. Needs the OPS_KEY repo secret (no-ops without it, same as every other job here).
+name: reconcile-deep
+
+on:
+  schedule:
+    - cron: "40 5 * * 0"     # Sundays 05:40 UTC (07:40 SAST) — inside the keep-warm window
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "Lookback in hours (default 2400 = 100 days)"
+        required: false
+        default: "2400"
+
+jobs:
+  deep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deep reconcile of pending online payments
+        env:
+          OPS_KEY: ${{ secrets.OPS_KEY }}
+          HOURS: ${{ github.event.inputs.hours }}
+        run: |
+          if [ -z "$OPS_KEY" ]; then
+            echo "OPS_KEY secret not set — skipping."
+            echo "### reconcile-deep SKIPPED — no OPS_KEY secret" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          HOURS="${HOURS:-2400}"
+
+          curl -fsS --max-time 90 https://courtflow-api.onrender.com/healthz >/dev/null 2>&1 || true
+
+          code=$(curl -sS --max-time 540 -o response.json -w '%{http_code}' -X POST \
+            https://courtflow-api.onrender.com/api/cron/reconcile-payments \
+            -H "X-Ops-Key: $OPS_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"hours\": ${HOURS}}") || {
+              echo "### reconcile-deep: request failed (timeout or network)" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            }
+
+          echo "HTTP $code"
+          # `recovered` is the number that matters: >0 means real money was repaired that the hourly
+          # sweep had already given up on. Surface it rather than burying it in a 60-order blob.
+          recovered=$(grep -o '"recovered":[0-9]*' response.json | head -1 | cut -d: -f2)
+          scanned=$(grep -o '"scanned":[0-9]*' response.json | head -1 | cut -d: -f2)
+          {
+            echo "### reconcile-deep (${HOURS}h lookback) — HTTP $code"
+            echo "- scanned: ${scanned:-?}"
+            echo "- **recovered: ${recovered:-?}**"
+            if [ "${recovered:-0}" != "0" ]; then
+              echo ""
+              echo "Recovered payments the 72h hourly sweep had aged out."
+              echo "Check these against Yoco and confirm the bookings/packs are live."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$code" != "200" ]; then
+            echo "reconcile-deep returned HTTP $code"
+            exit 1
+          fi

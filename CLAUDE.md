@@ -109,6 +109,7 @@ re-run or a doubled schedule is safe. When adding a recurring job, add a workflo
 | `membership-refill.yml` | daily 07:30 SAST | membership-lapse sweep — `current_period_end` passed → `expired` + emits `membership_lapsed` (drives the Klaviyo E2 win-back) |
 | `month-end.yml` | monthly, the **25th** 08:00 SAST | `billing.commission.run_month_end` — coach arrears + rent, then one consolidated statement invoice + pay-link per client owing |
 | `reconcile-payments.yml` | hourly, 07:00–22:00 SAST | `yoco_billing.reconcile.reconcile_pending` — recovers payments whose webhook never arrived (Render Free sleeps, so CLAUDE.md calls reconcile "the common path"). The handler shipped at launch but **nothing ever called it** until 2026-07-22 |
+| `reconcile-deep.yml` | weekly, Sun 07:40 SAST | the SAFETY NET behind the hourly sweep — `reconcile_pending` defaults to **`hours=72`** and the hourly job passes nothing, so an order that slips past 3 days **ages out and is never checked again**. Sweeps `hours=2400` (100 days) so nothing can hide unverified |
 | `marketing-digest.yml` | daily 07:00 SAST | cross-brand GA4/GSC organic report + the `core.web_daily` ingest push (see the analytics section) |
 
 **Capacity-sweep needs no job at all** — abandoned holds are released by lazy expiry (see Gotchas).
