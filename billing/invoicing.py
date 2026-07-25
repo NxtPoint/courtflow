@@ -350,6 +350,70 @@ def active_invoice_order_ids(session, *, club_id, user_id) -> set:
 # ISSUE — create an invoice DOCUMENT over a set of orders
 # ---------------------------------------------------------------------------
 
+def _enriched_line_descriptions(session, *, club_id, order_ids) -> Dict[str, str]:
+    """Human line descriptions for invoice lines, keyed by order_id.
+
+    A booking order_line carries only the bare `booking_type` ('court'/'lesson'/'class') as its
+    description — fine internally, but on a customer invoice it reads "court  R180" with no date,
+    service or coach. This resolves each booking/class order to a real one-liner:
+      lesson → "25 Jul · 60 min Private with Allon Rock"
+      court  → "25 Jul · 60 min Hardcourt Hire — KCC - Hard Court 3"   (court, NOT a coach)
+      class  → "25 Jul · Cardio Tennis"
+    Dates render in the CLUB's timezone (a month-end invoice at 08:00 SAST must not print the UTC
+    day). Only bare-booking lines are enriched by the caller; equipment add-ons, fees, memberships
+    and packs keep their own descriptions. Guarded end-to-end — a resolve failure just leaves the
+    original description, never a broken invoice."""
+    out: Dict[str, str] = {}
+    if not order_ids:
+        return out
+    tz = (session.execute(text("SELECT COALESCE(timezone,'Africa/Johannesburg') FROM club.club WHERE id = :c"),
+                          {"c": str(club_id)}).scalar()) or "Africa/Johannesburg"
+    try:
+        # Court / lesson bookings.
+        for r in session.execute(
+            text("SELECT DISTINCT ON (ol.order_id) ol.order_id, b.booking_type, "
+                 "  to_char((b.starts_at AT TIME ZONE :tz), 'DD Mon') AS d, "
+                 "  GREATEST(1, round(extract(epoch FROM (b.ends_at - b.starts_at)) / 60))::int AS mins, "
+                 "  p.name AS service, r.name AS resource_name, "
+                 "  NULLIF(trim(coalesce(cu.first_name,'') || ' ' || coalesce(cu.surname,'')), '') AS coach "
+                 "FROM billing.order_line ol "
+                 "JOIN diary.booking b ON b.id = ol.booking_id "
+                 "LEFT JOIN billing.product p ON p.id = b.product_id "
+                 "LEFT JOIN diary.resource r ON r.id = b.resource_id "
+                 'LEFT JOIN iam."user" cu ON cu.id = b.coach_user_id '
+                 "WHERE ol.order_id = ANY(:ids) AND ol.booking_id IS NOT NULL "
+                 "ORDER BY ol.order_id, b.starts_at"),
+            {"ids": [str(o) for o in order_ids], "tz": tz},
+        ).mappings():
+            d, mins = r["d"], r["mins"]
+            if r["booking_type"] == "lesson":
+                svc = r["service"] or "Lesson"
+                txt = f"{d} · {mins} min {svc}" + (f" with {r['coach']}" if r["coach"] else "")
+            else:  # court
+                svc = r["service"] or "Court hire"
+                txt = f"{d} · {mins} min {svc}" + (f" — {r['resource_name']}" if r["resource_name"] else "")
+            out[str(r["order_id"])] = txt
+
+        # Class enrolments (no booking row; the order hangs off diary.enrolment).
+        for r in session.execute(
+            text("SELECT DISTINCT ON (e.order_id) e.order_id, "
+                 "  to_char((cs.starts_at AT TIME ZONE :tz), 'DD Mon') AS d, "
+                 "  COALESCE(p.name, r.name) AS service "
+                 "FROM diary.enrolment e "
+                 "JOIN diary.class_session cs ON cs.id = e.class_session_id "
+                 "LEFT JOIN diary.resource r ON r.id = cs.resource_id "
+                 "LEFT JOIN billing.product p ON p.id = r.product_id "
+                 "WHERE e.order_id = ANY(:ids) "
+                 "ORDER BY e.order_id, cs.starts_at"),
+            {"ids": [str(o) for o in order_ids], "tz": tz},
+        ).mappings():
+            if str(r["order_id"]) not in out:
+                out[str(r["order_id"])] = f"{r['d']} · {r['service'] or 'Class'}"
+    except Exception:
+        log.info("invoice line enrichment skipped club=%s", club_id, exc_info=False)
+    return out
+
+
 def issue_invoice(session, *, club_id, user_id, order_ids, kind="statement",
                   period_label=None, due_date=None, created_by_user_id=None,
                   notes=None, skip_already_invoiced=None):
@@ -374,13 +438,30 @@ def issue_invoice(session, *, club_id, user_id, order_ids, kind="statement",
             return {"ok": False, "error": "ALL_ALREADY_INVOICED"}
 
     # Snapshot line items from the covered orders' order_lines (full itemisation), club-scoped.
-    rows = session.execute(
+    rows = [dict(r) for r in session.execute(
         text('SELECT ol.order_id, ol.description, ol.qty, ol.amount_minor, o.currency_code '
              'FROM billing.order_line ol JOIN billing."order" o ON o.id = ol.order_id '
              'WHERE ol.order_id = ANY(:ids) AND o.club_id = :c '
              'ORDER BY o.created_at, ol.created_at'),
         {"ids": order_ids, "c": str(club_id)},
-    ).mappings().all()
+    ).mappings().all()]
+
+    # EVERY covered order MUST contribute a line. An owed order with no order_line rows (a data gap)
+    # would otherwise be silently dropped: its debt vanishes from the invoice TOTAL (under-billing),
+    # and if it were the only order the whole issue failed NO_LINES and the client got a bare
+    # "pay online" reminder with no PDF instead of an invoice. Synthesise a single line from the
+    # order's own amount for any covered order the snapshot missed, so the invoice always ties out.
+    seen = {str(r["order_id"]) for r in rows}
+    missing = [o for o in order_ids if o not in seen]
+    if missing:
+        for o in session.execute(
+            text('SELECT id, amount_minor, currency_code FROM billing."order" '
+                 "WHERE id = ANY(:ids) AND club_id = :c AND amount_minor > 0"),
+            {"ids": missing, "c": str(club_id)},
+        ).mappings():
+            rows.append({"order_id": o["id"], "description": "Charge",
+                         "qty": 1, "amount_minor": int(o["amount_minor"] or 0),
+                         "currency_code": o["currency_code"]})
     if not rows:
         return {"ok": False, "error": "NO_LINES"}
 
@@ -405,13 +486,22 @@ def issue_invoice(session, *, club_id, user_id, order_ids, kind="statement",
          "notes": notes or seller.get("terms"), "by": (str(created_by_user_id) if created_by_user_id else None)},
     ).scalar()
 
+    # Enrich the bare booking lines ('court'/'lesson'/'class') into a dated, named description; fees,
+    # add-ons, memberships and packs already carry a real description and are left untouched.
+    enriched = _enriched_line_descriptions(session, club_id=club_id, order_ids=order_ids)
     for r in rows:
+        base = r["description"]
+        # Enrich a bare booking line ('court'/'lesson'/'class') or a synthesised 'Charge' line;
+        # everything with a real description (fees, packs, memberships, add-ons) is left as-is.
+        desc = enriched.get(str(r["order_id"])) if base in ("court", "lesson", "class", "Charge") else base
+        if not desc:
+            desc = (base or "").strip().capitalize() or "Charge"
         session.execute(
             text("INSERT INTO billing.invoice_line "
                  "(invoice_id, club_id, order_id, description, qty, amount_minor) "
                  "VALUES (:i, :c, :o, :d, :q, :a)"),
             {"i": str(inv), "c": str(club_id), "o": str(r["order_id"]),
-             "d": r["description"], "q": int(r["qty"] or 1), "a": int(r["amount_minor"] or 0)},
+             "d": desc, "q": int(r["qty"] or 1), "a": int(r["amount_minor"] or 0)},
         )
 
     return {"ok": True, "invoice_id": str(inv), "invoice_number": number,
@@ -429,6 +519,23 @@ def open_order_ids(session, *, club_id, user_id) -> List[str]:
         {"c": str(club_id), "u": str(user_id)},
     ).scalars().all()
     return [str(r) for r in rows]
+
+
+def latest_active_invoice_with_open_debt(session, *, club_id, user_id) -> Optional[str]:
+    """The client's most recent ISSUED invoice that still covers at least one OPEN order — i.e. an
+    invoice they've been sent but not yet paid. Month-end uses this: when a client's whole balance is
+    ALREADY on an active invoice (so there's nothing new to issue), re-send THAT invoice's email —
+    with its PDF and pay-link — instead of a bare "pay online" reminder with no document. Returns the
+    invoice id or None."""
+    return session.execute(
+        text("SELECT i.id FROM billing.invoice i "
+             "WHERE i.club_id = :c AND i.user_id = :u AND i.status = 'issued' "
+             "AND EXISTS (SELECT 1 FROM billing.invoice_line il "
+             '            JOIN billing."order" o ON o.id = il.order_id '
+             "            WHERE il.invoice_id = i.id AND o.status = 'open') "
+             "ORDER BY i.created_at DESC LIMIT 1"),
+        {"c": str(club_id), "u": str(user_id)},
+    ).scalar()
 
 
 def issue_statement_invoice(session, *, club_id, user_id, period_label=None, due_date=None,

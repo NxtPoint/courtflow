@@ -2235,6 +2235,78 @@ def sc_refund_request_visibility(s, fx):
           not _pending(req2["id"]))
 
 
+def sc_invoice_lines_are_itemised(s, fx):
+    """A statement invoice must read like a bill, not a debug dump. The order_line description of a
+    booking is only the bare `booking_type` ('court'/'lesson'/'class'); on the customer's PDF that
+    printed as "court  R180" with no date, service or coach. issue_invoice now enriches those lines:
+      lesson → date + duration + service + COACH
+      court  → date + duration + service + COURT (never a coach)
+      class  → date + service
+    Fees / packs / memberships keep their own description untouched."""
+    print("\n# Invoice lines are itemised: date + service + coach (lesson) / court (court hire)")
+    from billing import invoicing as INV
+
+    # A named lesson service for this coach, and a named court service.
+    lprod = s.execute(text("INSERT INTO billing.product (club_id,kind,name,coach_user_id,active) "
+                           "VALUES (:c,'lesson','Private',:u,true) RETURNING id"),
+                      {"c": fx.club_id, "u": fx.coach_uid}).scalar()
+    _price(s, fx.club_id, lprod, 40000, dur=60)
+    cprod = s.execute(text("INSERT INTO billing.product (club_id,kind,name,active) "
+                           "VALUES (:c,'court_booking','Hardcourt Hire',true) RETURNING id"),
+                      {"c": fx.club_id}).scalar()
+    _price(s, fx.club_id, cprod, 15000, dur=60)
+    s.execute(text("UPDATE diary.resource SET product_id = :p WHERE id = :r"),
+              {"p": cprod, "r": fx.courts[1]})
+
+    rl = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          product_id=str(lprod), starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)),
+                          settlement_mode="at_court")
+    rc = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="court", resource_id=fx.courts[1], product_id=str(cprod),
+                          starts_at=iso(at(fx, 11)), ends_at=iso(at(fx, 12)), settlement_mode="at_court")
+    check("lesson + court both booked owed", rl.get("ok") and rc.get("ok"), f"{rl}|{rc}")
+
+    res = INV.issue_statement_invoice(s, club_id=fx.club_id, user_id=fx.member)
+    check("statement invoice issued", res.get("ok"), str(res))
+    lines = [dict(r) for r in s.execute(
+        text("SELECT description, amount_minor FROM billing.invoice_line WHERE invoice_id = :i"),
+        {"i": res["invoice_id"]}).mappings().all()]
+    descs = [l["description"] for l in lines]
+
+    lesson_line = next((d for d in descs if "Private" in d), None)
+    court_line = next((d for d in descs if "Hardcourt Hire" in d), None)
+    check("a bare 'lesson'/'court' description no longer appears", not any(d in ("lesson", "court") for d in descs), str(descs))
+    check("lesson line names the SERVICE and the COACH",
+          lesson_line and "Coachy" in lesson_line and "60 min" in lesson_line, str(lesson_line))
+    check("court line names the COURT, not a coach",
+          court_line and "Court 2" in court_line and "Coachy" not in court_line, str(court_line))
+    check("both lines carry a date", all(any(m in d for m in
+          ("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"))
+          for d in (lesson_line, court_line)), str(descs))
+
+    # An owed order with NO order_line rows (a data gap) must still be invoiced — its debt is
+    # synthesised into a line from the order total, never silently dropped from the invoice.
+    u2 = _mk_user(s, "lineless@bill.test", "Lineless")
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": u2})
+    lineless = s.execute(text("INSERT INTO billing.\"order\" (club_id, user_id, status, amount_minor, "
+                              "currency_code, settlement_mode) VALUES (:c,:u,'open',12000,'ZAR','at_court') "
+                              "RETURNING id"), {"c": fx.club_id, "u": u2}).scalar()
+    r2 = INV.issue_invoice(s, club_id=fx.club_id, user_id=u2, order_ids=[str(lineless)])
+    check("a line-less owed order still invoices (no NO_LINES failure)", r2.get("ok"), str(r2))
+    check("…and the invoice total ties out to the order (not under-billed)",
+          r2.get("total_minor") == 12000, str(r2))
+
+    # When the whole balance is ALREADY invoiced, month-end re-sends THAT invoice (PDF), not a bare
+    # reminder. issue_statement_invoice returns not-ok, but the existing invoice is found.
+    again = INV.issue_statement_invoice(s, club_id=fx.club_id, user_id=fx.member)
+    check("re-issuing finds nothing NEW (already invoiced)", not again.get("ok"), str(again))
+    existing = INV.latest_active_invoice_with_open_debt(s, club_id=fx.club_id, user_id=fx.member)
+    check("…but the client's existing active invoice is still found (so month-end re-sends the PDF)",
+          str(existing) == str(res["invoice_id"]), f"{existing} vs {res['invoice_id']}")
+
+
 def sc_month_end_resumable(s, fx):
     """The month-end sweep must be RESUMABLE, because the cron route now drives it client-by-client
     in its OWN transaction and stops under a time box (gunicorn reaps the worker at 120s). That only
@@ -3163,6 +3235,7 @@ SCENARIOS = [
     sc_month_end_resumable,
     sc_payment_cannot_reopen_a_closed_debt,
     sc_refund_request_visibility,
+    sc_invoice_lines_are_itemised,
     sc_desk_amount_guard,
     sc_partial_refund_state,
     sc_coach_scoped_pricing,

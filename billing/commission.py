@@ -1200,6 +1200,13 @@ def month_end_client(session, *, club_id, period, user_id, owed, cur) -> str:
             session, club_id=club_id, user_id=str(user_id), period_label=period)
         if res.get("ok"):
             invoice_id = res.get("invoice_id")
+        else:
+            # Nothing NEW to invoice because the balance is already on an active invoice. Don't send a
+            # contentless "pay online" reminder — re-send that EXISTING invoice (PDF + pay-link), so
+            # every owing client gets an actual document. Only fall through to statement_ready when
+            # there is genuinely no invoice at all.
+            invoice_id = invoicing.latest_active_invoice_with_open_debt(
+                session, club_id=club_id, user_id=str(user_id))
     except Exception:
         log.info("run_month_end: invoice issue skipped user=%s", user_id)
     try:
