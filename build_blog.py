@@ -306,19 +306,30 @@ def render_index(posts, site):
             f'<h2>{_html.escape(p.get("title", p["slug"]))}</h2>'
             f'<p>{_html.escape(p.get("description",""))}</p></div></a>'
         )
+    import json as _blog_json
+    _idx_desc = f"Tennis tips, coaching insight and club news from {site.name} in Johannesburg."
+    blog_ld = _blog_json.dumps({
+        "@context": "https://schema.org", "@type": "Blog",
+        "name": f"{site.name} Blog", "url": f"{site.base}/blog", "description": _idx_desc,
+        "publisher": {"@type": "Organization", "name": site.name, "url": site.base},
+    })
     return f"""<!DOCTYPE html>
 <html lang="en-ZA">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Blog — Tennis Tips & News | {_html.escape(site.name)}</title>
-<meta name="description" content="Tennis tips, coaching insight and club news from {_html.escape(site.name)} in Johannesburg.">
+<meta name="description" content="{_html.escape(_idx_desc)}">
 <link rel="canonical" href="{site.base}/blog">
 <meta name="robots" content="index, follow">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="{_html.escape(site.name)}">
 <meta property="og:title" content="{_html.escape(site.name)} Blog">
+<meta property="og:description" content="{_html.escape(_idx_desc)}">
 <meta property="og:url" content="{site.base}/blog">
+<meta property="og:image" content="{site.og}">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{blog_ld}</script>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 {FONT}
 <link rel="stylesheet" href="/shared/theme.css">
