@@ -280,6 +280,13 @@ would double-message).
 4. Prices in Rand (R). Membership from **R220/month** (covers courts only). Courts from R90, lessons from R250.
 
 ## 7c. Posts ↔ Code sync (keep this current — it's our handshake)
+> 🚀 **2026-07-26 — Trial flow being upgraded to v2 (activation-branched, in-trial + post-expiry).** The
+> live A1 5-email flow is **all post-expiry**, which is why trial→member conversion is low (no in-trial
+> activation nudge, no pre-expiry urgency, no dormant-vs-engaged branch). **The full v2 build brief for Posts
+> is in `marketing/klaviyo/trial-conversion/TRIAL-CONVERSION-FLOW.md` (top section).** Core is pure Builder
+> work (branch on `booking_confirmed`/`class_enrolled`; exit on API `membership_started` `WRb7TK`). Open
+> decision for **Tomo**: the offer at the conversion moment (deadline / soft coupon / coach-desk human nudge).
+
 - **Posts has built (in Klaviyo):** A1 trial (live), A2 Welcome (Draft), Member-Preferences 1-day (Draft),
   preferences one-off campaign (draft), **B1 Court→membership FLOW `Rrs48q` (Draft)** — segment `SZ3UFX` →
   Wait 1 day → email `VZ8DiM`. **Pre-built templates waiting on a trigger:** C1 `RJDzuj`, F3 `T5Ub7j`.
