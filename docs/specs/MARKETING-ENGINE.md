@@ -74,11 +74,32 @@ ask every happy player for a review.
   goes to a private form. A Google click-through fires a **GA4/Ads `review_click` conversion**, so review
   generation shows up in the digest/measurement alongside bookings.
 
-## Current state & open items
-- ✅ Both brands measured + guarded; digest emailing daily; NextPoint GBP done; content pipelines live.
-- **NextPoint Google Ads**: live but needs tuning (switch bidding Max-Clicks → Max-Conversions after
-  ~15–30 conversions accrue with the now-working tag; keep Cyborg PMax paused). Best done via **Adspirer**
-  (free plan resets ~20th) or the console. Ten-Fifty5 has **no paid ads by choice** (not ready for scale).
-- **Phase 2 (optional):** Google Ads API (needs a developer-token approval) to fold ad spend/conversions
-  into the digest; GA4↔Search Console link for Ten-Fifty5 (Admin → Product links); email/Slack niceties.
-- The coworker's Ahrefs **free Domain-Rating endpoint needs a free API key before 1 Aug 2026**.
+## The operator — the `/marketing-manager` skill
+On-demand deep-tune companion to this automated engine (local skill `.claude/skills/marketing-manager/SKILL.md`).
+ONE command runs the full routine for BOTH brands — measurement health, organic/SEO scorecard (from the digest),
+technical SEO crawl, Google Ads review+tune (Adspirer), content (website pages + GBP posts, **de-duping the weekly
+Cowork output** against already-published slugs), reviews/GBP — and outputs a per-brand scorecard + prioritized
+action list, executing the safe tunes (spend changes are approval-gated). Run it weekly (e.g. Saturday). Ten-Fifty5
+also has an **autonomous weekly Claude Cowork task** (deep-research SEO scan + blog + infographic → outputs folder;
+the skill publishes/de-dupes it — a duplicate topic REFRESHES the existing post, never a competing new page).
+
+## Current state (2026-07-26) — the machine, complete ✅
+- ✅ Both brands **measured** + **digest emailing daily** (+ dashboard-ingested); NextPoint **GBP live**; content
+  engines running (blog + GBP posts + Ten-Fifty5 weekly Cowork + the tennis-reel skill).
+- ✅ **NextPoint Google Ads TUNED:** bidding = **Maximize Conversions**; budget **R90/day** (was R66 and
+  budget-capped — scale further while CPA holds); **~R76 cost-per-member** and improving; 28 negatives (incl.
+  `popyrin`); Cyborg PMax stays paused. **Judge by CPA, NOT the ROAS** (conversion values are R1 placeholders
+  except the offline loop). Ten-Fifty5 = **organic-only by choice**.
+- ✅ **Offline-conversion loop LIVE + importing** (`offline_conversions/`): gclid capture (`attribution.js`) →
+  `core.offline_conversion` → the password-gated CSV feed `/feeds/google-ads/offline-conversions.csv`
+  (`GOOGLE_ADS_FEED_USER`/`PASS`) → Google Ads' **daily scheduled upload** → the **"Offline purchase"** conversion
+  action (`UPLOAD_CLICKS`, ENABLED, real member value). Already matched **2 ad-clickers → paying members (R360,
+  95.7% of all conversion value)** — teaching bidding to chase real members, not clickers. *(Only keep ONE scheduled
+  upload in the Ads UI — a duplicate is harmless, Google dedupes, but tidy to one.)*
+- ✅ **Content shipped this build:** NextPoint (`book-a-tennis-court-in-killarney-johannesburg`,
+  `tennis-lessons-in-johannesburg` + matching GBP posts); Ten-Fifty5 (`how-to-reduce-unforced-errors-in-tennis-using-data`,
+  refreshed `tennis-return-of-serve-analysis` with a branded infographic). SEO polish: trimmed meta/titles, blog-index schema.
+- **Optional next levers (not urgent):** set real conversion **VALUES** on the other actions → value-based /
+  Target-ROAS bidding; **Customer Match** (exclude existing members from ad spend + seed lookalikes).
+- Ten-Fifty5 keeps **dormant DB-coupled Wix scaffolding** — a staged decommission is scoped in the 1050 repo's
+  `docs/DE-WIX-DECOMMISSION.md` (**DO NOT rush**). Coworker Ahrefs **free DR endpoint needs a free API key before 1 Aug 2026**.
