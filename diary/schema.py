@@ -381,6 +381,51 @@ _DDL = [
            ) m
      WHERE r.id = m.rid AND r.product_id IS NULL;
     """,
+
+    # --- HEAL any existing name drift (linked class whose diary name != its service name) ---------
+    # For every class resource that IS linked, force its name to match its product. This tidies rows
+    # that drifted before the write-path lockstep + the trigger below existed. Idempotent (a synced
+    # row updates to the same value). Display already derives from the product, so this is hygiene —
+    # but it keeps diary.resource.name trustworthy for any reader we haven't routed through the link.
+    """
+    UPDATE diary.resource r
+       SET name = p.name, updated_at = now()
+      FROM billing.product p
+     WHERE r.kind = 'class' AND r.product_id = p.id
+       AND r.name IS DISTINCT FROM p.name;
+    """,
+
+    # --- THE PERMANENT GUARANTEE: a class's two names CANNOT drift ---------------------------------
+    # A class is two linked rows — billing.product (the service the editor renames) and diary.resource
+    # (the class type the diary schedules against), joined by resource.product_id. The name lived in
+    # BOTH, so any writer that touched one and not the other split them (a service-editor rename did
+    # exactly this). Application-level lockstep fixes the known paths, but a NEW path — a script, a
+    # future feature, a manual UPDATE — could reintroduce the split. This trigger makes that
+    # impossible at the DB level: whenever a CLASS product's name changes, the linked resource's name
+    # follows, no matter who wrote it. Renaming a class is now a single logical fact with one owner
+    # (the product); the resource name is a guaranteed mirror. THIS is why editing a class name is
+    # safe and never needs to be disabled.
+    """
+    CREATE OR REPLACE FUNCTION diary._sync_class_resource_name()
+    RETURNS trigger AS $$
+    BEGIN
+        IF NEW.kind = 'class' AND NEW.name IS DISTINCT FROM OLD.name THEN
+            UPDATE diary.resource
+               SET name = NEW.name, updated_at = now()
+             WHERE product_id = NEW.id AND kind = 'class'
+               AND name IS DISTINCT FROM NEW.name;
+        END IF;
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+    """,
+    "DROP TRIGGER IF EXISTS trg_sync_class_resource_name ON billing.product;",
+    """
+    CREATE TRIGGER trg_sync_class_resource_name
+        AFTER UPDATE OF name ON billing.product
+        FOR EACH ROW
+        EXECUTE FUNCTION diary._sync_class_resource_name();
+    """,
 ]
 
 

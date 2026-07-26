@@ -22,7 +22,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 268 / billing 449 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 273 / billing 449 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -628,6 +628,19 @@ member by email on the first authenticated hit.
   `booking_type='class'` and a crafted row has no `class_session` behind it) — a phantom hold nobody could
   see or cancel. A real class court hold is inserted by `diary.classes._reserve_court_for_class`, and
   `create_booking` has exactly ONE caller (the route). Guarded by `sc_booking_type_must_match_resource`.
+- **A class name can NEVER break the class — enforced at THREE layers (2026-07-26).** A class is two
+  linked rows (`billing.product` = the service the editor renames + `diary.resource` = the class type
+  the diary schedules against), joined by `diary.resource.product_id`, with the name duplicated in both.
+  (1) **Identity, not names:** EVERY class resolver — `list_class_types`, `class_type_dict`, pricing,
+  `update_class_type` — resolves via `product_id` and DISPLAYS `billing.product.name`; the last
+  name-based resolver (`_class_product_for_resource`) was DELETED. A stale resource name can't affect
+  resolution. (2) **The DB makes drift impossible:** a trigger `diary._sync_class_resource_name` mirrors
+  `billing.product.name` → `diary.resource.name` on any UPDATE — so a rename via the service editor, the
+  diary edit, a SCRIPT or a manual SQL all stay in lockstep. (3) **Boot heals legacy:** `diary/schema.py`
+  backfills NULL `product_id` links (conservative, by name+coach) and force-syncs any linked-but-drifted
+  name every deploy. An unlinked+renamed class (the orphan) is a human call — `scripts/reconcile_class_names.py
+  --link-orphans` pairs a lone renamed class to its lone service. Editing a class name is SAFE and must
+  never be disabled. Guarded by `sc_class_name_cannot_break_the_class` (incl. a RAW-SQL trigger proof).
 - **A posted `product_id` is VALIDATED before anything uses it** (`SERVICE_NOT_VALID`): it must be an
   ACTIVE product of this club whose `kind` matches the booking type, and for a lesson/class either shared
   (NULL coach) or the RESOLVED coach's own. It arrives off the request body and used to be checked only on

@@ -1120,8 +1120,11 @@ def sc_class_price_survives_rename(s, fx):
     # (3) THE UNRECOVERABLE CASE, stated honestly: an OLD row that was never linked AND whose name
     # has already drifted cannot be resolved by any means — there is nothing left to match on. What
     # matters is that it now REFUSES rather than silently billing the decoy's R10. Relinking such a
-    # class is a human job (the boot backfill deliberately skips ambiguous/drifted rows).
-    s.execute(text("UPDATE diary.resource SET product_id = NULL WHERE id = :r"), {"r": fx.class_res})
+    # class is a human job (the boot backfill deliberately skips ambiguous/drifted rows). We drift the
+    # RESOURCE name directly here: the product→resource name trigger only prevents drift caused by a
+    # PRODUCT rename, so a legacy resource whose own name was changed is still a genuine orphan.
+    s.execute(text("UPDATE diary.resource SET product_id = NULL, name = 'Legacy Orphan No Match' "
+                   "WHERE id = :r"), {"r": fx.class_res})
     sid2 = _class_at(s, fx, 15, capacity=3)
     orphan_price = s.execute(text("SELECT price_id FROM diary.class_session WHERE id = :s"),
                              {"s": sid2}).scalar()
@@ -1172,6 +1175,52 @@ def sc_class_list_shows_renamed_service(s, fx):
     synced = s.execute(text("SELECT name FROM diary.resource WHERE id = :r"), {"r": rid}).scalar()
     check("the rename SYNCED the diary resource name (no future drift)",
           synced == "Cardio Bootcamp Tennis", synced)
+
+
+def sc_class_name_cannot_break_the_class(s, fx):
+    """THE PERMANENT GUARANTEE. A class is two linked rows (billing.product + diary.resource) and its
+    name lived in both, so any writer touching one could split them. Renaming a class must NEVER break
+    resolution, pricing or display — and the two stored names must be unable to drift, no matter WHO
+    writes. Three independent proofs:
+      (1) a DB trigger mirrors billing.product.name -> diary.resource.name even on a RAW SQL update
+          (no application code involved) — so a future code path / script / manual query can't split them;
+      (2) after a service-editor rename, both the list AND the single-class reader show the new name
+          WITH the price (resolution is by product_id, never name);
+      (3) a session scheduled AFTER the rename still prices correctly."""
+    print("\n# A class name is not an identifier: renaming can never break the class (trigger + link)")
+    from admin import repositories as AR
+
+    ct = C.create_class_type(s, club_id=fx.club_id, name="Bootcamp Orig", capacity=8,
+                             price_amount_minor=20000, duration_minutes=60, coach_user_id=fx.coach_uid)
+    rid = ct["class"]["resource_id"]
+    prod = s.execute(text("SELECT product_id FROM diary.resource WHERE id=:r"), {"r": rid}).scalar()
+
+    # (1) THE DB TRIGGER — rename the product with RAW SQL, bypassing every code path.
+    s.execute(text("UPDATE billing.product SET name='Bootcamp Raw' WHERE id=:p"), {"p": prod})
+    check("DB trigger mirrors a RAW product rename onto the resource (drift is impossible)",
+          s.execute(text("SELECT name FROM diary.resource WHERE id=:r"), {"r": rid}).scalar() == "Bootcamp Raw")
+
+    # (2) THE SERVICE-EDITOR PATH — the real UI action.
+    AR.patch_product(s, club_id=fx.club_id, product_id=str(prod), name="Bootcamp Final")
+    row = C.class_type_dict(s, club_id=fx.club_id, resource_id=rid)
+    listed = next((x for x in C.list_class_types(s, club_id=fx.club_id)
+                   if str(x["resource_id"]) == str(rid)), None)
+    check("single-class reader shows the new name + price (by product_id, not name)",
+          row and row["name"] == "Bootcamp Final" and row["price_amount_minor"] == 20000, str(row))
+    check("class list shows the new name + price too",
+          listed and listed["name"] == "Bootcamp Final" and listed["price_amount_minor"] == 20000, str(listed))
+    check("the resource name stayed in lockstep through the editor path",
+          s.execute(text("SELECT name FROM diary.resource WHERE id=:r"), {"r": rid}).scalar() == "Bootcamp Final")
+
+    # (3) A session scheduled AFTER the rename still prices off THIS class's own product.
+    C.schedule_sessions(s, club_id=fx.club_id, resource_id=rid,
+                        dates=[fx.target.isoformat()], start_time="13:00",
+                        duration_minutes=60, capacity=8)
+    pid = s.execute(text("SELECT price_id FROM diary.class_session WHERE resource_id=:r "
+                         "ORDER BY created_at DESC LIMIT 1"), {"r": rid}).scalar()
+    got = s.execute(text("SELECT product_id FROM billing.price WHERE id=:p"), {"p": pid}).scalar() if pid else None
+    check("a session scheduled AFTER the rename still prices off its own product",
+          pid is not None and str(got) == str(prod), f"price_id={pid} product={got} want {prod}")
 
 
 def sc_class_retired_price_never_free(s, fx):
@@ -2174,6 +2223,7 @@ SCENARIOS = [
     sc_class_waitlist,
     sc_class_price_survives_rename,
     sc_class_list_shows_renamed_service,
+    sc_class_name_cannot_break_the_class,
     sc_class_retired_price_never_free,
     sc_class_roster_shows_payment,
     sc_class_checkin_settles_debt,

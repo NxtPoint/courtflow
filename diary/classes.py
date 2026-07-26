@@ -696,16 +696,21 @@ def _parse_date(s):
 def class_type_dict(session, *, club_id, resource_id):
     """The {resource_id,name,coach_user_id,capacity,price_id,price_amount_minor,
     duration_minutes} contract shape for one class type, or None."""
+    # Resolve the product by the DURABLE link (resource.product_id), never a name join, and DISPLAY
+    # the product's current name — so a service rename can't blank the price or show a stale name.
     row = session.execute(
         text("""
-            SELECT r.id AS resource_id, r.name, r.coach_user_id, r.capacity,
+            SELECT r.id AS resource_id, COALESCE(p.name, r.name) AS name,
+                   r.coach_user_id, r.capacity,
                    pr.id AS price_id, pr.amount_minor AS price_amount_minor,
                    pr.duration_minutes
             FROM diary.resource r
             LEFT JOIN billing.product p
-                   ON p.club_id = r.club_id AND p.kind = 'class'
-                  AND p.coach_user_id IS NOT DISTINCT FROM r.coach_user_id
-                  AND lower(p.name) = lower(r.name) AND p.active = true
+                   ON p.club_id = r.club_id AND p.kind = 'class' AND p.active = true
+                  AND (p.id = r.product_id
+                       OR (r.product_id IS NULL
+                           AND p.coach_user_id IS NOT DISTINCT FROM r.coach_user_id
+                           AND lower(p.name) = lower(r.name)))
             LEFT JOIN billing.price pr
                    ON pr.product_id = p.id AND pr.club_id = p.club_id AND pr.active = true
             WHERE r.club_id = :c AND r.id = :r AND r.kind = 'class'
@@ -1160,19 +1165,10 @@ def schedule_sessions(session, *, club_id, resource_id, weekdays=None, start_tim
             "court_busy": court_busy, "coach_busy": coach_busy}
 
 
-def _class_product_for_resource(session, *, club_id, name, coach_user_id):
-    """The billing.product(kind='class') row backing this class type. Matched by NAME, PREFERRING the
-    row whose coach matches (the create_class_type pairing) but falling back to the same-named product
-    regardless of coach — so the coach lockstep is resilient once the resource + product coach diverge
-    (e.g. a legacy class edited to assign a coach: the product is still coachless, so a strict name+coach
-    match would never re-find it and the coach would never propagate to Services). Returns its id, or None."""
-    return session.execute(
-        text("SELECT id FROM billing.product WHERE club_id=:c AND kind='class' AND active=true "
-             "AND lower(name)=lower(:n) "
-             "ORDER BY (coach_user_id IS NOT DISTINCT FROM :coach) DESC, created_at "
-             "LIMIT 1"),
-        {"c": club_id, "n": name, "coach": coach_user_id},
-    ).scalar()
+# _class_product_for_resource (a NAME-based product lookup) was DELETED 2026-07-26. It was the last
+# name-based class resolver, and its only caller (update_class_type) now uses the durable
+# _class_service_product_id (resource.product_id). A class's identity is its product_id link, never
+# its name — so nothing may look a class up by name again.
 
 
 def _cancel_session_court_booking(session, *, club_id, booking_id, reason="class court reassigned"):
