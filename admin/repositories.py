@@ -531,6 +531,18 @@ def patch_product(session, *, club_id, product_id, kind=None, name=None, descrip
     ).mappings().first()
     if not res:
         return None
+    # A class service is TWO linked rows: billing.product (the service) and diary.resource (the class
+    # type the diary lists + schedules against, linked by resource.product_id). Renaming the product
+    # here without syncing the resource is what let "Cardio Tennis" (diary) drift from "Cardio Bootcamp
+    # Tennis" (services). diary.classes.update_class_type already keeps them in lockstep the other way;
+    # do the same here so a service-editor rename can't split them. Scoped by the durable product_id
+    # link, kind-guarded, no-op for non-class products.
+    if name is not None:
+        session.execute(
+            text("UPDATE diary.resource SET name = :n, updated_at = now() "
+                 "WHERE club_id = :c AND product_id = :p AND kind = 'class'"),
+            {"n": name, "c": club_id, "p": product_id},
+        )
     return get_product(session, club_id=club_id, product_id=product_id)
 
 

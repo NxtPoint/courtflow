@@ -21,6 +21,11 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
   check the SQL against the schema when a panel looks suspiciously clean.
 - `repermission_campaign.py` - the one-off re-permission send for the non-consented members
   (pairs with the token-guarded `/subscribe` page).
+- `reconcile_class_names.py` - find + heal class types whose diary name drifted from their
+  service (renamed in the service editor before the durable-link fix). Dry-run reports every
+  class type's link status; `--commit` applies the SAFE fixes (sync a drifted name, pin an
+  unambiguous unlinked resource). Ambiguous cases (linked to a terminated product with a live
+  alternative) are reported for a human, never guessed.
 - `resend_invoice.py <email>` - re-send a client's EXISTING statement invoice email (PDF + pay-link)
   when they got the bare month-end reminder instead. Looks up the invoice already covering their open
   debt and re-delivers it SYNCHRONOUSLY (no daemon thread) - no new number, nothing billed twice.

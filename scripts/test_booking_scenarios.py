@@ -1133,6 +1133,47 @@ def sc_class_price_survives_rename(s, fx):
           r.get("ok") is not True and r.get("error") == "PRICE_NOT_CONFIGURED", str(r))
 
 
+def sc_class_list_shows_renamed_service(s, fx):
+    """The DIARY 'Classes' list (list_class_types) is what a coach/owner sees to schedule. It joined
+    the product to the resource BY NAME, so a class renamed in the service editor showed the STALE
+    resource name and a blank price/length ("—") in the diary while Services showed the new name —
+    Allon's 'Cardio Tennis' vs 'Cardio Bootcamp Tennis'. The list must resolve via the durable
+    product_id link and show the CURRENT service name + price. And the rename itself must sync the
+    resource name so the two never split."""
+    print("\n# Diary class list follows a service-editor rename (durable link, name synced)")
+    from admin import repositories as AR
+
+    # A freshly-created class type: resource + product, linked at birth. Give it a price so the list
+    # can show one.
+    ct = C.create_class_type(s, club_id=fx.club_id, name="Cardio Tennis Ext", capacity=8,
+                             price_amount_minor=18000, duration_minutes=60,
+                             coach_user_id=fx.coach_uid)
+    rid = ct["class"]["resource_id"]
+    prod = s.execute(text("SELECT product_id FROM diary.resource WHERE id = :r"), {"r": rid}).scalar()
+    check("new class is linked to its product at birth", bool(prod), str(ct))
+
+    def _row():
+        return next((x for x in C.list_class_types(s, club_id=fx.club_id)
+                     if str(x["resource_id"]) == str(rid)), None)
+
+    before = _row()
+    check("list shows the class with its price BEFORE the rename",
+          before and before["name"] == "Cardio Tennis Ext" and before["price_amount_minor"] == 18000,
+          str(before))
+
+    # Rename via the SERVICE EDITOR path (product only) — the exact action Allon took.
+    AR.patch_product(s, club_id=fx.club_id, product_id=str(prod), name="Cardio Bootcamp Tennis")
+
+    after = _row()
+    check("the diary list now shows the NEW service name", after and after["name"] == "Cardio Bootcamp Tennis",
+          str(after))
+    check("...and STILL shows the price + length (no '—' blank)",
+          after and after["price_amount_minor"] == 18000 and after["duration_minutes"] == 60, str(after))
+    synced = s.execute(text("SELECT name FROM diary.resource WHERE id = :r"), {"r": rid}).scalar()
+    check("the rename SYNCED the diary resource name (no future drift)",
+          synced == "Cardio Bootcamp Tennis", synced)
+
+
 def sc_class_retired_price_never_free(s, fx):
     """Removing a price variation deactivates the price row; billing's price read requires
     active=true, so the order was written at R0 while the class list still showed the old amount.
@@ -2132,6 +2173,7 @@ SCENARIOS = [
     sc_slot_granularity,
     sc_class_waitlist,
     sc_class_price_survives_rename,
+    sc_class_list_shows_renamed_service,
     sc_class_retired_price_never_free,
     sc_class_roster_shows_payment,
     sc_class_checkin_settles_debt,

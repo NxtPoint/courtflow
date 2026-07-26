@@ -778,9 +778,17 @@ def list_class_types(session, *, club_id, coach_user_id=None):
     params = {"c": club_id}
     if coach_user_id is not None:
         where.append("r.coach_user_id = :coach"); params["coach"] = coach_user_id
+    # The backing product is resolved by the DURABLE link (diary.resource.product_id), NOT by a name
+    # join. A class renamed in the service editor changes billing.product.name only; the old name
+    # join (lower(p.name)=lower(r.name)) then matched NOTHING, so the class showed a blank price/
+    # length ("—") and the STALE resource name in the diary while Services showed the new name — the
+    # exact drift CLAUDE.md warns about. product_id first; a name+coach match is kept only as a
+    # fallback for legacy rows that were never linked. The DISPLAY name is the product's current name
+    # (COALESCE to the resource name for an unlinked legacy row).
     rows = session.execute(
         text("""
-            SELECT r.id AS resource_id, r.name, r.coach_user_id, r.capacity,
+            SELECT r.id AS resource_id, COALESCE(p.name, r.name) AS name,
+                   r.coach_user_id, r.capacity,
                    pr.id AS price_id, pr.amount_minor AS price_amount_minor,
                    pr.duration_minutes,
                    cu.first_name AS coach_first, cu.surname AS coach_surname,
@@ -798,9 +806,11 @@ def list_class_types(session, *, club_id, coach_user_id=None):
                         AND csc.court_resource_id IS NOT NULL) AS court_resource_ids
             FROM diary.resource r
             LEFT JOIN billing.product p
-                   ON p.club_id = r.club_id AND p.kind = 'class'
-                  AND p.coach_user_id IS NOT DISTINCT FROM r.coach_user_id
-                  AND lower(p.name) = lower(r.name) AND p.active = true
+                   ON p.club_id = r.club_id AND p.kind = 'class' AND p.active = true
+                  AND (p.id = r.product_id
+                       OR (r.product_id IS NULL
+                           AND p.coach_user_id IS NOT DISTINCT FROM r.coach_user_id
+                           AND lower(p.name) = lower(r.name)))
             LEFT JOIN billing.price pr
                    ON pr.product_id = p.id AND pr.club_id = p.club_id AND pr.active = true
             LEFT JOIN iam.user cu ON cu.id = r.coach_user_id
@@ -1195,9 +1205,11 @@ def update_class_type(session, *, club_id, resource_id, coach_user_id, name=None
     new_name = name if name is not None else old_name
     new_capacity = int(capacity) if capacity is not None else int(res["capacity"] or 0)
 
-    # Resolve the backing product BEFORE we change name/coach (the join keys off both).
-    prod_id = _class_product_for_resource(session, club_id=club_id, name=old_name,
-                                          coach_user_id=res["coach_user_id"])
+    # Resolve the backing product BEFORE we change name/coach — via the DURABLE link
+    # (diary.resource.product_id), not a name match, so a class already renamed in the service editor
+    # (product.name changed, resource.name stale) still finds its product and stays in lockstep.
+    prod_id = _class_service_product_id(session, club_id=club_id, resource_id=resource_id,
+                                        name=old_name, coach_user_id=res["coach_user_id"])
 
     # 1) The class resource.
     session.execute(
