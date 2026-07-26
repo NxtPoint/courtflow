@@ -109,6 +109,7 @@ def main(argv):
     with session_scope() as s:
         rows = [dict(r) for r in s.execute(text(REPORT)).mappings().all()]
         print("%d active class type(s)\n" % len(rows))
+        tags = []
         for r in rows:
             rn, pn = r["resource_name"], r["linked_product_name"]
             tag = ""
@@ -168,6 +169,7 @@ def main(argv):
                 ok += 1
                 tag = "ok"
 
+            tags.append(tag)
             flag = tag.split()[0]
             marker = "FIX " if flag in ("DRIFTED", "UNLINKED", "ORPHAN-PAIR", "LINKED") else "    "
             print("  [%s] %-28s coach=%s upcoming=%s  %s" % (
@@ -177,13 +179,20 @@ def main(argv):
 
         print("\n%d drifted, %d unlinked-pinnable, %d linked, %d ambiguous (human), %d already ok"
               % (drifted, pinned, linked, ambiguous, ok))
-        if not commit and not link_orphans and (drifted or pinned):
-            print(">>> DRY RUN — re-run with --commit to apply the %d safe fix(es)." % (drifted + pinned))
-        if not link_orphans:
-            print(">>> If an ORPHAN-PAIR is shown above (a renamed class + its lone service), re-run")
-            print("    with --link-orphans to link them, rename the class, and reprice its sessions.")
-        else:
+        # Only print a next-step hint that MATCHES what was actually found — a static footer that
+        # tells you to re-run when there's nothing to do just reads as a warning on a clean result.
+        needs_orphan_link = "ORPHAN-PAIR" in "\n".join(tags)
+        if link_orphans:
             print(">>> Applied. Ambiguous rows were NOT touched — resolve those in the UI.")
+        elif drifted or pinned:
+            print(">>> DRY RUN — re-run with --commit to apply the %d safe fix(es)." % (drifted + pinned))
+        elif needs_orphan_link:
+            print(">>> An ORPHAN-PAIR is shown above — re-run with --link-orphans to link the renamed")
+            print("    class to its service, rename it, and reprice its sessions.")
+        elif ambiguous:
+            print(">>> Some rows need a human call (see the flags above) — resolve those in the UI.")
+        else:
+            print(">>> All class types are correctly linked. Nothing to do.")
     return 0
 
 
