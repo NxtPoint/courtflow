@@ -7,8 +7,9 @@ because the diary list joined by name, showed a blank price/length. The code now
 diary list by product_id and (b) syncs the resource name on rename — but classes renamed BEFORE that
 fix are still drifted. This heals them.
 
-    python -m scripts.reconcile_class_names            # dry run — report only (default)
-    python -m scripts.reconcile_class_names --commit   # apply the SAFE fixes
+    python -m scripts.reconcile_class_names               # dry run — report only (default)
+    python -m scripts.reconcile_class_names --commit      # apply the SAFE fixes
+    python -m scripts.reconcile_class_names --link-orphans # ALSO pair a renamed class to its service
 
 Two SAFE fixes are applied with --commit:
   1. LINKED-BUT-DRIFTED — resource.product_id points at an active product whose name differs:
@@ -16,9 +17,15 @@ Two SAFE fixes are applied with --commit:
   2. UNLINKED-BUT-UNAMBIGUOUS — resource.product_id IS NULL and EXACTLY ONE active class product
      matches by (name, coach): pin resource.product_id to it.
 
-AMBIGUOUS cases are REPORTED, never guessed: a resource linked to a terminated product while a new
-active product exists (is the new one the same class, or a genuinely new one?) is a human call.
-Read-only until --commit.
+--link-orphans additionally pairs a RENAMED class back to its service: an unlinked class resource
+whose name no longer matches ANY product, where the coach has EXACTLY ONE active class product that
+no resource points to. That is the Allon case — "Cardio Tennis" (33 sessions, no product) + "Cardio
+Bootcamp Tennis" (a service with no class type). It links them, renames the resource to the service,
+and reprices FUTURE unpriced sessions to the service's active price so members can enrol. It acts
+ONLY when the pairing is 1:1 for that coach; anything ambiguous is still left for a human. It crosses
+a rename, so it is a separate, explicit flag — not part of --commit.
+
+AMBIGUOUS cases are REPORTED, never guessed. Read-only until --commit / --link-orphans.
 """
 import sys
 
@@ -54,10 +61,50 @@ WHERE club_id = :c AND kind = 'class' AND active = true
   AND coach_user_id IS NOT DISTINCT FROM :coach
 """
 
+# Active class products for this coach that NO resource links to — a "service with no class type",
+# the other half of a renamed-and-split class.
+ORPHAN_PRODUCTS = """
+SELECT p.id, p.name,
+       (SELECT amount_minor FROM billing.price pr WHERE pr.product_id = p.id AND pr.active = true
+          ORDER BY created_at LIMIT 1) AS price,
+       (SELECT id FROM billing.price pr WHERE pr.product_id = p.id AND pr.active = true
+          ORDER BY created_at LIMIT 1) AS price_id
+FROM billing.product p
+WHERE p.club_id = :c AND p.kind = 'class' AND p.active = true
+  AND p.coach_user_id IS NOT DISTINCT FROM :coach
+  AND NOT EXISTS (SELECT 1 FROM diary.resource r WHERE r.product_id = p.id)
+"""
+
+
+def _link_orphan(session, *, resource_id, product, do_commit):
+    """Link an unlinked resource to an orphan product: pin product_id, rename the resource to the
+    service, and reprice FUTURE unpriced sessions to the service's active price. Returns a summary."""
+    repriced = 0
+    if do_commit:
+        session.execute(
+            text("UPDATE diary.resource SET product_id = :p, name = :n, updated_at = now() WHERE id = :r"),
+            {"p": product["id"], "n": product["name"], "r": resource_id},
+        )
+        if product["price_id"]:
+            repriced = session.execute(
+                text("UPDATE diary.class_session SET price_id = :pr, updated_at = now() "
+                     "WHERE resource_id = :r AND status = 'scheduled' AND starts_at >= now() "
+                     "AND price_id IS NULL"),
+                {"pr": product["price_id"], "r": resource_id},
+            ).rowcount
+    else:
+        repriced = session.execute(
+            text("SELECT count(*) FROM diary.class_session WHERE resource_id = :r "
+                 "AND status = 'scheduled' AND starts_at >= now() AND price_id IS NULL"),
+            {"r": resource_id},
+        ).scalar()
+    return repriced
+
 
 def main(argv):
     commit = "--commit" in argv
-    drifted = pinned = ambiguous = ok = 0
+    link_orphans = "--link-orphans" in argv
+    drifted = pinned = ambiguous = ok = linked = 0
 
     with session_scope() as s:
         rows = [dict(r) for r in s.execute(text(REPORT)).mappings().all()]
@@ -94,8 +141,26 @@ def main(argv):
                         s.execute(text("UPDATE diary.resource SET product_id = :p, updated_at = now() "
                                        "WHERE id = :r"), {"p": m[0]["id"], "r": r["resource_id"]})
                 elif len(m) == 0:
-                    tag = "UNLINKED, no name match — human call"
-                    ambiguous += 1
+                    # No product shares this resource's (renamed-away) name. Look for the other half:
+                    # an active class product for this coach that no resource links to.
+                    orphans = s.execute(text(ORPHAN_PRODUCTS),
+                                        {"c": r["club_id"], "coach": r["coach_user_id"]}).mappings().all()
+                    if len(orphans) == 1:
+                        op = dict(orphans[0])
+                        n = _link_orphan(s, resource_id=r["resource_id"], product=op,
+                                         do_commit=link_orphans)
+                        priced = ("R%.2f" % ((op["price"] or 0) / 100.0)) if op["price"] else "no price!"
+                        if link_orphans:
+                            tag = "LINKED -> '%s' (%s); repriced %d future session(s)" % (op["name"], priced, n)
+                            linked += 1
+                        else:
+                            tag = ("ORPHAN-PAIR -> would link to service '%s' (%s) + reprice %d future "
+                                   "session(s)  [needs --link-orphans]" % (op["name"], priced, n))
+                            ambiguous += 1
+                    else:
+                        tag = ("UNLINKED, no name match; %d orphan service(s) for this coach — human call"
+                               % len(orphans))
+                        ambiguous += 1
                 else:
                     tag = "UNLINKED, %d name matches — human call" % len(m)
                     ambiguous += 1
@@ -103,19 +168,22 @@ def main(argv):
                 ok += 1
                 tag = "ok"
 
+            flag = tag.split()[0]
+            marker = "FIX " if flag in ("DRIFTED", "UNLINKED", "ORPHAN-PAIR", "LINKED") else "    "
             print("  [%s] %-28s coach=%s upcoming=%s  %s" % (
-                "FIX " if tag.split()[0] in ("DRIFTED", "UNLINKED") else "    ",
-                (rn or "?")[:28], str(r["coach_user_id"])[:8] if r["coach_user_id"] else "-",
+                marker, (rn or "?")[:28],
+                str(r["coach_user_id"])[:8] if r["coach_user_id"] else "-",
                 r["upcoming"], tag))
 
-        print("\n%d drifted, %d unlinked-pinnable, %d ambiguous (human), %d already ok"
-              % (drifted, pinned, ambiguous, ok))
-        if not commit and (drifted or pinned):
+        print("\n%d drifted, %d unlinked-pinnable, %d linked, %d ambiguous (human), %d already ok"
+              % (drifted, pinned, linked, ambiguous, ok))
+        if not commit and not link_orphans and (drifted or pinned):
             print(">>> DRY RUN — re-run with --commit to apply the %d safe fix(es)." % (drifted + pinned))
-        elif commit:
-            print(">>> Applied. Ambiguous rows were NOT touched — resolve those in the UI.")
+        if not link_orphans:
+            print(">>> If an ORPHAN-PAIR is shown above (a renamed class + its lone service), re-run")
+            print("    with --link-orphans to link them, rename the class, and reprice its sessions.")
         else:
-            print(">>> Nothing to auto-fix.")
+            print(">>> Applied. Ambiguous rows were NOT touched — resolve those in the UI.")
     return 0
 
 
