@@ -21,6 +21,9 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
   check the SQL against the schema when a panel looks suspiciously clean.
 - `repermission_campaign.py` - the one-off re-permission send for the non-consented members
   (pairs with the token-guarded `/subscribe` page).
+- `resend_invoice.py <email>` - re-send a client's EXISTING statement invoice email (PDF + pay-link)
+  when they got the bare month-end reminder instead. Looks up the invoice already covering their open
+  debt and re-delivers it SYNCHRONOUSLY (no daemon thread) - no new number, nothing billed twice.
 - `preview_month_end.py` — READ-ONLY dry run of the month-end sweep: who gets invoiced on the
   25th and for how much, PLUS the money it will skip and why (abandoned checkouts, debt hidden
   behind a live 'Pay all' wrapper, unattributed orders). Run it before every billing day — a
