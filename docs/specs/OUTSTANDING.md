@@ -7,8 +7,8 @@ switches, unwired endpoints) live in their own doc: **[FEATURE-FLAGS.md](FEATURE
 > **▶ NO CURRENT BUILD PHASE.** The platform is **LIVE on `https://nextpointtennis.com`** and
 > feature-complete for launch. What remains is (A) config owed by Tomo, (B) code backlog, (C) owner
 > decisions, (D) hardening, and (E) two large well-specced roadmaps (Admin Phase 2 + CRM Missions).
-> **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 263 /
-> billing 439 / statement 64** (2026-07-23).
+> **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 273 /
+> billing 449 / statement 64** (2026-07-26).
 >
 > **Klaviyo, 2026-07-22 — `membership_started` never fired** (wired to a gateway branch nothing produces);
 > **fixed in code + backfill RUN on prod** (12 members corrected, no emails sent). `KLAVIYO-MASTER-PLAN.md`
@@ -36,8 +36,14 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
       is already live. (`GOOGLE-ADS-PLAN.md`.)
 - [ ] **Complete Google advertiser verification** (in progress). (`GOOGLE-ADS-PLAN.md`.)
 
-**CARRY-OVER as of 2026-07-23 — the ONLY things known to be open.** Everything else in section B was
-closed out in the 2026-07-22/23 sweep (see `README.md`'s dated entry).
+**CARRY-OVER as of 2026-07-26 — the ONLY things known to be open.** The first real month-end ran on the
+25th (33 clients, R41,170). The 2026-07-25/26 follow-up sweep is closed: **invoice lines are now itemised**
+(date + duration + service + coach for a lesson, court for court hire); **month-end never sends a bare
+"pay online" reminder for an owed balance** (a line-less order is synthesised; an already-invoiced balance
+re-sends the real PDF); **refund requests are decided on the transaction record** (the queue is an inbox,
+the full-refund amount bug is fixed, a direct refund closes the request, and a void that still holds cash
+stays visible); and **a class name can never break the class again** (durable-link resolution + a DB trigger
+mirroring product→resource name + boot heal). See `README.md`'s dated entries.
 
 - [ ] **Klaviyo console work** (3 items, all in the Klaviyo UI, no code — full detail in
       `KLAVIYO-MASTER-PLAN.md` §7e/§8):

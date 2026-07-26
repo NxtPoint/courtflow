@@ -1,12 +1,30 @@
 # scripts/ — what each is, and whether it's still live
 
-Categorised in the 2026-07-12 close-out. Nothing here is dead code — but several are **spent one-offs**
-(their job is done for club #1) kept for provenance + future-tenant reuse. Run any with `python -m scripts.<name>`.
+Categorised in the 2026-07-12 close-out (refreshed 2026-07-26). Nothing here is dead code — but several are
+**spent one-offs** (their job is done for club #1) kept for provenance + future-tenant reuse. Run any with
+`python -m scripts.<name>`.
+
+## Operational playbook — when a query comes in (post-launch, month-end running)
+All read-only unless noted; all take `DATABASE_URL` from the Render shell env (or a gitignored `.env.local`).
+
+| A member/coach says… | Run | Then |
+|---|---|---|
+| "I got a 'pay online' email but no invoice/PDF" | `resend_invoice.py <email>` | re-sends their real invoice (no new number) |
+| "I paid but my booking/class shows unpaid" | `diagnose_bookings.py` | look at the S1 section; a stranded class seat → `settle_stranded_class_seats.py --settle` |
+| "I paid online but nothing happened" (missed webhook) | `POST /api/cron/reconcile-payments {"hours": 1200}` | recovers + activates; idempotent |
+| "before the 25th — who gets billed?" | `preview_month_end.py` | shows the invoice list + money it will skip and why |
+| "a class shows the wrong name / no price in the Diary" | `reconcile_class_names.py` | `--commit` / `--link-orphans` if it flags a fix (shouldn't recur — DB trigger) |
+| "is coach X being paid correctly?" | `reconcile_coach_commission.py [YYYY-MM]` | should read CLEAN; lists any paid coaching with no split |
+| "why isn't coach X's pack on his earnings?" | `diagnose_coach_packs.py <name> [YYYY-MM]` | shows where each pack lands |
+| general prod sanity check (safe, read-only) | `verify_live.py` | |
+
+If month-end itself needs a re-run, just re-trigger `.github/workflows/month-end.yml` from the Actions tab —
+it's idempotent per `(club,user,period)`, so it skips everyone already invoiced and picks up the rest.
 
 ## Gates (run before every merge — KEEP)
 - `test_all.py` — runs the three scenario harnesses below. **The merge gate.**
 - `test_booking_scenarios.py` · `test_billing_scenarios.py` · `test_statement_reconciliation.py`
-  — rollback-only scratch-DB harnesses (**booking 263 / billing 439 / statement 64**).
+  — rollback-only scratch-DB harnesses (**booking 273 / billing 449 / statement 64**).
 
 ## Load-bearing at runtime (KEEP — do not touch)
 - `seed_nextpoint.py` — re-seeds club #1 on every prod boot (`SEED_NEXTPOINT=1`, imported by `app.py`). Idempotent.
@@ -38,11 +56,9 @@ Categorised in the 2026-07-12 close-out. Nothing here is dead code — but sever
   normal owed debt so month-end invoices it; `--void` cancels it. Dry-run by default.
 - `test_ses.py` — manual SES send test.
 - `audit_trials.py` — audits/cleans the 7-day trial grants.
-- `audit_class_packs.py` — reports class-pack vs session price (read-only).
 - `diagnose_coach_packs.py` — READ-ONLY: where each session PACK lands in the coach-earnings roll-up (its selling coach vs the CLUB, sale month, order status, whether it counts). Answers "why isn't coach X's pack showing on his earnings?" Optional args: `<name-needle> [YYYY-MM]`. Uses `DATABASE_URL` from env (Render Shell) or `.env.local`.
 - `reconcile_coach_commission.py` — READ-ONLY financial-integrity proof: every PAID lesson/class line (money collected via Yoco / cash / EFT / invoice / 'pay-all' statement) must carry a coach commission_split. Lists any paid coaching with NO split (a coach under-paid) + a covered/uncovered rand tie-out + paid-but-no-coach lines. Should read **CLEAN**. Optional arg `YYYY-MM`. Run monthly before coach payouts.
 - `audit_client_data.py` — read-only Client-360 data scorecard.
-- `cleanup_coachless_classes.py` — soft-retire legacy coachless classes (dry-run by default, reversible).
 - `fix_bypassed_packs.py` — remediate the reconcile / pack-bypass billing bugs: (A) activate PENDING pack wallets on paid orders (the reconcile gap) + (B) unwind duplicate OWED lesson orders (draw the pack token + void the owed order → client owes R0) + (C) activate stuck MEMBERSHIPS (paid but subscription left at its 'expired' pending-placeholder — member paid but wasn't covered). **Dry-run by default**; `--commit` to write; `--club`/`--user` to scope. Idempotent (never touches cancelled/lapsed subs). Behind the fixes in commits a244e19+; run once over affected clients, then it's spent.
 - `klaviyo_reactivation.py` — sync the dormant opted-in cohort to Klaviyo (dry-run default; **dark until `KLAVIYO_API_KEY`**). A recurring win-back tool — schedule it if/when Klaviyo goes live.
 

@@ -45,7 +45,7 @@ month-at-a-glance `activity_summary` block (`_activity_summary` → `billing.me.
 | `analytics/` | repositories, routes | **Business Overview dashboard** (read-only over `core.usage_event`/`diary`/`billing`); `/api/analytics/*`; the standalone `/overview.html` (rolling `?days=` window). The admin **native Overview tab** now uses the `insights/` lane instead (the old iframe embed was retired 2026-07-05). |
 | `insights/` | repositories, routes | **Phase-2 P1 read-layer** (guarded aggregations, no new tables): court-utilisation heatmap · **sales-by-day** · **bookings-by-day** · **overview** (month-scoped daily composer powering the native admin Overview tab — traffic incl. public-vs-member + logged-in split, bookings, revenue, members, NPS; reconciles with the Money lists by construction); `/api/insights/*` |
 | `crons/` | trigger | thin dispatcher → `/api/cron/*` |
-| `scripts/` | seed_nextpoint, provision_club, **backfill_pack_products** (map legacy NULL-product packs to their service — preview + `--commit`), **audit_class_packs** (report class packs vs their session `price_id`), **audit_trials** (7-day-trial grant audit/cleanup), **cleanup_coachless_classes** (soft-retire legacy empty coachless classes — dry-run + `--commit`), **reconcile_coach_commission** (READ-ONLY: every PAID lesson/class line must carry a coach `commission_split` — lists any that don't [should be NONE] + a covered-rand tie-out; optional `YYYY-MM`), **diagnose_coach_packs** (READ-ONLY: where each session pack lands in coach earnings — its wallet's coach ELSE the club, sale-based; optional `<name> [YYYY-MM]`) | seed/provision tenants + data maintenance |
+| `scripts/` | seed_nextpoint, provision_club, **backfill_pack_products** (map legacy NULL-product packs to their service — preview + `--commit`), **audit_trials** (7-day-trial grant audit/cleanup), **reconcile_coach_commission** (READ-ONLY: every PAID lesson/class line must carry a coach `commission_split` — lists any that don't [should be NONE] + a covered-rand tie-out; optional `YYYY-MM`), **diagnose_coach_packs** (READ-ONLY: where each session pack lands in coach earnings — its wallet's coach ELSE the club, sale-based; optional `<name> [YYYY-MM]`), **preview_month_end** / **resend_invoice** / **settle_stranded_class_seats** / **reconcile_class_names** / **diagnose_bookings** (the post-launch operational toolkit — see `scripts/README.md`) | seed/provision tenants + data maintenance |
 | `web_app.py`, `frontend/` | host-switch + SPA shells + marketing | The web service |
 | `migration/` | Wix→Render URL/301 helper | SEO migration |
 
@@ -572,7 +572,7 @@ dashboard (`sync:false`).
 - Compile: `python -m py_compile $(git ls-files '*.py')`.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 263 / billing 439 / statement 64** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 273 / billing 449 / statement 64** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
   on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +
