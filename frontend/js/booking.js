@@ -1135,7 +1135,11 @@
         }
       }
       // Staff on-behalf never goes to Yoco (they collect at court / pack / account).
-      if (!st.skipOnline && st.settlement === "online" && orderId) {
+      // `res.requires_payment` is the SERVER saying this booking is held pending a charge even though
+      // we didn't pick "online" — a membership-covered court carrying card-only equipment still owes
+      // real money. Without honouring it the booking sits held and lazy-expires while the member
+      // thinks they're booked.
+      if (!st.skipOnline && (st.settlement === "online" || res.requires_payment) && orderId) {
         if (window.Pay) { await window.Pay.startYocoCheckout(orderId); return; }
         UI.toast("Couldn't open the payment page — please refresh and try again.", "error"); return;
       }

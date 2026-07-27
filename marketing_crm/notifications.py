@@ -149,6 +149,18 @@ def _t_class_promoted(ctx):
     return ("A spot opened — you're in!", body, "/portal")
 
 
+def _t_class_seat_awaiting_payment(ctx):
+    """A waitlisted player was promoted into a seat on a class that only takes card payment — the
+    seat is HELD, not confirmed, so this must not read like the "you're in" confirmation. That one
+    (class_enrolled) fires later, when the charge actually lands."""
+    cls = _g(ctx, "class_name", default="your class")
+    when = _when(ctx)
+    body = (f"A spot opened in {cls}" + (f" on {when}" if when else "")
+            + ". This class is paid online, so we're holding the spot for you — "
+              "pay now to confirm it, or it goes to the next person on the list.")
+    return ("A spot opened — pay to confirm it", body, "/portal")
+
+
 def _t_coach_invited(ctx):
     body = ("You've been invited to coach. Sign in to set up your profile, hours and "
             "services to start taking bookings.")
@@ -266,6 +278,9 @@ KIND_MAP = {
     "refund_decided":        _t_refund_decided,
     "class_enrolled":        _t_class_enrolled,
     "class_waitlisted":      _t_class_waitlisted,
+    # A promotion into a CARD-ONLY class holds the seat instead of confirming it, so it emits this
+    # INSTEAD of class_enrolled (which stays the single "you're in" confirmation, fired on payment).
+    "class_seat_awaiting_payment": _t_class_seat_awaiting_payment,
     # NOTE: waitlist_slot_open is intentionally NOT mapped to an email. On auto-promotion the diary
     # emits waitlist_slot_open AND class_enrolled back-to-back for the same seat; mapping both sent the
     # promoted player TWO emails. class_enrolled is the single confirmation. The waitlist_slot_open

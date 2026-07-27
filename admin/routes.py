@@ -214,9 +214,14 @@ def patch_policy():
     if any(k in b for k in ("peak_days", "peak_start_min", "peak_end_min")):
         peak_kwargs = {"peak_days": b.get("peak_days"), "peak_start_min": b.get("peak_start_min"),
                        "peak_end_min": b.get("peak_end_min")}
+    # Same partial-patch rule for the default membership caps: only touched when actually sent, and
+    # an explicit null means "no cap" (not "unchanged").
+    cap_keys = ("default_max_covered_minutes", "default_max_covered_per_day",
+                "default_max_courts_per_day")
+    cap_kwargs = {k: b.get(k) for k in cap_keys} if any(k in b for k in cap_keys) else {}
     with session_scope() as s:
         policy = repo.patch_policy(
-            s, club_id=p.club_id, **peak_kwargs,
+            s, club_id=p.club_id, **peak_kwargs, **cap_kwargs,
             booking_window_days=b.get("booking_window_days"),
             min_booking_minutes=b.get("min_booking_minutes"),
             cancellation_cutoff_hours=b.get("cancellation_cutoff_hours"),
@@ -621,7 +626,8 @@ def post_equipment():
     with session_scope() as s:
         item = repo.create_equipment(
             s, club_id=p.club_id, name=name, amount_minor=int(b.get("amount_minor") or 0),
-            quantity=int(b.get("quantity") or 1), feature_on_home=bool(b.get("feature_on_home")))
+            quantity=int(b.get("quantity") or 1), feature_on_home=bool(b.get("feature_on_home")),
+            payment_modes=b.get("payment_modes"))
     return jsonify(equipment=item), 201
 
 
@@ -635,7 +641,10 @@ def patch_equipment_route(resource_id):
         item = repo.patch_equipment(
             s, club_id=p.club_id, resource_id=resource_id, name=b.get("name"),
             amount_minor=b.get("amount_minor"), quantity=b.get("quantity"),
-            feature_on_home=b.get("feature_on_home"), is_active=b.get("is_active"))
+            feature_on_home=b.get("feature_on_home"), is_active=b.get("is_active"),
+            # Only touch the payment options when the caller actually sent the key (a NULL value
+            # means "inherit every club method", so it can't stand in for "unchanged").
+            set_modes=("payment_modes" in b), payment_modes=b.get("payment_modes"))
     if item is None:
         return jsonify(error="NOT_FOUND"), 404
     return jsonify(equipment=item), 200

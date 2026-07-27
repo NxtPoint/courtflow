@@ -453,10 +453,21 @@ def in_peak_window(session, *, club_id, local_dt):
 
 def membership_covers(session, *, club_id, user_id, starts_at):
     """True if an ACTIVE membership covers a COURT booking that STARTS at `starts_at` — i.e. the
-    member is active AND the booking falls inside that plan's access window (Phase 5). A plan with
-    NO window (trial/unconstrained) covers any time; a time-boxed tier (e.g. Student weekdays-only)
-    covers only inside its days + hours, otherwise the booking is PAYG. ANY qualifying subscription
-    wins. Guarded -> False (never blocks a booking; a non-covered booking just isn't free).
+    member's plan is still running ON THE DAY OF THE BOOKING AND the booking falls inside that
+    plan's access window (Phase 5). A plan with NO window (trial/unconstrained) covers any time of
+    day; a time-boxed tier (e.g. Student weekdays-only) covers only inside its days + hours,
+    otherwise the booking is PAYG. ANY qualifying subscription wins. Guarded -> False (never blocks
+    a booking; a non-covered booking just isn't free).
+
+    THE TERM IS TESTED AGAINST THE BOOKING'S DATE, NOT TODAY. This used to read
+    `current_period_end >= CURRENT_DATE` — "is the membership alive right now" — while `starts_at`
+    was used only to derive the weekday/minute for the access window. So a member could book
+    FORWARD, past their own expiry, and the booking was written settlement_mode='membership_covered'
+    at R0 permanently: the term lapsing afterwards changed nothing, because the price was already
+    fixed. It bit hardest on the 7-day trial (day 1 of 7, book 14 days out, all free) but it was
+    never a trial bug — a monthly member could book out the whole of next month on the last day of
+    this one and then not renew. club.policy.booking_window_days is the only thing that limited the
+    reach. Comparing to the booking's own CLUB-LOCAL date closes both.
 
     Day/time are taken from `starts_at` (the booking's local start). access_days is CSV ISO weekdays
     (Mon=1..Sun=7); access_start_min/access_end_min are minutes-from-midnight (start inclusive, end
@@ -476,13 +487,15 @@ def membership_covers(session, *, club_id, user_id, starts_at):
             pass
         iso_dow = local.isoweekday()                     # 1=Mon..7=Sun (club-local)
         min_of_day = local.hour * 60 + local.minute
+        on_date = local.date()                           # the BOOKING's club-local day
         row = session.execute(
             text("""
                 SELECT 1
                 FROM billing.membership_subscription ms
                 LEFT JOIN billing.price p ON p.id = ms.price_id
                 WHERE ms.club_id = :c AND ms.user_id = :u AND ms.status = 'active'
-                  AND (ms.current_period_end IS NULL OR ms.current_period_end >= CURRENT_DATE)
+                  AND (ms.current_period_end IS NULL
+                       OR ms.current_period_end >= CAST(:on_date AS date))
                   AND (
                     p.id IS NULL  -- trial / no linked plan -> unconstrained, covers any time
                     OR (
@@ -494,12 +507,39 @@ def membership_covers(session, *, club_id, user_id, starts_at):
                   )
                 LIMIT 1
             """),
-            {"c": club_id, "u": user_id, "dow": iso_dow, "mod": min_of_day},
+            {"c": club_id, "u": user_id, "dow": iso_dow, "mod": min_of_day, "on_date": on_date},
         ).first()
         return row is not None
     except Exception:
         log.debug("membership_covers() suppressed (billing not ready)", exc_info=False)
         return False
+
+
+def membership_covered_until(session, *, club_id, user_id):
+    """The LAST club-local date the member's cover runs to — the latest `current_period_end` across
+    their active subscriptions, or None when any of them is open-ended (or there is no membership).
+
+    Display-side companion to membership_covers: the availability picker shapes a whole RANGE of days
+    in one pass, so it can't ask per-slot whether the term still runs. It fetches this once and
+    compares each slot's own date, which is what stops the picker advertising "Covered by your
+    membership" on days past the member's expiry while the server (correctly) charges PAYG for them.
+    Guarded -> None (unknown = don't restrict the display; the server still decides the money)."""
+    try:
+        if not user_id or not _membership_sub_exists(session):
+            return None
+        rows = session.execute(
+            text("SELECT current_period_end FROM billing.membership_subscription "
+                 "WHERE club_id = :c AND user_id = :u AND status = 'active'"),
+            {"c": club_id, "u": user_id},
+        ).scalars().all()
+        if not rows:
+            return None
+        if any(r is None for r in rows):
+            return None                     # an open-ended plan covers any future date
+        return max(rows)
+    except Exception:
+        log.debug("membership_covered_until() suppressed (billing not ready)", exc_info=False)
+        return None
 
 
 def _product_has_coach_col(session):

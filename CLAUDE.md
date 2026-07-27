@@ -18,15 +18,23 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
   adds RLS; until then this is a discipline, not a guardrail.)
 
 ## Gates (run before every merge — there is no pytest suite)
+**"Guarded by `sc_…`" throughout this file names a scenario function in one of the three harnesses
+below** — `grep -rn "def sc_the_name" scripts/` to read the war story it encodes. `py_compile` is the
+WHOLE static gate: no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r
+requirements.txt` (Python 3.12).
 1. `python -m py_compile $(git ls-files '*.py')` — the `$(…)` is bash; from PowerShell use
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 273 / billing 449 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 316 / billing 449 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   - `test_booking_scenarios` (263) — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (43/70/12 `sc_*`
+   functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
+   don't commit the narrowing. The check counts below are the gate line's, not per-bullet totals —
+   **update line 25 only**, so the numbers can't drift apart.
+   - `test_booking_scenarios` — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
      waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused,
@@ -51,7 +59,7 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      its service through `diary.resource.product_id` (the DURABLE link, set at create_class_type and
      boot-backfilled), never a name join; an orphaned class REFUSES with PRICE_NOT_CONFIGURED rather
      than billing another class's rate, and a retired price variation can never enrol at R0**.
-   - `test_billing_scenarios` (439) — settlement modes, commission, tokens, membership (offline + per-tier),
+   - `test_billing_scenarios` — settlement modes, commission, tokens, membership (offline + per-tier),
      refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
      **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
      class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
@@ -71,7 +79,15 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
      ONCE per real activation (online + offline) carrying the email, never on a replay, and NEVER on the
      7-day trial (a `_EmitRecorder` context manager swaps the stubbed `marketing_crm.tracking.emit` for a
      recorder — late binding is what makes that work)**.
-   - `test_statement_reconciliation` (64) — no double-count, pay-all-once, part-settle, reclaim,
+     **REVENUE-LEAK HARDENING (2026-07-27, +43 checks)** — a membership is judged on the BOOKING'S
+     date not today (book past your expiry → PAYG, never a locked-in R0), one coach can't be in two
+     places (court↔lesson↔class both ways, a class's many court-holds excepted), a member's 2nd
+     CONCURRENT covered court is PAYG (the booking still succeeds), equipment obeys its OWN
+     payment_modes and HOLDS the booking when the resolved method is online (unpayable → refused),
+     club-default caps reach EVERY membership incl. the price-less trial (and a NULL-cap tier no
+     longer wipes a capped one), and a waitlist promotion into a card-only class is HELD pending
+     payment with the confirmation deferred (never `class_enrolled` on an unpaid seat).
+   - `test_statement_reconciliation` — no double-count, pay-all-once, part-settle, reclaim,
      membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
 
 ## Deployment (LIVE on Render)
@@ -682,6 +698,61 @@ member by email on the first authenticated hit.
   need flipped. The trial (`grant_signup_trial`) and the Wix import stay excluded — they INSERT directly and
   never reach either path. **It must carry `email`** — that's what the Klaviyo forward keys on. Guarded by
   `sc_membership_started_emit`.
+- **ENTITLEMENT IS EVALUATED ON THE BOOKING'S DATE, NEVER `CURRENT_DATE` (2026-07-27).**
+  `membership_covers` + `entitlement.active_caps` used to test `current_period_end >= CURRENT_DATE`
+  — "is this plan alive right now" — while `starts_at` only ever drove the access WINDOW. So a
+  member could book FORWARD past their own expiry and the row was written `membership_covered` at
+  R0 **permanently**: the term lapsing later changed nothing, the price was already fixed. Reported
+  as trialists booking beyond their 7 days; it was never trial-specific — a monthly member could
+  book out all of next month on the last day of this one and not renew, and
+  `club.policy.booking_window_days` (default 14) was the only limit on the reach. Both now compare
+  against the booking's CLUB-LOCAL date (`entitlement.local_date`), and the picker fetches
+  `pricing.membership_covered_until` once per range so it can't advertise "Covered" on a day the
+  server will charge for. Guarded by `sc_membership_cannot_book_past_its_own_expiry`.
+- **ONE PERSON, ONE PLACE — the GiST constraint can't express it.** `booking_no_overlap` is keyed on
+  `resource_id`, so it stops one COURT (or coach RESOURCE) being taken twice and says nothing about a
+  human. Three things slipped through: a class books NO row on the coach's resource (only court
+  holds), a coach's own court booking sits on the COURT's resource, and the court↔coach direction was
+  checked in neither `_coach_class_conflict` (lesson branch only) nor `classes._coach_busy_at`
+  (`booking_type='lesson'` only) — so a coach could hold a court AND deliver a lesson AND run a class
+  at 09:00 with no constraint violated. `bookings._coach_commitment_at` checks all three shapes on
+  create/accept/reschedule and returns which one clashed; a class's several court-holds are
+  `booking_type='class'` and never read as a clash with itself. **Members are NOT blocked** (a
+  doubles group legitimately holds two courts) — their 2nd *concurrent* covered court simply
+  downgrades to PAYG via `entitlement._has_overlapping_covered`. Guarded by
+  `sc_one_coach_one_place_at_a_time` + `sc_member_second_concurrent_court_is_payg`.
+- **EQUIPMENT IS A SERVICE AND PAYS LIKE ONE.** It rides the court's order, so where the court was
+  FREE (`membership_covered`) or prepaid (`token`) `_create_order_guarded` **hard-coded the order to
+  `at_court`** to collect the fee — assumed, never checked — and `create_booking` had already picked
+  `confirmed` from the COURT's free mode. A card-only club therefore got an owed pay-at-court debt
+  for the ball machine on a confirmed booking nobody could collect against: the "equipment always
+  comes as pay at court" report. Now `equipment.quote` prices the kit and intersects every requested
+  item's own `payment_modes` BEFORE any insert, `create_booking` resolves a method the club **and**
+  the kit both offer (empty → `EQUIPMENT_NOT_PAYABLE`, refused not granted — the pack rule), the hold
+  decision is made from BOTH modes, and the response carries **`requires_payment`** because the
+  client can no longer infer it from its own choice (`booking.js` redirects to Yoco on
+  `st.settlement === "online"`). Set the modes at Setup → Equipment hire. Guarded by
+  `sc_equipment_follows_its_own_payment_rule`.
+- **MEMBERSHIP CAPS HAVE A CLUB-LEVEL FLOOR — the per-tier ones alone never reached the trial.** The
+  caps live on `billing.price`, so they only applied to a tier that HAD a price row; the signup trial
+  usually doesn't (`grant_signup_trial` links one only when a trial TIER is configured), so trial
+  members were uncapped — and `active_caps._best` treated a NULL cap as "an unconstrained tier wins",
+  so merely HOLDING the price-less trial cancelled a paid tier's caps too. `club.policy.default_max_*`
+  is the floor every membership inherits (a tier's own value still overrides; NULL = inherit, as
+  `payment_modes` already works). **The owner's rule — one covered booking a day, 90 min max — is
+  exactly `default_max_covered_per_day=1` + `default_max_covered_minutes=90`**; no daily-minutes
+  accumulator exists or is needed. Every cap DOWNGRADES to PAYG, never blocks. Admin → Settings →
+  "What a membership includes (per day)". Guarded by `sc_club_default_caps_cover_every_membership`.
+- **A WAITLIST PROMOTION CANNOT CONFIRM AN UNPAID CARD-ONLY SEAT.** `_bill_promoted_enrolment`
+  rewrote an `online` intent to `at_court` ("async promotion can't drive a checkout") and
+  `_promote_waitlist` then marked the seat `enrolled` and emitted `class_enrolled` — on a card-only
+  class, a confirmed seat plus a "you're enrolled" email against an owed order, straight past the
+  payment gate `enrol` enforces two functions up. The downgrade now happens ONLY when the class
+  actually offers at-court; otherwise the seat is billed `online`, stamped `held_until` (the same
+  lazy-expiry rails as an online self-enrolment, so an unpaid promotion frees the seat and promotes
+  the next player) and emits **`class_seat_awaiting_payment`** instead — `class_enrolled` stays the
+  single confirmation and fires from `confirm_paid_enrolments` when the charge lands. Guarded by
+  `sc_waitlist_promotion_into_a_cardonly_class_is_held`.
 - **`marketing/` is NOT platform code** — local-only ad-ops notes, **gitignored as `/marketing/` since
   2026-07-22** (previously untracked-but-committable, one `git add -A` away from being published). The
   **leading slash is load-bearing**: a bare `marketing/` would also match the tracked public site at

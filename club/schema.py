@@ -98,6 +98,21 @@ _DDL = [
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS peak_start_min int;",
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS peak_end_min int;",
 
+    # DEFAULT membership entitlement caps — the club-wide floor EVERY membership inherits, including
+    # the signup trial. The per-tier caps (billing.price.max_covered_*) still override where set;
+    # NULL on a tier means "inherit these", exactly as payment_modes does.
+    #
+    # These exist because the caps used to live ONLY on billing.price, so they applied only to a tier
+    # that had a price row. The 7-day trial usually has none, so trial members were uncapped — and
+    # diary.entitlement._best treated a NULL cap as "an unconstrained tier wins", so merely HOLDING
+    # the price-less trial cancelled the caps on a member's paid tier as well. NULL here = no club
+    # default (the pre-existing behaviour). Set default_max_covered_per_day=1 +
+    # default_max_covered_minutes=90 for "one covered booking a day, 90 minutes max; anything else
+    # is paid" — every cap DOWNGRADES to PAYG, it never blocks the booking.
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS default_max_covered_minutes int;",
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS default_max_covered_per_day int;",
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS default_max_courts_per_day int;",
+
     # --- club.billing_profile : the club's FINANCIAL IDENTITY for invoices/receipts ------
     # One row per club. Everything a professional invoice / statement letterhead needs that
     # isn't already on club.club (legal_name) or club.location (address) or club.branding

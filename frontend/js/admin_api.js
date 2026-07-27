@@ -458,6 +458,39 @@
     return el("div", { class: "cf-field" }, [el("label", { text: label }), control]);
   }
   function input(opts) { return el("input", Object.assign({ class: "cf-input" }, opts || {})); }
+
+  // THE payment-options card — one renderer for every service that can restrict how it's paid for
+  // (memberships, equipment hire, …). `model` carries {modes, clubMethods}; ticking every enabled
+  // method means INHERIT (null), any subset overrides for this service alone. Extracted rather than
+  // copied when equipment gained payment options: a second copy is exactly how two surfaces drift
+  // into disagreeing about what "all ticked" means.
+  var PAY_MODE_LABELS = { online: "Pay online (card)", at_court: "Pay at the club",
+                          monthly_account: "Monthly account" };
+
+  function paymentOptionsCard(model, blurb) {
+    var c = el("div", { class: "cf-card" }, [el("h3", { text: "Payment options" }),
+      el("p", { class: "cf-muted cf-tiny", text: blurb })]);
+    var methods = model.clubMethods || [];
+    if (!methods.length) {
+      c.appendChild(el("div", { class: "cf-muted cf-tiny",
+                                text: "Enable payment methods on Club profile first." }));
+      return c;
+    }
+    var checks = {};
+    methods.forEach(function (mode) {
+      var lbl = el("label", { class: "cf-row", style: "gap:8px;align-items:center;cursor:pointer;margin-top:6px" });
+      var cb = el("input", { type: "checkbox" }); cb.style.width = "auto";
+      cb.checked = model.modes ? (model.modes.indexOf(mode) >= 0) : true;
+      checks[mode] = cb;
+      cb.addEventListener("change", function () {
+        var sel = methods.filter(function (x) { return checks[x].checked; });
+        model.modes = (sel.length === methods.length) ? null : sel;   // all → inherit
+      });
+      lbl.appendChild(cb); lbl.appendChild(el("span", { text: PAY_MODE_LABELS[mode] || mode }));
+      c.appendChild(lbl);
+    });
+    return c;
+  }
   function select(value, options) {
     var s = el("select", { class: "cf-select" });
     (options || []).forEach(function (o) {
@@ -1634,28 +1667,12 @@
         return c;
       }
 
-      // Per-membership payment options. Inherits the membership default (then the club's global
-      // methods) unless tailored here. Ticking a subset overrides for THIS membership only.
+      // Per-membership payment options — THE shared card (see paymentOptionsCard). Inherits the
+      // membership default (then the club's global methods) unless tailored here.
       function paymentCard() {
-        var LABELS = { online: "Pay online (card)", at_court: "Pay at the club", monthly_account: "Monthly account" };
-        var c = el("div", { class: "cf-card" }, [el("h3", { text: "Payment options" }),
-          el("p", { class: "cf-muted cf-tiny", text: "How members pay for THIS membership. Leave all ticked to inherit the club default; untick to tailor. A single non-online option checks out immediately." })]);
-        if (!m.clubMethods.length) { c.appendChild(el("div", { class: "cf-muted cf-tiny", text: "Enable payment methods on Club profile first." })); return c; }
-        var checks = {};
-        m.clubMethods.forEach(function (mode) {
-          var lbl = el("label", { class: "cf-row", style: "gap:8px;align-items:center;cursor:pointer;margin-top:6px" });
-          var cb = el("input", { type: "checkbox" }); cb.style.width = "auto";
-          cb.checked = m.modes ? (m.modes.indexOf(mode) >= 0) : true;
-          checks[mode] = cb;
-          cb.addEventListener("change", function () {
-            var sel = m.clubMethods.filter(function (x) { return checks[x].checked; });
-            // all enabled selected → inherit (null); else the chosen subset.
-            m.modes = (sel.length === m.clubMethods.length) ? null : sel;
-          });
-          lbl.appendChild(cb); lbl.appendChild(el("span", { text: LABELS[mode] || mode }));
-          c.appendChild(lbl);
-        });
-        return c;
+        return paymentOptionsCard(m, "How members pay for THIS membership. Leave all ticked to "
+          + "inherit the club default; untick to tailor. A single non-online option checks out "
+          + "immediately.");
       }
 
       function accessCard() {
@@ -1868,7 +1885,15 @@
 
     function openItem(it) {
       UI.clear(host);
-      var m = { name: it ? it.name : "", amount: it ? (it.amount_minor || 0) : 0, quantity: it ? it.quantity : 1, feature: it ? !!it.feature_on_home : false, active: it ? it.active : true };
+      var m = { name: it ? it.name : "", amount: it ? (it.amount_minor || 0) : 0, quantity: it ? it.quantity : 1, feature: it ? !!it.feature_on_home : false, active: it ? it.active : true,
+                // Equipment is a service and is paid for like one: null = inherit every club method.
+                modes: (it && it.payment_modes) ? it.payment_modes.slice() : null, clubMethods: [] };
+      // The payment card needs the club's enabled methods; fetch, then render (same as memberships).
+      window.TFAuth.apiJSON("/api/admin/membership-config").then(function (r) {
+        m.clubMethods = r.club_payment_methods || []; renderItem();
+      }, function () { m.clubMethods = []; renderItem(); });
+      function renderItem() {
+      UI.clear(host);
       var saveB = el("button", { class: "cf-btn cf-btn-primary", text: "Save & close" });
       host.appendChild(el("div", { class: "cf-editbar" }, [
         el("button", { class: "cf-btn", text: "← Cancel", onclick: function () { equipmentManage(host); } }),
@@ -1883,6 +1908,9 @@
         field("Name", nameI), field("Flat fee (R)", amtI), field("Quantity you own", qtyI),
         el("label", { class: "cf-row", style: "gap:10px;align-items:center;cursor:pointer;margin-top:6px" }, [featCb, el("span", { style: "font-weight:600", text: "Feature on the client Home (a hero tile)" })]),
       ]));
+      host.appendChild(paymentOptionsCard(m, "How this equipment is paid for. It rides the court "
+        + "booking's order, so if the court is free on a membership the booking still has to collect "
+        + "this fee — a card-only item holds the booking until it's paid."));
       if (it) {
         var tg = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", style: "margin-top:8px", text: it.active ? "Hide from booking" : "Show in booking" });
         tg.addEventListener("click", async function () { try { await window.AdminAPI.patchEquipment(it.id, { is_active: !it.active }); UI.toast("Saved.", "info"); equipmentManage(host); } catch (e) { UI.toast(UI.errMsg(e), "error"); } });
@@ -1892,11 +1920,12 @@
         if (!(m.name || "").trim()) { UI.toast("Name it.", "warn"); return; }
         saveB.disabled = true;
         try {
-          if (it) await window.AdminAPI.patchEquipment(it.id, { name: m.name, amount_minor: m.amount, quantity: m.quantity, feature_on_home: m.feature });
-          else await window.AdminAPI.createEquipment({ name: m.name, amount_minor: m.amount, quantity: m.quantity, feature_on_home: m.feature });
+          if (it) await window.AdminAPI.patchEquipment(it.id, { name: m.name, amount_minor: m.amount, quantity: m.quantity, feature_on_home: m.feature, payment_modes: m.modes });
+          else await window.AdminAPI.createEquipment({ name: m.name, amount_minor: m.amount, quantity: m.quantity, feature_on_home: m.feature, payment_modes: m.modes });
           UI.toast("Saved.", "info"); equipmentManage(host);
         } catch (e) { saveB.disabled = false; UI.toast(UI.errMsg(e) || "Couldn't save.", "error"); }
       });
+      }
     }
     reload();
   }

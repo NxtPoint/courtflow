@@ -226,6 +226,8 @@ def get_policy(session, *, club_id):
              "       cancellation_cutoff_hours, no_show_fee_minor, guest_requires_member, "
              "       allow_pay_at_court, allow_monthly_account, allow_online_payment, "
              "       peak_days, peak_start_min, peak_end_min, "
+             "       default_max_covered_minutes, default_max_covered_per_day, "
+             "       default_max_courts_per_day, "
              "       created_at, updated_at "
              "FROM club.policy WHERE club_id = :c"),
         {"c": club_id},
@@ -236,12 +238,18 @@ def patch_policy(session, *, club_id, booking_window_days=None, min_booking_minu
                  cancellation_cutoff_hours=None, no_show_fee_minor=None,
                  guest_requires_member=None, allow_pay_at_court=None,
                  allow_monthly_account=None, allow_online_payment=None,
-                 peak_days=_UNSET, peak_start_min=_UNSET, peak_end_min=_UNSET):
+                 peak_days=_UNSET, peak_start_min=_UNSET, peak_end_min=_UNSET,
+                 default_max_covered_minutes=_UNSET, default_max_covered_per_day=_UNSET,
+                 default_max_courts_per_day=_UNSET):
     """Upsert-then-partial-update policy (1 row per club). Inserts a defaults row if absent.
 
-    The peak-window fields use a sentinel (_UNSET) rather than None so the owner can explicitly CLEAR the
-    window (pass None) to turn peak pricing off, distinct from "don't touch it" (omit the arg)."""
+    The peak-window and default-cap fields use a sentinel (_UNSET) rather than None so the owner can
+    explicitly CLEAR them (pass None = no peak pricing / no cap), distinct from "don't touch it"
+    (omit the arg). A COALESCE-style partial update can't express "set this back to unlimited"."""
     set_peak = any(v is not _UNSET for v in (peak_days, peak_start_min, peak_end_min))
+    set_caps = any(v is not _UNSET for v in (default_max_covered_minutes,
+                                             default_max_covered_per_day,
+                                             default_max_courts_per_day))
     session.execute(
         text("INSERT INTO club.policy (club_id) VALUES (:c) ON CONFLICT (club_id) DO NOTHING"),
         {"c": club_id},
@@ -260,6 +268,9 @@ def patch_policy(session, *, club_id, booking_window_days=None, min_booking_minu
                 peak_days                 = CASE WHEN :set_peak THEN :peak_days ELSE peak_days END,
                 peak_start_min            = CASE WHEN :set_peak THEN :peak_start_min ELSE peak_start_min END,
                 peak_end_min              = CASE WHEN :set_peak THEN :peak_end_min ELSE peak_end_min END,
+                default_max_covered_minutes = CASE WHEN :set_caps THEN :dmcm ELSE default_max_covered_minutes END,
+                default_max_covered_per_day = CASE WHEN :set_caps THEN :dmcd ELSE default_max_covered_per_day END,
+                default_max_courts_per_day  = CASE WHEN :set_caps THEN :dmctd ELSE default_max_courts_per_day END,
                 updated_at                = now()
             WHERE club_id = :c
         """),
@@ -274,7 +285,11 @@ def patch_policy(session, *, club_id, booking_window_days=None, min_booking_minu
          "set_peak": set_peak,
          "peak_days": (None if peak_days is _UNSET else _days_csv(peak_days)),
          "peak_start_min": (None if peak_start_min is _UNSET else peak_start_min),
-         "peak_end_min": (None if peak_end_min is _UNSET else peak_end_min)},
+         "peak_end_min": (None if peak_end_min is _UNSET else peak_end_min),
+         "set_caps": set_caps,
+         "dmcm": (None if default_max_covered_minutes is _UNSET else default_max_covered_minutes),
+         "dmcd": (None if default_max_covered_per_day is _UNSET else default_max_covered_per_day),
+         "dmctd": (None if default_max_courts_per_day is _UNSET else default_max_courts_per_day)},
     )
     return get_policy(session, club_id=club_id)
 
@@ -575,11 +590,16 @@ def list_equipment(session, *, club_id):
     return _le(session, club_id=club_id, active_only=False)
 
 
-def create_equipment(session, *, club_id, name, amount_minor=0, quantity=1, feature_on_home=False):
+def create_equipment(session, *, club_id, name, amount_minor=0, quantity=1, feature_on_home=False,
+                     payment_modes=None):
+    # payment_modes (None = inherit every club-enabled method) is what makes equipment a first-class
+    # service rather than an always-owed add-on. diary.equipment.quote intersects these across the
+    # requested items and create_booking refuses a combination the club can't collect, instead of the
+    # old behaviour: assume pay-at-court and confirm the booking regardless.
     prod = session.execute(
-        text("INSERT INTO billing.product (club_id, kind, name, active) "
-             "VALUES (:c, 'equipment', :n, true) RETURNING id"),
-        {"c": club_id, "n": (name or "Equipment")},
+        text("INSERT INTO billing.product (club_id, kind, name, payment_modes, active) "
+             "VALUES (:c, 'equipment', :n, :m, true) RETURNING id"),
+        {"c": club_id, "n": (name or "Equipment"), "m": _modes_csv(payment_modes)},
     ).scalar()
     session.execute(
         text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, currency_code, "
@@ -597,7 +617,7 @@ def create_equipment(session, *, club_id, name, amount_minor=0, quantity=1, feat
 
 
 def patch_equipment(session, *, club_id, resource_id, name=None, amount_minor=None, quantity=None,
-                    feature_on_home=None, is_active=None):
+                    feature_on_home=None, is_active=None, set_modes=False, payment_modes=None):
     prod = session.execute(
         text("SELECT product_id FROM diary.resource "
              "WHERE club_id = :c AND id = :r AND kind = 'equipment'"),
@@ -621,6 +641,13 @@ def patch_equipment(session, *, club_id, resource_id, name=None, amount_minor=No
         session.execute(text("UPDATE billing.price SET amount_minor = :a, updated_at = now() "
                              "WHERE club_id = :c AND product_id = :p"),
                         {"c": club_id, "p": prod, "a": int(amount_minor)})
+    # set_modes distinguishes "don't touch the payment options" from "clear them back to inherit" —
+    # a bare NULL payment_modes is meaningful (= every club-enabled method), so it can't double as
+    # "unchanged". Same shape as patch_membership_plan's set_modes/set_window/set_limits flags.
+    if set_modes:
+        session.execute(text("UPDATE billing.product SET payment_modes = :m, updated_at = now() "
+                             "WHERE club_id = :c AND id = :p"),
+                        {"c": club_id, "p": prod, "m": _modes_csv(payment_modes)})
     return _equipment_one(session, club_id=club_id, resource_id=resource_id)
 
 

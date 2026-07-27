@@ -432,10 +432,24 @@ def _order_is_live(session, order_id):
 
 
 def _bill_promoted_enrolment(session, *, club_id, cs, enrol):
-    """Bill a seat just promoted off the waitlist — the waitlist itself never billed. Async promotion
-    can't drive an online checkout, so an 'online' intent becomes an OWED at-court order; a 'token'
-    intent draws a still-matching prepaid class wallet (else falls back to at-court rather than
-    rejecting a promotion). Guarded — a billing hiccup never blocks the promotion."""
+    """Bill a seat just promoted off the waitlist — the waitlist itself never billed. A 'token' intent
+    draws a still-matching prepaid class wallet (else falls back to at-court rather than rejecting a
+    promotion). Guarded — a billing hiccup never blocks the promotion.
+
+    Returns {"held": bool} — True when the seat was billed ONLINE and is therefore reserved pending
+    payment rather than confirmed, so the caller defers the confirmation.
+
+    AN 'ONLINE' INTENT IS NO LONGER SILENTLY REWRITTEN TO AT-COURT. It used to be, on the reasoning
+    that an async promotion can't drive a checkout — but on a class the club sells CARD-ONLY that
+    handed out a confirmed seat plus a "you're enrolled" email against an owed order that nobody
+    could collect, straight past the payment gate `enrol` enforces two functions up. It is the same
+    seat, sold the same way, so it gets the same treatment as the online enrol path: an
+    awaiting_payment order, a held seat, and the confirmation deferred until the charge lands
+    (confirm_paid_enrolments). If the hold lapses unpaid, release_expired_enrolments frees it and
+    promotes the next person — which is exactly what should happen to an unpaid seat.
+
+    A class that DOES accept at-court still converts, because there the club really can collect at
+    the desk and a held seat would just be friction."""
     # ALREADY-BILLED GUARD — must test that the linked order is still LIVE, not merely that a
     # order_id is present. Cancelling an enrolment VOIDS its order but leaves enrolment.order_id
     # pointing at the dead row (nothing in the repo NULLs it). Re-enrolling into a now-full class
@@ -443,10 +457,13 @@ def _bill_promoted_enrolment(session, *, club_id, cs, enrol):
     # skip billing entirely: seat enrolled, confirmation email sent, NOTHING charged and no coach
     # commission — a silent free class. Only a live order means "already billed".
     if enrol.get("order_id") and _order_is_live(session, enrol.get("order_id")):
-        return
+        return {"held": False}
     mode = enrol.get("settlement_mode") or "at_court"
     if mode == "online":
-        mode = "at_court"                        # collect at the club; can't check out asynchronously
+        # Only downgrade to "collect at the desk" when this class actually OFFERS that.
+        pm = _class_payment_modes(session, club_id, cs)
+        if pm is None or "at_court" in pm:
+            mode = "at_court"
     payer = enrol.get("payer_user_id") or enrol.get("user_id")
     audience = enrol.get("audience") or "member"
     enrol_id = str(enrol["id"])
@@ -473,8 +490,18 @@ def _bill_promoted_enrolment(session, *, club_id, cs, enrol):
             session.execute(
                 text("UPDATE diary.enrolment SET order_id=:o WHERE id=:id"),
                 {"o": order["order_id"], "id": enrol_id})
+        if mode == "online":
+            # Reserve, don't confirm. held_until puts the seat on exactly the same lazy-expiry rails
+            # as an online self-enrolment, so an unpaid promotion frees the seat for the next player.
+            session.execute(
+                text("UPDATE diary.enrolment SET settlement_mode='online', "
+                     "held_until = now() + make_interval(mins => :m), updated_at=now() "
+                     "WHERE id=:id"),
+                {"m": ONLINE_HOLD_MINUTES, "id": enrol_id})
+            return {"held": True}
     except Exception:
         log.debug("promoted-enrolment billing skipped", exc_info=False)
+    return {"held": False}
 
 
 def _promote_waitlist(session, *, club_id, cs):
@@ -497,10 +524,16 @@ def _promote_waitlist(session, *, club_id, cs):
         text("UPDATE diary.enrolment SET status='enrolled', updated_at=now() WHERE id=:id"),
         {"id": nxt["id"]},
     )
-    _bill_promoted_enrolment(session, club_id=club_id, cs=cs, enrol=nxt)
+    billed = _bill_promoted_enrolment(session, club_id=club_id, cs=cs, enrol=nxt) or {}
     enrolment = _enrolment_dict(session, nxt["id"])
     events.emit("waitlist_slot_open", _payload(cs, enrolment))
-    events.emit("class_enrolled", _payload(cs, enrolment))
+    if billed.get("held"):
+        # The seat is RESERVED pending payment on a card-only class — say exactly that. Emitting
+        # class_enrolled here would tell the player they were in while their order sat unpaid; the
+        # real confirmation fires from confirm_paid_enrolments when the charge lands.
+        events.emit("class_seat_awaiting_payment", _payload(cs, enrolment))
+    else:
+        events.emit("class_enrolled", _payload(cs, enrolment))
     return str(nxt["id"])
 
 
@@ -1021,13 +1054,19 @@ def _coach_busy_at(session, *, club_id, coach_user_id, starts_at, ends_at, exclu
     ).first()
     if class_clash:
         return True
-    lesson_clash = session.execute(
+    # A lesson they DELIVER, or a court they hold THEMSELVES. The court half matters because a coach's
+    # own court booking sits on the court's resource and collides with nothing else the coach has —
+    # without it a class could be laid straight over a court the coach is personally playing on.
+    # A class's own court-blocking rows are booking_type='class', so they never count here.
+    booking_clash = session.execute(
         text("SELECT 1 FROM diary.booking "
-             "WHERE club_id = :c AND coach_user_id = :u AND booking_type = 'lesson' "
-             "  AND status IN ('held','confirmed') AND ends_at > :s AND starts_at < :e LIMIT 1"),
-        {"c": club_id, "u": coach_user_id, "s": starts_at, "e": ends_at},
+             "WHERE club_id = :c AND status IN ('held','confirmed') "
+             "  AND ends_at > :s AND starts_at < :e "
+             "  AND ((booking_type = 'lesson' AND coach_user_id = CAST(:u AS uuid)) "
+             "    OR (booking_type = 'court'  AND booked_by_user_id = CAST(:u AS uuid))) LIMIT 1"),
+        {"c": club_id, "u": str(coach_user_id), "s": starts_at, "e": ends_at},
     ).first()
-    return bool(lesson_clash)
+    return bool(booking_clash)
 
 
 def _valid_court(session, *, club_id, court_resource_id):

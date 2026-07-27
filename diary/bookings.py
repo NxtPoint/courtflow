@@ -186,6 +186,79 @@ def _coach_class_conflict(session, club_id, coach_user_id, starts, ends):
     ).first())
 
 
+def _is_coach(session, club_id, user_id):
+    """True if this user coaches at this club (has an iam.coach_profile). Guarded -> False, so a
+    missing profile table can only ever RELAX the one-place-at-a-time rule, never invent a block."""
+    if not user_id:
+        return False
+    try:
+        return bool(session.execute(
+            text("SELECT 1 FROM iam.coach_profile WHERE club_id = :c AND user_id = :u LIMIT 1"),
+            {"c": str(club_id), "u": str(user_id)},
+        ).first())
+    except Exception:
+        return False
+
+
+def _coach_commitment_at(session, club_id, coach_user_id, starts, ends, exclude_booking_ids=()):
+    """What ELSE the coach is committed to across [starts, ends) — 'class' | 'lesson' | 'court', or
+    None when they're free.
+
+    THE GAP THIS CLOSES. The no-double-booking guarantee is a GiST exclusion constraint keyed on
+    `resource_id`, so it stops one COURT (or one coach RESOURCE) being taken twice. It has nothing to
+    say about one PERSON being in two places, and three things slip through it:
+
+      · a class books NO row on the coach's own resource — only court holds — so the coach resource
+        sits free during their own class (that is why _coach_class_conflict had to exist at all);
+      · a coach booking a COURT for themselves creates a row on the COURT's resource, which never
+        collides with their coach resource or their class;
+      · and the court-vs-coach direction was never checked in either place — _coach_class_conflict
+        was only ever called on the lesson branch, and classes._coach_busy_at deliberately looks at
+        booking_type='lesson' only.
+
+    So a coach could hold a court at 09:00 while ALSO delivering a lesson (on a different court) and
+    running a class — three commitments, one human, no constraint violated anywhere. Checking the
+    three shapes together is the whole fix.
+
+    A class's own court-blocking rows are booking_type='class' and match none of the three clauses,
+    so a class legitimately holding several courts never reads as a clash with itself.
+    `exclude_booking_ids` drops the booking being rescheduled (and its linked court row) so a move
+    within its own slot can't block itself."""
+    if not coach_user_id:
+        return None
+    params = {"c": str(club_id), "u": str(coach_user_id), "s": starts, "e": ends}
+    ex = ""
+    if exclude_booking_ids:
+        ids = [str(b) for b in exclude_booking_ids if b]
+        if ids:
+            ex = " AND id <> ALL(CAST(:ex AS uuid[]))"
+            params["ex"] = ids
+    if _coach_class_conflict(session, club_id, coach_user_id, starts, ends):
+        return "class"
+    row = session.execute(
+        text("SELECT booking_type FROM diary.booking "
+             "WHERE club_id = :c AND status IN ('held','confirmed') "
+             "  AND ends_at > :s AND starts_at < :e "
+             # delivering a lesson, OR personally holding a court as a player
+             "  AND ((booking_type = 'lesson' AND coach_user_id = CAST(:u AS uuid)) "
+             "    OR (booking_type = 'court'  AND booked_by_user_id = CAST(:u AS uuid)))"
+             + ex + " LIMIT 1"),
+        params,
+    ).mappings().first()
+    return row["booking_type"] if row else None
+
+
+_COACH_BUSY_MESSAGE = {
+    "class": "the coach is running a class at this time",
+    "lesson": "the coach already has a lesson at this time",
+    "court": "the coach already has a court booked at this time",
+}
+
+
+def _coach_busy_err(kind):
+    return _err("COACH_BUSY", 409, message=_COACH_BUSY_MESSAGE.get(kind, "the coach is busy then"))
+
+
 def _policy(session, club_id):
     row = session.execute(
         text("SELECT booking_window_days, min_booking_minutes, cancellation_cutoff_hours, "
@@ -278,15 +351,20 @@ def _membership_covers_guarded(session, *, club_id, user_id, starts_at):
         return False
 
 
-def _court_covered_guarded(session, *, club_id, user_id, starts_at, ends_at, resource_id, now=None):
-    """True if the member's FULL entitlement covers this court booking for free — active membership + inside
-    the access window + court-service member-eligible + within max_covered_minutes + under the daily
-    booking/court caps (diary.entitlement.court_covered). Outside entitlement -> False -> billed PAYG.
-    Guarded; never raises (a missing entitlement module must never block a booking)."""
+def _court_covered_guarded(session, *, club_id, user_id, starts_at, ends_at, resource_id, now=None,
+                           exclude_booking_id=None):
+    """True if the member's FULL entitlement covers this court booking for free — a membership still
+    running ON THE BOOKING'S DATE + inside the access window + court-service member-eligible + within
+    max_covered_minutes + under the daily booking/court caps + not overlapping another covered court
+    (diary.entitlement.court_covered). Outside entitlement -> False -> billed PAYG.
+    `exclude_booking_id` omits the booking being RESCHEDULED from the daily/overlap counts, so a move
+    within its own slot can't disqualify itself. Guarded; never raises (a missing entitlement module
+    must never block a booking)."""
     try:
         from diary.entitlement import court_covered
         return court_covered(session, club_id=club_id, user_id=user_id, starts_at=starts_at,
-                             ends_at=ends_at, resource_id=resource_id, now=now)
+                             ends_at=ends_at, resource_id=resource_id, now=now,
+                             exclude_booking_id=exclude_booking_id)
     except Exception:
         return False
 
@@ -403,7 +481,7 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
                           starts_at=None, ends_at=None, linked_booking_id=None,
                           audience="member", enrolment_id=None, duration_minutes=None,
                           token_wallet=None, token_ref=None, coach_user_id=None, product_id=None,
-                          price_id=None, addon_lines=None):
+                          price_id=None, addon_lines=None, addon_order_mode=None):
     """Adapter between the diary and Agent C's billing.orders.create_order_for_booking.
 
     The diary speaks bookings; billing speaks order *lines*. We translate here: price each
@@ -493,12 +571,18 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
     addon_total = sum(int(l.get("amount_minor") or 0) * int(l.get("qty") or 1) for l in addon_lines)
     lines.extend(addon_lines)
     # If the COURT base is R0 (membership_covered / token / free) but equipment adds a real charge, the
-    # ORDER must be collectable — make it an owed at-court order so the equipment is billed while the court
-    # stays free (its lines are R0, and the booking row keeps its own settlement_mode). A PAYG court just
-    # adds the equipment to its existing order/payment (one order, one payment).
+    # ORDER must be collectable while the court stays free (its lines are R0, and the booking row keeps
+    # its own settlement_mode). A PAYG court just adds the equipment to its existing order/payment
+    # (one order, one payment).
+    #
+    # `addon_order_mode` is the method the CALLER resolved against the club's enabled methods and the
+    # equipment's own payment_modes. This used to be a hard-coded 'at_court', which invented a
+    # pay-at-court debt in clubs that take cards only — and, because the caller had already decided
+    # 'confirmed' from the court's free mode, left the booking confirmed against it. Falling back to
+    # 'at_court' only when the caller resolved nothing keeps every existing caller's behaviour.
     order_settlement = settlement_mode
     if covered and addon_total > 0:
-        order_settlement = "at_court"
+        order_settlement = addon_order_mode or "at_court"
 
     try:
         order_id = create_order_for_booking(
@@ -519,7 +603,11 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
                 # Re-run for the same booking (idempotent) — fine; the token already moved.
                 log.debug("token already drawn for booking=%s (idempotent)", booking_id)
         return {"order_id": str(order_id) if order_id else None,
-                "status": booking_status_for_mode(settlement_mode),
+                # Describe the ORDER we actually created. These differ only when a free/prepaid court
+                # carries equipment: the booking stays membership_covered/token while the order takes
+                # a real money mode, and reporting the booking's mode would tell the caller an order
+                # awaiting payment was already settled.
+                "status": booking_status_for_mode(order_settlement),
                 "checkout": None,  # gateway checkout intent comes later (Phase 7, online mode)
                 "amount_minor": total}
     except Exception:
@@ -718,12 +806,13 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     if booking_type == "lesson":
         if res["kind"] != "coach":
             return _err("COACH_REQUIRED", 422, message="a lesson must be booked with a coach")
-        # A coach running a class can't simultaneously take a lesson — the class isn't a
-        # diary.booking so the exclusion constraint can't see it (guard explicitly).
-        if _coach_class_conflict(session, club_id,
-                                 coach_user_id or res.get("coach_user_id"), starts, ends):
-            return _err("COACH_BUSY", 409,
-                        message="the coach is running a class at this time")
+        # One coach, one place at a time. A class books no row on the coach's resource and a court
+        # the coach booked for themselves lives on the COURT's resource, so neither collides with
+        # this lesson through the exclusion constraint — check all three explicitly.
+        _busy = _coach_commitment_at(session, club_id,
+                                     coach_user_id or res.get("coach_user_id"), starts, ends)
+        if _busy:
+            return _coach_busy_err(_busy)
         if not court_resource_id:
             # No court named → the coach's PREFERRED court if it's free, else the first free one.
             court_resource_id = _pick_court_for_lesson(
@@ -731,6 +820,16 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         if not court_resource_id:
             return _err("NO_COURT_AVAILABLE", 422,
                         message="no court is free at this time — a lesson needs a court")
+
+    # The same rule from the other direction: a COACH taking a court for themselves can't do it while
+    # they're already delivering a lesson or running a class. Scoped to the person the court is FOR
+    # (owner_user_id) and only when that person actually coaches here — a coach booking a court ON
+    # BEHALF of a client is the client's booking, and an ordinary member is never blocked (their
+    # second concurrent court is simply not covered — see diary.entitlement._has_overlapping_covered).
+    if booking_type == "court" and _is_coach(session, club_id, owner_user_id):
+        _busy = _coach_commitment_at(session, club_id, owner_user_id, starts, ends)
+        if _busy:
+            return _coach_busy_err(_busy)
 
     policy = _policy(session, club_id)
 
@@ -782,9 +881,6 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                 return _err("GUEST_REQUIRES_HOST", 422,
                             message="a member host is required for a guest booking")
 
-    online = (settlement_mode == "online")
-    status = "held" if online else "confirmed"
-    held_until = (now + timedelta(minutes=hold_minutes)) if online else None
     coach_uid = coach_user_id or (res["coach_user_id"] if res["kind"] == "coach" else None)
     if booking_type == "lesson" and not coach_uid:
         return _err("COACH_REQUIRED", 422, message="a lesson must be booked with a coach")
@@ -828,6 +924,56 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         if pm is not None and settlement_mode not in pm:
             return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=settlement_mode,
                         message="this service doesn't offer that payment method")
+
+    # ---- EQUIPMENT hire is a SERVICE too, and has to be paid for like one ---------------------
+    #
+    # Equipment rides the court's order, so it used to inherit whatever that order did — and where
+    # the court itself was FREE (membership_covered) or prepaid (token), _create_order_guarded simply
+    # hard-coded the order to 'at_court' so the fee could be collected. That is where the money went:
+    #
+    #   · 'at_court' was assumed, never checked. A club that only accepts cards still got an owed
+    #     pay-at-court debt for the ball machine — no checkout, no card, and nobody at the desk
+    #     expecting to collect. That is the "equipment always comes as pay at court" report.
+    #   · the booking's status was decided from the COURT's mode, so a covered court + equipment
+    #     confirmed instantly while its order sat owed. Nothing was ever held pending payment.
+    #
+    # So: resolve a method the club AND the equipment both actually offer, and let it drive the hold
+    # below. An empty intersection is REFUSED rather than granted unpaid — the same rule packs
+    # already follow (billing.bundles.allowed_purchase_modes: an unpayable restricted item is
+    # refused, never handed over on an unpaid order).
+    equip_order_mode = None
+    if addons and booking_type == "court":
+        from diary.equipment import quote as _equip_quote
+        _eq = _equip_quote(session, club_id=club_id, addons=addons)
+        if int(_eq.get("total_minor") or 0) > 0:
+            _eq_modes = _eq.get("modes")          # None = the items place no restriction
+            _club_ok = [m for m in ("at_court", "monthly_account", "online")
+                        if _settlement_allowed(m, policy, role)]
+            _allowed = [m for m in _club_ok if _eq_modes is None or m in _eq_modes]
+            if settlement_mode in ("membership_covered", "token", "free"):
+                # The court costs nothing, so the ORDER exists purely to collect the equipment and
+                # needs a method of its own. Prefer collecting at the desk when that's offered
+                # (unchanged for the common club), else month-end, else drive a real checkout.
+                if not _allowed:
+                    return _err("EQUIPMENT_NOT_PAYABLE", 422,
+                                message="that equipment can't be paid for with any method this club "
+                                        "offers — book the court without it")
+                equip_order_mode = next(m for m in ("at_court", "monthly_account", "online")
+                                        if m in _allowed)
+            elif role in ("member", "guest") and _eq_modes is not None \
+                    and settlement_mode not in _eq_modes:
+                # A PAYG court already carries a money mode; the equipment must accept that same one
+                # (it is one order, one payment). Card-only equipment on a pay-at-court court would
+                # otherwise be collected under a rule it never offered.
+                return _err("EQUIPMENT_SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=settlement_mode,
+                            message="that equipment isn't available with that payment method")
+
+    # The hold decision, now that BOTH the court's and the equipment's methods are known. An 'online'
+    # order — whichever of the two demanded it — must leave the booking HELD until the charge lands,
+    # never confirmed on the promise of one.
+    online = (settlement_mode == "online") or (equip_order_mode == "online")
+    status = "held" if online else "confirmed"
+    held_until = (now + timedelta(minutes=hold_minutes)) if online else None
 
     # A BILLABLE booking must have a CONFIGURED price for its service + duration — otherwise
     # _create_order_guarded would silently write an R0 line and a delivered lesson/court would never
@@ -904,6 +1050,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         coach_user_id=coach_uid,   # price a lesson on THIS coach's own rate card (not the cheapest coach's)
         product_id=product_id,     # …and on the CHOSEN service (Private vs Semi-private) when given
         addon_lines=addon_lines,   # equipment hire → extra order lines on the SAME order (no double bill)
+        addon_order_mode=equip_order_mode,  # …collected by a method the club AND the kit both offer
     )
     order_id = order.get("order_id")
     if order_id:
@@ -934,7 +1081,13 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
 
     # Online stays held -> return checkout; everything else is confirmed -> emit.
     if online:
-        return {"ok": True, "booking": booking, "checkout": order.get("checkout")}
+        # `requires_payment` is explicit because the CLIENT can no longer infer it from its own
+        # choice. A membership-covered court carrying card-only equipment is 'membership_covered' as
+        # far as the booking flow picked, yet its order awaits a real charge — booking.js redirects
+        # to Yoco on `st.settlement === "online"`, so without this flag the booking would sit held
+        # and quietly lazy-expire while the member believed they were done.
+        return {"ok": True, "booking": booking, "checkout": order.get("checkout"),
+                "requires_payment": True}
 
     _emit_confirmed(session, booking, res, settlement_mode)
     return {"ok": True, "booking": booking, "checkout": None}
@@ -1081,10 +1234,19 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
         return _err("NOT_COVERED_AT_NEW_TIME", 422,
                     message="your membership doesn't cover that time — pick a covered slot, or book a paid court")
 
-    # A lesson must not be moved onto a time the coach runs a scheduled class — a class_session is
-    # not a diary.booking, so the GiST exclusion can't catch it (mirror the create/accept guard).
-    if _coach_class_conflict(session, club_id, bk.get("coach_user_id"), new_s, new_e):
-        return _err("COACH_BUSY", 409, message="the coach runs a class at the new time")
+    # A booking must not be moved onto a time its coach is already committed — a class they run, a
+    # lesson they deliver, or a court they hold themselves. Only the coach RESOURCE is arbitrated by
+    # the GiST exclusion, so mirror the create/accept guard here. The booking's OWN rows (a lesson is
+    # coach + held court on one order) are excluded, or a small shift would block itself.
+    _own_ids = tuple([booking_id] + _linked_booking_ids(session, club_id, bk.get("order_id")))
+    _busy_coach = bk.get("coach_user_id") or (
+        bk.get("booked_by_user_id") if (bk.get("booking_type") == "court"
+                                        and _is_coach(session, club_id, bk.get("booked_by_user_id")))
+        else None)
+    _busy = _coach_commitment_at(session, club_id, _busy_coach, new_s, new_e,
+                                 exclude_booking_ids=_own_ids)
+    if _busy:
+        return _coach_busy_err(_busy)
 
     # An explicit court change is validated up front so the caller gets a precise error instead of a
     # bare SLOT_TAKEN from the exclusion constraint. The booking's OWN rows are excluded from the
@@ -1128,7 +1290,8 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
         if bk.get("settlement_mode") == "membership_covered" and bk.get("booked_by_user_id"):
             if not _court_covered_guarded(session, club_id=club_id, user_id=bk["booked_by_user_id"],
                                           starts_at=new_s, ends_at=new_e,
-                                          resource_id=new_court_resource_id):
+                                          resource_id=new_court_resource_id,
+                                          exclude_booking_id=booking_id):
                 return _err("COURT_NOT_COVERED", 422,
                             message="your membership doesn't cover that court — pick another, "
                                     "or book it as a paid court")
@@ -1515,8 +1678,14 @@ def accept_booking(session, *, club_id, booking_id, actor_user_id, role, now=Non
     status = "held" if online else "confirmed"
     held_until = (now + timedelta(minutes=HOLD_MINUTES_DEFAULT)) if online else None
 
-    if _coach_class_conflict(session, club_id, coach_uid, starts, ends):
-        return _err("COACH_BUSY", 409, message="the coach is running a class at this time")
+    # A 'requested' lesson holds NOTHING (requested/proposed are excluded from the GiST exclusion),
+    # so several can pile up on the same slot and the clash only becomes real here, on accept. The
+    # coach resource itself is arbitrated by the constraint when the row flips to confirmed; a class
+    # or the coach's own court booking is not, so check the person explicitly first.
+    _busy = _coach_commitment_at(session, club_id, coach_uid, starts, ends,
+                                 exclude_booking_ids=(booking_id,))
+    if _busy:
+        return _coach_busy_err(_busy)
 
     court_resource_id = _first_free_court(session, club_id, starts, ends)
     if not court_resource_id:

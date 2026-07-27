@@ -26,19 +26,26 @@ def list_equipment(session, *, club_id, active_only=True, featured_only=False):
         if featured_only:
             where.append("r.feature_on_home = true")
         rows = session.execute(
-            text("SELECT r.id, r.name, r.quantity, r.feature_on_home, r.is_active, r.product_id "
-                 "FROM diary.resource r WHERE " + " AND ".join(where) + " ORDER BY r.rank, r.name"),
+            text("SELECT r.id, r.name, r.quantity, r.feature_on_home, r.is_active, r.product_id, "
+                 "       p.payment_modes "
+                 "FROM diary.resource r "
+                 "LEFT JOIN billing.product p ON p.id = r.product_id "
+                 "WHERE " + " AND ".join(where) + " ORDER BY r.rank, r.name"),
             {"c": str(club_id)},
         ).mappings().all()
         out = []
         for r in rows:
             price = _flat_price(session, club_id=club_id, product_id=r["product_id"])
+            modes = r["payment_modes"]
             out.append({
                 "id": str(r["id"]), "name": r["name"], "quantity": int(r["quantity"] or 1),
                 "feature_on_home": bool(r["feature_on_home"]), "active": bool(r["is_active"]),
                 "price_id": (price["price_id"] if price else None),
                 "amount_minor": (price["amount_minor"] if price else None),
                 "currency_code": (price["currency_code"] if price else None),
+                # None = inherit every club-enabled method (the booking flow narrows by this).
+                "payment_modes": ([m.strip() for m in str(modes).split(",") if m.strip()]
+                                  if modes else None),
             })
         return out
     except Exception:
@@ -61,6 +68,45 @@ def _flat_price(session, *, club_id, product_id):
         return dict(row) if row else None
     except Exception:
         return None
+
+
+def quote(session, *, club_id, addons):
+    """Price the requested equipment and resolve what it may be PAID with, BEFORE anything is
+    inserted — returns {total_minor, modes} where `modes` is the intersection of every requested
+    item's own `billing.product.payment_modes` (None = that item places no restriction, so it
+    doesn't narrow the set) and an empty list means the items disagree irreconcilably.
+
+    create_booking has to decide `held` vs `confirmed` before the order exists, so it needs the
+    equipment's price and payment rules up front; reserve_equipment below stays the authority that
+    actually locks stock and writes the lines. Guarded -> {0, None} (never blocks a booking)."""
+    total = 0
+    modes = None
+    try:
+        for a in (addons or []):
+            rid = a.get("resource_id")
+            qty = int(a.get("qty") or 1)
+            if not rid or qty < 1:
+                continue
+            row = session.execute(
+                text("SELECT product_id FROM diary.resource "
+                     "WHERE club_id = :c AND id = :r AND kind = 'equipment' AND is_active = true"),
+                {"c": str(club_id), "r": str(rid)},
+            ).mappings().first()
+            if not row:
+                continue
+            price = _flat_price(session, club_id=club_id, product_id=row["product_id"])
+            if price and price["amount_minor"] is not None:
+                total += int(price["amount_minor"]) * qty
+            from diary.pricing import payment_modes_for
+            pm = payment_modes_for(session, club_id=club_id, kind="equipment",
+                                   product_id=row["product_id"])
+            if pm is None:
+                continue                      # unrestricted item — narrows nothing
+            modes = list(pm) if modes is None else [m for m in modes if m in pm]
+        return {"total_minor": total, "modes": modes}
+    except Exception:
+        log.debug("equipment quote suppressed", exc_info=False)
+        return {"total_minor": 0, "modes": None}
 
 
 def available_units(session, *, club_id, resource_id, starts, ends, exclude_booking_id=None):

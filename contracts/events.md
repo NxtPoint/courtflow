@@ -60,6 +60,7 @@ then best-effort forwards to Klaviyo. Off-key Klaviyo is a clean no-op. See
 | `class_enrolled` | enrolment confirmed | `ref_type=enrolment`, `ref_id`, `class_name`, `starts_at`, `coach_name?`, `amount_minor?`, `settlement_mode?` | **Class Enrolment Confirmation** | **transactional** |
 | `class_waitlisted` | enrolment over capacity | `ref_type=enrolment`, `ref_id`, `class_name`, `starts_at`, `position?` | **"You're on the waitlist"** | **transactional** |
 | `waitlist_slot_open` | a slot frees on a waitlisted class/resource | `ref_type=waitlist`, `ref_id`, `class_name?`, `resource_name?`, `starts_at`, `claim_url?`, `claim_deadline?` | **"A slot opened — claim it"** | **transactional** |
+| `class_seat_awaiting_payment` | a waitlist promotion into a CARD-ONLY class — the seat is HELD, not confirmed | `ref_type=enrolment`, `ref_id`, `class_name`, `starts_at`, `coach_name?`, `amount_minor?` | **"A spot opened — pay to confirm it"** | **transactional** |
 | `lesson_completed` | coach marks a lesson complete | `ref_type=booking`, `ref_id`, `coach_name?`, `nps_url?`, `rebook_url?` | feedback/NPS prompt, rebook nudge | marketing |
 | `payment_succeeded` | online/desk payment recorded | `ref_type=order`, `ref_id`, `amount_minor`, `currency_code`, `provider`, `for?` (what was paid) | **Payment receipt** | **transactional** |
 | `monthly_statement_ready` | monthly-account invoice cron | `ref_type=order`, `ref_id`, `period`, `amount_minor`, `currency_code`, `due_date`, `pay_url?` | **Monthly statement** | **transactional** |

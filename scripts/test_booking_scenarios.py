@@ -2201,6 +2201,307 @@ def sc_card_only_service_gate(s, fx):
     check("staff may still force pay-at-court (admin override)", staff.get("ok"), str(staff))
 
 
+class _Emits:
+    """Record the events a block emits. main() stubs diary.events.emit to a no-op for the whole run,
+    so a scenario that cares WHICH event fired swaps in a recorder for its own duration. Patching the
+    module attribute (not the function) is what makes it visible to classes.py's `events.emit(...)`."""
+
+    def __init__(self):
+        self.seen = []
+
+    def __enter__(self):
+        self._orig = C.events.emit
+        C.events.emit = lambda event, payload=None: self.seen.append(event)
+        return self
+
+    def __exit__(self, *exc):
+        C.events.emit = self._orig
+        return False
+
+
+def _membership_for(s, fx, user_id, *, days=30, **caps):
+    """Give a user an active membership ending `days` out. caps → the tier's own entitlement caps."""
+    from billing.membership import membership_product_id
+    mprod = membership_product_id(s, club_id=fx.club_id, create_if_missing=True)
+    cols = "".join(f", {k}" for k in caps)
+    vals = "".join(f", :{k}" for k in caps)
+    price = s.execute(
+        text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, currency_code, "
+             "unit, term_months, membership_tier, active" + cols + ") "
+             "VALUES (:c,:p,'member',18000,'ZAR','per_month',1,'Adult',true" + vals + ") RETURNING id"),
+        dict(caps, c=fx.club_id, p=mprod)).scalar()
+    s.execute(
+        text("INSERT INTO billing.membership_subscription (club_id, user_id, price_id, status, "
+             "provider, current_period_end) "
+             "VALUES (:c,:u,:pr,'active','manual',CURRENT_DATE + :d)"),
+        {"c": fx.club_id, "u": user_id, "pr": price, "d": days})
+    return price
+
+
+def _order_for_booking(s, booking_id):
+    return s.execute(
+        text('SELECT o.amount_minor, o.settlement_mode, o.status FROM billing."order" o '
+             'JOIN billing.order_line ol ON ol.order_id = o.id WHERE ol.booking_id = :b LIMIT 1'),
+        {"b": booking_id}).mappings().first()
+
+
+def sc_membership_cannot_book_past_its_own_expiry(s, fx):
+    """A membership must be judged on the day the booking FALLS ON, not the day it is made.
+
+    membership_covers tested `current_period_end >= CURRENT_DATE` — "is this plan alive right now" —
+    while starts_at was used only for the access window. So a member could book FORWARD past their
+    own expiry and the booking was written membership_covered at R0 permanently; the term lapsing
+    afterwards changed nothing because the price was already fixed. Reported as trial members booking
+    beyond their 7 days, but it was never trial-specific: a monthly member could book the whole of
+    next month on the last day of this one and then not renew."""
+    print("\n# A membership can't book past its own expiry (the trial/renewal R0 leak)")
+    from diary import entitlement as E
+    m = fx.members[0]
+    _membership_for(s, fx, m, days=2)          # expires in 2 days; the test day is 3 days out
+    soon = datetime.now(JHB) + timedelta(days=1)
+    inside = datetime(soon.year, soon.month, soon.day, 10, tzinfo=JHB)
+    check("a booking INSIDE the term is covered",
+          E.court_covered(s, club_id=fx.club_id, user_id=m, starts_at=inside,
+                          ends_at=inside + timedelta(hours=1), resource_id=fx.courts[0]) is True)
+    check("a booking BEYOND the expiry is NOT covered (the leak)",
+          E.court_covered(s, club_id=fx.club_id, user_id=m, starts_at=at(fx, 10),
+                          ends_at=at(fx, 11), resource_id=fx.courts[0]) is False)
+    # …and the money follows: it silently becomes a normal paid booking, never blocked.
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="membership_covered",
+                         starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)))
+    check("the post-expiry booking still SUCCEEDS (a cap downgrades, never blocks)", r.get("ok"), str(r))
+    o = _order_for_booking(s, r["booking"]["id"]) if r.get("ok") else None
+    check("…billed PAYG R150, not R0", bool(o) and o["amount_minor"] == 15000, str(o))
+    check("…and settled at-court, not membership_covered",
+          bool(o) and o["settlement_mode"] == "at_court", str(o))
+
+
+def sc_one_coach_one_place_at_a_time(s, fx):
+    """The GiST exclusion constraint is keyed on resource_id, so it stops one COURT being taken
+    twice — it says nothing about one PERSON. A class books no row on the coach's resource, and a
+    court the coach books for themselves sits on the COURT's resource, so a coach could hold a court
+    at 09:00 while ALSO delivering a lesson and running a class: three commitments, one human, no
+    constraint violated. Only the lesson→class direction was ever guarded."""
+    print("\n# One coach, one place at a time (court ↔ lesson ↔ class, both directions)")
+    m = fx.members[0]
+    # The coach is a club member too, so they can book a court like anyone else.
+    s.execute(text("INSERT INTO iam.membership (club_id, user_id, role, member_status) "
+                   "VALUES (:c,:u,'member','active')"), {"c": fx.club_id, "u": fx.coach_uid})
+    # 1) LESSON at 10:00 → the coach may not also take a court then.
+    les = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                           booking_type="lesson", resource_id=fx.coach_res,
+                           coach_user_id=fx.coach_uid,
+                           starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)))
+    check("the coach's 10:00 lesson is booked", les.get("ok"), str(les))
+    clash = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="member",
+                             booking_type="court", resource_id=fx.courts[1],
+                             starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)))
+    check("coach can't book a court while delivering a lesson", clash.get("error") == "COACH_BUSY", str(clash))
+    # A MEMBER booking that same court is of course fine — the guard is about the coach, not the court.
+    ok_other = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[1], role="member",
+                                booking_type="court", resource_id=fx.courts[1],
+                                starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)))
+    check("…but a member may still book that court at the same time", ok_other.get("ok"), str(ok_other))
+    # 2) The reverse: a coach holding a COURT can't then be booked for a lesson.
+    own = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="member",
+                           booking_type="court", resource_id=fx.courts[0],
+                           starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 14)))
+    check("the coach books their own court at 13:00", own.get("ok"), str(own))
+    les2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                            booking_type="lesson", resource_id=fx.coach_res,
+                            coach_user_id=fx.coach_uid,
+                            starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 14)))
+    check("a lesson over the coach's own court is refused", les2.get("error") == "COACH_BUSY", str(les2))
+    # 3) A class the coach RUNS legitimately holds several courts — that must never read as a clash
+    #    with itself (its rows are booking_type='class').
+    C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                        dates=[fx.target.isoformat()], start_time="16:00",
+                        duration_minutes=60, capacity=4,
+                        court_resource_ids=[fx.courts[0], fx.courts[1]])
+    held = s.execute(text("SELECT count(*) FROM diary.booking WHERE club_id=:c "
+                          "AND booking_type='class' AND starts_at=:sa AND status IN ('held','confirmed')"),
+                     {"c": fx.club_id, "sa": at(fx, 16)}).scalar()
+    check("the coach's class holds BOTH courts (many courts, one commitment)", held == 2, f"held={held}")
+    les3 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                            booking_type="lesson", resource_id=fx.coach_res,
+                            coach_user_id=fx.coach_uid,
+                            starts_at=utc_iso(at(fx, 16)), ends_at=utc_iso(at(fx, 17)))
+    check("…but the coach still can't take a lesson during it", les3.get("error") == "COACH_BUSY", str(les3))
+
+
+def sc_member_second_concurrent_court_is_payg(s, fx):
+    """A member holding two courts at the same moment is legitimate (a doubles group, a family) —
+    getting BOTH free is not. The membership covers the member, not every court they can reach at
+    once, and nothing enforced that: the exclusion constraint is per-court, and the daily caps only
+    count bookings, not concurrency."""
+    print("\n# One member, one COVERED court at a time (the 2nd concurrent court is PAYG)")
+    from diary import entitlement as E
+    m = fx.members[0]
+    _membership_for(s, fx, m, days=30)          # no caps at all — concurrency stands on its own
+    r1 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          settlement_mode="membership_covered",
+                          starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)))
+    o1 = _order_for_booking(s, r1["booking"]["id"]) if r1.get("ok") else None
+    check("the first covered court is free", bool(o1) and o1["amount_minor"] == 0, str(o1))
+    check("a second OVERLAPPING court is no longer covered",
+          E.court_covered(s, club_id=fx.club_id, user_id=m, starts_at=at(fx, 10),
+                          ends_at=at(fx, 11), resource_id=fx.courts[1]) is False)
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                          booking_type="court", resource_id=fx.courts[1],
+                          settlement_mode="membership_covered",
+                          starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)))
+    check("…the booking still SUCCEEDS (a doubles group isn't blocked)", r2.get("ok"), str(r2))
+    o2 = _order_for_booking(s, r2["booking"]["id"]) if r2.get("ok") else None
+    check("…it is simply charged PAYG R150", bool(o2) and o2["amount_minor"] == 15000, str(o2))
+    # A NON-overlapping second booking later the same day is still covered (no cap configured).
+    check("a later, non-overlapping court that day is still covered",
+          E.court_covered(s, club_id=fx.club_id, user_id=m, starts_at=at(fx, 14),
+                          ends_at=at(fx, 15), resource_id=fx.courts[0]) is True)
+
+
+def sc_equipment_follows_its_own_payment_rule(s, fx):
+    """Equipment rides the court's order, so where the court was FREE (membership_covered) or prepaid
+    (token) the order was hard-coded to 'at_court' to collect the fee — assumed, never checked. A
+    card-only club still got an owed pay-at-court debt for the ball machine, and because the booking
+    status was decided from the COURT's free mode it confirmed instantly against an order nobody
+    could collect. That is the "equipment always comes as pay at court" report."""
+    print("\n# Equipment is a service: it obeys its own payment rule and can hold the booking")
+    from admin import repositories as AR
+    m = fx.members[0]
+    _membership_for(s, fx, m, days=30)
+    # A card-only ball machine.
+    kit = AR.create_equipment(s, club_id=fx.club_id, name="Ball machine", amount_minor=8000,
+                              quantity=1, payment_modes=["online"])
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="membership_covered",
+                         starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)),
+                         addons=[{"resource_id": kit["id"], "qty": 1}])
+    check("the booking succeeds", r.get("ok"), str(r))
+    check("the server FLAGS that payment is still required", r.get("requires_payment") is True, str(r))
+    check("the booking is HELD, not confirmed (it isn't paid for yet)",
+          r.get("ok") and r["booking"]["status"] == "held", str(r.get("booking")))
+    o = _order_for_booking(s, r["booking"]["id"]) if r.get("ok") else None
+    check("the order takes the equipment's own method (online), not a assumed at-court",
+          bool(o) and o["settlement_mode"] == "online", str(o))
+    check("…and awaits payment rather than sitting owed", bool(o) and o["status"] == "awaiting_payment", str(o))
+    check("…for the equipment fee only — the court stays free (R80)",
+          bool(o) and o["amount_minor"] == 8000, str(o))
+    # An item the club has no way to collect for is REFUSED, never granted unpaid (the pack rule).
+    s.execute(text("UPDATE club.policy SET allow_monthly_account = false WHERE club_id = :c"),
+              {"c": fx.club_id})
+    kit2 = AR.create_equipment(s, club_id=fx.club_id, name="Court-side kit", amount_minor=5000,
+                               quantity=1, payment_modes=["monthly_account"])
+    bad = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                           booking_type="court", resource_id=fx.courts[1],
+                           settlement_mode="membership_covered",
+                           starts_at=utc_iso(at(fx, 12)), ends_at=utc_iso(at(fx, 13)),
+                           addons=[{"resource_id": kit2["id"], "qty": 1}])
+    check("equipment the club can't collect for is REFUSED, not handed over unpaid",
+          bad.get("error") == "EQUIPMENT_NOT_PAYABLE", str(bad))
+
+
+def sc_club_default_caps_cover_every_membership(s, fx):
+    """The caps lived only on billing.price, so they applied only to a tier that HAD a price row. The
+    signup trial usually doesn't, so trial members were entirely uncapped — and _best treated a NULL
+    cap as "an unconstrained tier wins", so merely HOLDING the price-less trial alongside a capped
+    paid tier wiped that tier's caps out too. Club defaults make "every membership is capped" one
+    setting. Owner's rule: ONE covered booking a day, 90 minutes max; anything else is paid."""
+    print("\n# Club default caps apply to EVERY membership — including the price-less trial")
+    from billing.membership import grant_signup_trial
+    from diary import entitlement as E
+    s.execute(text("UPDATE club.policy SET default_max_covered_per_day = 1, "
+                   "default_max_covered_minutes = 90 WHERE club_id = :c"), {"c": fx.club_id})
+    # A brand-new member on the LEGACY trial (no trial tier configured → NULL price_id, no caps).
+    newu = _mk_user(s, f"trialcap+{str(fx.club_id)[:8]}@scratch.test", "Trialist")
+    g = grant_signup_trial(s, club_id=fx.club_id, user_id=newu, days=7)
+    check("the legacy trial is granted", g.get("granted") is True, str(g))
+    linked = s.execute(text("SELECT price_id FROM billing.membership_subscription "
+                            "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": newu}).scalar()
+    check("…with NO price row of its own (this is why per-tier caps missed it)", linked is None, str(linked))
+    caps = E.active_caps(s, club_id=fx.club_id, user_id=newu)
+    check("the trial INHERITS the club default: 1 booking/day", caps["max_covered_per_day"] == 1, str(caps))
+    check("…and 90 covered minutes", caps["max_covered_minutes"] == 90, str(caps))
+    # The rule, end to end: 90 min is covered, 120 is not, and the 2nd booking that day is not.
+    check("a 90-min booking is covered",
+          E.court_covered(s, club_id=fx.club_id, user_id=newu, starts_at=at(fx, 10),
+                          ends_at=at(fx, 11, 30), resource_id=fx.courts[0]) is True)
+    check("a 120-min booking is NOT (over the 90-min max)",
+          E.court_covered(s, club_id=fx.club_id, user_id=newu, starts_at=at(fx, 10),
+                          ends_at=at(fx, 12), resource_id=fx.courts[0]) is False)
+    B.create_booking(s, club_id=fx.club_id, booked_by_user_id=newu, role="member",
+                     booking_type="court", resource_id=fx.courts[0],
+                     settlement_mode="membership_covered",
+                     starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)))
+    check("after ONE covered booking, a later one the same day is charged",
+          E.court_covered(s, club_id=fx.club_id, user_id=newu, starts_at=at(fx, 14),
+                          ends_at=at(fx, 15), resource_id=fx.courts[0]) is False)
+    # THE TRAP: holding the price-less trial must not cancel a paid tier's caps.
+    both = fx.members[2]
+    _membership_for(s, fx, both, days=30, max_covered_per_day=1, max_covered_minutes=90)
+    s.execute(text("INSERT INTO billing.membership_subscription (club_id, user_id, price_id, status, "
+                   "provider, current_period_end) "
+                   "VALUES (:c,:u,NULL,'active','trial',CURRENT_DATE + 7)"),
+              {"c": fx.club_id, "u": both})
+    caps2 = E.active_caps(s, club_id=fx.club_id, user_id=both)
+    check("a price-less trial alongside a capped tier no longer wipes the caps",
+          caps2["max_covered_per_day"] == 1 and caps2["max_covered_minutes"] == 90, str(caps2))
+
+
+def sc_waitlist_promotion_into_a_cardonly_class_is_held(s, fx):
+    """_bill_promoted_enrolment rewrote an 'online' intent to 'at_court' because an async promotion
+    can't drive a checkout — but on a class the club sells CARD-ONLY that produced a confirmed seat
+    and a "you're enrolled" email against an owed order nobody could collect, straight past the
+    payment gate `enrol` enforces two functions up. The seat is now RESERVED pending payment, on the
+    same lazy-expiry rails as an online self-enrolment."""
+    print("\n# Waitlist promotion into a CARD-ONLY class holds the seat (never a free confirmed one)")
+    C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                        dates=[fx.target.isoformat()], start_time="17:00",
+                        duration_minutes=60, capacity=1)
+    sid = s.execute(text("SELECT id FROM diary.class_session WHERE club_id=:c AND resource_id=:r "
+                         "AND starts_at=:sa"),
+                    {"c": fx.club_id, "r": fx.class_res, "sa": at(fx, 17)}).scalar()
+    s.execute(text("UPDATE billing.product SET payment_modes='online' WHERE club_id=:c AND kind='class'"),
+              {"c": fx.club_id})
+    first, second = fx.members[0], fx.members[1]
+    a = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=first,
+                settlement_mode="online", role="member")
+    check("the only seat is taken", a.get("ok") and a.get("status_value") == "enrolled", str(a))
+    b = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=second,
+                settlement_mode="online", role="member")
+    check("the next player is waitlisted", b.get("status_value") == "waitlisted", str(b))
+    # Free the seat → the waitlister is promoted.
+    with _Emits() as rec:
+        C.cancel_enrolment(s, club_id=fx.club_id, class_session_id=sid, user_id=first)
+    row = s.execute(text("SELECT e.status, e.settlement_mode, e.held_until, o.status AS ostatus, "
+                         "       o.amount_minor "
+                         'FROM diary.enrolment e LEFT JOIN billing."order" o ON o.id = e.order_id '
+                         "WHERE e.class_session_id=:cs AND e.user_id=:u"),
+                    {"cs": sid, "u": second}).mappings().first()
+    check("the waitlister IS promoted into the seat", row and row["status"] == "enrolled", str(row))
+    check("…but the seat is HELD pending payment, not confirmed", row and row["held_until"] is not None, str(row))
+    check("…it kept the online method (never silently rewritten to at-court)",
+          row and row["settlement_mode"] == "online", str(row))
+    check("…its order awaits payment rather than sitting owed",
+          row and row["ostatus"] == "awaiting_payment", str(row))
+    check("…and it IS billed at the class rate R120", row and row["amount_minor"] == 12000, str(row))
+    check("no 'you're enrolled' confirmation went out for an unpaid seat",
+          "class_enrolled" not in rec.seen, str(rec.seen))
+    check("…the player is told to pay instead", "class_seat_awaiting_payment" in rec.seen, str(rec.seen))
+    # Paying it confirms the seat and releases the hold — the deferred confirmation fires HERE.
+    oid = s.execute(text("SELECT order_id FROM diary.enrolment WHERE class_session_id=:cs AND user_id=:u"),
+                    {"cs": sid, "u": second}).scalar()
+    with _Emits() as rec2:
+        C.confirm_paid_enrolments(s, club_id=fx.club_id, order_id=oid)
+    after = s.execute(text("SELECT held_until FROM diary.enrolment WHERE class_session_id=:cs AND user_id=:u"),
+                      {"cs": sid, "u": second}).mappings().first()
+    check("payment clears the hold", after and after["held_until"] is None, str(after))
+    check("…and NOW the enrolment confirmation is sent", "class_enrolled" in rec2.seen, str(rec2.seen))
+
+
 SCENARIOS = [
     sc_cancel_after_start_guard,
     sc_unpriced_booking_refused,
@@ -2245,6 +2546,13 @@ SCENARIOS = [
     sc_semi_private_addable_guard,
     sc_card_only_service_gate,
     sc_class_payment_gate,
+    # Revenue-leak hardening (2026-07-27) — see each docstring for the leak it closes.
+    sc_membership_cannot_book_past_its_own_expiry,
+    sc_one_coach_one_place_at_a_time,
+    sc_member_second_concurrent_court_is_payg,
+    sc_equipment_follows_its_own_payment_rule,
+    sc_club_default_caps_cover_every_membership,
+    sc_waitlist_promotion_into_a_cardonly_class_is_held,
 ]
 
 

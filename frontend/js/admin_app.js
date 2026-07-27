@@ -1738,6 +1738,48 @@
     c.appendChild(flag("allow_monthly_account", "Monthly account", "Charges accrue on a tab, invoiced monthly."));
     host.appendChild(c);
     host.appendChild(peakHoursCard(policy));
+    host.appendChild(membershipLimitsCard(policy));
+  }
+
+  // Club-wide DEFAULT membership entitlement caps. Every membership inherits these — including the
+  // 7-day trial, which is why they live on the club and not only on each tier: the trial usually has
+  // no price row of its own, so per-tier caps never applied to it and a trialist could book free
+  // courts all day. A tier can still set its own limits (Setup → Memberships) to override.
+  function membershipLimitsCard(policy) {
+    var c = el("div", { class: "cf-card" }, [
+      el("h3", { text: "What a membership includes (per day)" }),
+      el("p", { class: "cf-muted", text: "Applies to EVERY membership, including the free trial. Anything beyond these limits is simply charged as a normal paid booking — members are never blocked. Leave blank for no limit." }),
+    ]);
+    function numRow(label, key, placeholder, hint) {
+      var i = el("input", { class: "cf-input", type: "number", min: 1, placeholder: placeholder,
+                            value: (policy[key] == null ? "" : policy[key]), style: "max-width:120px" });
+      c.appendChild(el("div", { class: "cf-field" }, [
+        el("label", { text: label }), i,
+        el("div", { class: "cf-muted cf-tiny", text: hint }),
+      ]));
+      return i;
+    }
+    var perDay = numRow("Free bookings per day", "default_max_covered_per_day", "e.g. 1",
+                        "A member's 2nd court on the same day is charged.");
+    var minutes = numRow("Longest free booking (minutes)", "default_max_covered_minutes", "e.g. 90",
+                         "A longer booking than this is charged in full.");
+    var courts = numRow("Different courts per day", "default_max_courts_per_day", "no limit",
+                        "Rarely needed — leave blank unless you're capping court spread.");
+    var save = el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Save limits", style: "margin-top:10px" });
+    save.addEventListener("click", async function () {
+      function val(i) { var v = parseInt(i.value, 10); return (isNaN(v) || v < 1) ? null : v; }
+      var body = { default_max_covered_per_day: val(perDay),
+                   default_max_covered_minutes: val(minutes),
+                   default_max_courts_per_day: val(courts) };
+      save.disabled = true;
+      try {
+        await window.AdminAPI.patchPolicy(body);
+        Object.keys(body).forEach(function (k) { policy[k] = body[k]; });
+        UI.toast("Limits saved.", "info");
+      } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
+    });
+    c.appendChild(save);
+    return c;
   }
 
   // Peak court-hours editor (club-wide). When a court booking STARTS in this window it's charged the PEAK
