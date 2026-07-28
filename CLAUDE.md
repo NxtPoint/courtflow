@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 316 / billing 462 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 316 / billing 467 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -698,6 +698,19 @@ member by email on the first authenticated hit.
   need flipped. The trial (`grant_signup_trial`) and the Wix import stay excluded — they INSERT directly and
   never reach either path. **It must carry `email`** — that's what the Klaviyo forward keys on. Guarded by
   `sc_membership_started_emit`.
+- **A REFUND NEEDS EVIDENCE OF A CARD PAYMENT, NOT A CHECKOUT (2026-07-28).** `billing.payment_attempt`
+  is written the moment a member taps "Pay online" — **BEFORE any money moves** — so it proves an
+  INTENT, never a payment. An order whose member started an online checkout, abandoned it and then
+  settled at the desk (or had a coach collect it, or an admin mark it paid) still carries that `ch_`
+  id while the money arrived elsewhere. `execute_order_refund` looked ONLY for that intent, so it
+  asked Yoco to return money it never took — and **Yoco answers "insufficient funds" about THAT
+  CHECKOUT's balance, not the merchant's**, which reads as an empty Yoco account and gets chased in
+  entirely the wrong place (a club with a day's takings sitting in Yoco still sees it). It now checks
+  `billing.payment` for a succeeded **yoco** charge first and refuses with a message NAMING the real
+  method (`not_paid_by_card` / `no_card_payment_recorded`). **The order's own facts are checked BEFORE
+  `get_gateway`** — "this was never a card sale" is true whether or not Yoco is reachable, and
+  answering "online payments are not available" to that question helps nobody. Diagnose with
+  `scripts/diagnose_refund.py`. Guarded by `sc_refund_refuses_an_order_never_paid_by_card`.
 - **A REFUND MUST TARGET THE CHECKOUT THAT HOLDS THE MONEY, NOT THE FIRST ONE CREATED (2026-07-28).**
   `POST /checkout` mints a FRESH Yoco checkout on every call and writes a `billing.payment_attempt`
   row — **there is no reuse guard** — so a member who taps Pay, abandons, returns and pays leaves TWO

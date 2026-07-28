@@ -47,14 +47,49 @@ def execute_order_refund(session, *, order_id, amount_minor=None):
     from sqlalchemy import text
     from billing.gateway import get_gateway
 
+    # The ORDER's own facts come first, before we reach for any infrastructure: "this sale was never a
+    # card sale" is true whether or not Yoco is reachable, and it is the answer that actually helps.
+    # Checking the gateway first would answer "online payments are not available" to a question that
+    # was never about availability.
+    #
+    # WAS THIS ORDER ACTUALLY PAID BY CARD? A billing.payment_attempt row is written the moment a
+    # member taps "Pay online" — BEFORE any money moves — so its existence proves an INTENT, never a
+    # payment. An order whose member started an online checkout, abandoned it, and then settled at the
+    # desk (or had a coach collect it, or an admin mark it paid) still carries that `ch_` id while the
+    # money arrived somewhere else entirely.
+    #
+    # Asking Yoco to refund that checkout is asking it to return money it never took, and Yoco answers
+    # "insufficient funds" — about the CHECKOUT's balance, not the merchant's. That reads like the
+    # club's Yoco account being empty, so it gets diagnosed as a banking problem while the real cause
+    # is that this sale was never a card sale. Check the payments, not the intents.
+    paid_via = session.execute(
+        text("SELECT provider, COALESCE(SUM(amount_minor),0) AS amt FROM billing.payment "
+             "WHERE order_id = :o AND direction = 'charge' AND status = 'succeeded' "
+             "GROUP BY provider"),
+        {"o": str(order_id)},
+    ).mappings().all()
+    by_provider = {r["provider"]: int(r["amt"] or 0) for r in paid_via}
+    if not by_provider.get("yoco"):
+        if by_provider:
+            how = ", ".join(sorted(by_provider))
+            raise RefundError(
+                "not_paid_by_card",
+                f"This order wasn't paid by card — it was settled by {how}. "
+                "Refund it the same way it was paid and record that against the order.",
+                status=409)
+        raise RefundError(
+            "no_card_payment_recorded",
+            "No successful card payment is recorded against this order, so there is nothing for "
+            "Yoco to refund. If the money was taken another way, refund it that way and record it.",
+            status=409)
+
     gw = get_gateway("yoco")
     if gw is None:
         raise RefundError("yoco_unavailable", "Online payments are not available.", status=503)
 
     # WHICH checkout holds the money. POST /checkout mints a fresh Yoco checkout on every call, so an
     # order the member abandoned once and paid on the retry has two `ch_` ids — and this used to take
-    # the OLDEST. Refunding a checkout that was never collected against makes Yoco report insufficient
-    # funds, which reads exactly like the club's own Yoco balance being empty. Resolved against Yoco
+    # the OLDEST, which is likewise a checkout Yoco never collected against. Resolved against Yoco
     # itself (lazy import: reconcile imports this package, so a top-level import would be circular).
     from yoco_billing.reconcile import paid_checkout_id_for_order
     checkout_id = paid_checkout_id_for_order(session, order_id)

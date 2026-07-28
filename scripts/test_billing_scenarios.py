@@ -3299,6 +3299,79 @@ def sc_refund_finds_the_checkout_that_holds_the_money(s, fx):
           fallback == "ch_paid_second", f"fallback={fallback}")
 
 
+def sc_refund_refuses_an_order_never_paid_by_card(s, fx):
+    """A `payment_attempt` row is written the moment a member taps "Pay online" — BEFORE any money
+    moves — so it proves an INTENT, not a payment. An order whose member started an online checkout,
+    abandoned it and then settled at the desk still carries that `ch_` id while the money arrived
+    somewhere else.
+
+    execute_order_refund only ever looked for that intent, so it cheerfully asked Yoco to refund a
+    checkout Yoco had never collected against — and Yoco answers INSUFFICIENT FUNDS, about the
+    CHECKOUT's balance, not the merchant's. With takings sitting in the Yoco account that reads as a
+    banking problem, so it gets chased in the wrong place entirely, while the real answer is that
+    this sale was never a card sale."""
+    print("\n# A refund must REFUSE an order that was never paid by card (the 'insufficient funds' trap)")
+    from yoco_billing import execute_order_refund, RefundError
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="online")
+    oid = r["booking"]["order_id"]
+    # The member opened a Yoco checkout — the intent row exists…
+    s.execute(text("INSERT INTO billing.payment_attempt (club_id, order_id, provider, intent_id, "
+                   "status) VALUES (:c,:o,'yoco','ch_abandoned_intent','created')"),
+              {"c": fx.club_id, "o": oid})
+    # …then abandoned it and paid CASH at the desk instead.
+    amt = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'), {"o": oid}).scalar()
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=oid, amount_minor=amt, provider="cash")
+    check("the order is paid (by cash)", _order(s, oid)["status"] == "paid", str(_order(s, oid)))
+
+    err = None
+    try:
+        execute_order_refund(s, order_id=str(oid))
+    except RefundError as e:
+        err = e
+    check("a Yoco refund on it is REFUSED, not sent to the gateway",
+          err is not None and err.code == "not_paid_by_card", str(err and err.code))
+    check("…and the message names how it WAS paid, so it can be actioned",
+          err is not None and "cash" in (err.message or ""), str(err and err.message))
+
+    # An order with a real Yoco charge is of course still refundable — the guard is about evidence of
+    # payment, not about blocking refunds. (Stub the gateway; we're asserting the guard, not the HTTP.)
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=iso(at(fx, 10)), ends_at=iso(at(fx, 11)), settlement_mode="online")
+    oid2 = r2["booking"]["order_id"]
+    s.execute(text("INSERT INTO billing.payment_attempt (club_id, order_id, provider, intent_id, "
+                   "status) VALUES (:c,:o,'yoco','ch_real','created')"), {"c": fx.club_id, "o": oid2})
+    s.execute(text("INSERT INTO billing.payment (club_id, order_id, provider, provider_payment_id, "
+                   "amount_minor, currency_code, direction, status) "
+                   "VALUES (:c,:o,'yoco','p_real',:a,'ZAR','charge','succeeded')"),
+              {"c": fx.club_id, "o": oid2,
+               "a": s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                              {"o": oid2}).scalar()})
+    # Registering the adapter (import side-effect) so the POSITIVE half actually runs — without it
+    # get_gateway returns None, the refund short-circuits on availability and this check silently
+    # skips, which would leave the guard unproven in the direction that matters most.
+    from yoco_billing import adapter as _adapter  # noqa: F401  (registers the "yoco" gateway)
+    from billing import gateway as GW
+    gw = GW.get_gateway("yoco")
+    check("the yoco gateway is registered for this check", gw is not None)
+    reached = []
+    if gw is not None:
+        _orig = gw.refund
+        gw.refund = lambda payment, amount_minor=None: (
+            reached.append(payment.get("checkout_id")) or type("R", (), {"provider_refund_id": "rf_1",
+                                                                        "amount_minor": 0})())
+        try:
+            try:
+                execute_order_refund(s, order_id=str(oid2))
+            except RefundError:
+                pass          # the post-gateway bookkeeping may still object; the gateway CALL is the assertion
+        finally:
+            gw.refund = _orig
+        check("a genuinely card-paid order DOES reach the gateway", reached == ["ch_real"], str(reached))
+
+
 def sc_ledger_direction_follows_who_holds_the_cash(s, fx):
     """THE ledger invariant: which way a collection moves the club↔coach balance depends entirely on
     who ended up holding the money — and it used to ignore that completely.
@@ -3384,6 +3457,7 @@ SCENARIOS = [
     sc_promo_bonus_grants,
     sc_ledger_direction_follows_who_holds_the_cash,
     sc_refund_finds_the_checkout_that_holds_the_money,
+    sc_refund_refuses_an_order_never_paid_by_card,
     sc_pack_autodraw_guardrail,
     sc_reconcile_activates_pack,
     sc_reconcile_guard_activates_pack,

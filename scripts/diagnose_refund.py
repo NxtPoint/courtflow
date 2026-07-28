@@ -139,19 +139,38 @@ def main():
                       f"{p['status']:<10} {_money(p['amount_minor'], p['currency_code'])}  "
                       f"{p['provider_payment_id'] or ''}")
 
+            # The decisive question is not "is there a checkout" but "did a CARD payment succeed".
+            yoco_ok = sum(int(p["amount_minor"] or 0) for p in pays
+                          if p["provider"] == "yoco" and p["direction"] == "charge"
+                          and p["status"] == "succeeded")
+            other = sorted({p["provider"] for p in pays
+                            if p["direction"] == "charge" and p["status"] == "succeeded"
+                            and p["provider"] != "yoco"})
+
             print("\n  VERDICT:")
-            if len(att) > 1:
+            if not yoco_ok:
+                if other:
+                    print(f"    NO successful CARD payment — this order was settled by {', '.join(other)}.")
+                    print("    A payment_attempt row is written the moment someone taps 'Pay online',")
+                    print("    BEFORE any money moves, so the ch_ id above is an INTENT, not a payment.")
+                    print("    Yoco was being asked to return money it never took, and answers")
+                    print("    'insufficient funds' about THAT CHECKOUT's balance — nothing to do with")
+                    print("    your merchant balance. Refund it the way it was paid and record that.")
+                else:
+                    print("    NO successful payment of ANY kind is recorded against this order, so")
+                    print("    there is nothing to refund. Check how the money actually arrived.")
+                print("    (Refused up-front since 2026-07-28 with a message naming the real method.)")
+            elif len(att) > 1:
                 print("    This order has MORE THAN ONE Yoco checkout, so the refund was aiming at the")
                 print("    wrong one (the oldest). That is the bug fixed on 2026-07-28 — retry the")
                 print("    refund now; it will target the checkout that actually holds the money.")
             elif len(att) == 1:
-                print("    Only ONE checkout on this order, so the refund was already aiming correctly.")
-                print("    'Insufficient funds' here is Yoco's own answer: refunds draw on your YOCO")
-                print("    BALANCE, not your bank. If this payment already settled out, top up / wait")
-                print("    for takings, or refund by EFT and record it against the order instead.")
+                print("    A card payment DID succeed and there is only one checkout, so the refund was")
+                print("    already aiming correctly. If Yoco still refuses, that is its own answer about")
+                print("    your merchant balance — refunds draw on the Yoco BALANCE, not your bank.")
             else:
-                print("    NO Yoco checkout recorded for this order — it was not paid online, so there")
-                print("    is nothing for Yoco to refund. Settle it off-platform and record that.")
+                print("    A card payment succeeded but NO checkout id was recorded, so the refund has")
+                print("    nothing to reference. Refund from the Yoco dashboard and record it here.")
             return 0
 
         # No order given: surface the orders that were exposed to the wrong-checkout bug.
