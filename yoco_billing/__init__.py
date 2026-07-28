@@ -69,18 +69,21 @@ def execute_order_refund(session, *, order_id, amount_minor=None):
         {"o": str(order_id)},
     ).mappings().all()
     by_provider = {r["provider"]: int(r["amt"] or 0) for r in paid_via}
-    if not by_provider.get("yoco"):
-        if by_provider:
-            how = ", ".join(sorted(by_provider))
-            raise RefundError(
-                "not_paid_by_card",
-                f"This order wasn't paid by card — it was settled by {how}. "
-                "Refund it the same way it was paid and record that against the order.",
-                status=409)
+    # NARROW ON PURPOSE. Refuse only when we can POSITIVELY see the money came another way — some
+    # other provider succeeded on this order, so a card refund is simply the wrong instrument and
+    # saying so beats a baffling gateway error.
+    #
+    # When there are NO payment rows at all we do NOT refuse. That is the AMBIGUOUS case, not the
+    # obvious one: the charge may sit on a 'Pay all' wrapper, or a webhook may never have been
+    # recorded, while the money is genuinely at Yoco. Refusing there would be asserting knowledge we
+    # don't have and blocking a legitimate refund on the strength of a gap in our own records. Let
+    # Yoco answer — it is the authority on whether that checkout holds funds.
+    if by_provider and not by_provider.get("yoco"):
+        how = ", ".join(sorted(by_provider))
         raise RefundError(
-            "no_card_payment_recorded",
-            "No successful card payment is recorded against this order, so there is nothing for "
-            "Yoco to refund. If the money was taken another way, refund it that way and record it.",
+            "not_paid_by_card",
+            f"This order wasn't paid by card — it was settled by {how}. "
+            "Refund it the same way it was paid and record that against the order.",
             status=409)
 
     # ALREADY REFUNDED? This is the REAL double-refund guard, and it lives here rather than in the
@@ -95,17 +98,22 @@ def execute_order_refund(session, *, order_id, amount_minor=None):
              "  AND status IN ('succeeded','refunded')"),
         {"o": str(order_id)},
     ).scalar() or 0)
-    wanted = int(amount_minor) if amount_minor is not None else (charged - refunded)
-    if refunded >= charged:
-        raise RefundError(
-            "already_refunded",
-            f"This order's card payment has already been refunded in full "
-            f"({refunded / 100:,.2f} of {charged / 100:,.2f}).", status=409)
-    if wanted <= 0 or refunded + wanted > charged:
-        raise RefundError(
-            "refund_exceeds_payment",
-            f"That would refund more than was charged — {charged / 100:,.2f} taken, "
-            f"{refunded / 100:,.2f} already returned.", status=409)
+    # Only meaningful when we can SEE the charge. With no recorded card payment (charged == 0) these
+    # comparisons are vacuously true — `refunded >= charged` is `0 >= 0` — and would refuse "already
+    # refunded in full (0.00 of 0.00)" on precisely the ambiguous case decided above to let through.
+    # No knowledge of the charge means no opinion about the refund; Yoco decides.
+    if charged > 0:
+        wanted = int(amount_minor) if amount_minor is not None else (charged - refunded)
+        if refunded >= charged:
+            raise RefundError(
+                "already_refunded",
+                f"This order's card payment has already been refunded in full "
+                f"({refunded / 100:,.2f} of {charged / 100:,.2f}).", status=409)
+        if wanted <= 0 or refunded + wanted > charged:
+            raise RefundError(
+                "refund_exceeds_payment",
+                f"That would refund more than was charged — {charged / 100:,.2f} taken, "
+                f"{refunded / 100:,.2f} already returned.", status=409)
 
     gw = get_gateway("yoco")
     if gw is None:

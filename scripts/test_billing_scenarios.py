@@ -3312,6 +3312,9 @@ def sc_refund_refuses_an_order_never_paid_by_card(s, fx):
     this sale was never a card sale."""
     print("\n# A refund must REFUSE an order that was never paid by card (the 'insufficient funds' trap)")
     from yoco_billing import execute_order_refund, RefundError
+    # Register the gateway UP FRONT: without it every path short-circuits on availability and the
+    # checks below pass or fail for the wrong reason entirely.
+    from yoco_billing import adapter as _adapter_early  # noqa: F401
     r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
                          starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)), settlement_mode="online")
@@ -3334,6 +3337,33 @@ def sc_refund_refuses_an_order_never_paid_by_card(s, fx):
           err is not None and err.code == "not_paid_by_card", str(err and err.code))
     check("…and the message names how it WAS paid, so it can be actioned",
           err is not None and "cash" in (err.message or ""), str(err and err.message))
+
+    # AMBIGUOUS ≠ REFUSED. An order with NO recorded payments at all is not evidence the money isn't
+    # at Yoco — the charge may sit on a 'Pay all' wrapper, or a webhook may never have been recorded.
+    # Refusing there would block a legitimate refund on a gap in OUR records, so it must reach the
+    # gateway and let Yoco answer. (This also pins the 0>=0 trap: an empty charge total must not read
+    # as "already refunded in full".)
+    r3 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=iso(at(fx, 14)), ends_at=iso(at(fx, 15)), settlement_mode="online")
+    oid3 = r3["booking"]["order_id"]
+    s.execute(text('UPDATE billing."order" SET status=\'paid\' WHERE id=:o'), {"o": oid3})
+    s.execute(text("INSERT INTO billing.payment_attempt (club_id, order_id, provider, intent_id, "
+                   "status) VALUES (:c,:o,'yoco','ch_no_payment_rows','created')"),
+              {"c": fx.club_id, "o": oid3})
+    from yoco_billing import client as _ycl
+    _keep = _ycl.refund_checkout
+    got = []
+    _ycl.refund_checkout = lambda **kw: got.append(kw.get("checkout_id")) or {}
+    try:
+        try:
+            execute_order_refund(s, order_id=str(oid3))
+        except RefundError:
+            pass                       # post-gateway bookkeeping may object; the CALL is the assertion
+    finally:
+        _ycl.refund_checkout = _keep
+    check("an order with NO recorded payments still REACHES Yoco (ambiguous ≠ refused)",
+          got == ["ch_no_payment_rows"], str(got))
 
     # An order with a real Yoco charge is of course still refundable — the guard is about evidence of
     # payment, not about blocking refunds. (Stub the gateway; we're asserting the guard, not the HTTP.)

@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 316 / billing 475 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 316 / billing 476 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -721,7 +721,11 @@ member by email on the first authenticated hit.
   CHECKOUT's balance, not the merchant's**, which reads as an empty Yoco account and gets chased in
   entirely the wrong place (a club with a day's takings sitting in Yoco still sees it). It now checks
   `billing.payment` for a succeeded **yoco** charge first and refuses with a message NAMING the real
-  method (`not_paid_by_card` / `no_card_payment_recorded`). **The order's own facts are checked BEFORE
+  method (`not_paid_by_card`) — but ONLY when another provider positively succeeded. **No payment
+  rows at all is AMBIGUOUS, not refused**: the charge may sit on a 'Pay all' wrapper or a webhook may
+  never have been recorded while the money is genuinely at Yoco, so it reaches the gateway and lets
+  Yoco decide. (The already-refunded check is likewise gated on `charged > 0` — `0 >= 0` would
+  otherwise read an empty charge total as "already refunded in full".) **The order's own facts are checked BEFORE
   `get_gateway`** — "this was never a card sale" is true whether or not Yoco is reachable, and
   answering "online payments are not available" to that question helps nobody. Diagnose with
   `scripts/diagnose_refund.py`. Guarded by `sc_refund_refuses_an_order_never_paid_by_card`.
