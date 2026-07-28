@@ -51,15 +51,13 @@ def execute_order_refund(session, *, order_id, amount_minor=None):
     if gw is None:
         raise RefundError("yoco_unavailable", "Online payments are not available.", status=503)
 
-    checkout_id = session.execute(
-        text("""
-            SELECT intent_id FROM billing.payment_attempt
-            WHERE order_id = :oid AND provider = 'yoco' AND intent_id IS NOT NULL
-              AND (status = 'created' OR intent_id LIKE 'ch_%')
-            ORDER BY created_at ASC LIMIT 1
-        """),
-        {"oid": str(order_id)},
-    ).scalar()
+    # WHICH checkout holds the money. POST /checkout mints a fresh Yoco checkout on every call, so an
+    # order the member abandoned once and paid on the retry has two `ch_` ids — and this used to take
+    # the OLDEST. Refunding a checkout that was never collected against makes Yoco report insufficient
+    # funds, which reads exactly like the club's own Yoco balance being empty. Resolved against Yoco
+    # itself (lazy import: reconcile imports this package, so a top-level import would be circular).
+    from yoco_billing.reconcile import paid_checkout_id_for_order
+    checkout_id = paid_checkout_id_for_order(session, order_id)
     if not checkout_id:
         raise RefundError("no_yoco_checkout_for_order",
                           "No Yoco checkout found for this order.", status=404)

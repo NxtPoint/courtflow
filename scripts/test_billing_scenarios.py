@@ -3221,6 +3221,84 @@ def sc_promo_bonus_grants(s, fx):
           w3["minutes_total"] == 720 and w3["minutes_remaining"] == 720, str(dict(w3)))
 
 
+def sc_refund_finds_the_checkout_that_holds_the_money(s, fx):
+    """POST /checkout mints a FRESH Yoco checkout every time it is called — there is no reuse guard —
+    so a member who taps Pay, abandons, comes back and pays leaves TWO `ch_` ids on one order, and
+    only the second carries money.
+
+    Both the refund path and the missed-webhook sweep picked `ORDER BY created_at ASC LIMIT 1`: the
+    OLDEST, i.e. the abandoned one. Refunding a checkout Yoco never collected against fails — and
+    Yoco reports it as INSUFFICIENT FUNDS, which reads exactly like the club's own Yoco balance being
+    empty, so it looks like a banking problem rather than a wrong id. The same ordering also made
+    recovery give up on any order with a retry: reconcile asked about the abandoned checkout, was
+    correctly told it was never paid, and left real money unrecovered."""
+    print("\n# Refund/recovery must target the checkout that HOLDS THE MONEY (not the first attempt)")
+    from yoco_billing import client as yoco_client
+    from yoco_billing import reconcile as RC
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 15)), ends_at=iso(at(fx, 16)), settlement_mode="online")
+    oid = r["booking"]["order_id"]
+    # Two attempts: the member abandoned the first, came back MINUTES LATER and paid on the second.
+    # created_at is set explicitly — now() is the TRANSACTION timestamp, so rows written together in
+    # one transaction are indistinguishable by time, which real attempts (separate requests) never are.
+    for cid, mins in (("ch_abandoned_first", 30), ("ch_paid_second", 5)):
+        s.execute(text("INSERT INTO billing.payment_attempt (club_id, order_id, provider, intent_id, "
+                       "status, created_at) "
+                       "VALUES (:c,:o,'yoco',:i,'created', now() - make_interval(mins => :m))"),
+                  {"c": fx.club_id, "o": oid, "i": cid, "m": mins})
+    probed = []
+    _orig = yoco_client.get_checkout
+
+    def _stub(checkout_id):
+        probed.append(checkout_id)
+        if checkout_id == "ch_paid_second":
+            return {"status": "completed", "paymentId": "p_real_money", "amount": 40000,
+                    "currency": "ZAR", "metadata": {"club_id": str(fx.club_id)}}
+        # The abandoned one: created, never collected against.
+        return {"status": "created", "paymentId": None, "amount": 40000, "currency": "ZAR"}
+
+    yoco_client.get_checkout = _stub
+    try:
+        picked = RC.paid_checkout_id_for_order(s, str(oid))
+        check("picks the checkout Yoco says was PAID, not the first attempt",
+              picked == "ch_paid_second", f"picked={picked}")
+        check("…and it asked Yoco newest-first (so the common case costs one call)",
+              probed and probed[0] == "ch_paid_second", str(probed))
+        # Recovery must now work on exactly this order — it used to give up.
+        res = RC.reconcile_order(s, order_id=str(oid))
+        check("missed-webhook recovery now succeeds on a retried checkout",
+              res.get("changed") and _order(s, oid)["status"] == "paid", str(res))
+    finally:
+        yoco_client.get_checkout = _orig
+
+    # A single-attempt order must NOT cost an API call at all (the overwhelmingly common case).
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=iso(at(fx, 16)), ends_at=iso(at(fx, 17)), settlement_mode="online")
+    oid2 = r2["booking"]["order_id"]
+    s.execute(text("INSERT INTO billing.payment_attempt (club_id, order_id, provider, intent_id, "
+                   "status) VALUES (:c,:o,'yoco','ch_only_one','created')"),
+              {"c": fx.club_id, "o": oid2})
+    calls = []
+    yoco_client.get_checkout = lambda checkout_id: calls.append(checkout_id) or {}
+    try:
+        only = RC.paid_checkout_id_for_order(s, str(oid2))
+    finally:
+        yoco_client.get_checkout = _orig
+    check("a single-checkout order resolves with NO Yoco call", only == "ch_only_one" and not calls,
+          f"only={only} calls={calls}")
+
+    # Yoco unreachable + several attempts → fall back to the NEWEST, never the oldest.
+    yoco_client.get_checkout = lambda checkout_id: (_ for _ in ()).throw(RuntimeError("yoco down"))
+    try:
+        fallback = RC.paid_checkout_id_for_order(s, str(oid))
+    finally:
+        yoco_client.get_checkout = _orig
+    check("unverifiable → falls back to the NEWEST attempt (the old code took the oldest)",
+          fallback == "ch_paid_second", f"fallback={fallback}")
+
+
 def sc_ledger_direction_follows_who_holds_the_cash(s, fx):
     """THE ledger invariant: which way a collection moves the club↔coach balance depends entirely on
     who ended up holding the money — and it used to ignore that completely.
@@ -3305,6 +3383,7 @@ SCENARIOS = [
     sc_promo_unique_codes,
     sc_promo_bonus_grants,
     sc_ledger_direction_follows_who_holds_the_cash,
+    sc_refund_finds_the_checkout_that_holds_the_money,
     sc_pack_autodraw_guardrail,
     sc_reconcile_activates_pack,
     sc_reconcile_guard_activates_pack,

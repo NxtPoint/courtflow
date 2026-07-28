@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 316 / billing 457 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 316 / billing 462 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -698,6 +698,23 @@ member by email on the first authenticated hit.
   need flipped. The trial (`grant_signup_trial`) and the Wix import stay excluded — they INSERT directly and
   never reach either path. **It must carry `email`** — that's what the Klaviyo forward keys on. Guarded by
   `sc_membership_started_emit`.
+- **A REFUND MUST TARGET THE CHECKOUT THAT HOLDS THE MONEY, NOT THE FIRST ONE CREATED (2026-07-28).**
+  `POST /checkout` mints a FRESH Yoco checkout on every call and writes a `billing.payment_attempt`
+  row — **there is no reuse guard** — so a member who taps Pay, abandons, returns and pays leaves TWO
+  `ch_` ids on one order and only the second carries money. Both `execute_order_refund` and
+  `reconcile` picked `ORDER BY created_at ASC LIMIT 1` — the **oldest**, i.e. the abandoned one. Two
+  consequences, both money: a refund aimed at an uncollected checkout fails and **Yoco reports it as
+  INSUFFICIENT FUNDS**, which reads exactly like the club's own Yoco balance being empty (so it looks
+  like a banking problem, not a wrong id); and missed-webhook RECOVERY silently gave up on any order
+  with a retry — reconcile asked about the abandoned checkout, was correctly told it was never paid,
+  and left real money unrecovered. **`reconcile.paid_checkout_id_for_order` is now the ONE resolver**
+  both use: one attempt → returned with no API call (the common case, unchanged); several → ask Yoco
+  newest-first and take the one it says completed; unreachable → fall back to the NEWEST (the old
+  ordering had it backwards). Ordering carries an `id` tiebreak because `now()` is the TRANSACTION
+  timestamp, so same-transaction rows are indistinguishable by time. Guarded by
+  `sc_refund_finds_the_checkout_that_holds_the_money`. **NOTE:** "insufficient funds" is *also*
+  genuinely what Yoco says when the club's Yoco balance can't fund the refund (refunds draw on the
+  balance, not the bank) — check whether the order has >1 `payment_attempt` row before assuming which.
 - **THE COACH LEDGER'S DIRECTION FOLLOWS WHO HOLDS THE CASH (2026-07-28).** `billing.coach_ledger` is
   SIGNED — **+ = the club owes the coach, − = the coach owes the club** (the rent entry is
   deliberately negative). A `commission_earning` of `+coach_net` is correct ONLY when the club took

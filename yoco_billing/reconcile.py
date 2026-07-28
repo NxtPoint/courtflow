@@ -53,6 +53,59 @@ def _checkout_is_paid(co: Dict[str, Any]) -> bool:
     return bool(co.get("paymentId")) and status in _PAID_STATUSES
 
 
+def checkout_ids_for_order(session, order_id) -> List[str]:
+    """EVERY Yoco checkout ever created for this order, NEWEST FIRST.
+
+    POST /checkout mints a FRESH Yoco checkout each time it is called and records a payment_attempt
+    row — there is no reuse guard — so an order accumulates one row per attempt. A member who taps
+    Pay, abandons, comes back and pays leaves TWO `ch_` ids, and only the second carries money."""
+    return [str(r) for r in session.execute(
+        text("""
+            SELECT intent_id FROM billing.payment_attempt
+            WHERE order_id = :oid AND provider = 'yoco' AND intent_id IS NOT NULL
+              AND (status = 'created' OR intent_id LIKE 'ch_%')
+            -- id breaks a created_at tie: now() is the TRANSACTION timestamp, so two rows written in
+            -- one transaction share it exactly and the order would otherwise be undefined.
+            ORDER BY created_at DESC, id DESC
+        """),
+        {"oid": str(order_id)},
+    ).scalars().all() if r]
+
+
+def paid_checkout_id_for_order(session, order_id) -> Optional[str]:
+    """The checkout that ACTUALLY carries the money — asked of Yoco, not guessed.
+
+    THE BUG THIS REPLACES: both the refund path and this module picked
+    `ORDER BY created_at ASC LIMIT 1` — the OLDEST attempt. On any order where the member abandoned a
+    checkout and paid on a later one, that is a checkout Yoco never collected against, so:
+
+      · a REFUND aimed at it fails — Yoco has nothing on that checkout to give back, and reports it
+        as insufficient funds, which reads exactly like the club's Yoco balance being empty;
+      · RECOVERY of a missed webhook silently gives up — reconcile asks about the abandoned checkout,
+        is told (correctly) that it was never paid, and reports the order unpaid forever.
+
+    One attempt → return it without an API call (the overwhelmingly common case, unchanged). Several →
+    ask Yoco about each, newest first, and return the one it says completed. If Yoco can't be reached
+    we fall back to the NEWEST rather than the oldest: the last attempt is the one a member actually
+    completed, and the old ordering had it exactly backwards."""
+    ids = checkout_ids_for_order(session, order_id)
+    if not ids:
+        return None
+    if len(ids) == 1:
+        return ids[0]
+    for cid in ids:                       # newest first
+        try:
+            co = client.get_checkout(checkout_id=cid)
+        except Exception as e:
+            log.info("checkout probe failed order=%s checkout=%s: %s", order_id, cid, e)
+            continue
+        if _checkout_is_paid(co):
+            return cid
+    log.warning("order=%s has %d Yoco checkouts and none verified as paid — using the newest",
+                order_id, len(ids))
+    return ids[0]
+
+
 def _is_expired_hold_void(session, order_id) -> bool:
     """True if this order is 'void' ONLY because its booking's online hold lapsed.
 
@@ -87,7 +140,9 @@ def reconcile_order(session, *, order_id: str) -> Dict[str, Any]:
         # Already settled/refunded, or deliberately voided — nothing to recover.
         return {"ok": True, "changed": False, "reason": "not_pending", "status": order.get("status")}
 
-    checkout_id = _checkout_id_for_order(session, order_id)
+    # The checkout that actually carries the money — NOT merely the first one ever created for this
+    # order. An abandoned first attempt used to make every later payment unrecoverable.
+    checkout_id = paid_checkout_id_for_order(session, order_id)
     if not checkout_id:
         return {"ok": True, "changed": False, "reason": "no_checkout", "status": "awaiting_payment"}
 
