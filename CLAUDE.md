@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 316 / billing 467 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 316 / billing 475 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -698,6 +698,20 @@ member by email on the first authenticated hit.
   need flipped. The trial (`grant_signup_trial`) and the Wix import stay excluded — they INSERT directly and
   never reach either path. **It must carry `email`** — that's what the Klaviyo forward keys on. Guarded by
   `sc_membership_started_emit`.
+- **A REFUND'S IDEMPOTENCY KEY MUST NOT OUTLIVE A FAILED ATTEMPT (2026-07-28).** The Yoco adapter
+  keyed refunds `refund:{checkout_id}:{int(amount_minor or 0)}` — and a FULL refund passes
+  `amount_minor=None`, so `int(None or 0)` collapsed to **0**: ONE FIXED KEY per checkout, for all
+  time. Yoco honours `Idempotency-Key` by REPLAYING the response first stored against it, so once
+  any attempt failed, **every retry replayed that failure forever** regardless of what changed —
+  while the Yoco dashboard refunded the same payment without complaint. It presented as an
+  unchanging "insufficient funds" against an account with plenty in it, which sends you hunting a
+  balance problem that does not exist. The key now carries a **minute bucket**
+  (`refund:{ch}:full|{amount}:{YYYYMMDDHHMM}`): still collapses an accidental double-submit, no
+  longer blocks a deliberate retry. **The real double-refund guard belongs in OUR ledger, not the
+  gateway key** — `execute_order_refund` refuses `already_refunded` / `refund_exceeds_payment` by
+  summing `billing.payment` refunds against the charge, without calling Yoco at all. A frozen key
+  was never protecting the money; it was only preventing the retry. Guarded by
+  `sc_refund_retry_is_not_poisoned_by_the_idempotency_key`.
 - **A REFUND NEEDS EVIDENCE OF A CARD PAYMENT, NOT A CHECKOUT (2026-07-28).** `billing.payment_attempt`
   is written the moment a member taps "Pay online" — **BEFORE any money moves** — so it proves an
   INTENT, never a payment. An order whose member started an online checkout, abandoned it and then

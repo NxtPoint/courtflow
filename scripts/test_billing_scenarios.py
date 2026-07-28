@@ -3372,6 +3372,136 @@ def sc_refund_refuses_an_order_never_paid_by_card(s, fx):
         check("a genuinely card-paid order DOES reach the gateway", reached == ["ch_real"], str(reached))
 
 
+def sc_refund_retry_is_not_poisoned_by_the_idempotency_key(s, fx):
+    """A FAILED refund must stay retryable, and a SUCCEEDED one must not be repeatable.
+
+    The adapter keyed refunds `refund:{checkout}:{int(amount_minor or 0)}`. A full refund passes
+    amount_minor=None, so that collapsed to `...:0` — ONE FIXED KEY per checkout, for all time. Yoco
+    honours Idempotency-Key by replaying the response first stored against it, so once any attempt
+    had failed every retry replayed that failure forever, while the Yoco dashboard refunded the same
+    payment without complaint. It presented as an unchanging "insufficient funds" against an account
+    with plenty in it.
+
+    The key's real job is collapsing an accidental double-submit; protecting the money is OUR job and
+    belongs in our ledger."""
+    print("\n# A failed refund stays retryable; a completed one can't be repeated")
+    from yoco_billing import execute_order_refund, RefundError
+    from yoco_billing import adapter as _adapter  # noqa: F401  (registers the gateway)
+    from billing import gateway as GW
+
+    def _paid_online_order(hour):
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                             booking_type="lesson", resource_id=fx.coach_res,
+                             coach_user_id=fx.coach_uid, starts_at=iso(at(fx, hour)),
+                             ends_at=iso(at(fx, hour + 1)), settlement_mode="online")
+        oid = r["booking"]["order_id"]
+        amt = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                        {"o": oid}).scalar()
+        s.execute(text("INSERT INTO billing.payment_attempt (club_id, order_id, provider, intent_id, "
+                       "status) VALUES (:c,:o,'yoco',:i,'created')"),
+                  {"c": fx.club_id, "o": oid, "i": f"ch_key_{hour}"})
+        s.execute(text("INSERT INTO billing.payment (club_id, order_id, provider, provider_payment_id, "
+                       "amount_minor, currency_code, direction, status) "
+                       "VALUES (:c,:o,'yoco',:p,:a,'ZAR','charge','succeeded')"),
+                  {"c": fx.club_id, "o": oid, "p": f"p_key_{hour}", "a": amt})
+        return oid, int(amt)
+
+    gw = GW.get_gateway("yoco")
+    check("gateway registered", gw is not None)
+    if gw is None:
+        return
+
+    # (1) TWO attempts on the same checkout must not reuse the same idempotency key.
+    oid, amt = _paid_online_order(9)
+    keys = []
+    _orig_client_refund = None
+    from yoco_billing import client as ycl
+    _orig_client_refund = ycl.refund_checkout
+
+    def _capture(checkout_id, amount_minor=None, idempotency_key=None):
+        keys.append(idempotency_key)
+        raise ycl.YocoError(400, "insufficient funds")     # the failure that used to get cached
+
+    ycl.refund_checkout = _capture
+    try:
+        for _ in range(2):
+            try:
+                execute_order_refund(s, order_id=str(oid))
+            except RefundError:
+                pass
+    finally:
+        ycl.refund_checkout = _orig_client_refund
+    check("a failed refund was actually attempted twice", len(keys) == 2, str(keys))
+    # The key is deliberately STABLE within a minute (that is the accidental-double-submit guard) and
+    # CHANGES across minutes (that is what makes a deliberate retry possible). Asserting "the two keys
+    # differ" would therefore be wrong — two attempts a millisecond apart SHOULD share one. Assert the
+    # shape instead: it must carry a time component and must never be the old fixed `...:0`.
+    import re as _re
+    shape = _re.compile(r"^refund:ch_[^:]+:full:\d{12}$")
+    check("…the key carries a time component (so a later retry is a NEW key)",
+          all(shape.match(str(k) or "") for k in keys), str(keys))
+    check("…and a full refund is no longer encoded as ':0' (the old fixed key)",
+          all(not str(k).endswith(":0") for k in keys), str(keys))
+    # Prove the across-minute behaviour directly rather than hoping the clock ticks mid-test.
+    from yoco_billing.adapter import YocoGateway as _YG
+    import datetime as _dt
+    _real = _dt.datetime
+    minute_keys = []
+    ycl.refund_checkout = lambda **kw: minute_keys.append(kw.get("idempotency_key")) or {}
+    try:
+        for offset in (0, 60):
+            class _Clock(_real):
+                @classmethod
+                def now(cls, tz=None):
+                    return _real.now(tz) + _dt.timedelta(seconds=offset)
+            import yoco_billing.adapter as _ad
+            _ad.datetime = _Clock
+            try:
+                _YG().refund(payment={"checkout_id": "ch_key_9"}, amount_minor=None)
+            finally:
+                _ad.datetime = _real
+    finally:
+        ycl.refund_checkout = _orig_client_refund
+    check("a minute later the SAME refund gets a DIFFERENT key (retry unblocked)",
+          len(minute_keys) == 2 and minute_keys[0] != minute_keys[1], str(minute_keys))
+
+    # (2) Once the money HAS gone back, a further refund is refused by OUR ledger, not the gateway.
+    oid2, amt2 = _paid_online_order(11)
+    s.execute(text("INSERT INTO billing.payment (club_id, order_id, provider, provider_payment_id, "
+                   "amount_minor, currency_code, direction, status) "
+                   "VALUES (:c,:o,'yoco','rf_done',:a,'ZAR','refund','succeeded')"),
+              {"c": fx.club_id, "o": oid2, "a": amt2})
+    reached = []
+    ycl.refund_checkout = lambda **kw: reached.append(kw) or {}
+    err = None
+    try:
+        execute_order_refund(s, order_id=str(oid2))
+    except RefundError as e:
+        err = e
+    finally:
+        ycl.refund_checkout = _orig_client_refund
+    check("an already-refunded order is REFUSED", err is not None and err.code == "already_refunded",
+          str(err and err.code))
+    check("…without ever calling the gateway", reached == [], str(reached))
+
+    # (3) A partial refund larger than what's left is refused too.
+    oid3, amt3 = _paid_online_order(13)
+    s.execute(text("INSERT INTO billing.payment (club_id, order_id, provider, provider_payment_id, "
+                   "amount_minor, currency_code, direction, status) "
+                   "VALUES (:c,:o,'yoco','rf_part',:a,'ZAR','refund','succeeded')"),
+              {"c": fx.club_id, "o": oid3, "a": amt3 - 5000})
+    err3 = None
+    ycl.refund_checkout = lambda **kw: reached.append(kw) or {}
+    try:
+        execute_order_refund(s, order_id=str(oid3), amount_minor=9000)   # only R50 remains
+    except RefundError as e:
+        err3 = e
+    finally:
+        ycl.refund_checkout = _orig_client_refund
+    check("refunding more than remains is refused", err3 is not None
+          and err3.code == "refund_exceeds_payment", str(err3 and err3.code))
+
+
 def sc_ledger_direction_follows_who_holds_the_cash(s, fx):
     """THE ledger invariant: which way a collection moves the club↔coach balance depends entirely on
     who ended up holding the money — and it used to ignore that completely.
@@ -3458,6 +3588,7 @@ SCENARIOS = [
     sc_ledger_direction_follows_who_holds_the_cash,
     sc_refund_finds_the_checkout_that_holds_the_money,
     sc_refund_refuses_an_order_never_paid_by_card,
+    sc_refund_retry_is_not_poisoned_by_the_idempotency_key,
     sc_pack_autodraw_guardrail,
     sc_reconcile_activates_pack,
     sc_reconcile_guard_activates_pack,

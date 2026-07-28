@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from billing.gateway import (
@@ -108,10 +109,28 @@ class YocoGateway:
         checkout_id = _get(payment, "checkout_id") or _get(payment, "intent_id")
         if not checkout_id:
             raise client.YocoError(0, "no yoco checkout id for this payment")
+        # THE IDEMPOTENCY KEY MUST NOT OUTLIVE A FAILED ATTEMPT.
+        #
+        # This was `refund:{checkout_id}:{int(amount_minor or 0)}`. A FULL refund passes
+        # amount_minor=None, so `int(None or 0)` collapsed to 0 and produced ONE FIXED KEY per
+        # checkout, for all time. Yoco honours Idempotency-Key by replaying the response it first
+        # stored against it — so once any attempt had failed, every retry replayed that same failure
+        # forever, no matter what had changed since. A refund that failed once could never succeed
+        # through this code again, while the Yoco dashboard (which sends no key of ours) refunded the
+        # very same payment without complaint. That is precisely how it presented: "insufficient
+        # funds", unchanged, against an account with plenty in it.
+        #
+        # The minute bucket keeps the key's REAL job — collapsing an accidental double-submit — while
+        # letting a deliberate retry through. Double-refunding is guarded properly upstream, in our
+        # own data (execute_order_refund refuses an order that is already fully refunded), which is
+        # where that protection belongs: a frozen gateway key was never really protecting the money,
+        # it was just preventing the retry.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
+        amt_tag = "full" if amount_minor is None else str(int(amount_minor))
         resp = client.refund_checkout(
             checkout_id=str(checkout_id),
             amount_minor=amount_minor,
-            idempotency_key=f"refund:{checkout_id}:{int(amount_minor or 0)}",
+            idempotency_key=f"refund:{checkout_id}:{amt_tag}:{stamp}",
         )
         return RefundResult(
             provider="yoco",

@@ -83,6 +83,30 @@ def execute_order_refund(session, *, order_id, amount_minor=None):
             "Yoco to refund. If the money was taken another way, refund it that way and record it.",
             status=409)
 
+    # ALREADY REFUNDED? This is the REAL double-refund guard, and it lives here rather than in the
+    # gateway's idempotency key. That key used to be fixed per checkout, which looked like protection
+    # but was really just a permanent replay of whatever happened first — it blocked legitimate
+    # retries while never once consulting whether the money had actually gone back. Our own ledger
+    # knows, so ask it.
+    charged = int(by_provider.get("yoco") or 0)
+    refunded = int(session.execute(
+        text("SELECT COALESCE(SUM(amount_minor),0) FROM billing.payment "
+             "WHERE order_id = :o AND provider = 'yoco' AND direction = 'refund' "
+             "  AND status IN ('succeeded','refunded')"),
+        {"o": str(order_id)},
+    ).scalar() or 0)
+    wanted = int(amount_minor) if amount_minor is not None else (charged - refunded)
+    if refunded >= charged:
+        raise RefundError(
+            "already_refunded",
+            f"This order's card payment has already been refunded in full "
+            f"({refunded / 100:,.2f} of {charged / 100:,.2f}).", status=409)
+    if wanted <= 0 or refunded + wanted > charged:
+        raise RefundError(
+            "refund_exceeds_payment",
+            f"That would refund more than was charged — {charged / 100:,.2f} taken, "
+            f"{refunded / 100:,.2f} already returned.", status=409)
+
     gw = get_gateway("yoco")
     if gw is None:
         raise RefundError("yoco_unavailable", "Online payments are not available.", status=503)
