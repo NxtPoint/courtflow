@@ -3532,6 +3532,75 @@ def sc_refund_retry_is_not_poisoned_by_the_idempotency_key(s, fx):
           and err3.code == "refund_exceeds_payment", str(err3 and err3.code))
 
 
+def sc_partial_refund_reaches_yoco_as_a_partial(s, fx):
+    """A PART refund must actually be partial all the way down, and a FULL one must still send no
+    amount.
+
+    Yoco, the client, the route and approve_refund_request all supported a partial the whole way —
+    but neither UI path ever sent an amount, so it was unreachable in practice. The rule the money
+    depends on: an explicit figure EQUAL to the total is the form Yoco has refused before, so full
+    must stay amount-less and only a genuine partial carries a number."""
+    print("\n# A partial refund is partial end-to-end; a full one still sends NO amount")
+    from yoco_billing import execute_order_refund, RefundError
+    from yoco_billing import adapter as _ad  # noqa: F401  (registers the gateway)
+    from yoco_billing import client as ycl
+    from billing import refunds as RFD
+
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 8)), ends_at=iso(at(fx, 9)), settlement_mode="online")
+    oid = r["booking"]["order_id"]
+    total = int(s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                          {"o": oid}).scalar())
+    s.execute(text('UPDATE billing."order" SET status=\'paid\' WHERE id=:o'), {"o": oid})
+    s.execute(text("INSERT INTO billing.payment_attempt (club_id, order_id, provider, intent_id, "
+                   "status) VALUES (:c,:o,'yoco','ch_partial','created')"), {"c": fx.club_id, "o": oid})
+    s.execute(text("INSERT INTO billing.payment (club_id, order_id, provider, provider_payment_id, "
+                   "amount_minor, currency_code, direction, status) "
+                   "VALUES (:c,:o,'yoco','p_partial',:a,'ZAR','charge','succeeded')"),
+              {"c": fx.club_id, "o": oid, "a": total})
+
+    sent = []
+    _keep = ycl.refund_checkout
+    ycl.refund_checkout = lambda **kw: sent.append(kw.get("amount_minor")) or {"id": "rf_x"}
+    half = total // 2
+    try:
+        try:
+            execute_order_refund(s, order_id=str(oid), amount_minor=half)
+        except RefundError:
+            pass
+        check("a PARTIAL carries the explicit amount to Yoco", sent == [half], str(sent))
+        # …and a FULL refund still sends nothing, which is the form Yoco accepts reliably.
+        sent.clear()
+        r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                              booking_type="lesson", resource_id=fx.coach_res,
+                              coach_user_id=fx.coach_uid, starts_at=iso(at(fx, 12)),
+                              ends_at=iso(at(fx, 13)), settlement_mode="online")
+        oid2 = r2["booking"]["order_id"]
+        s.execute(text('UPDATE billing."order" SET status=\'paid\' WHERE id=:o'), {"o": oid2})
+        s.execute(text("INSERT INTO billing.payment_attempt (club_id, order_id, provider, intent_id, "
+                       "status) VALUES (:c,:o,'yoco','ch_full','created')"), {"c": fx.club_id, "o": oid2})
+        s.execute(text("INSERT INTO billing.payment (club_id, order_id, provider, provider_payment_id, "
+                       "amount_minor, currency_code, direction, status) "
+                       "VALUES (:c,:o,'yoco','p_full',:a,'ZAR','charge','succeeded')"),
+                  {"c": fx.club_id, "o": oid2, "a": total})
+        try:
+            execute_order_refund(s, order_id=str(oid2))
+        except RefundError:
+            pass
+        check("a FULL refund sends NO amount (never an explicit total)", sent == [None], str(sent))
+    finally:
+        ycl.refund_checkout = _keep
+
+    # The APPROVE path resolves the same way: a request for the full amount becomes amount-less.
+    rq, err = RFD.create_refund_request(s, club_id=fx.club_id, user_id=fx.member, order_id=str(oid2),
+                                        amount_minor=None, reason="all of it")
+    check("a full-amount request was created", err is None and rq is not None, str(err))
+    if rq:
+        check("…clamped to the order total (so approve resolves it to a full refund)",
+              int(rq["amount_minor"]) == total, str(rq["amount_minor"]))
+
+
 def sc_ledger_direction_follows_who_holds_the_cash(s, fx):
     """THE ledger invariant: which way a collection moves the club↔coach balance depends entirely on
     who ended up holding the money — and it used to ignore that completely.
@@ -3619,6 +3688,7 @@ SCENARIOS = [
     sc_refund_finds_the_checkout_that_holds_the_money,
     sc_refund_refuses_an_order_never_paid_by_card,
     sc_refund_retry_is_not_poisoned_by_the_idempotency_key,
+    sc_partial_refund_reaches_yoco_as_a_partial,
     sc_pack_autodraw_guardrail,
     sc_reconcile_activates_pack,
     sc_reconcile_guard_activates_pack,

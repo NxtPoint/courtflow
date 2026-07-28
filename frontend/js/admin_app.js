@@ -521,14 +521,11 @@
         // Decide a pending refund REQUEST in place (same endpoints as Money → Approvals; the record
         // reloads on success so the status updates here without leaving the client). A cancelled prompt
         // returns a rejected promise → the widget silently aborts (runAct only toasts a truthy error).
+        // THE refund modal here too (amount + note + cancel), so approving from the client record can
+        // part-refund exactly as it can from the transaction record — one dialog, one behaviour.
         approve_refund_request: {
-          done: "Approved.",
-          run: function (r) {
-            var note = window.prompt("Approve & refund this via Yoco? Optional note:", "");
-            if (note === null) return Promise.reject();
-            var alsoCancel = window.confirm("Also CANCEL the booking + free the slot?\n\nOK = refund + cancel.   Cancel = refund only.");
-            return window.AdminAPI.approveRefundRequest(r.id, { note: note, cancel_booking: alsoCancel });
-          },
+          manual: true,
+          run: function (r) { decideRefund(r, "approve", function () { renderPerson(id); }); },
         },
         decline_refund_request: {
           tone: "ghost", done: "Declined.",
@@ -1315,14 +1312,22 @@
     set(wrap);
   }
 
-  async function decideRefund(rq, action, then) {
-    var isA = action === "approve";
-    var note = window.prompt(isA ? "Approve & refund this via Yoco? Optional note:" : "Decline this request? Reason (shown to the member):", "");
+  // APPROVE goes through THE refund modal (amount + note + cancel, validated against what's actually
+  // refundable) rather than window.prompt/confirm, which could neither show a figure nor let you
+  // change one — so a part-refund was impossible from here. DECLINE moves no money, so a prompt is
+  // still the right weight for it.
+  async function decideRefund(rq, action, then, charge) {
+    if (action === "approve") {
+      var ch = charge || { amount_minor: rq.amount_minor, paid_minor: rq.amount_minor,
+                           refunded_minor: 0, currency: rq.currency_code || clubCur() };
+      refundModal(rq.order_id, ch, then || moneyApprovals, { request: rq });
+      return;
+    }
+    var note = window.prompt("Decline this request? Reason (shown to the member):", "");
     if (note === null) return;
     try {
-      if (isA) { var alsoCancel = window.confirm("Also CANCEL the booking + free the slot?\n\nOK = refund + cancel.   Cancel = refund only."); await window.AdminAPI.approveRefundRequest(rq.id, { note: note, cancel_booking: alsoCancel }); }
-      else await window.AdminAPI.declineRefundRequest(rq.id, { note: note });
-      UI.toast(isA ? "Approved." : "Declined.", "info"); (then || moneyApprovals)();
+      await window.AdminAPI.declineRefundRequest(rq.id, { note: note });
+      UI.toast("Declined.", "info"); (then || moneyApprovals)();
     } catch (e) { UI.toast(UI.errMsg(e), "error"); }
   }
 
@@ -1743,14 +1748,74 @@
       el("button", { class: "cf-btn cf-btn-primary", text: "Record payment", onclick: function () { var f = parseFloat(amt.value); if (isNaN(f) || f < 0) { UI.toast("Enter a valid amount.", "warn"); return; } window.API.deskPayment({ order_id: orderId, amount_minor: Math.round(f * 100), provider: prov.value, provider_payment_id: (ref.value.trim() || null) }).then(function () { UI.toast("Payment recorded.", "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }),
     ]));
   }
-  function refundModal(orderId, ch, then) {
-    var m = modal("Refund");
-    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.9rem", text: "Refund " + money(ch.amount_minor, ch.currency || "ZAR") + " to the customer via Yoco." }));
-    var cancel = el("input", { type: "checkbox" });
-    m.body.appendChild(el("label", { class: "cf-row", style: "gap:8px;align-items:center" }, [cancel, el("span", { text: "Also cancel the booking + free the slot" })]));
+  // THE refund modal — one dialog for both ways a refund starts: the Refund action on a transaction
+  // record, and Approve & refund on a member's request. Neither used to offer an AMOUNT, so a partial
+  // refund was impossible from the UI even though Yoco, the client, the route and
+  // approve_refund_request all supported one the whole way down. Approving also ran on
+  // window.prompt/confirm, which can't show a figure or validate it.
+  //   opts.request → the approve path: prefills the member's asked-for amount and sends a note.
+  function refundModal(orderId, ch, then, opts) {
+    opts = opts || {};
+    var rq = opts.request || null;
+    var cur = ch.currency || clubCur();
+    // What is actually still refundable: what was collected, less anything already sent back.
+    var paid = (ch.paid_minor != null ? ch.paid_minor : (ch.amount_minor || 0));
+    var already = ch.refunded_minor || 0;
+    var maxRefund = Math.max(0, paid - already);
+    var def = (rq && rq.amount_minor) ? Math.min(rq.amount_minor, maxRefund) : maxRefund;
+
+    var m = modal(rq ? "Approve & refund" : "Refund");
+    if (rq) {
+      m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.9rem", text:
+        (rq.requester_name || "The member") + " asked for " + money(rq.amount_minor, cur) + " back"
+        + (rq.reason ? " — “" + rq.reason + "”" : "") + "." }));
+    }
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.9rem", text:
+      money(maxRefund, cur) + " is available to refund via Yoco"
+      + (already ? " (" + money(already, cur) + " already returned)" : "") + "." }));
+
+    var amtI = el("input", { class: "cf-input", type: "number", step: "0.01", min: "0.01",
+                             max: String(maxRefund / 100), value: (def / 100).toFixed(2),
+                             style: "max-width:160px" });
+    m.body.appendChild(el("div", { class: "cf-field" }, [
+      el("label", { text: "Amount to refund (" + cur + ")" }), amtI,
+      el("div", { class: "cf-muted", style: "font-size:.8rem", text:
+        "Refund less than the full amount to return only part of it." }),
+    ]));
+
+    var noteI = null;
+    if (rq) {
+      noteI = el("input", { class: "cf-input", placeholder: "Optional note (kept on the record)" });
+      m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Note" }), noteI]));
+    }
+    var cancel = el("input", { type: "checkbox" }); cancel.style.width = "auto";
+    m.body.appendChild(el("label", { class: "cf-row", style: "gap:8px;align-items:center" },
+      [cancel, el("span", { text: "Also cancel the booking + free the slot" })]));
+
+    var go = el("button", { class: "cf-btn cf-btn-primary", text: rq ? "Approve & refund" : "Refund" });
+    go.addEventListener("click", async function () {
+      var amt = Math.round(parseFloat(amtI.value || "0") * 100);
+      if (!(amt > 0)) { UI.toast("Enter an amount to refund.", "warn"); return; }
+      if (amt > maxRefund) { UI.toast("That's more than is available to refund.", "warn"); return; }
+      // A FULL refund must send NO amount — that is the form Yoco accepts reliably, and an explicit
+      // figure equal to the total has been refused before. Only a genuine PARTIAL carries an amount.
+      var body = { cancel_booking: cancel.checked };
+      if (amt < maxRefund) body.amount_minor = amt;
+      go.disabled = true;
+      try {
+        if (rq) {
+          body.note = (noteI && noteI.value.trim()) || null;
+          await window.AdminAPI.approveRefundRequest(rq.id, body);
+        } else {
+          body.order_id = orderId;
+          await window.AdminAPI.yocoRefund(body);
+        }
+        UI.toast(amt < maxRefund ? "Refunded " + money(amt, cur) + "." : "Refunded.", "info");
+        m.close(); (then || route)();
+      } catch (e) { go.disabled = false; UI.toast(UI.errMsg(e), "error"); }
+    });
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
-      el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
-      el("button", { class: "cf-btn cf-btn-primary", text: "Refund", onclick: function () { window.AdminAPI.yocoRefund({ order_id: orderId, cancel_booking: cancel.checked }).then(function () { UI.toast("Refunded.", "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }),
+      el("button", { class: "cf-btn", text: "Close", onclick: m.close }), go,
     ]));
   }
   async function reassignModal(b, then) {

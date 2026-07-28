@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 316 / billing 476 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 316 / billing 480 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -698,6 +698,17 @@ member by email on the first authenticated hit.
   need flipped. The trial (`grant_signup_trial`) and the Wix import stay excluded — they INSERT directly and
   never reach either path. **It must carry `email`** — that's what the Klaviyo forward keys on. Guarded by
   `sc_membership_started_emit`.
+- **ONE REFUND MODAL, AND IT OFFERS AN AMOUNT (2026-07-28).** `admin_app.refundModal` is THE dialog
+  for both ways a refund starts — the **Refund** action on a transaction record and **Approve &
+  refund** on a member's request — and it is the ONLY place `yocoRefund` / `approveRefundRequest`
+  are called. Partial refunds were supported by Yoco, `client.refund_checkout`, the route AND
+  `approve_refund_request` the whole way down, but **neither UI path ever sent an amount**, so a
+  part-refund was unreachable; approving also ran on `window.prompt`/`confirm`, which can neither
+  show a figure nor validate one. The modal now takes an amount (defaulted to what's still
+  refundable — collected MINUS already-returned), a note, and the cancel-booking choice.
+  **A FULL refund must still send NO amount** — an explicit figure equal to the total is the form
+  Yoco has refused before — so the modal omits it unless the figure is a genuine partial. DECLINE
+  stays a prompt (no money moves). Guarded by `sc_partial_refund_reaches_yoco_as_a_partial`.
 - **A REFUND'S IDEMPOTENCY KEY MUST NOT OUTLIVE A FAILED ATTEMPT (2026-07-28).** The Yoco adapter
   keyed refunds `refund:{checkout_id}:{int(amount_minor or 0)}` — and a FULL refund passes
   `amount_minor=None`, so `int(None or 0)` collapsed to **0**: ONE FIXED KEY per checkout, for all
