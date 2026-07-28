@@ -233,6 +233,12 @@
       return A().apiJSON("/api/admin/membership-plans/" + enc(id), { method: "DELETE" });
     },
 
+    // GET /api/admin/financials/coach-statement?month=YYYY-MM -> month-end close-out: coach → client →
+    // service, each row carrying how it was paid and whether that money reached the club's bank.
+    coachStatement: function (month) {
+      return A().apiJSON("/api/admin/financials/coach-statement" + (month ? "?month=" + enc(month) : ""));
+    },
+
     // ---- equipment hire (ball machine / racquets / balls) ----------------
     equipment: function () { return A().apiJSON("/api/admin/equipment"); },
     createEquipment: function (body) { return A().apiJSON("/api/admin/equipment", { method: "POST", body: body }); },

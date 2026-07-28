@@ -1380,6 +1380,25 @@ def get_earnings_by_service():
     return jsonify(data), 200
 
 
+@admin_bp.get("/financials/coach-statement")
+def get_coach_statement_report():
+    """Month-end close-out: coach → client → service, each row carrying HOW it was paid and WHERE that
+    money is (your bank / the desk / the coach / still owed). `?month=YYYY-MM` (default current).
+
+    Read-only and deliberately non-committal: desk cash is reported as ambiguous rather than guessed,
+    because at the club it genuinely can go either way. The one thing it IS certain about is a lesson
+    a coach marked collected off-platform — that flips the order to 'paid' with no billing.payment row
+    at all, so it can be identified exactly. Folds identically to Money → Club earnings for the same
+    month; the custody split is an extra axis over the same order set, never a second count."""
+    p, err = _admin()
+    if err:
+        return err
+    month = (request.args.get("month") or "").strip() or None
+    with session_scope() as s:
+        data = repo.coach_statement_report(s, club_id=p.club_id, month=month)
+    return jsonify(data), 200
+
+
 @admin_bp.get("/financials/revenue-club")
 def get_revenue_club():
     """The CLUB earnings P&L (the Money revenue landing): direct club services + the commission taken from

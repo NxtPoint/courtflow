@@ -2531,6 +2531,271 @@ def revenue_club_overview(session, *, club_id, month=None):
             "direct": direct, "coaches": coaches, "club": club}
 
 
+# ---------------------------------------------------------------------------
+# COACH STATEMENT — "where is the money?" (read-only; month-end close-out)
+# ---------------------------------------------------------------------------
+# The money engine answers ONE question — "is this debt settled?" — and month-end needs TWO:
+# has the client paid, AND who is holding the cash. `order.status='paid'` merges five things with
+# three destinations: Yoco and EFT reach the club's BANK; cash/card at the desk reach the club's TILL
+# or the coach's pocket depending on who was standing there; and a coach marking an off-platform
+# arrears item collected reaches the COACH only.
+#
+# That last one is the sharp edge and it is precisely derivable: billing.commission
+# .mark_arrears_collected flips the order to 'paid' with NO billing.payment row at all (the money
+# never touched the platform). So *paid with zero succeeded charges* == the coach collected it
+# off-platform. Nothing else produces that shape.
+#
+# This reader classifies but does NOT decide: desk cash is reported as ambiguous rather than guessed,
+# because the owner's own answer is "it could go either way".
+
+_CUSTODY = {
+    "bank_yoco":         {"label": "Yoco → your bank",        "bank": True},
+    "bank_eft":          {"label": "EFT → your bank",         "bank": True},
+    "desk_card":         {"label": "Card at desk",            "bank": False},
+    "desk_cash":         {"label": "Cash at desk/court",      "bank": False},
+    "coach_offplatform": {"label": "Coach collected direct",  "bank": False},
+    "unpaid":            {"label": "Still owed",              "bank": False},
+    "written_off":       {"label": "Written off",             "bank": False},
+    "refunded":          {"label": "Refunded",                "bank": False},
+}
+_CUSTODY_KEYS = list(_CUSTODY)
+
+
+def _custody_of(status, pay):
+    """Which bucket ONE order's money sits in. Classified off the order (not the payment rows) so the
+    buckets sum EXACTLY to the Money tab's `paid` figure — a partial or over-payment can't make the
+    split drift from the fold. Provider precedence yoco > eft > card > cash only matters for the rare
+    mixed order, which the row flags."""
+    if status == "open":
+        return "unpaid"
+    if status in ("written_off", "refunded"):
+        return status
+    if status != "paid":
+        return "unpaid"
+    if int(pay["yoco"] or 0) > 0:
+        return "bank_yoco"
+    if int(pay["eft"] or 0) > 0:
+        return "bank_eft"
+    if int(pay["card_at_desk"] or 0) > 0:
+        return "desk_card"
+    if int(pay["cash"] or 0) > 0:
+        return "desk_cash"
+    return "coach_offplatform"      # paid, but no money ever crossed the platform
+
+
+def _custody_zero():
+    return {k: 0 for k in _CUSTODY_KEYS}
+
+
+def _custody_totals(buckets):
+    """Roll a custody bucket dict up into the three numbers month-end actually turns on."""
+    in_bank = buckets["bank_yoco"] + buckets["bank_eft"]
+    not_in_bank = buckets["desk_card"] + buckets["desk_cash"] + buckets["coach_offplatform"]
+    return {
+        "by_bucket": dict(buckets),
+        "in_bank_minor": in_bank,
+        "not_in_bank_minor": not_in_bank,     # collected, but NOT in the club's account
+        "unpaid_minor": buckets["unpaid"],
+    }
+
+
+def coach_statement_report(session, *, club_id, month=None):
+    """Month → COACH → CLIENT → service rows, each carrying how it was paid and where that money is.
+
+    Built on the SAME _earnings_cte as the Money tab, so every fold figure (billed / discount /
+    written-off / invoiced / paid / outstanding) is identical to Money → Club earnings for the same
+    month — the custody split is an extra axis over that same order set, never a second count.
+    Orders with no coach (court hire, membership) group under a synthetic 'club' node. Guarded."""
+    cur = _club_currency(session, club_id=club_id)
+    ym, s_dt, e_dt = _earnings_month_bounds(session, month)
+    cte = _earnings_cte(coach=False)
+    rows = []
+    try:
+        rows = session.execute(
+            text(cte + """
+                SELECT c.id AS order_id, c.user_id, c.status, c.amount_minor, c.billed_orig,
+                       c.created_at, c.category, c.booking_id, c.enrolment_id, c.coach_user_id,
+                       ord.settlement_mode,
+                       COALESCE(cp.display_name,
+                                NULLIF(TRIM(CONCAT_WS(' ', cu.first_name, cu.surname)),''),
+                                cu.email) AS coach_name,
+                       COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)),''),
+                                u.email, 'Walk-in') AS client_name,
+                       (SELECT COALESCE(pr.name, ol.description)
+                          FROM billing.order_line ol
+                          LEFT JOIN billing.price   p2 ON p2.id = ol.price_id
+                          LEFT JOIN billing.product pr ON pr.id = p2.product_id
+                         WHERE ol.order_id = c.id ORDER BY ol.created_at LIMIT 1) AS service_name,
+                       pay.yoco, pay.eft, pay.cash, pay.card_at_desk, pay.n_charges, pay.recorders
+                FROM cat c
+                LEFT JOIN iam."user" u  ON u.id  = c.user_id
+                LEFT JOIN iam."user" cu ON cu.id = c.coach_user_id
+                LEFT JOIN iam.coach_profile cp
+                       ON cp.user_id = c.coach_user_id AND cp.club_id = :c
+                LEFT JOIN billing."order" ord ON ord.id = c.id
+                LEFT JOIN LATERAL (
+                    SELECT
+                      COALESCE(SUM(p.amount_minor) FILTER (WHERE p.provider='yoco'),0)         AS yoco,
+                      COALESCE(SUM(p.amount_minor) FILTER (WHERE p.provider='eft'),0)          AS eft,
+                      COALESCE(SUM(p.amount_minor) FILTER (WHERE p.provider='cash'),0)         AS cash,
+                      COALESCE(SUM(p.amount_minor) FILTER (WHERE p.provider='card_at_desk'),0) AS card_at_desk,
+                      COUNT(*) AS n_charges,
+                      STRING_AGG(DISTINCT NULLIF(TRIM(CONCAT_WS(' ', ru.first_name, ru.surname)),''), ', ')
+                        AS recorders
+                    FROM billing.payment p
+                    LEFT JOIN iam."user" ru ON ru.id = p.recorded_by_user_id
+                    WHERE p.order_id = c.id AND p.direction = 'charge' AND p.status = 'succeeded'
+                ) pay ON true
+                ORDER BY coach_name NULLS FIRST, client_name, c.created_at
+            """),
+            {"c": club_id, "s": s_dt, "e": e_dt},
+        ).mappings().all()
+    except Exception:
+        session.rollback()
+        log.exception("coach_statement_report failed")
+        rows = []
+
+    coaches = {}          # key -> node
+    club_fold = {"billed": 0, "discount": 0, "written_off": 0, "collected": 0,
+                 "outstanding": 0, "refunded": 0, "n": 0}
+    club_custody = _custody_zero()
+
+    def _blank(key, name):
+        return {"key": key, "coach_user_id": (None if key == "club" else key), "coach_name": name,
+                "fold": {"billed": 0, "discount": 0, "written_off": 0, "collected": 0,
+                         "outstanding": 0, "refunded": 0, "n": 0},
+                "custody": _custody_zero(), "clients": {}}
+
+    for r in rows:
+        ckey = str(r["coach_user_id"]) if r["coach_user_id"] else "club"
+        cname = r["coach_name"] or "Club (court hire, memberships)"
+        node = coaches.setdefault(ckey, _blank(ckey, cname))
+        ukey = str(r["user_id"]) if r["user_id"] else "walkin"
+        client = node["clients"].setdefault(
+            ukey, {"user_id": (str(r["user_id"]) if r["user_id"] else None),
+                   "client_name": r["client_name"],
+                   "fold": {"billed": 0, "discount": 0, "written_off": 0, "collected": 0,
+                            "outstanding": 0, "refunded": 0, "n": 0},
+                   "custody": _custody_zero(), "rows": []})
+
+        billed = int(r["billed_orig"] or 0)
+        amt = int(r["amount_minor"] or 0)
+        st = r["status"]
+        bucket = _custody_of(st, r)
+        providers = [k for k in ("yoco", "eft", "cash", "card_at_desk") if int(r[k] or 0) > 0]
+
+        client["rows"].append({
+            "order_id": str(r["order_id"]),
+            "booking_id": str(r["booking_id"]) if r["booking_id"] else None,
+            "enrolment_id": str(r["enrolment_id"]) if r["enrolment_id"] else None,
+            "when": r["created_at"].isoformat() if r["created_at"] else None,
+            "service": r["service_name"] or _SVC_LABELS.get(r["category"], "Other"),
+            "category": r["category"],
+            "billed_minor": billed,
+            "amount_minor": amt,
+            "status": st,
+            "settlement_mode": r["settlement_mode"],
+            "custody": bucket,
+            "custody_label": _CUSTODY[bucket]["label"],
+            "in_bank": _CUSTODY[bucket]["bank"],
+            "paid_via": providers[0] if providers else None,
+            "mixed_providers": len(providers) > 1,
+            "recorded_by": r["recorders"],
+        })
+        # The fold + the custody split, accumulated identically at client / coach / club level.
+        for scope in (client, node):
+            f = scope["fold"]
+            f["billed"] += billed
+            f["discount"] += max(billed - amt, 0)
+            f["n"] += 1
+            if st == "written_off":
+                f["written_off"] += amt
+            elif st == "paid":
+                f["collected"] += amt
+            elif st == "open":
+                f["outstanding"] += amt
+            elif st == "refunded":
+                f["refunded"] += amt
+            scope["custody"][bucket] += amt
+        club_fold["billed"] += billed
+        club_fold["discount"] += max(billed - amt, 0)
+        club_fold["n"] += 1
+        if st == "written_off":
+            club_fold["written_off"] += amt
+        elif st == "paid":
+            club_fold["collected"] += amt
+        elif st == "open":
+            club_fold["outstanding"] += amt
+        elif st == "refunded":
+            club_fold["refunded"] += amt
+        club_custody[bucket] += amt
+
+    out_coaches = []
+    for node in coaches.values():
+        node["clients"] = sorted(node["clients"].values(),
+                                 key=lambda c: (-c["fold"]["outstanding"], c["client_name"] or ""))
+        for cl in node["clients"]:
+            cl["fold"] = _fold_from_row(cl["fold"])
+            cl["custody"] = _custody_totals(cl["custody"])
+        node["fold"] = _fold_from_row(node["fold"])
+        node["custody"] = _custody_totals(node["custody"])
+        out_coaches.append(node)
+    # The club node last; coaches by biggest not-in-bank first (that's the month-end chase list).
+    out_coaches.sort(key=lambda n: (n["key"] == "club",
+                                    -n["custody"]["not_in_bank_minor"], n["coach_name"] or ""))
+    return {
+        "month": ym, "currency": cur,
+        "totals": _fold_from_row(club_fold),
+        "custody": _custody_totals(club_custody),
+        "custody_labels": {k: v["label"] for k, v in _CUSTODY.items()},
+        "coaches": out_coaches,
+        "payments": payments_received(session, club_id=club_id, month=month),
+    }
+
+
+def payments_received(session, *, club_id, month=None):
+    """What ACTUALLY arrived this month, straight off billing.payment — independent of how orders are
+    bucketed. This is the figure to reconcile against a bank statement.
+
+    Deliberately a SECOND opinion rather than a derivation of the fold above: the order-based reader
+    inherits _earnings_cte's exclusions (notably both sides of a settled 'Pay all' wrapper) and is
+    scoped by ORDER creation date, while a payment can land in a later month than the sale. Where the
+    two disagree, the difference is real and worth seeing — so it is shown, not reconciled away.
+    Guarded → zeroes."""
+    ym, s_dt, e_dt = _earnings_month_bounds(session, month)
+    try:
+        r = session.execute(
+            text("""
+                SELECT
+                  COALESCE(SUM(amount_minor) FILTER (WHERE direction='charge' AND status='succeeded'
+                                                       AND provider='yoco'),0)         AS yoco,
+                  COALESCE(SUM(amount_minor) FILTER (WHERE direction='charge' AND status='succeeded'
+                                                       AND provider='eft'),0)          AS eft,
+                  COALESCE(SUM(amount_minor) FILTER (WHERE direction='charge' AND status='succeeded'
+                                                       AND provider='cash'),0)         AS cash,
+                  COALESCE(SUM(amount_minor) FILTER (WHERE direction='charge' AND status='succeeded'
+                                                       AND provider='card_at_desk'),0) AS card_at_desk,
+                  COALESCE(SUM(amount_minor) FILTER (WHERE direction='refund'
+                                                       AND status IN ('succeeded','refunded')),0) AS refunded,
+                  COUNT(*) FILTER (WHERE direction='charge' AND status='succeeded')     AS n
+                FROM billing.payment
+                WHERE club_id = :c AND created_at >= :s AND created_at < :e
+            """),
+            {"c": club_id, "s": s_dt, "e": e_dt},
+        ).mappings().first() or {}
+    except Exception:
+        session.rollback()
+        r = {}
+    g = lambda k: int((r or {}).get(k) or 0)     # noqa: E731
+    bank = g("yoco") + g("eft")
+    desk = g("cash") + g("card_at_desk")
+    return {"month": ym, "yoco_minor": g("yoco"), "eft_minor": g("eft"),
+            "cash_minor": g("cash"), "card_at_desk_minor": g("card_at_desk"),
+            "refunded_minor": g("refunded"), "count": g("n"),
+            "to_bank_minor": bank, "to_desk_minor": desk,
+            "net_to_bank_minor": bank - g("refunded")}
+
+
 def earnings_clients(session, *, club_id, month=None, category=None, earned_by=None, coach_user_id=None):
     """The revenue drill's CLIENT level: within a service (and, for admin, a chosen coach/'club'), the
     per-client fold. `earned_by` = a coach uuid or 'club' (admin's picked coach node); `coach_user_id`
