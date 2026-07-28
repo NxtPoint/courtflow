@@ -1,0 +1,167 @@
+# scripts/diagnose_refund.py — READ-ONLY: why is a Yoco refund failing?
+#
+#   python -m scripts.diagnose_refund                 # every order with >1 checkout (the risky ones)
+#   python -m scripts.diagnose_refund <order_id>      # the full picture for one order
+#   python -m scripts.diagnose_refund --recent 20     # the last 20 online orders + their checkouts
+#
+# Reads DATABASE_URL from a gitignored .env.local (never printed) — same pattern as verify_live, but
+# this one runs NO boot DDL and writes NOTHING. Pure SELECTs.
+#
+# WHAT IT ANSWERS. "Insufficient funds" on a refund has two completely different causes and they look
+# identical from the admin console:
+#
+#   (a) THE CHECKOUT IS WRONG. POST /checkout mints a fresh Yoco checkout on every call, so an order
+#       the member abandoned once and paid on the retry carries several ch_ ids. Refund used to aim at
+#       the OLDEST — a checkout Yoco never collected against — and Yoco calls that insufficient funds.
+#       Fixed 2026-07-28 (reconcile.paid_checkout_id_for_order); an order listed here with >1 checkout
+#       was exposed to it.
+#
+#   (b) THE YOCO BALANCE IS EMPTY. Yoco funds refunds from your Yoco BALANCE, not your bank. If the
+#       money already settled out and you've taken little since, Yoco declines — and no code change
+#       helps. Refund by EFT and record it against the order instead.
+#
+# One checkout on the order → it's (b). Several → it was (a), and the fix now targets the right one.
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+
+def _load_env_local():
+    f = Path(__file__).resolve().parent.parent / ".env.local"
+    if not f.exists():
+        print("!! .env.local not found — create it in the repo root with ONE line:\n"
+              "     DATABASE_URL=postgresql://<user>:<pass>@<host>.frankfurt-postgres.render.com/<db>\n"
+              "   Use the EXTERNAL connection string from the Render dashboard (the DATABASE_URL on\n"
+              "   the service itself is the INTERNAL Frankfurt URL and won't resolve from your laptop).\n"
+              "   .env.local is gitignored and this script never prints its contents.")
+        sys.exit(2)
+    for line in f.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    if not os.environ.get("DATABASE_URL"):
+        print("!! .env.local has no DATABASE_URL line")
+        sys.exit(2)
+
+
+def _money(minor, cur="ZAR"):
+    return f"{cur} {(minor or 0) / 100:,.2f}"
+
+
+def main():
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    ap = argparse.ArgumentParser(description="Read-only Yoco refund diagnosis.")
+    ap.add_argument("order_id", nargs="?", help="the order to inspect")
+    ap.add_argument("--recent", type=int, default=0, help="list the N most recent online orders")
+    args = ap.parse_args()
+
+    _load_env_local()
+    from sqlalchemy import text
+    from db import get_engine
+    from sqlalchemy.orm import Session
+
+    s = Session(get_engine())
+    try:
+        who = s.execute(text("SELECT current_database()")).scalar()
+        print(f"connected to: {who}\n")
+
+        if args.order_id:
+            o = s.execute(
+                text('SELECT id, status, amount_minor, currency_code, settlement_mode, created_at '
+                     'FROM billing."order" WHERE id = CAST(:o AS uuid)'),
+                {"o": args.order_id},
+            ).mappings().first()
+            if not o:
+                print("No such order.")
+                return 1
+            print(f"ORDER {o['id']}")
+            print(f"  {o['status']}  {_money(o['amount_minor'], o['currency_code'])}  "
+                  f"{o['settlement_mode']}  created {o['created_at']:%Y-%m-%d %H:%M}")
+
+            att = s.execute(
+                text("SELECT intent_id, status, created_at FROM billing.payment_attempt "
+                     "WHERE order_id = CAST(:o AS uuid) AND provider = 'yoco' "
+                     "  AND intent_id IS NOT NULL "
+                     "ORDER BY created_at DESC, id DESC"),
+                {"o": args.order_id},
+            ).mappings().all()
+            print(f"\n  Yoco checkouts: {len(att)}")
+            for i, a in enumerate(att):
+                tag = "  <- newest (the one a refund now targets)" if i == 0 else ""
+                print(f"    {a['created_at']:%Y-%m-%d %H:%M}  {a['intent_id']}  [{a['status']}]{tag}")
+
+            pays = s.execute(
+                text("SELECT provider, provider_payment_id, direction, status, amount_minor, "
+                     "       currency_code, created_at "
+                     "FROM billing.payment WHERE order_id = CAST(:o AS uuid) "
+                     "ORDER BY created_at"),
+                {"o": args.order_id},
+            ).mappings().all()
+            print(f"\n  Payments recorded: {len(pays)}")
+            for p in pays:
+                print(f"    {p['created_at']:%Y-%m-%d %H:%M}  {p['provider']:<12} {p['direction']:<7} "
+                      f"{p['status']:<10} {_money(p['amount_minor'], p['currency_code'])}  "
+                      f"{p['provider_payment_id'] or ''}")
+
+            print("\n  VERDICT:")
+            if len(att) > 1:
+                print("    This order has MORE THAN ONE Yoco checkout, so the refund was aiming at the")
+                print("    wrong one (the oldest). That is the bug fixed on 2026-07-28 — retry the")
+                print("    refund now; it will target the checkout that actually holds the money.")
+            elif len(att) == 1:
+                print("    Only ONE checkout on this order, so the refund was already aiming correctly.")
+                print("    'Insufficient funds' here is Yoco's own answer: refunds draw on your YOCO")
+                print("    BALANCE, not your bank. If this payment already settled out, top up / wait")
+                print("    for takings, or refund by EFT and record it against the order instead.")
+            else:
+                print("    NO Yoco checkout recorded for this order — it was not paid online, so there")
+                print("    is nothing for Yoco to refund. Settle it off-platform and record that.")
+            return 0
+
+        # No order given: surface the orders that were exposed to the wrong-checkout bug.
+        rows = s.execute(
+            text('SELECT o.id, o.status, o.amount_minor, o.currency_code, o.created_at, '
+                 '       COUNT(pa.id) AS n '
+                 'FROM billing."order" o '
+                 'JOIN billing.payment_attempt pa ON pa.order_id = o.id AND pa.provider = \'yoco\' '
+                 '  AND pa.intent_id IS NOT NULL '
+                 'GROUP BY o.id, o.status, o.amount_minor, o.currency_code, o.created_at '
+                 'HAVING COUNT(pa.id) > 1 '
+                 'ORDER BY o.created_at DESC LIMIT 50'),
+        ).mappings().all()
+        print(f"Orders with MORE THAN ONE Yoco checkout (exposed to the wrong-checkout bug): {len(rows)}")
+        for r in rows:
+            print(f"  {r['created_at']:%Y-%m-%d}  {r['id']}  {r['status']:<10} "
+                  f"{_money(r['amount_minor'], r['currency_code']):>14}  {r['n']} checkouts")
+        if not rows:
+            print("  none — every online order has exactly one checkout.")
+
+        if args.recent:
+            print(f"\nMost recent {args.recent} online orders:")
+            recent = s.execute(
+                text('SELECT o.id, o.status, o.amount_minor, o.currency_code, o.created_at, '
+                     '       (SELECT COUNT(*) FROM billing.payment_attempt pa '
+                     '         WHERE pa.order_id = o.id AND pa.provider = \'yoco\' '
+                     '           AND pa.intent_id IS NOT NULL) AS n '
+                     'FROM billing."order" o WHERE o.settlement_mode = \'online\' '
+                     'ORDER BY o.created_at DESC LIMIT :n'),
+                {"n": args.recent},
+            ).mappings().all()
+            for r in recent:
+                print(f"  {r['created_at']:%Y-%m-%d}  {r['id']}  {r['status']:<10} "
+                      f"{_money(r['amount_minor'], r['currency_code']):>14}  {r['n']} checkout(s)")
+        return 0
+    finally:
+        s.rollback()      # nothing was written; this just closes cleanly
+        s.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
