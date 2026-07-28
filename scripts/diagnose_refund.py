@@ -139,6 +139,39 @@ def main():
                       f"{p['status']:<10} {_money(p['amount_minor'], p['currency_code'])}  "
                       f"{p['provider_payment_id'] or ''}")
 
+            # WAS IT PAID VIA A 'PAY ALL' WRAPPER? Then the Yoco payment lives on the WRAPPER order and
+            # this child was marked paid without a payment row of its own — so the money is genuinely
+            # at Yoco while this order looks card-less. Chased both ways: the child's own back-reference
+            # (mutable — _reclaim_abandoned_settlements NULLs it) and the wrapper's immutable snapshot.
+            wrapper = s.execute(
+                text('SELECT w.id, w.status, w.amount_minor, w.currency_code '
+                     'FROM billing."order" w '
+                     'WHERE w.id = (SELECT settled_by_order_id FROM billing."order" '
+                     '               WHERE id = CAST(:o AS uuid)) '
+                     '   OR CAST(:o AS uuid) = ANY(COALESCE(w.covered_order_ids, ARRAY[]::uuid[]))'),
+                {"o": args.order_id},
+            ).mappings().first()
+            if wrapper:
+                print(f"\n  SETTLED BY A 'PAY ALL' WRAPPER: {wrapper['id']}")
+                print(f"    {wrapper['status']}  {_money(wrapper['amount_minor'], wrapper['currency_code'])}")
+                wp = s.execute(
+                    text("SELECT provider, direction, status, amount_minor, currency_code "
+                         "FROM billing.payment WHERE order_id = :o ORDER BY created_at"),
+                    {"o": str(wrapper["id"])},
+                ).mappings().all()
+                for x in wp:
+                    print(f"      payment: {x['provider']} {x['direction']} {x['status']} "
+                          f"{_money(x['amount_minor'], x['currency_code'])}")
+                wa = s.execute(
+                    text("SELECT COUNT(*) FROM billing.payment_attempt WHERE order_id = :o "
+                         "AND provider = 'yoco' AND intent_id IS NOT NULL"),
+                    {"o": str(wrapper["id"])},
+                ).scalar()
+                print(f"      yoco checkouts on the wrapper: {wa}")
+                print("    → the card payment is on the WRAPPER, not this order. Refund the wrapper")
+                print("      (it covers several debts, so a part-refund can't be split per child —")
+                print("      see 'Pay all' in CLAUDE.md), or refund in the Yoco dashboard and record it.")
+
             # The decisive question is not "is there a checkout" but "did a CARD payment succeed".
             yoco_ok = sum(int(p["amount_minor"] or 0) for p in pays
                           if p["provider"] == "yoco" and p["direction"] == "charge"
@@ -148,7 +181,12 @@ def main():
                             and p["provider"] != "yoco"})
 
             print("\n  VERDICT:")
-            if not yoco_ok:
+            if not yoco_ok and wrapper:
+                print("    The card payment for this lesson is on the 'Pay all' WRAPPER above, not on")
+                print("    this order — which is why a refund aimed here finds an empty checkout and")
+                print("    Yoco answers 'insufficient funds' (about THAT checkout, not your balance).")
+                print("    The money IS at Yoco; it is just filed against the wrapper.")
+            elif not yoco_ok:
                 if other:
                     print(f"    NO successful CARD payment — this order was settled by {', '.join(other)}.")
                     print("    A payment_attempt row is written the moment someone taps 'Pay online',")
