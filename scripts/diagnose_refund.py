@@ -59,6 +59,7 @@ def main():
         pass
     ap = argparse.ArgumentParser(description="Read-only Yoco refund diagnosis.")
     ap.add_argument("order_id", nargs="?", help="the order to inspect")
+    ap.add_argument("--client", help="find a client's orders by name or email (no uuid needed)")
     ap.add_argument("--recent", type=int, default=0, help="list the N most recent online orders")
     args = ap.parse_args()
 
@@ -71,6 +72,34 @@ def main():
     try:
         who = s.execute(text("SELECT current_database()")).scalar()
         print(f"connected to: {who}\n")
+
+        # Find the order by CLIENT rather than uuid — you know the name and the amount, not the id.
+        if args.client:
+            rows = s.execute(
+                text('SELECT o.id, o.status, o.amount_minor, o.currency_code, o.settlement_mode, '
+                     '       o.created_at, '
+                     '       COALESCE(NULLIF(TRIM(CONCAT_WS(\' \', u.first_name, u.surname)),\'\'), '
+                     '                u.email) AS who, '
+                     '       (SELECT COUNT(*) FROM billing.payment_attempt pa '
+                     '         WHERE pa.order_id = o.id AND pa.provider = \'yoco\' '
+                     '           AND pa.intent_id IS NOT NULL) AS n_checkouts '
+                     'FROM billing."order" o JOIN iam."user" u ON u.id = o.user_id '
+                     'WHERE u.first_name ILIKE :q OR u.surname ILIKE :q OR u.email ILIKE :q '
+                     'ORDER BY o.created_at DESC LIMIT 40'),
+                {"q": f"%{args.client}%"},
+            ).mappings().all()
+            if not rows:
+                print(f"No client matching '{args.client}'.")
+                return 1
+            print(f"Orders for '{args.client}':\n")
+            for r in rows:
+                print(f"  {r['created_at']:%Y-%m-%d}  {_money(r['amount_minor'], r['currency_code']):>13}  "
+                      f"{r['status']:<10} {(r['settlement_mode'] or ''):<16} "
+                      f"{r['n_checkouts']} checkout(s)  {r['who']}")
+                print(f"      {r['id']}")
+            print("\nRe-run with the order id above for the full picture + verdict:")
+            print(f"  python -m scripts.diagnose_refund {rows[0]['id']}")
+            return 0
 
         if args.order_id:
             o = s.execute(
