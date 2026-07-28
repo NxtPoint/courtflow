@@ -1743,14 +1743,24 @@ def sc_class_commission_parity(s, fx):
     check("re-running accrual does NOT double-count the class", cnt_after1 == cnt_after2,
           f"{cnt_after1}->{cnt_after2}")
 
-    # (2) Collecting the OWED class → arrears_commission accrues to the coach (70% of R120 = R84).
+    # (2) Collecting the OWED class OFF-PLATFORM. Arrears is off-platform by definition — the coach
+    # chased the money into their OWN account — so the club is now owed its commission: the ledger
+    # moves by −owner_cut (R36 of R120 at 30%), NOT +coach_net.
+    #
+    # This assertion used to expect +R84 (the coach's net), which is the entry for money the CLUB
+    # took. Posting it here credited a coach who was actually holding the club's cash: wrong by the
+    # full R120, in the wrong direction, on every off-platform lesson — and it surfaced as "Coach
+    # payouts due" telling the owner to pay someone who owed them. See _write_split_pair's
+    # cash_held_by.
     aid = s.execute(text("SELECT id FROM billing.coach_arrears WHERE club_id=:c AND enrolment_id=:e"),
                     {"c": fx.club_id, "e": str(ro["enrolment"]["id"])}).scalar()
     res_col = CM.mark_arrears_collected(s, club_id=fx.club_id, arrears_id=aid)
     bal_after_collect = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
-    check("collecting the owed class accrues commission (coach +R84 net)",
-          res_col.get("status") == "collected" and (bal_after_collect - bal0) == 8400,
+    check("collecting off-platform makes the COACH owe the club its cut (−R36, not +R84)",
+          res_col.get("status") == "collected" and (bal_after_collect - bal0) == -3600,
           f"{bal0}->{bal_after_collect} res={res_col}")
+    check("…and it reports which way the money went", res_col.get("cash_held_by") == "coach",
+          str(res_col.get("cash_held_by")))
 
     # (3) PAID (desk) class enrolment → class_commission credits the coach (another +R84).
     csPaid = mk_class_session("Cardio Paid", 10)
@@ -3211,6 +3221,79 @@ def sc_promo_bonus_grants(s, fx):
           w3["minutes_total"] == 720 and w3["minutes_remaining"] == 720, str(dict(w3)))
 
 
+def sc_ledger_direction_follows_who_holds_the_cash(s, fx):
+    """THE ledger invariant: which way a collection moves the club↔coach balance depends entirely on
+    who ended up holding the money — and it used to ignore that completely.
+
+    billing.coach_ledger is signed: + = the club owes the coach, − = the coach owes the club (the rent
+    entry is deliberately negative). A `commission_earning` of +coach_net is correct ONLY when the club
+    took the gross and is holding it. But `mark_arrears_collected` — off-platform by definition, the
+    coach chased the EFT into their own account — posted the SAME +coach_net. The coach already had
+    the full gross, so the club was owed its commission and the ledger said the opposite: wrong by the
+    whole gross, every time, and it surfaced as "Coach payouts due" telling the owner to pay a coach
+    who was in fact holding the club's money.
+
+    Same lesson, same price, same commission — only the collector differs, and the balances must be
+    mirror images."""
+    print("\n# Ledger direction follows WHO HOLDS THE CASH (club collected vs coach collected)")
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "active) VALUES (:c,'club',20,true) ON CONFLICT DO NOTHING"),
+              {"c": fx.club_id})
+
+    def _fresh_lesson(hour):
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                             booking_type="lesson", resource_id=fx.coach_res,
+                             coach_user_id=fx.coach_uid, starts_at=iso(at(fx, hour)),
+                             ends_at=iso(at(fx, hour + 1)), settlement_mode="at_court")
+        return r["booking"]["order_id"], _line_of(s, r["booking"]["order_id"])
+
+    # ---- (A) the CLUB collects it (desk payment) — the club holds the gross, so it owes the coach.
+    base = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    oid_a, ol_a = _fresh_lesson(9)
+    gross = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                      {"o": oid_a}).scalar()
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=oid_a, amount_minor=gross,
+                          provider="cash")
+    club_delta = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) - base
+    check("club collected → the club OWES the coach their net (+80% of R400)",
+          club_delta == 32000, f"delta={club_delta}")
+
+    # ---- (B) the COACH collects it off-platform — the coach holds the gross, so they owe the cut.
+    base_b = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    oid_b, ol_b = _fresh_lesson(13)
+    _seed_owed_arrears(s, fx, ol_b, gross=gross)
+    aid = s.execute(text("SELECT id FROM billing.coach_arrears WHERE order_line_id=:ol"),
+                    {"ol": ol_b}).scalar()
+    res = CM.mark_arrears_collected(s, club_id=fx.club_id, arrears_id=aid)
+    coach_delta = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) - base_b
+    check("coach collected → the COACH OWES the club its commission (−20% of R400)",
+          coach_delta == -8000, f"delta={coach_delta} res={res}")
+    check("…the two directions are NOT the same entry", club_delta != coach_delta)
+    check("…and the coach-collected entry is typed 'commission_due'",
+          s.execute(text("SELECT entry_type FROM billing.coach_ledger WHERE club_id=:c "
+                         "AND coach_user_id=:u ORDER BY id DESC LIMIT 1"),
+                    {"c": fx.club_id, "u": fx.coach_uid}).scalar() == "commission_due")
+
+    # The SPLIT is identical either way — the sale was divided the same, whoever held the cash. Only
+    # the running balance differs, so commission REPORTING (the Money P&L) is untouched by this.
+    splits = s.execute(text("SELECT COUNT(*) FROM billing.commission_split WHERE club_id=:c "
+                            "AND order_line_id IN (:a,:b) AND party_type='owner'"),
+                       {"c": fx.club_id, "a": ol_a, "b": ol_b}).scalar()
+    check("both collections still record the SAME owner split (reporting unchanged)", splits == 2,
+          str(splits))
+    owner_cuts = s.execute(text("SELECT DISTINCT amount_minor FROM billing.commission_split "
+                                "WHERE club_id=:c AND order_line_id IN (:a,:b) AND party_type='owner'"),
+                           {"c": fx.club_id, "a": ol_a, "b": ol_b}).scalars().all()
+    check("…for the same amount (R80 each)", owner_cuts == [8000], str(owner_cuts))
+
+    # Replay guard: marking it collected again must not move the balance a second time.
+    bal_now = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    CM.mark_arrears_collected(s, club_id=fx.club_id, arrears_id=aid)
+    check("a replayed 'mark collected' does NOT double the debt",
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == bal_now,
+          "balance moved twice")
+
+
 SCENARIOS = [
     sc_service_editor_child_ownership,
     sc_removed_variation_stays_removed,
@@ -3221,6 +3304,7 @@ SCENARIOS = [
     sc_promo_eligibility,
     sc_promo_unique_codes,
     sc_promo_bonus_grants,
+    sc_ledger_direction_follows_who_holds_the_cash,
     sc_pack_autodraw_guardrail,
     sc_reconcile_activates_pack,
     sc_reconcile_guard_activates_pack,

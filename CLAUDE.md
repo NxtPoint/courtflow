@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 316 / billing 449 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 316 / billing 457 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -698,6 +698,32 @@ member by email on the first authenticated hit.
   need flipped. The trial (`grant_signup_trial`) and the Wix import stay excluded — they INSERT directly and
   never reach either path. **It must carry `email`** — that's what the Klaviyo forward keys on. Guarded by
   `sc_membership_started_emit`.
+- **THE COACH LEDGER'S DIRECTION FOLLOWS WHO HOLDS THE CASH (2026-07-28).** `billing.coach_ledger` is
+  SIGNED — **+ = the club owes the coach, − = the coach owes the club** (the rent entry is
+  deliberately negative). A `commission_earning` of `+coach_net` is correct ONLY when the club took
+  the gross and is holding it. But `mark_arrears_collected` — **off-platform by definition**
+  (docs/specs/01: the coach chases the EFT into their OWN account) — posted the SAME `+coach_net`.
+  The coach already held the full gross, so the club was owed its commission and the ledger said the
+  exact opposite: **wrong by the whole gross, every time**, surfacing as "Coach payouts due" telling
+  the owner to pay a coach who was holding the club's money. `_write_split_pair` now takes
+  **`cash_held_by`** — `'club'` → `+coach_net` as `commission_earning`; `'coach'` → **`−owner_cut` as
+  `commission_due`** (a new entry type; no read filters on `commission_earning`, balances just
+  `SUM(amount_minor)`, so it flows through everywhere). **The `commission_split` rows are IDENTICAL
+  either way** — the sale was divided the same whoever held the cash — so commission REPORTING
+  (`cockpit_coach_earnings`, the Money P&L) is untouched; only the running balance changes, which is
+  the thing that was lying. Historical rows: `scripts/fix_inverted_coach_ledger.py` (dry-run by
+  default) appends ONE correcting `adjustment` per coach rather than rewriting history, idempotent on
+  a fixed `ref_id`. Guarded by `sc_ledger_direction_follows_who_holds_the_cash`.
+- **"PAID" IS NOT "IN THE BANK" — Money → Coach statement is the split.** `order.status='paid'` merges
+  Yoco + EFT (the club's bank), cash/card at the desk (the till OR the coach, genuinely ambiguous) and
+  a coach's off-platform collection (the coach only). The last is **exactly derivable**:
+  `mark_arrears_collected` flips the order to `paid` with **no `billing.payment` row at all** (the
+  money never touched the platform), so *paid + zero succeeded charges* == the coach collected it.
+  `admin.repositories.coach_statement_report` classifies off the ORDER (not the payment rows) so the
+  custody buckets sum EXACTLY to the Money tab's `paid`, and pairs it with `payments_received` — an
+  INDEPENDENT read of `billing.payment` by landing date, which is the bank-reconciliation figure and
+  deliberately not derived from the fold (it sees money the order CTE excludes, e.g. both sides of a
+  settled 'Pay all' wrapper, and counts when cash landed, not when the sale happened).
 - **ENTITLEMENT IS EVALUATED ON THE BOOKING'S DATE, NEVER `CURRENT_DATE` (2026-07-27).**
   `membership_covers` + `entitlement.active_caps` used to test `current_period_end >= CURRENT_DATE`
   — "is this plan alive right now" — while `starts_at` only ever drove the access WINDOW. So a

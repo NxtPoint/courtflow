@@ -205,13 +205,32 @@ def record_split_for_order(session, *, club_id, order_id, payment_id, at=None) -
 
 def _write_split_pair(session, *, club_id, payment_id, order_line_id, booking_id,
                       coach_user_id, product_id, rule_id, basis, gross_minor, pct,
-                      owner_minor, coach_minor, currency, at=None) -> Dict[str, int]:
-    """Insert the owner + coach commission_split rows (idempotent) and, on a fresh coach
-    split, post the coach_ledger commission_earning (idempotent on ref_id=split.id).
+                      owner_minor, coach_minor, currency, at=None,
+                      cash_held_by="club") -> Dict[str, int]:
+    """Insert the owner + coach commission_split rows (idempotent) and, on a fresh coach split, post
+    the matching coach_ledger entry (idempotent on ref_id=split.id).
     `payment_id` may be None for arrears collection (the unique index uses NULLS NOT
-    DISTINCT so it still dedupes on order_line_id+party_type)."""
+    DISTINCT so it still dedupes on order_line_id+party_type).
+
+    `cash_held_by` decides the DIRECTION of the ledger entry, and it is the whole point:
+
+      'club'  — the club took the money (Yoco / desk / EFT / invoice). The club holds the gross and
+                owes the coach their net share  →  +coach_net as 'commission_earning'.
+      'coach' — the coach collected it themselves, off-platform (docs/specs/01: "the coach chases the
+                EFT himself"). They already hold the gross, so the club is owed its commission
+                →  −owner_cut as 'commission_due'.
+
+    Both paths used to post +coach_net. On a R400 lesson at 20% that meant the ledger read
+    "club owes the coach R320" when the truth was "the coach owes the club R80" — wrong by the full
+    R400, in the wrong direction, on every off-platform lesson. It surfaced as "Coach payouts due"
+    telling the owner to pay a coach who was in fact holding the club's money.
+
+    The commission_split rows are IDENTICAL either way — the sale was split the same, whoever held
+    the cash — so commission reporting (cockpit_coach_earnings, the Money P&L) is untouched. Only the
+    running balance changes, which is exactly the thing that was lying."""
     splits = 0
     earnings = 0
+    coach_holds = (cash_held_by == "coach")
     pairs = (("owner", owner_minor), ("coach", coach_minor))
     coach_split_id = None
     for party, amount in pairs:
@@ -240,24 +259,32 @@ def _write_split_pair(session, *, club_id, payment_id, order_line_id, booking_id
             if party == "coach":
                 coach_split_id = row["id"]
 
-    # Post the coach's earning to the signed ledger (only when a fresh coach split was written
-    # AND the coach is known). Idempotent on ref_id = the split id.
+    # Post to the signed ledger (only when a fresh coach split was written AND the coach is known).
+    # Idempotent on ref_id = the split id, per entry_type. Which entry — and which SIGN — depends on
+    # who is actually holding the cash (see the docstring).
     if coach_split_id is not None and coach_user_id is not None:
+        entry_type = "commission_due" if coach_holds else "commission_earning"
+        amount = -int(owner_minor) if coach_holds else int(coach_minor)
+        note = (f"{basis} — coach collected, club commission due" if coach_holds
+                else f"{basis} earning")
+        # The entry type is INLINED, not bound: ON CONFLICT infers its partial unique index from the
+        # predicate at plan time, so a bind parameter there matches no index and the upsert fails.
+        # Safe to interpolate — it's one of two internal literals chosen just above, never input.
         led = session.execute(
-            text("""
+            text(f"""
                 INSERT INTO billing.coach_ledger
                     (club_id, coach_user_id, entry_type, amount_minor, currency,
                      ref_type, ref_id, note, occurred_at)
-                VALUES (:club, :coach, 'commission_earning', :amount, :cur,
+                VALUES (:club, :coach, '{entry_type}', :amount, :cur,
                         'split', :ref, :note, COALESCE(:at, now()))
                 ON CONFLICT (club_id, coach_user_id, ref_id)
-                    WHERE entry_type = 'commission_earning'
+                    WHERE entry_type = '{entry_type}'
                 DO NOTHING
                 RETURNING id
             """),
             {"club": club_id, "coach": str(coach_user_id),
-             "amount": int(coach_minor), "cur": currency,
-             "ref": str(coach_split_id), "note": f"{basis} earning", "at": at},
+             "amount": amount, "cur": currency,
+             "ref": str(coach_split_id), "note": note, "at": at},
         ).mappings().first()
         if led:
             earnings += 1
@@ -551,10 +578,16 @@ def mark_arrears_collected(session, *, club_id, arrears_id, coach_user_id=None,
         order_line_id=row["order_line_id"], booking_id=row["booking_id"],
         coach_user_id=coach, product_id=product_id, rule_id=rule_id,
         basis="arrears_commission", gross_minor=gross, pct=pct,
-        owner_minor=owner_cut, coach_minor=coach_net, currency=row["currency"] or "ZAR")
+        owner_minor=owner_cut, coach_minor=coach_net, currency=row["currency"] or "ZAR",
+        # THE COACH holds this money — arrears is off-platform by definition (docs/specs/01: the coach
+        # chases the EFT into their own account). So the ledger records the club's commission as OWED
+        # BY the coach, not the coach's share as owed to them.
+        cash_held_by="coach")
     return {"ok": True, "status": "collected", "splits": wrote["splits"],
             "owner_cut_minor": owner_cut, "coach_net_minor": coach_net,
-            "commission_pct": str(pct)}
+            "commission_pct": str(pct), "cash_held_by": "coach",
+            # What this collection did to the running balance: the coach now owes the club its cut.
+            "ledger_delta_minor": -owner_cut}
 
 
 def client_service_breakdown(session, *, club_id, coach_user_id, client_user_id, month=None) -> Dict[str, Any]:

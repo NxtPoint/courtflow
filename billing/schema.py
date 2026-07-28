@@ -446,8 +446,8 @@ _DDL = [
         club_id         uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
         coach_user_id   uuid NOT NULL,
         entry_type      text NOT NULL
-                          CHECK (entry_type IN ('commission_earning','rent_charge',
-                                                'payout','adjustment')),
+                          CHECK (entry_type IN ('commission_earning','commission_due',
+                                                'rent_charge','payout','adjustment')),
         amount_minor    integer NOT NULL,                -- SIGNED: + owed TO coach, - owed BY coach
         currency        text NOT NULL DEFAULT 'ZAR',
         ref_type        text,                            -- 'split' | 'rent_period' | 'payout'
@@ -466,6 +466,33 @@ _DDL = [
     f"CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_ledger_earning "
     f"ON {SCHEMA}.coach_ledger (club_id, coach_user_id, ref_id) "
     f"WHERE entry_type = 'commission_earning';",
+
+    # 'commission_due' — the MIRROR of commission_earning, for money the COACH collected themselves.
+    # The ledger is signed (+ owed TO coach, − owed BY coach) and a commission_earning credits the coach
+    # their net share, which is right only when the CLUB took the money and is holding it. When a coach
+    # collects off-platform they already hold the FULL gross, so the club is owed its commission — a
+    # negative entry. Posting an earning there was wrong by the whole gross, in the wrong direction.
+    # Existing DBs: widen the CHECK in place (guarded so a second boot is a clean no-op).
+    f"""
+    DO $$
+    DECLARE d text;
+    BEGIN
+        SELECT pg_get_constraintdef(oid) INTO d FROM pg_constraint
+         WHERE conrelid = '{SCHEMA}.coach_ledger'::regclass
+           AND conname = 'coach_ledger_entry_type_check';
+        IF d IS NULL OR position('commission_due' in d) = 0 THEN
+            ALTER TABLE {SCHEMA}.coach_ledger
+                DROP CONSTRAINT IF EXISTS coach_ledger_entry_type_check;
+            ALTER TABLE {SCHEMA}.coach_ledger
+                ADD CONSTRAINT coach_ledger_entry_type_check
+                CHECK (entry_type IN ('commission_earning','commission_due',
+                                      'rent_charge','payout','adjustment'));
+        END IF;
+    END $$;
+    """,
+    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_ledger_due "
+    f"ON {SCHEMA}.coach_ledger (club_id, coach_user_id, ref_id) "
+    f"WHERE entry_type = 'commission_due';",
 
     # 5. coach_arrears — an unpaid (off-platform) lesson on the coach's per-client tab.
     # Created lazily from confirmed-but-unpaid lesson bookings; the coach marks it
