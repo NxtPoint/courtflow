@@ -125,17 +125,32 @@ def main():
             print(f"  {o['status']}  {_money(o['amount_minor'], o['currency_code'])}  "
                   f"{o['settlement_mode']}  created {o['created_at']:%Y-%m-%d %H:%M}")
 
-            att = s.execute(
+            # billing.payment_attempt holds TWO different things and conflating them is misleading:
+            #   · CHECKOUT intents  — ch_…, status 'created', written when the member taps Pay online
+            #   · WEBHOOK records   — p_…, status 'succeeded', written by apply_payment_event to claim
+            #                         the event hash for idempotency
+            # Only the first kind is refundable (Yoco's endpoint is /checkouts/{id}/refund; a p_ id
+            # 404s there). The resolver filters to exactly that, so count it the same way here — an
+            # earlier version of this script counted BOTH and reported "2 checkouts" for an order that
+            # has one, which points the diagnosis straight at the wrong bug.
+            rows_all = s.execute(
                 text("SELECT intent_id, status, created_at FROM billing.payment_attempt "
                      "WHERE order_id = CAST(:o AS uuid) AND provider = 'yoco' "
                      "  AND intent_id IS NOT NULL "
                      "ORDER BY created_at DESC, id DESC"),
                 {"o": args.order_id},
             ).mappings().all()
-            print(f"\n  Yoco checkouts: {len(att)}")
+            att = [a for a in rows_all
+                   if a["status"] == "created" or str(a["intent_id"]).startswith("ch_")]
+            hooks = [a for a in rows_all if a not in att]
+            print(f"\n  Yoco CHECKOUTS (refundable): {len(att)}")
             for i, a in enumerate(att):
-                tag = "  <- newest (the one a refund now targets)" if i == 0 else ""
+                tag = "  <- the one a refund targets" if i == 0 else ""
                 print(f"    {a['created_at']:%Y-%m-%d %H:%M}  {a['intent_id']}  [{a['status']}]{tag}")
+            if hooks:
+                print(f"  webhook records (NOT checkouts, not refundable): {len(hooks)}")
+                for a in hooks:
+                    print(f"    {a['created_at']:%Y-%m-%d %H:%M}  {a['intent_id']}  [{a['status']}]")
 
             pays = s.execute(
                 text("SELECT provider, provider_payment_id, direction, status, amount_minor, "
@@ -214,9 +229,17 @@ def main():
                 print("    wrong one (the oldest). That is the bug fixed on 2026-07-28 — retry the")
                 print("    refund now; it will target the checkout that actually holds the money.")
             elif len(att) == 1:
-                print("    A card payment DID succeed and there is only one checkout, so the refund was")
-                print("    already aiming correctly. If Yoco still refuses, that is its own answer about")
-                print("    your merchant balance — refunds draw on the Yoco BALANCE, not your bank.")
+                print("    A card payment DID succeed and there is exactly ONE checkout, so the refund")
+                print("    was already aiming at the right place — nothing in our request is wrong.")
+                print("    If Yoco still says 'insufficient funds', that is Yoco's own answer and no")
+                print("    code change here will move it. Refunds draw on the AVAILABLE Yoco balance:")
+                print("    today's takings may still be pending settlement, and this charge is from")
+                age = ""
+                if pays:
+                    age = f"{(max(p['created_at'] for p in pays)):%Y-%m-%d}"
+                print(f"    {age or 'an earlier date'}, so its funds have long since settled out.")
+                print("    → Refund it directly in the Yoco dashboard against the payment id above,")
+                print("      then record it here so the books match.")
             else:
                 print("    A card payment succeeded but NO checkout id was recorded, so the refund has")
                 print("    nothing to reference. Refund from the Yoco dashboard and record it here.")
