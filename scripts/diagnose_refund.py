@@ -29,12 +29,23 @@ from pathlib import Path
 
 
 def _load_env_local():
+    # ALREADY CONFIGURED? Then use it. Inside a Render shell on courtflow-api, DATABASE_URL is
+    # already in the environment (the INTERNAL Frankfurt URL, which only resolves from inside
+    # Render) — so this runs there with nothing to set up. .env.local is the LOCAL fallback.
+    if os.environ.get("DATABASE_URL"):
+        return
     f = Path(__file__).resolve().parent.parent / ".env.local"
     if not f.exists():
-        print("!! .env.local not found — create it in the repo root with ONE line:\n"
+        print("!! No DATABASE_URL in the environment and no .env.local.\n"
+              "\n"
+              "   EASIEST — run this in a Render shell on the courtflow-api service:\n"
+              "     DATABASE_URL is already set there, so just run the command as-is.\n"
+              "\n"
+              "   FROM YOUR LAPTOP — create .env.local in the repo root with ONE line:\n"
               "     DATABASE_URL=postgresql://<user>:<pass>@<host>.frankfurt-postgres.render.com/<db>\n"
-              "   Use the EXTERNAL connection string from the Render dashboard (the DATABASE_URL on\n"
-              "   the service itself is the INTERNAL Frankfurt URL and won't resolve from your laptop).\n"
+              "   Use the EXTERNAL connection string from the Render dashboard (Postgres → Connect →\n"
+              "   External). The DATABASE_URL on the SERVICE is the internal Frankfurt address and\n"
+              "   will not resolve from outside Render.\n"
               "   .env.local is gitignored and this script never prints its contents.")
         sys.exit(2)
     for line in f.read_text(encoding="utf-8").splitlines():
