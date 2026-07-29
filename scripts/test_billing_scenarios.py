@@ -3605,6 +3605,61 @@ def sc_partial_refund_reaches_yoco_as_a_partial(s, fx):
               int(rq["amount_minor"]) == total, str(rq["amount_minor"]))
 
 
+def sc_signup_trial_is_a_tier_level_flag(s, fx):
+    """The signup trial is a property of a TIER, and a tier is several PRICES (one per term).
+
+    Exclusivity used to clear every other PRICE, so saving a 3-term tier — which the editor does by
+    PATCHing each term in turn — had each save clear the siblings the previous ones had just set.
+    Only the LAST term kept the flag. The trial still worked (grant_signup_trial finds any flagged
+    row), but the editor reads the FIRST term, so re-opening showed "Signup trial" OFF: the owner
+    ticks it, saves, and it looks unset again, forever.
+
+    Both halves matter — siblings must be KEPT, and another tier must still be able to take over."""
+    print("\n# The signup trial is a TIER-level flag (all its terms keep it; another tier steals it)")
+    from admin import repositories as AR
+    from billing.membership import grant_signup_trial
+
+    def _terms(tier):
+        return [r for r in s.execute(
+            text("SELECT p.id, p.term_months, p.is_trial, p.membership_tier FROM billing.price p "
+                 "JOIN billing.product pr ON pr.id = p.product_id "
+                 "WHERE pr.club_id = :c AND pr.kind = 'membership' AND p.membership_tier = :t "
+                 "ORDER BY p.term_months"), {"c": fx.club_id, "t": tier}).mappings().all()]
+
+    adult = [AR.create_membership_plan(s, club_id=fx.club_id, tier="Adult", term_months=mo,
+                                       amount_minor=amt, label=None, is_trial=False)["price_id"]
+             for mo, amt in ((1, 18000), (3, 50000), (12, 180000))]
+    # The editor saves a tier by PATCHing EVERY term — that is what used to undo itself.
+    for pid in adult:
+        AR.patch_membership_plan(s, club_id=fx.club_id, price_id=pid, set_trial=True,
+                                 is_trial=True, trial_days=7)
+    rows = _terms("Adult")
+    check("every term of the trial tier keeps the flag",
+          len(rows) == 3 and all(r["is_trial"] for r in rows),
+          str([(r["term_months"], r["is_trial"]) for r in rows]))
+    check("…so the editor (which reads the FIRST term) shows the toggle ON",
+          rows[0]["is_trial"] is True)
+
+    # A brand-new member gets THAT tier's trial, at ITS configured length.
+    newu = _mk_user(s, f"tiertrial+{str(fx.club_id)[:8]}@scratch.test", "New")
+    g = grant_signup_trial(s, club_id=fx.club_id, user_id=newu, days=99)
+    sub = s.execute(text("SELECT price_id, (current_period_end - CURRENT_DATE) AS d "
+                         "FROM billing.membership_subscription WHERE club_id=:c AND user_id=:u"),
+                    {"c": fx.club_id, "u": newu}).mappings().first()
+    check("the trial LINKS the configured tier", g.get("granted") and sub["price_id"] is not None)
+    check("…for the tier's 7 days, not the caller's 99", int(sub["d"]) == 7, str(sub["d"]))
+
+    # Flagging ANOTHER tier must still take it over completely — exclusivity is the whole point.
+    student = AR.create_membership_plan(s, club_id=fx.club_id, tier="Student", term_months=1,
+                                        amount_minor=9000, label=None, is_trial=True,
+                                        trial_days=14)["price_id"]
+    check("the new tier is the trial",
+          s.execute(text("SELECT is_trial FROM billing.price WHERE id=:p"), {"p": student}).scalar() is True)
+    check("…and EVERY term of the old tier lost it (only one trial tier)",
+          not any(r["is_trial"] for r in _terms("Adult")),
+          str([(r["term_months"], r["is_trial"]) for r in _terms("Adult")]))
+
+
 def sc_plan_reports_the_cap_the_server_will_enforce(s, fx):
     """SHOWN MUST EQUAL CHARGED. The booking UI hides over-cap durations using
     `/api/me/plan.max_covered_minutes`, and the server decides whether to charge using
@@ -3733,6 +3788,7 @@ SCENARIOS = [
     sc_promo_unique_codes,
     sc_promo_bonus_grants,
     sc_ledger_direction_follows_who_holds_the_cash,
+    sc_signup_trial_is_a_tier_level_flag,
     sc_plan_reports_the_cap_the_server_will_enforce,
     sc_refund_finds_the_checkout_that_holds_the_money,
     sc_refund_refuses_an_order_never_paid_by_card,

@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 349 / billing 486 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 349 / billing 492 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -735,6 +735,16 @@ member by email on the first authenticated hit.
   while the booking charges the court's. Edited at Setup → Courts & hours → a court → "Peak hours
   for this court". Guarded by `sc_peak_hours_can_differ_per_court` (asserts shown == charged for all
   three states).
+- **THE SIGNUP TRIAL IS A TIER-LEVEL FLAG, AND A TIER IS SEVERAL PRICES.** `billing.price.is_trial` /
+  `trial_days` mark the tier a brand-new member is granted (Setup → Memberships → a tier → **"Signup
+  trial"**); `grant_signup_trial` prefers it and uses its `trial_days`, and `membership_plans`
+  excludes it from sale. Exclusivity (`_make_sole_trial`) clears **OTHER TIERS, never sibling
+  TERMS** — a tier is one price per term (1/3/12 months) and the editor saves it by PATCHing each
+  term in turn, so clearing by `p.id <> :pid` had every save undo the previous ones and only the
+  LAST term kept the flag. The trial still worked (the grant finds any flagged row) but the editor
+  reads the FIRST term, so re-opening showed the toggle OFF — tick, save, still off, forever. Tiers
+  are matched by `membership_tier` (`IS DISTINCT FROM`, so NULL-tier legacy rows group together).
+  Guarded by `sc_signup_trial_is_a_tier_level_flag`.
 - **THE TRIAL IS A MEMBERSHIP — it has no separate court rules.** `provider='trial'` goes through the
   SAME resolver as a paid tier: the court service's **`members_covered`** flag, the duration/day caps
   and the access window all apply identically. So "is clay in the free trial?" is answered by ONE

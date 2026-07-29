@@ -960,11 +960,24 @@ def create_membership_plan(session, *, club_id, label, amount_minor, term_months
 
 
 def _make_sole_trial(session, *, club_id, price_id):
-    """Only ONE tier can be the signup trial — clear is_trial on every OTHER membership price of this club."""
+    """Only ONE TIER can be the signup trial — clear is_trial on every OTHER TIER of this club.
+
+    SIBLING TERMS OF THE SAME TIER ARE KEPT. This used to clear every other PRICE (`p.id <> :pid`),
+    and a tier is several prices — one per term (1 / 3 / 12 months). The editor saves a tier by
+    PATCHing each term in turn, so each save cleared the siblings the previous ones had just set and
+    only the LAST term kept the flag. The trial still worked (grant_signup_trial finds any flagged
+    row), but the editor reads the FIRST term, so re-opening the tier showed the "Signup trial"
+    toggle OFF — the owner ticks it, saves, and it looks unset again. The trial is a property of the
+    TIER, so exclusivity belongs at tier level.
+
+    Tiers are matched by `membership_tier`; IS DISTINCT FROM keeps NULL-tier legacy rows grouped
+    together rather than treating every NULL as its own tier."""
     session.execute(
         text("UPDATE billing.price p SET is_trial = false, updated_at = now() "
              "FROM billing.product pr WHERE p.product_id = pr.id AND pr.club_id = :c "
-             "  AND pr.kind = 'membership' AND p.id <> :pid AND p.is_trial = true"),
+             "  AND pr.kind = 'membership' AND p.is_trial = true "
+             "  AND p.membership_tier IS DISTINCT FROM "
+             "      (SELECT membership_tier FROM billing.price WHERE id = :pid)"),
         {"c": club_id, "pid": price_id},
     )
 
