@@ -76,9 +76,15 @@ def main():
     accepted = cancelled = left = failed = 0
 
     with session_scope() as s:
+        # SAY WHICH DATABASE. "Nothing pending" reads identically against production and against an
+        # empty local sandbox — and this one's answer decides whether it is safe to delete the
+        # approval path. A migration that can be misread as done is worse than one that fails.
+        who = s.execute(text("SELECT current_database()")).scalar()
         rows = _pending(s, club_id=args.club)
+        print(f"connected to: {who}\n")
         if not rows:
-            print("No pending lesson requests — the approval path can be deleted.")
+            print("No pending lesson requests.")
+            print(f"If '{who}' is the PRODUCTION database, the approval path can be deleted.")
             return 0
         print(f"{'COMMIT' if args.commit else 'DRY RUN'} — {len(rows)} pending lesson request(s)\n")
 
