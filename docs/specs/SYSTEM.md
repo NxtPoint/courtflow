@@ -233,7 +233,8 @@ guarded no-op when the order is settled, a real charge has succeeded, it's an R0
   whoever holds the cash), so **reporting is unaffected — only the running balance**. Decision + the custody
   table: [01-commission-and-coaching-decisions.md](01-commission-and-coaching-decisions.md) §D6.
 - **"PAID" IS NOT "IN THE BANK".** `admin.repositories.coach_statement_report` splits `paid` by **custody**
-  (`bank_yoco` / `bank_eft` / `desk_card` / `desk_cash` / `coach_offplatform` / `unpaid`), classifying off
+  (`bank_yoco` / `bank_eft` = the club, the ONLY two ways it can receive; `desk_card` / `desk_cash` /
+  `coach_offplatform` = the coach; `unpaid`), classifying off
   the ORDER so the buckets sum EXACTLY to the Money tab's `paid` — a coach's off-platform collection is
   *exactly derivable* because `mark_arrears_collected` flips the order to `paid` with **no `billing.payment`
   row at all**. It is paired with `payments_received`, an INDEPENDENT read of `billing.payment` by landing

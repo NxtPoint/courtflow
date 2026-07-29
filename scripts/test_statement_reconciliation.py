@@ -107,10 +107,26 @@ def owed(s, fx):
     return S.statement(s, club_id=fx.club_id, user_id=fx.member)
 
 
-def coach_earnings(s, fx):
-    return int(s.execute(text("SELECT COALESCE(SUM(amount_minor),0) FROM billing.coach_ledger "
-                              "WHERE club_id=:c AND coach_user_id=:u AND entry_type='commission_earning'"),
-                         {"c": fx.club_id, "u": fx.coach_uid}).scalar() or 0)
+def coach_commission_accrued(s, fx):
+    """HOW MANY commission splits this coach has — i.e. did commission accrue, and exactly once.
+
+    A COUNT, not a sum, and deliberately not a `coach_ledger` filter any more. Two reasons:
+      · the ledger ENTRY TYPE now depends on who held the cash (club-held posts `+coach_net` as
+        `commission_earning`, coach-held posts `-owner_cut` as `commission_due`), so filtering on one
+        type reads ZERO for a perfectly correct collection;
+      · this fixture configures NO commission rule, so the rate is 0% and every amount is zero. The
+        old helper only read non-zero because at 0% the coach's net IS the gross — it was measuring
+        "a split exists" by accident.
+    What these scenarios actually assert is that commission accrued once and did not double, which is
+    a count of rows and is true at any rate, in either direction."""
+    return int(s.execute(
+        text("SELECT COUNT(*) FROM billing.commission_split "
+             "WHERE club_id=:c AND coach_user_id=:u AND party_type='coach'"),
+        {"c": fx.club_id, "u": fx.coach_uid}).scalar() or 0)
+
+
+# Kept as the old name so the scenarios below read unchanged.
+coach_earnings = coach_commission_accrued
 
 
 def sc_no_double_count(s, fx):
@@ -149,12 +165,12 @@ def sc_pay_all(s, fx):
     after = owed(s, fx)
     check("after paying, balance is ZERO", after["total_owed_minor"] == 0 and after["count"] == 0, str(after))
     earn1 = coach_earnings(s, fx)
-    check("coach earned commission on the settled lesson (>0)", earn1 > 0, str(earn1))
+    check("a commission split was accrued for the settled lesson", earn1 > 0, str(earn1))
     # Replay the SAME settlement payment → no re-charge, no double split.
     O.record_desk_payment(s, club_id=fx.club_id, order_id=so["order_id"], amount_minor=so["amount_minor"],
                           provider="card_at_desk", provider_payment_id="SETTLE-1", user_id=fx.member)
     check("balance still ZERO after replay", owed(s, fx)["total_owed_minor"] == 0)
-    check("coach earnings unchanged after replay", coach_earnings(s, fx) == earn1, str(coach_earnings(s, fx)))
+    check("commission unchanged after replay", coach_earnings(s, fx) == earn1, str(coach_earnings(s, fx)))
 
 
 def _fresh_court(s, fx, name):

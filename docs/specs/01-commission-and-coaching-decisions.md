@@ -94,26 +94,42 @@ live — until then shareable/printable.)
 ### D6 — WHO HOLDS THE CASH decides the ledger's direction
 `billing.coach_ledger` is **SIGNED: + = the club owes the coach, − = the coach owes the club.**
 
+**THE CLUB CAN ONLY RECEIVE TWO WAYS: Yoco, or an EFT into its account.** It has no facility for
+taking money on a coach's behalf, so anything else recorded against a COACHING order is cash the coach
+took from the client directly.
+
 | How the money arrived | Who physically holds it | Ledger entry |
 |---|---|---|
 | Yoco online checkout / invoice pay-link | **Club** | `+coach_net` (`commission_earning`) |
-| EFT or cash recorded at the desk | **Club** | `+coach_net` |
-| Coach collects courtside / off-platform | **Coach** | `−owner_cut` (`commission_due`) |
+| EFT into the club's account | **Club** | `+coach_net` |
+| **Cash or card taken at the court** | **Coach** | `−owner_cut` (`commission_due`) |
+| Coach marks an arrears line collected | **Coach** | `−owner_cut` |
 | Monthly account → month-end invoice → Yoco/EFT | **Club** | `+coach_net` when it lands |
+
+One rule, one function: **`billing.commission.cash_custody_for(provider)`** — `'club'` for
+`yoco`/`eft`, `'coach'` for everything else *including no provider at all*. It is read by
+`record_split_for_order` (the ledger direction), `coach_settlement` (the statement) and
+`coach_sessions_by_day` (the work log), so the three can never disagree.
 
 **Owner's words:** *"paid online, goes to club. eft is club. pay at court means paid to coach directly —
 they received the funds, we get the comm, but don't need to refund them anything. paid at end of month
 assumes the club will get the funds either through the invoice process or paid eft after the fact."*
 
-**As built, the direction follows WHO RECORDED THE PAYMENT, not what the booking said** — which is
-deliberately more precise than the flat rule, and needs no policy enforcement to stay true:
-- `POST /api/billing/desk-payment` is **`club_admin`-only** (`take_pay_at_court`). A coach physically
-  cannot record a desk payment.
-- A coach's only collection verb is **"Mark collected"** (`mark_arrears_collected`) — the off-platform
-  path, which posts `−owner_cut`.
-- So an `at_court` lesson is **not** automatically coach-held. If the client pays at reception, or settles
-  the month-end invoice, the **club** holds it and the coach is owed his net. The club can take a lesson
-  payment at the desk without the ledger going wrong.
+**The direction follows the PROVIDER, because that is the only thing factually known.** A Yoco charge
+and an EFT demonstrably landed in the club's account; cash or a card taken at the court did not land
+anywhere the club can see. `recorded_by_user_id` cannot decide it — `POST /api/billing/desk-payment`
+is `club_admin`-only, so *every* desk payment is admin-recorded whoever actually took the note.
+- An `at_court` lesson is therefore **not** club-held just because an admin recorded the payment.
+  Cash is the coach's; only Yoco/EFT is the club's.
+- A coach's own verb, **"Mark collected"** (`mark_arrears_collected`), writes no `billing.payment`
+  row at all, and reaches the same coach-held answer through the same rule.
+- **CORRECTED 2026-07-29 (same day).** The first cut of D6 read "EFT **or cash** recorded at the desk"
+  as club-held, assuming a front desk that takes coaching money. NextPoint has no such facility.
+  `record_split_for_order` had hard-coded `cash_held_by='club'` for every payment path, so a lesson
+  settled in cash at the court booked the coach's net as owed TO him while he stood there holding the
+  money — wrong by the whole gross, the identical shape to the off-platform inversion. Repair
+  historical rows with **`scripts/fix_desk_cash_coach_ledger.py`** (dry-run by default, idempotent,
+  appends a correcting adjustment rather than rewriting history).
 
 **What must be enforced with coaches is behavioural, not financial:** mark the collection promptly, or the
 club's commission on that cash stays invisible.

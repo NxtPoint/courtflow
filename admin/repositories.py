@@ -2587,11 +2587,16 @@ def revenue_club_overview(session, *, club_id, month=None):
 # This reader classifies but does NOT decide: desk cash is reported as ambiguous rather than guessed,
 # because the owner's own answer is "it could go either way".
 
+# THE CLUB CAN ONLY RECEIVE TWO WAYS — Yoco and EFT (owner rule, 2026-07-29). Anything else marked
+# paid on a COACHING order is money the coach took from the client directly; the club has no facility
+# for collecting on a coach's behalf. So `bank` is not a nuance here, it is the whole classification,
+# and the labels must not imply a front-desk till that takes coaching money. One rule, shared with the
+# ledger: billing.commission.cash_custody_for().
 _CUSTODY = {
     "bank_yoco":         {"label": "Yoco → your bank",        "bank": True},
     "bank_eft":          {"label": "EFT → your bank",         "bank": True},
-    "desk_card":         {"label": "Card at desk",            "bank": False},
-    "desk_cash":         {"label": "Cash at desk/court",      "bank": False},
+    "desk_card":         {"label": "Card taken by coach",     "bank": False},
+    "desk_cash":         {"label": "Cash taken by coach",     "bank": False},
     "coach_offplatform": {"label": "Coach collected direct",  "bank": False},
     "unpaid":            {"label": "Still owed",              "bank": False},
     "written_off":       {"label": "Written off",             "bank": False},

@@ -541,20 +541,30 @@ did not exist. Read this before diagnosing a failed refund; `scripts/diagnose_re
 When the COACH holds the cash, the club is owed its commission and the entry must be **`−owner_cut` as
 `commission_due`** (`_write_split_pair(cash_held_by=)`).
 
-| How the money arrived | Who holds it | Ledger entry |
+**THE CLUB CAN ONLY RECEIVE TWO WAYS — Yoco, or an EFT into its account.** It has no facility for
+collecting on a coach's behalf, so anything else recorded against a COACHING order is cash the coach
+took from the client directly.
+
+| How the money arrived | Who holds it | Ledger says |
 |---|---|---|
 | Yoco online checkout / invoice pay-link | **Club** | `+coach_net` (club owes coach) |
-| EFT or cash recorded at the desk (`record_desk_payment`) | **Club** | `+coach_net` |
-| Coach collects courtside / off-platform (**"Mark collected"**) | **Coach** | `−owner_cut` (coach owes club) |
+| EFT into the club's account | **Club** | `+coach_net` |
+| **Cash or card taken at the court** | **Coach** | `−owner_cut` (coach owes club) |
+| Coach marks an arrears line collected | **Coach** | `−owner_cut` |
 | Monthly account → month-end invoice → paid by Yoco/EFT | **Club** | `+coach_net` when it lands |
 
-**The direction follows WHO RECORDED THE PAYMENT, not what the booking said.**
-`POST /api/billing/desk-payment` is **`club_admin`-only** (`take_pay_at_court`) — a coach physically
-cannot use it; his one collection verb is "Mark collected" (`mark_arrears_collected`), which is the
-off-platform path. So an `at_court` lesson is **not** automatically coach-held: if the client pays at
-reception, or pays the month-end invoice, the club holds it and the coach is owed his net. This is
-deliberately more accurate than a flat "pay-at-court means the coach has it" rule, and it means the club
-can take a lesson payment at the desk without the ledger going wrong.
+**ONE rule, one function: `billing.commission.cash_custody_for(provider)`** — `'club'` for
+`yoco`/`eft`, `'coach'` for everything else *including no provider at all* (an arrears collection
+writes no `billing.payment` row). It is read by `record_split_for_order` (the ledger DIRECTION),
+`coach_settlement` (the statement) and `coach_sessions_by_day` (the work log), so those three can
+never drift apart. **The provider is the only thing factually known** — `recorded_by_user_id` cannot
+decide it, because `POST /api/billing/desk-payment` is `club_admin`-only and every desk payment is
+therefore admin-recorded whoever actually took the note. Corrected 2026-07-29: the first cut treated
+desk CASH as club-held, which booked a courtside-collected lesson as the club owing the coach while he
+was holding the money. Historical rows: `scripts/fix_desk_cash_coach_ledger.py`. Guarded by
+`sc_only_yoco_and_eft_reach_the_club`.
+
+
 **What still needs enforcing with coaches is behavioural, not financial:** mark the collection promptly,
 or the club's commission on that cash stays invisible.
 
@@ -584,7 +594,8 @@ actually received** — and this needs no monthly commission run, because there 
   The club does not carry the cost of a client who doesn't pay.
 
 - **"PAID" IS NOT "IN THE BANK" — Money → Coach statement is the split.** `order.status='paid'` merges Yoco
-  + EFT (the club's bank), cash/card at the desk (the till OR the coach, genuinely ambiguous) and a coach's
+  + EFT (the club's bank) with cash/card taken at the court (the COACH — the club has no facility for
+  collecting on his behalf) and a coach's
   off-platform collection (the coach only). The last is **exactly derivable**: `mark_arrears_collected`
   flips the order to `paid` with **no `billing.payment` row at all** (the money never touched the platform),
   so *paid + zero succeeded charges* == the coach collected it. `admin.repositories.coach_statement_report`

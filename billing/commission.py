@@ -121,6 +121,49 @@ def _split_minor(gross_minor: int, pct: Decimal) -> int:
 # the split fan-out — called from apply_payment_event on charge_succeeded
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# WHO HOLDS THE CASH — the ONE rule, used by the ledger AND every statement
+# ---------------------------------------------------------------------------
+
+# The club can only actually RECEIVE money two ways: a Yoco charge, or an EFT into its account.
+# Everything else recorded against a coaching order is cash that never reached the club — the coach
+# took it from the client directly. The club has no facility for taking money on a coach's behalf
+# (owner rule, 2026-07-29; docs/specs/01 §D6).
+#
+# This matters far beyond a label: it decides the DIRECTION of the coach_ledger entry. Club-held →
+# `+coach_net` (the club owes the coach his share). Coach-held → `−owner_cut` (the coach is holding
+# the club's commission). Getting it backwards is wrong by the whole gross, which is exactly what
+# happened to off-platform collections before 2026-07-28.
+CLUB_BANKED_PROVIDERS = ("yoco", "eft")
+
+
+def cash_custody_for(provider) -> str:
+    """'club' | 'coach' — who is holding the money this payment represents.
+
+    Provider-driven because that is the only thing that is FACTUALLY known: a Yoco charge and an EFT
+    demonstrably landed in the club's account; cash or a card taken at the court did not land
+    anywhere the club can see. `recorded_by_user_id` cannot help here — `POST /api/billing/desk-payment`
+    is `club_admin`-only, so every desk payment is admin-recorded whoever actually took the note.
+
+    A payment with NO provider at all (`mark_arrears_collected` writes no `billing.payment` row) is
+    coach-held by definition, and reaches the same answer through the default."""
+    return "club" if (provider or "").strip().lower() in CLUB_BANKED_PROVIDERS else "coach"
+
+
+def _provider_of_payment(session, payment_id):
+    """The provider on a billing.payment row, or None. Guarded → None (which classifies coach-held,
+    the conservative direction: it books the club's commission as still owed rather than assuming
+    the club is holding the coach's money)."""
+    if not payment_id:
+        return None
+    try:
+        return session.execute(
+            text("SELECT provider FROM billing.payment WHERE id = :p"), {"p": str(payment_id)},
+        ).scalar()
+    except Exception:
+        return None
+
+
 def record_split_for_order(session, *, club_id, order_id, payment_id, at=None) -> Dict[str, Any]:
     """For each lesson/class order line of a PAID order, resolve the commission rate and write
     an owner + coach commission_split pair plus a coach_ledger earning. The on-COLLECTION
@@ -155,6 +198,7 @@ def record_split_for_order(session, *, club_id, order_id, payment_id, at=None) -
     splits = 0
     earnings = 0
     skipped = 0
+    held_by = cash_custody_for(_provider_of_payment(session, payment_id))
     currency = session.execute(
         text("SELECT currency_code FROM club.club WHERE id = :c"), {"c": club_id},
     ).scalar() or "ZAR"
@@ -184,7 +228,13 @@ def record_split_for_order(session, *, club_id, order_id, payment_id, at=None) -
             order_line_id=ln["order_line_id"], booking_id=ln["booking_id"],
             coach_user_id=coach, product_id=product_id, rule_id=rule_id,
             basis=basis, gross_minor=gross, pct=pct,
-            owner_minor=owner_cut, coach_minor=coach_net, currency=currency, at=at)
+            owner_minor=owner_cut, coach_minor=coach_net, currency=currency, at=at,
+            # The club only ever RECEIVES Yoco and EFT. A cash/desk-card payment recorded against a
+            # coaching order is money the COACH took from the client — the club has no facility for
+            # collecting on a coach's behalf — so the ledger must book the club's commission as owed
+            # BY him, not book his net as owed TO him. This used to hard-code 'club' for every
+            # payment path, which was wrong by the whole gross on every desk-collected lesson.
+            cash_held_by=held_by)
         splits += wrote["splits"]
         earnings += wrote["earnings"]
 
@@ -1390,14 +1440,14 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
                        -- Did any REAL money land on the platform for this order? That is what
                        -- separates "the club has it" from "the coach collected it himself":
                        -- mark_arrears_collected flips the order to paid with NO payment row at all.
+                       -- ONLY Yoco and EFT ever reach the club. Anything else recorded against a
+                       -- coaching order is money the coach took from the client himself (the club
+                       -- has no facility for collecting on his behalf) -- so there is no "desk"
+                       -- bucket here to be ambiguous about.
                        COALESCE((SELECT SUM(pm.amount_minor) FROM billing.payment pm
                                   WHERE pm.order_id = o.id AND pm.direction = 'charge'
                                     AND pm.status = 'succeeded'
-                                    AND pm.provider IN ('yoco','eft')), 0) AS to_bank,
-                       COALESCE((SELECT SUM(pm.amount_minor) FROM billing.payment pm
-                                  WHERE pm.order_id = o.id AND pm.direction = 'charge'
-                                    AND pm.status = 'succeeded'
-                                    AND pm.provider IN ('cash','card_at_desk')), 0) AS to_desk
+                                    AND pm.provider IN ('yoco','eft')), 0) AS to_bank
                 FROM src
                 LEFT JOIN billing."order" o ON o.id = src.order_id
                 LEFT JOIN iam."user" u ON u.id = src.client_user_id
@@ -1418,15 +1468,18 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
         amt = int(r["amount_minor"] or 0)
         st = (r["order_status"] or "").lower()
         mode = (r["settlement_mode"] or "").lower()
-        # WHERE IS THE MONEY? Order status alone can't say (see BUSINESS-RULES §6): a coach's
-        # off-platform collection is `paid` with ZERO payment rows, because the cash never touched
-        # the platform. So: paid + a real charge -> the club has it; paid + nothing -> the coach does.
+        # WHERE IS THE MONEY? Order status alone can't say (see BUSINESS-RULES §6). The club only
+        # ever RECEIVES Yoco and EFT; a coach's own collection is either cash recorded at the court
+        # or an arrears collection with no payment row at all. So: paid + money in the club's
+        # account -> the club has it; paid any other way -> the coach does.
         if mode in ("membership_covered", "free", "token") or amt <= 0:
             custody, label = "not_charged", "No charge"
-        elif st == "paid" and (int(r["to_bank"] or 0) + int(r["to_desk"] or 0)) > 0:
+        elif st == "paid" and int(r["to_bank"] or 0) > 0:
             custody, label = "to_club", "Paid to club"
         elif st == "paid":
-            custody, label = "with_coach", "Collected by you"
+            # Paid, but nothing reached the club's account: cash/card at the court, or an arrears
+            # collection that never wrote a payment row at all. Either way the coach is holding it.
+            custody, label = "with_coach", "Collected by coach"
         elif st in ("written_off", "refunded", "void"):
             custody, label = "not_charged", st.replace("_", " ").title()
         else:
@@ -1470,10 +1523,11 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
     owner's rule is that commission is paid on funds RECEIVED (docs/specs/01 \u00a7D7), so a lesson taught
     in July and paid in August settles in August.
 
-    **`commission_split.basis` IS the custody marker.** `arrears_commission` is written by
-    `mark_arrears_collected`, which is off-platform by definition \u2014 the coach took the cash himself.
-    Everything else was collected through the platform, so the club holds it. Nothing needs deriving
-    from payment providers here, and the split rows are the same ones the Money tab reports on.
+    **CUSTODY IS THE PAYMENT PROVIDER** (`cash_custody_for`): the club only ever receives Yoco and
+    EFT, so those are club-held and everything else is the coach's. `arrears_commission` carries no
+    payment row at all (`mark_arrears_collected` is off-platform by definition) and lands coach-held
+    through the same rule. Basis alone is NOT enough \u2014 a cash payment recorded at the desk against a
+    coaching order writes `lesson_commission` but the coach is the one holding the note.
 
     The net computed here is, by construction, the same figure the `coach_ledger` accumulates:
     a club-held collection posts `+coach_net`, a coach-held one posts `\u2212owner_cut`, and
@@ -1486,22 +1540,34 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
     try:
         r = session.execute(
             text("""
+                WITH sp AS (
+                    SELECT cs.*,
+                           -- WHO HOLDS IT: only a Yoco charge or an EFT ever reaches the club. A desk
+                           -- cash/card payment on a coaching order, and an arrears collection (which
+                           -- writes no payment row at all), are both money the COACH is holding.
+                           (pm.provider IN ('yoco','eft')) AS club_banked
+                    FROM billing.commission_split cs
+                    LEFT JOIN billing.payment pm ON pm.id = cs.payment_id
+                    WHERE cs.club_id = :club AND cs.coach_user_id = CAST(:coach AS uuid)
+                      AND cs.party_type = 'owner'
+                      AND to_char(cs.occurred_at, 'YYYY-MM') = :ym
+                )
                 SELECT
                   -- The OWNER side carries the club's cut; gross_minor is the sale it was cut from.
                   COALESCE(SUM(gross_minor) FILTER (
-                      WHERE basis IN ('lesson_commission','class_commission')), 0) AS club_gross,
+                      WHERE basis <> 'refund_clawback' AND club_banked), 0)         AS club_gross,
                   COALESCE(SUM(gross_minor) FILTER (
-                      WHERE basis = 'arrears_commission'), 0)                      AS coach_gross,
+                      WHERE basis <> 'refund_clawback'
+                        AND COALESCE(club_banked, false) = false), 0)               AS coach_gross,
                   COALESCE(SUM(amount_minor) FILTER (
-                      WHERE basis <> 'refund_clawback'), 0)                        AS commission,
+                      WHERE basis <> 'refund_clawback'), 0)                         AS commission,
                   COALESCE(SUM(amount_minor) FILTER (
-                      WHERE basis = 'refund_clawback'), 0)                         AS clawback,
+                      WHERE basis = 'refund_clawback'), 0)                          AS clawback,
                   COALESCE(SUM(gross_minor) FILTER (
-                      WHERE basis = 'refund_clawback'), 0)                         AS refunded_gross
-                FROM billing.commission_split
-                WHERE club_id = :club AND coach_user_id = CAST(:coach AS uuid)
-                  AND party_type = 'owner'
-                  AND to_char(occurred_at, 'YYYY-MM') = :ym
+                      WHERE basis = 'refund_clawback'), 0)                          AS refunded_gross,
+                  COALESCE(SUM(gross_minor) FILTER (
+                      WHERE basis = 'refund_clawback' AND club_banked), 0)          AS refunded_club
+                FROM sp
             """),
             {"club": club_id, "coach": str(coach_user_id), "ym": ym},
         ).mappings().first() or {}
@@ -1511,7 +1577,10 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
         r = {}
 
     g = lambda k: int((r or {}).get(k) or 0)                                   # noqa: E731
-    club_held = g("club_gross")
+    # A refund reverses a collection: money the club banked and gave back is no longer held, so it
+    # must come off club_held too, not just off the commission. (refunded_club is negative-signed
+    # gross on the clawback rows.)
+    club_held = g("club_gross") + g("refunded_club")
     coach_held = g("coach_gross")
     total = club_held + coach_held
     # A clawback is a NEGATIVE owner split (commission returned on a refund) — it reduces what the

@@ -26,11 +26,11 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 404 / billing 492 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 404 / billing 528 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (45/70/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (45/72/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. The check counts below are the gate line's, not per-bullet totals —
    **update line 25 only**, so the numbers can't drift apart.
@@ -901,6 +901,31 @@ member by email on the first authenticated hit.
   `sc_refund_finds_the_checkout_that_holds_the_money`. **NOTE:** "insufficient funds" is *also*
   genuinely what Yoco says when the club's Yoco balance can't fund the refund (refunds draw on the
   balance, not the bank) — check whether the order has >1 `payment_attempt` row before assuming which.
+- **THE CLUB CAN ONLY RECEIVE YOCO AND EFT (2026-07-29).** It has no facility for collecting on a
+  coach's behalf, so anything else recorded against a COACHING order is cash the coach took from the
+  client directly. ONE rule, ONE function — **`billing.commission.cash_custody_for(provider)`**:
+  `'club'` for `yoco`/`eft`, `'coach'` for everything else *including no provider at all* (an
+  arrears collection writes no `billing.payment` row). Read by `record_split_for_order` (the ledger
+  DIRECTION), `coach_settlement` (the statement) and `coach_sessions_by_day` (the work log), so the
+  three can never drift. **The provider is the only thing factually known** — `recorded_by_user_id`
+  can't decide it, because `/api/billing/desk-payment` is `club_admin`-only and every desk payment
+  is admin-recorded whoever actually took the note. `record_split_for_order` used to hard-code
+  `cash_held_by='club'` for EVERY path, so a lesson settled in cash at the court booked the coach's
+  net as owed TO him while he stood there holding it — wrong by the whole gross, the same shape as
+  the arrears inversion below. Historical rows: `scripts/fix_desk_cash_coach_ledger.py` (dry-run
+  default, idempotent, appends a correcting adjustment). Guarded by
+  `sc_only_yoco_and_eft_reach_the_club`.
+- **THE COACH STATEMENT is the coach-side of a client invoice** (`billing.commission.coach_settlement`
+  + `coach_sessions_by_day`, rendered by the ONE shared `Widgets.CoachStatement`; admin and coach
+  differ by config only). Three blocks on TWO DELIBERATE DATE BASES: **sessions** by client by day
+  (bounded on the SESSION's date — "what did I teach"), **custody** (paid to club / collected by
+  coach / outstanding), and the **settlement** — total collected × commission = owed to the club,
+  minus what the club already holds, = net (bounded on when the money ARRIVED, per §D7). A lesson
+  taught in July and paid in August is outstanding in July and settles in August; the page says so.
+  The net equals the `coach_ledger` movement **by construction**, and `reconciles` asserts it on
+  every render — a mismatch shows a WARNING BANNER rather than a number nobody can check. Admin:
+  Money → Coach statement = summary + a coach dropdown (ONE coach at a time). Guarded by
+  `sc_coach_settlement_statement`.
 - **THE COACH LEDGER'S DIRECTION FOLLOWS WHO HOLDS THE CASH (2026-07-28).** `billing.coach_ledger` is
   SIGNED — **+ = the club owes the coach, − = the coach owes the club** (the rent entry is
   deliberately negative). A `commission_earning` of `+coach_net` is correct ONLY when the club took
@@ -918,7 +943,8 @@ member by email on the first authenticated hit.
   default) appends ONE correcting `adjustment` per coach rather than rewriting history, idempotent on
   a fixed `ref_id`. Guarded by `sc_ledger_direction_follows_who_holds_the_cash`.
 - **"PAID" IS NOT "IN THE BANK" — Money → Coach statement is the split.** `order.status='paid'` merges
-  Yoco + EFT (the club's bank), cash/card at the desk (the till OR the coach, genuinely ambiguous) and
+  Yoco + EFT (the club's bank — the ONLY two ways it can receive) with cash/card taken at the court (the
+  COACH; there is no facility for collecting on his behalf) and
   a coach's off-platform collection (the coach only). The last is **exactly derivable**:
   `mark_arrears_collected` flips the order to `paid` with **no `billing.payment` row at all** (the
   money never touched the platform), so *paid + zero succeeded charges* == the coach collected it.

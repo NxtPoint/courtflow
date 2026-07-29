@@ -1049,6 +1049,13 @@
     });
   }
 
+  // MONEY -> COACH STATEMENT. A club-level summary, then ONE COACH AT A TIME.
+  //
+  // This replaced a club-wide per-client custody drill. That screen answered "where is all the money"
+  // by listing every coach's every client at once, which is not how a settlement conversation happens
+  // - you settle with one coach, about their sessions, and you need a document to do it from. The
+  // summary keeps the club-level answer (who is holding what, who to chase); the dropdown opens the
+  // real statement.
   async function moneyCoachStatement() {
     loading();
     var data;
@@ -1062,17 +1069,22 @@
     wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:4px" }, [
       el("h1", { style: "margin:0", text: "Coach statement" }),
       el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
-        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "‹", onclick: function () { shift(-1); } }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "\u2039", onclick: function () { shift(-1); } }),
         el("span", { style: "font-weight:600;min-width:104px;text-align:center", text: monthLabel(data.month) }),
-        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "›", onclick: function () { shift(1); } }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "\u203a", onclick: function () { shift(1); } }),
       ]),
     ]));
 
-    // (1) The SAME reconciling fold as Money → Club earnings, so this screen can be trusted against it.
-    wrap.appendChild(card([window.CRMUI.statementFold({ currency: cur, month: data.month, totals: data.totals })]));
+    // Only real coaches can be settled with - the synthetic "club" node (court hire, memberships)
+    // has no coach to owe anything to.
+    var coaches = (data.coaches || []).filter(function (n) { return n.coach_user_id; });
 
-    // (2) The headline the month-end actually turns on: of what was collected, how much reached the bank.
+    // (1) THE SUMMARY: of what was collected, how much actually reached the club. The club only ever
+    // receives Yoco and EFT; anything else marked paid on a coaching order is money the coach took
+    // from the client directly.
     var cu = data.custody || {}, b = cu.by_bucket || {};
+    var toClub = (b.bank_yoco || 0) + (b.bank_eft || 0);
+    var withCoach = (b.desk_cash || 0) + (b.desk_card || 0) + (b.coach_offplatform || 0);
     function figure(label, minor, sub, tone) {
       return el("div", { class: "cf-item" }, [
         el("div", {}, [
@@ -1084,108 +1096,47 @@
           text: money(minor || 0, cur) }),
       ]);
     }
-    var custodyList = el("div", { class: "cf-list" }, [
-      figure("Yoco → your bank", b.bank_yoco, "Card payments, settled to you", "good"),
-      figure("EFT → your bank", b.bank_eft, "Recorded by an admin against your account", "good"),
-      figure("Cash / card at the desk", (b.desk_cash || 0) + (b.desk_card || 0), "Could be the front desk OR the coach — check below"),
-      figure("Coach collected directly", b.coach_offplatform, "Marked collected off-platform: never reached the club", "bad"),
-      figure("Still owed", b.unpaid, "Not collected by anyone yet"),
-    ]);
     wrap.appendChild(card([
       el("h3", { text: "Where the collected money is" }),
       el("p", { class: "cf-muted", style: "margin:-4px 0 8px;font-size:.86rem", text:
-        "Of " + money(data.totals.paid_minor, cur) + " marked paid this month, " +
-        money(cu.in_bank_minor, cur) + " reached your bank and " +
-        money(cu.not_in_bank_minor, cur) + " did not." }),
-      custodyList,
-    ]));
-
-    // (3) An INDEPENDENT read of billing.payment — the figure to hold against a bank statement. It is a
-    // second opinion, not a derivation: it counts payments by the date they LANDED (a payment can settle
-    // in a later month than the sale) and it sees money the order-based fold above cannot.
-    var p = data.payments || {};
-    wrap.appendChild(card([
-      el("h3", { text: "Payments actually recorded this month" }),
-      el("p", { class: "cf-muted", style: "margin:-4px 0 8px;font-size:.86rem", text:
-        "Straight off the payment log, counted by when the money landed. Reconcile this against your bank statement — it won't always equal the figures above, because a payment can land in a different month from the sale." }),
+        "The club can only receive Yoco and EFT. Anything else marked paid on a coaching order is "
+        + "money the coach took from the client directly - the commission on it is still owed to you." }),
       el("div", { class: "cf-list" }, [
-        figure("Yoco", p.yoco_minor, null, "good"),
-        figure("EFT", p.eft_minor, null, "good"),
-        figure("Cash", p.cash_minor),
-        figure("Card at desk", p.card_at_desk_minor),
-        p.refunded_minor ? figure("Refunded out", -(p.refunded_minor || 0), "Money returned", "bad") : null,
-        figure("→ Expected in your bank", p.net_to_bank_minor, "Yoco + EFT − refunds", "good"),
-      ].filter(Boolean)),
+        figure("Paid to the club", toClub, "Yoco + EFT - actually in your account", "good"),
+        figure("Collected by coaches", withCoach, "Never reached the club", "bad"),
+        figure("Still outstanding", b.unpaid, "Not collected by anyone yet"),
+      ]),
+      // An INDEPENDENT read of the payment log by the date money LANDED — the figure to hold against
+      // a bank statement. It won't always equal the line above: a payment can land in a different
+      // month from the sale. That difference is real, so it is shown rather than reconciled away.
+      (data.payments && data.payments.net_to_bank_minor != null) ? el("p", { class: "cf-muted",
+        style: "margin:10px 0 0;font-size:.84rem", text:
+        "Payment log for " + monthLabel(data.month) + ": " + money(data.payments.net_to_bank_minor, cur)
+        + " expected in your bank (Yoco + EFT − refunds, counted by when it landed)." }) : null,
+    ].filter(Boolean)));
+
+    // (2) ONE COACH AT A TIME. A picker, then the statement itself.
+    var pick = el("select", { class: "cf-input" }, [el("option", { value: "", text: "Choose a coach\u2026" })].concat(
+      coaches.map(function (n) {
+        var nc = n.custody || {}, nb = nc.by_bucket || {};
+        var mine = (nb.desk_cash || 0) + (nb.desk_card || 0) + (nb.coach_offplatform || 0);
+        return el("option", { value: n.coach_user_id, text:
+          (n.coach_name || "Coach") + " \u00b7 " + money((n.fold || {}).paid_minor || 0, cur) + " collected"
+          + (mine ? " (" + money(mine, cur) + " held by them)" : "") });
+      })));
+    pick.addEventListener("change", function () {
+      if (pick.value) go("#/money/coach-statement/" + pick.value);
+    });
+    wrap.appendChild(card([
+      el("h3", { text: "Open a coach's statement" }),
+      el("p", { class: "cf-muted", style: "margin:-4px 0 8px;font-size:.86rem", text:
+        "Sessions by client and day, where each payment sits, and the net between you." }),
+      el("div", { class: "cf-field" }, [el("label", { text: "Coach" }), pick]),
     ]));
 
-    // (4) The drill: coach → client → service rows.
-    (data.coaches || []).forEach(function (node) {
-      var nc = node.custody || {}, nf = node.fold || {};
-      var head = el("div", { class: "cf-row", style: "justify-content:space-between;align-items:baseline;margin:18px 2px 4px" }, [
-        el("div", { style: "font-weight:700;font-size:1.02rem", text: node.coach_name || "Club" }),
-        el("div", { class: "cf-row", style: "gap:10px;align-items:baseline" }, [
-          el("div", { class: "cf-muted", style: "font-size:.84rem", text:
-            money(nf.paid_minor || 0, cur) + " collected · " + money(nc.in_bank_minor || 0, cur) + " to bank" }),
-          // This screen answers "where is the money" club-wide. A COACH's own settlement statement —
-          // what we owe each other, and the sessions behind it — is a document in its own right.
-          node.coach_user_id ? el("button", { class: "cf-btn cf-btn-sm", text: "Statement →",
-            onclick: function () { go("#/money/coach-statement/" + node.coach_user_id); } }) : null,
-        ].filter(Boolean)),
-      ]);
-      wrap.appendChild(head);
-      if ((nc.not_in_bank_minor || 0) > 0) {
-        wrap.appendChild(el("div", { class: "cf-muted", style: "margin:0 2px 6px;font-size:.82rem;font-weight:600", text:
-          money(nc.not_in_bank_minor, cur) + " collected but NOT in your bank" +
-          ((nc.by_bucket && nc.by_bucket.coach_offplatform) ? " (" + money(nc.by_bucket.coach_offplatform, cur) + " marked collected directly)" : "") }));
-      }
-      if ((nf.outstanding_minor || 0) > 0) {
-        wrap.appendChild(el("div", { class: "cf-muted", style: "margin:0 2px 6px;font-size:.82rem", text:
-          money(nf.outstanding_minor, cur) + " still owed" }));
-      }
-      (node.clients || []).forEach(function (cl) {
-        var list = el("div", { class: "cf-list" });
-        (cl.rows || []).forEach(function (r) {
-          // The custody chip is the whole point of the row — use the design system's own good/bad/muted
-          // chip rather than a bespoke tone class. In-bank = good; still-owed = muted (not an error,
-          // just uncollected); anything collected that ISN'T in the bank = bad, because that is the
-          // money the month-end has to chase.
-          var chipCls = "cf-chip " + (r.in_bank ? "cf-chip-good"
-            : (r.custody === "unpaid" || r.custody === "written_off" || r.custody === "refunded"
-               ? "cf-chip-muted" : "cf-chip-bad"));
-          var right = el("div", { style: "text-align:right" }, [
-            el("div", { style: "font-weight:700", text: money(r.amount_minor, cur) }),
-            el("span", { class: chipCls, text: r.custody_label + (r.mixed_providers ? " (mixed)" : "") }),
-          ]);
-          var left = el("div", {}, [
-            el("div", { style: "font-weight:600", text: r.service || "Service" }),
-            el("div", { class: "cf-muted", style: "font-size:.78rem", text:
-              (r.when ? dayLabel(String(r.when).slice(0, 10)) : "") +
-              (r.settlement_mode ? " · " + r.settlement_mode.replace(/_/g, " ") : "") +
-              (r.recorded_by ? " · taken by " + r.recorded_by : "") }),
-          ]);
-          var row = el("div", { class: "cf-item cf-item-tap" }, [left, right]);
-          row.addEventListener("click", function () {
-            // Straight to the SHARED transaction record — same destination as everywhere else.
-            if (r.booking_id) go("#/event/" + r.booking_id);
-            else if (r.enrolment_id) go("#/class/" + r.enrolment_id);
-            else go("#/txn/" + r.order_id);
-          });
-          list.appendChild(row);
-        });
-        var cf = cl.custody || {}, ff = cl.fold || {};
-        wrap.appendChild(card([
-          el("div", { class: "cf-row", style: "justify-content:space-between;align-items:baseline" }, [
-            el("div", { style: "font-weight:700", text: cl.client_name || "Client" }),
-            el("div", { class: "cf-muted", style: "font-size:.8rem", text:
-              money(ff.paid_minor || 0, cur) + " paid" +
-              ((cf.not_in_bank_minor || 0) > 0 ? " · " + money(cf.not_in_bank_minor, cur) + " not to bank" : "") +
-              ((ff.outstanding_minor || 0) > 0 ? " · " + money(ff.outstanding_minor, cur) + " owed" : "") }),
-          ]),
-          list,
-        ]));
-      });
-    });
-    if (!(data.coaches || []).length) wrap.appendChild(el("div", { class: "cf-empty", text: "Nothing billed this month." }));
+    if (!coaches.length) {
+      wrap.appendChild(el("div", { class: "cf-empty", text: "No coaching billed in " + monthLabel(data.month) + "." }));
+    }
     set(wrap);
   }
 

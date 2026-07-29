@@ -769,8 +769,11 @@ def sc_lockstep_desk_pay(s, fx):
                           provider_payment_id="RCPT-DESK", user_id=fx.member)
     check("desk pay cleared the coach's owed tab (lockstep)", _arrears_status(s, ol) == "collected",
           str(_arrears_status(s, ol)))
+    # CASH on a coaching order = the COACH took it (the club only receives Yoco/EFT), so the ledger
+    # books the club's commission as owed BY him: -30% of R400. The lockstep point of this scenario
+    # is unchanged — the commission accrues exactly ONCE, whichever way it points.
     bal = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
-    check("coach earned commission exactly once on desk pay", bal == 28000, f"bal={bal}")
+    check("coach commission accrued exactly once on desk pay", bal == -12000, f"bal={bal}")
     # Simulate drift (arrears back to 'owed') then a stray 'mark collected' → guard = no double.
     s.execute(text("UPDATE billing.coach_arrears SET status='owed' WHERE order_line_id=:ol"), {"ol": ol})
     aid = s.execute(text("SELECT id FROM billing.coach_arrears WHERE order_line_id=:ol"), {"ol": ol}).scalar()
@@ -778,7 +781,7 @@ def sc_lockstep_desk_pay(s, fx):
     check("re-collect on an already-paid order is a no-op (guard)",
           res.get("status") == "reconciled" and res.get("splits") == 0, str(res))
     check("coach commission NOT doubled after stray re-collect",
-          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == 28000, "doubled!")
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == -12000, "doubled!")
 
 
 def sc_void_clears_arrears(s, fx):
@@ -3738,15 +3741,19 @@ def sc_ledger_direction_follows_who_holds_the_cash(s, fx):
                              ends_at=iso(at(fx, hour + 1)), settlement_mode="at_court")
         return r["booking"]["order_id"], _line_of(s, r["booking"]["order_id"])
 
-    # ---- (A) the CLUB collects it (desk payment) — the club holds the gross, so it owes the coach.
+    # ---- (A) the CLUB collects it — the club holds the gross, so it owes the coach.
+    # EFT, not cash: the club can only actually RECEIVE Yoco and EFT. Cash recorded against a
+    # coaching order is money the COACH took from the client (the club has no facility for
+    # collecting on his behalf), so it is the (B) case, not this one — see
+    # sc_only_yoco_and_eft_reach_the_club.
     base = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
     oid_a, ol_a = _fresh_lesson(9)
     gross = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
                       {"o": oid_a}).scalar()
     O.record_desk_payment(s, club_id=fx.club_id, order_id=oid_a, amount_minor=gross,
-                          provider="cash")
+                          provider="eft", provider_payment_id="EFT-LEDGER-A")
     club_delta = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) - base
-    check("club collected → the club OWES the coach their net (+80% of R400)",
+    check("club collected (EFT) → the club OWES the coach their net (+80% of R400)",
           club_delta == 32000, f"delta={club_delta}")
 
     # ---- (B) the COACH collects it off-platform — the coach holds the gross, so they owe the cut.
@@ -3899,7 +3906,84 @@ def sc_coach_settlement_statement(s, fx):
           st5["net_minor"] == st3["net_minor"], str(st5["net_minor"]))
 
 
+def sc_only_yoco_and_eft_reach_the_club(s, fx):
+    """THE CLUB CAN ONLY RECEIVE TWO WAYS: a Yoco charge, or an EFT into its account.
+
+    Anything else recorded against a COACHING order is cash the coach took from the client himself -
+    the club has no facility for collecting on a coach's behalf (owner rule, 2026-07-29). This is not
+    a labelling question: it decides the DIRECTION of the coach_ledger entry, so getting it wrong is
+    wrong by the whole gross, exactly as the off-platform inversion was.
+
+    `record_split_for_order` used to hard-code `cash_held_by='club'` for EVERY payment path, so a
+    lesson settled in cash at the court booked the coach's net as owed TO him - when he was standing
+    there holding the money. Four collections, same lesson price, same commission; only the provider
+    differs, and the ledger has to move the opposite way for two of them."""
+    print("\n# Only Yoco and EFT reach the club - everything else is money the COACH holds")
+    from billing.commission import cash_custody_for
+
+    check("yoco is club-held", cash_custody_for("yoco") == "club")
+    check("eft is club-held", cash_custody_for("eft") == "club")
+    check("cash is COACH-held", cash_custody_for("cash") == "coach")
+    check("card at the desk is COACH-held", cash_custody_for("card_at_desk") == "coach")
+    check("no provider at all is COACH-held (an arrears collection writes no payment row)",
+          cash_custody_for(None) == "coach")
+
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',20,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+
+    def lesson_paid(hour, provider):
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                             booking_type="lesson", resource_id=fx.coach_res,
+                             coach_user_id=fx.coach_uid, starts_at=iso(at(fx, hour)),
+                             ends_at=iso(at(fx, hour + 1)), settlement_mode="at_court")
+        oid = r["booking"]["order_id"]
+        gross = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                          {"o": oid}).scalar()
+        before = CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+        if provider == "yoco":
+            # Yoco is NOT a manual provider — record_desk_payment coerces anything outside
+            # MANUAL_PROVIDERS to 'cash', which is correct (you cannot take a Yoco payment at the
+            # desk; it arrives by webhook). So drive the real gateway path for this leg.
+            apply_payment_event(NormalizedPaymentEvent(
+                provider="yoco", kind="charge_succeeded", order_ref=str(oid),
+                provider_payment_id=f"p_custody_{hour}", amount_minor=gross, currency="ZAR",
+                status="succeeded", direction="charge", club_id=str(fx.club_id),
+                user_id=str(fx.member)), session=s)
+        else:
+            O.record_desk_payment(s, club_id=fx.club_id, order_id=oid, amount_minor=gross,
+                                  provider=provider, provider_payment_id=f"RCPT-{provider}-{hour}",
+                                  user_id=fx.member)
+        return CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) - before, gross
+
+    # R400 lesson, 20% commission -> coach net R320, club cut R80.
+    d_eft, gross = lesson_paid(9, "eft")
+    check("EFT -> the club holds it, so it OWES the coach +R320", d_eft == 32000, f"delta={d_eft}")
+    d_yoco, _ = lesson_paid(11, "yoco")
+    check("Yoco -> same direction, +R320", d_yoco == 32000, f"delta={d_yoco}")
+    d_cash, _ = lesson_paid(13, "cash")
+    check("CASH -> the COACH holds it, so he owes the club its cut: -R80",
+          d_cash == -8000, f"delta={d_cash}")
+    d_card, _ = lesson_paid(15, "card_at_desk")
+    check("card at the court -> also the coach's: -R80", d_card == -8000, f"delta={d_card}")
+    check("...and the two directions are genuinely opposite, not the same entry twice",
+          d_eft > 0 > d_cash and abs(d_eft) != abs(d_cash))
+
+    # The STATEMENT must tell the same story as the ledger, or the document lies about the money.
+    from billing.commission import coach_settlement
+    st = coach_settlement(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)["settlement"]
+    check("the statement counts the Yoco + EFT lessons as paid to the club",
+          st["club_held_minor"] == gross * 2, str(st["club_held_minor"]))
+    check("...and the cash + card ones as collected by the coach",
+          st["coach_held_minor"] == gross * 2, str(st["coach_held_minor"]))
+    check("...with commission charged on ALL FOUR, however they were collected",
+          st["commission_minor"] == int(gross * 4 * 0.20), str(st["commission_minor"]))
+    check("...and the statement still ties to the ledger", st["reconciles"] is True,
+          f"splits={st['net_minor']} ledger={st['ledger_commission_minor']}")
+
+
 SCENARIOS = [
+    sc_only_yoco_and_eft_reach_the_club,
     sc_coach_settlement_statement,
     sc_service_editor_child_ownership,
     sc_removed_variation_stays_removed,
