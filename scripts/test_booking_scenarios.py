@@ -2502,6 +2502,90 @@ def sc_waitlist_promotion_into_a_cardonly_class_is_held(s, fx):
     check("…and NOW the enrolment confirmation is sent", "class_enrolled" in rec2.seen, str(rec2.seen))
 
 
+def sc_online_lesson_request_is_paid_up_front(s, fx):
+    """A CARD-ONLY coach who reviews bookings used to be unbookable in practice.
+
+    A gated ('requested') lesson created NO order, so the client's browser — which needs an order_id
+    to reach Yoco — never sent her to pay. She got a success screen, paid nothing, and had no way to
+    pay (the Pay action needs an order). The charge only appeared when the coach accepted, hours
+    later, behind a 30-minute hold she was never awake for; it lapsed, cancelled itself, and the
+    whole attempt vanished. Meanwhile the accept email told her "Your lesson is confirmed".
+
+    The approval is about the TIME, not about whether she wants the lesson — so she pays up front,
+    accept confirms what is already paid, and decline refunds her."""
+    print("\n# An ONLINE lesson request takes the money up front (card-only coach who reviews)")
+    from billing.events import apply_payment_event
+    from billing.gateway import NormalizedPaymentEvent
+    m = fx.members[0]
+    s.execute(text("UPDATE iam.coach_profile SET review_bookings = true "
+                   "WHERE club_id = :c AND user_id = :u"), {"c": fx.club_id, "u": fx.coach_uid})
+    prod = s.execute(text("INSERT INTO billing.product (club_id, kind, name, active, coach_user_id, "
+                          "payment_modes) VALUES (:c,'lesson','Private (card only)',true,:u,'online') "
+                          "RETURNING id"), {"c": fx.club_id, "u": fx.coach_uid}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, duration_minutes, active) "
+                   "VALUES (:c,:p,'any',55000,'ZAR',60,true)"), {"c": fx.club_id, "p": prod})
+
+    def _book(hour):
+        return B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                                booking_type="lesson", resource_id=fx.coach_res,
+                                coach_user_id=fx.coach_uid, product_id=str(prod),
+                                settlement_mode="online",
+                                starts_at=utc_iso(at(fx, hour)), ends_at=utc_iso(at(fx, hour + 1)))
+
+    def _pay(oid, ref):
+        apply_payment_event(NormalizedPaymentEvent(
+            provider="yoco", kind="charge_succeeded", order_ref=str(oid), provider_payment_id=ref,
+            amount_minor=55000, currency="ZAR", status="succeeded", direction="charge",
+            club_id=str(fx.club_id), user_id=str(m)), session=s)
+
+    def _ostatus(oid):
+        return s.execute(text('SELECT status FROM billing."order" WHERE id=:o'), {"o": oid}).scalar()
+
+    # (1) The request carries an order she can pay RIGHT NOW.
+    r = _book(9)
+    bk = r.get("booking") or {}
+    check("the request is created", r.get("ok") and bk.get("status") == "requested", str(r))
+    check("…WITH an order to pay (this is what sends her to Yoco)", bool(bk.get("order_id")), str(bk))
+    check("…and the server says payment is required", r.get("requires_payment") is True, str(r))
+    check("the order awaits her payment", _ostatus(bk["order_id"]) == "awaiting_payment")
+
+    # (2) She pays. The lesson stays REQUESTED — the coach still decides the time.
+    _pay(bk["order_id"], "p_req_1")
+    check("after paying, the order is settled", _ostatus(bk["order_id"]) == "paid")
+    check("…but the lesson still awaits the coach", _booking_row(s, bk["id"])["status"] == "requested")
+
+    # (3) Accept CONFIRMS it outright — no second order, no fresh payment window.
+    a = B.accept_booking(s, club_id=fx.club_id, booking_id=bk["id"],
+                         actor_user_id=fx.coach_uid, role="coach")
+    ab = a.get("booking") or {}
+    check("accept confirms the paid lesson", a.get("ok") and ab.get("status") == "confirmed", str(a))
+    check("…on the SAME order (never billed twice)", ab.get("order_id") == bk["order_id"],
+          f"{ab.get('order_id')} vs {bk['order_id']}")
+    n_orders = s.execute(text('SELECT COUNT(*) FROM billing."order" WHERE club_id=:c AND user_id=:u'),
+                         {"c": fx.club_id, "u": m}).scalar()
+    check("exactly ONE order exists for the lesson", n_orders == 1, str(n_orders))
+    check("…and a court is now held for it",
+          bool(s.execute(text("SELECT 1 FROM diary.booking WHERE order_id=:o AND booking_type='court' "
+                              "AND status='confirmed'"), {"o": bk["order_id"]}).first()))
+
+    # (4) DECLINE gives the money back — the veto is about the time, not the debt.
+    r2 = _book(11)
+    bk2 = r2["booking"]
+    _pay(bk2["order_id"], "p_req_2")
+    check("the second request is paid", _ostatus(bk2["order_id"]) == "paid")
+    d = B.decline_booking(s, club_id=fx.club_id, booking_id=bk2["id"],
+                          actor_user_id=fx.coach_uid, role="coach", reason="can't make it")
+    check("the decline stands", d.get("ok") and _booking_row(s, bk2["id"])["status"] == "cancelled",
+          str(d))
+    check("…and a refund was attempted on her paid order", d.get("refund") is not None, str(d.get("refund")))
+
+
+def _booking_row(s, booking_id):
+    return s.execute(text("SELECT status, order_id FROM diary.booking WHERE id=:b"),
+                     {"b": booking_id}).mappings().first()
+
+
 def sc_peak_hours_can_differ_per_court(s, fx):
     """Peak was ONE club-wide window, so "peak on the show courts only" was unexpressible — every
     court shared it. The peak AMOUNT was already per service+duration; only the WINDOW was global.
@@ -2838,6 +2922,7 @@ SCENARIOS = [
     sc_equipment_follows_its_own_payment_rule,
     sc_club_default_caps_cover_every_membership,
     sc_waitlist_promotion_into_a_cardonly_class_is_held,
+    sc_online_lesson_request_is_paid_up_front,
     sc_peak_hours_can_differ_per_court,
     sc_trial_obeys_the_same_court_rules_as_a_membership,
     sc_equipment_court_is_charged_and_both_are_booked_out,

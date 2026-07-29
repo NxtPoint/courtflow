@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 349 / billing 492 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 362 / billing 492 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -723,6 +723,19 @@ member by email on the first authenticated hit.
   summing `billing.payment` refunds against the charge, without calling Yoco at all. A frozen key
   was never protecting the money; it was only preventing the retry. Guarded by
   `sc_refund_retry_is_not_poisoned_by_the_idempotency_key`.
+- **AN ONLINE LESSON REQUEST IS PAID UP FRONT; DECLINE REFUNDS (2026-07-29).** A gated
+  (`requested`) lesson used to create NO order — so a client booking a CARD-ONLY coach who reviews
+  was never sent to Yoco (the client needs an `order_id` to reach checkout), got a success screen,
+  paid nothing, and had no way to pay at all (`can.pay` needs an order). The charge appeared only
+  when the coach ACCEPTED, hours later, behind a **30-minute** hold she was never awake for — so it
+  lapsed, cancelled itself, and the attempt vanished with nothing on her record. That is the "it
+  said nothing owed but no payment was made" report. **The approval is about the TIME, not about
+  whether the client wants the lesson**, so an `online` request now creates its order immediately
+  and returns `requires_payment`; `accept_booking` REUSES that order (`_order_is_settled` → confirm
+  outright rather than re-holding behind a payment window already passed, and never a second order
+  for money already taken); `decline_booking` REFUNDS a settled order automatically (and voids an
+  unpaid one, so a declined lesson never leaves a debt). Guarded by
+  `sc_online_lesson_request_is_paid_up_front`.
 - **THE COURT IS THE ONE PLACE TO SEE A COURT (2026-07-29).** Setup → Courts & hours → a court now
   carries everything about it: details + service allocation, **its own peak window**, playing hours,
   and a READ-ONLY **"Pricing & payment"** summary of the court SERVICE it sits on (price per

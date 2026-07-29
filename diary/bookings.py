@@ -795,11 +795,41 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                 product_id=product_id)   # REMEMBER the chosen service — accept_booking prices off it
             for _party in parties:
                 _insert_party(session, booking_id=_gid, club_id=club_id, party=_party)
+
+            # AN ONLINE REQUEST TAKES THE MONEY NOW, WHILE THE CLIENT IS HERE.
+            #
+            # A gated lesson used to create no order at all, so a client booking a card-only coach was
+            # never sent to Yoco — her browser needs an order_id and there wasn't one. She got a
+            # success screen, paid nothing, and had NO way to pay (the Pay action needs an order). The
+            # charge only appeared when the coach accepted, hours later, with a 30-minute hold she was
+            # never awake for — so it lapsed, cancelled itself, and the whole attempt vanished without
+            # a trace on her record. That is the "it said nothing owed but no payment was made" report.
+            #
+            # The approval is about the TIME, not about whether she wants the lesson. So she pays up
+            # front and the request carries a paid order; accept simply confirms it (accept_booking
+            # reuses this order rather than raising a second), and decline REFUNDS her
+            # (decline_booking). Non-online modes are unchanged — there is nothing to collect yet.
+            _gorder = None
+            if _gate_sm == "online":
+                _gdur = int((ends - starts).total_seconds() // 60)
+                _gorder = _create_order_guarded(
+                    session, club_id=club_id, user_id=owner_user_id, booking_id=_gid,
+                    booking_type="lesson", settlement_mode="online", parties=parties,
+                    resource_id=resource_id, starts_at=starts, ends_at=ends, audience=audience,
+                    duration_minutes=_gdur,
+                    coach_user_id=_gate_coach, product_id=product_id)
+                if _gorder.get("order_id"):
+                    _attach_order(session, _gid, _gorder["order_id"])
+
             _gb = _booking_dict(session, _gid)
             _lesson_event(session, _gb,
                           "lesson_requested" if _gate_status == "requested" else "lesson_proposed",
                           _gate_coach if _gate_status == "requested" else owner_user_id)
-            return {"ok": True, "booking": _gb, "checkout": None}
+            out = {"ok": True, "booking": _gb, "checkout": (_gorder or {}).get("checkout")}
+            if _gorder and _gorder.get("order_id"):
+                # The client must be driven to Yoco NOW — same seam as a normal online booking.
+                out["requires_payment"] = True
+            return out
 
     # Lesson integrity (coach ∩ court): a lesson is a COACH booking that ALSO holds a court in the
     # same transaction. The primary resource MUST be an active coach; and a court MUST be held — if
@@ -1170,6 +1200,21 @@ def confirm_held_booking(session, *, club_id, booking_id):
 # ---------------------------------------------------------------------------
 # RESCHEDULE (atomic move, conflict-checked)
 # ---------------------------------------------------------------------------
+
+def _order_is_settled(session, order_id):
+    """True if this order is already PAID (or settled at R0 by a pack/cover). Guarded -> False, so an
+    unreadable order is treated as unpaid — the safe direction: the worst case is asking for money
+    already taken, which the payment core refuses, rather than confirming a lesson nobody paid for."""
+    if not order_id:
+        return False
+    try:
+        st = session.execute(
+            text('SELECT status FROM billing."order" WHERE id = :o'), {"o": str(order_id)},
+        ).scalar()
+        return st == "paid"
+    except Exception:
+        return False
+
 
 def _order_has_succeeded_charge(session, order_id):
     """True if this order has taken real money (a succeeded charge payment). Guarded → False."""
@@ -1650,13 +1695,19 @@ def _gated_actor_ok(bk, actor_user_id, role):
     return False
 
 
-def _lesson_event(session, booking, event, recipient_user_id):
-    """Emit a lesson-lifecycle event routed to the recipient (best-effort, non-fatal)."""
+def _lesson_event(session, booking, event, recipient_user_id, extra=None):
+    """Emit a lesson-lifecycle event routed to the recipient (best-effort, non-fatal).
+
+    `extra` states outcomes the EMAIL would otherwise have to re-derive — and can't, because emit
+    dispatches on a background thread with its own session that cannot see the caller's uncommitted
+    work (the same trap that made a paid booking's receipt say "Cancelled")."""
     try:
         res = _resource(session, booking["club_id"], booking["resource_id"])
         payload = _payload(booking, res)
         if recipient_user_id:
             payload["user_id"] = str(recipient_user_id)
+        if extra:
+            payload.update(extra)
         events.emit(event, payload)
     except Exception:
         log.debug("lesson event emit failed", exc_info=False)
@@ -1683,7 +1734,13 @@ def accept_booking(session, *, club_id, booking_id, actor_user_id, role, now=Non
     # somehow carries one, settle it at the desk rather than mint an R0 'paid' lesson on accept.
     if settlement_mode in ("membership_covered", "free"):
         settlement_mode = "at_court"
-    online = settlement_mode == "online"
+    # ALREADY PAID? An online request now takes the money at booking time (see the gate in
+    # create_booking), so by the time the coach accepts, the order usually exists and is settled.
+    # Accepting must then CONFIRM it outright — not re-hold it behind a fresh 30-minute payment
+    # window it has already been through, and not raise a second order for money already taken.
+    _existing_order = bk.get("order_id")
+    _already_paid = bool(_existing_order) and _order_is_settled(session, _existing_order)
+    online = settlement_mode == "online" and not _already_paid
     status = "held" if online else "confirmed"
     held_until = (now + timedelta(minutes=HOLD_MINUTES_DEFAULT)) if online else None
 
@@ -1747,14 +1804,20 @@ def accept_booking(session, *, club_id, booking_id, actor_user_id, role, now=Non
         return _err("INTEGRITY_ERROR", 409)
 
     duration_minutes = int((ends - starts).total_seconds() // 60)
-    order = _create_order_guarded(
-        session, club_id=club_id, user_id=owner_user_id, booking_id=booking_id,
-        booking_type="lesson", settlement_mode=settlement_mode, parties=[],
-        resource_id=bk["resource_id"], starts_at=starts, ends_at=ends,
-        linked_booking_id=linked_court_id, audience="member",
-        duration_minutes=duration_minutes, token_wallet=token_wallet,
-        coach_user_id=coach_uid,       # price on THIS coach's own rate card…
-        product_id=gated_product_id)   # …and on the EXACT service they booked, not its cheapest sibling
+    # REUSE the order the request already carries. An online request is paid up front, so raising a
+    # second order here would bill the client twice for one lesson. Only a request that never had one
+    # (at-court / monthly / token) creates it now, exactly as before.
+    if _existing_order:
+        order = {"order_id": _existing_order, "checkout": None}
+    else:
+        order = _create_order_guarded(
+            session, club_id=club_id, user_id=owner_user_id, booking_id=booking_id,
+            booking_type="lesson", settlement_mode=settlement_mode, parties=[],
+            resource_id=bk["resource_id"], starts_at=starts, ends_at=ends,
+            linked_booking_id=linked_court_id, audience="member",
+            duration_minutes=duration_minutes, token_wallet=token_wallet,
+            coach_user_id=coach_uid,       # price on THIS coach's own rate card…
+            product_id=gated_product_id)   # …and on the EXACT service they booked, not its cheapest sibling
     order_id = order.get("order_id")
     if order_id:
         _attach_order(session, booking_id, order_id)
@@ -1815,10 +1878,44 @@ def decline_booking(session, *, club_id, booking_id, actor_user_id, role, reason
         text("UPDATE diary.booking SET status='cancelled', cancellation_reason=:r, "
              "cancelled_by=:by, cancelled_at=now(), updated_at=now() WHERE id=:id"),
         {"r": reason or "declined", "by": actor_user_id, "id": booking_id})
+
+    # GIVE THE MONEY BACK. An online request is paid UP FRONT (see the gate in create_booking), so a
+    # decline is the club keeping cash for a lesson it just refused. The coach's veto is about the
+    # TIME, never about whether the client owes — so the refund is automatic, not a chore someone has
+    # to remember. Guarded end to end: a gateway hiccup must not leave the lesson un-declined, so the
+    # decline stands either way and a failure is reported rather than raised.
+    refund = None
+    _oid = bk.get("order_id")
+    if _oid and _order_is_settled(session, _oid):
+        try:
+            from yoco_billing import execute_order_refund, RefundError
+            try:
+                execute_order_refund(session, order_id=_oid)
+                refund = {"ok": True}
+            except RefundError as e:
+                log.warning("declined lesson %s: refund failed (%s) — needs a human", booking_id, e.code)
+                refund = {"ok": False, "error": e.code, "message": e.message}
+        except Exception:
+            log.exception("declined lesson %s: refund path unavailable", booking_id)
+            refund = {"ok": False, "error": "refund_unavailable"}
+    else:
+        # Nothing was collected (at-court / monthly / token request) — void the owed order so the
+        # client isn't left with a debt for a lesson that never happened.
+        if _oid:
+            try:
+                from billing.statement import void_order
+                void_order(session, club_id=club_id, order_id=_oid, reason="lesson declined")
+            except Exception:
+                log.debug("declined lesson: order void skipped", exc_info=False)
+
     booking = _booking_dict(session, booking_id)
     other = booking.get("booked_by_user_id") if bk["status"] == "requested" else booking.get("coach_user_id")
-    _lesson_event(session, booking, "lesson_declined", other)
-    return {"ok": True, "booking": booking}
+    _lesson_event(session, booking, "lesson_declined", other,
+                  extra={"refunded": bool(refund and refund.get("ok"))})
+    out = {"ok": True, "booking": booking}
+    if refund is not None:
+        out["refund"] = refund
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1836,6 +1933,10 @@ def _payload(booking, res):
         "resource_name": (res or {}).get("name"),
         "starts_at": booking["starts_at"],
         "ends_at": booking["ends_at"],
+        # The booking's ACTUAL state, so an email can say what is true of THIS booking rather than
+        # what is usually true. emit dispatches on a background thread with its own session, so a
+        # template that tried to re-read this would see the pre-write row (or nothing at all).
+        "status": booking.get("status"),
         "settlement_mode": booking.get("settlement_mode"),
         # The .ics download (in-app 'Add to calendar'; the confirmation email attaches the same
         # file once SES/Klaviyo is wired). Matches contracts/events.md booking_confirmed.ics_url.

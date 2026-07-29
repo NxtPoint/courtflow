@@ -200,10 +200,28 @@ def _t_lesson_proposed(ctx):
 
 
 def _t_lesson_accepted(ctx):
+    """Say what is TRUE of the booking, not what is usually true.
+
+    This always read "Your lesson is confirmed". For a card-only coach the lesson was accepted into a
+    HELD, unpaid state with a short window to pay — so the one email that could have prompted payment
+    instead told the client there was nothing left to do, and the booking quietly lapsed. An online
+    request is now paid up front, so "confirmed" is normally right; when a booking is still awaiting
+    payment the email must say so and point at it."""
+    if str(ctx.get("status") or "").strip().lower() == "held":
+        return ("Your coach accepted — one step left",
+                "Your coach accepted your lesson. It isn't confirmed until it's paid — open it in "
+                "My Bookings to pay and lock in the slot.", "/portal")
     return ("Lesson confirmed", "Your lesson is confirmed — see it in My Bookings.", "/portal")
 
 
 def _t_lesson_declined(ctx):
+    # `refunded` is stated by the producer (diary.bookings.decline_booking), never re-derived here:
+    # emit runs on a background thread whose session cannot see the refund the caller just wrote.
+    if ctx.get("refunded"):
+        return ("Lesson declined — you've been refunded",
+                "Your coach couldn't take that lesson, so we've refunded your payment in full. It "
+                "can take a few days to show on your statement. Try another time or coach.",
+                "/portal")
     return ("Lesson request declined", "Your coach couldn't take that lesson. Try another time or "
             "coach.", "/portal")
 
