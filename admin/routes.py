@@ -1591,8 +1591,22 @@ def _coach_or_admin():
 @admin_bp.get("/coach-statement")
 def coach_statement():
     """GET /api/admin/coach-statement?month=YYYY-MM[&coach_user_id=]
-    Per-client: lessons, paid-via-Yoco, owed (arrears), net balance + the coach's running
-    ledger balance. A coach sees only their own; an admin may pass coach_user_id."""
+
+    THE COACH'S STATEMENT — the coach-side equivalent of a client invoice. Three blocks, and they
+    deliberately answer different questions on different date bases:
+
+      · `by_client`   — the existing per-client rollup (lessons, paid, owed, net).
+      · `sessions`    — THE WORK LOG: every session delivered this month, by client, by DAY, each
+                        saying where its money is (paid to club / collected by you / outstanding).
+                        Bounded on the SESSION's own date — "what did I teach in July".
+      · `settlement`  — THE MONEY: total collected × commission = owed to the club, minus what the
+                        club already holds, = net. Bounded on when the money ARRIVED, because
+                        commission is paid on funds received (docs/specs/01 §D7).
+
+    A lesson taught in July and paid in August therefore sits in July's work log as outstanding and
+    in August's settlement. That is the intended behaviour, not a mismatch — the UI says so.
+
+    A coach sees only their own; an admin may pass coach_user_id."""
     pr, err = _coach_or_admin()
     if err:
         return err
@@ -1605,6 +1619,27 @@ def coach_statement():
         return jsonify(error="no_coach"), 400
     with session_scope() as s:
         data = comm.coach_statement(s, club_id=pr.club_id, coach_user_id=coach_id, month=month)
+        # Additive — existing callers keep the shape they already read.
+        data["sessions"] = comm.coach_sessions_by_day(
+            s, club_id=pr.club_id, coach_user_id=coach_id, month=month)
+        settle = comm.coach_settlement(s, club_id=pr.club_id, coach_user_id=coach_id, month=month)
+        data["settlement"] = settle["settlement"]
+        data["ledger_detail"] = settle["ledger"]
+        data["coach_user_id"] = str(coach_id)
+        # The statement NAMES the coach when an admin reads it ("Colbert — statement"), so resolve it
+        # here where we already know who was asked for. Guarded: a missing name must not 500 a
+        # money document.
+        try:
+            from sqlalchemy import text as _t
+            data["coach_name"] = s.execute(
+                _t("SELECT COALESCE(cp.display_name, "
+                   "         NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)),''), u.email) "
+                   'FROM iam."user" u '
+                   "LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id AND cp.club_id = :c "
+                   "WHERE u.id = CAST(:u AS uuid)"),
+                {"c": pr.club_id, "u": str(coach_id)}).scalar()
+        except Exception:
+            data["coach_name"] = None
     return jsonify(data), 200
 
 

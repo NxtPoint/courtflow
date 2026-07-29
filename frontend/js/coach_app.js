@@ -92,7 +92,7 @@
     if (top === "roster") return renderRoster(parts[1]);
     if (top === "class") return renderClassEvent(parts[1]);
     if (top === "txn") return renderTxn(parts[1]);
-    if (top === "money") return renderMoney();
+    if (top === "money") return parts[1] === "statement" ? renderStatement() : renderMoney();
     if (top === "setup") return renderSetup(parts[1]);
     if (top === "service") return renderService(parts[1]);
     if (top === "profile") return renderProfilePage();
@@ -617,7 +617,37 @@
         else if (t.kind === "txn") go("#/txn/" + t.id);
         else if (t.kind === "person") go("#/client/" + t.id);
       },
-      homeExtra: function () { return disputesCard(); },
+      homeExtra: function () {
+        var box = el("div", {});
+        // THE SETTLEMENT STATEMENT. The P&L above answers "how am I doing"; this answers "what do we
+        // owe each other, and which sessions is that made of" — the coach-side of a client invoice.
+        var c = card([
+          el("h2", { style: "margin:0 0 6px", text: "Your statement" }),
+          el("p", { class: "cf-muted", style: "margin:-2px 0 8px;font-size:.85rem", text:
+            "Sessions by client and day, where each payment sits, and the net between you and the club." }),
+          el("div", { class: "cf-row", style: "justify-content:flex-end" }, [
+            el("button", { class: "cf-btn cf-btn-primary cf-btn-sm", text: "Open statement",
+              onclick: function () { go("#/money/statement"); } }),
+          ]),
+        ]);
+        box.appendChild(c);
+        box.appendChild(disputesCard());
+        return box;
+      },
+    });
+  }
+
+  // The coach's OWN settlement statement — the SAME shared widget the admin opens for any coach.
+  // Role is the only difference: this one says "you", and has no payout action (the club records that).
+  function renderStatement() {
+    ensureMonth();
+    var host = el("div", {});
+    set(host);
+    window.Widgets.CoachStatement.mount(host, {
+      scope: { role: "coach" },
+      month: MONTH,
+      back: { label: "Money", hash: "#/money" },
+      load: function (_cid, month) { MONTH = month || MONTH; return window.CoachAPI.statement(month); },
     });
   }
   // The coach's pending refund-request queue — an ACTION card below the earnings (a dispute is a decision

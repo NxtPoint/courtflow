@@ -3785,7 +3785,122 @@ def sc_ledger_direction_follows_who_holds_the_cash(s, fx):
           "balance moved twice")
 
 
+def sc_coach_settlement_statement(s, fx):
+    """THE COACH'S STATEMENT MATH, and that it reconciles to the ledger.
+
+        total collected (club-held + coach-held) x commission = owed to the club
+        - what the club already holds
+        = NET   (+ club pays the coach / - the coach pays the club)
+
+    Two things are pinned here. First the ARITHMETIC, in both directions: a month where the CLUB
+    collected leaves the club owing the coach; a month where the COACH collected leaves the coach
+    owing the club its commission - and the sign has to flip on its own, with no separate branch.
+
+    Second, and the reason this deserves a scenario: the net derived from `commission_split` must
+    EQUAL what `coach_ledger` accumulated. They are two views of one event written by one function,
+    so a disagreement means something posted one without the other - exactly the class of bug that
+    had the ledger reading backwards for every off-platform collection. The statement carries
+    `reconciles` so a drift appears ON THE DOCUMENT rather than being averaged into a number nobody
+    can check."""
+    print("\n# Coach settlement statement: the math, both directions, and it ties to the ledger")
+    from billing.commission import coach_settlement, coach_sessions_by_day
+
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',20,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+
+    def lesson(hour, amount, *, mode="at_court"):
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                             booking_type="lesson", resource_id=fx.coach_res,
+                             coach_user_id=fx.coach_uid, starts_at=iso(at(fx, hour)),
+                             ends_at=iso(at(fx, hour + 1)), settlement_mode=mode)
+        oid = r["booking"]["order_id"]
+        # The fixture prices lessons at one rate; re-state the line so each leg is a distinct figure.
+        s.execute(text("UPDATE billing.order_line SET amount_minor=:a WHERE order_id=:o"),
+                  {"a": amount, "o": oid})
+        s.execute(text('UPDATE billing."order" SET amount_minor=:a WHERE id=:o'),
+                  {"a": amount, "o": oid})
+        return oid
+
+    def settle():
+        return coach_settlement(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)["settlement"]
+
+    # ---- (1) CLUB-COLLECTED: desk/online payment. Club holds R400, its cut R80 -> owes R320. ----
+    o1 = lesson(9, 40000)
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=o1, amount_minor=40000, provider="eft",
+                          provider_payment_id="EFT-1", user_id=fx.member)
+    st = settle()
+    check("club-held collection is R400", st["club_held_minor"] == 40000, str(st))
+    check("nothing is with the coach yet", st["coach_held_minor"] == 0, str(st))
+    check("commission owed to the club is R80 (20%)", st["commission_minor"] == 8000, str(st))
+    check("NET = +R320 - the club is holding the coach's share",
+          st["net_minor"] == 32000, str(st["net_minor"]))
+    check("...and it ties to the coach ledger exactly", st["reconciles"] is True,
+          f"splits={st['net_minor']} ledger={st['ledger_commission_minor']}")
+
+    # ---- (2) COACH-COLLECTED off-platform: he takes R500 courtside; club is owed its R100. ----
+    o2 = lesson(11, 50000)
+    ol2 = _line_of(s, o2)
+    _seed_owed_arrears(s, fx, ol2, gross=50000)
+    aid2 = s.execute(text("SELECT id FROM billing.coach_arrears WHERE order_line_id=:ol"),
+                     {"ol": ol2}).scalar()
+    CM.mark_arrears_collected(s, club_id=fx.club_id, arrears_id=aid2)
+    st2 = settle()
+    check("the coach is now holding R500", st2["coach_held_minor"] == 50000, str(st2))
+    check("total collected is R900 across both", st2["total_collected_minor"] == 90000, str(st2))
+    check("commission on ALL of it is R180", st2["commission_minor"] == 18000, str(st2))
+    check("NET = R400 - R180 = +R220 (club still owes the coach, but less)",
+          st2["net_minor"] == 22000, str(st2["net_minor"]))
+    check("...still tying to the ledger", st2["reconciles"] is True,
+          f"splits={st2['net_minor']} ledger={st2['ledger_commission_minor']}")
+
+    # ---- (3) THE SIGN FLIPS on its own once the coach holds enough ----
+    o3 = lesson(13, 200000)
+    ol3 = _line_of(s, o3)
+    _seed_owed_arrears(s, fx, ol3, gross=200000)
+    aid3 = s.execute(text("SELECT id FROM billing.coach_arrears WHERE order_line_id=:ol"),
+                     {"ol": ol3}).scalar()
+    CM.mark_arrears_collected(s, club_id=fx.club_id, arrears_id=aid3)
+    st3 = settle()
+    check("the coach now holds R2500", st3["coach_held_minor"] == 250000, str(st3))
+    check("total collected is R2900", st3["total_collected_minor"] == 290000, str(st3))
+    check("NET goes NEGATIVE - the COACH now owes the club", st3["net_minor"] < 0,
+          str(st3["net_minor"]))
+    check("...by exactly R400 - 20% of R2900 = -R180", st3["net_minor"] == 40000 - 58000,
+          str(st3["net_minor"]))
+    check("...and the ledger agrees on the way down too", st3["reconciles"] is True,
+          f"splits={st3['net_minor']} ledger={st3['ledger_commission_minor']}")
+    check("the ledger BALANCE is that same figure",
+          CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == st3["net_minor"],
+          str(CM.coach_balance(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)))
+
+    # ---- (4) THE WORK LOG: sessions by client, by day, each saying where its money is ----
+    # The work log is bounded on the SESSION's own date and the fixture books 3 days out, so ask for
+    # the FIXTURE's month — `now()` would return nothing for the last 3 days of every month and read
+    # as a regression. (Same trap as sc_activity_summary; see CLAUDE.md.)
+    ym = fx.target.strftime("%Y-%m")
+    log = coach_sessions_by_day(s, club_id=fx.club_id, coach_user_id=fx.coach_uid, month=ym)
+    tot = log["totals"]
+    check("all three sessions are on the work log", tot["sessions"] >= 3, str(tot))
+    custody = {r["custody"] for c in log["clients"] for r in c["rows"]}
+    check("the log distinguishes club-held from coach-held money",
+          "to_club" in custody and "with_coach" in custody, str(custody))
+    check("every row carries the DAY it was taught",
+          all(r["date"] for c in log["clients"] for r in c["rows"]), "a row has no date")
+    check("...and its client", all(c["client_name"] for c in log["clients"]))
+
+    # ---- (5) An UNPAID lesson is OUTSTANDING - with neither party yet ----
+    lesson(15, 30000)
+    log2 = coach_sessions_by_day(s, club_id=fx.club_id, coach_user_id=fx.coach_uid, month=ym)
+    check("the unpaid lesson shows as OUTSTANDING (never silently 'earned')",
+          log2["totals"]["outstanding_minor"] == 30000, str(log2["totals"]))
+    st5 = settle()
+    check("...and it does NOT move the settlement - commission is on funds RECEIVED",
+          st5["net_minor"] == st3["net_minor"], str(st5["net_minor"]))
+
+
 SCENARIOS = [
+    sc_coach_settlement_statement,
     sc_service_editor_child_ownership,
     sc_removed_variation_stays_removed,
     sc_confirmation_email_block,

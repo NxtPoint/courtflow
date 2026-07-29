@@ -1338,6 +1338,245 @@ def settlement_overview(session, *, club_id) -> Dict[str, Any]:
             "total_owed_minor": sum(c["owed_minor"] for c in client_rows)}
 
 
+def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dict[str, Any]:
+    """THE WORK LOG: every session this coach delivered in the month, by CLIENT, by DAY.
+
+    Bounded on the **SESSION's own date** (`diary.booking.starts_at` / `class_session.starts_at`), not
+    the order date \u2014 "what did I teach in July" is a question about when the lesson happened. A lesson
+    booked in June for July belongs to July; a back-captured past lesson belongs to the day it ran.
+    (The SETTLEMENT half of the statement is bounded on when the MONEY arrived instead \u2014 see
+    `coach_settlement`. The two deliberately differ, and the statement says so.)
+
+    Each row carries what it cost, whether it is settled, and \u2014 the point of the exercise \u2014 WHERE THAT
+    MONEY IS: with the club, with the coach, or not yet collected. Guarded \u2192 empty."""
+    ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    try:
+        rows = session.execute(
+            text("""
+                WITH src AS (
+                    -- LESSONS the coach delivers (his own resource / denormalised coach_user_id).
+                    SELECT b.starts_at, b.ends_at,
+                           -- booked_by_user_id IS the client: an on-behalf booking sets it to the
+                           -- client, not the acting staff member (created_by_user_id is the actor).
+                           b.booked_by_user_id AS client_user_id,
+                           ol.order_id, ol.amount_minor, 'lesson' AS kind,
+                           COALESCE(pr.name, ol.description) AS service
+                    FROM diary.booking b
+                    JOIN billing.order_line ol ON ol.booking_id = b.id
+                    LEFT JOIN billing.price   p2 ON p2.id = ol.price_id
+                    LEFT JOIN billing.product pr ON pr.id = p2.product_id
+                    WHERE b.club_id = :club AND b.coach_user_id = CAST(:coach AS uuid)
+                      AND b.booking_type = 'lesson'
+                      AND b.status IN ('confirmed','completed','held')
+                      AND to_char(b.starts_at, 'YYYY-MM') = :ym
+                    UNION ALL
+                    -- CLASSES he runs: one row per enrolled seat (that is what he is paid on).
+                    SELECT cls.starts_at, cls.ends_at, e.user_id AS client_user_id,
+                           ol.order_id, ol.amount_minor, 'class' AS kind,
+                           COALESCE(pr.name, ol.description) AS service
+                    FROM diary.class_session cls
+                    JOIN diary.enrolment e ON e.class_session_id = cls.id
+                                          AND e.status IN ('enrolled','attended')
+                    JOIN billing.order_line ol ON ol.enrolment_id = e.id
+                    LEFT JOIN billing.price   p2 ON p2.id = ol.price_id
+                    LEFT JOIN billing.product pr ON pr.id = p2.product_id
+                    WHERE cls.club_id = :club AND cls.coach_user_id = CAST(:coach AS uuid)
+                      AND cls.status <> 'cancelled'
+                      AND to_char(cls.starts_at, 'YYYY-MM') = :ym
+                )
+                SELECT src.*, o.status AS order_status, o.settlement_mode,
+                       COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)),''),
+                                u.email, 'Walk-in') AS client_name,
+                       -- Did any REAL money land on the platform for this order? That is what
+                       -- separates "the club has it" from "the coach collected it himself":
+                       -- mark_arrears_collected flips the order to paid with NO payment row at all.
+                       COALESCE((SELECT SUM(pm.amount_minor) FROM billing.payment pm
+                                  WHERE pm.order_id = o.id AND pm.direction = 'charge'
+                                    AND pm.status = 'succeeded'
+                                    AND pm.provider IN ('yoco','eft')), 0) AS to_bank,
+                       COALESCE((SELECT SUM(pm.amount_minor) FROM billing.payment pm
+                                  WHERE pm.order_id = o.id AND pm.direction = 'charge'
+                                    AND pm.status = 'succeeded'
+                                    AND pm.provider IN ('cash','card_at_desk')), 0) AS to_desk
+                FROM src
+                LEFT JOIN billing."order" o ON o.id = src.order_id
+                LEFT JOIN iam."user" u ON u.id = src.client_user_id
+                ORDER BY client_name, src.starts_at
+            """),
+            {"club": club_id, "coach": str(coach_user_id), "ym": ym},
+        ).mappings().all()
+    except Exception:
+        session.rollback()
+        log.exception("coach_sessions_by_day failed")
+        rows = []
+
+    clients: Dict[str, Dict[str, Any]] = {}
+    totals = {"sessions": 0, "billed_minor": 0, "to_club_minor": 0,
+              "with_coach_minor": 0, "outstanding_minor": 0, "not_charged_minor": 0}
+
+    for r in rows:
+        amt = int(r["amount_minor"] or 0)
+        st = (r["order_status"] or "").lower()
+        mode = (r["settlement_mode"] or "").lower()
+        # WHERE IS THE MONEY? Order status alone can't say (see BUSINESS-RULES §6): a coach's
+        # off-platform collection is `paid` with ZERO payment rows, because the cash never touched
+        # the platform. So: paid + a real charge -> the club has it; paid + nothing -> the coach does.
+        if mode in ("membership_covered", "free", "token") or amt <= 0:
+            custody, label = "not_charged", "No charge"
+        elif st == "paid" and (int(r["to_bank"] or 0) + int(r["to_desk"] or 0)) > 0:
+            custody, label = "to_club", "Paid to club"
+        elif st == "paid":
+            custody, label = "with_coach", "Collected by you"
+        elif st in ("written_off", "refunded", "void"):
+            custody, label = "not_charged", st.replace("_", " ").title()
+        else:
+            custody, label = "outstanding", "Outstanding"
+
+        key = str(r["client_user_id"]) if r["client_user_id"] else "_walkin"
+        c = clients.setdefault(key, {
+            "client_user_id": (str(r["client_user_id"]) if r["client_user_id"] else None),
+            "client_name": r["client_name"], "rows": [],
+            "totals": {"sessions": 0, "billed_minor": 0, "to_club_minor": 0,
+                       "with_coach_minor": 0, "outstanding_minor": 0, "not_charged_minor": 0}})
+        c["rows"].append({
+            "date": r["starts_at"].date().isoformat() if r["starts_at"] else None,
+            "starts_at": r["starts_at"].isoformat() if r["starts_at"] else None,
+            "kind": r["kind"],
+            "service": r["service"] or ("Class" if r["kind"] == "class" else "Lesson"),
+            "amount_minor": amt,
+            "order_id": str(r["order_id"]) if r["order_id"] else None,
+            "order_status": st or None,
+            "custody": custody,
+            "custody_label": label,
+        })
+        for scope in (c["totals"], totals):
+            scope["sessions"] += 1
+            scope["billed_minor"] += amt
+            scope[custody + "_minor"] += amt
+
+    out = sorted(clients.values(),
+                 key=lambda c: (-c["totals"]["outstanding_minor"], c["client_name"] or ""))
+    return {"month": ym, "clients": out, "totals": totals}
+
+
+def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str, Any]:
+    """THE SETTLEMENT MATH \u2014 what the club and the coach owe each other for the month.
+
+        total collected (club-held + coach-held)  \u00d7 commission  =  owed to the club
+        \u2212 what the club is already holding
+        =  NET  (+ club pays the coach \u00b7 \u2212 the coach pays the club)
+
+    Bounded on when the MONEY ARRIVED (`commission_split.occurred_at`), never the sale date \u2014 the
+    owner's rule is that commission is paid on funds RECEIVED (docs/specs/01 \u00a7D7), so a lesson taught
+    in July and paid in August settles in August.
+
+    **`commission_split.basis` IS the custody marker.** `arrears_commission` is written by
+    `mark_arrears_collected`, which is off-platform by definition \u2014 the coach took the cash himself.
+    Everything else was collected through the platform, so the club holds it. Nothing needs deriving
+    from payment providers here, and the split rows are the same ones the Money tab reports on.
+
+    The net computed here is, by construction, the same figure the `coach_ledger` accumulates:
+    a club-held collection posts `+coach_net`, a coach-held one posts `\u2212owner_cut`, and
+    `\u03a3(gross_club \u2212 owner_cut_club) \u2212 \u03a3 owner_cut_coach == gross_club \u2212 \u03a3 owner_cut`. `reconciles`
+    asserts exactly that against the ledger, so a drift shows up on the document instead of hiding.
+    Guarded \u2192 zeroes."""
+    ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    z = {"club_held_minor": 0, "coach_held_minor": 0, "total_collected_minor": 0,
+         "commission_minor": 0, "clawback_minor": 0, "net_minor": 0, "effective_pct": None}
+    try:
+        r = session.execute(
+            text("""
+                SELECT
+                  -- The OWNER side carries the club's cut; gross_minor is the sale it was cut from.
+                  COALESCE(SUM(gross_minor) FILTER (
+                      WHERE basis IN ('lesson_commission','class_commission')), 0) AS club_gross,
+                  COALESCE(SUM(gross_minor) FILTER (
+                      WHERE basis = 'arrears_commission'), 0)                      AS coach_gross,
+                  COALESCE(SUM(amount_minor) FILTER (
+                      WHERE basis <> 'refund_clawback'), 0)                        AS commission,
+                  COALESCE(SUM(amount_minor) FILTER (
+                      WHERE basis = 'refund_clawback'), 0)                         AS clawback,
+                  COALESCE(SUM(gross_minor) FILTER (
+                      WHERE basis = 'refund_clawback'), 0)                         AS refunded_gross
+                FROM billing.commission_split
+                WHERE club_id = :club AND coach_user_id = CAST(:coach AS uuid)
+                  AND party_type = 'owner'
+                  AND to_char(occurred_at, 'YYYY-MM') = :ym
+            """),
+            {"club": club_id, "coach": str(coach_user_id), "ym": ym},
+        ).mappings().first() or {}
+    except Exception:
+        session.rollback()
+        log.exception("coach_settlement splits failed")
+        r = {}
+
+    g = lambda k: int((r or {}).get(k) or 0)                                   # noqa: E731
+    club_held = g("club_gross")
+    coach_held = g("coach_gross")
+    total = club_held + coach_held
+    # A clawback is a NEGATIVE owner split (commission returned on a refund) — it reduces what the
+    # club is owed, so it belongs in the commission figure rather than beside it.
+    commission = g("commission") + g("clawback")
+    net = club_held - commission
+    st = {"club_held_minor": club_held, "coach_held_minor": coach_held,
+          "total_collected_minor": total, "commission_minor": commission,
+          "clawback_minor": g("clawback"), "refunded_gross_minor": g("refunded_gross"),
+          "net_minor": net,
+          "effective_pct": (round(commission * 100.0 / total, 2) if total else None)}
+
+    # --- the ledger side: rent, payouts and adjustments this month, + the running balance ---------
+    led = {"rent_minor": 0, "payouts_minor": 0, "adjustments_minor": 0,
+           "commission_entries_minor": 0, "balance_minor": 0, "entries": []}
+    try:
+        rows = session.execute(
+            text("SELECT entry_type, amount_minor, note, ref_id, occurred_at "
+                 "FROM billing.coach_ledger "
+                 "WHERE club_id = :club AND coach_user_id = CAST(:coach AS uuid) "
+                 "  AND to_char(occurred_at,'YYYY-MM') = :ym "
+                 "ORDER BY occurred_at"),
+            {"club": club_id, "coach": str(coach_user_id), "ym": ym},
+        ).mappings().all()
+        for e in rows:
+            amt = int(e["amount_minor"] or 0)
+            if e["entry_type"] == "rent_charge":
+                led["rent_minor"] += amt
+            elif e["entry_type"] == "payout":
+                led["payouts_minor"] += amt
+            elif e["entry_type"] == "adjustment":
+                led["adjustments_minor"] += amt
+            else:                                     # commission_earning | commission_due
+                led["commission_entries_minor"] += amt
+            led["entries"].append({
+                "entry_type": e["entry_type"], "amount_minor": amt,
+                "note": e["note"], "ref_id": e["ref_id"],
+                "occurred_at": e["occurred_at"].isoformat() if e["occurred_at"] else None})
+        led["balance_minor"] = int(session.execute(
+            text("SELECT COALESCE(SUM(amount_minor),0) FROM billing.coach_ledger "
+                 "WHERE club_id = :club AND coach_user_id = CAST(:coach AS uuid)"),
+            {"club": club_id, "coach": str(coach_user_id)}).scalar() or 0)
+    except Exception:
+        session.rollback()
+        log.exception("coach_settlement ledger failed")
+
+    # The document's own audit line. The month's commission ENTRIES must equal the net derived from
+    # the splits — they are two views of the same event, so a mismatch means something wrote one
+    # without the other and the statement should SAY so rather than quietly present a wrong number.
+    st["ledger_commission_minor"] = led["commission_entries_minor"]
+    st["reconciles"] = (led["commission_entries_minor"] == net)
+    # What actually changes hands after rent and anything already settled this month.
+    st["due_now_minor"] = net + led["rent_minor"] + led["adjustments_minor"] + led["payouts_minor"]
+    return {"month": ym, "settlement": st, "ledger": led,
+            "currency": _club_currency_code(session, club_id)}
+
+
+def _club_currency_code(session, club_id):
+    try:
+        return session.execute(text("SELECT currency_code FROM club.club WHERE id = :c"),
+                               {"c": club_id}).scalar() or "ZAR"
+    except Exception:
+        return "ZAR"
+
+
 def coach_statement(session, *, club_id, coach_user_id, month=None) -> Dict[str, Any]:
     """The coach month-end statement (docs/specs/01 — the coach's most-wanted surface).
     For the given month (YYYY-MM, default current), per CLIENT:

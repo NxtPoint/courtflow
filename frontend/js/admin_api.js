@@ -238,6 +238,14 @@
     coachStatement: function (month) {
       return A().apiJSON("/api/admin/financials/coach-statement" + (month ? "?month=" + enc(month) : ""));
     },
+    // GET /api/admin/coach-statement?coach_user_id=&month= -> ONE coach's settlement statement:
+    // by_client + sessions (the work log, by day) + settlement (the money math) + ledger_detail.
+    coachSettlementStatement: function (coachUserId, month) {
+      var q = [];
+      if (coachUserId) q.push("coach_user_id=" + enc(coachUserId));
+      if (month) q.push("month=" + enc(month));
+      return A().apiJSON("/api/admin/coach-statement" + (q.length ? "?" + q.join("&") : ""));
+    },
 
     // ---- equipment hire (ball machine / racquets / balls) ----------------
     equipment: function () { return A().apiJSON("/api/admin/equipment"); },

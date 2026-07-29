@@ -721,7 +721,7 @@
     if (section === "invoice") return moneyInvoice();
     if (section === "sales") return moneySales();
     if (section === "revenue") return moneyRevenue();
-    if (section === "coach-statement") return moneyCoachStatement();
+    if (section === "coach-statement") return sub ? coachSettlement(sub) : moneyCoachStatement();
     if (section === "bookings") return moneyBookings();
     if (section === "approvals") return moneyApprovals();
     if (section === "activity") return moneyActivity();
@@ -1025,6 +1025,30 @@
   // bank) with desk cash (your till OR the coach's pocket) and a coach's off-platform collection (the
   // coach only) — this screen pulls those apart. Read-only; it states what it knows and flags what it
   // can't know rather than guessing.
+  // ONE coach's settlement statement — the coach-side equivalent of a client invoice. The SAME shared
+  // widget the coach sees of themselves (Widgets.CoachStatement); admin differs only by config: it
+  // names the coach rather than saying "you", and it can record the payout that clears the balance.
+  function coachSettlement(coachUserId) {
+    var host = el("div", {});
+    set(host);
+    window.Widgets.CoachStatement.mount(host, {
+      scope: { role: "admin" },
+      coachUserId: coachUserId,
+      month: MONEY_MONTH,
+      back: { label: "Coach statement", hash: "#/money/coach-statement" },
+      load: function (cid, month) { return window.AdminAPI.coachSettlementStatement(cid, month); },
+      onRecordPayout: function (data, refresh) {
+        // Reuses the existing payout modal — one way to record a payout, wherever you start from.
+        recordPayoutModal({
+          coach_user_id: coachUserId,
+          name: data.coach_name,                       // recordPayoutModal reads `name`, not coach_name
+          currency: data.currency,
+          ledger_balance_minor: (data.ledger_detail || {}).balance_minor || 0,
+        }, refresh);
+      },
+    });
+  }
+
   async function moneyCoachStatement() {
     loading();
     var data;
@@ -1099,8 +1123,14 @@
       var nc = node.custody || {}, nf = node.fold || {};
       var head = el("div", { class: "cf-row", style: "justify-content:space-between;align-items:baseline;margin:18px 2px 4px" }, [
         el("div", { style: "font-weight:700;font-size:1.02rem", text: node.coach_name || "Club" }),
-        el("div", { class: "cf-muted", style: "font-size:.84rem", text:
-          money(nf.paid_minor || 0, cur) + " collected · " + money(nc.in_bank_minor || 0, cur) + " to bank" }),
+        el("div", { class: "cf-row", style: "gap:10px;align-items:baseline" }, [
+          el("div", { class: "cf-muted", style: "font-size:.84rem", text:
+            money(nf.paid_minor || 0, cur) + " collected · " + money(nc.in_bank_minor || 0, cur) + " to bank" }),
+          // This screen answers "where is the money" club-wide. A COACH's own settlement statement —
+          // what we owe each other, and the sessions behind it — is a document in its own right.
+          node.coach_user_id ? el("button", { class: "cf-btn cf-btn-sm", text: "Statement →",
+            onclick: function () { go("#/money/coach-statement/" + node.coach_user_id); } }) : null,
+        ].filter(Boolean)),
       ]);
       wrap.appendChild(head);
       if ((nc.not_in_bank_minor || 0) > 0) {
