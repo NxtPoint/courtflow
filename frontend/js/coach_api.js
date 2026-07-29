@@ -262,6 +262,11 @@
       return A().apiJSON("/api/coach/classes/sessions/" + enc(sessionId) + "/cancel",
         { method: "POST", body: body || {} });
     },
+    // PATCH /api/coach/classes/sessions/:session_id -- MOVE one of his own sessions.
+    rescheduleClassSession: function (sessionId, body) {
+      return A().apiJSON("/api/coach/classes/sessions/" + enc(sessionId),
+        { method: "PATCH", body: body || {} });
+    },
 
     // ---- class rosters / attendance (shared diary lane) -----------------
     // GET /api/diary/classes/:session_id/roster

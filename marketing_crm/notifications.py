@@ -205,6 +205,23 @@ def _t_lesson_booked(ctx):
     return ("New lesson booked", body, "/coach")
 
 
+def _t_class_booked(ctx):
+    """The class mirror of `_t_lesson_booked` — the coach's OWN notification about a seat taken.
+
+    Same reasoning: a class only ever BCC'd him on the player's "you're enrolled" receipt, which is
+    written for them. This is addressed to him and says what he needs — who, when, how full."""
+    who = _g(ctx, "player_name", "client_name", default="Someone")
+    cls = _g(ctx, "class_name", "resource_name", default="your class")
+    when = _when(ctx)
+    body = f"{who} joined {cls}" + (f" on {when}" if when else "") + "."
+    left = ctx.get("spots_left")
+    if left is not None:
+        body += " The class is now full." if int(left) <= 0 else \
+                f" {int(left)} spot{'' if int(left) == 1 else 's'} left."
+    body += " Open the roster to see who's coming, or to reschedule the session."
+    return ("New class booking", body, "/coach")
+
+
 # Booking/money lifecycle — cancellations, edits, refunds, reminders (client-facing, launch-critical).
 def _t_booking_cancelled(ctx):
     res = _g(ctx, "resource_name", default="your booking")
@@ -232,6 +249,22 @@ def _t_booking_rescheduled(ctx):
     return ("Booking updated", body, "/portal")
 
 
+def _t_class_rescheduled(ctx):
+    """The class mirror of `_t_booking_rescheduled` — a session has MOVED, so say where to.
+
+    Fanned out per enrolled player by `diary.classes.reschedule_session` (the raw session carries no
+    recipient). The old time is stated as well as the new one: someone who has already put the class
+    in their calendar needs to know which entry to change."""
+    cls = _g(ctx, "class_name", "resource_name", default="Your class")
+    when = _when(ctx)
+    body = f"{cls} has been moved" + (f" to {when}" if when else "") + "."
+    court = ctx.get("court_name")
+    if court:
+        body += f" It's now on {court}."
+    body += " Your place is kept — nothing to re-book."
+    return ("Your class has moved", body, "/portal")
+
+
 def _t_payment_refunded(ctx):
     amt = _money(_g(ctx, "amount_minor"), _g(ctx, "currency_code", "currency"))
     body = ("We've refunded" + (f" {amt}" if amt else " your payment") +
@@ -242,11 +275,19 @@ def _t_payment_refunded(ctx):
 
 
 def _t_class_cancelled(ctx):
+    """State what happened to the money, don't promise it.
+
+    This read "Any payment for it will be refunded or credited" — which the code did NOT do: cancelling
+    a session only VOIDED owed orders, and void deliberately skips a paid one, so an online payer kept
+    nothing but this sentence. Now a club-cancelled class refunds, and the email says so as a fact."""
     cls = _g(ctx, "class_name", "resource_name", default="your class")
     when = _when(ctx)
-    body = f"{cls}" + (f" on {when}" if when else "") + \
-           " has been cancelled. Any payment for it will be refunded or credited."
-    return ("Class cancelled", body, "/portal")
+    body = f"{cls}" + (f" on {when}" if when else "") + " has been cancelled."
+    if ctx.get("refunded"):
+        return ("Class cancelled — you've been refunded",
+                body + " We've refunded your payment in full; it can take a few days to show on "
+                       "your statement.", "/portal")
+    return ("Class cancelled", body + " You won't be charged for it.", "/portal")
 
 
 def _t_booking_reminder(ctx):
@@ -294,11 +335,13 @@ KIND_MAP = {
     "statement_ready":       _t_statement_ready,         # month-end: balance reminder → pay online
     "invoice_issued":        _t_invoice_issued,          # issued invoice DOCUMENT (summary + PDF + pay-online)
     "lesson_booked":         _t_lesson_booked,           # THE coach's notification (→ coach)
+    "class_booked":          _t_class_booked,            # THE coach's notification for a class (→ coach)
     # Booking/money lifecycle — these WERE emitted but silent (no map entry = no email/inbox).
     "booking_cancelled":     _t_booking_cancelled,       # court/lesson cancel (→ booker)
     "booking_rescheduled":   _t_booking_rescheduled,     # court/lesson moved (→ booker)
     "payment_refunded":      _t_payment_refunded,         # money-back-to-card (→ payer)
     "class_cancelled":       _t_class_cancelled,          # session cancelled (→ each enrolled, fanned out)
+    "class_rescheduled":     _t_class_rescheduled,        # session moved (→ each enrolled, fanned out)
     "booking_reminder":      _t_booking_reminder,         # T-24h / T-2h (→ booker)
 }
 
@@ -391,13 +434,11 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
     #    MULTI-TENANT: the club's name becomes the email's From display name + signature, and the
     #    club's contact email its Reply-To — all riding one verified CourtFlow SES identity.
     ident = _club_identity(session, club_id)
-    # NO COACH BCC ON A LESSON — he now gets `lesson_booked`, addressed to him, so copying him on the
-    # client's receipt as well would just be the same news twice. A CLASS still BCCs its coach: the
-    # class lifecycle is separate and hasn't been through this yet.
-    _coach_bcc = None
-    if (detail or {}).get("booking_type") != "lesson":
-        _coach_bcc = booking_detail.coach_email(detail)
-    bcc = list(filter(None, [ident.get("bcc"), _coach_bcc]))
+    # NO COACH BCC AT ALL. A coach now gets his OWN addressed email — `lesson_booked` for a lesson,
+    # `class_booked` for a class — so blind-copying him on the client's receipt is the same news
+    # twice, in words written for someone else. A court booking has no coach to copy in the first
+    # place, so this drops nothing else.
+    bcc = list(filter(None, [ident.get("bcc")]))
 
     status = _try_email(recipient.get("email"), title, body, recipient.get("name"),
                         from_name=ident.get("from_name"), reply_to=ident.get("reply_to"),

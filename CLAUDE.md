@@ -26,11 +26,11 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 362 / billing 492 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 390 / billing 492 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (43/70/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (44/70/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. The check counts below are the gate line's, not per-bullet totals —
    **update line 25 only**, so the numbers can't drift apart.
@@ -403,12 +403,12 @@ AND matches the pack off `bk["product_id"]`. **If you add a column here, add it 
 too** — it returns `None` otherwise and the fallback silently bites again. Guarded by
 `sc_gated_lesson_bills_the_booked_service`.
 
-**Lesson approval lifecycle (accept / propose / decline).** Per-coach `iam.coach_profile.review_bookings`:
-ON → a CLIENT self-booking with that coach creates a **`requested`** booking reserving NOTHING until the coach
-acts; a coach/admin **on-behalf** booking ALWAYS auto-confirms. Coach actions `POST /api/diary/bookings/<id>/
-{accept,propose,decline}`: accept → assign court + settle → `confirmed`; propose → `proposed` (client
-accepts/declines/withdraws in My Bookings → "Needs your attention"); decline → `cancelled`. `requested`/
-`proposed` are in the status CHECK but NOT the GiST exclusion (they hold no slot).
+**Lesson lifecycle — there is ONE flow, and no approval gate.** A lesson books exactly like a court:
+it reserves coach ∩ court immediately, and the settlement mode alone decides `held` (online, awaiting
+payment) vs `confirmed`. `iam.coach_profile.review_bookings` gates nothing; `accept`/`propose`/`decline`
+and the `requested`/`proposed` statuses were **deleted 2026-07-29**. A coach who doesn't want a time
+**reschedules or cancels** it — and a paid lesson cancelled by the club refunds itself. Full reasoning +
+what must never be restored: the "THERE IS ONE LESSON FLOW" bullet in Gotchas.
 
 **"Pay all" settlement orders — the wrapper OWNS its contents.** A settlement order stands in for N real
 debts. Its coverage is snapshotted **immutably** on `billing."order".covered_order_ids` at creation; the
@@ -737,8 +737,8 @@ member by email on the first authenticated hit.
   to the coach (in-app + email: "open it to reschedule or cancel"). Who got told used to depend on
   the settlement mode AND the review flag — only a gated booking emailed him directly, elsewhere he
   was a BCC on the CLIENT's receipt, and a client who made a request got nothing at all. **The coach
-  BCC is now dropped for lessons** (he has his own mail; a class still BCCs — that lifecycle is
-  separate). An ONLINE lesson confirms in the PAYMENT path, which `_emit_confirmed` never reaches,
+  BCC is dropped entirely** — a class now emits `class_booked` to him the same way, so nothing is
+  left to blind-copy. An ONLINE lesson confirms in the PAYMENT path, which `_emit_confirmed` never reaches,
   so `billing.events` calls `notify_coach_of_confirmed_order` — without it the coach would hear
   about every lesson EXCEPT the paid ones.
 - **A PAID lesson cancelled BY THE CLUB refunds itself.** Cancel used to void owed orders and leave a
@@ -761,6 +761,40 @@ member by email on the first authenticated hit.
   read state the PRODUCER passes on the payload (`_payload` carries `status`; `_lesson_event(...,
   extra=)` carries outcomes) — emit dispatches on a background thread whose session cannot see the
   caller's uncommitted work.
+- **A CLASS HAS THREE VERBS, AND CANCEL GIVES THE MONEY BACK (2026-07-29).** The class lifecycle got
+  the same treatment as the lesson one, and had three holes:
+  (a) **`reschedule_session` — the verb that didn't exist.** A class could be created, scheduled
+  forward and cancelled, never MOVED. A coach needing one session shifted an hour had to cancel it —
+  which releases every player and refunds — and re-schedule, losing the roster; so in practice the
+  session just ran at the wrong time. It is deliberately the same shape as
+  `bookings.reschedule_booking` and REUSES the same guards: `_coach_busy_at` (excluding this session
+  so it can't block itself) → `COACH_NOT_AVAILABLE`, and courts re-reserved through
+  `_reserve_courts_for_class` so the GiST exclusion, the busy-court auto-repick and the court-grid
+  visibility all behave as they do at schedule time. **The old holds are released inside the SAME
+  savepoint that re-takes them** — a small move (11:00→11:30, same court) overlaps itself, so the old
+  hold must go first or it GiST-blocks its own session; a failed re-take unwinds via `_NoCourt` and
+  the class is left exactly as it was. A class that HELD courts and can secure none at the target
+  **REFUSES (`NO_COURT_AVAILABLE`)** rather than half-moving: `schedule_sessions` may drop a court
+  when laying out a term, but a class people have PAID for may not move to a time it can't run at.
+  Enrolments/orders/waitlist are untouched — the seat follows the session. Routes: `PATCH
+  /api/admin/classes/sessions/<id>` (+ coach, own sessions only — a coach may not reassign the class
+  to another coach, so `coach_user_id` is deliberately not read off his body). UI: a **"Move"**
+  action on the sessions table, reusing the shared `CRMUI.rescheduleModal` — `canChangeCourt` became
+  config-driven rather than `booking_type !== 'class'`, and a class on SEVERAL courts gets no
+  single-court dropdown (it would silently drop the rest; they move with it).
+  (b) **The coach is now told: `class_booked`**, addressed to him, fired at the ONE point a seat
+  becomes real — at enrolment when owed/prepaid, on PAYMENT when online (a hold that may lapse is not
+  news), and on waitlist promotion, plus the late-payment re-instate (which clears `held_until`, so
+  `confirm_paid_enrolments`' own query no longer sees that seat — it must emit from there or never).
+  He previously only ever got a blind copy of the player's "you're enrolled" receipt. **The coach BCC
+  is now dropped everywhere** (`notifications.deliver`), lesson and class alike.
+  (c) **Cancelling a class REFUNDS the paid seats.** `cancel_session` called `void_order`, and
+  `void_order` deliberately no-ops on a paid order ("a paid order must be refunded, not voided") — so
+  every online payer lost the seat AND the money, under a `class_cancelled` email that literally
+  promised "any payment will be refunded or credited". Now a paid order refunds
+  (`execute_order_refund`, per-player guarded so one gateway failure doesn't abandon the rest of the
+  cancel) and only an unpaid one is voided; the producer states `refunded` on the payload and the
+  email says what actually happened. All three guarded by `sc_class_session_lifecycle`.
 - **THE COURT IS THE ONE PLACE TO SEE A COURT (2026-07-29).** Setup → Courts & hours → a court now
   carries everything about it: details + service allocation, **its own peak window**, playing hours,
   and a READ-ONLY **"Pricing & payment"** summary of the court SERVICE it sits on (price per

@@ -1063,6 +1063,163 @@ def _enrolled_n(s, sid):
                      {"cs": sid}).scalar()
 
 
+def sc_class_session_lifecycle(s, fx):
+    """A class had only TWO verbs — schedule and cancel — and cancel didn't give the money back.
+
+    Three defects, one lifecycle:
+      (1) NO WAY TO MOVE A SESSION. A coach who scheduled a term forward and then needed one shifted
+          an hour had to CANCEL it (which releases every player and refunds) and re-schedule, losing
+          the roster. In practice the session just ran at the wrong time.
+      (2) THE COACH WAS NEVER TOLD a seat was taken. The only email that reached him was a blind copy
+          of the player's own "you're enrolled" receipt — the same gap the lesson path had.
+      (3) CANCELLING A CLASS KEPT THE MONEY. cancel_session called void_order, and void_order
+          deliberately no-ops on a paid order ("a paid order must be refunded, not voided"), so every
+          online payer lost their seat AND their payment — under an email that promised a refund."""
+    print("\n# Class session lifecycle: MOVE it, tell the coach, and refund when the club cancels")
+
+    # ---- (2) the coach hears about a seat, once, addressed to him ---------------------------
+    sid = _class_at(s, fx, 8, capacity=3)
+    with _Emits() as rec:
+        C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=fx.members[0])
+    check("an enrolment notifies the coach", rec.seen.count("class_booked") == 1, str(rec.seen))
+    cb = rec.payloads("class_booked")[0]
+    check("...addressed to the COACH, not the player",
+          str(cb.get("user_id")) == str(fx.coach_uid), str(cb.get("user_id")))
+    check("...and it names the player + the class",
+          cb.get("player_name") and cb.get("class_name"), str(cb))
+    check("...exactly once alongside the player's own confirmation",
+          rec.seen.count("class_enrolled") == 1, str(rec.seen))
+
+    # An ONLINE seat is not a seat until it's paid — the coach must not be told about a hold that
+    # may lapse. He is told when the charge lands, which is the same rule the lesson path follows.
+    sid_on = _class_at(s, fx, 10, capacity=2)
+    with _Emits() as rec2:
+        C.enrol(s, club_id=fx.club_id, class_session_id=sid_on, user_id=fx.members[1],
+                settlement_mode="online")
+    check("an UNPAID online seat does NOT notify the coach", "class_booked" not in rec2.seen,
+          str(rec2.seen))
+    o_on = _order_of_enrolment(s, fx, sid_on, fx.members[1])
+    s.execute(text("UPDATE billing.\"order\" SET status='paid' WHERE id=:o"), {"o": o_on["id"]})
+    with _Emits() as rec3:
+        C.confirm_paid_enrolments(s, club_id=fx.club_id, order_id=o_on["id"])
+    check("...he IS told when the payment lands", rec3.seen.count("class_booked") == 1, str(rec3.seen))
+
+    # ---- (1) MOVE a session: it keeps its roster and takes its court with it -----------------
+    court_a = fx.courts[0]
+    C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                        dates=[fx.target.isoformat()], start_time="14:00", duration_minutes=60,
+                        capacity=3, court_resource_ids=[court_a])
+    mv = s.execute(text("SELECT id FROM diary.class_session WHERE club_id=:c AND resource_id=:r "
+                        "AND starts_at=:sa"),
+                   {"c": fx.club_id, "r": fx.class_res, "sa": at(fx, 14)}).scalar()
+    check("a class is scheduled at 14:00 on court A", mv is not None)
+    C.enrol(s, club_id=fx.club_id, class_session_id=mv, user_id=fx.members[0])
+    C.enrol(s, club_id=fx.club_id, class_session_id=mv, user_id=fx.members[2])
+
+    def held_courts(sid_):
+        return {str(x) for x in s.execute(
+            text("SELECT csc.court_resource_id FROM diary.class_session_court csc "
+                 "JOIN diary.booking b ON b.id = csc.court_booking_id AND b.status='confirmed' "
+                 "WHERE csc.class_session_id=:cs"), {"cs": sid_}).scalars().all()}
+
+    check("it holds court A at 14:00", held_courts(mv) == {str(court_a)}, str(held_courts(mv)))
+    with _Emits() as rec4:
+        moved = C.reschedule_session(s, club_id=fx.club_id, session_id=mv,
+                                     starts_at=utc_iso(at(fx, 16)), duration_minutes=60)
+    check("the session MOVES (the verb that didn't exist)", moved.get("ok"), str(moved))
+    row = s.execute(text("SELECT starts_at, ends_at FROM diary.class_session WHERE id=:i"),
+                    {"i": mv}).mappings().first()
+    check("...to the new time", row["starts_at"] == at(fx, 16), str(row["starts_at"]))
+    check("...for the new duration", row["ends_at"] == at(fx, 17), str(row["ends_at"]))
+    check("...keeping BOTH enrolments (this is what cancel-and-reschedule destroyed)",
+          _enrolled_n(s, mv) == 2, str(_enrolled_n(s, mv)))
+    check("...and every player is told where it went",
+          rec4.seen.count("class_rescheduled") == 2, str(rec4.seen))
+    ev = rec4.payloads("class_rescheduled")[0]
+    check("...carrying the OLD time as well as the new (which diary entry to change)",
+          ev.get("old_starts_at") and ev.get("starts_at") != ev.get("old_starts_at"), str(ev))
+
+    # The court moved WITH it: free at the old time, blocked at the new one.
+    check("the court hold followed the session", held_courts(mv) == {str(court_a)},
+          str(held_courts(mv)))
+    free_old = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[1], role="member",
+                                booking_type="court", resource_id=court_a,
+                                starts_at=utc_iso(at(fx, 14)), ends_at=utc_iso(at(fx, 14, 30)))
+    check("the OLD slot is released (a stale hold would block a court nobody is using)",
+          free_old.get("ok"), str(free_old))
+    busy_new = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[1], role="member",
+                                booking_type="court", resource_id=court_a,
+                                starts_at=utc_iso(at(fx, 16)), ends_at=utc_iso(at(fx, 16, 30)))
+    check("the NEW slot is blocked (the class really is on that court now)",
+          busy_new.get("error") == "SLOT_TAKEN", str(busy_new))
+
+    # A move onto a time the coach is already teaching is refused — the same guard scheduling uses.
+    les = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[0], role="member",
+                           booking_type="lesson", resource_id=fx.coach_res,
+                           coach_user_id=fx.coach_uid,
+                           starts_at=utc_iso(at(fx, 19)), ends_at=utc_iso(at(fx, 20)))
+    check("the coach has a lesson at 19:00", les.get("ok"), str(les))
+    clash = C.reschedule_session(s, club_id=fx.club_id, session_id=mv,
+                                 starts_at=utc_iso(at(fx, 19)), duration_minutes=60)
+    check("a move onto the coach's own lesson is REFUSED",
+          clash.get("error") == "COACH_NOT_AVAILABLE", str(clash))
+    check("...and the session did not move", s.execute(
+        text("SELECT starts_at FROM diary.class_session WHERE id=:i"), {"i": mv}).scalar()
+        == at(fx, 16))
+
+    # No court free at the target -> REFUSE, and leave the class exactly as it was. A half-moved
+    # class holds no court and cannot physically run.
+    all_courts = [str(x) for x in s.execute(
+        text("SELECT id FROM diary.resource WHERE club_id=:c AND kind='court' AND is_active=true"),
+        {"c": fx.club_id}).scalars().all()]
+    for c in all_courts:
+        s.execute(text("INSERT INTO diary.booking (club_id, booking_type, resource_id, "
+                       "starts_at, ends_at, status) VALUES (:c,'court',:r,:sa,:ea,'confirmed')"),
+                  {"c": fx.club_id, "r": c, "sa": at(fx, 21), "ea": at(fx, 22)})
+    nocourt = C.reschedule_session(s, club_id=fx.club_id, session_id=mv,
+                                   starts_at=utc_iso(at(fx, 21)), duration_minutes=60)
+    check("a move with NO court free anywhere is refused",
+          nocourt.get("error") == "NO_COURT_AVAILABLE", str(nocourt))
+    check("...and the class keeps its original court hold (never half-moved)",
+          held_courts(mv) == {str(court_a)}, str(held_courts(mv)))
+    check("...at its original time", s.execute(
+        text("SELECT starts_at FROM diary.class_session WHERE id=:i"), {"i": mv}).scalar()
+        == at(fx, 16))
+    check("...and its roster", _enrolled_n(s, mv) == 2, str(_enrolled_n(s, mv)))
+
+    # ---- (3) the club cancels: a PAID seat gets its money back, an unpaid one is voided -------
+    sid_c = _class_at(s, fx, 12, capacity=3)
+    C.enrol(s, club_id=fx.club_id, class_session_id=sid_c, user_id=fx.members[0],
+            settlement_mode="online")
+    C.enrol(s, club_id=fx.club_id, class_session_id=sid_c, user_id=fx.members[1],
+            settlement_mode="at_court")
+    paid_o = _order_of_enrolment(s, fx, sid_c, fx.members[0])
+    owed_o = _order_of_enrolment(s, fx, sid_c, fx.members[1])
+    s.execute(text("UPDATE billing.\"order\" SET status='paid' WHERE id=:o"), {"o": paid_o["id"]})
+
+    # Stand in for the gateway: moving the money is the billing lane's job, but WHICH orders this
+    # asks to refund is exactly the defect, so record the calls.
+    import yoco_billing
+    asked = []
+    _orig_refund = yoco_billing.execute_order_refund
+    yoco_billing.execute_order_refund = (
+        lambda session, order_id, **kw: asked.append(str(order_id)))
+    try:
+        with _Emits() as rec5:
+            res = C.cancel_session(s, club_id=fx.club_id, session_id=sid_c)
+    finally:
+        yoco_billing.execute_order_refund = _orig_refund
+    check("the session cancels", res.get("ok"), str(res))
+    check("the PAID seat is refunded (this is the money that used to just vanish)",
+          asked == [str(paid_o["id"])], str(asked))
+    owed_after = s.execute(text("SELECT status FROM billing.\"order\" WHERE id=:o"),
+                           {"o": owed_o["id"]}).scalar()
+    check("the UNPAID seat is voided, not refunded", owed_after == "void", str(owed_after))
+    refunded_flags = [bool(p.get("refunded")) for p in rec5.payloads("class_cancelled")]
+    check("the email is told the outcome (it promised a refund it never made)",
+          sorted(refunded_flags) == [False, True], str(refunded_flags))
+
+
 def sc_class_price_survives_rename(s, fx):
     """A class's service was resolved by JOINING ON NAMES. Renaming the service updates
     billing.product.name and nothing syncs diary.resource.name, so every session scheduled afterwards
@@ -2154,11 +2311,19 @@ class _Emits:
 
     def __init__(self):
         self.seen = []
+        self.events = []          # (name, payload) — for asserting WHO an event was addressed to
 
     def __enter__(self):
         self._orig = C.events.emit
-        C.events.emit = lambda event, payload=None: self.seen.append(event)
+        C.events.emit = self._rec
         return self
+
+    def _rec(self, event, payload=None):
+        self.seen.append(event)
+        self.events.append((event, payload or {}))
+
+    def payloads(self, name):
+        return [p for (e, p) in self.events if e == name]
 
     def __exit__(self, *exc):
         C.events.emit = self._orig
@@ -2928,6 +3093,7 @@ SCENARIOS = [
     sc_coach_class_conflict,
     sc_slot_granularity,
     sc_class_waitlist,
+    sc_class_session_lifecycle,
     sc_class_price_survives_rename,
     sc_class_list_shows_renamed_service,
     sc_class_name_cannot_break_the_class,

@@ -263,6 +263,7 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
         # (at-court / monthly / token / covered) confirm immediately, so they emit now.
         if settlement_mode != "online":
             events.emit("class_enrolled", payload)
+            _emit_coach_booked(session, cs, enrolment)      # …and tell the COACH, once
     else:
         events.emit("class_waitlisted", payload)
     resp = {"ok": True, "enrolment": enrolment, "status_value": target}
@@ -313,6 +314,9 @@ def _reinstate_late_paid_enrolments(session, *, club_id, order_id):
                 enrolment = _enrolment_dict(session, r["id"])
                 if enrolment:
                     events.emit("class_enrolled", _payload(cs, enrolment))
+                    # The re-instate clears held_until, so confirm_paid_enrolments' own query no
+                    # longer sees this seat — the coach must be told from HERE or not at all.
+                    _emit_coach_booked(session, cs, enrolment)
             except Exception:
                 pass
             n += 1
@@ -357,6 +361,9 @@ def confirm_paid_enrolments(session, *, club_id, order_id):
             enrolment = _enrolment_dict(session, r["id"])
             if cs and enrolment:
                 events.emit("class_enrolled", _payload(cs, enrolment))
+                # The online seat's coach notification belongs HERE, not at enrol — before payment
+                # there is no seat to tell him about, and it may still lapse.
+                _emit_coach_booked(session, cs, enrolment)
         except Exception:
             pass
         n += 1
@@ -414,6 +421,19 @@ def cancel_enrolment(session, *, club_id, class_session_id, user_id, actor_user_
     if was_enrolled:
         promoted = _promote_waitlist(session, club_id=club_id, cs=cs)
     return {"ok": True, "promoted": promoted}
+
+
+def _order_is_paid(session, order_id):
+    """True if this order is settled. Guarded -> False, the safe direction: an unreadable order is
+    treated as unpaid, so the worst case is voiding an owed order rather than skipping a refund."""
+    if not order_id:
+        return False
+    try:
+        return session.execute(
+            text('SELECT status FROM billing."order" WHERE id = :o'), {"o": str(order_id)},
+        ).scalar() == "paid"
+    except Exception:
+        return False
 
 
 def _order_is_live(session, order_id):
@@ -534,6 +554,7 @@ def _promote_waitlist(session, *, club_id, cs):
         events.emit("class_seat_awaiting_payment", _payload(cs, enrolment))
     else:
         events.emit("class_enrolled", _payload(cs, enrolment))
+        _emit_coach_booked(session, cs, enrolment)
     return str(nxt["id"])
 
 
@@ -672,6 +693,59 @@ def _payload(cs, enrolment):
         "starts_at": cs["starts_at"].isoformat() if hasattr(cs["starts_at"], "isoformat") else cs["starts_at"],
         "ends_at": cs["ends_at"].isoformat() if hasattr(cs["ends_at"], "isoformat") else cs["ends_at"],
     }
+
+
+def _emit_coach_booked(session, cs, enrolment):
+    """Tell the class's COACH that a seat was taken, addressed to him.
+
+    THE ONE PLACE a class tells its coach — the mirror of `_emit_coach_booked` for lessons. No class
+    event was ever addressed to him: he only ever saw a blind copy of the player's own receipt, which
+    is written for them. Best-effort; a notification must never break an enrolment."""
+    try:
+        coach_uid = (cs or {}).get("coach_user_id")
+        if not coach_uid:
+            return
+        payload = _payload(cs, enrolment)
+        payload["user_id"] = str(coach_uid)          # route it to the COACH, not the player
+        payload["class_name"] = _class_display_name(session, cs)
+        payload["player_name"] = _player_name(session, (enrolment or {}).get("user_id"))
+        payload["spots_left"] = max(0, int(cs.get("capacity") or 0)
+                                    - _enrolled_count(session, cs["id"])) if cs.get("capacity") else None
+        events.emit("class_booked", payload)
+    except Exception:
+        log.debug("coach class_booked emit failed", exc_info=False)
+
+
+def _class_display_name(session, cs):
+    """The class's CURRENT name — via the durable product link, never the resource's own (which can
+    lag a service rename). Guarded -> the resource name."""
+    try:
+        pid = _class_product_for_session(session, cs["club_id"], cs)
+        if pid:
+            n = session.execute(text("SELECT name FROM billing.product WHERE id = :p"),
+                                {"p": str(pid)}).scalar()
+            if n:
+                return n
+    except Exception:
+        pass
+    try:
+        return session.execute(text("SELECT name FROM diary.resource WHERE id = :r"),
+                               {"r": str(cs["resource_id"])}).scalar()
+    except Exception:
+        return None
+
+
+def _player_name(session, user_id):
+    """The player's display name for the coach's notification. Guarded -> None."""
+    if not user_id:
+        return None
+    try:
+        return session.execute(
+            text("SELECT NULLIF(TRIM(CONCAT_WS(' ', first_name, surname)), '') "
+                 'FROM iam."user" WHERE id = CAST(:u AS uuid)'), {"u": str(user_id)},
+        ).scalar()
+    except Exception:
+        return None
 
 
 # ===========================================================================
@@ -1525,7 +1599,18 @@ def list_type_sessions(session, *, club_id, resource_id, date_from=None, date_to
                    (SELECT count(*) FROM diary.enrolment e
                       WHERE e.class_session_id = cs.id AND e.status = 'enrolled') AS enrolled,
                    (SELECT count(*) FROM diary.enrolment e
-                      WHERE e.class_session_id = cs.id AND e.status = 'waitlisted') AS waitlisted
+                      WHERE e.class_session_id = cs.id AND e.status = 'waitlisted') AS waitlisted,
+                   -- The courts this occurrence holds. The reschedule UI needs them to decide
+                   -- HONESTLY whether to offer a single-court picker: a class on four courts must
+                   -- not be movable through a one-court dropdown that would silently drop three.
+                   (SELECT array_agg(csc.court_resource_id::text ORDER BY r2.rank, r2.name)
+                      FROM diary.class_session_court csc
+                      JOIN diary.resource r2 ON r2.id = csc.court_resource_id
+                     WHERE csc.class_session_id = cs.id) AS court_resource_ids,
+                   (SELECT string_agg(r2.name, ', ' ORDER BY r2.rank, r2.name)
+                      FROM diary.class_session_court csc
+                      JOIN diary.resource r2 ON r2.id = csc.court_resource_id
+                     WHERE csc.class_session_id = cs.id) AS court_names
             FROM diary.class_session cs
             WHERE """ + " AND ".join(where) + " ORDER BY cs.starts_at"),
         params,
@@ -1536,6 +1621,7 @@ def list_type_sessions(session, *, club_id, resource_id, date_from=None, date_to
         cap = d.get("capacity") or 0
         d["spots_left"] = max(cap - (d["enrolled"] or 0), 0) if cap else None
         d["session_id"] = str(d["session_id"])
+        d["court_resource_ids"] = list(d.get("court_resource_ids") or [])
         for k in ("starts_at", "ends_at"):
             if d.get(k) is not None:
                 d[k] = d[k].isoformat()
@@ -1590,12 +1676,32 @@ def cancel_session(session, *, club_id, session_id):
             text("UPDATE diary.enrolment SET status='cancelled', updated_at=now() WHERE id=:id"),
             {"id": p["id"]},
         )
+        refunded = False
         if p.get("order_id"):
+            # THE CLUB CANCELLED — so the money goes back. This only voided, and `void_order`
+            # deliberately no-ops on a PAID order ("a paid order must be refunded, not voided"), so
+            # every player who had paid online kept their seat cancelled and their money gone, with a
+            # "class cancelled" email that never mentioned it. Nobody asked for a refund because
+            # nobody was told there was one to ask for.
+            #
+            # Same rule the lesson path now follows: a cancellation BY THE CLUB refunds itself; only
+            # an unpaid order is voided. Guarded per player — one failed refund must not abandon the
+            # rest of the class mid-cancel.
             try:
-                from billing.statement import void_order
-                void_order(session, club_id=club_id, order_id=p["order_id"], reason="class cancelled")
+                if _order_is_paid(session, p["order_id"]):
+                    from yoco_billing import execute_order_refund, RefundError
+                    try:
+                        execute_order_refund(session, order_id=p["order_id"])
+                        refunded = True
+                    except RefundError as e:
+                        log.warning("cancelled class %s: refund failed for enrolment %s (%s) — "
+                                    "needs a human", session_id, p["id"], e.code)
+                else:
+                    from billing.statement import void_order
+                    void_order(session, club_id=club_id, order_id=p["order_id"],
+                               reason="class cancelled")
             except Exception:
-                log.debug("class order void skipped", exc_info=False)
+                log.debug("class order settle skipped", exc_info=False)
         try:
             from diary.bookings import _credit_token_guarded
             _credit_token_guarded(session, club_id=club_id, booking_id=str(p["id"]),
@@ -1608,11 +1714,170 @@ def cancel_session(session, *, club_id, session_id):
                 "resource_id": str(cs["resource_id"]), "class_name": class_name,
                 "user_id": str(p["user_id"]) if p.get("user_id") else None,
                 "starts_at": starts,
+                # Stated by the producer — emit dispatches on a background thread whose session
+                # cannot see the refund written moments ago.
+                "refunded": refunded,
             })
         except Exception:
             log.debug("class_cancelled emit skipped")
     return {"ok": True, "session_id": str(session_id), "status_value": "cancelled",
             "notified": len(players)}
+
+
+class _NoCourt(Exception):
+    """Internal: unwind the reschedule savepoint when no court can be secured at the target."""
+
+
+def reschedule_session(session, *, club_id, session_id, starts_at=None, duration_minutes=None,
+                       coach_user_id=None, court_resource_ids=None):
+    """MOVE one scheduled class occurrence — time, and optionally its coach and its courts.
+
+    THE MISSING THIRD VERB. A class type could be created, scheduled forward and cancelled, but never
+    MOVED: a coach who scheduled a term of Tuesday sessions and then needed one shifted an hour had
+    only 'cancel', which refunds and empties the class, and then re-schedule — losing every enrolment
+    and every payment. So in practice the session just ran at the wrong time.
+
+    Deliberately the same shape as `diary.bookings.reschedule_booking`, and reusing the SAME guards
+    rather than a second set:
+      * the coach must be free at the target (`_coach_busy_at`, excluding this session so it can't
+        block itself) -> COACH_NOT_AVAILABLE;
+      * the courts are RE-RESERVED at the target through `_reserve_courts_for_class`, so the GiST
+        exclusion, the busy-court auto-repick and the class's visibility on the court grid all behave
+        exactly as they do at schedule time;
+      * the OLD court holds are released only AFTER the new ones are secured — never free a court you
+        might fail to re-take;
+      * a class that HELD courts and can secure none at the target REFUSES (NO_COURT_AVAILABLE) rather
+        than moving to a time it cannot physically run at. `schedule_sessions` may drop a court when
+        laying out a term; moving a class people have already PAID for may not.
+
+    Enrolments, orders and the waitlist are untouched — the seat follows the session. Every enrolled
+    player is emitted `class_rescheduled` so nobody turns up at the old time."""
+    cs = _session_row(session, club_id, session_id, lock=True)
+    if not cs:
+        return _err("SESSION_NOT_FOUND", 404)
+    if cs.get("status") == "cancelled":
+        return _err("SESSION_CANCELLED", 409)
+
+    old_starts, old_ends = cs["starts_at"], cs["ends_at"]
+    old_minutes = int(round((old_ends - old_starts).total_seconds() / 60.0))
+
+    new_starts = _parse_dt(starts_at) if starts_at else old_starts
+    if new_starts is None:
+        return _err("INVALID_START", 400)
+    minutes = int(duration_minutes) if duration_minutes else old_minutes
+    if minutes <= 0:
+        return _err("INVALID_DURATION", 400)
+    new_ends = new_starts + timedelta(minutes=minutes)
+
+    coach = str(coach_user_id) if coach_user_id else (
+        str(cs["coach_user_id"]) if cs.get("coach_user_id") else None)
+
+    # Another occurrence of the SAME class type already at the target — scheduling is idempotent on
+    # (resource_id, starts_at), so allowing this would collapse two sessions onto one slot.
+    if new_starts != old_starts:
+        clash = session.execute(
+            text("SELECT 1 FROM diary.class_session WHERE club_id=:c AND resource_id=:r "
+                 "  AND starts_at=:s AND status <> 'cancelled' AND id <> :id LIMIT 1"),
+            {"c": club_id, "r": cs["resource_id"], "s": new_starts, "id": session_id},
+        ).first()
+        if clash:
+            return _err("SESSION_EXISTS", 409)
+
+    if _coach_busy_at(session, club_id=club_id, coach_user_id=coach, starts_at=new_starts,
+                      ends_at=new_ends, exclude_session_id=session_id):
+        return _err("COACH_NOT_AVAILABLE", 409)
+
+    # The courts to hold at the target: the caller's list, else the ones this session holds today.
+    old_courts = session.execute(
+        text("SELECT court_resource_id, court_booking_id FROM diary.class_session_court "
+             "WHERE class_session_id=:cs"),
+        {"cs": session_id},
+    ).mappings().all()
+    old_bids = [str(r["court_booking_id"]) for r in old_courts if r["court_booking_id"]]
+    if cs.get("court_booking_id"):
+        old_bids.append(str(cs["court_booking_id"]))
+    wanted = ([str(c) for c in court_resource_ids if c] if court_resource_ids is not None
+              else [str(r["court_resource_id"]) for r in old_courts if r["court_resource_id"]]
+                   or ([str(cs["court_resource_id"])] if cs.get("court_resource_id") else []))
+    for c in wanted:
+        if not _valid_court(session, club_id=club_id, court_resource_id=c):
+            return _err("COURT_NOT_VALID", 400)
+
+    class_name = _class_display_name(session, cs)
+
+    # RELEASE FIRST, but only the rows in the way: the old holds overlap the target whenever the move
+    # is small (11:00 -> 11:30 on the same court), and they'd GiST-block their own session's re-hold.
+    # Cancelling inside a savepoint means a failed re-take can be rolled back to leave them intact.
+    reserved = []
+    if wanted:
+        try:
+            with session.begin_nested():
+                for bid in set(old_bids):
+                    _cancel_session_court_booking(session, club_id=club_id, booking_id=bid,
+                                                  reason="class rescheduled")
+                session.execute(
+                    text("DELETE FROM diary.class_session_court WHERE class_session_id=:cs"),
+                    {"cs": session_id})
+                reserved = _reserve_courts_for_class(
+                    session, club_id=club_id, court_resource_ids=wanted, coach_user_id=coach,
+                    name=class_name, starts_at=new_starts, ends_at=new_ends)
+                if not reserved:
+                    # Nothing free at the target. RAISE to unwind the savepoint (rather than return
+                    # from inside it) so the old holds come back intact and the class is left exactly
+                    # as it was — a half-moved class holds no court and cannot run.
+                    raise _NoCourt()
+                for court_id, bid in reserved:
+                    session.execute(
+                        text("INSERT INTO diary.class_session_court (club_id, class_session_id, "
+                             "court_resource_id, court_booking_id) VALUES (:c, :cs, :r, :b)"),
+                        {"c": club_id, "cs": session_id, "r": court_id, "b": bid},
+                    )
+        except _NoCourt:
+            return _err("NO_COURT_AVAILABLE", 409)
+    else:
+        for bid in set(old_bids):
+            _cancel_session_court_booking(session, club_id=club_id, booking_id=bid,
+                                          reason="class rescheduled")
+        session.execute(text("DELETE FROM diary.class_session_court WHERE class_session_id=:cs"),
+                        {"cs": session_id})
+
+    primary = reserved[0] if reserved else None
+    session.execute(
+        text("UPDATE diary.class_session SET starts_at=:sa, ends_at=:ea, coach_user_id=:coach, "
+             "  court_resource_id=:cr, court_booking_id=:cb, updated_at=now() "
+             "WHERE club_id=:c AND id=:id"),
+        {"sa": new_starts, "ea": new_ends, "coach": coach,
+         "cr": primary[0] if primary else None, "cb": primary[1] if primary else None,
+         "c": club_id, "id": session_id},
+    )
+
+    # Tell everyone holding a seat. The raw session carries no recipient, so — exactly like
+    # cancel_session — this fans out PER PLAYER or it notifies nobody.
+    players = session.execute(
+        text("SELECT user_id FROM diary.enrolment "
+             "WHERE class_session_id=:cs AND status IN ('enrolled','waitlisted') "
+             "  AND user_id IS NOT NULL"),
+        {"cs": session_id},
+    ).scalars().all()
+    court_name = None
+    if primary:
+        court_name = session.execute(text("SELECT name FROM diary.resource WHERE id=:r"),
+                                     {"r": primary[0]}).scalar()
+    for uid in players:
+        try:
+            events.emit("class_rescheduled", {
+                "club_id": str(club_id), "class_session_id": str(session_id),
+                "resource_id": str(cs["resource_id"]), "class_name": class_name,
+                "user_id": str(uid), "court_name": court_name,
+                "old_starts_at": old_starts.isoformat(),
+                "starts_at": new_starts.isoformat(), "ends_at": new_ends.isoformat(),
+            })
+        except Exception:
+            log.debug("class_rescheduled emit skipped")
+    return {"ok": True, "session_id": str(session_id),
+            "starts_at": new_starts.isoformat(), "ends_at": new_ends.isoformat(),
+            "coach_user_id": coach,
+            "courts": [c for c, _ in reserved], "notified": len(players)}
 
 
 def session_owner_coach(session, *, club_id, session_id):

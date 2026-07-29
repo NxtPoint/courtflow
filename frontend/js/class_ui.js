@@ -326,12 +326,17 @@
         var cancelled = s.status === "cancelled";
         var rosterBtn = el("button", { class: "cf-btn cf-btn-sm", text: "Roster",
           onclick: function () { openRoster({ api: api, cls: cls, session: s }); } });
+        var moveBtn = el("button", { class: "cf-btn cf-btn-sm", text: "Move",
+          onclick: function () { moveSession(api, cls, s, function () { renderSessions(opts); }); } });
         var cancelBtn = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Cancel",
           onclick: function () { cancelSession(api, s, function () { renderSessions(opts); }); } });
         var actions = el("div", { class: "cf-row", style: "gap:6px;justify-content:flex-end" },
-          cancelled ? [rosterBtn] : [rosterBtn, cancelBtn]);
+          cancelled ? [rosterBtn] : [rosterBtn, moveBtn, cancelBtn]);
         tb.appendChild(el("tr", {}, [
-          el("td", { text: UI.fmtRange(s.starts_at, s.ends_at) }),
+          el("td", {}, [
+            el("div", { text: UI.fmtRange(s.starts_at, s.ends_at) }),
+            s.court_names ? el("div", { class: "cf-muted cf-sm", text: s.court_names }) : null,
+          ].filter(Boolean)),
           el("td", { text: enrolledTxt }),
           el("td", { text: String(s.waitlisted != null ? s.waitlisted : 0) }),
           el("td", {}, [el("span", { class: "cf-chip " + (s.status || ""), text: s.status || "—" })]),
@@ -344,6 +349,54 @@
       UI.clear(host);
       host.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) }));
     });
+  }
+
+  // MOVE one occurrence — the third verb next to schedule and cancel. Cancelling refunds and empties
+  // the class, so it was never the right way to shift a session by an hour; this keeps every seat.
+  // Reuses the SHARED CRMUI.rescheduleModal (golden rule: one widget per capability) — the class is
+  // config, not a fork: canChangeCourt is forced on, and `submit` maps the widget's booking-shaped
+  // body onto the class route's own contract.
+  function moveSession(api, cls, session, after) {
+    init();
+    if (!window.CRMUI || !window.CRMUI.rescheduleModal) {
+      UI.toast("Reschedule isn't available on this screen.", "error"); return null;
+    }
+    var courts = session.court_resource_ids || [];
+    var multi = courts.length > 1;
+    var m = window.CRMUI.rescheduleModal({
+      title: "Move " + (cls.name || "class"),
+      booking: {
+        id: session.session_id,
+        booking_type: "class",
+        starts_at: session.starts_at,
+        ends_at: session.ends_at,
+        // Only offer the picker when there IS one court to swap. A class on several courts can't be
+        // honestly represented by a single dropdown — those courts move with it automatically.
+        court_resource_id: multi ? null : (courts[0] || null),
+      },
+      canChangeCourt: !multi,
+      // Explicit: the widget's default loader is window.API (the CLIENT SPA's), which isn't on the
+      // admin/coach pages. Each console's own api object is the one that's actually here.
+      loadCourts: function () {
+        return (api.resources ? api.resources()
+                : window.TFAuth.apiJSON("/api/diary/resources"));
+      },
+      submit: function (body) {
+        var payload = { starts_at: body.starts_at };
+        if (body.starts_at && body.ends_at) {
+          payload.duration_minutes =
+            Math.round((new Date(body.ends_at) - new Date(body.starts_at)) / 60000);
+        }
+        if (body.court_resource_id) payload.court_resource_ids = [body.court_resource_id];
+        return api.rescheduleClassSession(session.session_id, payload);
+      },
+      onDone: function () { if (typeof after === "function") after(); },
+    });
+    if (multi && m && m.body) {
+      m.body.appendChild(el("p", { class: "cf-muted cf-sm",
+        text: "This class holds " + courts.length + " courts — they move with it." }));
+    }
+    return m;
   }
 
   async function cancelSession(api, session, after) {

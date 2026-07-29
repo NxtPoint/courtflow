@@ -636,5 +636,10 @@ def text_block(d):
 
 
 def coach_email(d):
-    """The coach's email for a lesson/class (for BCC), or None."""
+    """The coach's email for a lesson/class, or None.
+
+    NO LONGER USED FOR BCC — a coach gets his own addressed `lesson_booked`/`class_booked` email
+    instead of a blind copy of the client's receipt. Kept as the one accessor for the detail dict's
+    coach address; do not reinstate a BCC off it without dropping the addressed email first, or the
+    coach gets the same booking twice."""
     return ((d or {}).get("coach") or {}).get("email")

@@ -833,6 +833,24 @@ def post_class_session_cancel(session_id):
     return _class_result(res)
 
 
+@admin_bp.patch("/classes/sessions/<session_id>")
+def patch_class_session(session_id):
+    """MOVE one scheduled session — time, duration, coach and/or courts. The third verb alongside
+    schedule and cancel: before this, shifting a session meant cancelling it (which refunds and
+    empties the class) and re-scheduling."""
+    p, err = _admin()
+    if err:
+        return err
+    b = request.get_json(silent=True) or {}
+    with session_scope() as s:
+        res = classes_mod.reschedule_session(
+            s, club_id=p.club_id, session_id=session_id,
+            starts_at=b.get("starts_at"), duration_minutes=b.get("duration_minutes"),
+            coach_user_id=b.get("coach_user_id"),
+            court_resource_ids=b.get("court_resource_ids"))
+    return _class_result(res)
+
+
 # ---------------------------------------------------------------------------
 # coaches + invite
 # ---------------------------------------------------------------------------

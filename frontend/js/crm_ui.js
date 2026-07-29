@@ -541,7 +541,10 @@
     cfg = cfg || {};
     var b = cfg.booking || {};
     var m = UI.modal(cfg.title || "Reschedule", {});
-    var canCourt = cfg.canChangeCourt !== false && b.booking_type !== "class";
+    // Court picker: explicit config always wins; the default stays type-based. A class ENROLMENT
+    // can't move a court (the seat isn't the court), but a class SESSION reschedule can — so the
+    // class-management screen passes canChangeCourt:true rather than forking this widget.
+    var canCourt = (cfg.canChangeCourt != null) ? !!cfg.canChangeCourt : (b.booking_type !== "class");
 
     function toLocal(iso) {
       if (!iso) return "";

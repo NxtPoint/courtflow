@@ -377,6 +377,25 @@ def post_class_session_cancel(session_id):
     return _class_result(res)
 
 
+@coach_bp.patch("/classes/sessions/<session_id>")
+def patch_class_session(session_id):
+    """A coach MOVES one of his own scheduled sessions. Same ownership gate as cancel — he may not
+    reassign it to another coach, so coach_user_id is deliberately NOT read off the body here."""
+    p, err = _coach()
+    if err:
+        return err
+    b = request.get_json(silent=True) or {}
+    with session_scope() as s:
+        if not repo.owns_class_session(s, club_id=p.club_id, user_id=p.user_id,
+                                       session_id=session_id):
+            return jsonify(error="forbidden"), 403
+        res = classes_mod.reschedule_session(
+            s, club_id=p.club_id, session_id=session_id,
+            starts_at=b.get("starts_at"), duration_minutes=b.get("duration_minutes"),
+            court_resource_ids=b.get("court_resource_ids"))
+    return _class_result(res)
+
+
 # ---------------------------------------------------------------------------
 # photo upload presign (S3 if configured; else tell the frontend to fall back)
 # ---------------------------------------------------------------------------
