@@ -591,7 +591,7 @@ def list_equipment(session, *, club_id):
 
 
 def create_equipment(session, *, club_id, name, amount_minor=0, quantity=1, feature_on_home=False,
-                     payment_modes=None):
+                     payment_modes=None, service_product_ids=None):
     # payment_modes (None = inherit every club-enabled method) is what makes equipment a first-class
     # service rather than an always-owed add-on. diary.equipment.quote intersects these across the
     # requested items and create_booking refuses a combination the club can't collect, instead of the
@@ -613,11 +613,17 @@ def create_equipment(session, *, club_id, name, amount_minor=0, quantity=1, feat
         {"c": club_id, "n": (name or "Equipment"), "q": max(1, int(quantity or 1)),
          "f": bool(feature_on_home), "p": prod},
     ).scalar()
+    # Which court services it's offered on. None/empty = ALL of them (the default, and what every
+    # item created before this existed has).
+    if service_product_ids is not None:
+        from diary.equipment import set_services
+        set_services(session, club_id=club_id, resource_id=rid, product_ids=service_product_ids)
     return _equipment_one(session, club_id=club_id, resource_id=rid)
 
 
 def patch_equipment(session, *, club_id, resource_id, name=None, amount_minor=None, quantity=None,
-                    feature_on_home=None, is_active=None, set_modes=False, payment_modes=None):
+                    feature_on_home=None, is_active=None, set_modes=False, payment_modes=None,
+                    set_services_flag=False, service_product_ids=None):
     prod = session.execute(
         text("SELECT product_id FROM diary.resource "
              "WHERE club_id = :c AND id = :r AND kind = 'equipment'"),
@@ -648,6 +654,12 @@ def patch_equipment(session, *, club_id, resource_id, name=None, amount_minor=No
         session.execute(text("UPDATE billing.product SET payment_modes = :m, updated_at = now() "
                              "WHERE club_id = :c AND id = :p"),
                         {"c": club_id, "p": prod, "m": _modes_csv(payment_modes)})
+    # Same "only when sent" rule: an EMPTY service list is meaningful (= offered on all court
+    # services), so it can't double as "don't touch".
+    if set_services_flag:
+        from diary.equipment import set_services
+        set_services(session, club_id=club_id, resource_id=resource_id,
+                     product_ids=service_product_ids)
     return _equipment_one(session, club_id=club_id, resource_id=resource_id)
 
 

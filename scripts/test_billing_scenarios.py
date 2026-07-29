@@ -2400,7 +2400,11 @@ def sc_activity_summary(s, fx):
     settled month still tells its story. Surfaced on Client 360 as the clean headline."""
     print("\n# Client activity summary: sessions played + billed/paid/outstanding this month")
     from billing import me as ME
-    ym = s.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    # The month of the SESSIONS, not of today. activity_summary buckets by the booking's start
+    # (COALESCE(b.starts_at, o.created_at)), and the fixture's test day is 3 days out — so asking for
+    # today's month silently measured an empty August/July on the last three days of any month and
+    # reported it as a regression. Date-dependent assertions must derive their date from the fixture.
+    ym = fx.target.strftime("%Y-%m")
     # A PAID online lesson (played + paid) and an OWED at-court court booking (played + outstanding).
     r1 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
                           booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,

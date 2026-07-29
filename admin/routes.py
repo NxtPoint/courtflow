@@ -627,7 +627,8 @@ def post_equipment():
         item = repo.create_equipment(
             s, club_id=p.club_id, name=name, amount_minor=int(b.get("amount_minor") or 0),
             quantity=int(b.get("quantity") or 1), feature_on_home=bool(b.get("feature_on_home")),
-            payment_modes=b.get("payment_modes"))
+            payment_modes=b.get("payment_modes"),
+            service_product_ids=b.get("service_product_ids"))
     return jsonify(equipment=item), 201
 
 
@@ -644,7 +645,10 @@ def patch_equipment_route(resource_id):
             feature_on_home=b.get("feature_on_home"), is_active=b.get("is_active"),
             # Only touch the payment options when the caller actually sent the key (a NULL value
             # means "inherit every club method", so it can't stand in for "unchanged").
-            set_modes=("payment_modes" in b), payment_modes=b.get("payment_modes"))
+            set_modes=("payment_modes" in b), payment_modes=b.get("payment_modes"),
+            # Empty list = offered on ALL court services, so presence in the body is the signal.
+            set_services_flag=("service_product_ids" in b),
+            service_product_ids=b.get("service_product_ids"))
     if item is None:
         return jsonify(error="NOT_FOUND"), 404
     return jsonify(equipment=item), 200

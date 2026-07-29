@@ -16,9 +16,59 @@ class EquipmentUnavailable(Exception):
     time — so the whole booking rolls back cleanly (mirrors the SLOT_TAKEN path)."""
 
 
-def list_equipment(session, *, club_id, active_only=True, featured_only=False):
+def services_for(session, *, club_id, resource_id):
+    """The court SERVICES an equipment item is offered on (billing.product ids, as str). EMPTY = every
+    court service — the default, and what every pre-existing item has. Guarded -> []."""
+    try:
+        return [str(r) for r in session.execute(
+            text("SELECT product_id FROM diary.equipment_service "
+                 "WHERE club_id = :c AND resource_id = :r"),
+            {"c": str(club_id), "r": str(resource_id)},
+        ).scalars().all()]
+    except Exception:
+        return []
+
+
+def set_services(session, *, club_id, resource_id, product_ids):
+    """Replace the court services an item is offered on. product_ids empty/None -> offered on ALL
+    (the row set is simply cleared). Caller composes the transaction."""
+    session.execute(
+        text("DELETE FROM diary.equipment_service WHERE club_id = :c AND resource_id = :r"),
+        {"c": str(club_id), "r": str(resource_id)},
+    )
+    for pid in (product_ids or []):
+        if not pid:
+            continue
+        session.execute(
+            text("INSERT INTO diary.equipment_service (club_id, resource_id, product_id) "
+                 "VALUES (:c, :r, CAST(:p AS uuid)) ON CONFLICT DO NOTHING"),
+            {"c": str(club_id), "r": str(resource_id), "p": str(pid)},
+        )
+
+
+def offered_on_service(session, *, club_id, resource_id, court_product_id):
+    """Is this item offered on that court service? True when the item has NO service links (offered
+    everywhere — the default) or one of them matches. Guarded -> True (a bad read must never make an
+    item that IS offered look unavailable)."""
+    try:
+        links = services_for(session, club_id=club_id, resource_id=resource_id)
+        if not links:
+            return True
+        return court_product_id is not None and str(court_product_id) in links
+    except Exception:
+        return True
+
+
+def list_equipment(session, *, club_id, active_only=True, featured_only=False,
+                   court_product_id=None, starts=None, ends=None):
     """The club's equipment items (for the booking add-on picker + the Setup editor). Each =
-    {id, name, quantity, feature_on_home, active, price_id, amount_minor, currency_code}. Guarded -> []."""
+    {id, name, quantity, feature_on_home, active, price_id, amount_minor, currency_code,
+     payment_modes, services[], available?}.
+
+    `court_product_id` filters to the items offered on THAT court service (an item with no links is
+    offered on all — see equipment_service). `starts`/`ends` add `available` = the units actually free
+    for that window, so the picker can clamp to what can really be hired rather than to what the club
+    owns. Guarded -> []."""
     try:
         where = ["r.club_id = :c", "r.kind = 'equipment'"]
         if active_only:
@@ -35,9 +85,13 @@ def list_equipment(session, *, club_id, active_only=True, featured_only=False):
         ).mappings().all()
         out = []
         for r in rows:
+            svc = services_for(session, club_id=club_id, resource_id=r["id"])
+            # Offered on the chosen court service? No links = offered everywhere (the default).
+            if court_product_id is not None and svc and str(court_product_id) not in svc:
+                continue
             price = _flat_price(session, club_id=club_id, product_id=r["product_id"])
             modes = r["payment_modes"]
-            out.append({
+            item = {
                 "id": str(r["id"]), "name": r["name"], "quantity": int(r["quantity"] or 1),
                 "feature_on_home": bool(r["feature_on_home"]), "active": bool(r["is_active"]),
                 "price_id": (price["price_id"] if price else None),
@@ -46,7 +100,15 @@ def list_equipment(session, *, club_id, active_only=True, featured_only=False):
                 # None = inherit every club-enabled method (the booking flow narrows by this).
                 "payment_modes": ([m.strip() for m in str(modes).split(",") if m.strip()]
                                   if modes else None),
-            })
+                "services": svc,          # [] = every court service
+            }
+            if starts is not None and ends is not None:
+                # What can ACTUALLY be hired for this slot. The picker used to clamp to what the club
+                # OWNS, so a client could select 4 racquets that were already out and only find out at
+                # confirm (the server refuses, correctly — but at the worst possible moment).
+                item["available"] = available_units(session, club_id=club_id, resource_id=r["id"],
+                                                    starts=starts, ends=ends)
+            out.append(item)
         return out
     except Exception:
         log.debug("list_equipment suppressed", exc_info=False)
@@ -67,6 +129,29 @@ def _flat_price(session, *, club_id, product_id):
         ).mappings().first()
         return dict(row) if row else None
     except Exception:
+        return None
+
+
+def check_offered(session, *, club_id, addons, court_product_id):
+    """The NAME of the first requested item not offered on this court service, else None.
+
+    The picker filters by service, but the picker is not the authority — `addons` arrives off the
+    request body. Without this a crafted (or stale) request could hire clay-only kit on a hard court,
+    which is the same class of hole the posted-product_id guard closes for services. Guarded -> None
+    (a bad read must never block a legitimate hire)."""
+    try:
+        for a in (addons or []):
+            rid = a.get("resource_id")
+            if not rid or int(a.get("qty") or 1) < 1:
+                continue
+            if not offered_on_service(session, club_id=club_id, resource_id=rid,
+                                      court_product_id=court_product_id):
+                return session.execute(
+                    text("SELECT name FROM diary.resource WHERE id = :r"), {"r": str(rid)},
+                ).scalar() or "that equipment"
+        return None
+    except Exception:
+        log.debug("check_offered suppressed", exc_info=False)
         return None
 
 

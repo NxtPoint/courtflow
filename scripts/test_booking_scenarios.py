@@ -2502,6 +2502,158 @@ def sc_waitlist_promotion_into_a_cardonly_class_is_held(s, fx):
     check("…and NOW the enrolment confirmation is sent", "class_enrolled" in rec2.seen, str(rec2.seen))
 
 
+def sc_equipment_court_is_charged_and_both_are_booked_out(s, fx):
+    """THE equipment invariant, end to end: the COURT is charged unless a membership genuinely covers
+    it, and BOTH the court and the kit are reserved so neither can be taken twice.
+
+    Reported as "she hired 2 racquets for R100 and got a 2-hour court free". The court was free
+    because she held a MEMBERSHIP — not an equipment fault — but the shapes are indistinguishable
+    from the order alone, so all three are pinned here: PAYG pays for the court, a covered member
+    doesn't, and a covered member OVER THE CAP does."""
+    print("\n# Equipment: the court is still charged (unless covered), and both are booked out")
+    from admin import repositories as AR
+    from diary.equipment import available_units
+    m = fx.members[0]
+    court = fx.courts[0]
+    kit = AR.create_equipment(s, club_id=fx.club_id, name="Racquet", amount_minor=5000, quantity=4)
+
+    def _order(bid):
+        return s.execute(text('SELECT o.amount_minor, o.settlement_mode FROM billing."order" o '
+                              'JOIN billing.order_line ol ON ol.order_id=o.id '
+                              'WHERE ol.booking_id=:b LIMIT 1'), {"b": bid}).mappings().first()
+
+    # (1) PAYG: the court is charged IN FULL alongside the kit. This is the leak that was feared.
+    r1 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                          booking_type="court", resource_id=court,
+                          starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                          settlement_mode="at_court",
+                          addons=[{"resource_id": kit["id"], "qty": 2}])
+    check("PAYG court + kit is booked", r1.get("ok"), str(r1))
+    o1 = _order(r1["booking"]["id"]) if r1.get("ok") else None
+    check("…and the ORDER carries the court R150 AND the kit R100 = R250",
+          bool(o1) and o1["amount_minor"] == 25000, str(o1))
+
+    # (2) BOTH are booked out. The court by the GiST constraint, the kit by time-overlap count.
+    left = available_units(s, club_id=fx.club_id, resource_id=kit["id"],
+                           starts=at(fx, 9), ends=at(fx, 10))
+    check("2 of the 4 racquets are now out for that hour", left == 2, f"left={left}")
+    clash = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[1], role="member",
+                             booking_type="court", resource_id=court,
+                             starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)))
+    check("the COURT can't be double-booked", clash.get("error") == "SLOT_TAKEN", str(clash))
+    over = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[1], role="member",
+                            booking_type="court", resource_id=fx.courts[1],
+                            starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                            settlement_mode="at_court",
+                            addons=[{"resource_id": kit["id"], "qty": 3}])
+    check("the KIT can't be over-hired (only 2 left, 3 asked)",
+          over.get("error") == "EQUIPMENT_UNAVAILABLE", str(over))
+    ok2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[1], role="member",
+                           booking_type="court", resource_id=fx.courts[1],
+                           starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                           settlement_mode="at_court",
+                           addons=[{"resource_id": kit["id"], "qty": 2}])
+    check("…but the remaining 2 CAN be hired on another court", ok2.get("ok"), str(ok2))
+    check("all 4 racquets are now out",
+          available_units(s, club_id=fx.club_id, resource_id=kit["id"],
+                          starts=at(fx, 9), ends=at(fx, 10)) == 0)
+
+    # (3) A MEMBER whose entitlement covers the court: court free, kit still charged. This is the
+    # reported shape — correct, and only correct because the membership really does cover it.
+    _membership_for_court(s, fx, m)
+    r3 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                          booking_type="court", resource_id=court,
+                          starts_at=utc_iso(at(fx, 11)), ends_at=utc_iso(at(fx, 12)),
+                          settlement_mode="membership_covered",
+                          addons=[{"resource_id": kit["id"], "qty": 1}])
+    o3 = _order(r3["booking"]["id"]) if r3.get("ok") else None
+    check("a covered member pays for the KIT ONLY (R50)",
+          bool(o3) and o3["amount_minor"] == 5000, str(o3))
+    check("…the booking itself stays membership_covered",
+          r3.get("ok") and r3["booking"]["settlement_mode"] == "membership_covered", str(r3.get("booking")))
+
+    # (4) …and the moment the club's cap bites, that same member PAYS for the court again.
+    s.execute(text("UPDATE club.policy SET default_max_covered_minutes = 60 WHERE club_id = :c"),
+              {"c": fx.club_id})
+    r4 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                          booking_type="court", resource_id=court,
+                          starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 15)),   # 2 HOURS
+                          settlement_mode="membership_covered",
+                          addons=[{"resource_id": kit["id"], "qty": 1}])
+    o4 = _order(r4["booking"]["id"]) if r4.get("ok") else None
+    check("a 2-hour booking over the 60-min cap is charged for the court again",
+          bool(o4) and o4["settlement_mode"] == "at_court" and o4["amount_minor"] > 5000, str(o4))
+
+
+def _membership_for_court(s, fx, user_id):
+    """An active, uncapped membership so COURT bookings resolve as covered."""
+    from billing.membership import membership_product_id
+    mp = membership_product_id(s, club_id=fx.club_id, create_if_missing=True)
+    pr = s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                        "currency_code, unit, term_months, membership_tier, active) "
+                        "VALUES (:c,:p,'member',18000,'ZAR','per_month',1,'Adult',true) RETURNING id"),
+                   {"c": fx.club_id, "p": mp}).scalar()
+    s.execute(text("INSERT INTO billing.membership_subscription (club_id, user_id, price_id, status, "
+                   "provider, current_period_end) "
+                   "VALUES (:c,:u,:pr,'active','manual',CURRENT_DATE + 30)"),
+              {"c": fx.club_id, "u": user_id, "pr": pr})
+
+
+def sc_equipment_is_scoped_to_its_court_service(s, fx):
+    """Equipment used to be club-wide: every item showed on every court booking whatever service it
+    belonged to. Clay-only kit could be hired on a hard court. NO service links still means "offered
+    everywhere" — the default, so nothing pre-existing changes — and the guard is SERVER-side because
+    `addons` arrives off the request body, exactly like the posted product_id."""
+    print("\n# Equipment is scoped to its court service (and the guard is server-side)")
+    from admin import repositories as AR
+    from diary.equipment import list_equipment
+    m = fx.members[0]
+    # Two court services; court[0] is Hardcourt, the clay court is its own service.
+    hard = fx.court_product
+    clay_prod = s.execute(text("INSERT INTO billing.product (club_id, kind, name, active) "
+                               "VALUES (:c,'court_booking','Clay Hire',true) RETURNING id"),
+                          {"c": fx.club_id}).scalar()
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, duration_minutes, active) "
+                   "VALUES (:c,:p,'any',20000,'ZAR',60,true)"), {"c": fx.club_id, "p": clay_prod})
+    clay_court = s.execute(text("INSERT INTO diary.resource (club_id, kind, name, surface, rank, "
+                                "product_id) VALUES (:c,'court','Clay 1','clay',9,:p) RETURNING id"),
+                           {"c": fx.club_id, "p": clay_prod}).scalar()
+    s.execute(text("UPDATE diary.resource SET product_id = :p WHERE id = :r"),
+              {"p": hard, "r": fx.courts[0]})
+
+    anywhere = AR.create_equipment(s, club_id=fx.club_id, name="Racquet", amount_minor=5000, quantity=4)
+    clay_only = AR.create_equipment(s, club_id=fx.club_id, name="Clay shoes", amount_minor=3000,
+                                    quantity=2, service_product_ids=[str(clay_prod)])
+
+    hard_items = [i["id"] for i in list_equipment(s, club_id=fx.club_id, court_product_id=str(hard))]
+    clay_items = [i["id"] for i in list_equipment(s, club_id=fx.club_id, court_product_id=str(clay_prod))]
+    check("an UNLINKED item is offered on every service (the default)",
+          anywhere["id"] in hard_items and anywhere["id"] in clay_items)
+    check("a clay-only item is NOT offered on hardcourt", clay_only["id"] not in hard_items,
+          str(hard_items))
+    check("…and IS offered on clay", clay_only["id"] in clay_items, str(clay_items))
+
+    # The picker filters, but the picker is not the authority.
+    bad = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                           booking_type="court", resource_id=fx.courts[0], product_id=str(hard),
+                           starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                           settlement_mode="at_court",
+                           addons=[{"resource_id": clay_only["id"], "qty": 1}])
+    check("a crafted request for clay-only kit on a hard court is REFUSED",
+          bad.get("error") == "EQUIPMENT_NOT_FOR_SERVICE", str(bad))
+    check("…and nothing persisted — the slot is still free",
+          not s.execute(text("SELECT 1 FROM diary.booking WHERE club_id=:c AND resource_id=:r "
+                             "AND starts_at=:sa AND status IN ('held','confirmed')"),
+                        {"c": fx.club_id, "r": fx.courts[0], "sa": at(fx, 9)}).first())
+    good = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                            booking_type="court", resource_id=clay_court, product_id=str(clay_prod),
+                            starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
+                            settlement_mode="at_court",
+                            addons=[{"resource_id": clay_only["id"], "qty": 1}])
+    check("…while the SAME kit books fine on a clay court", good.get("ok"), str(good))
+
+
 SCENARIOS = [
     sc_cancel_after_start_guard,
     sc_unpriced_booking_refused,
@@ -2553,6 +2705,8 @@ SCENARIOS = [
     sc_equipment_follows_its_own_payment_rule,
     sc_club_default_caps_cover_every_membership,
     sc_waitlist_promotion_into_a_cardonly_class_is_held,
+    sc_equipment_court_is_charged_and_both_are_booked_out,
+    sc_equipment_is_scoped_to_its_court_service,
 ]
 
 

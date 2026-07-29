@@ -95,6 +95,28 @@ _DDL = [
     f"CREATE INDEX IF NOT EXISTS ix_booking_equipment_res "
     f"ON {SCHEMA}.booking_equipment (club_id, resource_id);",
 
+    # --- diary.equipment_service : which COURT SERVICES an equipment item is offered on ---------
+    # Equipment used to be club-wide: every item appeared on every court booking regardless of which
+    # court service it belongs to. Fine for racquets, wrong the moment a club adds clay-only shoes or
+    # a ball machine that never leaves the hard courts.
+    #
+    # MANY-TO-MANY on purpose — racquets belong on every service, clay shoes on one — and, crucially,
+    # **NO ROWS FOR AN ITEM MEANS "ALL COURT SERVICES"**. That keeps every existing item behaving
+    # exactly as it does today: this table starts empty and changes nothing until an owner opts an
+    # item in to specific services. product_id is a billing.product (kind='court_booking'); the
+    # cross-lane reference is deliberately unconstrained, like booking_equipment.price_id.
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.equipment_service (
+        club_id      uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        resource_id  uuid NOT NULL REFERENCES {SCHEMA}.resource(id) ON DELETE CASCADE,
+        product_id   uuid NOT NULL,
+        created_at   timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (resource_id, product_id)
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_equipment_service_club "
+    f"ON {SCHEMA}.equipment_service (club_id, product_id);",
+
     # --- diary.availability_rule : recurring open hours per resource ------
     f"""
     CREATE TABLE IF NOT EXISTS {SCHEMA}.availability_rule (

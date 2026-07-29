@@ -64,6 +64,8 @@
       ctx.courts = rs.filter(function (r) { return r.kind === "court" && r.is_active; });
     } catch (e) {}
     // Equipment hire (ball machine / racquets / balls) — offered as an add-on on a court booking.
+    // Loaded unscoped here (no service or slot chosen yet); refreshEquipmentForSlot() re-fetches it
+    // scoped to the CHOSEN court service + time once we reach the confirm step.
     try { ctx.equipment = (await window.TFAuth.apiJSON("/api/diary/equipment")).equipment || []; } catch (e) { ctx.equipment = []; }
     ctx.policy = (principal && principal.policy) || null;
     ctx.loaded = true;
@@ -803,10 +805,16 @@
     ]);
     items.forEach(function (it) {
       var priceTxt = it.amount_minor != null ? UI.money(it.amount_minor, ctx.billing && ctx.billing.currency) : "";
+      // Clamp to what is ACTUALLY free for this slot when we know it (`available`), not to what the
+      // club owns — otherwise a client can pick 4 racquets that are already out and only be refused
+      // at confirm. Falls back to `quantity` before the scoped fetch lands.
+      var cap = (it.available != null) ? it.available : (it.quantity || 1);
       var qEl = el("span", { style: "min-width:26px;text-align:center;font-weight:700", text: String(st.addonQty[it.id] || 0) });
       var minus = el("button", { class: "cf-btn cf-btn-sm", type: "button", text: "–" });
       var plus = el("button", { class: "cf-btn cf-btn-sm", type: "button", text: "+" });
-      function set(n) { st.addonQty[it.id] = Math.max(0, Math.min(n, it.quantity || 1)); renderConfirm(); }
+      plus.disabled = (st.addonQty[it.id] || 0) >= cap;
+      if (cap <= 0) { priceTxt += " · none free for this time"; }
+      function set(n) { st.addonQty[it.id] = Math.max(0, Math.min(n, cap)); renderConfirm(); }
       minus.addEventListener("click", function () { set((st.addonQty[it.id] || 0) - 1); });
       plus.addEventListener("click", function () { set((st.addonQty[it.id] || 0) + 1); });
       sec.appendChild(el("div", { class: "cf-row", style: "gap:10px;align-items:center;justify-content:space-between;margin-top:8px" }, [
@@ -849,7 +857,33 @@
     ]);
   }
 
+  // Re-fetch equipment SCOPED to the chosen court service + slot: which items are offered on THIS
+  // service, and how many of each are actually free for THIS window. Fire-and-forget — a failure
+  // leaves the unscoped list in place (the server re-checks both on submit either way), so the flow
+  // never stalls on it. Guarded against re-entry so it runs once per slot.
+  async function refreshEquipmentForSlot() {
+    if (st.type !== "court" || !st.slot) return;
+    var key = [(st.selService && st.selService.product_id) || "", st.slot.starts_at, st.slot.ends_at].join("|");
+    if (st.equipKey === key) return;
+    st.equipKey = key;
+    var qs = "?starts=" + encodeURIComponent(st.slot.starts_at) + "&ends=" + encodeURIComponent(st.slot.ends_at);
+    if (st.selService && st.selService.product_id) qs += "&court_product_id=" + encodeURIComponent(st.selService.product_id);
+    try {
+      var r = await window.TFAuth.apiJSON("/api/diary/equipment" + qs);
+      ctx.equipment = r.equipment || [];
+      // Drop any selection that this service doesn't offer / can't supply for this slot.
+      var byId = {}; ctx.equipment.forEach(function (e) { byId[e.id] = e; });
+      Object.keys(st.addonQty || {}).forEach(function (id) {
+        var it = byId[id];
+        var cap = it ? (it.available != null ? it.available : (it.quantity || 0)) : 0;
+        if (st.addonQty[id] > cap) st.addonQty[id] = cap;
+      });
+      if (st.view === "confirm") renderConfirm();
+    } catch (e) { /* keep the unscoped list; the server is the authority on submit */ }
+  }
+
   function renderConfirm() {
+    refreshEquipmentForSlot();
     var free = courtCovered();
     var modes = payModes();
     if (free) st.settlement = "membership_covered";

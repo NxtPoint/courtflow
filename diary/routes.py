@@ -215,13 +215,27 @@ def availability():
 @diary_bp.get("/equipment")
 def equipment_list():
     """Active equipment items (ball machine / racquets / balls) for the booking add-on picker.
-    Each = {id, name, quantity, feature_on_home, price_id, amount_minor, currency_code}."""
+    Each = {id, name, quantity, feature_on_home, price_id, amount_minor, currency_code, services[]}.
+
+    `?court_product_id=` narrows to the items offered on THAT court service (an item with no service
+    links is offered on all of them). `?starts=&ends=` adds `available` — the units actually free for
+    that window — so the picker clamps to what can really be hired, not to what the club owns."""
     p = _principal()
     if not p or not _need_club(p):
         return jsonify(error="unauthorized"), 401
+    q = request.args
+    starts = ends = None
+    try:
+        if q.get("starts") and q.get("ends"):
+            from diary.bookings import _parse_dt
+            starts, ends = _parse_dt(q.get("starts")), _parse_dt(q.get("ends"))
+    except Exception:
+        starts = ends = None          # a bad window just means "no availability figure", never a 500
     with session_scope() as s:
         from diary.equipment import list_equipment
-        items = list_equipment(s, club_id=p.club_id, active_only=True)
+        items = list_equipment(s, club_id=p.club_id, active_only=True,
+                               court_product_id=(q.get("court_product_id") or None),
+                               starts=starts, ends=ends)
     return jsonify(equipment=items, count=len(items)), 200
 
 

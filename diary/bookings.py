@@ -943,7 +943,13 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     # refused, never handed over on an unpaid order).
     equip_order_mode = None
     if addons and booking_type == "court":
-        from diary.equipment import quote as _equip_quote
+        from diary.equipment import quote as _equip_quote, check_offered as _equip_offered
+        # The kit must belong to THIS court's service. The picker already filters, but `addons` comes
+        # off the request body — same reason the posted product_id is validated rather than trusted.
+        _bad = _equip_offered(session, club_id=club_id, addons=addons, court_product_id=product_id)
+        if _bad:
+            return _err("EQUIPMENT_NOT_FOR_SERVICE", 422,
+                        message=f"{_bad} isn't available with this court service")
         _eq = _equip_quote(session, club_id=club_id, addons=addons)
         if int(_eq.get("total_minor") or 0) > 0:
             _eq_modes = _eq.get("modes")          # None = the items place no restriction

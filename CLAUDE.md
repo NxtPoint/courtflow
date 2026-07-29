@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 316 / billing 480 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 332 / billing 480 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -723,6 +723,29 @@ member by email on the first authenticated hit.
   summing `billing.payment` refunds against the charge, without calling Yoco at all. A frozen key
   was never protecting the money; it was only preventing the retry. Guarded by
   `sc_refund_retry_is_not_poisoned_by_the_idempotency_key`.
+- **EQUIPMENT IS SCOPED TO A COURT SERVICE, AND THE COURT IS STILL CHARGED (2026-07-29).** Equipment
+  was club-wide — every item offered on every court booking whatever service it belonged to, so
+  clay-only kit could be hired on a hard court. `diary.equipment_service` links an item to the court
+  SERVICES it's offered on, many-to-many, and **NO ROWS MEANS ALL SERVICES** so every pre-existing
+  item is unchanged. The picker filters (`GET /api/diary/equipment?court_product_id=`), and
+  `create_booking` re-checks server-side (`EQUIPMENT_NOT_FOR_SERVICE`) because `addons` arrives off
+  the request body — the same reason a posted `product_id` is validated rather than trusted.
+  `?starts=&ends=` returns `available` per item so the stepper clamps to what is FREE for the slot,
+  not to what the club owns (it used to let a client pick 4 racquets already out and refuse at the
+  very end). **The COURT is charged in full alongside the kit unless a membership genuinely covers
+  it** — a covered court + kit is an order for the kit ONLY, which is indistinguishable from a leak
+  by looking at the order, so all three cases are pinned: PAYG pays, covered doesn't, and covered
+  OVER THE CAP pays again. Both the court (GiST) and the kit (time-overlap count) are reserved, so
+  neither double-books. Guarded by `sc_equipment_court_is_charged_and_both_are_booked_out` +
+  `sc_equipment_is_scoped_to_its_court_service`.
+- **`billing.me.activity_summary` buckets EVERYTHING by the SESSION's month.** `paid_minor` used to
+  filter on the PAYMENT's own `created_at`, putting the money in a different month from the thing it
+  paid for whenever someone books ahead: an August session paid in July read "billed R400, paid R0"
+  in August and "paid R400, nothing played" in July — a fold that reconciles in NEITHER month, on
+  the client's own summary. One month view, one date basis. (Found because a harness scenario asked
+  for *today's* month while the fixture books 3 days out — **date-dependent assertions must derive
+  their date from the fixture**, or they fail for the last 3 days of every month and look like a
+  regression.)
 - **A REFUND NEEDS EVIDENCE OF A CARD PAYMENT, NOT A CHECKOUT (2026-07-28).** `billing.payment_attempt`
   is written the moment a member taps "Pay online" — **BEFORE any money moves** — so it proves an
   INTENT, never a payment. An order whose member started an online checkout, abandoned it and then

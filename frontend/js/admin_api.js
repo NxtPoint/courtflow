@@ -1893,11 +1893,20 @@
       UI.clear(host);
       var m = { name: it ? it.name : "", amount: it ? (it.amount_minor || 0) : 0, quantity: it ? it.quantity : 1, feature: it ? !!it.feature_on_home : false, active: it ? it.active : true,
                 // Equipment is a service and is paid for like one: null = inherit every club method.
-                modes: (it && it.payment_modes) ? it.payment_modes.slice() : null, clubMethods: [] };
-      // The payment card needs the club's enabled methods; fetch, then render (same as memberships).
-      window.TFAuth.apiJSON("/api/admin/membership-config").then(function (r) {
-        m.clubMethods = r.club_payment_methods || []; renderItem();
-      }, function () { m.clubMethods = []; renderItem(); });
+                modes: (it && it.payment_modes) ? it.payment_modes.slice() : null, clubMethods: [],
+                // Which COURT SERVICES this item is offered on. [] = ALL of them (the default, and
+                // what every item created before this existed has).
+                services: (it && it.services) ? it.services.slice() : [], courtServices: [] };
+      // Needs the club's enabled methods AND its court services; fetch both, then render.
+      Promise.all([
+        window.TFAuth.apiJSON("/api/admin/membership-config").catch(function () { return {}; }),
+        window.AdminAPI.products().catch(function () { return {}; }),
+      ]).then(function (r) {
+        m.clubMethods = (r[0] && r[0].club_payment_methods) || [];
+        m.courtServices = ((r[1] && r[1].products) || [])
+          .filter(function (p) { return p.kind === "court_booking" && p.active !== false; });
+        renderItem();
+      });
       function renderItem() {
       UI.clear(host);
       var saveB = el("button", { class: "cf-btn cf-btn-primary", text: "Save & close" });
@@ -1917,6 +1926,28 @@
       host.appendChild(paymentOptionsCard(m, "How this equipment is paid for. It rides the court "
         + "booking's order, so if the court is free on a membership the booking still has to collect "
         + "this fee — a card-only item holds the booking until it's paid."));
+      // Which court services offer this item. Nothing ticked = offered on ALL of them, which is the
+      // default and what every existing item does — so an owner only opts in when they want to
+      // restrict (clay-only shoes, a hard-court ball machine).
+      if (m.courtServices.length > 1) {
+        var sc = el("div", { class: "cf-card" }, [
+          el("h3", { text: "Offered with" }),
+          el("p", { class: "cf-muted cf-tiny", text: "Which court services can hire this. Leave all unticked to offer it with every court." }),
+        ]);
+        m.courtServices.forEach(function (svc) {
+          var lbl = el("label", { class: "cf-row", style: "gap:8px;align-items:center;cursor:pointer;margin-top:6px" });
+          var cb = el("input", { type: "checkbox" }); cb.style.width = "auto";
+          cb.checked = m.services.indexOf(String(svc.id)) >= 0;
+          cb.addEventListener("change", function () {
+            var i = m.services.indexOf(String(svc.id));
+            if (cb.checked && i < 0) m.services.push(String(svc.id));
+            else if (!cb.checked && i >= 0) m.services.splice(i, 1);
+          });
+          lbl.appendChild(cb); lbl.appendChild(el("span", { text: svc.name }));
+          sc.appendChild(lbl);
+        });
+        host.appendChild(sc);
+      }
       if (it) {
         var tg = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", style: "margin-top:8px", text: it.active ? "Hide from booking" : "Show in booking" });
         tg.addEventListener("click", async function () { try { await window.AdminAPI.patchEquipment(it.id, { is_active: !it.active }); UI.toast("Saved.", "info"); equipmentManage(host); } catch (e) { UI.toast(UI.errMsg(e), "error"); } });
@@ -1926,8 +1957,8 @@
         if (!(m.name || "").trim()) { UI.toast("Name it.", "warn"); return; }
         saveB.disabled = true;
         try {
-          if (it) await window.AdminAPI.patchEquipment(it.id, { name: m.name, amount_minor: m.amount, quantity: m.quantity, feature_on_home: m.feature, payment_modes: m.modes });
-          else await window.AdminAPI.createEquipment({ name: m.name, amount_minor: m.amount, quantity: m.quantity, feature_on_home: m.feature, payment_modes: m.modes });
+          if (it) await window.AdminAPI.patchEquipment(it.id, { name: m.name, amount_minor: m.amount, quantity: m.quantity, feature_on_home: m.feature, payment_modes: m.modes, service_product_ids: m.services });
+          else await window.AdminAPI.createEquipment({ name: m.name, amount_minor: m.amount, quantity: m.quantity, feature_on_home: m.feature, payment_modes: m.modes, service_product_ids: m.services });
           UI.toast("Saved.", "info"); equipmentManage(host);
         } catch (e) { saveB.disabled = false; UI.toast(UI.errMsg(e) || "Couldn't save.", "error"); }
       });

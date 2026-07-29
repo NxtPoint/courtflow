@@ -339,14 +339,27 @@ def activity_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]
         ).mappings().first()
         out["billed_minor"] = int(m["billed"] or 0)
         out["outstanding_minor"] = int(m["outstanding"] or 0)
-        # Paid = net money movement (charges − refunds) recorded this month, over THIS client's orders.
+        # Paid = net money movement (charges − refunds) against the orders belonging to THIS month's
+        # sessions — bucketed by the SESSION, exactly like counts / billed / outstanding above.
+        #
+        # It used to filter on the PAYMENT's own created_at, which put the money in a different month
+        # from the thing it paid for whenever someone books ahead: an August session paid for in July
+        # showed "billed R400, paid R0" in August and "paid R400, nothing played" in July — a fold
+        # that reconciles in neither month, on the client's own summary. One month view, one date
+        # basis: the session's.
         out["paid_minor"] = int(session.execute(
             text("SELECT COALESCE(SUM(CASE "
-                 "  WHEN direction='charge' AND status='succeeded' THEN amount_minor "
-                 "  WHEN direction='refund' AND status IN ('refunded','succeeded') THEN -amount_minor "
-                 "  END),0) FROM billing.payment "
-                 'WHERE club_id = :c AND to_char(created_at,\'YYYY-MM\') = :ym AND order_id IN '
-                 '  (SELECT id FROM billing."order" WHERE club_id = :c AND user_id = :u)'),
+                 "  WHEN pay.direction='charge' AND pay.status='succeeded' THEN pay.amount_minor "
+                 "  WHEN pay.direction='refund' AND pay.status IN ('refunded','succeeded') THEN -pay.amount_minor "
+                 "  END),0) "
+                 "FROM billing.payment pay "
+                 'JOIN billing."order" o ON o.id = pay.order_id '
+                 "LEFT JOIN LATERAL (SELECT booking_id FROM billing.order_line "
+                 "                   WHERE order_id = o.id ORDER BY created_at LIMIT 1) ol ON true "
+                 "LEFT JOIN diary.booking b ON b.id = ol.booking_id "
+                 "WHERE pay.club_id = :c AND o.club_id = :c AND o.user_id = :u "
+                 "  AND o.settled_by_order_id IS NULL "
+                 "  AND to_char(COALESCE(b.starts_at, o.created_at),'YYYY-MM') = :ym"),
             {"c": str(club_id), "u": str(user_id), "ym": ym},
         ).scalar() or 0)
     except Exception:
