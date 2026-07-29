@@ -31,7 +31,7 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 - **Owner onboarding wizard** — club profile, location, branding, policy, courts, hours, services &
   prices, invite coaches; gated first-run redirect. 🔭
 - **Coach onboarding (4-step)** — profile/photo/bio, languages/qualifications/visibility,
-  review-bookings preference, weekly hours (creates their bookable resource), services/rates +
+  **preferred court**, weekly hours (creates their bookable resource), services/rates +
   classes + packs; fully pre-filled on return. 🔭
 - **Member account** — profile/demographics (email = identity, read-only); **dependents/children**
   (login-less child players billed to the guardian). 🔭
@@ -92,14 +92,25 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
 - **Master diary** — a unified resource-timeline calendar for the owner (courts/coaches/classes). 🔭
 - Every booking has a downloadable **`.ics`** ("Add to calendar"). 🔭
 
-## 4. Lesson approval lifecycle (per-coach)
-- A coach can require approval of lessons clients book with them (`review_bookings`). ✅
-- Client self-books a review-coach → **`requested`**, reserving **nothing** (no court/order/payment). ✅
-- Coach **accepts** → court auto-assigned, settles → `confirmed`. ✅
-- Coach **proposes** a new time → **`proposed`** (client accepts/declines/withdraws). ✅
-- Coach **declines** → `cancelled`. ✅
-- On-behalf bookings always auto-confirm (no acceptance step). ✅
-- Lifecycle notifications: requested / proposed / accepted / declined. 🔭
+## 4. Lesson & class lifecycle (ONE flow — no approval gate)
+> The per-coach approval gate (`review_bookings` → `requested`/`proposed` + accept / propose / decline)
+> was **DELETED 2026-07-29**. It raised no order, so a card-only coach was unbookable; it reserved
+> nothing, so two clients could each hold and pay for one slot. A coach who doesn't want a time
+> **reschedules or cancels**. Do not restore it.
+- A lesson reserves **coach ∩ court immediately**; the **settlement mode alone** decides `held` (online,
+  awaiting payment) vs `confirmed`. Nothing about the coach changes the booking's shape. ✅
+- On-behalf bookings auto-confirm, desk-settlement only (skips Yoco). ✅
+- **The coach is told, once, about every lesson** — `lesson_booked`, addressed to him, at booking when
+  owed/prepaid and **on payment** when online. The coach BCC on the client's receipt is gone. ✅
+- A coach can **reschedule** (time and/or court) or **cancel** any of his own lessons. ✅
+- **A paid lesson cancelled BY THE CLUB refunds itself**; a client's own cancellation does not (it is a
+  policy decision, flagged `was_paid`). ✅
+- **Classes have three verbs — schedule, MOVE, cancel.** `reschedule_session` moves one occurrence,
+  keeping the roster and re-reserving its courts through the same guards; it **refuses** rather than
+  half-moving when no court is free at the target. ✅
+- **The coach is told about class seats** — `class_booked`, at enrolment / on payment / on waitlist
+  promotion. ✅
+- **Cancelling a class refunds its paid seats** (it used to void, which no-ops on a paid order). ✅
 
 ## 5. Pricing & the three purchasing models
 - **Per-duration PAYG** — one price per offered duration (e.g. court 30/60/90/120; lesson 30/60);
@@ -236,11 +247,11 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
   (`GET /api/me/bookings/<id>`), every line to its order/receipt. The **Match-analysis** block is a
   distinctive **"AI" gradient panel**. **Emoji removed** throughout (replaced by drawn line-glyphs). The
   **Edit-profile** button on the record returns to **Client 360** on save. My-Bookings needs-attention
-  (accept/decline a proposed time) + **add-to-calendar**. 🔭
+  + **reschedule / cancel** (the shared `CRMUI.rescheduleModal`) + **add-to-calendar**. 🔭
 - **Coach** (`coach_app.html` + `coach_app.js`, at `/coach`; bottom nav **Home · Schedule · Clients ·
   Money · Setup**):
   - **Home** = business cockpit KPIs (**Total billed** + net-of-commission earnings / lessons / hours /
-    fill-rate) + the **lesson approval queue** + today + book-for-a-client. 🔭
+    fill-rate) + today + book-for-a-client. 🔭
   - **Schedule** = a **weekly calendar** (week-of-today, prev/this/next) on the shared Calendar widget
     — defaults to **just this coach** but can switch to **all** club bookings; tap a lesson → the event
     story; tap a class → its roster. 🔭
@@ -259,8 +270,8 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
     **Setup** = Services (lifecycle Deactivate/Reactivate/Terminate + filter) + **Classes**
     (create / schedule / roster) + club-commission card + Edit-profile & Weekly-hours (as pages). 🔭
   - **THE ONE COACH EVENT STORY** (`#/event/:id`, `GET /api/coach/bookings/<id>`): client + contact,
-    when, court, charge, **coaching line**, players + attendance, and the actions — accept / propose /
-    decline / reschedule / cancel / mark-completed / no-show **+ Mark collected / Discount / Write off**
+    when, court, charge, **coaching line**, players + attendance, and the actions — reschedule /
+    cancel / mark-completed / no-show **+ Mark collected / Discount / Write off**
     (the money is managed right here) + add-to-calendar. 🔭
 - **Owner / Admin** (`admin_app.html` + `admin_app.js`, at **`/admin`** — **COMPLETE + LIVE**; the
   classic tab console was **retired 2026-07-18**). **Responsive**: bottom-nav on mobile, **left
@@ -286,7 +297,8 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
 ## 9. Notifications, calendar & CRM
 - In-app **bell + inbox** for every member, driven off the event feed: booking confirmed, payment
   receipt, membership active, pack activated, refund requested/decided, class enrolled/waitlisted/
-  spot-open, coach invited, lesson requested/proposed/accepted/declined. 🔭
+  spot-open, class seat-awaiting-payment, class cancelled, class **rescheduled**, coach invited,
+  and the coach's OWN **`lesson_booked`** / **`class_booked`** (addressed to him, never a BCC). 🔭
 - **Child → guardian** notification routing. 🔭
 - Booking **`.ics` calendar** (in-app add-to-calendar works now; the email attachment is gated OFF via
   `EMAIL_ICS_ENABLED=0` **by choice** - the SES key already has `ses:SendRawEmail`, so it is flag-only). Invoice PDFs already attach with it.

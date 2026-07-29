@@ -105,7 +105,7 @@ Cockpit and Overview tabs are folded into the five above (Diary/Money/Insights).
 > changing prices/branding. That's the "screens that shouldn't be there for everyone."
 
 ## 5. Coach surface (`/coach`, `coach_app.js`) — own-scope only, **5 tabs; default = Home:**
-- **Dashboard** — "Needs your attention" (approval queue) + the cockpit (net-of-commission KPIs · earnings
+- **Dashboard** — the cockpit (net-of-commission KPIs · earnings
   trend · month-end position · top clients · upcoming).
 - **Schedule** — a week TIMELINE of the coach's lessons + classes (prev/next-week); tap a lesson →
   completed/no-show, tap a class → roster; + **Book for a client** + **Book for myself** (→ `/book/court`) +
@@ -134,9 +134,9 @@ flag anything a coach sees that they shouldn't.
 > SPA at `/coach` (bottom nav **Home · Schedule · Clients · Money · Setup**). The per-session **money
 > actions — Mark collected / Discount / Write off** — now live in **the one coach event story**
 > (`GET /api/coach/bookings/<id>`), reached by tapping a session anywhere; they remain coach-own-scoped
-> (a coach only ever settles arrears on their own sessions). **Lesson lifecycle** (accept / propose /
-> decline) stays gated so **only the awaited party — or an admin — can act** (matches §7: coach on own,
-> admin on any), and a coach/admin on-behalf booking always auto-confirms (no acceptance step).
+> (a coach only ever settles arrears on their own sessions). **There is no lesson approval lifecycle** —
+> accept / propose / decline were deleted 2026-07-29; a coach acts on his own lessons by **rescheduling or
+> cancelling** them (admin on any), and a coach/admin on-behalf booking auto-confirms.
 
 ## 6. Client/member surface (`/portal`, `/book`, `/my`, `/plan`, `/account`)
 Cockpit + quick-book · full booking · My Bookings (reschedule/cancel/needs-attention/calendar) · Plan
@@ -149,7 +149,9 @@ membership**). All own-scope (gated by `view_own_ledger`). Looks correct.
 |---|---|
 | `manage_club / branding / policy / resources / coaches / prices`, `view_finances`, `run_billing`, `take_pay_at_court`, `view_club_analytics`, `view_master_diary` | club_admin+ |
 | `provision_club`, `impersonate`, `cross_club` | platform_admin |
-| `cancel/reschedule/edit_booking`, `mark_attendance`, `accept/propose/decline` | admin (any) · coach (own) · member/guest (own) |
+| `cancel/reschedule/edit_booking`, `mark_attendance` | admin (any) · coach (own) · member/guest (own) |
+| `reschedule_class_session` (`PATCH /api/{admin,coach}/classes/sessions/<id>`) | admin (any) · coach (**own only**; may not reassign the class to another coach) |
+| `take_pay_at_court` (`POST /api/billing/desk-payment`) | **`club_admin` only** — a coach cannot record a desk payment; his collection verb is `mark_arrears_collected` (see BUSINESS-RULES §6 custody) |
 | **add a player to a semi-private lesson** (`POST /api/diary/bookings/<id>/add-player`) | **the SAME gate as reschedule** — `can(reschedule_booking)`: admin (any) · coach (own) · the booking's owner. A non-staff booker may only add a **club member** or **their OWN dependent** (`_addable_player_uid`); staff may add any member/child. Each added player is billed their own owed order per-head. |
 | `manage_own_availability / time_off`, `view_own_rosters` | club_admin, coach |
 | `create_booking`, `book_court/lesson/class` | all roles |

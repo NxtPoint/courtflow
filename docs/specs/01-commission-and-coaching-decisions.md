@@ -85,6 +85,73 @@ live — until then shareable/printable.)
 - Plan/bundle **expiry** edge cases (unused-credit refund/transfer) — default: no refund of a started term.
 - VAT registration / invoicing format — later.
 
+## RESOLVED (2026-07-29, third round) — CASH CUSTODY + COMMISSION TIMING
+
+> Owner's answers after a year-one month of live operation. These settle the two questions the code
+> could not infer, and they are now **built and scenario-guarded**. The 2026-06-21 decisions above stand;
+> this round makes the *direction* and the *timing* explicit.
+
+### D6 — WHO HOLDS THE CASH decides the ledger's direction
+`billing.coach_ledger` is **SIGNED: + = the club owes the coach, − = the coach owes the club.**
+
+| How the money arrived | Who physically holds it | Ledger entry |
+|---|---|---|
+| Yoco online checkout / invoice pay-link | **Club** | `+coach_net` (`commission_earning`) |
+| EFT or cash recorded at the desk | **Club** | `+coach_net` |
+| Coach collects courtside / off-platform | **Coach** | `−owner_cut` (`commission_due`) |
+| Monthly account → month-end invoice → Yoco/EFT | **Club** | `+coach_net` when it lands |
+
+**Owner's words:** *"paid online, goes to club. eft is club. pay at court means paid to coach directly —
+they received the funds, we get the comm, but don't need to refund them anything. paid at end of month
+assumes the club will get the funds either through the invoice process or paid eft after the fact."*
+
+**As built, the direction follows WHO RECORDED THE PAYMENT, not what the booking said** — which is
+deliberately more precise than the flat rule, and needs no policy enforcement to stay true:
+- `POST /api/billing/desk-payment` is **`club_admin`-only** (`take_pay_at_court`). A coach physically
+  cannot record a desk payment.
+- A coach's only collection verb is **"Mark collected"** (`mark_arrears_collected`) — the off-platform
+  path, which posts `−owner_cut`.
+- So an `at_court` lesson is **not** automatically coach-held. If the client pays at reception, or settles
+  the month-end invoice, the **club** holds it and the coach is owed his net. The club can take a lesson
+  payment at the desk without the ledger going wrong.
+
+**What must be enforced with coaches is behavioural, not financial:** mark the collection promptly, or the
+club's commission on that cash stays invisible.
+
+> **This restores the original intent.** §"Owner visibility & commission timing" above already described
+> *"a running `coach_ledger` balance the coach owes the club"*. The as-built had drifted:
+> `mark_arrears_collected` posted `+coach_net` like a club-held collection, so the ledger was **wrong by
+> the whole gross on every off-platform collection** and told the owner to pay a coach who was holding the
+> club's money. Fixed 2026-07-28 (`_write_split_pair(cash_held_by=)`); historical rows corrected in
+> production 2026-07-29 via `scripts/fix_inverted_coach_ledger.py` (2 coaches, R14,800 net).
+> The `commission_split` rows were always right — the sale divides the same whoever holds the cash — so
+> commission **reporting** never lied; only the running **balance** did.
+
+### D7 — Commission is paid on FUNDS RECEIVED, and there is no monthly commission run
+The club invoices on the **25th** and collects by the **1st**. Commission is only ever paid on money
+actually received — and this needs no period logic, because there is no commission run to time:
+- The split posts at `charge_succeeded`, i.e. **at collection**. Unpaid work never accrues a ledger earning.
+- `coach_ledger` is a **live running balance**, not a period bucket. A payment landing on 2 August adds to
+  the balance on 2 August; when a `coach_payout` is recorded, the balance is exactly what has been
+  collected at that instant. **A payment arriving in the new month is simply in the next settlement** —
+  there is no window it can fall between.
+- The 25th sweep accrues **arrears + rent** and issues **client** invoices. It does **not** pay commission.
+
+### D8 — The coach owns the client relationship, therefore the coach chases the payment
+**Owner's words:** *"otherwise I am running around chasing payments. The coaches have the relationship with
+the client, and if a client doesn't pay then I lose in the process. What we are doing is creating a platform
+for the coaches to run and manage their business. They must take control of their finances and make it
+work."*
+
+This is a **product principle**, not just an accounting one, and it is what the money model already
+expresses: unpaid coaching sits on the coach's tab as **projected** commission that never realises until
+the client pays. The coach sees the gap in their own P&L (`Widgets.Earnings`, "You keep"). The club does
+not carry the cost of a client who doesn't pay, and does not do the chasing.
+
+**Design consequence — do not "help" by moving unpaid coaching onto the club's books.** Any future feature
+that auto-settles, auto-writes-off or fronts a coach their commission before collection breaks D7 *and*
+D8 at once. Escalation is a *reporting* problem (show the coach their ageing debt), never a cash one.
+
 ## Build order impact
 Phase D becomes: (D1) `coach_agreement` + `commission_rule` + resolution; (D2) accrue
 `commission_split` **on collection** for online lessons/classes; (D3) **bundles** (prepaid credits +

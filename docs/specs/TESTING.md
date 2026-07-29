@@ -11,7 +11,7 @@ the coach sets up services, then the client books against them. Expected results
 > **Automated gate (separate from this manual plan):** the backend money/booking invariants are also
 > proven by scratch-DB scenario harnesses — **`python -m scripts.test_all`** runs **THREE** (each in its
 > own scratch club, always rolled back, never persisted):
-> - **booking** (`test_booking_scenarios`, **180** checks) — double-book refusal, coach∩court integrity,
+> - **booking** (`test_booking_scenarios`, **390** checks) — double-book refusal, coach∩court integrity,
 >   recurrence/waitlist, lazy hold-expiry, off-peak per-slot pricing, court→service allocation (per-service
 >   courts + pricing), **classes reserve N courts** (held + conflict guard + auto-repick) + editable, the
 >   **online class seat held → lazy-expired on abandonment → waitlister promoted** (a paid seat is never
@@ -21,7 +21,7 @@ the coach sets up services, then the client books against them. Expected results
 >   bill a stranger or another family's child) — and the **payment-gate** correctness: a **card-only service**
 >   refuses pay-at-court on the booking path (staff override kept), and **class enrolment** respects the
 >   service's payment rule (no free/membership-covered seat conjured, card-only refuses at-court).
-> - **billing / commercial** (`test_billing_scenarios`, **311** checks) — PAYG/membership/bundle settlement,
+> - **billing / commercial** (`test_billing_scenarios`, **492** checks) — PAYG/membership/bundle settlement,
 >   desk-payment idempotency, refunds, commission, refund clawback, membership-cancel-voids-order, the
 >   transaction log, dispute routing, client month-end, void clears arrears, abandoned reclaim on read, the
 >   booking + coach event stories, cancel-voids-order + phantom cleanup, the **client by-service breakdown**
@@ -29,12 +29,12 @@ the coach sets up services, then the client books against them. Expected results
 >   additions: **strict two-tier coach/product-scoped pricing** (coach's own product ELSE shared, never
 >   merged), per-service selection, **class rate-card fix** (each class bills its own price, not a cheaper
 >   coach's), **cancel late-fee + paid-booking resize** (`PAID_CANNOT_EXTEND`), **lesson-reschedule court
->   auto-reassign**, **membership-covered reschedule guard** (`NOT_COVERED_AT_NEW_TIME`), **settlement/
->   approval-gate whitelist** (no client `free`; accept coerces covered/free → at-court), **online-only**
+>   auto-reassign**, **membership-covered reschedule guard** (`NOT_COVERED_AT_NEW_TIME`), **the settlement
+>   whitelist** (no client-chosen `free`), **online-only**
 >   and **off-platform reconcile** paths, **on-behalf token/pack draw-down**, and **a pack inherits its
 >   service's payment rule** (a card-only service can't sell an owed at-court pack — the leak that let a clay
 >   10-pack be taken unpaid is closed; an unrestricted pack still allows pay-at-court).
-> - **statement reconciliation** (`test_statement_reconciliation`, **47** checks) — the unified-statement
+> - **statement reconciliation** (`test_statement_reconciliation`, **64** checks) — the unified-statement
 >   money invariant: a client owes the SUM of unpaid orders with **no double-count** (ledger/arrears never
 >   added in), **pay-all** settles every debt **once + idempotent** (replay = no re-charge, no double
 >   commission), **partial settle** pays a ticked subset, an **abandoned settlement is reclaimed** (never
@@ -175,7 +175,7 @@ client Home. *(The classic five-tab console was RETIRED 2026-07-18; the
 **Console shape** — the coach console is now a **business cockpit**: five tabs **Dashboard · Schedule ·
 Clients · Money · Setup**, landing on **Dashboard**. Nav is role-focused — the coach lands on **Coach**,
 not the client Home.
-- [ ] **Dashboard** — "Needs your attention" (approval queue) + the cockpit (net-of-commission KPIs ·
+- [ ] **Dashboard** — the cockpit (net-of-commission KPIs ·
       earnings trend · month-end position · top clients · upcoming), with a today-glimpse of the day's sessions.
 - [ ] **Schedule** — the **week TIMELINE** (a calendar grid of the coach's lessons + classes, prev/next-week
       nav): tap a lesson → completed/no-show; tap a class → roster. Buttons: **Book for a client**, **Book for
@@ -189,7 +189,7 @@ not the client Home.
       **visibility** + **"review my bookings"** toggle, **weekly hours** (creates the coach's bookable
       resource), **services/rates** (per-duration) + **classes** + **lesson packs**. → on return, every
       field is **pre-filled**.
-- [ ] Leave **review-bookings OFF** for now (test auto-confirm first); you'll flip it ON in §4.
+- [ ] Set a **preferred court** (honoured when free on a lesson, never a lock).
 
 **Services**
 - [ ] Add a **second lesson duration** (e.g. 90 min) with a rate → the client sees it as a chip.
@@ -264,26 +264,55 @@ not the client Home.
 
 ---
 
-## 4. Cross-role flows (the lesson lifecycle — needs 2 profiles live)
+## 4. Cross-role flows (the lesson + class lifecycle — needs 2 profiles live)
 
-**Flip the coach's "review my bookings" ON** (Coach profile, §2), then:
-- [ ] **Client requests a lesson** with that coach → status **`requested`**, reserves **nothing** (no court,
-      no charge). Client sees "awaiting coach" in **My Bookings → Needs your attention** (can **withdraw**).
-- [ ] **Coach ACCEPTS** (pending queue) → a court is auto-assigned, it settles → **`confirmed`**; client notified.
-- [ ] **Coach PROPOSES a new time** on another request → status **`proposed`**; client sees it under
-      **Needs your attention** → **Accept** (→ confirmed) or **Decline** (→ cancelled).
-- [ ] **Coach DECLINES** a third request → **`cancelled`**; client notified.
-- [ ] **Coach books on-behalf** (review ON or OFF) → still **auto-confirms** (no client acceptance step).
-- [ ] **Refund round-trip** — client requests a refund → owner approves → Yoco refund executes → both see
-      it; if "Refund & cancel", the slot frees.
+> **There is no approval gate.** The `requested`/`proposed` statuses and the accept / propose / decline
+> actions were **deleted 2026-07-29** — a lesson reserves coach ∩ court immediately and the settlement mode
+> alone decides `held` vs `confirmed`. If a coach doesn't want a time, he **reschedules or cancels**.
+> Do not test for (or restore) an approval queue.
+
+**Lesson**
+- [ ] **Client books a lesson** with an at-court coach → **`confirmed`** immediately, court held, order owed.
+- [ ] **Client books a lesson** with a **card-only** coach → **`held`** + an `awaiting_payment` order, and the
+      client is sent to Yoco. Pay → **`confirmed`**. *(This is the case the old gate made unbookable: a gated
+      lesson raised no order, so the client was never sent to checkout.)*
+- [ ] **Two clients try the same slot** → exactly one wins (`SLOT_TAKEN`). The old gate reserved nothing, so
+      both could hold — and both could pay.
+- [ ] **The COACH is emailed `lesson_booked`** — addressed to him ("open it to reschedule or cancel"), once,
+      on BOTH paths (at booking when owed; **on payment** when online). He is **not** BCC'd on the client's
+      receipt any more — check he gets exactly one mail.
+- [ ] **Coach reschedules** it (time and/or court) → client notified; a busy target refuses
+      `COURT_NOT_AVAILABLE`, not a bare `SLOT_TAKEN`.
+- [ ] **Coach cancels a PAID lesson** → it **refunds itself** (club-initiated). Then **the client cancels
+      their own paid lesson** → **not** auto-refunded, but flagged `was_paid` so the club is prompted.
+- [ ] **Coach books on-behalf** → auto-confirms, desk-only settlement (skips Yoco).
+
+**Class**
+- [ ] **Client enrols** → the **coach** gets `class_booked` (addressed to him, with spots-left). For an
+      **online** class he gets it **only when the payment lands**, not on the unpaid hold.
+- [ ] **Coach MOVES a session** ("Move" on the sessions table) → the roster is **kept**, every player gets
+      `class_rescheduled` with the old AND new time, the old court frees and the new one blocks.
+- [ ] **Move onto the coach's own lesson** → refused `COACH_NOT_AVAILABLE`, nothing changes.
+- [ ] **Cancel a session with a PAID seat** → the money **comes back** and the email says so. *(It used to
+      void — which no-ops on a paid order — so the player lost seat and money under an email promising a
+      refund.)*
+
+**Money**
+- [ ] **Refund round-trip** — client requests a refund → the request opens the **transaction record**
+      (`#/txn/<order_id>`), not a prompt → owner approves via the ONE refund modal → Yoco refund executes.
+      Try a **partial** (e.g. R250 of R420) — it must reach Yoco as a partial and leave the order `paid`.
+- [ ] **Custody direction** — a coach **"Mark collected"** on an owed lesson must move his balance
+      **DOWN** (he now owes the club its commission), while a **desk payment** recorded by the owner moves it
+      **UP** (the club owes him his net). See BUSINESS-RULES §6.
 
 ---
 
 ## 5. Suggested order (fastest path to full coverage)
 1. **Owner** §1 (config + invite coach + commission + payments ON).
-2. **Coach** §2 (onboard + services + pack; review OFF).
+2. **Coach** §2 (onboard + services + pack).
 3. **Client** §3 (sign up + book court/lesson/class + pay online + plan + my-bookings + calendar).
-4. **Cross-role** §4 (flip review ON; run request→accept/propose/decline; on-behalf; refund).
+4. **Cross-role** §4 (lesson both settlement paths; coach notification; reschedule/cancel; class move +
+   paid-cancel refund; refund round-trip incl. a partial; custody direction).
 5. **Owner** revisit §1 (cockpit/financials/refunds/People-360 now that there's data).
 
 ---

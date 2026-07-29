@@ -47,7 +47,7 @@ browsing `/plan`. The Money "Manage plan" opens the same wizard for upgrades.
 
 ## Coach (next) — 5 tabs
 Profile (bio/photo/languages/quals/visibility/review-toggle) · Services (per-duration rates · classes ·
-own packs) · Schedule (availability + time-off + **approval queue** + book-for-client) · Clients (360) ·
+own packs) · Schedule (availability + time-off + book-for-client) · Clients (360) ·
 Reporting & Financials (cockpit + statement). (Reorganises today's single-page `coach.js`.)
 
 ## Admin (later) — same shape, admin options
@@ -63,7 +63,7 @@ built components (the master-diary grid, the cockpit, the analytics Overview, CR
   owner → **Admin** (landing) · Settings. `landingFor()` sends staff to their console on sign-in;
   `/portal.html?stay=1` bypasses it for testing.
 - **Coach console** (`coach.js`) → **Dashboard · Schedule · Clients · Money · Setup**: Dashboard =
-  "needs your attention" (approval queue) + the cockpit (net-of-commission KPIs · earnings trend ·
+  the cockpit (net-of-commission KPIs · earnings trend ·
   month-end position · top clients · upcoming); Schedule = a NEW **week timeline** (master-diary grid
   reused, prev/next week, tap lesson → done/no-show, tap class → roster) + book-for-client + time off;
   Money = the settlement statement (supersedes standalone `/statement.html`); Setup = sub-tabbed

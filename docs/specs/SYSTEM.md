@@ -113,12 +113,18 @@ a free court and refuses without a free coach AND court. A lesson service may be
 `diary.booking_party(role='partner')` + a **separate order** at the service price (never merged), billed to
 the player or — for a login-less child — their **guardian** (`_bill_owner` → `iam.guardian_user_id_for`);
 cancelling voids EVERY order on the booking. The staff-only picker `GET /api/diary/members/search` →
-`iam.search_members_with_dependents` lists members + a parent's kids as their own rows. **Lesson approval lifecycle:** a coach with
-`iam.coach_profile.review_bookings` ON turns a client's self-booked lesson into a **`requested`** booking
-that reserves NOTHING until the coach **accepts** (auto-assign court + settle → `confirmed`), **proposes**
-a new time (→ **`proposed`**, awaiting the client), or **declines** (→ `cancelled`); on-behalf bookings
-always auto-confirm. `requested`/`proposed` are outside the GiST exclusion (they hold no slot). Classes
-have capacity + waitlist (auto-promote on cancel) and can reserve **one or more courts**
+`iam.search_members_with_dependents` lists members + a parent's kids as their own rows.
+**THERE IS ONE LESSON FLOW (2026-07-29):** a lesson reserves coach ∩ court immediately and the
+**settlement mode alone** decides `held` (online, awaiting payment) vs `confirmed` — nothing about the
+coach changes the booking's shape. The old approval gate (`review_bookings` → a `requested` booking that
+reserved nothing, then accept / propose / decline) was **deleted** together with the `requested`/`proposed`
+statuses; the status CHECK is now `held|confirmed|cancelled|completed|no_show`, narrowed inside a
+**guarded** DO block (it runs every boot, and an ALTER that fails takes the deploy with it, so it only
+narrows once no such rows remain). A coach who doesn't want a time **reschedules or cancels**, and a paid
+lesson cancelled by the club refunds itself. Classes
+have capacity + waitlist (auto-promote on cancel), a **`reschedule_session`** verb that moves one
+occurrence (re-reserving its courts through the same guards, refusing rather than half-moving), and can
+reserve **one or more courts**
 (`diary.class_session_court` link table + the scalar `class_session.court_resource_id`/`court_booking_id`
 for legacy readers — each a GiST-blocking `diary.booking(booking_type='class')`, auto-repicked if busy,
 freed on cancel). A class **enrolment goes through the same money path as a booking**: an `online`
@@ -219,6 +225,19 @@ guarded no-op when the order is settled, a real charge has succeeded, it's an R0
   a new `billing.coach_payout` (record/settle/list) nets the append-only **`coach_ledger`** — the ONE net-owed
   figure per coach — so recording a payout draws the balance down and the aging view `GET /api/admin/financials/
   settlement` shows what each coach is still owed.
+  **The ledger is SIGNED and its DIRECTION follows WHO HOLDS THE CASH** (`_write_split_pair(cash_held_by=)`):
+  club-held (Yoco / desk / invoice) → `+coach_net` as `commission_earning`; **coach-held** (off-platform
+  "Mark collected") → **`−owner_cut` as `commission_due`**. In practice the direction follows **who RECORDED
+  the payment** — `POST /api/billing/desk-payment` is `club_admin`-only, so a coach can only ever use the
+  off-platform verb. The `commission_split` rows are identical either way (the sale divides the same
+  whoever holds the cash), so **reporting is unaffected — only the running balance**. Decision + the custody
+  table: [01-commission-and-coaching-decisions.md](01-commission-and-coaching-decisions.md) §D6.
+- **"PAID" IS NOT "IN THE BANK".** `admin.repositories.coach_statement_report` splits `paid` by **custody**
+  (`bank_yoco` / `bank_eft` / `desk_card` / `desk_cash` / `coach_offplatform` / `unpaid`), classifying off
+  the ORDER so the buckets sum EXACTLY to the Money tab's `paid` — a coach's off-platform collection is
+  *exactly derivable* because `mark_arrears_collected` flips the order to `paid` with **no `billing.payment`
+  row at all**. It is paired with `payments_received`, an INDEPENDENT read of `billing.payment` by landing
+  date (the bank-reconciliation figure, deliberately not derived from the fold).
 - **`billing/refunds.py`** — client refund-request workflow + admin approve/decline.
 - **`billing/me.py`** — client financial reads.
 
@@ -287,8 +306,8 @@ staff override via `role`). This closed a member self-enrol-for-R0 exploit.
 
 ## Events, CRM & notifications
 Producers call `marketing_crm.emit(event, payload)` → writes `core.usage_event` (the decoupled event
-contract, `contracts/events.md`; includes the `lesson_requested|proposed|accepted|declined` lifecycle
-events). `emit()` also drives **notifications** (`marketing_crm/notifications.py`, non-fatal): mapped
+contract, `contracts/events.md`; includes **`lesson_booked`** and **`class_booked`** — the coach's own
+addressed notifications, which replaced the coach BCC on the client's receipt). `emit()` also drives **notifications** (`marketing_crm/notifications.py`, non-fatal): mapped
 transactional kinds → a `core.notification` (in-app inbox, always) + a transactional email (SES).
 Child bookings route notifications to the **guardian**. Booking/class emails carry a **rich detail
 block** (`marketing_crm/email/booking_detail.py`, `DETAIL_KINDS`) — a guarded, read-only lookup
@@ -331,13 +350,14 @@ event. No new endpoints, no schema change. **Running now** via the **interim** T
    lesson and class flows → settlement (at-court / monthly / membership / **token** / online / free).
 2. `POST /api/diary/bookings` → `create_booking` (club-scoped, exclusion-constrained); creates the order
    per settlement mode (online → `awaiting_payment` + booking `held`; token → draws a wallet token at R0;
-   membership-covered → R0). A **gated lesson** (review-coach, client self-book) → `requested`, with **no
-   order/court** until the coach accepts.
+   membership-covered → R0). **A lesson is no different**: it reserves coach ∩ court immediately and the
+   settlement mode alone decides `held` vs `confirmed` — there is no approval gate and no orderless state.
 3. Online: `booking.js` reads **`res.booking.order_id`** → `Pay.startYocoCheckout` → Yoco hosted page →
    `POST yoco/webhook` (verified) → `apply_payment_event` → order `paid` + booking `confirmed` +
    commission split accrued (if a coach lesson) + `emit('payment_succeeded')` → receipt notification.
-4. Cancel/withdraw → frees the slot (also cancels a pending `requested`/`proposed` lesson), credits a
-   token back / records a refund as configured.
+4. Cancel → frees the slot, credits a token back, voids the unpaid order. A **paid lesson cancelled BY
+   THE CLUB refunds itself** (a client's own cancellation does not — that is a policy decision, flagged
+   `was_paid`). Reschedule can move the **time and/or the court**, re-running the money guards.
 
 ## Deploy
 Render auto-deploys `master` (push → both services rebuild). Both web services + the DB are pinned to the

@@ -7,8 +7,8 @@ switches, unwired endpoints) live in their own doc: **[FEATURE-FLAGS.md](FEATURE
 > **▶ NO CURRENT BUILD PHASE.** The platform is **LIVE on `https://nextpointtennis.com`** and
 > feature-complete for launch. What remains is (A) config owed by Tomo, (B) code backlog, (C) owner
 > decisions, (D) hardening, and (E) two large well-specced roadmaps (Admin Phase 2 + CRM Missions).
-> **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 273 /
-> billing 449 / statement 64** (2026-07-26).
+> **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 390 /
+> billing 492 / statement 64** (2026-07-29).
 >
 > **Klaviyo, 2026-07-22 — `membership_started` never fired** (wired to a gateway branch nothing produces);
 > **fixed in code + backfill RUN on prod** (12 members corrected, no emails sent). `KLAVIYO-MASTER-PLAN.md`
@@ -45,6 +45,37 @@ the full-refund amount bug is fixed, a direct refund closes the request, and a v
 stays visible); and **a class name can never break the class again** (durable-link resolution + a DB trigger
 mirroring product→resource name + boot heal). See `README.md`'s dated entries.
 
+**CLOSED 2026-07-27 → 29 — the live-use hardening run.** Five revenue leaks reported from real use, then
+the refund, lesson and class lifecycles. All scenario-guarded, each verified by re-breaking the fix:
+- **Five revenue leaks (27th).** Entitlement was judged on `CURRENT_DATE` not the booking's date (book past
+  your own expiry → R0 **permanently**, all memberships not just trials) · no one-person-one-place rule (the
+  GiST constraint is per-*resource*, so a coach could hold a court AND teach AND run a class at 09:00) ·
+  equipment hard-coded `at_court` on covered courts (an uncollectable debt in a card-only club) · the caps
+  never reached the price-less trial, **and a NULL cap wiped a paid tier's** · a waitlist promotion
+  confirmed an unpaid card-only seat.
+- **Refunds (28th).** Four distinct failure modes that all presented as *"insufficient funds"*: a **frozen
+  idempotency key** (`int(None or 0)` → one fixed key forever, so every retry replayed the first failure) ·
+  refunding the **oldest** checkout rather than the one holding the money · refunding an order **never paid
+  by card** · and the genuine empty-balance case. Plus **partial refunds became reachable** — supported the
+  whole way down but no UI ever sent an amount.
+- **The coach ledger's direction (28th)** — off-platform collections posted `+coach_net` as if the club held
+  the cash, so the balance was **wrong by the whole gross every time** and told the owner to pay a coach who
+  was holding the club's money. Fixed forward; production corrected 29th (2 coaches, R14,800 net).
+- **One lesson flow (29th)** — the approval gate deleted (it made a card-only coach unbookable and let two
+  clients hold one slot), the coach now told once via `lesson_booked`, a club-cancelled paid lesson refunds.
+- **The class lifecycle (29th)** — `reschedule_session` (the verb that never existed), `class_booked` to the
+  coach, and **cancelling a class now refunds its paid seats** (it voided, which no-ops on a paid order, so
+  players lost seat *and* money under an email promising a refund).
+- **Per-court peak windows + the court as the one place to see a court (29th)**, equipment scoped to its
+  court service, the signup trial fixed as a **tier**-level flag, and `/api/me/plan` reporting the
+  **effective** cap the server will enforce.
+
+**⚠ CONFIG STILL OWED BY TOMO — the code above is INERT until set** (see §A):
+- Admin → Settings → "What a membership includes (per day)": **1 booking / 90 minutes** (that IS the
+  owner's rule — `default_max_covered_per_day=1` + `default_max_covered_minutes=90`).
+- Setup → Equipment hire: tick each item's **payment options** (an item with none resolvable is now
+  refused rather than silently billed at-court).
+
 - [ ] **Klaviyo console work** (3 items, all in the Klaviyo UI, no code — full detail in
       `KLAVIYO-MASTER-PLAN.md` §7e/§8):
       **(a)** flow **`WSWr2C`** ("Court feedback") has `trigger_filter = null` — add **`booking_type` equals
@@ -63,9 +94,15 @@ mirroring product→resource name + boot heal). See `README.md`'s dated entries.
       reschedule re-prices at base regardless of the new time: **moving a booking INTO a peak window
       under-charges it.** (It does not "keep the original band" — peak is dropped entirely.) The fix is to
       thread the new `starts_at` through and price the way `diary.pricing.price_for(at_local=…)` does at
-      CREATE time, which is correct and harness-covered. **Dormant**: no club has peak pricing configured
-      (`peak_amount_minor` is NULL everywhere), so it cannot bite today — but this MUST be fixed before peak
-      pricing is enabled anywhere.
+      CREATE time, which is correct and harness-covered.
+      **⚠ RAISED 2026-07-29 — the fix now needs the COURT too, and configuring peak just got easy.**
+      Two things changed on the 29th. (a) The peak **window is now per court** (`diary.resource.peak_override`
+      + its own days/times), so repricing must pass **both** the new `starts_at` **and** the new
+      `resource_id` — `pricing.in_peak_window(..., resource_id=)` — or a move between courts mis-prices even
+      at an unchanged time. (b) A reschedule can now **move the court**, so that is a live path, not a
+      theoretical one. The "dormant" caveat still holds *today* (`peak_amount_minor` is NULL everywhere) but
+      it is now one owner visit to **Setup → Courts & hours → a court → "Peak hours for this court"** away
+      from biting. **Fix this BEFORE Tomo configures peak pricing.**
 - [ ] **3 abandoned-checkout orders** were held back by `void_orphaned_orders.py`'s 7-day age floor on
       2026-07-23 (created 18-22 July). Cosmetic only — Yoco confirmed all unpaid. Re-run the script whenever;
       they will clear once past 7 days.
@@ -130,7 +167,10 @@ mirroring product→resource name + boot heal). See `README.md`'s dated entries.
       Needs a proper spec before building.
 - [ ] **Bundle/arrears edges** — expiry policy for unused pack minutes/credits (refund/transfer?); an optional
       "too-late cancellation forfeits the credit."
-- [ ] **Reschedule UX polish** — `PATCH /api/diary/bookings/<id>` exists; make member/admin reschedule flows
+- [x] ~~**Reschedule UX polish**~~ — **DONE 2026-07-22/29.** `CRMUI.rescheduleModal` is the ONE reschedule
+      UI (client · coach · admin · home), replacing four drifted forks none of which could move a court; it
+      offers the service's configured durations + a court picker (config-driven `canChangeCourt`), and the
+      same widget now also **moves a class session**. Original note: make member/admin reschedule flows
       smooth + policy-guarded.
 - [ ] **Marketing contact-form delivery** — SES is live; confirm the web-service contact form is wired to the
       live sender (it also logs to Render as a fallback).

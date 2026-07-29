@@ -2,11 +2,42 @@
 
 Status: **SHIPPED + LIVE on `master` / prod (merged 2026-07-12).** All four capabilities shipped reuse-first
 on the existing engines. Every value is owner-configured data (white-label); every new row is `club_id`-scoped;
-all boot DDL is idempotent (`python -m db` twice = no-op). Gates green: **py_compile · db twice ·
-`python -m scripts.test_all` = booking 180 / billing 311 / statement 47** (equipment/peak/caps/trial assertions:
-peak shown==charged, silent entitlement caps → PAYG, clay never covered, trial inherits caps, equipment
-one-order/no-double-bill + no-double-book).
+all boot DDL is idempotent (`python -m db` twice = no-op). Gate baseline at merge: **booking 180 / billing 311
+/ statement 47**; current **booking 390 / billing 492 / statement 64**.
 Commits: peak `9703ee2` · membership+trial `08c9820` · equipment `db24db9` (spec `36450d6`).
+
+> ## ⚠ SUPERSEDED IN FOUR PLACES (2026-07-27/29) — read this first
+> Live use found real money leaking through three of the four capabilities in this doc. The **as-built
+> behaviour is now in [BUSINESS-RULES.md](BUSINESS-RULES.md) §2–§4**; where this doc and that one differ,
+> BUSINESS-RULES is right. The deltas:
+>
+> 1. **PEAK IS PER COURT, not one club window.** `diary.resource.peak_override` + its own
+>    `peak_days`/`peak_start_min`/`peak_end_min` give three states — inherit the club window, use the
+>    court's own, or (with an **EMPTY** window + override on) **never peak**. That third state is the point:
+>    a nullable window alone could only ever ADD peak, never remove it. BOTH price paths must pass the
+>    court (`availability._slot_price` = shown, `_create_order_guarded._price` = charged).
+>    Guarded by `sc_peak_hours_can_differ_per_court`.
+> 2. **CAPS HAVE A CLUB-LEVEL FLOOR** (`club.policy.default_max_*`). Caps living only on `billing.price`
+>    never reached the price-less signup trial, and `active_caps._best` read a NULL cap as "an
+>    unconstrained tier wins" — so merely HOLDING the trial cancelled a paid tier's caps too. **The owner's
+>    rule — one covered booking a day, 90 min max — is exactly `default_max_covered_per_day=1` +
+>    `default_max_covered_minutes=90`.** Also: `/api/me/plan` must report the **effective** cap (COALESCEd
+>    to the club default), or the picker offers a duration the server will then charge for.
+> 3. **ENTITLEMENT IS EVALUATED ON THE BOOKING'S DATE, never `CURRENT_DATE`.** Members could book forward
+>    past their own expiry and the row was written `membership_covered` at R0 **permanently**. Not
+>    trial-specific — any member could book out next month on their last day and not renew.
+> 4. **EQUIPMENT PAYS LIKE A SERVICE, is SCOPED TO A COURT SERVICE, and THE COURT IS STILL CHARGED.**
+>    `_create_order_guarded` used to **hard-code** the kit's order to `at_court` on a covered/free court —
+>    so a card-only club got an uncollectable owed debt on a confirmed booking. Now every requested item's
+>    own `payment_modes` are intersected before any insert (`EQUIPMENT_NOT_PAYABLE` → **refused, not
+>    granted**). `diary.equipment_service` scopes kit to court services (**no rows = all services**), and
+>    the guard is re-checked server-side (`EQUIPMENT_NOT_FOR_SERVICE`) because `addons` arrives off the
+>    request body.
+>
+> Also new since this doc: **ONE PERSON, ONE PLACE** — the GiST constraint is keyed on `resource_id`, so it
+> could never stop a coach holding a court AND teaching a lesson AND running a class at 09:00.
+> `bookings._coach_commitment_at` checks all three shapes; members are deliberately NOT blocked (their 2nd
+> concurrent covered court just downgrades to PAYG).
 
 The client-Home **hero tile** for a `feature_on_home` equipment item is now in (`client.js` → a Home "Book a
 session" tile that starts a court booking with the item pre-added via `BookFlow.start(..., {featureEquipment})`).

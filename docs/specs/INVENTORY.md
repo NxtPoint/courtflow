@@ -97,8 +97,18 @@ surfaces their dependents/kids as their own rows for the add-player flow; `iam.s
 `GET classes/<rid>/sessions` · `POST classes/<rid>/schedule` · `GET classes/<sid>/roster` ·
 `POST classes/<sid>/enrol` (`diary.classes.enrol` now takes a **`role`** + gates the payment mode against
 the class service's offered modes / membership_covered / free — a member can't conjure a free or
-unpayable seat) · `POST classes/<sid>/cancel-enrolment` · `POST classes/<sid>/attendance` ·
-`POST classes/sessions/<sid>/cancel`.
+unpayable seat) · `GET classes/mine` (the signed-in client's own enrolments) ·
+`POST classes/<sid>/cancel-enrolment` · `POST classes/<sid>/attendance` ·
+`POST classes/sessions/<sid>/cancel` · **`PATCH /api/{admin,coach}/classes/sessions/<sid>`** (2026-07-29 —
+MOVE a scheduled session: `{starts_at, duration_minutes?, court_resource_ids?, coach_user_id?}`;
+`diary.classes.reschedule_session`. A coach may move only his own and may NOT reassign the class to another
+coach, so `coach_user_id` is deliberately not read off his body. Refusals: `COACH_NOT_AVAILABLE` /
+`NO_COURT_AVAILABLE` / `SESSION_EXISTS` / `SESSION_CANCELLED` / `COURT_NOT_VALID`).
+**`GET /api/diary/equipment`** now takes **`?court_product_id=`** (offer only kit linked to that court
+SERVICE) and **`?starts=&ends=`** (returns `available` per item so the stepper clamps to what is free for
+the slot, not to what the club owns).
+**DELETED 2026-07-29:** `POST /api/diary/bookings/<id>/{accept,propose,decline}` — the lesson approval
+lifecycle is gone (see BUSINESS-RULES §2). Do not reinstate.
 
 **Billing `/api/billing/*`:** `GET config` · `GET receipt/<order_id>` · `POST desk-payment` ·
 `GET bundles` (+`allowed_payment_modes`) · `GET bundles/wallets` · `POST bundles/checkout` (the pack's
@@ -155,6 +165,10 @@ config) · **`GET/POST equipment`** (+`PATCH/DELETE /<resource_id>`) — equipme
 quantity · feature_on_home); `PATCH /policy` now also carries the `peak_days`/`peak_start_min`/`peak_end_min`
 court-peak window; the service editor's `PATCH /api/services/<id>` carries `members_covered` (court service)
 and `POST/PATCH .../variations` carry `peak_amount_minor` ·
+**`GET/PATCH billing-profile`** (the club's **company financial identity** — registered name, company reg
+no., bank details for EFT-payable invoices, invoice terms/footer + the dormant VAT block; `club.billing_profile`,
+surfaced at Setup → "Company & billing details") ·
+**`POST promotions/codes/revoke`** (revoke a minted unique per-recipient promo code) ·
 **`GET/PATCH membership-config`** (per-tier payment options) · **`GET bundle-plans`** (kept for the offline
 "issue a pack" picker; the `POST/PATCH/DELETE /api/admin/bundle-plans` **write** routes were REMOVED 2026-07-09
 — packs are created/edited ONLY under a service via `POST/PATCH/DELETE /api/services/<product_id>/packages`) ·
@@ -223,7 +237,7 @@ the coaching figures and adds the per-SERVICE breakdown; feeds `Widgets.ClientRe
 reader `GET clients/<id>` + `CoachAPI.client` was RETIRED 2026-07-11 — this is the ONE coach client reader,
 the by-service breakdown now composes inside the 360*) ·
 **`GET bookings/<id>`** (the coach **event story** — client/contact, court, charge, coaching-arrears line,
-players+attendance, can-flags for accept/propose/decline/reschedule/cancel/mark-completed/no-show +
+players+attendance, can-flags for reschedule/cancel/mark-completed/no-show/add-player +
 mark-collected/discount/write-off; `diary/bookings.py::coach_booking_story`) ·
 `GET cockpit` (+ **plan_balances**, month-end-after-commission, + **`billed_minor`** = gross coaching value
 for the month before write-off/discount/collection, distinct from collected `gross_minor`;
@@ -345,7 +359,8 @@ coach BCC only on his own lesson/class. (`send_booking_confirmation` is legacy; 
 
 ## 4. Database — 5 schemas (idempotent boot DDL)
 - **`club`**: `club`, `branding`, `location`, `policy`
-- **`iam`**: `user`, `membership`, `coach_profile` (+`review_bookings`), `coach_invite`, `player_profile`, `dependent`
+- **`iam`**: `user`, `membership`, `coach_profile` (`review_bookings` is now VESTIGIAL — the approval gate
+  was deleted 2026-07-29 and nothing reads it; `preferred_court_resource_id` is live), `coach_invite`, `player_profile`, `dependent`
 - **`diary`**: `resource` (+`kind='equipment'`, `quantity`, `feature_on_home`), `availability_rule`,
   `booking`, `booking_party`, `time_off`, `class_session`, `enrolment`, `waitlist`, `recurrence`,
   `reminder_log`, **`booking_equipment`**
@@ -373,8 +388,29 @@ coach BCC only on his own lesson/class. (`send_booking_confirmation` is legacy; 
     marker for the month-end statement sweep (PK `club_id,user_id,period_label` + `owed_minor`, `sent_at`), so
     a re-run never re-notifies a client. Plus **`billing.payment.recorded_by_user_id`** (cash-audit: who
     recorded a desk / at-court payment).
+  - *New tables + columns (2026-07-27/29 — revenue-leak hardening, per-court peak, equipment scoping):*
+    **`diary.equipment_service`** (many-to-many: which court SERVICES an equipment item is offered on —
+    **no rows means ALL services**, so every pre-existing item is unchanged; server-re-checked on booking as
+    `EQUIPMENT_NOT_FOR_SERVICE` because `addons` arrives off the request body). On **`diary.resource`**:
+    `peak_override` + `peak_days` / `peak_start_min` / `peak_end_min` — the **per-court** peak window;
+    three states, and the third is the point: `override=false` inherits the club window, `override=true`
+    with a window makes the court's own authoritative, `override=true` with an **EMPTY** window means the
+    court is **never peak** (a nullable window alone could only ever ADD peak, never remove it). Resolved by
+    `pricing.in_peak_window(..., resource_id=)`, and BOTH price paths must pass the court
+    (`availability._slot_price` = shown, `_create_order_guarded._price` = charged).
+    On **`club.policy`**: **`default_max_covered_minutes`** / **`default_max_covered_per_day`** /
+    **`default_max_courts_per_day`** — the club-level cap FLOOR every membership inherits (a tier's own
+    value overrides; NULL = inherit). Without it the caps only reached a tier that HAD a price row, so the
+    price-less signup trial was uncapped — and a NULL cap was read as "unconstrained tier wins", so merely
+    holding the trial cancelled a paid tier's caps too. **The owner's rule — one covered booking a day,
+    90 min max — is exactly `default_max_covered_per_day=1` + `default_max_covered_minutes=90`.**
+    On **`billing.coach_ledger`**: the new `entry_type='commission_due'` (−`owner_cut`, written when the
+    **COACH** holds the cash — see the custody table in BUSINESS-RULES §6). Narrowed:
+    `diary.booking.status` CHECK → `held|confirmed|cancelled|completed|no_show` (the `requested`/`proposed`
+    statuses were dropped inside a **guarded** DO block that only fires once no such rows remain).
   - *New columns (2026-07-12 — peak pricing + membership entitlements + trial + equipment):* on
-    **`club.policy`**: `peak_days` / `peak_start_min` / `peak_end_min` (the club court-peak window). On
+    **`club.policy`**: `peak_days` / `peak_start_min` / `peak_end_min` (the **club-wide** court-peak window,
+    still the inherited default — see the per-court override above). On
     **`billing.price`**: `peak_amount_minor` (explicit per-duration court peak price), `max_covered_minutes`
     / `max_covered_per_day` / `max_courts_per_day` (silent membership caps), `is_trial` / `trial_days` (the
     tier that IS the signup trial). On **`billing.product`**: `members_covered` (a court service =false is
@@ -407,7 +443,7 @@ coach BCC only on his own lesson/class. (`send_booking_confirmation` is legacy; 
     the wallet row + ledger (never hard-deletes); **`billing.order_line.original_amount_minor`** preserves the
     pre-discount amount when an order is repriced by `discount_order` (the audit); **`booking.status` now allows
     `requested`/`proposed`** (lesson approval lifecycle — NOT in the GiST exclusion, so they hold no
-    slot; gated by `iam.coach_profile.review_bookings`); **`class_session.court_resource_id`/`court_booking_id`**
+    slot); **`class_session.court_resource_id`/`court_booking_id`**
     (a scheduled class can optionally **reserve a court** — `court_booking_id` is a court-blocking
     `diary.booking` reusing the GiST exclusion, freed on cancel).
 - **`core`**: account/user/person, `usage_event`, consent, nps, `notification`, **`acquisition`** (gclid/utm,
@@ -572,7 +608,7 @@ dashboard (`sync:false`).
 - Compile: `python -m py_compile $(git ls-files '*.py')`.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 273 / billing 449 / statement 64** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 390 / billing 492 / statement 64** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
   on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +

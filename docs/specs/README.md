@@ -7,9 +7,10 @@ operating guide; **this folder is the detail.**
 > **Status:** LIVE on Render, deployed end-to-end. Build sessions 2026-06-20 → 06-28. Earlier: the public
 > site + the **three purchasing models** end-to-end (unit/minute bundles, free week, active/dormant/retired
 > lifecycle, membership tiers + access windows). **2026-06-25/26:** a **redesigned client journey**
-> (action-first cockpit, full-screen calendar booking, consolidated `/plan`), the **lesson approval
-> lifecycle** (request/propose/accept/decline + per-coach review; on-behalf auto-confirms), **coach & owner
-> consoles** (onboarding, approval queue, clients-360, statements with discount/write-off, per-service
+> (action-first cockpit, full-screen calendar booking, consolidated `/plan`), the lesson approval
+> lifecycle (request/propose/accept/decline + per-coach review — **since DELETED, 2026-07-29**; see the
+> hardening entry below), **coach & owner
+> consoles** (onboarding, the then-current approval queue, clients-360, statements with discount/write-off, per-service
 > commission, financial cockpits — both on the shared `crm_ui.js`), and a booking **`.ics` calendar**.
 > **2026-06-28:** the **UNIFIED CLIENT STATEMENT** ([UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md)) — one
 > reconciled "what you owe" from unpaid orders, grouped + tick-to-part-settle, admin void/write-off, coach
@@ -254,6 +255,61 @@ operating guide; **this folder is the detail.**
 > Yoco (0 recovered, all genuinely abandoned) then voided.
 > **New gate baseline: booking 263 / billing 439 / statement 64.**
 
+> **2026-07-25 → 29 — THE LIVE-USE HARDENING RUN.** A month of real operation surfaced money leaking
+> through paths the harnesses didn't cover. Everything below is fixed, scenario-guarded, and each fix was
+> verified by **re-breaking it** and confirming the scenario goes red.
+> **(1) Five revenue leaks (27th).** Entitlement was judged on `CURRENT_DATE`, not the BOOKING's date — so
+> a member could book forward past their own expiry and the row was written `membership_covered` at R0
+> **permanently** (reported as trialists over-running, but it was never trial-specific). **No
+> one-person-one-place rule existed** — the GiST constraint is keyed on `resource_id`, so it could never
+> stop a coach holding a court AND delivering a lesson AND running a class at 09:00
+> (`_coach_commitment_at` now checks all three; **members stay unblocked** — a doubles group legitimately
+> holds two courts — their 2nd concurrent covered court just downgrades to PAYG). **Equipment hard-coded
+> `at_court`** on a covered/free court, so a card-only club got an uncollectable owed debt on a confirmed
+> booking. **The caps never reached the price-less signup trial**, and `active_caps._best` read a NULL cap
+> as "an unconstrained tier wins", so merely holding the trial **cancelled a paid tier's caps too** —
+> `club.policy.default_max_*` is now the floor every membership inherits. A **waitlist promotion confirmed
+> an unpaid card-only seat**.
+> **(2) Refunds (28th) — four failure modes, all presenting as "insufficient funds"** and all sending us
+> hunting a Yoco balance problem that did not exist. A **frozen idempotency key**: full refunds pass
+> `amount_minor=None` → `int(None or 0)` collapsed to **0**, ONE FIXED KEY per checkout forever, and Yoco
+> honours the key by **replaying the first response** — so once any attempt failed, every retry replayed
+> that failure while the Yoco dashboard refunded the same payment happily. Refunding the **oldest**
+> checkout when `POST /checkout` mints a fresh one every tap (only the newest holds money — this also
+> silently broke missed-webhook **recovery**). Refunding an order **never paid by card** (`payment_attempt`
+> proves INTENT, written before any money moves). And the genuine empty-balance case. **Partial refunds
+> also became reachable** — supported by Yoco, the client, the route and `approve_refund_request` the whole
+> way down, but **no UI ever sent an amount**; there is now ONE refund modal for both entry points.
+> **(3) The coach ledger's DIRECTION (28th).** `coach_ledger` is signed (+ = club owes coach), but
+> `mark_arrears_collected` — **off-platform by definition** — posted the same `+coach_net` as a club-held
+> collection. The coach already held the gross, so the ledger was **wrong by the whole gross every time**,
+> surfacing as "Coach payouts due" telling the owner to pay a coach who was holding the club's money.
+> `_write_split_pair(cash_held_by=)` fixes it forward; production corrected on the 29th (2 coaches,
+> R14,800 net). The `commission_split` rows were always right, so **reporting never lied** — only the
+> running balance did.
+> **(4) ONE LESSON FLOW (29th).** The per-coach approval gate was **deleted** — `requested`/`proposed`,
+> accept / propose / decline, four email templates, the coach's queue and the client's "needs your
+> attention" blocks. It raised **no order**, so a card-only coach was literally unbookable; it reserved
+> **nothing**, so two clients could each hold and pay for one slot. A coach reschedules or cancels instead,
+> and **a paid lesson cancelled by the club refunds itself**. The coach is now told once, addressed to him
+> (`lesson_booked`), on both the owed and the paid path — the coach BCC is gone.
+> **(5) THE CLASS LIFECYCLE (29th)** got the same treatment: **`reschedule_session`** — the verb that never
+> existed, so shifting one session meant cancelling it (refunding and emptying the class) and
+> re-scheduling; **`class_booked`** to the coach; and **cancelling a class now REFUNDS its paid seats** (it
+> called `void_order`, which deliberately no-ops on a paid order, so every online payer lost the seat AND
+> the money under an email that promised a refund).
+> **(6) Also:** peak windows are now **per court** (three states — inherit / own / **never peak**, the last
+> being why the flag exists); **the court is the ONE place to see a court** (Setup → Courts & hours carries
+> details, service, its own peak, hours + a READ-ONLY pricing summary — price/payment/cover stay on the
+> SERVICE, which several courts share); equipment is **scoped to its court service**; the signup trial is a
+> **tier**-level flag (a tier is several TERMS — clearing by `p.id` had every save undo the last);
+> `/api/me/plan` reports the **effective** cap the server will enforce; and **the trial is a membership** —
+> one switch (`members_covered` on the court service) answers "is clay in the free trial?".
+> **Owner decisions recorded (29th):** cash **custody** → ledger direction, and **commission on funds
+> received** — see [01-commission-and-coaching-decisions.md](01-commission-and-coaching-decisions.md)
+> §D6–D8.
+> **New gate baseline: booking 390 / billing 492 / statement 64.**
+
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,
    request/auth flow, integrations, deploy. *"How it's wired."*
@@ -298,7 +354,10 @@ operating guide; **this folder is the detail.**
 ## The build-era spec docs (design intent, still useful)
 - [01-commission-and-coaching-decisions.md](01-commission-and-coaching-decisions.md) — the owner's
   LOCKED commercial decisions (ex-VAT, rent +/or %, PAYG/bundle/arrears, commission-on-collection,
-  nothing-hardcoded). **Authoritative for the commission engine.**
+  nothing-hardcoded). **Authoritative for the commission engine.** **Third round added 2026-07-29 (§D6–D8):**
+  cash **custody** decides the ledger's direction, commission is paid on **funds received** (there is no
+  monthly commission run), and **the coach owns the client relationship, so the coach chases the payment** —
+  with the design consequence that nothing may front a coach commission before collection.
 - [02-token-bundle-engine.md](02-token-bundle-engine.md) — the generic token/bundle design.
 
 ### Archived (`_archive/`) — superseded by the as-built docs, kept for provenance

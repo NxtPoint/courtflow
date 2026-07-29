@@ -50,7 +50,7 @@
     profile: function () { return A().apiJSON("/api/coach/profile"); },
     // PATCH /api/coach/profile  body:
     //   {display_name,headline,bio,photo_url,specialties[],languages[],qualifications[],
-    //    years_experience,is_bookable,public_visibility,review_bookings,phone,first_name,surname}
+    //    years_experience,is_bookable,public_visibility,preferred_court_resource_id,phone,first_name,surname}
     //   (rank is admin-only — ignored if sent.)
     patchProfile: function (body) {
       return A().apiJSON("/api/coach/profile", { method: "PATCH", body: body });
@@ -449,10 +449,12 @@
     var visible = toggle("Show on the public coach directory",
       (p.public_visibility == null ? true : p.public_visibility),
       "Appears on the club's public/marketing site. Independent of bookable.");
-    // review_bookings defaults FALSE — lessons confirm immediately unless the coach opts in.
-    var review = toggle("Review bookings before they confirm",
-      !!p.review_bookings,
-      "New lesson requests wait for you to accept (or propose a new time) before they're confirmed.");
+    // NO "review bookings" TOGGLE. The approval gate was deleted 2026-07-29 and nothing reads
+    // `review_bookings` any more — a lesson reserves coach ∩ court immediately and its settlement mode
+    // alone decides held-vs-confirmed. The control outlived the feature by a day and promised a
+    // behaviour the system no longer has: a coach could tick it and every lesson still auto-confirmed.
+    // A coach who doesn't want a time RESCHEDULES or CANCELS it. Do not reinstate the toggle without
+    // reinstating the gate, and read the "THERE IS ONE LESSON FLOW" gotcha in CLAUDE.md before you do.
     // PREFERRED COURT. Clients pick the coach, never the court — the club allocates it — which used to
     // scatter a coach's lessons across the site. This is a PREFERENCE, not a lock: the server holds
     // this court whenever it's free at the requested time and falls back to any free court otherwise,
@@ -503,7 +505,6 @@
           years_experience: num(f.years.value),
           is_bookable: bookable.checked(),
           public_visibility: visible.checked(),
-          review_bookings: review.checked(),
           // Always sent (even empty) so a coach can clear the preference — the repo treats a
           // present-but-empty value as "no preference" rather than "leave unchanged".
           preferred_court_resource_id: prefCourt.value || null,

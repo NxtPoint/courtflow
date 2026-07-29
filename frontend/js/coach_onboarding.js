@@ -119,7 +119,7 @@
       try {
         state.data = await window.CoachAPI.onboarding();
         // The onboarding payload carries only a profile SUBSET. Merge the FULL profile so
-        // languages/qualifications/years/visibility/bookable/review_bookings pre-fill too.
+        // languages/qualifications/years/visibility/bookable/preferred-court pre-fill too.
         try {
           var pr = await window.CoachAPI.profile();
           if (pr && pr.profile) {
