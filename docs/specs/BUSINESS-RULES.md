@@ -134,6 +134,14 @@ a membership tier's lifecycle derives from its term plans' status.
   (`COURT_NOT_COVERED` — the time-window check alone let a free booking move onto a clay court members are
   never covered for). Court moves are single-booking only (`COURT_MOVE_SINGLE_ONLY`), and a busy target
   refuses with `COURT_NOT_AVAILABLE` rather than a bare `SLOT_TAKEN`.
+- **A RESCHEDULE RE-PRICES ON LENGTH, TIME *AND* COURT (2026-07-29).** Repricing fires whenever any of
+  the three could have changed the price, and the new band is resolved exactly as it is at create:
+  `reprice_booking_order(..., starts_at=, resource_id=)` → the club-local start + that court's peak
+  window. Previously it fired only on a **duration** change and always wrote the **base** amount, so
+  moving a booking into a peak window under-charged it and moving one out over-charged it — and since
+  the peak window is **per court**, a court swap changes the price at an unchanged time too. Unpaid
+  orders only: a **settled** order is never silently re-charged (that needs a refund). Guarded by
+  `sc_peak_survives_a_reschedule`.
 - **Courts on a lesson: the client picks the COACH, the club allocates the COURT.** A client never sees a
   court picker for a lesson (they do for court hire). Unassigned, `create_booking` takes the coach's
   **preferred court** (`iam.coach_profile.preferred_court_resource_id`) when free, else the first free

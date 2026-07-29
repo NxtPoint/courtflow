@@ -308,7 +308,7 @@ operating guide; **this folder is the detail.**
 > **Owner decisions recorded (29th):** cash **custody** → ledger direction, and **commission on funds
 > received** — see [01-commission-and-coaching-decisions.md](01-commission-and-coaching-decisions.md)
 > §D6–D8.
-> **New gate baseline: booking 390 / billing 492 / statement 64.**
+> **New gate baseline: booking 404 / billing 492 / statement 64.**
 
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,

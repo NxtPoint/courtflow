@@ -1347,16 +1347,32 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
             return _err("SLOT_TAKEN", 409, message="the new slot conflicts")
         return _err("INTEGRITY_ERROR", 409)
 
-    # If the reschedule changed the DURATION (not just the start time), re-price the order + owed
-    # coaching to the new length so the charge always matches the booked time — a 30-min lesson costs
-    # the 30-min price even if it was first booked (and priced) as 45 min. Guarded, unpaid-only; only
-    # the primary target can change length (series occurrences just shift by the same delta).
+    # RE-PRICE whenever the move could have changed the price — length, TIME, or COURT.
+    #
+    # This used to fire ONLY on a duration change, which missed peak pricing entirely: moving a
+    # 60-min court from 10:00 to 18:00 is the SAME length, so nothing re-priced and a peak-hour
+    # booking stayed on the off-peak rate. And because the peak WINDOW is now per court
+    # (`diary.resource.peak_override`), a court swap changes the price at an unchanged time too — a
+    # never-peak court onto a peak one. All three inputs now trigger it, and all three are passed
+    # down so the band is re-decided exactly as `create_booking` decided it.
+    #
+    # Still guarded + unpaid-only (a settled order needs a refund, not a re-price), and only the
+    # primary target can change length — series occurrences just shift by the same delta.
     old_dur = _parse_dt(bk["ends_at"]) - _parse_dt(bk["starts_at"])
-    if abs((new_e - new_s).total_seconds() - old_dur.total_seconds()) >= 60:
+    duration_changed = abs((new_e - new_s).total_seconds() - old_dur.total_seconds()) >= 60
+    time_changed = abs((new_s - _parse_dt(bk["starts_at"])).total_seconds()) >= 60
+    court_changed = bool(new_court_resource_id) and \
+        str(new_court_resource_id) != str(bk.get("resource_id") or "")
+    if duration_changed or time_changed or court_changed:
         try:
             from billing.orders import reprice_booking_order
+            # The court whose peak WINDOW applies. A court booking is priced on its own resource
+            # (the new one after a move); a lesson/class is priced by its lesson/class service, whose
+            # rows carry no peak amount at all — so its own resource is the honest answer either way.
+            peak_resource = new_court_resource_id or bk.get("resource_id")
             reprice_booking_order(session, club_id=club_id, booking_id=booking_id,
-                                  duration_minutes=int((new_e - new_s).total_seconds() // 60))
+                                  duration_minutes=int((new_e - new_s).total_seconds() // 60),
+                                  starts_at=new_s, resource_id=peak_resource)
         except Exception:
             log.debug("reprice after reschedule skipped (non-fatal)", exc_info=False)
 

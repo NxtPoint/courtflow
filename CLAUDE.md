@@ -26,11 +26,11 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 390 / billing 492 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 404 / billing 492 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (44/70/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (45/70/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. The check counts below are the gate line's, not per-bullet totals —
    **update line 25 only**, so the numbers can't drift apart.

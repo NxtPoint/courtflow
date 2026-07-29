@@ -7,7 +7,7 @@ switches, unwired endpoints) live in their own doc: **[FEATURE-FLAGS.md](FEATURE
 > **▶ NO CURRENT BUILD PHASE.** The platform is **LIVE on `https://nextpointtennis.com`** and
 > feature-complete for launch. What remains is (A) config owed by Tomo, (B) code backlog, (C) owner
 > decisions, (D) hardening, and (E) two large well-specced roadmaps (Admin Phase 2 + CRM Missions).
-> **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 390 /
+> **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 404 /
 > billing 492 / statement 64** (2026-07-29).
 >
 > **Klaviyo, 2026-07-22 — `membership_started` never fired** (wired to a gateway branch nothing produces);
@@ -88,21 +88,20 @@ the refund, lesson and class lifecycles. All scenario-guarded, each verified by 
       **(c)** re-check the Unconverted-trial segment **`XxUZCt`** has shrunk now the `membership_started`
       backfill has run, *before* sending the January offer — otherwise it aims "you haven't converted" at
       paying members.
-- [ ] **Peak pricing is LOST on reschedule.** `billing.orders.reprice_booking_order` takes
-      `duration_minutes` only — no start time — and selects `p2.amount_minor`, which is the **BASE
-      (off-peak) amount**. It never reads `peak_amount_minor` and never calls `in_peak_window`, so a
-      reschedule re-prices at base regardless of the new time: **moving a booking INTO a peak window
-      under-charges it.** (It does not "keep the original band" — peak is dropped entirely.) The fix is to
-      thread the new `starts_at` through and price the way `diary.pricing.price_for(at_local=…)` does at
-      CREATE time, which is correct and harness-covered.
-      **⚠ RAISED 2026-07-29 — the fix now needs the COURT too, and configuring peak just got easy.**
-      Two things changed on the 29th. (a) The peak **window is now per court** (`diary.resource.peak_override`
-      + its own days/times), so repricing must pass **both** the new `starts_at` **and** the new
-      `resource_id` — `pricing.in_peak_window(..., resource_id=)` — or a move between courts mis-prices even
-      at an unchanged time. (b) A reschedule can now **move the court**, so that is a live path, not a
-      theoretical one. The "dormant" caveat still holds *today* (`peak_amount_minor` is NULL everywhere) but
-      it is now one owner visit to **Setup → Courts & hours → a court → "Peak hours for this court"** away
-      from biting. **Fix this BEFORE Tomo configures peak pricing.**
+- [x] ~~**Peak pricing is LOST on reschedule.**~~ **FIXED 2026-07-29** (same day it was raised, before
+      peak was configured anywhere). It was **two** bugs, and the second hid the first:
+      **(a)** `reprice_booking_order` took `duration_minutes` only and selected `p2.amount_minor` — the
+      off-peak column — so it never read `peak_amount_minor` and never asked whether the new time was
+      peak. It did not "keep the original band"; peak was dropped entirely.
+      **(b)** The CALL only fired when the **duration** changed. Moving a 60-min court from 10:00 to
+      18:00 is the same length, so nothing re-priced at all — the commonest move of the lot, and the
+      reason (a) could never have been caught by testing length changes.
+      Now `reprice_booking_order(..., starts_at=, resource_id=)` re-decides the band exactly as
+      `diary.pricing.price_for` does (same club-local conversion, same `in_peak_window` call), and the
+      reschedule fires it on **duration OR time OR court** — the court included because the peak window
+      is per court, so a swap changes the price at an unchanged time. Both directions are pinned
+      (into peak charges more, out of peak charges less), plus two regressions: a duration change still
+      re-prices, and a **settled** order still never does. Guarded by `sc_peak_survives_a_reschedule`.
 - [ ] **3 abandoned-checkout orders** were held back by `void_orphaned_orders.py`'s 7-day age floor on
       2026-07-23 (created 18-22 July). Cosmetic only — Yoco confirmed all unpaid. Re-run the script whenever;
       they will clear once past 7 days.

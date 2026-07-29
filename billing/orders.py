@@ -186,12 +186,25 @@ def record_desk_payment(session, *, club_id, order_id, amount_minor, provider="c
     return apply_payment_event(event, session=session)
 
 
-def reprice_booking_order(session, *, club_id, booking_id, duration_minutes) -> Dict[str, Any]:
-    """Re-price a booking's UNPAID order (+ its owed coaching arrears) to a NEW duration's price —
-    e.g. after a reschedule changed the lesson/court LENGTH, so the charge always matches the booked
-    time (a 30-min lesson costs the 30-min price, not the 45-min price it was first booked at). The
-    new price is resolved from the SAME product as the current line, so it is the coach's own service
-    price for that duration — never another coach's rate.
+def reprice_booking_order(session, *, club_id, booking_id, duration_minutes,
+                          starts_at=None, resource_id=None) -> Dict[str, Any]:
+    """Re-price a booking's UNPAID order (+ its owed coaching arrears) after a reschedule — to the new
+    DURATION's price, and at the new time/court's PEAK band.
+
+    The new price is resolved from the SAME product as the current line, so it is the coach's own
+    service price for that duration — never another coach's rate.
+
+    **PEAK MUST BE RE-DECIDED HERE, and it needs BOTH the new start AND the new court.** This used to
+    take `duration_minutes` only and select `p2.amount_minor` — the BASE (off-peak) amount — so a
+    reschedule silently re-priced at base regardless of the new time: **moving a booking INTO a peak
+    window under-charged it.** It did not "keep the original band"; peak was dropped entirely. And
+    since the peak WINDOW is per court (`diary.resource.peak_override`), the court matters too: at an
+    unchanged time, a move from a never-peak court onto a peak one changes the price. Pass
+    `starts_at` (UTC — converted to club-local here, exactly as `create_booking` does) and
+    `resource_id` (the court whose window applies); omit either and the base amount is used, which is
+    the old behaviour and still correct for anything with no peak amount configured.
+
+    Only court price rows ever carry `peak_amount_minor`, so lessons/classes are naturally unaffected.
 
     Safe no-op (nothing to re-price) when: there is no order, the order is already settled
     (paid/void/written_off) or a real charge has succeeded (money moved — re-pricing would need a
@@ -217,6 +230,16 @@ def reprice_booking_order(session, *, club_id, booking_id, duration_minutes) -> 
                      "AND status='succeeded' LIMIT 1"), {"o": order_id}).first():
             return {"repriced": False, "reason": "charged", "order_id": order_id}
 
+        # The club-LOCAL start decides the peak band — same conversion `create_booking` uses, so a
+        # rescheduled booking is priced by the identical rule that priced it originally.
+        at_local = None
+        if starts_at is not None:
+            try:
+                from diary.availability import _club_tz
+                at_local = starts_at.astimezone(_club_tz(session, club_id))
+            except Exception:
+                at_local = None
+
         # Re-price each line of THIS booking to the new duration's price on the SAME product.
         lines = session.execute(
             text("SELECT id, price_id, qty FROM billing.order_line "
@@ -228,7 +251,7 @@ def reprice_booking_order(session, *, club_id, booking_id, duration_minutes) -> 
             if not ln["price_id"]:
                 continue
             newp = session.execute(
-                text("SELECT p2.id AS price_id, p2.amount_minor "
+                text("SELECT p2.id AS price_id, p2.amount_minor, p2.peak_amount_minor "
                      "FROM billing.price p1 "
                      "JOIN billing.price p2 ON p2.product_id = p1.product_id AND p2.active = true "
                      "WHERE p1.id = :pid AND p2.duration_minutes = :dur "
@@ -237,12 +260,25 @@ def reprice_booking_order(session, *, club_id, booking_id, duration_minutes) -> 
             ).mappings().first()
             if not newp:
                 continue  # the new duration is not priced on this product — never guess a price
+            # PEAK BAND at the NEW time on the NEW court. Mirrors diary.pricing.price_for's tail
+            # exactly (peak only when the row HAS a peak amount and the local start is in that
+            # court's window), so shown == charged after a move just as it is at create.
+            amount = int(newp["amount_minor"] or 0)
+            peak_amt = newp["peak_amount_minor"]
+            if at_local is not None and peak_amt is not None:
+                try:
+                    from diary.pricing import in_peak_window
+                    if in_peak_window(session, club_id=club_id, local_dt=at_local,
+                                      resource_id=resource_id):
+                        amount = int(peak_amt)
+                except Exception:
+                    # Peak undecidable → keep the base amount (never guess a higher charge).
+                    log.debug("peak re-resolve skipped on reprice", exc_info=False)
             qty = int(ln["qty"] or 1)
             session.execute(
                 text("UPDATE billing.order_line SET price_id = :np, amount_minor = :amt "
                      "WHERE id = :id"),
-                {"np": str(newp["price_id"]), "amt": int(newp["amount_minor"] or 0) * qty,
-                 "id": str(ln["id"])},
+                {"np": str(newp["price_id"]), "amt": amount * qty, "id": str(ln["id"])},
             )
             changed += 1
         if not changed:

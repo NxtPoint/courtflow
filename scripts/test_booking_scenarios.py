@@ -2862,6 +2862,122 @@ def sc_peak_hours_can_differ_per_court(s, fx):
     check("inheriting court at 17:00 is CHARGED peak R250", charged(inherit, 17) == 25000)
 
 
+def sc_peak_survives_a_reschedule(s, fx):
+    """A RESCHEDULE re-priced at the BASE amount, whatever the new time — so moving a booking INTO a
+    peak window under-charged it, permanently and silently.
+
+    Two separate defects, and the second is the one that made it unreachable by testing the first:
+      (1) `reprice_booking_order` took `duration_minutes` only and selected `p2.amount_minor` — the
+          off-peak column. It never read `peak_amount_minor` and never asked whether the new time was
+          peak. It did not "keep the original band"; peak was dropped entirely.
+      (2) The CALL only fired when the DURATION changed. Moving a 60-min court from 10:00 to 18:00 is
+          the same length, so nothing re-priced at all — the commonest move of the lot.
+    And now that the peak WINDOW is per court, a court SWAP changes the price at an unchanged time
+    too, so that must trigger it as well."""
+    print("\n# Peak survives a reschedule: into peak, out of peak, and across courts")
+    from billing.orders import reprice_booking_order          # noqa: F401  (import proves it loads)
+    m = fx.members[1]
+    BASE, PEAK = 15000, 25000
+
+    # Club peak 17:00-19:00. `plain` inherits it; `early` peaks 07:00-09:00 instead (per-court).
+    s.execute(text("UPDATE club.policy SET peak_days = NULL, peak_start_min = 1020, "
+                   "peak_end_min = 1140 WHERE club_id = :c"), {"c": fx.club_id})
+    s.execute(text("UPDATE billing.price SET peak_amount_minor = :pk "
+                   "WHERE club_id = :c AND product_id = :p AND duration_minutes = 60"),
+              {"pk": PEAK, "c": fx.club_id, "p": fx.court_product})
+    plain = fx.courts[0]
+    early = s.execute(
+        text("INSERT INTO diary.resource (club_id, kind, name, surface, rank) "
+             "VALUES (:c,'court','Early Court','hard',11) RETURNING id"), {"c": fx.club_id}).scalar()
+    s.execute(text("INSERT INTO diary.availability_rule (club_id, resource_id, weekday, start_time, "
+                   "end_time, slot_minutes) VALUES (:c,:r,:wd,'06:00','21:00',60)"),
+              {"c": fx.club_id, "r": early, "wd": fx.target.weekday()})
+    s.execute(text("UPDATE diary.resource SET peak_override = true, peak_days = NULL, "
+                   "peak_start_min = 420, peak_end_min = 540 WHERE id = :r"), {"r": early})
+
+    def book(court, hour, mins=60):
+        st = at(fx, hour)
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                             booking_type="court", resource_id=court,
+                             starts_at=utc_iso(st), ends_at=utc_iso(st + timedelta(minutes=mins)),
+                             settlement_mode="at_court")
+        assert r.get("ok"), str(r)
+        return r["booking"]["id"]
+
+    def amount(bid):
+        return s.execute(text('SELECT o.amount_minor FROM billing."order" o '
+                              'JOIN billing.order_line ol ON ol.order_id=o.id '
+                              'WHERE ol.booking_id=:b'), {"b": bid}).scalar()
+
+    def move(bid, hour, mins=60, court=None):
+        st = at(fx, hour)
+        return B.reschedule_booking(
+            s, club_id=fx.club_id, booking_id=bid,
+            new_starts_at=utc_iso(st), new_ends_at=utc_iso(st + timedelta(minutes=mins)),
+            actor_user_id=m, role="club_admin", new_court_resource_id=court)
+
+    # --- (1) THE BUG: move OFF-PEAK -> PEAK at the SAME duration ---------------------------
+    b1 = book(plain, 10)
+    check("an off-peak 10:00 court is billed the base R150", amount(b1) == BASE, str(amount(b1)))
+    r1 = move(b1, 17)
+    check("it reschedules into the 17:00 peak window", r1.get("ok"), str(r1))
+    check("...and is NOW CHARGED PEAK R250 (it silently stayed R150 — the leak)",
+          amount(b1) == PEAK, str(amount(b1)))
+
+    # --- (2) and the reverse: PEAK -> OFF-PEAK must come back DOWN --------------------------
+    b2 = book(plain, 18)
+    check("a 18:00 court is billed peak R250", amount(b2) == PEAK, str(amount(b2)))
+    check("it moves to 11:00", move(b2, 11).get("ok"))
+    check("...and drops back to the base R150 (a stuck peak over-charges just as badly)",
+          amount(b2) == BASE, str(amount(b2)))
+
+    # --- (3) THE COURT decides the window, so a court SWAP re-prices at an unchanged time ----
+    b3 = book(plain, 8)                                   # 08:00: off-peak on `plain`...
+    check("08:00 on the club-window court is base R150", amount(b3) == BASE, str(amount(b3)))
+    r3 = move(b3, 8, court=early)                         # ...but PEAK on `early` (07:00-09:00)
+    check("it moves to the early-peak court at the SAME time", r3.get("ok"), str(r3))
+    check("...and is charged that COURT's peak R250 (the window follows the court)",
+          amount(b3) == PEAK, str(amount(b3)))
+
+    # --- (4) REGRESSION: a duration change still re-prices (the original purpose) -----------
+    # The scratch fixture prices ONLY 60 min, and reprice deliberately no-ops on an unpriced
+    # duration ("never guess a price") - so give the product a real 30-min row to move onto.
+    s.execute(text("UPDATE billing.price SET peak_amount_minor = NULL "
+                   "WHERE club_id = :c AND product_id = :p"), {"c": fx.club_id, "p": fx.court_product})
+    s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                   "currency_code, duration_minutes, active) "
+                   "VALUES (:c, :p, 'any', 9000, 'ZAR', 30, true)"),
+              {"c": fx.club_id, "p": fx.court_product})
+    b4 = book(plain, 13, mins=60)
+    check("a 60-min booking is priced at R150", amount(b4) == BASE, str(amount(b4)))
+    check("it shortens to 30 min", move(b4, 13, mins=30).get("ok"))
+    check("...and re-prices to the 30-min rate R90 (the original purpose, unchanged)",
+          amount(b4) == 9000, str(amount(b4)))
+
+    # --- (5) REGRESSION: a PAID order is never re-priced by a move --------------------------
+    s.execute(text("UPDATE billing.price SET peak_amount_minor = :pk "
+                   "WHERE club_id = :c AND product_id = :p AND duration_minutes = 60"),
+              {"pk": PEAK, "c": fx.club_id, "p": fx.court_product})
+    b5 = book(plain, 15)
+    oid = s.execute(text("SELECT order_id FROM billing.order_line WHERE booking_id=:b"),
+                    {"b": b5}).scalar()
+    # BOTH the order status AND a real succeeded charge. `_order_has_succeeded_charge` (the
+    # extend guard) and reprice's own guard each read billing.payment, so a status-only flip is
+    # not a paid booking to either of them.
+    s.execute(text('UPDATE billing."order" SET status = \'paid\' WHERE id = :o'), {"o": oid})
+    paid_before = amount(b5)
+    s.execute(text("INSERT INTO billing.payment (club_id, order_id, provider, provider_payment_id, "
+                   "amount_minor, currency_code, direction, status) "
+                   "VALUES (:c, :o, 'yoco', 'p_peak_regression', :a, 'ZAR', 'charge', 'succeeded')"),
+              {"c": fx.club_id, "o": oid, "a": paid_before})
+    # 18:00, not 17:00 — step (1) already parked a booking on this court at 17:00, so that move
+    # would refuse SLOT_TAKEN and prove nothing about pricing. 18:00 is inside the same peak window.
+    check("the paid booking moves into peak (same length, so not an extend)",
+          move(b5, 18).get("ok"))
+    check("...but a SETTLED order is NOT re-priced (that needs a refund, not a silent re-charge)",
+          amount(b5) == paid_before, str(amount(b5)))
+
+
 def sc_trial_obeys_the_same_court_rules_as_a_membership(s, fx):
     """"Is clay included in the free trial?" — the trial is not a special case in the pricing engine.
     It IS a membership (provider='trial'), so it goes through the SAME resolver as a paid one: the
@@ -3127,6 +3243,7 @@ SCENARIOS = [
     sc_one_lesson_flow,
     sc_paying_is_the_acceptance,
     sc_peak_hours_can_differ_per_court,
+    sc_peak_survives_a_reschedule,
     sc_trial_obeys_the_same_court_rules_as_a_membership,
     sc_equipment_court_is_charged_and_both_are_booked_out,
     sc_equipment_is_scoped_to_its_court_service,
