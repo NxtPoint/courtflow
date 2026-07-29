@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 332 / billing 486 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 338 / billing 486 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -723,6 +723,14 @@ member by email on the first authenticated hit.
   summing `billing.payment` refunds against the charge, without calling Yoco at all. A frozen key
   was never protecting the money; it was only preventing the retry. Guarded by
   `sc_refund_retry_is_not_poisoned_by_the_idempotency_key`.
+- **THE TRIAL IS A MEMBERSHIP — it has no separate court rules.** `provider='trial'` goes through the
+  SAME resolver as a paid tier: the court service's **`members_covered`** flag, the duration/day caps
+  and the access window all apply identically. So "is clay in the free trial?" is answered by ONE
+  switch — Setup → Services → the court service → **"Included with a membership?"** (owner-only,
+  `billing.product.members_covered`, already wired through `services/` read+PATCH). Turning it off
+  makes that court PAYG for members AND trialists; the booking is never blocked, just billed.
+  Resist any urge to special-case the trial — a club would be giving its most expensive courts away
+  to every new signup. Guarded by `sc_trial_obeys_the_same_court_rules_as_a_membership`.
 - **`/api/me/plan` MUST REPORT THE CAP THE SERVER WILL ENFORCE (2026-07-29).** The booking UI hides
   over-cap durations using `membership_status.max_covered_minutes`, while the ENGINE decides whether
   to charge using `entitlement.active_caps` — which resolves a NULL tier cap to the **club default**

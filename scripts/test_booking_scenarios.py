@@ -2502,6 +2502,65 @@ def sc_waitlist_promotion_into_a_cardonly_class_is_held(s, fx):
     check("…and NOW the enrolment confirmation is sent", "class_enrolled" in rec2.seen, str(rec2.seen))
 
 
+def sc_trial_obeys_the_same_court_rules_as_a_membership(s, fx):
+    """"Is clay included in the free trial?" — the trial is not a special case in the pricing engine.
+    It IS a membership (provider='trial'), so it goes through the SAME resolver as a paid one: the
+    court service's `members_covered` flag, the duration/day caps, the access window. Turning clay
+    off for members turns it off for trialists too, with no separate setting and no code change.
+
+    Worth pinning explicitly because it's the one people assume must be special-cased — and if it
+    ever were, a club would be giving its most expensive courts away to every new signup."""
+    print("\n# The trial is a MEMBERSHIP: clay exclusion + caps apply to it identically")
+    from billing.membership import grant_signup_trial
+    from diary import entitlement as E
+    # Two court services: hardcourt covered for members, clay explicitly PAYG-only.
+    hard = s.execute(text("INSERT INTO billing.product (club_id, kind, name, active, members_covered) "
+                          "VALUES (:c,'court_booking','Hard Hire',true,true) RETURNING id"),
+                     {"c": fx.club_id}).scalar()
+    clay = s.execute(text("INSERT INTO billing.product (club_id, kind, name, active, members_covered) "
+                          "VALUES (:c,'court_booking','Clay Hire',true,false) RETURNING id"),
+                     {"c": fx.club_id}).scalar()
+    for pid, amt in ((hard, 15000), (clay, 28000)):
+        s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                       "currency_code, duration_minutes, active) "
+                       "VALUES (:c,:p,'any',:a,'ZAR',60,true)"), {"c": fx.club_id, "p": pid, "a": amt})
+    s.execute(text("UPDATE diary.resource SET product_id=:p WHERE id=:r"),
+              {"p": hard, "r": fx.courts[0]})
+    clay_court = s.execute(text("INSERT INTO diary.resource (club_id, kind, name, surface, rank, "
+                                "product_id) VALUES (:c,'court','Clay 1','clay',9,:p) RETURNING id"),
+                           {"c": fx.club_id, "p": clay}).scalar()
+
+    newu = _mk_user(s, f"trialclay+{str(fx.club_id)[:8]}@scratch.test", "Trialist")
+    g = grant_signup_trial(s, club_id=fx.club_id, user_id=newu, days=7)
+    check("a brand-new member gets the trial", g.get("granted") is True, str(g))
+
+    check("the trial DOES cover a members-covered hard court",
+          E.court_covered(s, club_id=fx.club_id, user_id=newu, starts_at=at(fx, 10),
+                          ends_at=at(fx, 11), resource_id=fx.courts[0]) is True)
+    check("…and does NOT cover a PAYG-only clay court (members_covered=false)",
+          E.court_covered(s, club_id=fx.club_id, user_id=newu, starts_at=at(fx, 10),
+                          ends_at=at(fx, 11), resource_id=clay_court) is False)
+
+    # End to end: the trialist's clay booking is CHARGED, not blocked.
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=newu, role="member",
+                         booking_type="court", resource_id=clay_court, product_id=str(clay),
+                         settlement_mode="membership_covered",
+                         starts_at=utc_iso(at(fx, 10)), ends_at=utc_iso(at(fx, 11)))
+    check("the clay booking still SUCCEEDS (never blocked, just billed)", r.get("ok"), str(r))
+    o = s.execute(text('SELECT o.amount_minor, o.settlement_mode FROM billing."order" o '
+                       'JOIN billing.order_line ol ON ol.order_id=o.id WHERE ol.booking_id=:b'),
+                  {"b": r["booking"]["id"]}).mappings().first() if r.get("ok") else None
+    check("…and is billed at the clay rate R280, at-court", bool(o) and o["amount_minor"] == 28000
+          and o["settlement_mode"] == "at_court", str(o))
+
+    # The club-wide cap reaches the trial exactly as it reaches a paid tier.
+    s.execute(text("UPDATE club.policy SET default_max_covered_minutes = 90 WHERE club_id = :c"),
+              {"c": fx.club_id})
+    check("a 2-hour hard court is over the club cap for a TRIALIST too",
+          E.court_covered(s, club_id=fx.club_id, user_id=newu, starts_at=at(fx, 12),
+                          ends_at=at(fx, 14), resource_id=fx.courts[0]) is False)
+
+
 def sc_equipment_court_is_charged_and_both_are_booked_out(s, fx):
     """THE equipment invariant, end to end: the COURT is charged unless a membership genuinely covers
     it, and BOTH the court and the kit are reserved so neither can be taken twice.
@@ -2705,6 +2764,7 @@ SCENARIOS = [
     sc_equipment_follows_its_own_payment_rule,
     sc_club_default_caps_cover_every_membership,
     sc_waitlist_promotion_into_a_cardonly_class_is_held,
+    sc_trial_obeys_the_same_court_rules_as_a_membership,
     sc_equipment_court_is_charged_and_both_are_booked_out,
     sc_equipment_is_scoped_to_its_court_service,
 ]

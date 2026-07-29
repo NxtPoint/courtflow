@@ -114,12 +114,22 @@
   }
 
   function membersCard() {
-    var c = card("Membership", "Whether an active member's booking of this court is free. Turn OFF for a PAYG-only court (e.g. a premium clay court) — members pay like everyone else.");
+    // The trial is a MEMBERSHIP row (provider='trial'), so it goes through the same resolver — this
+    // one switch governs both. Said explicitly because "is clay included in the free trial?" is the
+    // first question this card gets asked, and the old copy only mentioned members.
+    var c = card("Included with a membership?",
+      "Whether a member's booking of this court is FREE. This covers the 7-day free trial too — a "
+      + "trial is just a membership. Turn OFF for a PAYG-only court (e.g. a premium clay court): "
+      + "members and trialists pay for it like everyone else.");
     var cb = el("input", { type: "checkbox" }); cb.style.width = "auto"; cb.checked = !!st.m.members_covered;
-    cb.addEventListener("change", function () { st.m.members_covered = cb.checked; });
+    cb.addEventListener("change", function () { st.m.members_covered = cb.checked; render(); });
     c.appendChild(el("label", { class: "cf-row", style: "gap:10px;align-items:center;cursor:pointer;margin-top:6px" }, [
-      cb, el("span", { style: "font-weight:600", text: "Members book this court free" }),
+      cb, el("span", { style: "font-weight:600", text: "Members and trialists book this court free" }),
     ]));
+    c.appendChild(el("div", { class: "cf-muted cf-tiny", style: "margin-top:6px", text:
+      st.m.members_covered
+        ? "Currently FREE for anyone on a membership or the trial (within their daily limits)."
+        : "Currently PAID by everyone — a membership or trial gives no discount on this court." }));
     return c;
   }
 
