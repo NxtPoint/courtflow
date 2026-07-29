@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 358 / billing 493 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 371 / billing 492 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -723,21 +723,35 @@ member by email on the first authenticated hit.
   summing `billing.payment` refunds against the charge, without calling Yoco at all. A frozen key
   was never protecting the money; it was only preventing the retry. Guarded by
   `sc_refund_retry_is_not_poisoned_by_the_idempotency_key`.
-- **PAYING IS THE ACCEPTANCE — AN ONLINE LESSON IS NEVER GATED (2026-07-29).** A gated
-  (`requested`) lesson creates no order and **reserves nothing**. For a CARD-ONLY coach that made
-  the coach unbookable: the client is never sent to Yoco (checkout needs an `order_id`), gets a
-  success screen, pays nothing, and has no way to pay (`can.pay` needs an order); the charge appears
-  only when the coach ACCEPTS, behind a 30-minute hold nobody is awake for, so it lapses and the
-  attempt vanishes. And because a request reserves nothing, **two clients could each request — and
-  pay for — the same slot**, leaving one to be refunded. So `create_booking` **does not gate an
-  `online` booking at all**, whatever `review_bookings` says: it holds coach + court through the
-  exclusion constraint (a second client gets COACH_BUSY/SLOT_TAKEN — the honest answer) and PAYING
-  confirms it. The gate was never buying control anyway — **a coach can RESCHEDULE**, so a time that
-  doesn't suit is moved, not refused. An OWED request (at-court/monthly) is STILL gated; that is the
-  case the review setting was for. `accept_booking` reuses an order the request already carries
-  (`_order_is_settled` → confirm outright, never a second charge) and `decline_booking` refunds a
-  settled one — both retained for requests made while online WAS gated. Guarded by
-  `sc_paying_is_the_acceptance`.
+- **THERE IS ONE LESSON FLOW (2026-07-29).** A lesson is booked exactly like a court: it holds the
+  coach AND a court immediately, and the SETTLEMENT alone decides `held` (online, pending payment)
+  vs `confirmed`. **Nothing about the coach changes the shape of the booking.**
+  `iam.coach_profile.review_bookings` no longer gates anything.
+  The gate it replaced created a `requested` lesson that reserved NOTHING and raised no order — a
+  different booking, a different notification and a different money path for the same act — so a
+  card-only coach was unbookable (no order ⇒ the client is never sent to checkout, and `can.pay`
+  needs an order), and TWO clients could each hold and pay for one slot. It also wasn't buying what
+  it looked like: **a coach can RESCHEDULE or CANCEL**, so a bad time is moved or returned, not
+  refused up front. Guarded by `sc_one_lesson_flow` + `sc_paying_is_the_acceptance`.
+- **THE COACH IS TOLD, ONCE, ABOUT EVERY LESSON.** `_emit_confirmed` → **`lesson_booked`**, addressed
+  to the coach (in-app + email: "open it to reschedule or cancel"). Who got told used to depend on
+  the settlement mode AND the review flag — only a gated booking emailed him directly, elsewhere he
+  was a BCC on the CLIENT's receipt, and a client who made a request got nothing at all. **The coach
+  BCC is now dropped for lessons** (he has his own mail; a class still BCCs — that lifecycle is
+  separate). An ONLINE lesson confirms in the PAYMENT path, which `_emit_confirmed` never reaches,
+  so `billing.events` calls `notify_coach_of_confirmed_order` — without it the coach would hear
+  about every lesson EXCEPT the paid ones.
+- **A PAID lesson cancelled BY THE CLUB refunds itself.** Cancel used to void owed orders and leave a
+  paid one intact ("refunding is a separate explicit flow") — fine while a coach who didn't want a
+  lesson DECLINED it and that path refunded. With the gate gone **cancel IS how a coach returns a
+  lesson**, so leaving the money would keep payment for a lesson the club just cancelled. A CLIENT's
+  own cancellation is deliberately NOT auto-refunded — that is a request decided under the
+  cancellation policy (`was_paid` still flags it).
+- **accept / propose / decline are RETIRED, NOT DELETED.** No new `requested` lesson can be created,
+  but the ones made while the gate existed are live in production and would be stranded. They stay
+  until `scripts/migrate_lesson_requests.py` has cleared the queue (paid → accept, past → cancel,
+  unpaid-future → left for a human); then the path, its four email templates and the `requested`/
+  `proposed` statuses can go. Guarded by `sc_legacy_lesson_requests_can_still_be_finished`.
 - **A lesson email must state THIS booking's state, not the usual one.** `lesson_accepted` always
   read "Your lesson is confirmed" — including when the booking was HELD and unpaid, so the one
   email that could have prompted payment said there was nothing to do. It now says "one step left"

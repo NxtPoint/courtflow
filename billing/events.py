@@ -154,6 +154,16 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
         elif order_id:
             confirmed = _confirm_held_bookings(session, order_id, club_id)
             result["bookings_confirmed"] = confirmed
+            # An ONLINE lesson only becomes real HERE, when the charge lands — so this is the one
+            # confirmation the diary's own emit can't reach. Without it the coach would be told about
+            # every lesson EXCEPT the paid ones. Guarded inside; a notification never breaks a
+            # settlement.
+            if confirmed:
+                try:
+                    from diary.bookings import notify_coach_of_confirmed_order
+                    notify_coach_of_confirmed_order(session, club_id=club_id, order_id=order_id)
+                except Exception:
+                    log.debug("coach lesson notification skipped", exc_info=False)
             # Classes are the enrolment sibling of held bookings: an ONLINE seat deferred its
             # "you're enrolled" confirmation until payment (so no premature email while the charge is
             # pending). Emit it NOW + clear the hold. Guarded + idempotent; shared by webhook + reconcile.

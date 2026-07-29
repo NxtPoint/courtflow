@@ -754,68 +754,22 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         product_id = product_id or court_own_service
 
     # ---- lesson approval gate (accept/propose/decline lifecycle) ----------------------------
-    # A lesson is "gated" — created as 'requested' (reserving NOTHING: no court, no order, no
-    # payment) when a CLIENT self-books a coach who reviews bookings, so the coach accepts/declines
-    # first. A coach/admin booking ON-BEHALF of a client ALWAYS auto-confirms (no client-acceptance
-    # step) — the client is just notified and can reschedule/cancel themselves if it doesn't suit.
-    # (A coach can still counter-propose a new time on a request via propose_time -> 'proposed',
-    # which the client then accepts/declines.) Everything else flows through the immediate path below.
+    # THERE IS ONE LESSON FLOW. A lesson is booked the way a court is booked: it holds the coach AND
+    # a court immediately, and the SETTLEMENT alone decides whether it is `held` (online, pending
+    # payment) or `confirmed`. Nothing about the coach changes the shape of the booking.
     #
-    # PAYING FOR IT IS THE ACCEPTANCE. An ONLINE booking is never gated, whatever the coach's review
-    # setting, because approval and prepayment pull against each other:
+    # The approval gate that used to live here is gone. It created a `requested` lesson that reserved
+    # NOTHING and raised no order, which produced a different booking, a different notification and a
+    # different money path for the same act — and two clients could each hold, and pay for, the same
+    # slot. It also wasn't buying what it appeared to: a coach can RESCHEDULE or CANCEL any lesson, so
+    # a time that doesn't suit is moved or returned, not refused up front.
     #
-    #   · a 'requested' lesson reserves NOTHING, so TWO clients could each request — and now each PAY
-    #     for — the same 18:00 slot. The coach can only take one; the other has to be refunded. A
-    #     confirmed booking holds the coach AND the court through the exclusion constraint, so the
-    #     second client is simply told the slot is taken, which is the honest answer.
-    #   · and the gate was never really buying control: a coach can RESCHEDULE any lesson, so a time
-    #     that doesn't suit is moved, not refused. The approval step only delayed the booking and
-    #     opened the double-book window it was never meant to create.
+    # What the coach actually needed was to be TOLD. That is now unconditional and lives in one place
+    # (`_emit_confirmed` → `lesson_booked`), so every lesson notifies him exactly once, whoever booked
+    # it and however it was paid, instead of only on the one path that happened to be gated.
     #
-    # An OWED request (at-court / monthly) is still gated — there the coach is vetting a booking with
-    # no money behind it, which is the case the review setting was actually for.
-    if booking_type == "lesson" and res["kind"] == "coach":
-        _gate_coach = coach_user_id or res.get("coach_user_id")
-        _gate_status = None
-        if booked_for_user_id is None and role in ("member", "guest") and \
-                settlement_mode != "online" and \
-                _coach_reviews(session, club_id, _gate_coach):
-            _gate_status = "requested"
-        if _gate_status and _gate_coach:
-            # A gated (requested) lesson holds NO money yet, but we PRESERVE the client's real intent:
-            # online stays online (the coach's accept will keep it HELD + return a Yoco checkout so the
-            # client prepays — an online-only coach is never left owed); at_court/monthly/token pass
-            # through; membership_covered (COURT-only) / free (admin-only) collapse to at_court.
-            _gate_sm = settlement_mode if settlement_mode in ("at_court", "monthly_account", "token", "online") \
-                else "at_court"
-            # The gate returns BEFORE the main _settlement_allowed / per-service payment_modes checks,
-            # so enforce the coach's payment preference HERE for a client self-booking — an online-only
-            # coach can't be booked owed (M1). Staff booking on-behalf (booked_for_user_id set) is not
-            # gated (handled above) so their at-court override is unaffected.
-            if role in ("member", "guest") and _gate_sm in ("online", "at_court", "monthly_account"):
-                # Resolve modes by the EXACT chosen lesson service (product_id), not coach/kind alone —
-                # a coach with two differently-priced lesson services must be gated on the one booked,
-                # else a kind-level resolve reads the first-of-kind product (the known leak pattern).
-                _pm = _service_payment_modes_guarded(session, club_id, "lesson", _gate_coach, product_id=product_id)
-                if _pm is not None and _gate_sm not in _pm:
-                    return _err("SETTLEMENT_NOT_ALLOWED", 422, settlement_mode=_gate_sm,
-                                message="this coach doesn't offer that payment method")
-            _gid = _insert_booking(
-                session, club_id=club_id, booking_type="lesson", resource_id=resource_id,
-                coach_user_id=_gate_coach, starts_at=starts, ends_at=ends, status=_gate_status,
-                held_until=None, booked_by_user_id=owner_user_id, recurrence_id=recurrence_id,
-                created_by_user_id=booked_by_user_id, settlement_mode=_gate_sm, notes=notes,
-                product_id=product_id)   # REMEMBER the chosen service — accept_booking prices off it
-            for _party in parties:
-                _insert_party(session, booking_id=_gid, club_id=club_id, party=_party)
-
-            # A gated request is always an OWED one now (online never reaches here), so there is
-            # genuinely nothing to collect yet — the order is raised when the coach accepts.
-            _gb = _booking_dict(session, _gid)
-            _lesson_event(session, _gb,
-                          "lesson_requested" if _gate_status == "requested" else "lesson_proposed",
-                          _gate_coach if _gate_status == "requested" else owner_user_id)
-            return {"ok": True, "booking": _gb, "checkout": None}
+    # `iam.coach_profile.review_bookings` is retained but no longer gates a booking; accept/propose/
+    # decline remain ONLY to finish the requests made while it did (see scripts/migrate_lesson_requests).
 
     # Lesson integrity (coach ∩ court): a lesson is a COACH booking that ALSO holds a court in the
     # same transaction. The primary resource MUST be an active coach; and a court MUST be held — if
@@ -1500,6 +1454,7 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
     # cancel_membership. SEMI-PRIVATE: a squad lesson raises ONE order PER head (all linked via
     # order_line.booking_id, not booking.order_id), so we void EVERY order referencing this booking —
     # a bare booking.order_id would leave the partners' debts stranded.
+    refunds = []
     try:
         from billing.statement import void_order
         order_ids = [r[0] for r in session.execute(
@@ -1508,6 +1463,29 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
         if bk.get("order_id") and bk["order_id"] not in order_ids:
             order_ids.append(bk["order_id"])
         for oid in order_ids:
+            # A PAID lesson cancelled BY THE CLUB (coach or admin) refunds itself.
+            #
+            # Cancelling used to void the owed orders and leave a PAID one intact, on the reasoning
+            # that refunding is a separate explicit flow. That was fine while a coach who didn't want
+            # a lesson DECLINED it — and the decline path refunded. With the approval gate gone,
+            # cancel IS how a coach returns a lesson, so leaving the money would mean the club keeps
+            # payment for a lesson it just cancelled on the client. The client's OWN cancellation is
+            # untouched: that is a request to give money back, decided under the cancellation policy,
+            # not something to hand out automatically.
+            if (not member_initiated) and bk.get("booking_type") == "lesson" \
+                    and _order_is_settled(session, oid):
+                try:
+                    from yoco_billing import execute_order_refund, RefundError
+                    try:
+                        execute_order_refund(session, order_id=oid)
+                        refunds.append({"order_id": str(oid), "ok": True})
+                    except RefundError as e:
+                        log.warning("cancelled lesson %s: refund failed (%s) — needs a human",
+                                    booking_id, e.code)
+                        refunds.append({"order_id": str(oid), "ok": False, "error": e.code})
+                except Exception:
+                    log.exception("cancelled lesson %s: refund path unavailable", booking_id)
+                continue        # a refunded order must not then be voided — the money moved
             void_order(session, club_id=club_id, order_id=oid, reason="booking cancelled")
     except Exception:
         log.info("cancel_booking: order void skipped (billing unavailable) order=%s", bk.get("order_id"))
@@ -1535,11 +1513,14 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
     promoted = _promote_court_waitlist(session, club_id=club_id,
                                        resource_id=booking["resource_id"],
                                        desired_start=_parse_dt(booking["starts_at"]))
-    # Flag a PAID cancellation so the UI can prompt a refund (the paid order is left intact — a refund
-    # is a separate, explicit flow, so without this the client got no indication). (L1.)
+    # Flag a PAID cancellation so the UI can prompt a refund. Still needed for the cases that do NOT
+    # auto-refund above — a client cancelling their own paid booking (decided under the cancellation
+    # policy, not handed back automatically) and a paid COURT booking. `refunds` says what already
+    # went back, so the UI can report it instead of prompting for it a second time. (L1.)
     return {"ok": True, "booking": booking, "fee_applied": fee_applies,
             "fee_minor": fee_minor, "waitlist_notified": promoted,
             "token_credited": credited,
+            "refunds": (refunds or None),
             "was_paid": _order_has_succeeded_charge(session, bk.get("order_id"))}
 
 
@@ -1655,7 +1636,11 @@ def set_attendance(session, *, club_id, booking_id, party_id=None, attended=True
 # ---------------------------------------------------------------------------
 
 def _coach_reviews(session, club_id, coach_user_id):
-    """True when this coach reviews bookings before they confirm (coach_profile.review_bookings)."""
+    """True when this coach reviews bookings before they confirm (coach_profile.review_bookings).
+
+    NO LONGER GATES A BOOKING. Kept because the column is still read by the coach console and by the
+    legacy accept/propose/decline path that finishes the requests made while it did gate. A lesson
+    now confirms on its settlement alone and the coach is always notified — see create_booking."""
     if not coach_user_id:
         return False
     try:
@@ -1931,7 +1916,68 @@ def _payload(booking, res):
 
 
 def _emit_confirmed(session, booking, res, settlement_mode):
+    """The client's confirmation — and, for a lesson, the COACH's own notification.
+
+    THE ONE PLACE a lesson tells its coach. It used to depend on how the booking happened: only a
+    gated (owed, reviewing-coach) booking emailed him directly — `lesson_requested` — and every other
+    path left him as a blind copy on the client's receipt, or told him nothing at all. Same act, four
+    different answers. Now every confirmed lesson notifies him here, once, whoever booked it and
+    however it was paid. `notify_coach_of_confirmed_order` covers the one case that cannot reach this
+    function: an ONLINE lesson, which confirms later when the payment lands."""
     events.emit("booking_confirmed", _payload(booking, res))
+    _emit_coach_booked(session, booking, res)
+
+
+def _emit_coach_booked(session, booking, res):
+    """Tell the lesson's COACH, addressed to him. Best-effort — a notification must never break a
+    booking. No-ops for anything that isn't a lesson with a coach."""
+    try:
+        if (booking or {}).get("booking_type") != "lesson":
+            return
+        coach_uid = booking.get("coach_user_id")
+        if not coach_uid:
+            return
+        payload = _payload(booking, res)
+        payload["user_id"] = str(coach_uid)          # route it to the COACH, not the payer
+        payload["client_name"] = _client_name(session, booking.get("booked_by_user_id"))
+        events.emit("lesson_booked", payload)
+    except Exception:
+        log.debug("coach lesson_booked emit failed", exc_info=False)
+
+
+def _client_name(session, user_id):
+    """The client's display name for the coach's notification (no contact details — the coach opens
+    the booking for those). Guarded -> None."""
+    if not user_id:
+        return None
+    try:
+        return session.execute(
+            text("SELECT NULLIF(TRIM(CONCAT_WS(' ', first_name, surname)), '') "
+                 'FROM iam."user" WHERE id = CAST(:u AS uuid)'), {"u": str(user_id)},
+        ).scalar()
+    except Exception:
+        return None
+
+
+def notify_coach_of_confirmed_order(session, *, club_id, order_id):
+    """Tell the coach about lesson(s) an ORDER just confirmed — the payment path's entry point.
+
+    An online lesson is `held` at creation and only becomes real when the charge lands, which happens
+    in the billing lane (`_confirm_held_bookings`). Without this the coach would be told about every
+    lesson EXCEPT the paid ones. Guarded end to end: this runs inside the payment fan-out and must
+    never break a settlement."""
+    try:
+        rows = session.execute(
+            text("SELECT id FROM diary.booking WHERE club_id = :c AND order_id = :o "
+                 "  AND booking_type = 'lesson' AND status = 'confirmed'"),
+            {"c": str(club_id), "o": str(order_id)},
+        ).scalars().all()
+        for bid in rows:
+            bk = _booking_dict(session, bid)
+            if bk:
+                _emit_coach_booked(session, bk, _resource(session, club_id, bk["resource_id"]))
+    except Exception:
+        log.debug("notify_coach_of_confirmed_order suppressed", exc_info=False)
 
 
 # ---------------------------------------------------------------------------

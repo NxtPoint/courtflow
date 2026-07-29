@@ -532,19 +532,15 @@ def sc_gated_lesson_bills_the_booked_service(s, fx):
                          starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
                          settlement_mode="at_court")
     bid = r["booking"]["id"]
-    check("a gated lesson starts as 'requested' with no order",
-          r["booking"]["status"] == "requested" and not r["booking"].get("order_id"),
+    check("the lesson is booked and priced immediately (one flow, no gate)",
+          r["booking"]["status"] == "confirmed" and bool(r["booking"].get("order_id")),
           str(r["booking"]["status"]))
     remembered = s.execute(text("SELECT product_id FROM diary.booking WHERE id=:b"),
                            {"b": bid}).scalar()
-    check("...but the chosen SERVICE is remembered on the booking",
+    check("...the chosen SERVICE is remembered on the booking",
           str(remembered) == str(dear), str(remembered))
-
-    acc = B.accept_booking(s, club_id=fx.club_id, booking_id=bid,
-                           actor_user_id=fx.coach_uid, role="coach")
-    check("the coach accepts it", acc.get("ok"), str(acc))
     amt = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
-                    {"o": B.get_booking(s, club_id=fx.club_id, booking_id=bid)["order_id"]}).scalar()
+                    {"o": r["booking"]["order_id"]}).scalar()
     check("it is billed the BOOKED service (R900), not the cheapest (R100)", amt == 90000,
           "billed %s" % amt)
     billed_prod = s.execute(text("SELECT pr.product_id FROM billing.order_line ol "
@@ -552,6 +548,23 @@ def sc_gated_lesson_bills_the_booked_service(s, fx):
                                  "WHERE ol.booking_id = :b LIMIT 1"), {"b": bid}).scalar()
     check("...and attributed to the right service in earnings", str(billed_prod) == str(dear),
           str(billed_prod))
+
+    # The LEGACY accept path prices off the booking's remembered product too — that is where the
+    # cheapest-service fallback originally bit (a gated lesson created no order, so by accept time
+    # the chosen service was gone). Requests still exist in production, so it still has to hold.
+    legacy = s.execute(
+        text("INSERT INTO diary.booking (club_id, booking_type, resource_id, coach_user_id, "
+             "starts_at, ends_at, status, booked_by_user_id, settlement_mode, product_id) "
+             "VALUES (:c,'lesson',:r,:co,:sa,:ea,'requested',:u,'at_court',:p) RETURNING id"),
+        {"c": fx.club_id, "r": fx.coach_res, "co": fx.coach_uid, "sa": at(fx, 13),
+         "ea": at(fx, 14), "u": m, "p": dear}).scalar()
+    acc = B.accept_booking(s, club_id=fx.club_id, booking_id=str(legacy),
+                           actor_user_id=fx.coach_uid, role="coach")
+    check("a legacy request still accepts", acc.get("ok"), str(acc))
+    lamt = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                     {"o": acc["booking"]["order_id"]}).scalar()
+    check("...and is billed its BOOKED service too (R900, not R100)", lamt == 90000,
+          "billed %s" % lamt)
     s.execute(text("UPDATE iam.coach_profile SET review_bookings = false "
                    "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.coach_uid})
 
@@ -1340,55 +1353,73 @@ def sc_class_online_hold_expiry(s, fx):
     check("paid seat stays enrolled", stp == "enrolled", str(stp))
 
 
-def sc_lesson_lifecycle(s, fx):
-    print("\n# Lesson approval lifecycle (coach review ON): request → accept / decline / propose")
-    s.execute(text("UPDATE iam.coach_profile SET review_bookings = true "
-                   "WHERE club_id=:c AND user_id=:u"),
-              {"c": fx.club_id, "u": fx.coach_uid})
+def _legacy_request(s, fx, hour, status="requested"):
+    """A lesson in the OLD gated shape — 'requested', no court, no order — written directly because
+    create_booking can no longer produce one. These exist in production from before the gate was
+    removed, and the accept/propose/decline path lives on solely to finish them."""
+    return s.execute(
+        text("INSERT INTO diary.booking (club_id, booking_type, resource_id, coach_user_id, "
+             "starts_at, ends_at, status, booked_by_user_id, settlement_mode) "
+             "VALUES (:c,'lesson',:r,:co,:sa,:ea,:st,:u,'at_court') RETURNING id"),
+        {"c": fx.club_id, "r": fx.coach_res, "co": fx.coach_uid, "sa": at(fx, hour),
+         "ea": at(fx, hour + 1), "st": status, "u": fx.members[0]},
+    ).scalar()
+
+
+def sc_legacy_lesson_requests_can_still_be_finished(s, fx):
+    """The approval lifecycle is RETIRED for new bookings but must still finish the old ones.
+
+    create_booking no longer produces a 'requested' lesson — one flow, and paying (or owing) is the
+    booking. But requests made while it DID gate are sitting in production, so accept / propose /
+    decline stay alive until they are cleared (scripts/migrate_lesson_requests.py). Deleting that
+    path before the queue is empty would strand real clients mid-booking.
+
+    This pins the retirement in both directions: a NEW booking is never gated, and an OLD request
+    still accepts, still counter-proposes, and still declines."""
+    print("\n# Legacy lesson requests still finish (the approval path is retired, not deleted)")
     m = fx.members[0]
-    start, end = at(fx, 9), at(fx, 10)
-    # Client self-books → 'requested', reserves NOTHING (coach still free, no court row).
-    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
-                         booking_type="lesson", resource_id=fx.coach_res,
-                         coach_user_id=fx.coach_uid,
-                         starts_at=utc_iso(start), ends_at=utc_iso(end))
-    req_id = r["booking"]["id"]
-    check("gated self-book → requested", r["booking"]["status"] == "requested", str(r.get("booking")))
-    check("requested lesson reserves no court (coach slot still free)",
-          has_slot(lesson_slots(s, fx), start))
-    # Coach accepts → court assigned, confirmed.
-    acc = B.accept_booking(s, club_id=fx.club_id, booking_id=req_id,
+    s.execute(text("UPDATE iam.coach_profile SET review_bookings = true "
+                   "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.coach_uid})
+
+    # A reviewing coach no longer gates ANYTHING — that is the whole point of the single flow.
+    fresh = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                             booking_type="lesson", resource_id=fx.coach_res,
+                             coach_user_id=fx.coach_uid,
+                             starts_at=utc_iso(at(fx, 8)), ends_at=utc_iso(at(fx, 9)))
+    check("a NEW booking with a reviewing coach is confirmed, not requested",
+          fresh.get("ok") and fresh["booking"]["status"] == "confirmed", str(fresh.get("booking")))
+    check("…and it holds a court immediately",
+          bool(s.execute(text("SELECT 1 FROM diary.booking WHERE order_id=:o AND booking_type='court'"),
+                         {"o": fresh["booking"]["order_id"]}).first()))
+
+    # An OLD request still accepts — court assigned, slot taken, order raised.
+    req = _legacy_request(s, fx, 10)
+    acc = B.accept_booking(s, club_id=fx.club_id, booking_id=str(req),
                            actor_user_id=fx.coach_uid, role="coach")
-    check("coach accept → confirmed", acc.get("ok") and acc["booking"]["status"] == "confirmed",
-          str(acc))
-    check("coach slot gone after accept", not has_slot(lesson_slots(s, fx), start))
-    B.cancel_booking(s, club_id=fx.club_id, booking_id=req_id, actor_user_id=m, role="member")
+    check("a legacy request still ACCEPTS → confirmed",
+          acc.get("ok") and acc["booking"]["status"] == "confirmed", str(acc))
+    check("…and the coach's slot is taken", not has_slot(lesson_slots(s, fx), at(fx, 10)))
 
-    # A second request the coach DECLINES → cancelled, nothing reserved.
-    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
-                          booking_type="lesson", resource_id=fx.coach_res,
-                          coach_user_id=fx.coach_uid,
-                          starts_at=utc_iso(at(fx, 11)), ends_at=utc_iso(at(fx, 12)))
-    dec = B.decline_booking(s, club_id=fx.club_id, booking_id=r2["booking"]["id"],
+    # …still DECLINES.
+    req2 = _legacy_request(s, fx, 12)
+    dec = B.decline_booking(s, club_id=fx.club_id, booking_id=str(req2),
                             actor_user_id=fx.coach_uid, role="coach", reason="busy")
-    check("coach decline → cancelled", dec["booking"]["status"] == "cancelled", str(dec))
+    check("a legacy request still DECLINES → cancelled",
+          dec.get("ok") and dec["booking"]["status"] == "cancelled", str(dec))
 
-    # A third request the coach PROPOSES a new time → proposed; client accepts → confirmed.
-    r3 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
-                          booking_type="lesson", resource_id=fx.coach_res,
-                          coach_user_id=fx.coach_uid,
-                          starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 14)))
-    prop = B.propose_time(s, club_id=fx.club_id, booking_id=r3["booking"]["id"],
+    # …and still counter-proposes, with the client accepting the new time.
+    req3 = _legacy_request(s, fx, 14)
+    prop = B.propose_time(s, club_id=fx.club_id, booking_id=str(req3),
                           actor_user_id=fx.coach_uid, role="coach",
-                          starts_at=utc_iso(at(fx, 15)), ends_at=utc_iso(at(fx, 16)))
-    check("coach propose → proposed", prop["booking"]["status"] == "proposed", str(prop))
-    acc3 = B.accept_booking(s, club_id=fx.club_id, booking_id=r3["booking"]["id"],
-                            actor_user_id=m, role="member")
-    check("client accept proposed → confirmed",
+                          starts_at=utc_iso(at(fx, 16)), ends_at=utc_iso(at(fx, 17)))
+    check("a legacy request still PROPOSES → proposed", prop["booking"]["status"] == "proposed",
+          str(prop))
+    acc3 = B.accept_booking(s, club_id=fx.club_id, booking_id=str(req3), actor_user_id=m,
+                            role="member")
+    check("…and the client can accept the proposed time",
           acc3.get("ok") and acc3["booking"]["status"] == "confirmed", str(acc3))
     s.execute(text("UPDATE iam.coach_profile SET review_bookings = false "
-                   "WHERE club_id=:c AND user_id=:u"),
-              {"c": fx.club_id, "u": fx.coach_uid})
+                   "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.coach_uid})
 
 
 def sc_offpeak_slot_pricing(s, fx):
@@ -2502,6 +2533,97 @@ def sc_waitlist_promotion_into_a_cardonly_class_is_held(s, fx):
     check("…and NOW the enrolment confirmation is sent", "class_enrolled" in rec2.seen, str(rec2.seen))
 
 
+def sc_one_lesson_flow(s, fx):
+    """THE lesson flow — one shape, whoever books and however they pay.
+
+    A lesson used to take four shapes depending on the settlement mode and the coach's review flag,
+    and WHO GOT TOLD depended on the same two flags: only a gated booking emailed the coach directly,
+    everywhere else he was a blind copy or nothing at all, and a client who made a request got no
+    email whatsoever. Same act, four answers.
+
+    Now: every lesson holds the coach AND a court, the settlement alone decides held vs confirmed,
+    and the coach is told EXACTLY ONCE per lesson — including for the online one, which confirms
+    later in the payment path and would otherwise be the one he never heard about."""
+    print("\n# ONE lesson flow: same shape every mode; the coach is told exactly once")
+    from billing.events import apply_payment_event
+    from billing.gateway import NormalizedPaymentEvent
+    m = fx.members[0]
+    # Review ON throughout — it must make no difference to the shape any more.
+    s.execute(text("UPDATE iam.coach_profile SET review_bookings = true "
+                   "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.coach_uid})
+
+    def _book(hour, mode):
+        return B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                                booking_type="lesson", resource_id=fx.coach_res,
+                                coach_user_id=fx.coach_uid, settlement_mode=mode,
+                                starts_at=utc_iso(at(fx, hour)), ends_at=utc_iso(at(fx, hour + 1)))
+
+    def _has_court(order_id):
+        return bool(s.execute(text("SELECT 1 FROM diary.booking WHERE order_id=:o "
+                                   "AND booking_type='court'"), {"o": order_id}).first())
+
+    # ---- shape is identical across settlement modes -----------------------------------------
+    owed = _book(9, "at_court")
+    check("at-court → confirmed, court held, order raised",
+          owed["booking"]["status"] == "confirmed" and _has_court(owed["booking"]["order_id"]),
+          str(owed["booking"]["status"]))
+    online = _book(11, "online")
+    check("online → HELD pending payment, court held, order raised",
+          online["booking"]["status"] == "held" and _has_court(online["booking"]["order_id"]),
+          str(online["booking"]["status"]))
+    check("…and BOTH reserve the coach (no unreserved lesson state exists)",
+          not has_slot(lesson_slots(s, fx), at(fx, 9)) and not has_slot(lesson_slots(s, fx), at(fx, 11)))
+
+    # ---- the coach is told ONCE per lesson, on both paths ------------------------------------
+    with _Emits() as rec:
+        paid_owed = _book(13, "at_court")
+    check("an OWED lesson notifies the coach at booking",
+          rec.seen.count("lesson_booked") == 1, str(rec.seen))
+    check("…exactly once (not once per linked row — a lesson is coach + court)",
+          rec.seen.count("lesson_booked") == 1, str(rec.seen))
+
+    with _Emits() as rec2:
+        pend = _book(15, "online")
+    check("an ONLINE lesson does NOT notify the coach before it's paid",
+          "lesson_booked" not in rec2.seen, str(rec2.seen))
+    with _Emits() as rec3:
+        apply_payment_event(NormalizedPaymentEvent(
+            provider="yoco", kind="charge_succeeded", order_ref=str(pend["booking"]["order_id"]),
+            provider_payment_id="p_flow_1", amount_minor=40000, currency="ZAR", status="succeeded",
+            direction="charge", club_id=str(fx.club_id), user_id=str(m)), session=s)
+    check("…it notifies him WHEN THE PAYMENT LANDS (the one he used to never hear about)",
+          rec3.seen.count("lesson_booked") == 1, str(rec3.seen))
+    check("…and the lesson is now confirmed",
+          _booking_row(s, pend["booking"]["id"])["status"] == "confirmed")
+
+    # ---- a coach cancelling a PAID lesson gives the money back --------------------------------
+    paid = _book(17, "online")
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="yoco", kind="charge_succeeded", order_ref=str(paid["booking"]["order_id"]),
+        provider_payment_id="p_flow_2", amount_minor=40000, currency="ZAR", status="succeeded",
+        direction="charge", club_id=str(fx.club_id), user_id=str(m)), session=s)
+    cancelled = B.cancel_booking(s, club_id=fx.club_id, booking_id=paid["booking"]["id"],
+                                 actor_user_id=fx.coach_uid, role="coach", reason="coach unavailable")
+    check("the coach can cancel it", cancelled.get("ok"), str(cancelled))
+    check("…and a paid lesson REFUNDS itself (decline used to do this; cancel is now the way)",
+          cancelled.get("refunds") is not None, str(cancelled.get("refunds")))
+
+    # A CLIENT cancelling their own paid lesson is NOT auto-refunded — that is a request decided
+    # under the cancellation policy, not money handed back automatically.
+    mine = _book(19, "online")
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="yoco", kind="charge_succeeded", order_ref=str(mine["booking"]["order_id"]),
+        provider_payment_id="p_flow_3", amount_minor=40000, currency="ZAR", status="succeeded",
+        direction="charge", club_id=str(fx.club_id), user_id=str(m)), session=s)
+    own = B.cancel_booking(s, club_id=fx.club_id, booking_id=mine["booking"]["id"],
+                           actor_user_id=m, role="member")
+    check("a CLIENT's own cancellation is not auto-refunded", own.get("refunds") is None,
+          str(own.get("refunds")))
+    check("…but it is flagged as paid so the club is prompted", own.get("was_paid") is True)
+    s.execute(text("UPDATE iam.coach_profile SET review_bookings = false "
+                   "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.coach_uid})
+
+
 def sc_paying_is_the_acceptance(s, fx):
     """PAYING FOR IT IS THE ACCEPTANCE. An online lesson is never gated, whatever the coach's review
     setting — which fixes two things at once.
@@ -2568,12 +2690,17 @@ def sc_paying_is_the_acceptance(s, fx):
           s.execute(text('SELECT status FROM billing."order" WHERE id=:o'),
                     {"o": bk["order_id"]}).scalar() == "paid")
 
-    # (4) An OWED request IS still gated — the review setting keeps working where it was meant to.
+    # (4) ONE FLOW — an OWED booking with the same reviewing coach behaves identically in shape:
+    # confirmed, slot held, order raised. Only the settlement differs, which is the whole point.
     s.execute(text("UPDATE billing.product SET payment_modes = NULL WHERE id = :p"), {"p": prod})
     owed = _book(m, 12, mode="at_court")
-    check("an at-court booking with a reviewing coach IS still 'requested'",
-          owed.get("ok") and owed["booking"]["status"] == "requested", str(owed))
-    check("…and holds no money yet", owed["booking"].get("order_id") is None, str(owed["booking"]))
+    check("an at-court booking with the same reviewing coach is ALSO confirmed",
+          owed.get("ok") and owed["booking"]["status"] == "confirmed", str(owed))
+    check("…and raises an OWED order (settlement differs, the shape does not)",
+          bool(owed["booking"].get("order_id"))
+          and s.execute(text('SELECT status FROM billing."order" WHERE id=:o'),
+                        {"o": owed["booking"]["order_id"]}).scalar() == "open",
+          str(owed["booking"]))
 
 
 def _booking_row(s, booking_id):
@@ -2895,7 +3022,7 @@ SCENARIOS = [
     sc_class_promotion_never_free,
     sc_class_late_payment_reinstates,
     sc_class_online_hold_expiry,
-    sc_lesson_lifecycle,
+    sc_legacy_lesson_requests_can_still_be_finished,
     sc_offpeak_slot_pricing,
     sc_peak_court_pricing,
     sc_membership_entitlement,
@@ -2917,6 +3044,7 @@ SCENARIOS = [
     sc_equipment_follows_its_own_payment_rule,
     sc_club_default_caps_cover_every_membership,
     sc_waitlist_promotion_into_a_cardonly_class_is_held,
+    sc_one_lesson_flow,
     sc_paying_is_the_acceptance,
     sc_peak_hours_can_differ_per_court,
     sc_trial_obeys_the_same_court_rules_as_a_membership,

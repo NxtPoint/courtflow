@@ -189,6 +189,22 @@ def _t_invoice_issued(ctx):
 
 
 # Lesson approval lifecycle (recipient is set on the emit payload's user_id by diary.bookings).
+def _t_lesson_booked(ctx):
+    """THE coach's own notification — addressed to him, not a blind copy of the client's receipt.
+
+    He used to be BCC'd on the client's confirmation, which reads "your lesson is confirmed" and is
+    written for her; the only email actually addressed to him was the approval request, on the one
+    path that happened to be gated. Now every lesson tells him, once, in his own words — and the BCC
+    is dropped for lessons so he never gets both."""
+    who = _g(ctx, "client_name", default="A client")
+    when = _when(ctx)
+    where = ctx.get("resource_name")
+    body = (f"{who} booked a lesson with you" + (f" on {when}" if when else "")
+            + (f" ({where})" if where else "") + ". "
+            + "It's in your diary — open it to reschedule or cancel if the time doesn't suit.")
+    return ("New lesson booked", body, "/coach")
+
+
 def _t_lesson_requested(ctx):
     return ("New lesson request", "A client has requested a lesson with you — accept, propose a new "
             "time, or decline.", "/coach")
@@ -306,6 +322,7 @@ KIND_MAP = {
     "coach_invited":         _t_coach_invited,
     "statement_ready":       _t_statement_ready,         # month-end: balance reminder → pay online
     "invoice_issued":        _t_invoice_issued,          # issued invoice DOCUMENT (summary + PDF + pay-online)
+    "lesson_booked":         _t_lesson_booked,           # THE coach's notification (→ coach)
     "lesson_requested":      _t_lesson_requested,        # lesson approval lifecycle (→ coach)
     "lesson_proposed":       _t_lesson_proposed,         # (→ client)
     "lesson_accepted":       _t_lesson_accepted,         # (→ requester)
@@ -407,7 +424,13 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
     #    MULTI-TENANT: the club's name becomes the email's From display name + signature, and the
     #    club's contact email its Reply-To — all riding one verified CourtFlow SES identity.
     ident = _club_identity(session, club_id)
-    bcc = list(filter(None, [ident.get("bcc"), booking_detail.coach_email(detail)]))
+    # NO COACH BCC ON A LESSON — he now gets `lesson_booked`, addressed to him, so copying him on the
+    # client's receipt as well would just be the same news twice. A CLASS still BCCs its coach: the
+    # class lifecycle is separate and hasn't been through this yet.
+    _coach_bcc = None
+    if (detail or {}).get("booking_type") != "lesson":
+        _coach_bcc = booking_detail.coach_email(detail)
+    bcc = list(filter(None, [ident.get("bcc"), _coach_bcc]))
 
     status = _try_email(recipient.get("email"), title, body, recipient.get("name"),
                         from_name=ident.get("from_name"), reply_to=ident.get("reply_to"),

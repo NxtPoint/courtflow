@@ -1257,16 +1257,15 @@ def sc_settlement_guards(s, fx):
                              booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
                              starts_at=iso(at(fx, 9)), ends_at=iso(at(fx, 10)),
                              settlement_mode="membership_covered")
-    check("H4: gated lesson created as 'requested'",
-          rgate.get("ok") and rgate["booking"]["status"] == "requested",
+    # ONE FLOW: a reviewing coach no longer gates anything, so the lesson is created confirmed and
+    # priced there and then. H4's invariant is unchanged and still the point — a crafted
+    # membership_covered LESSON must never become an R0 'paid' lesson (a membership covers COURTS).
+    check("H4: the lesson is created confirmed (a reviewing coach no longer gates)",
+          rgate.get("ok") and rgate["booking"]["status"] == "confirmed",
           str(rgate.get("booking", {}).get("status")))
     bid = rgate["booking"]["id"]
     stored = s.execute(text("SELECT settlement_mode FROM diary.booking WHERE id=:b"), {"b": bid}).scalar()
-    check("H4: crafted membership_covered coerced to at_court on the requested row",
-          stored == "at_court", str(stored))
-    acc = B.accept_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=fx.coach_uid, role="coach")
-    check("H4: coach accept confirms the lesson",
-          acc.get("ok") and acc["booking"]["status"] == "confirmed", str(acc))
+    check("H4: crafted membership_covered coerced to at_court", stored == "at_court", str(stored))
     oid = B._booking_dict(s, bid)["order_id"]
     check("H4: accepted lesson is CHARGED (R400), not R0",
           _order(s, oid) and _order(s, oid)["amount_minor"] == 40000,
