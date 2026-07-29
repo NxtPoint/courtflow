@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 371 / billing 492 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 362 / billing 492 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -747,11 +747,13 @@ member by email on the first authenticated hit.
   lesson**, so leaving the money would keep payment for a lesson the club just cancelled. A CLIENT's
   own cancellation is deliberately NOT auto-refunded — that is a request decided under the
   cancellation policy (`was_paid` still flags it).
-- **accept / propose / decline are RETIRED, NOT DELETED.** No new `requested` lesson can be created,
-  but the ones made while the gate existed are live in production and would be stranded. They stay
-  until `scripts/migrate_lesson_requests.py` has cleared the queue (paid → accept, past → cancel,
-  unpaid-future → left for a human); then the path, its four email templates and the `requested`/
-  `proposed` statuses can go. Guarded by `sc_legacy_lesson_requests_can_still_be_finished`.
+- **accept / propose / decline are GONE (deleted 2026-07-29 once production's queue was empty).**
+  The approval lifecycle, its four email templates, the coach's approval queue, the client's
+  "needs your attention" blocks and the `requested`/`proposed` statuses were all removed — the
+  status CHECK is now `held|confirmed|cancelled|completed|no_show`, narrowed inside a **guarded**
+  DO block (it runs every boot; an ALTER that fails takes the deploy with it, so it only narrows
+  when no such rows remain). If a lesson ever needs approving again, do NOT restore the gate —
+  the coach reschedules or cancels, and a paid cancel refunds.
 - **A lesson email must state THIS booking's state, not the usual one.** `lesson_accepted` always
   read "Your lesson is confirmed" — including when the booking was HELD and unpaid, so the one
   email that could have prompted payment said there was nothing to do. It now says "one step left"

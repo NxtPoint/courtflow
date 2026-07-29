@@ -128,13 +128,14 @@
   function ensureMonth() { if (!MONTH) MONTH = thisMonthKey(); }
   function act(fn, ok, then) { fn().then(function () { UI.toast(ok, "info"); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
 
-  // ---- HOME (the business pulse + approval queue + today) ------------------
+  // ---- HOME (the business pulse + today) -----------------------------------
+  // No approval queue: a lesson is never "waiting" for a coach any more (one lesson flow — it holds
+  // its slot and the settlement confirms it). He is NOTIFIED instead, and reschedules or cancels
+  // from the booking itself.
   async function renderHome() {
     ensureMonth(); loading();
-    var ck = {}, pendReq = [], pendProp = [], today = [];
+    var ck = {}, today = [];
     try { ck = await window.CoachAPI.cockpit(MONTH); } catch (e) {}
-    try { pendReq = (await window.CoachAPI.pendingLessons("requested")).bookings || []; } catch (e) {}
-    try { pendProp = (await window.CoachAPI.pendingLessons("proposed")).bookings || []; } catch (e) {}
     var tk = UI.dateKey(new Date());
     try { today = (await window.API.bookings({ as_coach: 1, date_from: tk, date_to: tk })).bookings || []; } catch (e) {}
     var k = ck.kpis || {}, cur = "ZAR";
@@ -163,18 +164,6 @@
     if ((k.arrears_owed_minor || 0) > 0) kpiCard.appendChild(el("div", { class: "cf-muted", style: "margin-top:8px;font-size:.85rem", text: "Outstanding on client tabs: " + money(k.arrears_owed_minor, cur) + " — chase it up in Money." }));
     wrap.appendChild(kpiCard);
 
-    // Needs your attention (requests)
-    if (pendReq.length) {
-      var ac = card([el("h2", { style: "margin:0 0 8px", text: "Needs your attention" })]);
-      ac.appendChild(window.CRMUI.requestQueue(pendReq.map(reqItem), {
-        onAccept: function (it) { act(function () { return window.API.acceptBooking(it.id); }, "Lesson confirmed."); },
-        onPropose: function (it) { proposeModal(it.id); },
-        onDecline: function (it) { act(function () { return window.API.declineBooking(it.id, {}); }, "Declined."); },
-        empty: "Nothing waiting.",
-      }));
-      wrap.appendChild(ac);
-    }
-
     // Today
     var todayCard = card([el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:8px" }, [
       el("h2", { style: "margin:0", text: "Today" }),
@@ -193,7 +182,6 @@
     set(wrap);
   }
   function greet() { var h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; }
-  function reqItem(b) { return { id: b.id, title: (b.booked_by_name || "A client") + " · " + typeLabel(b.booking_type), sub: UI.fmtDate(b.starts_at) + " · " + timeRange(b), status: b.status, starts_at: b.starts_at, ends_at: b.ends_at }; }
 
   // A booking row (schedule/today/client history) → drills into the event story.
   function eventRow(b) {
@@ -496,7 +484,7 @@
 
   // ---- EVENT STORY (the drill-through heart) -------------------------------
   // The ONE shared transaction detail (Widgets.TransactionDetail). Coach wires its action handlers;
-  // proposeModal/rescheduleModal/arr below are the coach action UIs. (FRONTEND-STANDARDISATION Wave 2.)
+  // rescheduleModal/arr below are the coach action UIs. (FRONTEND-STANDARDISATION Wave 2.)
   function renderEvent(id) {
     var host = el("div", {});
     set(host);
@@ -507,9 +495,6 @@
       data: { get: function (i) { return window.CoachAPI.bookingStory(i).then(function (r) { return r.booking; }); } },
       onNavigate: function (t) { if (t.kind === "person") go("#/client/" + t.id); },
       actions: {
-        accept: { done: "Confirmed.", run: function (b) { return window.API.acceptBooking(b.id); } },
-        propose: { manual: true, run: function (b) { proposeModal(b.id, function () { renderEvent(id); }); } },
-        decline: { tone: "danger", back: true, done: "Declined.", run: function (b) { return window.API.declineBooking(b.id, {}); } },
         mark_completed: { done: "Marked completed.", run: function (b) { return window.API.setBookingStatus(b.id, { status: "completed" }); } },
         mark_no_show: { done: "Marked no-show.", run: function (b) { return window.API.setBookingStatus(b.id, { status: "no_show" }); } },
         reschedule: { manual: true, run: function (b) { rescheduleModal(b, function () { renderEvent(id); }); } },
@@ -605,19 +590,6 @@
   }
 
   function btn(text, tone, onclick) { return el("button", { class: "cf-btn cf-btn-sm" + (tone ? " cf-btn-" + tone : ""), text: text, onclick: onclick }); }
-  function proposeModal(id, then) {
-    var m = modal("Propose a time");
-    var s = el("input", { class: "cf-input", type: "datetime-local" });
-    var dur = el("select", { class: "cf-input" }, [30, 45, 60, 90, 120].map(function (d) { return el("option", { value: String(d), text: d + " min" }); })); dur.value = "60";
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "New time" }), s]));
-    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Duration" }), dur]));
-    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
-      el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
-      el("button", { class: "cf-btn cf-btn-primary", text: "Propose", onclick: function () { if (!s.value) { UI.toast("Pick a time.", "warn"); return; } var st = new Date(s.value), en = new Date(st.getTime() + parseInt(dur.value, 10) * 60000); window.API.proposeTime(id, { starts_at: st.toISOString(), ends_at: en.toISOString() }).then(function () { UI.toast("Proposed.", "info"); m.close(); (then || route)(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); } }),
-    ]));
-  }
-  // Reschedule is the ONE shared CRMUI.rescheduleModal (date/time + duration + COURT) — the local
-  // fork was deleted so coaches get court-swapping everywhere it's offered.
   function rescheduleModal(b, then) {
     CRMUI.rescheduleModal({ booking: b, onDone: then || route });
   }

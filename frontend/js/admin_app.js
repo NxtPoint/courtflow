@@ -1583,9 +1583,6 @@
       data: { get: function (i) { return window.AdminAPI.bookingStory(i).then(function (r) { return r.booking; }); } },
       onNavigate: function (t) { if (t.kind === "person") go("#/person/" + t.id); },
       actions: {
-        accept: { done: "Confirmed.", run: function (b) { return window.API.acceptBooking(b.id); } },
-        propose: { manual: true, run: function (b) { timeModal("Propose a time", b, function (body) { return window.API.proposeTime(b.id, body); }, "Proposed.", function () { renderEvent(id); }); } },
-        decline: { tone: "danger", back: true, done: "Declined.", run: function (b) { return window.API.declineBooking(b.id, {}); } },
         mark_completed: { done: "Marked completed.", run: function (b) { return window.API.setBookingStatus(b.id, { status: "completed" }); } },
         mark_no_show: { done: "Marked no-show.", run: function (b) { return window.API.setBookingStatus(b.id, { status: "no_show" }); } },
         // Reschedule = the ONE shared CRMUI.rescheduleModal (adds the court picker staff asked for).

@@ -195,14 +195,6 @@
     // First-login nudge: gently prompt to complete a sparse profile.
     if (DATA.profile && !DATA.profile.phone && !nudgeDismissed()) wrap.appendChild(profileNudge());
 
-    // Needs attention
-    var attn = bookings.filter(function (b) { return b.status === "proposed" || b.status === "requested"; });
-    if (attn.length) {
-      var ac = card([el("h2", { style: "margin:0 0 8px", text: "Needs your attention" })]);
-      var al = el("div", { class: "cf-list" }); attn.forEach(function (b) { al.appendChild(attnRow(b)); }); ac.appendChild(al);
-      wrap.appendChild(ac);
-    }
-
     // BOOK — services FIRST so a member can pick one straight away (Court / Lesson / Class,
     // drawn glyphs, no emoji).
     var qb = card([el("h2", { style: "margin:0 0 10px", text: "Book a session" })]);
@@ -604,23 +596,6 @@
       statusChip(b.status),
     ]);
   }
-  function attnRow(b) {
-    var row = el("div", { class: "cf-item" }, [
-      el("div", { class: "cf-item-main" }, [
-        el("div", { class: "cf-item-t", text: typeLabel(b.booking_type) + " · " + UI.fmtDate(b.starts_at) }),
-        el("div", { class: "cf-item-s", text: b.status === "proposed" ? "Your coach proposed " + timeRange(b) : "Awaiting the coach · " + timeRange(b) }),
-      ]),
-    ]);
-    var acts = el("div", { class: "cf-row", style: "gap:6px" });
-    if (b.status === "proposed") {
-      acts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Accept", onclick: function () { act(function () { return window.API.acceptBooking(b.id); }, "Confirmed."); } }));
-      acts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Decline", onclick: function () { act(function () { return window.API.declineBooking(b.id, {}); }, "Declined."); } }));
-    } else {
-      acts.appendChild(el("button", { class: "cf-btn cf-btn-sm", text: "Withdraw", onclick: function () { act(function () { return window.API.cancelBooking(b.id, { reason: "withdrawn" }); }, "Withdrawn."); } }));
-    }
-    row.appendChild(acts);
-    return row;
-  }
   function act(fn, okMsg) { fn().then(function () { UI.toast(okMsg, "info"); route(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
 
   // ---- BOOK (mount the existing full-screen flow) --------------------------
@@ -647,15 +622,12 @@
       data: { get: function (i) { return window.API.bookingStory(i).then(function (r) { return r.booking; }); } },
       actions: {
         pay: { manual: true, run: function (b) { payOrders([b.charge.order_id]); } },
-        accept: { done: "Confirmed.", run: function (b) { return window.API.acceptBooking(b.id); } },
         add_to_calendar: { manual: true, run: function (b) { addToCalendar(b.ics_url); } },
         receipt: { manual: true, run: function (b) { window.open("/receipt.html?order=" + encodeURIComponent(b.charge.order_id), "_blank"); } },
         reschedule: { manual: true, run: function (b) { rescheduleSheet(b); } },
         add_player: { manual: true, run: function (b) { window.CRMUI.addLessonPlayerModal({ onSubmit: function (payload) { return window.API.addBookingPlayer(b.id, payload); }, onDone: function () { renderBookingStory(b.id); } }); } },
         cancel: { manual: true, run: function (b) { cancelBooking(b); } },
         request_refund: { manual: true, run: function (b) { requestRefund(b.charge.order_id); } },
-        withdraw: { tone: "danger", back: true, done: "Withdrawn.", run: function (b) { return window.API.cancelBooking(b.id, { reason: "withdrawn" }); } },
-        decline: { tone: "danger", back: true, done: "Declined.", run: function (b) { return window.API.declineBooking(b.id, {}); } },
       },
     });
   }

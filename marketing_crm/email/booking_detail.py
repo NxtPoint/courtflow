@@ -19,7 +19,7 @@ log = logging.getLogger("marketing_crm.email.booking_detail")
 DETAIL_KINDS = {
     "booking_confirmed", "booking_cancelled", "booking_rescheduled", "booking_reminder",
     "class_enrolled", "class_waitlisted", "waitlist_slot_open", "class_cancelled",
-    "lesson_requested", "lesson_proposed", "lesson_accepted", "lesson_declined",
+    "lesson_booked",
 }
 
 

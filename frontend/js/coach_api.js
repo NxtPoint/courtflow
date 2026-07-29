@@ -220,12 +220,7 @@
     },
 
     // ---- pending lessons (approval queue; THIS coach as the runner) ----------
-    // Thin alias over the diary list — lessons awaiting the coach (status='requested')
-    // or awaiting the client (status='proposed'). Returns {bookings:[...],count}.
     // (No client name in the row — see api.js bookings(); we render a best-effort title.)
-    pendingLessons: function (status) {
-      return window.API.bookings({ as_coach: "1", status: status || "requested" });
-    },
 
     // ---- profile photo ---------------------------------------------------
     // POST /api/coach/photo-presign  body: {filename,content_type}

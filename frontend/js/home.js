@@ -100,11 +100,6 @@
   // ===========================================================================
   function bookingsCard() {
     var card = el("div", { class: "cf-card" }, [el("h2", { text: "My bookings" })]);
-    var pending = st.bookings.filter(function (b) { return ["requested", "proposed"].indexOf(b.status) >= 0; });
-    if (pending.length) {
-      card.appendChild(el("h3", { text: "Needs your attention" }));
-      var p = el("div", { class: "cf-list" }); pending.forEach(function (b) { p.appendChild(pendingRow(b)); }); card.appendChild(p);
-    }
     // toggle
     var toggle = el("div", { class: "cf-segment", style: "margin:14px 0 8px;max-width:280px" });
     ["upcoming", "past"].forEach(function (v) {
@@ -132,21 +127,6 @@
     var list = el("div", { class: "cf-list" });
     rows.forEach(function (b) { list.appendChild(bookingRow(b, st.view === "upcoming")); });
     box.appendChild(list);
-  }
-  function pendingRow(b) {
-    var isProposed = b.status === "proposed";
-    var sub = isProposed ? ("Coach proposed: " + UI.fmtRange(b.starts_at, b.ends_at)) : ("Requested: " + UI.fmtRange(b.starts_at, b.ends_at) + " · awaiting coach");
-    var actions = [];
-    if (isProposed) {
-      actions.push(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Accept", onclick: function () { act(window.API.acceptBooking(b.id), "Lesson confirmed."); } }));
-      actions.push(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Decline", onclick: function () { if (confirm("Decline this proposed time?")) act(window.API.declineBooking(b.id, { reason: "member_declined" }), "Declined."); } }));
-    } else {
-      actions.push(el("button", { class: "cf-btn cf-btn-sm", text: "Withdraw", onclick: function () { if (confirm("Withdraw this lesson request?")) act(window.API.cancelBooking(b.id, { reason: "member_withdraw" }), "Request withdrawn."); } }));
-    }
-    return el("div", { class: "cf-item" }, [
-      el("span", { class: "cf-chip held", text: b.status }),
-      el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: b.resource_name || "Lesson" }), el("div", { class: "cf-item-s", text: sub })]),
-    ].concat(actions));
   }
   function bookingRow(b, upcoming) {
     var sub = UI.fmtRange(b.starts_at, b.ends_at) + (b.court_name ? " · " + b.court_name : "") + " · " + UI.settlementLabel(b.settlement_mode);

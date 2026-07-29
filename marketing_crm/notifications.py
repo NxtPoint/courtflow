@@ -205,43 +205,6 @@ def _t_lesson_booked(ctx):
     return ("New lesson booked", body, "/coach")
 
 
-def _t_lesson_requested(ctx):
-    return ("New lesson request", "A client has requested a lesson with you — accept, propose a new "
-            "time, or decline.", "/coach")
-
-
-def _t_lesson_proposed(ctx):
-    return ("Your coach proposed a time", "Your coach suggested a time for your lesson — accept or "
-            "decline it under “Needs your attention”.", "/portal")
-
-
-def _t_lesson_accepted(ctx):
-    """Say what is TRUE of the booking, not what is usually true.
-
-    This always read "Your lesson is confirmed". For a card-only coach the lesson was accepted into a
-    HELD, unpaid state with a short window to pay — so the one email that could have prompted payment
-    instead told the client there was nothing left to do, and the booking quietly lapsed. An online
-    request is now paid up front, so "confirmed" is normally right; when a booking is still awaiting
-    payment the email must say so and point at it."""
-    if str(ctx.get("status") or "").strip().lower() == "held":
-        return ("Your coach accepted — one step left",
-                "Your coach accepted your lesson. It isn't confirmed until it's paid — open it in "
-                "My Bookings to pay and lock in the slot.", "/portal")
-    return ("Lesson confirmed", "Your lesson is confirmed — see it in My Bookings.", "/portal")
-
-
-def _t_lesson_declined(ctx):
-    # `refunded` is stated by the producer (diary.bookings.decline_booking), never re-derived here:
-    # emit runs on a background thread whose session cannot see the refund the caller just wrote.
-    if ctx.get("refunded"):
-        return ("Lesson declined — you've been refunded",
-                "Your coach couldn't take that lesson, so we've refunded your payment in full. It "
-                "can take a few days to show on your statement. Try another time or coach.",
-                "/portal")
-    return ("Lesson request declined", "Your coach couldn't take that lesson. Try another time or "
-            "coach.", "/portal")
-
-
 # Booking/money lifecycle — cancellations, edits, refunds, reminders (client-facing, launch-critical).
 def _t_booking_cancelled(ctx):
     res = _g(ctx, "resource_name", default="your booking")
@@ -250,6 +213,14 @@ def _t_booking_cancelled(ctx):
     fee = _money(_g(ctx, "fee_minor"), _g(ctx, "currency_code", "currency"))
     if fee and _g(ctx, "fee_applied"):
         body += f" A cancellation fee of {fee} applies."
+    # THE REFUND NEWS. This used to live on the lesson-DECLINE email; with the approval path gone,
+    # cancelling IS how a coach returns a lesson, so the one message the client gets has to say the
+    # money is coming back. `refunded` is stated by the producer (cancel_booking) — emit dispatches
+    # on a background thread whose session cannot see the refund the caller just wrote.
+    if ctx.get("refunded"):
+        return ("Booking cancelled — you've been refunded",
+                body + " We've refunded your payment in full; it can take a few days to show on "
+                       "your statement.", "/portal")
     return ("Booking cancelled", body, "/portal")
 
 
@@ -323,10 +294,6 @@ KIND_MAP = {
     "statement_ready":       _t_statement_ready,         # month-end: balance reminder → pay online
     "invoice_issued":        _t_invoice_issued,          # issued invoice DOCUMENT (summary + PDF + pay-online)
     "lesson_booked":         _t_lesson_booked,           # THE coach's notification (→ coach)
-    "lesson_requested":      _t_lesson_requested,        # lesson approval lifecycle (→ coach)
-    "lesson_proposed":       _t_lesson_proposed,         # (→ client)
-    "lesson_accepted":       _t_lesson_accepted,         # (→ requester)
-    "lesson_declined":       _t_lesson_declined,         # (→ requester)
     # Booking/money lifecycle — these WERE emitted but silent (no map entry = no email/inbox).
     "booking_cancelled":     _t_booking_cancelled,       # court/lesson cancel (→ booker)
     "booking_rescheduled":   _t_booking_rescheduled,     # court/lesson moved (→ booker)
@@ -445,7 +412,7 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
 
 
 # Booking-ish events that carry a start/end time → attach a calendar invite (.ics).
-_ICS_KINDS = {"booking_confirmed", "lesson_accepted", "lesson_proposed", "class_enrolled"}
+_ICS_KINDS = {"booking_confirmed", "lesson_booked", "class_enrolled"}
 
 # PURCHASE events (membership / pack / payment receipt) that carry an order_id (or ref_type='order')
 # → enrich with the order block: the exact item(s) bought, the amount, and the payment method (paid

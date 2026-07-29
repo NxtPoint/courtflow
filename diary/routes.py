@@ -558,59 +558,6 @@ def set_status(booking_id):
     return _result(res)
 
 
-# --- lesson approval lifecycle: accept / propose new time / decline --------
-@diary_bp.post("/bookings/<booking_id>/accept")
-def accept_booking(booking_id):
-    p = _principal()
-    if not p or not _need_club(p):
-        return jsonify(error="unauthorized"), 401
-    with session_scope() as s:
-        bk = bookings_mod.get_booking(s, club_id=p.club_id, booking_id=booking_id)
-        if not bk:
-            return jsonify(error="NOT_FOUND"), 404
-        if not can(p, "accept_booking", bk):
-            return jsonify(error="forbidden"), 403
-        res = bookings_mod.accept_booking(
-            s, club_id=p.club_id, booking_id=booking_id, actor_user_id=p.user_id, role=p.role)
-    return _result(res)
-
-
-@diary_bp.post("/bookings/<booking_id>/propose")
-def propose_time(booking_id):
-    p = _principal()
-    if not p or not _need_club(p):
-        return jsonify(error="unauthorized"), 401
-    b = _body()
-    with session_scope() as s:
-        bk = bookings_mod.get_booking(s, club_id=p.club_id, booking_id=booking_id)
-        if not bk:
-            return jsonify(error="NOT_FOUND"), 404
-        if not can(p, "propose_time", bk):
-            return jsonify(error="forbidden"), 403
-        res = bookings_mod.propose_time(
-            s, club_id=p.club_id, booking_id=booking_id, actor_user_id=p.user_id, role=p.role,
-            starts_at=b.get("starts_at"), ends_at=b.get("ends_at"))
-    return _result(res)
-
-
-@diary_bp.post("/bookings/<booking_id>/decline")
-def decline_booking(booking_id):
-    p = _principal()
-    if not p or not _need_club(p):
-        return jsonify(error="unauthorized"), 401
-    b = _body()
-    with session_scope() as s:
-        bk = bookings_mod.get_booking(s, club_id=p.club_id, booking_id=booking_id)
-        if not bk:
-            return jsonify(error="NOT_FOUND"), 404
-        if not can(p, "decline_booking", bk):
-            return jsonify(error="forbidden"), 403
-        res = bookings_mod.decline_booking(
-            s, club_id=p.club_id, booking_id=booking_id, actor_user_id=p.user_id, role=p.role,
-            reason=b.get("reason"))
-    return _result(res)
-
-
 @diary_bp.get("/bookings/<booking_id>/calendar.ics")
 def booking_calendar(booking_id):
     """An iCalendar (.ics) for a booking — powers the in-app 'Add to calendar' download, and is

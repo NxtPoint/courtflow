@@ -3,7 +3,7 @@
 # Two consumers (now + later):
 #   • NOW: the in-app "Add to calendar" download (GET /api/diary/bookings/<id>/calendar.ics).
 #   • LATER: attach the same .ics to the confirmation email once SES/Klaviyo is wired (the
-#     booking_confirmed/lesson_accepted payloads already carry `ics_url`).
+#     booking_confirmed/lesson_booked payloads already carry `ics_url`).
 #
 # Pure, dependency-free RFC-5545 output (CRLF line endings, escaped text, 75-octet folding).
 import datetime as _dt

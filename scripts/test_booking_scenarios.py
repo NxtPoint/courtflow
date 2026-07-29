@@ -549,22 +549,6 @@ def sc_gated_lesson_bills_the_booked_service(s, fx):
     check("...and attributed to the right service in earnings", str(billed_prod) == str(dear),
           str(billed_prod))
 
-    # The LEGACY accept path prices off the booking's remembered product too — that is where the
-    # cheapest-service fallback originally bit (a gated lesson created no order, so by accept time
-    # the chosen service was gone). Requests still exist in production, so it still has to hold.
-    legacy = s.execute(
-        text("INSERT INTO diary.booking (club_id, booking_type, resource_id, coach_user_id, "
-             "starts_at, ends_at, status, booked_by_user_id, settlement_mode, product_id) "
-             "VALUES (:c,'lesson',:r,:co,:sa,:ea,'requested',:u,'at_court',:p) RETURNING id"),
-        {"c": fx.club_id, "r": fx.coach_res, "co": fx.coach_uid, "sa": at(fx, 13),
-         "ea": at(fx, 14), "u": m, "p": dear}).scalar()
-    acc = B.accept_booking(s, club_id=fx.club_id, booking_id=str(legacy),
-                           actor_user_id=fx.coach_uid, role="coach")
-    check("a legacy request still accepts", acc.get("ok"), str(acc))
-    lamt = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
-                     {"o": acc["booking"]["order_id"]}).scalar()
-    check("...and is billed its BOOKED service too (R900, not R100)", lamt == 90000,
-          "billed %s" % lamt)
     s.execute(text("UPDATE iam.coach_profile SET review_bookings = false "
                    "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.coach_uid})
 
@@ -1351,75 +1335,6 @@ def sc_class_online_hold_expiry(s, fx):
     stp = s.execute(text("SELECT status FROM diary.enrolment WHERE class_session_id=:cs AND user_id=:u"),
                     {"cs": sid2, "u": fx.members[2]}).scalar()
     check("paid seat stays enrolled", stp == "enrolled", str(stp))
-
-
-def _legacy_request(s, fx, hour, status="requested"):
-    """A lesson in the OLD gated shape — 'requested', no court, no order — written directly because
-    create_booking can no longer produce one. These exist in production from before the gate was
-    removed, and the accept/propose/decline path lives on solely to finish them."""
-    return s.execute(
-        text("INSERT INTO diary.booking (club_id, booking_type, resource_id, coach_user_id, "
-             "starts_at, ends_at, status, booked_by_user_id, settlement_mode) "
-             "VALUES (:c,'lesson',:r,:co,:sa,:ea,:st,:u,'at_court') RETURNING id"),
-        {"c": fx.club_id, "r": fx.coach_res, "co": fx.coach_uid, "sa": at(fx, hour),
-         "ea": at(fx, hour + 1), "st": status, "u": fx.members[0]},
-    ).scalar()
-
-
-def sc_legacy_lesson_requests_can_still_be_finished(s, fx):
-    """The approval lifecycle is RETIRED for new bookings but must still finish the old ones.
-
-    create_booking no longer produces a 'requested' lesson — one flow, and paying (or owing) is the
-    booking. But requests made while it DID gate are sitting in production, so accept / propose /
-    decline stay alive until they are cleared (scripts/migrate_lesson_requests.py). Deleting that
-    path before the queue is empty would strand real clients mid-booking.
-
-    This pins the retirement in both directions: a NEW booking is never gated, and an OLD request
-    still accepts, still counter-proposes, and still declines."""
-    print("\n# Legacy lesson requests still finish (the approval path is retired, not deleted)")
-    m = fx.members[0]
-    s.execute(text("UPDATE iam.coach_profile SET review_bookings = true "
-                   "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.coach_uid})
-
-    # A reviewing coach no longer gates ANYTHING — that is the whole point of the single flow.
-    fresh = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
-                             booking_type="lesson", resource_id=fx.coach_res,
-                             coach_user_id=fx.coach_uid,
-                             starts_at=utc_iso(at(fx, 8)), ends_at=utc_iso(at(fx, 9)))
-    check("a NEW booking with a reviewing coach is confirmed, not requested",
-          fresh.get("ok") and fresh["booking"]["status"] == "confirmed", str(fresh.get("booking")))
-    check("…and it holds a court immediately",
-          bool(s.execute(text("SELECT 1 FROM diary.booking WHERE order_id=:o AND booking_type='court'"),
-                         {"o": fresh["booking"]["order_id"]}).first()))
-
-    # An OLD request still accepts — court assigned, slot taken, order raised.
-    req = _legacy_request(s, fx, 10)
-    acc = B.accept_booking(s, club_id=fx.club_id, booking_id=str(req),
-                           actor_user_id=fx.coach_uid, role="coach")
-    check("a legacy request still ACCEPTS → confirmed",
-          acc.get("ok") and acc["booking"]["status"] == "confirmed", str(acc))
-    check("…and the coach's slot is taken", not has_slot(lesson_slots(s, fx), at(fx, 10)))
-
-    # …still DECLINES.
-    req2 = _legacy_request(s, fx, 12)
-    dec = B.decline_booking(s, club_id=fx.club_id, booking_id=str(req2),
-                            actor_user_id=fx.coach_uid, role="coach", reason="busy")
-    check("a legacy request still DECLINES → cancelled",
-          dec.get("ok") and dec["booking"]["status"] == "cancelled", str(dec))
-
-    # …and still counter-proposes, with the client accepting the new time.
-    req3 = _legacy_request(s, fx, 14)
-    prop = B.propose_time(s, club_id=fx.club_id, booking_id=str(req3),
-                          actor_user_id=fx.coach_uid, role="coach",
-                          starts_at=utc_iso(at(fx, 16)), ends_at=utc_iso(at(fx, 17)))
-    check("a legacy request still PROPOSES → proposed", prop["booking"]["status"] == "proposed",
-          str(prop))
-    acc3 = B.accept_booking(s, club_id=fx.club_id, booking_id=str(req3), actor_user_id=m,
-                            role="member")
-    check("…and the client can accept the proposed time",
-          acc3.get("ok") and acc3["booking"]["status"] == "confirmed", str(acc3))
-    s.execute(text("UPDATE iam.coach_profile SET review_bookings = false "
-                   "WHERE club_id=:c AND user_id=:u"), {"c": fx.club_id, "u": fx.coach_uid})
 
 
 def sc_offpeak_slot_pricing(s, fx):
@@ -3022,7 +2937,6 @@ SCENARIOS = [
     sc_class_promotion_never_free,
     sc_class_late_payment_reinstates,
     sc_class_online_hold_expiry,
-    sc_legacy_lesson_requests_can_still_be_finished,
     sc_offpeak_slot_pricing,
     sc_peak_court_pricing,
     sc_membership_entitlement,

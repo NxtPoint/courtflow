@@ -129,34 +129,7 @@
   }
 
   // ---- pending-requests queue (lesson accept/propose/decline) -----------------
-  // items: [{id, title, sub?, status('requested'|'proposed'), starts_at, ends_at}]
   // opts: {onAccept(it), onPropose(it), onDecline(it), empty}
-  function requestQueue(items, opts) {
-    opts = opts || {};
-    items = items || [];
-    if (!items.length) return el("div", { class: "cf-empty", text: opts.empty || "No pending requests." });
-    var list = el("div", { class: "cf-list" });
-    items.forEach(function (it) {
-      var actions = el("div", { class: "cf-row", style: "gap:6px" });
-      if (opts.onAccept) actions.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", type: "button", text: "Accept", onclick: function () { opts.onAccept(it); } }));
-      if (opts.onPropose) actions.appendChild(el("button", { class: "cf-btn cf-btn-sm", type: "button", text: "Propose time", onclick: function () { opts.onPropose(it); } }));
-      if (opts.onDecline) actions.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", type: "button", text: "Decline", onclick: function () { opts.onDecline(it); } }));
-      list.appendChild(el("div", { class: "cf-item" }, [
-        el("span", { class: "cf-chip " + (it.status === "requested" ? "held" : "lesson"),
-          text: it.status === "requested" ? "requested" : "proposed" }),
-        el("div", { class: "cf-item-main" }, [
-          el("div", { class: "cf-item-t", text: it.title || "Lesson" }),
-          el("div", { class: "cf-item-s",
-            text: it.sub || (it.starts_at ? UI.fmtRange(it.starts_at, it.ends_at) : "") }),
-        ]),
-        actions,
-      ]));
-    });
-    return list;
-  }
-
-  // ---- 360 drawer (client / coach detail slide-over) -------------------------
-  // opts: {title, subtitle?, sections:[{h?, rows?:[[k,v]], node?}]} -> returns a close() fn.
   function drawer(opts) {
     opts = opts || {};
     var overlay = el("div", { class: "cf-drawer-bg", onclick: function (ev) { if (ev.target === overlay) close(); } });
@@ -675,7 +648,6 @@
     monthLabel: monthLabel,
     statementTable: statementTable,
     lineItems: lineItems,
-    requestQueue: requestQueue,
     drawer: drawer,
     sectionHead: sectionHead,
     activityFeed: activityFeed,

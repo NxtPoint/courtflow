@@ -275,7 +275,7 @@ def _booking_dict(session, booking_id):
         text("SELECT id, club_id, booking_type, resource_id, coach_user_id, starts_at, "
              "ends_at, status, held_until, booked_by_user_id, recurrence_id, order_id, "
              "settlement_mode, notes, cancellation_reason, cancelled_at, cancelled_by, "
-             # The service this was booked against — accept_booking prices off it, so it MUST be
+             # The service this was booked against — the order prices off it, so it MUST be
              # selected here or the read silently returns None and the fallback bites again.
              "product_id "
              "FROM diary.booking WHERE id = :id"),
@@ -407,7 +407,7 @@ def _void_orders_with_no_live_bookings(session, club_id, order_ids):
         try:
             live = session.execute(
                 text("SELECT 1 FROM diary.booking WHERE club_id = :c AND order_id = :o "
-                     "  AND status IN ('held','confirmed','requested','proposed') LIMIT 1"),
+                     "  AND status IN ('held','confirmed') LIMIT 1"),
                 {"c": club_id, "o": oid},
             ).first()
             if live:
@@ -1413,7 +1413,6 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
     # delivered-but-owed booking could be cancelled after the fact, voiding its owed order and
     # erasing the debt (a real leak on clubs with no late-cancel fee). Admins/coaches may still
     # cancel a started booking (a PAID order keeps the usual separate-refund prompt). A still-pending
-    # requested/proposed booking holds no slot or debt, so withdrawing it stays allowed.
     if (member_initiated and bk["status"] in ("held", "confirmed")
             and _parse_dt(bk["starts_at"]) <= now):
         return _err("CANNOT_CANCEL_STARTED", 409)
@@ -1431,8 +1430,7 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
         text("UPDATE diary.booking SET status='cancelled', cancelled_at=now(), "
              "cancelled_by=:by, cancellation_reason=:reason, held_until=NULL, updated_at=now() "
              "WHERE club_id=:c AND (id=:id OR (order_id IS NOT NULL AND order_id=:oid)) "
-             # include requested/proposed so a client can WITHDRAW a still-pending lesson request.
-             "  AND status IN ('held','confirmed','requested','proposed')"),
+             "  AND status IN ('held','confirmed')"),
         {"by": actor_user_id, "reason": reason, "c": club_id, "id": booking_id,
          "oid": bk.get("order_id")},
     )
@@ -1508,6 +1506,9 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
     payload = _payload(booking, res)
     payload["fee_minor"] = fee_minor
     payload["fee_applied"] = fee_applies
+    # State the refund outcome for the email — it cannot re-derive it (emit dispatches on a
+    # background thread whose session can't see the refund written moments ago).
+    payload["refunded"] = any(r.get("ok") for r in (refunds or []))
     events.emit("booking_cancelled", payload)
 
     promoted = _promote_court_waitlist(session, club_id=club_id,
@@ -1629,41 +1630,8 @@ def set_attendance(session, *, club_id, booking_id, party_id=None, attended=True
     return {"ok": True}
 
 
-# ---------------------------------------------------------------------------
-# Lesson approval lifecycle: accept / propose new time / decline.
-# requested = awaiting coach · proposed = awaiting client. A gated lesson
-# reserves nothing until accepted; accept assigns a court + runs settlement.
-# ---------------------------------------------------------------------------
-
-def _coach_reviews(session, club_id, coach_user_id):
-    """True when this coach reviews bookings before they confirm (coach_profile.review_bookings).
-
-    NO LONGER GATES A BOOKING. Kept because the column is still read by the coach console and by the
-    legacy accept/propose/decline path that finishes the requests made while it did gate. A lesson
-    now confirms on its settlement alone and the coach is always notified — see create_booking."""
-    if not coach_user_id:
-        return False
-    try:
-        return bool(session.execute(
-            text("SELECT review_bookings FROM iam.coach_profile WHERE club_id=:c AND user_id=:u"),
-            {"c": club_id, "u": coach_user_id}).scalar())
-    except Exception:
-        return False
-
-
 def _as_dt(v):
     return v if isinstance(v, datetime) else _parse_dt(v)
-
-
-def _gated_actor_ok(bk, actor_user_id, role):
-    """Only the AWAITED party may act on a gated lesson (admins always)."""
-    if role in ("club_admin", "platform_admin"):
-        return True
-    if bk["status"] == "requested":            # awaiting the coach
-        return str(bk.get("coach_user_id")) == str(actor_user_id)
-    if bk["status"] == "proposed":             # awaiting the client (booker)
-        return str(bk.get("booked_by_user_id")) == str(actor_user_id)
-    return False
 
 
 def _lesson_event(session, booking, event, recipient_user_id, extra=None):
@@ -1683,215 +1651,6 @@ def _lesson_event(session, booking, event, recipient_user_id, extra=None):
     except Exception:
         log.debug("lesson event emit failed", exc_info=False)
 
-
-def accept_booking(session, *, club_id, booking_id, actor_user_id, role, now=None):
-    """The awaited party accepts a requested/proposed lesson → assign a free court, confirm both
-    rows (the GiST exclusion constraint arbitrates the slot), run the normal settlement, and notify
-    the requester. Reuses the same seam create_booking uses (no money-path duplication)."""
-    now = now or datetime.now(timezone.utc)
-    bk = _booking_dict(session, booking_id)
-    if not bk or str(bk["club_id"]) != str(club_id):
-        return _err("NOT_FOUND", 404)
-    if bk["status"] not in ("requested", "proposed"):
-        return _err("BAD_STATE", 409, status_value=bk["status"])
-    if not _gated_actor_ok(bk, actor_user_id, role):
-        return _err("NOT_AWAITED", 403, message="only the awaited party can accept this lesson")
-
-    starts = _as_dt(bk["starts_at"]); ends = _as_dt(bk["ends_at"])
-    owner_user_id = bk.get("booked_by_user_id")
-    coach_uid = bk.get("coach_user_id")
-    settlement_mode = bk.get("settlement_mode") or "at_court"
-    # Defence in depth: a lesson is never membership_covered/free (court-only / admin-only). If a row
-    # somehow carries one, settle it at the desk rather than mint an R0 'paid' lesson on accept.
-    if settlement_mode in ("membership_covered", "free"):
-        settlement_mode = "at_court"
-    # ALREADY PAID? Online bookings are no longer gated at all (see create_booking), so a NEW request
-    # is always an owed one. This handles the requests made while they WERE gated — some of which
-    # carry a paid order — so accepting one confirms it outright rather than re-holding it behind a
-    # payment window it has already been through, and never raises a second order for money taken.
-    _existing_order = bk.get("order_id")
-    _already_paid = bool(_existing_order) and _order_is_settled(session, _existing_order)
-    online = settlement_mode == "online" and not _already_paid
-    status = "held" if online else "confirmed"
-    held_until = (now + timedelta(minutes=HOLD_MINUTES_DEFAULT)) if online else None
-
-    # A 'requested' lesson holds NOTHING (requested/proposed are excluded from the GiST exclusion),
-    # so several can pile up on the same slot and the clash only becomes real here, on accept. The
-    # coach resource itself is arbitrated by the constraint when the row flips to confirmed; a class
-    # or the coach's own court booking is not, so check the person explicitly first.
-    _busy = _coach_commitment_at(session, club_id, coach_uid, starts, ends,
-                                 exclude_booking_ids=(booking_id,))
-    if _busy:
-        return _coach_busy_err(_busy)
-
-    court_resource_id = _first_free_court(session, club_id, starts, ends)
-    if not court_resource_id:
-        return _err("NO_COURT_AVAILABLE", 422, message="no court is free at this time")
-
-    # Same GUARDRAIL as create_booking: a matching prepaid pack is drawn even when an OWED method was
-    # picked, so a paid pack is never bypassed (no duplicate owed order). Explicit 'token' with no
-    # wallet still errors NO_TOKEN.
-    # THE SERVICE THIS LESSON WAS ACTUALLY BOOKED AGAINST, remembered on the booking row at request
-    # time. A gated lesson creates no order, so without it the chosen service was gone by now and
-    # pricing fell back to the coach's CHEAPEST service (price_for's tie-break is amount_minor ASC) —
-    # a R400 Private billed as a R250 Semi-private, with commission and earnings attribution wrong to
-    # match. NULL for rows predating the column: behaviour is then exactly as before.
-    gated_product_id = bk.get("product_id")
-
-    token_wallet = None
-    _wants_token = (settlement_mode == "token")
-    if _wants_token or settlement_mode in ("at_court", "monthly_account"):
-        dur = int((ends - starts).total_seconds() // 60)
-        token_wallet = _match_token_wallet_guarded(
-            session, club_id=club_id, user_id=owner_user_id, booking_type="lesson",
-            duration_minutes=dur, coach_user_id=coach_uid,
-            # Scope the pack to the SAME service too — a NULL request product matches anything and
-            # prefers a product-scoped wallet, so a pack bought for another service was being burned.
-            product_id=gated_product_id)
-        if token_wallet is not None:
-            settlement_mode = "token"
-        elif _wants_token:
-            return _err("NO_TOKEN", 422, message="no matching prepaid token — choose another way to pay")
-
-    linked_court_id = None
-    try:
-        with session.begin_nested():
-            session.execute(
-                text("UPDATE diary.booking SET status=:st, held_until=:hu, updated_at=now() WHERE id=:id"),
-                {"st": status, "hu": held_until, "id": booking_id})
-            court = _resource(session, club_id, court_resource_id)
-            if not court or not court["is_active"] or court["kind"] != "court":
-                return _err("COURT_NOT_FOUND", 404, message="a valid court is required for a lesson")
-            linked_court_id = _insert_booking(
-                session, club_id=club_id, booking_type="court", resource_id=court_resource_id,
-                coach_user_id=coach_uid, starts_at=starts, ends_at=ends, status=status,
-                held_until=held_until, booked_by_user_id=owner_user_id, recurrence_id=None,
-                created_by_user_id=actor_user_id,
-                settlement_mode=settlement_mode, notes="(court held for lesson)")
-    except IntegrityError as e:
-        if _is_slot_taken(e):
-            return _err("SLOT_TAKEN", 409, message="that slot was just taken")
-        log.exception("accept booking integrity error")
-        return _err("INTEGRITY_ERROR", 409)
-
-    duration_minutes = int((ends - starts).total_seconds() // 60)
-    # REUSE the order the request already carries. An online request is paid up front, so raising a
-    # second order here would bill the client twice for one lesson. Only a request that never had one
-    # (at-court / monthly / token) creates it now, exactly as before.
-    if _existing_order:
-        order = {"order_id": _existing_order, "checkout": None}
-    else:
-        order = _create_order_guarded(
-            session, club_id=club_id, user_id=owner_user_id, booking_id=booking_id,
-            booking_type="lesson", settlement_mode=settlement_mode, parties=[],
-            resource_id=bk["resource_id"], starts_at=starts, ends_at=ends,
-            linked_booking_id=linked_court_id, audience="member",
-            duration_minutes=duration_minutes, token_wallet=token_wallet,
-            coach_user_id=coach_uid,       # price on THIS coach's own rate card…
-            product_id=gated_product_id)   # …and on the EXACT service they booked, not its cheapest sibling
-    order_id = order.get("order_id")
-    if order_id:
-        _attach_order(session, booking_id, order_id)
-        if linked_court_id:
-            _attach_order(session, linked_court_id, order_id)
-
-    booking = _booking_dict(session, booking_id)
-    res = _resource(session, club_id, booking["resource_id"])
-    other = owner_user_id if bk["status"] == "requested" else coach_uid
-    _lesson_event(session, booking, "lesson_accepted", other)
-    if not online:
-        _emit_confirmed(session, booking, res, settlement_mode)
-    return {"ok": True, "booking": booking, "checkout": order.get("checkout")}
-
-
-def propose_time(session, *, club_id, booking_id, actor_user_id, role, starts_at, ends_at, now=None):
-    """The awaited party proposes a different time → flips the turn to the other party."""
-    now = now or datetime.now(timezone.utc)
-    bk = _booking_dict(session, booking_id)
-    if not bk or str(bk["club_id"]) != str(club_id):
-        return _err("NOT_FOUND", 404)
-    if bk["status"] not in ("requested", "proposed"):
-        return _err("BAD_STATE", 409, status_value=bk["status"])
-    if not _gated_actor_ok(bk, actor_user_id, role):
-        return _err("NOT_AWAITED", 403, message="only the awaited party can propose a new time")
-    starts = _parse_dt(starts_at); ends = _parse_dt(ends_at)
-    if not starts or not ends or ends <= starts:
-        return _err("BAD_RANGE", 400, message="ends_at must be after starts_at")
-    if starts < now:
-        return _err("IN_THE_PAST", 400, message="cannot propose a past slot")
-    # Validate the proposed slot is actually honourable, so the OTHER party can always accept it
-    # (otherwise a coach proposes a time they can't run → the client accepts → accept fails → a
-    # dead-end 'proposed'). Mirror accept_booking's coach∩court checks.
-    if _coach_class_conflict(session, club_id, bk.get("coach_user_id"), starts, ends):
-        return _err("COACH_BUSY", 409, message="the coach is running a class at that time")
-    if _first_free_court(session, club_id, starts, ends) is None:
-        return _err("NO_COURT_AVAILABLE", 422, message="no court is free at that time")
-    new_status = "proposed" if bk["status"] == "requested" else "requested"
-    session.execute(
-        text("UPDATE diary.booking SET starts_at=:sa, ends_at=:ea, status=:st, updated_at=now() WHERE id=:id"),
-        {"sa": starts, "ea": ends, "st": new_status, "id": booking_id})
-    booking = _booking_dict(session, booking_id)
-    recipient = booking.get("booked_by_user_id") if new_status == "proposed" else booking.get("coach_user_id")
-    _lesson_event(session, booking, "lesson_proposed", recipient)
-    return {"ok": True, "booking": booking}
-
-
-def decline_booking(session, *, club_id, booking_id, actor_user_id, role, reason=None):
-    """The awaited party declines a requested/proposed lesson → cancelled; notify the requester."""
-    bk = _booking_dict(session, booking_id)
-    if not bk or str(bk["club_id"]) != str(club_id):
-        return _err("NOT_FOUND", 404)
-    if bk["status"] not in ("requested", "proposed"):
-        return _err("BAD_STATE", 409, status_value=bk["status"])
-    if not _gated_actor_ok(bk, actor_user_id, role):
-        return _err("NOT_AWAITED", 403, message="only the awaited party can decline")
-    session.execute(
-        text("UPDATE diary.booking SET status='cancelled', cancellation_reason=:r, "
-             "cancelled_by=:by, cancelled_at=now(), updated_at=now() WHERE id=:id"),
-        {"r": reason or "declined", "by": actor_user_id, "id": booking_id})
-
-    # GIVE THE MONEY BACK. An online request is paid UP FRONT (see the gate in create_booking), so a
-    # decline is the club keeping cash for a lesson it just refused. The coach's veto is about the
-    # TIME, never about whether the client owes — so the refund is automatic, not a chore someone has
-    # to remember. Guarded end to end: a gateway hiccup must not leave the lesson un-declined, so the
-    # decline stands either way and a failure is reported rather than raised.
-    refund = None
-    _oid = bk.get("order_id")
-    if _oid and _order_is_settled(session, _oid):
-        try:
-            from yoco_billing import execute_order_refund, RefundError
-            try:
-                execute_order_refund(session, order_id=_oid)
-                refund = {"ok": True}
-            except RefundError as e:
-                log.warning("declined lesson %s: refund failed (%s) — needs a human", booking_id, e.code)
-                refund = {"ok": False, "error": e.code, "message": e.message}
-        except Exception:
-            log.exception("declined lesson %s: refund path unavailable", booking_id)
-            refund = {"ok": False, "error": "refund_unavailable"}
-    else:
-        # Nothing was collected (at-court / monthly / token request) — void the owed order so the
-        # client isn't left with a debt for a lesson that never happened.
-        if _oid:
-            try:
-                from billing.statement import void_order
-                void_order(session, club_id=club_id, order_id=_oid, reason="lesson declined")
-            except Exception:
-                log.debug("declined lesson: order void skipped", exc_info=False)
-
-    booking = _booking_dict(session, booking_id)
-    other = booking.get("booked_by_user_id") if bk["status"] == "requested" else booking.get("coach_user_id")
-    _lesson_event(session, booking, "lesson_declined", other,
-                  extra={"refunded": bool(refund and refund.get("ok"))})
-    out = {"ok": True, "booking": booking}
-    if refund is not None:
-        out["refund"] = refund
-    return out
-
-
-# ---------------------------------------------------------------------------
-# emit helpers
-# ---------------------------------------------------------------------------
 
 def _payload(booking, res):
     """Non-PII confirmation payload (docs/06 §2): club, contact, resource name, time,
@@ -1919,10 +1678,10 @@ def _emit_confirmed(session, booking, res, settlement_mode):
     """The client's confirmation — and, for a lesson, the COACH's own notification.
 
     THE ONE PLACE a lesson tells its coach. It used to depend on how the booking happened: only a
-    gated (owed, reviewing-coach) booking emailed him directly — `lesson_requested` — and every other
-    path left him as a blind copy on the client's receipt, or told him nothing at all. Same act, four
-    different answers. Now every confirmed lesson notifies him here, once, whoever booked it and
-    however it was paid. `notify_coach_of_confirmed_order` covers the one case that cannot reach this
+    booking that happened to be gated for approval emailed him directly, and every other path left him
+    as a blind copy on the client's receipt, or told him nothing at all. Same act, four different
+    answers. Now every confirmed lesson notifies him here, once, whoever booked it and however it was
+    paid. `notify_coach_of_confirmed_order` covers the one case that cannot reach this
     function: an ONLINE lesson, which confirms later when the payment lands."""
     events.emit("booking_confirmed", _payload(booking, res))
     _emit_coach_booked(session, booking, res)
@@ -2028,7 +1787,7 @@ def list_bookings(session, *, club_id, role, user_id, date_from=None, date_to=No
              "           AND cb.booking_type = 'court' AND b.order_id IS NOT NULL "
              "           AND b.booking_type = 'lesson' LIMIT 1) AS court_name, "
              # The booker's name/email so coach/admin lists (esp. the accept/propose/decline
-             # queue) can show WHO requested — not just the resource. Non-PII for the coach who
+             # list) can show WHO booked — not just the resource. Non-PII for the coach who
              # runs the lesson; the client is their own client.
              "       NULLIF(TRIM(COALESCE(ub.first_name,'') || ' ' || COALESCE(ub.surname,'')),'') "
              "         AS booked_by_name, "
@@ -2337,16 +2096,12 @@ def booking_story(session, *, club_id, user_id, booking_id):
 
     can = {
         "add_to_calendar": status in ("confirmed", "held", "completed"),
-        "cancel": status in ("confirmed", "held", "requested", "proposed") and is_future,
+        "cancel": status in ("confirmed", "held") and is_future,
         "reschedule": status in ("confirmed", "held") and is_future and not within_cutoff,
         "pay": charge["status"] in ("owed", "pending"),
         "receipt": charge["status"] in ("paid", "refunded"),
         "request_refund": charge["refundable"],
-        "accept": status == "proposed",
-        # A client can only DECLINE a coach's proposed time; on a `requested` lesson the awaited party
         # is the coach, so the client's action is WITHDRAW (below) — showing Decline 403'd.
-        "decline": status == "proposed",
-        "withdraw": status == "requested",
         # A semi-private lesson the client booked — they can add a fellow player later (each billed).
         "add_player": _can_add_lesson_partner(session, booking_id=b["id"], order_id=b["order_id"],
                                               booking_type=b["booking_type"], status=status),
@@ -2448,11 +2203,8 @@ def coach_booking_story(session, *, club_id, coach_user_id, booking_id):
     client_name = " ".join(x for x in [b["first_name"], b["surname"]] if x).strip() or (b["email"] or "Client")
 
     can = {
-        "accept": status == "requested",
-        "propose": status in ("requested", "proposed"),
-        "decline": status in ("requested", "proposed"),
         "reschedule": status in ("confirmed", "held") and is_future,
-        "cancel": status in ("confirmed", "held", "requested", "proposed"),
+        "cancel": status in ("confirmed", "held"),
         "mark_completed": status == "confirmed" and started and is_lesson,
         "mark_no_show": status == "confirmed" and started and is_lesson,
         "add_to_calendar": status in ("confirmed", "held", "completed"),
@@ -2573,11 +2325,8 @@ def admin_booking_story(session, *, club_id, booking_id):
 
     order_settleable = charge["status"] in ("owed", "pending")
     can = {
-        "accept": status == "requested",
-        "propose": status in ("requested", "proposed"),
-        "decline": status in ("requested", "proposed"),
         "reschedule": status in ("confirmed", "held") and is_future,
-        "cancel": status in ("confirmed", "held", "requested", "proposed"),
+        "cancel": status in ("confirmed", "held"),
         "mark_completed": status == "confirmed" and started and is_lesson,
         "mark_no_show": status == "confirmed" and started and is_lesson,
         "add_to_calendar": status in ("confirmed", "held", "completed"),
@@ -2734,7 +2483,7 @@ def admin_reassign_coach(session, *, club_id, booking_id, new_coach_user_id):
         return _err("NOT_FOUND", 404)
     if bk["booking_type"] != "lesson":
         return _err("NOT_A_LESSON", 422, message="only a lesson can be reassigned to a coach")
-    if bk["status"] not in ("confirmed", "held", "requested", "proposed"):
+    if bk["status"] not in ("confirmed", "held"):
         return _err("BAD_STATUS", 422, message="this lesson can't be reassigned")
     starts = _parse_dt(bk["starts_at"])
     ends = _parse_dt(bk["ends_at"])
