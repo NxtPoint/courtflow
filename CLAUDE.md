@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 332 / billing 480 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 332 / billing 486 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -723,6 +723,16 @@ member by email on the first authenticated hit.
   summing `billing.payment` refunds against the charge, without calling Yoco at all. A frozen key
   was never protecting the money; it was only preventing the retry. Guarded by
   `sc_refund_retry_is_not_poisoned_by_the_idempotency_key`.
+- **`/api/me/plan` MUST REPORT THE CAP THE SERVER WILL ENFORCE (2026-07-29).** The booking UI hides
+  over-cap durations using `membership_status.max_covered_minutes`, while the ENGINE decides whether
+  to charge using `entitlement.active_caps` — which resolves a NULL tier cap to the **club default**
+  (`club.policy.default_max_covered_minutes`). `membership_status` returned the tier's RAW column, so
+  a club-level 90-minute cap was invisible to the UI: it kept offering a 2-hour court, told the
+  member "Covered by your membership", and the server then correctly charged for it. The owner sees
+  a cap that "isn't working"; the member gets a surprise bill. It now COALESCEs to the club default,
+  and a tier's own value still overrides. **Any new surface that shows entitlement must read the
+  EFFECTIVE cap, never a raw column** — shown == charged. Guarded by
+  `sc_plan_reports_the_cap_the_server_will_enforce`.
 - **EQUIPMENT IS SCOPED TO A COURT SERVICE, AND THE COURT IS STILL CHARGED (2026-07-29).** Equipment
   was club-wide — every item offered on every court booking whatever service it belonged to, so
   clay-only kit could be hired on a hard court. `diary.equipment_service` links an item to the court

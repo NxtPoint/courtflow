@@ -3605,6 +3605,50 @@ def sc_partial_refund_reaches_yoco_as_a_partial(s, fx):
               int(rq["amount_minor"]) == total, str(rq["amount_minor"]))
 
 
+def sc_plan_reports_the_cap_the_server_will_enforce(s, fx):
+    """SHOWN MUST EQUAL CHARGED. The booking UI hides over-cap durations using
+    `/api/me/plan.max_covered_minutes`, and the server decides whether to charge using
+    `entitlement.active_caps` — which resolves a NULL tier cap to the CLUB DEFAULT.
+
+    membership_status returned the tier's RAW column, so a club-level 90-minute cap was invisible to
+    the UI: it kept offering a 2-hour court, told the member "Covered by your membership", and the
+    server then correctly charged them for it. The owner sees a cap that "isn't working"; the member
+    sees a surprise bill. The two must report the same number."""
+    print("\n# The plan reports the cap the SERVER will actually enforce (club default included)")
+    from billing.membership import membership_status, membership_product_id
+    from diary import entitlement as E
+    # Club default 90; the member's tier sets NO cap of its own (the normal case).
+    s.execute(text("UPDATE club.policy SET default_max_covered_minutes = 90, "
+                   "default_max_covered_per_day = 1 WHERE club_id = :c"), {"c": fx.club_id})
+    mp = membership_product_id(s, club_id=fx.club_id, create_if_missing=True)
+    pr = s.execute(text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                        "currency_code, unit, term_months, membership_tier, active) "
+                        "VALUES (:c,:p,'member',18000,'ZAR','per_month',1,'Adult',true) RETURNING id"),
+                   {"c": fx.club_id, "p": mp}).scalar()
+    s.execute(text("INSERT INTO billing.membership_subscription (club_id, user_id, price_id, status, "
+                   "provider, current_period_end) "
+                   "VALUES (:c,:u,:pr,'active','manual',CURRENT_DATE + 30)"),
+              {"c": fx.club_id, "u": fx.member, "pr": pr})
+    raw = s.execute(text("SELECT max_covered_minutes FROM billing.price WHERE id = :p"),
+                    {"p": pr}).scalar()
+    check("the tier itself sets no cap (so the club default must apply)", raw is None, str(raw))
+    plan = membership_status(s, club_id=fx.club_id, user_id=fx.member)
+    enforced = E.active_caps(s, club_id=fx.club_id, user_id=fx.member)["max_covered_minutes"]
+    check("the server will enforce 90", enforced == 90, str(enforced))
+    check("…and the PLAN reports 90 too (not the tier's NULL)",
+          plan["max_covered_minutes"] == 90, str(plan["max_covered_minutes"]))
+    check("shown == charged — the UI and the engine agree",
+          plan["max_covered_minutes"] == enforced,
+          f"plan={plan['max_covered_minutes']} engine={enforced}")
+    # A tier that DOES set its own cap still overrides the club default.
+    s.execute(text("UPDATE billing.price SET max_covered_minutes = 120 WHERE id = :p"), {"p": pr})
+    plan2 = membership_status(s, club_id=fx.club_id, user_id=fx.member)
+    check("a tier's OWN cap still wins over the club default",
+          plan2["max_covered_minutes"] == 120, str(plan2["max_covered_minutes"]))
+    check("…and the engine agrees with it",
+          E.active_caps(s, club_id=fx.club_id, user_id=fx.member)["max_covered_minutes"] == 120)
+
+
 def sc_ledger_direction_follows_who_holds_the_cash(s, fx):
     """THE ledger invariant: which way a collection moves the club↔coach balance depends entirely on
     who ended up holding the money — and it used to ignore that completely.
@@ -3689,6 +3733,7 @@ SCENARIOS = [
     sc_promo_unique_codes,
     sc_promo_bonus_grants,
     sc_ledger_direction_follows_who_holds_the_cash,
+    sc_plan_reports_the_cap_the_server_will_enforce,
     sc_refund_finds_the_checkout_that_holds_the_money,
     sc_refund_refuses_an_order_never_paid_by_card,
     sc_refund_retry_is_not_poisoned_by_the_idempotency_key,

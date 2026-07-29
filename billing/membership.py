@@ -550,10 +550,19 @@ def membership_status(session, *, club_id, user_id) -> Dict[str, Any]:
     row = session.execute(
         text("SELECT ms.id AS sub_id, ms.current_period_end, ms.provider, "
              "       (ms.current_period_end - CURRENT_DATE) AS days_left, "
-             "       p.access_days, p.access_start_min, p.access_end_min, p.max_covered_minutes, "
+             "       p.access_days, p.access_start_min, p.access_end_min, "
+             # THE EFFECTIVE CAP, not just the tier's own. A normal tier leaves max_covered_minutes
+             # NULL and inherits the club default (club.policy.default_max_covered_minutes) — exactly
+             # as diary.entitlement.active_caps resolves it when it decides whether to charge. This
+             # used to return the tier's raw value, so a club-level 90-minute cap was invisible to the
+             # booking UI: it kept offering a 2-hour court and told the member "Covered by your
+             # membership", then the server (correctly) charged them for it. Shown must equal charged.
+             "       COALESCE(p.max_covered_minutes, pol.default_max_covered_minutes) "
+             "         AS max_covered_minutes, "
              "       p.membership_tier, p.label, p.term_months "
              "FROM billing.membership_subscription ms "
              "LEFT JOIN billing.price p ON p.id = ms.price_id "
+             "LEFT JOIN club.policy pol ON pol.club_id = ms.club_id "
              "WHERE ms.club_id = :c AND ms.user_id = :u AND ms.status = 'active' "
              "  AND (ms.current_period_end IS NULL OR ms.current_period_end >= CURRENT_DATE) "
              "ORDER BY ms.current_period_end DESC NULLS FIRST LIMIT 1"),
@@ -586,8 +595,10 @@ def membership_status(session, *, club_id, user_id) -> Dict[str, Any]:
         "is_trial": is_trial,                       # the signup free-week (provider='trial')
         "trial_days_left": days_left if is_trial else None,
         "membership_window": window,                # Phase 5 access window (None = any time)
-        # The longest COVERED court booking on this tier — the booking UI silently hides over-cap durations
-        # for the member (a longer booking would just be PAYG). None = no cap.
+        # The longest COVERED court booking for this member — the tier's own cap, ELSE the club
+        # default. The booking UI silently hides over-cap durations (a longer booking is just PAYG),
+        # so this must be the EFFECTIVE figure the server will enforce, not the tier's raw column.
+        # None = no cap.
         "max_covered_minutes": (int(row["max_covered_minutes"])
                                 if row and row["max_covered_minutes"] is not None else None),
         "membership_window_summary": (_window_summary(row["access_days"], row["access_start_min"],
