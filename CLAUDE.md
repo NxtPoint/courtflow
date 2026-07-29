@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 338 / billing 486 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 349 / billing 486 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -723,6 +723,18 @@ member by email on the first authenticated hit.
   summing `billing.payment` refunds against the charge, without calling Yoco at all. A frozen key
   was never protecting the money; it was only preventing the retry. Guarded by
   `sc_refund_retry_is_not_poisoned_by_the_idempotency_key`.
+- **PEAK HOURS ARE PER COURT (2026-07-29).** The peak AMOUNT was always per service+duration
+  (`billing.price.peak_amount_minor`); only the WINDOW was club-wide, so "peak on the show courts
+  only" was unexpressible. `diary.resource.peak_override` + `peak_days/start_min/end_min` give three
+  states — and **the third is why the flag exists**: `override=false` inherits the club window (every
+  court, unchanged); `override=true` makes the court's own window authoritative **including when it
+  is EMPTY**, which is how a club with peak hours marks a court never-peak. A nullable window alone
+  could only ever ADD peak, never remove it. `pricing.in_peak_window(..., resource_id=)` resolves it
+  and **BOTH price paths must pass the court** — `availability._slot_price` (what the grid shows)
+  and `_create_order_guarded._price` (what the order charges) — or the grid quotes the club window
+  while the booking charges the court's. Edited at Setup → Courts & hours → a court → "Peak hours
+  for this court". Guarded by `sc_peak_hours_can_differ_per_court` (asserts shown == charged for all
+  three states).
 - **THE TRIAL IS A MEMBERSHIP — it has no separate court rules.** `provider='trial'` goes through the
   SAME resolver as a paid tier: the court service's **`members_covered`** flag, the duration/day caps
   and the access window all apply identically. So "is clay in the free trial?" is answered by ONE

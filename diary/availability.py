@@ -328,10 +328,13 @@ def compute_availability(session, *, club_id, resource_id=None, kind=None,
                                      slot_local=s_local, court_id=court_id)
         if free:
             return 0
-        # PEAK court pricing: a non-covered court slot inside the club peak window is charged its peak
-        # amount (shown here == charged in create_booking). Only court rows carry peak_amount_minor.
+        # PEAK court pricing: a non-covered court slot inside the peak window THAT COURT uses (its own
+        # when it overrides, else the club's) is charged its peak amount. Passing court_id is what keeps
+        # shown == charged now that peak can differ per court — without it the grid would price every
+        # court off the CLUB window while create_booking charged off the COURT's.
         if peak_price is not None and kind == "court" and \
-                pricing.in_peak_window(session, club_id=club_id, local_dt=s_local):
+                pricing.in_peak_window(session, club_id=club_id, local_dt=s_local,
+                                       resource_id=court_id):
             return peak_price
         return payg_price
 

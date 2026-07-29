@@ -2502,6 +2502,80 @@ def sc_waitlist_promotion_into_a_cardonly_class_is_held(s, fx):
     check("…and NOW the enrolment confirmation is sent", "class_enrolled" in rec2.seen, str(rec2.seen))
 
 
+def sc_peak_hours_can_differ_per_court(s, fx):
+    """Peak was ONE club-wide window, so "peak on the show courts only" was unexpressible — every
+    court shared it. The peak AMOUNT was already per service+duration; only the WINDOW was global.
+
+    Three states, and the third is why `peak_override` exists at all: a nullable window can only ever
+    ADD peak to a court, never REMOVE it, which is half the requirement. And because the availability
+    grid and create_booking price independently, both must consult the SAME window — or the grid
+    quotes one number and the order charges another."""
+    print("\n# Peak hours per COURT: inherit the club · own window · never peak")
+    from diary import pricing as P
+    m = fx.members[0]
+    # Club-wide peak 17:00–19:00 Mon–Sun, and a court service with a peak amount.
+    s.execute(text("UPDATE club.policy SET peak_days = NULL, peak_start_min = 1020, "
+                   "peak_end_min = 1140 WHERE club_id = :c"), {"c": fx.club_id})
+    s.execute(text("UPDATE billing.price SET peak_amount_minor = 25000 "
+                   "WHERE club_id = :c AND product_id = :p AND duration_minutes = 60"),
+              {"c": fx.club_id, "p": fx.court_product})
+    inherit, own, never = fx.courts[0], fx.courts[1], s.execute(
+        text("INSERT INTO diary.resource (club_id, kind, name, surface, rank) "
+             "VALUES (:c,'court','Back Court','hard',9) RETURNING id"), {"c": fx.club_id}).scalar()
+    # A court with no availability_rule emits no slots at all, so the grid half of shown==charged
+    # would read None for a reason unrelated to peak. Give the new court the fixture's own hours.
+    s.execute(text("INSERT INTO diary.availability_rule (club_id, resource_id, weekday, start_time, "
+                   "end_time, slot_minutes) VALUES (:c,:r,:wd,'08:00','20:00',60)"),
+              {"c": fx.club_id, "r": never, "wd": fx.target.weekday()})
+    # `own` peaks EARLIER (07:00–09:00) and not at the club's time; `never` opts out entirely.
+    s.execute(text("UPDATE diary.resource SET peak_override = true, peak_days = NULL, "
+                   "peak_start_min = 420, peak_end_min = 540 WHERE id = :r"), {"r": own})
+    s.execute(text("UPDATE diary.resource SET peak_override = true, peak_days = NULL, "
+                   "peak_start_min = NULL, peak_end_min = NULL WHERE id = :r"), {"r": never})
+
+    def peak_at(court, hour):
+        return P.in_peak_window(s, club_id=fx.club_id, local_dt=at(fx, hour), resource_id=court)
+
+    check("inheriting court: peak at 17:00 (the club window)", peak_at(inherit, 17) is True)
+    check("inheriting court: NOT peak at 08:00", peak_at(inherit, 8) is False)
+    check("own-window court: peak at 08:00 (its own)", peak_at(own, 8) is True)
+    check("own-window court: NOT peak at 17:00 (the club's time doesn't apply)",
+          peak_at(own, 17) is False)
+    check("never-peak court: NOT peak at 17:00 even though the CLUB is",
+          peak_at(never, 17) is False)
+    check("never-peak court: NOT peak at 08:00 either", peak_at(never, 8) is False)
+
+    # SHOWN == CHARGED. The grid prices per slot; the order prices at booking. Same window, or the
+    # member is quoted one number and billed another.
+    def shown(court, hour):
+        # The slot key is "start" (not starts_at) and the figure is "price" — see
+        # diary.availability's slot dict. Reuses the harness's own court_slots helper.
+        for sl in court_slots(s, fx, court, hour_from=hour, hour_to=hour + 1):
+            if sl["start"] == utc_iso(at(fx, hour)):
+                return sl.get("price")
+        return None
+
+    def charged(court, hour):
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                             booking_type="court", resource_id=court,
+                             starts_at=utc_iso(at(fx, hour)), ends_at=utc_iso(at(fx, hour + 1)),
+                             settlement_mode="at_court")
+        if not r.get("ok"):
+            return None
+        return s.execute(text('SELECT o.amount_minor FROM billing."order" o '
+                              'JOIN billing.order_line ol ON ol.order_id=o.id '
+                              'WHERE ol.booking_id=:b'), {"b": r["booking"]["id"]}).scalar()
+
+    # Read the grid BEFORE booking — the booking occupies the slot, so afterwards there is nothing
+    # left to price and `shown` would report None for reasons that have nothing to do with peak.
+    shown_own_8, shown_never_17 = shown(own, 8), shown(never, 17)
+    check("own-window court at 08:00 is CHARGED the peak R250", charged(own, 8) == 25000)
+    check("…and the grid SHOWED peak there too", shown_own_8 == 25000, str(shown_own_8))
+    check("never-peak court at 17:00 is CHARGED the base R150", charged(never, 17) == 15000)
+    check("…and the grid SHOWED base there too", shown_never_17 == 15000, str(shown_never_17))
+    check("inheriting court at 17:00 is CHARGED peak R250", charged(inherit, 17) == 25000)
+
+
 def sc_trial_obeys_the_same_court_rules_as_a_membership(s, fx):
     """"Is clay included in the free trial?" — the trial is not a special case in the pricing engine.
     It IS a membership (provider='trial'), so it goes through the SAME resolver as a paid one: the
@@ -2764,6 +2838,7 @@ SCENARIOS = [
     sc_equipment_follows_its_own_payment_rule,
     sc_club_default_caps_cover_every_membership,
     sc_waitlist_promotion_into_a_cardonly_class_is_held,
+    sc_peak_hours_can_differ_per_court,
     sc_trial_obeys_the_same_court_rules_as_a_membership,
     sc_equipment_court_is_charged_and_both_are_booked_out,
     sc_equipment_is_scoped_to_its_court_service,

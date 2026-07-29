@@ -867,7 +867,13 @@
     function openCourt(c) {
       var existing = {}; (DATA.hoursByCourt[c.id] || []).forEach(function (h) { existing[h.weekday] = h; });
       var hasAny = Object.keys(existing).length > 0;  // a court with NO hours yet → default a sensible open week
-      var m = { name: c.name || "", surface: c.surface || "hard", product_id: c.product_id || "", rows: [] };
+      var m = { name: c.name || "", surface: c.surface || "hard", product_id: c.product_id || "", rows: [],
+                // PER-COURT peak. override=false inherits the club window; override=true means THIS
+                // court's window is the answer — and an EMPTY one marks it never-peak.
+                peakOverride: !!c.peak_override,
+                peakDays: (c.peak_days != null && c.peak_days !== "")
+                  ? String(c.peak_days).split(",").map(function (x) { return x.trim(); }).filter(Boolean) : null,
+                peakStart: c.peak_start_min, peakEnd: c.peak_end_min };
       WEEKDAYS.forEach(function (lbl, wd) {
         var h = existing[wd];
         m.rows.push({ wd: wd, label: lbl, open: hasAny ? !!h : (wd < 6), start: h ? (h.start_time || "").slice(0, 5) : "07:00",
@@ -894,6 +900,56 @@
         if ((DATA.courtServices || []).length) details.push(field("Court service", svcI));
         host.appendChild(el("div", { class: "cf-card" }, details));
 
+        host.appendChild(peakCard());
+
+        // Peak hours for THIS court. The peak AMOUNT stays on the court's service (Setup → Services →
+        // per duration); this only decides WHEN that amount applies here — which is what makes "peak
+        // on the show courts only" possible. Three states, and the third is the reason the override
+        // flag exists: inherit the club window · this court's own window · this court never peaks.
+        function peakCard() {
+          var DOW = [["1", "Mon"], ["2", "Tue"], ["3", "Wed"], ["4", "Thu"], ["5", "Fri"], ["6", "Sat"], ["7", "Sun"]];
+          function m2t(x) { if (x == null || x === "") return ""; x = parseInt(x, 10); return ("0" + Math.floor(x / 60)).slice(-2) + ":" + ("0" + (x % 60)).slice(-2); }
+          function t2m(v) { if (!v) return null; var q = String(v).split(":"); return (parseInt(q[0], 10) || 0) * 60 + (parseInt(q[1], 10) || 0); }
+          var c2 = el("div", { class: "cf-card" }, [
+            el("h3", { text: "Peak hours for this court" }),
+            el("p", { class: "cf-muted cf-tiny", text: "When this court charges its service's PEAK price. The amount itself is set per duration under Setup → Services." }),
+          ]);
+          var ov = el("input", { type: "checkbox" }); ov.style.width = "auto"; ov.checked = !!m.peakOverride;
+          ov.addEventListener("change", function () { m.peakOverride = ov.checked; render(); });
+          c2.appendChild(el("label", { class: "cf-row", style: "gap:8px;align-items:center;cursor:pointer;margin-top:6px" },
+            [ov, el("span", { style: "font-weight:600", text: "Set peak hours just for this court" })]));
+          if (!m.peakOverride) {
+            c2.appendChild(el("div", { class: "cf-muted cf-tiny", style: "margin-top:6px", text: "Currently follows the club-wide peak hours (Setup → Club profile & payments)." }));
+            return c2;
+          }
+          var sel = {};
+          var chips = el("div", { class: "cf-row", style: "gap:4px;flex-wrap:wrap;margin-top:8px" });
+          DOW.forEach(function (o) {
+            var on = m.peakDays ? m.peakDays.indexOf(o[0]) >= 0 : false;
+            sel[o[0]] = on;
+            var b = el("button", { class: "cf-day" + (on ? " on" : ""), text: o[1], type: "button" });
+            b.addEventListener("click", function () {
+              sel[o[0]] = !sel[o[0]]; b.className = "cf-day" + (sel[o[0]] ? " on" : "");
+              m.peakDays = DOW.filter(function (x) { return sel[x[0]]; }).map(function (x) { return x[0]; });
+            });
+            chips.appendChild(b);
+          });
+          var pf = el("input", { class: "cf-input", type: "time", value: m2t(m.peakStart), style: "max-width:110px" });
+          var pt = el("input", { class: "cf-input", type: "time", value: m2t(m.peakEnd), style: "max-width:110px" });
+          pf.addEventListener("input", function () { m.peakStart = t2m(pf.value); });
+          pt.addEventListener("input", function () { m.peakEnd = t2m(pt.value); });
+          c2.appendChild(el("div", { class: "cf-row", style: "gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px" }, [
+            el("span", { class: "cf-muted cf-tiny", text: "Peak on:" }), chips,
+            el("span", { class: "cf-muted cf-tiny", text: "from" }), pf,
+            el("span", { class: "cf-muted cf-tiny", text: "to" }), pt,
+          ]));
+          c2.appendChild(el("div", { class: "cf-muted cf-tiny", style: "margin-top:8px", text:
+            (m.peakDays && m.peakDays.length && m.peakStart != null && m.peakEnd != null)
+              ? "This court charges peak on the days and hours above."
+              : "Leave the days or times empty and this court NEVER charges peak — even when the club does." }));
+          return c2;
+        }
+
         var hc = el("div", { class: "cf-card" }, [el("h3", { text: "Playing hours" }),
           el("p", { class: "cf-muted cf-tiny", text: "The days and hours bookings can be made on this court. Untick a day to close it." })]);
         var grid = el("div", { class: "cf-list" });
@@ -916,7 +972,12 @@
         var name = (m.name || "").trim(); if (!name) { UI.toast("Name the court.", "warn"); return; }
         btn.disabled = true; btn.textContent = "Saving…";
         try {
-          await window.AdminAPI.patchResource(c.id, { name: name, surface: m.surface, product_id: m.product_id || null });
+          var body = { name: name, surface: m.surface, product_id: m.product_id || null,
+            peak_override: !!m.peakOverride,
+            peak_days: m.peakOverride ? (m.peakDays && m.peakDays.length === 7 ? null : (m.peakDays || []).map(Number)) : null,
+            peak_start_min: m.peakOverride ? m.peakStart : null,
+            peak_end_min: m.peakOverride ? m.peakEnd : null };
+          await window.AdminAPI.patchResource(c.id, body);
           var week = m.rows.map(function (r) { return { weekday: r.wd, open: r.open, start_time: r.start || "07:00", end_time: r.end || "21:00", slot_minutes: r.slot || 60 }; });
           await window.AdminAPI.putHours({ scope: c.id, week: week });
           UI.toast("Saved.", "info"); reload();

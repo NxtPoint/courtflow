@@ -374,6 +374,13 @@ def patch_resource(resource_id):
             name=b.get("name"), surface=b.get("surface"),
             is_active=b.get("is_active"), rank=b.get("rank"), capacity=b.get("capacity"),
             product_id=b.get("product_id"),   # re-allocate the court to a court SERVICE
+            # PER-COURT peak window. Only touched when sent, because every value means something:
+            # override=true with an empty window marks this court NEVER peak, even if the club has
+            # peak hours — so it can't be inferred from the values alone.
+            set_peak=("peak_override" in b or "peak_days" in b
+                      or "peak_start_min" in b or "peak_end_min" in b),
+            peak_override=b.get("peak_override"), peak_days=b.get("peak_days"),
+            peak_start_min=b.get("peak_start_min"), peak_end_min=b.get("peak_end_min")
         )
     if res is None:
         return jsonify(error="NOT_FOUND"), 404

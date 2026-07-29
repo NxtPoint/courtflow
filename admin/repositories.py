@@ -309,7 +309,8 @@ def list_resources(session, *, club_id, include_inactive=True):
     where = "WHERE club_id = :c" if include_inactive else "WHERE club_id = :c AND is_active = true"
     return _rows(session.execute(
         text("SELECT id, club_id, location_id, kind, name, surface, coach_user_id, product_id, "
-             "       capacity, is_active, rank, created_at, updated_at "
+             "       capacity, is_active, rank, peak_override, peak_days, peak_start_min, "
+             "       peak_end_min, created_at, updated_at "
              f"FROM diary.resource {where} ORDER BY kind, rank, name"),
         {"c": club_id},
     ).mappings().all())
@@ -318,7 +319,8 @@ def list_resources(session, *, club_id, include_inactive=True):
 def get_resource(session, *, club_id, resource_id):
     return _row(session.execute(
         text("SELECT id, club_id, location_id, kind, name, surface, coach_user_id, product_id, "
-             "       capacity, is_active, rank, created_at, updated_at "
+             "       capacity, is_active, rank, peak_override, peak_days, peak_start_min, "
+             "       peak_end_min, created_at, updated_at "
              "FROM diary.resource WHERE club_id = :c AND id = :r"),
         {"c": club_id, "r": resource_id},
     ).mappings().first())
@@ -340,8 +342,13 @@ def create_resource(session, *, club_id, kind, name=None, surface=None, capacity
 
 
 def patch_resource(session, *, club_id, resource_id, name=None, surface=None, is_active=None,
-                   rank=None, capacity=None, product_id=None):
-    # product_id: re-allocate a court to a different court SERVICE (COALESCE = set-or-unchanged).
+                   rank=None, capacity=None, product_id=None, set_peak=False,
+                   peak_override=None, peak_days=None, peak_start_min=None, peak_end_min=None):
+    """product_id: re-allocate a court to a different court SERVICE (COALESCE = set-or-unchanged).
+
+    The PEAK window uses an explicit `set_peak` flag rather than COALESCE because every one of its
+    values is meaningful: override=true with an EMPTY window is how a court is marked never-peak,
+    and COALESCE could not tell that apart from "leave it alone"."""
     res = session.execute(
         text("""
             UPDATE diary.resource SET
@@ -351,12 +358,19 @@ def patch_resource(session, *, club_id, resource_id, name=None, surface=None, is
                 rank       = COALESCE(:rank, rank),
                 capacity   = COALESCE(:capacity, capacity),
                 product_id = COALESCE(:product_id, product_id),
+                peak_override  = CASE WHEN :set_peak THEN COALESCE(:peak_override, false) ELSE peak_override END,
+                peak_days      = CASE WHEN :set_peak THEN :peak_days ELSE peak_days END,
+                peak_start_min = CASE WHEN :set_peak THEN :peak_start_min ELSE peak_start_min END,
+                peak_end_min   = CASE WHEN :set_peak THEN :peak_end_min ELSE peak_end_min END,
                 updated_at = now()
             WHERE club_id = :c AND id = :r
             RETURNING id
         """),
         {"c": club_id, "r": resource_id, "name": name, "surface": surface,
-         "is_active": is_active, "rank": rank, "capacity": capacity, "product_id": product_id},
+         "is_active": is_active, "rank": rank, "capacity": capacity, "product_id": product_id,
+         "set_peak": bool(set_peak), "peak_override": peak_override,
+         "peak_days": _days_csv(peak_days) if peak_days is not None else None,
+         "peak_start_min": peak_start_min, "peak_end_min": peak_end_min},
     ).mappings().first()
     if not res:
         return None

@@ -111,7 +111,7 @@ def court_service_for_resource(session, *, club_id, resource_id):
 
 
 def price_for(session, *, club_id, kind=None, duration_minutes=None, product_id=None,
-              audience="any", coach_user_id=None, at_local=None):
+              audience="any", coach_user_id=None, at_local=None, resource_id=None):
     """Best matching billing.price for a service + a chosen duration. Returns a dict
     {price_id, amount_minor, base_amount_minor, is_peak, currency_code, unit, duration_minutes} or None
     (billing absent / no match). Never raises — pricing is best-effort here.
@@ -174,8 +174,12 @@ def price_for(session, *, club_id, kind=None, duration_minutes=None, product_id=
             return None
         base = row["amount_minor"]
         peak = row["peak_amount_minor"]
+        # Peak is decided by the COURT's window (its own when it overrides, else the club's) —
+        # `resource_id` is what makes "peak on the show courts only" possible. Omitted by
+        # non-court callers, which have no peak amount anyway.
         is_peak = (at_local is not None and peak is not None
-                   and in_peak_window(session, club_id=club_id, local_dt=at_local))
+                   and in_peak_window(session, club_id=club_id, local_dt=at_local,
+                                      resource_id=resource_id))
         return {
             "price_id": str(row["price_id"]),
             "amount_minor": (peak if is_peak else base),
@@ -411,10 +415,30 @@ def any_window_covers(windows, starts_local):
     return False
 
 
-def _peak_window(session, club_id):
-    """The club's PEAK court-pricing window as {days:[int]|None, start_min, end_min}, or None when no peak
-    window is configured. Cached per (session, club) so per-slot availability pricing never re-queries.
-    Guarded -> None (a missing/empty policy just means no peak pricing)."""
+def _row_to_window(row):
+    """A (peak_days, peak_start_min, peak_end_min) row -> a window dict, or None when nothing is set."""
+    if not row:
+        return None
+    if row["peak_start_min"] is None and row["peak_end_min"] is None and not row["peak_days"]:
+        return None
+    return {
+        "days": ([int(x) for x in row["peak_days"].split(",") if str(x).strip()]
+                 if row["peak_days"] else None),
+        "start_min": row["peak_start_min"], "end_min": row["peak_end_min"],
+    }
+
+
+def _peak_window(session, club_id, resource_id=None):
+    """The PEAK court-pricing window that applies to a court: its OWN when it overrides, else the
+    club's. {days:[int]|None, start_min, end_min}, or None for no peak pricing. Cached per
+    (session, club, resource) so per-slot availability pricing never re-queries.
+
+    RESOLUTION — `diary.resource.peak_override` decides, and both answers matter:
+      · override FALSE (every court until an owner says otherwise) -> the club window. Unchanged.
+      · override TRUE  -> this court's own window IS the answer, INCLUDING when it is empty, which
+                          is how a club with peak hours marks a court as never-peak. A nullable
+                          window alone could only ever add peak, never remove it.
+    Guarded -> the club window (a bad court read must not silently drop peak pricing everywhere)."""
     cache = getattr(session, "_cf_peak_window", None)
     if cache is None:
         cache = {}
@@ -422,30 +446,37 @@ def _peak_window(session, club_id):
             session._cf_peak_window = cache
         except Exception:
             pass
-    key = str(club_id)
+    key = (str(club_id), str(resource_id) if resource_id else "")
     if key in cache:
         return cache[key]
     win = None
     try:
+        if resource_id:
+            r = session.execute(
+                text("SELECT peak_override, peak_days, peak_start_min, peak_end_min "
+                     "FROM diary.resource WHERE club_id = :c AND id = :r"),
+                {"c": str(club_id), "r": str(resource_id)},
+            ).mappings().first()
+            if r and r["peak_override"]:
+                win = _row_to_window(r)          # may be None = this court is never peak
+                cache[key] = win
+                return win
         row = session.execute(
             text("SELECT peak_days, peak_start_min, peak_end_min FROM club.policy WHERE club_id = :c"),
-            {"c": key},
+            {"c": str(club_id)},
         ).mappings().first()
-        if row and (row["peak_start_min"] is not None or row["peak_end_min"] is not None or row["peak_days"]):
-            win = {
-                "days": [int(x) for x in row["peak_days"].split(",") if str(x).strip()] if row["peak_days"] else None,
-                "start_min": row["peak_start_min"], "end_min": row["peak_end_min"],
-            }
+        win = _row_to_window(row)
     except Exception:
         win = None
     cache[key] = win
     return win
 
 
-def in_peak_window(session, *, club_id, local_dt):
-    """True if local_dt (a CLUB-LOCAL datetime) falls inside the club peak window. Reuses any_window_covers'
-    day/time semantics (ISO weekday, minutes-from-midnight, end exclusive). Guarded -> False."""
-    win = _peak_window(session, club_id)
+def in_peak_window(session, *, club_id, local_dt, resource_id=None):
+    """True if local_dt (a CLUB-LOCAL datetime) falls inside the peak window that applies to this
+    court — its own when it overrides, else the club's. Reuses any_window_covers' day/time semantics
+    (ISO weekday, minutes-from-midnight, end exclusive). Guarded -> False."""
+    win = _peak_window(session, club_id, resource_id)
     if not win or local_dt is None:
         return False
     return any_window_covers([win], local_dt)

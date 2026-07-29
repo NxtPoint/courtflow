@@ -60,6 +60,20 @@ _DDL = [
     # and is availability-checked by TIME (a single unit can't be hired twice for overlapping times),
     # never holding a court of its own. `feature_on_home` promotes an item to a hero tile on the client Home.
     f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS quantity int NOT NULL DEFAULT 1;",
+
+    # PER-COURT peak window. The peak AMOUNT is already per service+duration
+    # (billing.price.peak_amount_minor); only the WINDOW was club-wide, so "peak on the show courts
+    # only" was unexpressible — every court shared one window.
+    #
+    # `peak_override` is what makes it expressible in BOTH directions, and it's why a nullable window
+    # alone isn't enough: false = inherit the club window (every existing court, unchanged), true =
+    # this court's own window IS the answer — and if that window is empty, this court has NO peak at
+    # all even while the club does. Without the flag you could only ever ADD a window, never remove
+    # one, which is exactly half the requirement.
+    f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS peak_override boolean NOT NULL DEFAULT false;",
+    f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS peak_days text;",
+    f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS peak_start_min int;",
+    f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS peak_end_min int;",
     f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS feature_on_home boolean NOT NULL DEFAULT false;",
     # Widen resource.kind to accept 'equipment'. Idempotent drop+re-add of the auto-named CHECK.
     f"""

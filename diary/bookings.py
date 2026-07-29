@@ -550,12 +550,15 @@ def _create_order_guarded(session, *, club_id, user_id, booking_id=None, booking
                      "FROM billing.price WHERE id = :p AND active = true"), {"p": str(price_id)},
             ).mappings().first()
             return dict(row) if row else {}
+        # resource_id resolves the PEAK WINDOW for a court (its own when it overrides, else the
+        # club's) — the same court the availability grid priced, so shown == charged.
         if product_id:
             return price_for(session, club_id=club_id, audience=aud, product_id=product_id,
-                             duration_minutes=duration_minutes, at_local=at_local) or {}
+                             duration_minutes=duration_minutes, at_local=at_local,
+                             resource_id=resource_id) or {}
         return price_for(session, club_id=club_id, audience=aud, kind=kind,
                          duration_minutes=duration_minutes, coach_user_id=coach_user_id,
-                         at_local=at_local) or {}
+                         at_local=at_local, resource_id=resource_id) or {}
     if member_parties:
         for p in member_parties:
             pr = _price("member")
