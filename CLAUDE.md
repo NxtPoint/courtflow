@@ -723,6 +723,15 @@ member by email on the first authenticated hit.
   summing `billing.payment` refunds against the charge, without calling Yoco at all. A frozen key
   was never protecting the money; it was only preventing the retry. Guarded by
   `sc_refund_retry_is_not_poisoned_by_the_idempotency_key`.
+- **THE COURT IS THE ONE PLACE TO SEE A COURT (2026-07-29).** Setup → Courts & hours → a court now
+  carries everything about it: details + service allocation, **its own peak window**, playing hours,
+  and a READ-ONLY **"Pricing & payment"** summary of the court SERVICE it sits on (price per
+  duration incl. peak, payment methods, members-covered, packs) with one button into THE service
+  editor (`window.ServiceEditor`, mounted in place, returning to the court on close).
+  **Price/payment/cover are NOT editable on the court and must not become so** — they belong to the
+  SERVICE, which several courts share (eight hard courts are one price list). Editing them per court
+  would either fork the model or silently mean "change this for all eight", which is worse than
+  sending the owner to the place that says so. Summarise here, edit there.
 - **PEAK HOURS ARE PER COURT (2026-07-29).** The peak AMOUNT was always per service+duration
   (`billing.price.peak_amount_minor`); only the WINDOW was club-wide, so "peak on the show courts
   only" was unexpressible. `diary.resource.peak_override` + `peak_days/start_min/end_min` give three

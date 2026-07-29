@@ -827,12 +827,23 @@
       return openDays.map(function (d) { return WEEKDAYS[d]; }).join(", ") + " · " + t;
     }
 
+    // "" when the court just follows the club window (the common case — no noise on every row).
+    function peakSummary(c) {
+      if (!c.peak_override) return "";
+      function t(x) { return ("0" + Math.floor(x / 60)).slice(-2) + ":" + ("0" + (x % 60)).slice(-2); }
+      if (c.peak_start_min == null || c.peak_end_min == null) return "no peak";
+      return "peak " + t(c.peak_start_min) + "–" + t(c.peak_end_min);
+    }
+
     function courtRow(c) {
       var row = el("div", { class: "cf-item cf-pickable" }, [
         el("span", { class: "cf-chip court", text: "court" }),
         el("div", { class: "cf-item-main" }, [
           el("div", { class: "cf-item-t", text: c.name || "Court" }),
-          el("div", { class: "cf-item-s", text: [(c.surface || "hard"), svcName(c.product_id), hoursSummary(c)].filter(Boolean).join(" · ") }),
+          // Peak is per COURT now, so the list says when a court differs from the club — otherwise
+          // "peak on the show courts only" is invisible until you open all eight of them.
+          el("div", { class: "cf-item-s", text: [(c.surface || "hard"), svcName(c.product_id),
+                                                 peakSummary(c), hoursSummary(c)].filter(Boolean).join(" · ") }),
         ]),
         el("span", { class: "cf-spacer" }),
         el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Delete", onclick: function (ev) { ev.stopPropagation(); delCourt(c); } }),
@@ -901,6 +912,78 @@
         host.appendChild(el("div", { class: "cf-card" }, details));
 
         host.appendChild(peakCard());
+        host.appendChild(serviceCard());
+
+        // WHAT THIS COURT COSTS — a read-only summary of the court SERVICE it belongs to, so the
+        // court is one place to SEE everything about it, with one tap to change any of it.
+        //
+        // Deliberately NOT editable here, and deliberately not duplicated. Price, payment methods,
+        // membership cover and packs belong to the SERVICE, which several courts share — eight hard
+        // courts are one price list. Editing them per court would either fork the model or quietly
+        // mean "edit this for all eight", which is worse than sending you to the place that says so.
+        // The button opens THE service editor (window.ServiceEditor — the same widget Setup →
+        // Services uses) right here, and returns to this court on close.
+        function serviceCard() {
+          // `card0`, not `c` — `c` is openCourt's court argument and shadowing it here would break
+          // the "back to this court" return below.
+          var card0 = el("div", { class: "cf-card" }, [el("h3", { text: "Pricing & payment" })]);
+          var svcId = m.product_id
+            || ((DATA.courtServices || []).length === 1 ? DATA.courtServices[0].id : null);
+          if (!svcId) {
+            card0.appendChild(el("div", { class: "cf-muted cf-tiny", text:
+              "This court isn't allocated to a court service yet, so it has no price list. Pick one "
+              + "under Details above, or create one in Setup → Services." }));
+            return card0;
+          }
+          var body = el("div"); card0.appendChild(body);
+          body.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+          window.TFAuth.apiJSON("/api/services/" + encodeURIComponent(svcId)).then(function (r) {
+            var svc = (r && r.service) || {};
+            UI.clear(body);
+            body.appendChild(el("p", { class: "cf-muted cf-tiny", text:
+              "From the court service “" + (svc.name || "Court hire") + "”, shared by every court on "
+              + "it. Change it once here and it applies to all of them." }));
+            var list = el("div", { class: "cf-list" });
+            (svc.variations || []).forEach(function (v) {
+              var peak = (v.peak_amount_minor != null)
+                ? "  ·  peak " + UI.money(v.peak_amount_minor, svc.currency) : "";
+              list.appendChild(el("div", { class: "cf-item" }, [
+                el("div", { text: (v.duration_minutes ? v.duration_minutes + " min" : "Per booking") }),
+                el("div", { style: "font-weight:700;text-align:right", text: UI.money(v.amount_minor, svc.currency) + peak }),
+              ]));
+            });
+            if (!(svc.variations || []).length) {
+              list.appendChild(el("div", { class: "cf-empty", text: "No prices set — this court can't be booked until one is." }));
+            }
+            body.appendChild(list);
+            function line(k, v) {
+              return el("div", { class: "cf-row", style: "justify-content:space-between;margin-top:8px" }, [
+                el("span", { class: "cf-muted", style: "font-size:.88rem", text: k }),
+                el("span", { style: "font-weight:600;font-size:.88rem", text: v }),
+              ]);
+            }
+            var modes = svc.payment_modes && svc.payment_modes.length
+              ? svc.payment_modes.map(function (x) { return PAY_MODE_LABELS[x] || x; }).join(", ")
+              : "Every method the club accepts";
+            body.appendChild(line("Payment", modes));
+            body.appendChild(line("Members & trialists",
+              svc.members_covered === false ? "Pay for this court" : "Book it free"));
+            if ((svc.packages || []).length) {
+              body.appendChild(line("Packs", svc.packages.length + " on this service"));
+            }
+            var b = el("button", { class: "cf-btn cf-btn-sm", style: "margin-top:12px",
+                                   text: "Edit " + (svc.name || "service") + " →" });
+            b.addEventListener("click", function () {
+              // THE service editor, mounted here; closing returns to this court.
+              window.ServiceEditor.open(svcId, { host: host, onClose: function () { openCourt(c); } });
+            });
+            body.appendChild(b);
+          }, function (e) {
+            UI.clear(body);
+            body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) }));
+          });
+          return card0;
+        }
 
         // Peak hours for THIS court. The peak AMOUNT stays on the court's service (Setup → Services →
         // per duration); this only decides WHEN that amount applies here — which is what makes "peak
