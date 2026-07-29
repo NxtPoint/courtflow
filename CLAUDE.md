@@ -26,7 +26,7 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 362 / billing 492 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 358 / billing 493 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -723,19 +723,28 @@ member by email on the first authenticated hit.
   summing `billing.payment` refunds against the charge, without calling Yoco at all. A frozen key
   was never protecting the money; it was only preventing the retry. Guarded by
   `sc_refund_retry_is_not_poisoned_by_the_idempotency_key`.
-- **AN ONLINE LESSON REQUEST IS PAID UP FRONT; DECLINE REFUNDS (2026-07-29).** A gated
-  (`requested`) lesson used to create NO order — so a client booking a CARD-ONLY coach who reviews
-  was never sent to Yoco (the client needs an `order_id` to reach checkout), got a success screen,
-  paid nothing, and had no way to pay at all (`can.pay` needs an order). The charge appeared only
-  when the coach ACCEPTED, hours later, behind a **30-minute** hold she was never awake for — so it
-  lapsed, cancelled itself, and the attempt vanished with nothing on her record. That is the "it
-  said nothing owed but no payment was made" report. **The approval is about the TIME, not about
-  whether the client wants the lesson**, so an `online` request now creates its order immediately
-  and returns `requires_payment`; `accept_booking` REUSES that order (`_order_is_settled` → confirm
-  outright rather than re-holding behind a payment window already passed, and never a second order
-  for money already taken); `decline_booking` REFUNDS a settled order automatically (and voids an
-  unpaid one, so a declined lesson never leaves a debt). Guarded by
-  `sc_online_lesson_request_is_paid_up_front`.
+- **PAYING IS THE ACCEPTANCE — AN ONLINE LESSON IS NEVER GATED (2026-07-29).** A gated
+  (`requested`) lesson creates no order and **reserves nothing**. For a CARD-ONLY coach that made
+  the coach unbookable: the client is never sent to Yoco (checkout needs an `order_id`), gets a
+  success screen, pays nothing, and has no way to pay (`can.pay` needs an order); the charge appears
+  only when the coach ACCEPTS, behind a 30-minute hold nobody is awake for, so it lapses and the
+  attempt vanishes. And because a request reserves nothing, **two clients could each request — and
+  pay for — the same slot**, leaving one to be refunded. So `create_booking` **does not gate an
+  `online` booking at all**, whatever `review_bookings` says: it holds coach + court through the
+  exclusion constraint (a second client gets COACH_BUSY/SLOT_TAKEN — the honest answer) and PAYING
+  confirms it. The gate was never buying control anyway — **a coach can RESCHEDULE**, so a time that
+  doesn't suit is moved, not refused. An OWED request (at-court/monthly) is STILL gated; that is the
+  case the review setting was for. `accept_booking` reuses an order the request already carries
+  (`_order_is_settled` → confirm outright, never a second charge) and `decline_booking` refunds a
+  settled one — both retained for requests made while online WAS gated. Guarded by
+  `sc_paying_is_the_acceptance`.
+- **A lesson email must state THIS booking's state, not the usual one.** `lesson_accepted` always
+  read "Your lesson is confirmed" — including when the booking was HELD and unpaid, so the one
+  email that could have prompted payment said there was nothing to do. It now says "one step left"
+  when `status='held'`, and `lesson_declined` says the money is coming back when `refunded`. Both
+  read state the PRODUCER passes on the payload (`_payload` carries `status`; `_lesson_event(...,
+  extra=)` carries outcomes) — emit dispatches on a background thread whose session cannot see the
+  caller's uncommitted work.
 - **THE COURT IS THE ONE PLACE TO SEE A COURT (2026-07-29).** Setup → Courts & hours → a court now
   carries everything about it: details + service allocation, **its own peak window**, playing hours,
   and a READ-ONLY **"Pricing & payment"** summary of the court SERVICE it sits on (price per

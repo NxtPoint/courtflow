@@ -1274,10 +1274,14 @@ def sc_settlement_guards(s, fx):
 
 
 def sc_online_only(s, fx):
-    """M1: an ONLINE-ONLY coach can't be booked owed by a client. A crafted at_court is refused; an
-    online request to a gated (review) coach stays 'online', and the coach's accept keeps it HELD
-    (order awaiting_payment — client prepays), never confirmed+owed."""
-    print("\n# Online-only coach: client must prepay; gated accept stays held; at_court refused")
+    """M1: an ONLINE-ONLY coach can't be booked owed by a client. A crafted at_court is refused, and
+    an online booking goes straight to HELD with an order awaiting_payment — the client prepays and
+    the coach is never left owed.
+
+    Since 2026-07-29 an online lesson is NOT gated even when the coach reviews bookings: paying IS
+    the acceptance (sc_paying_is_the_acceptance). The review setting still gates OWED requests, which
+    is the case it was actually for."""
+    print("\n# Online-only coach: client must prepay, never owed; at_court refused")
     s.execute(text("UPDATE billing.product SET payment_modes='online' WHERE id=:p"),
               {"p": fx.lesson_product})
     s.execute(text("UPDATE iam.coach_profile SET review_bookings=true WHERE club_id=:c AND user_id=:u"),
@@ -1294,14 +1298,19 @@ def sc_online_only(s, fx):
                                        {"b": r["booking"]["id"]}).scalar()
     check("M1: online request preserved (not coerced to at_court)", stored == "online", str(stored))
     bid = r["booking"]["id"]
-    acc = B.accept_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=fx.coach_uid, role="coach")
-    check("M1: accept keeps the online lesson HELD (awaiting prepayment), not confirmed",
-          acc.get("ok") and acc["booking"]["status"] == "held",
-          str(acc.get("booking", {}).get("status")))
+    # An ONLINE lesson is no longer gated at all — paying IS the acceptance (see
+    # sc_paying_is_the_acceptance). So it goes straight to HELD with an order awaiting payment,
+    # rather than sitting 'requested' until a coach accepts it into that same state. M1's intent is
+    # unchanged and still asserted: the client must PREPAY, and the coach is never left owed.
+    check("M1: the online lesson is HELD awaiting prepayment (no coach step)",
+          r["booking"]["status"] == "held", str(r["booking"]["status"]))
     oid = B._booking_dict(s, bid)["order_id"]
     check("M1: order is awaiting_payment (client must pay), not open/owed",
           _order(s, oid) and _order(s, oid)["status"] == "awaiting_payment",
           str(_order(s, oid) and _order(s, oid)["status"]))
+    check("M1: and a court is held with it (never a courtless lesson)",
+          bool(s.execute(text("SELECT 1 FROM diary.booking WHERE order_id=:o AND booking_type='court'"),
+                         {"o": oid}).first()))
 
 
 def sc_offplatform_reconcile(s, fx):

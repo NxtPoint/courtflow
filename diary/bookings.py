@@ -759,13 +759,26 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     # first. A coach/admin booking ON-BEHALF of a client ALWAYS auto-confirms (no client-acceptance
     # step) — the client is just notified and can reschedule/cancel themselves if it doesn't suit.
     # (A coach can still counter-propose a new time on a request via propose_time -> 'proposed',
-    # which the client then accepts/declines.) On accept the court is auto-assigned + the normal
-    # settlement runs (online prepay -> pay-at-court for an unconfirmed lesson). Everything else
-    # flows through the immediate path below unchanged.
+    # which the client then accepts/declines.) Everything else flows through the immediate path below.
+    #
+    # PAYING FOR IT IS THE ACCEPTANCE. An ONLINE booking is never gated, whatever the coach's review
+    # setting, because approval and prepayment pull against each other:
+    #
+    #   · a 'requested' lesson reserves NOTHING, so TWO clients could each request — and now each PAY
+    #     for — the same 18:00 slot. The coach can only take one; the other has to be refunded. A
+    #     confirmed booking holds the coach AND the court through the exclusion constraint, so the
+    #     second client is simply told the slot is taken, which is the honest answer.
+    #   · and the gate was never really buying control: a coach can RESCHEDULE any lesson, so a time
+    #     that doesn't suit is moved, not refused. The approval step only delayed the booking and
+    #     opened the double-book window it was never meant to create.
+    #
+    # An OWED request (at-court / monthly) is still gated — there the coach is vetting a booking with
+    # no money behind it, which is the case the review setting was actually for.
     if booking_type == "lesson" and res["kind"] == "coach":
         _gate_coach = coach_user_id or res.get("coach_user_id")
         _gate_status = None
         if booked_for_user_id is None and role in ("member", "guest") and \
+                settlement_mode != "online" and \
                 _coach_reviews(session, club_id, _gate_coach):
             _gate_status = "requested"
         if _gate_status and _gate_coach:
@@ -796,40 +809,13 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
             for _party in parties:
                 _insert_party(session, booking_id=_gid, club_id=club_id, party=_party)
 
-            # AN ONLINE REQUEST TAKES THE MONEY NOW, WHILE THE CLIENT IS HERE.
-            #
-            # A gated lesson used to create no order at all, so a client booking a card-only coach was
-            # never sent to Yoco — her browser needs an order_id and there wasn't one. She got a
-            # success screen, paid nothing, and had NO way to pay (the Pay action needs an order). The
-            # charge only appeared when the coach accepted, hours later, with a 30-minute hold she was
-            # never awake for — so it lapsed, cancelled itself, and the whole attempt vanished without
-            # a trace on her record. That is the "it said nothing owed but no payment was made" report.
-            #
-            # The approval is about the TIME, not about whether she wants the lesson. So she pays up
-            # front and the request carries a paid order; accept simply confirms it (accept_booking
-            # reuses this order rather than raising a second), and decline REFUNDS her
-            # (decline_booking). Non-online modes are unchanged — there is nothing to collect yet.
-            _gorder = None
-            if _gate_sm == "online":
-                _gdur = int((ends - starts).total_seconds() // 60)
-                _gorder = _create_order_guarded(
-                    session, club_id=club_id, user_id=owner_user_id, booking_id=_gid,
-                    booking_type="lesson", settlement_mode="online", parties=parties,
-                    resource_id=resource_id, starts_at=starts, ends_at=ends, audience=audience,
-                    duration_minutes=_gdur,
-                    coach_user_id=_gate_coach, product_id=product_id)
-                if _gorder.get("order_id"):
-                    _attach_order(session, _gid, _gorder["order_id"])
-
+            # A gated request is always an OWED one now (online never reaches here), so there is
+            # genuinely nothing to collect yet — the order is raised when the coach accepts.
             _gb = _booking_dict(session, _gid)
             _lesson_event(session, _gb,
                           "lesson_requested" if _gate_status == "requested" else "lesson_proposed",
                           _gate_coach if _gate_status == "requested" else owner_user_id)
-            out = {"ok": True, "booking": _gb, "checkout": (_gorder or {}).get("checkout")}
-            if _gorder and _gorder.get("order_id"):
-                # The client must be driven to Yoco NOW — same seam as a normal online booking.
-                out["requires_payment"] = True
-            return out
+            return {"ok": True, "booking": _gb, "checkout": None}
 
     # Lesson integrity (coach ∩ court): a lesson is a COACH booking that ALSO holds a court in the
     # same transaction. The primary resource MUST be an active coach; and a court MUST be held — if
@@ -1734,10 +1720,10 @@ def accept_booking(session, *, club_id, booking_id, actor_user_id, role, now=Non
     # somehow carries one, settle it at the desk rather than mint an R0 'paid' lesson on accept.
     if settlement_mode in ("membership_covered", "free"):
         settlement_mode = "at_court"
-    # ALREADY PAID? An online request now takes the money at booking time (see the gate in
-    # create_booking), so by the time the coach accepts, the order usually exists and is settled.
-    # Accepting must then CONFIRM it outright — not re-hold it behind a fresh 30-minute payment
-    # window it has already been through, and not raise a second order for money already taken.
+    # ALREADY PAID? Online bookings are no longer gated at all (see create_booking), so a NEW request
+    # is always an owed one. This handles the requests made while they WERE gated — some of which
+    # carry a paid order — so accepting one confirms it outright rather than re-holding it behind a
+    # payment window it has already been through, and never raises a second order for money taken.
     _existing_order = bk.get("order_id")
     _already_paid = bool(_existing_order) and _order_is_settled(session, _existing_order)
     online = settlement_mode == "online" and not _already_paid
