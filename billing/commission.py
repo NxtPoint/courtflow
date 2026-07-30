@@ -214,7 +214,15 @@ def record_split_for_order(session, *, club_id, order_id, payment_id, at=None) -
             # membership-covered / free lesson -> gross R0, nothing to split.
             skipped += 1
             continue
-        coach = ln["product_coach"] or ln["booking_coach"]
+        # WHO EARNED IT: the line's own product, else the booking's denormalised coach, else — for a
+        # PACK SALE — the coach on the wallet this order granted. That third fallback matters and was
+        # missing: a pack's order line is hung on a lesson/class PRICE so the commission attributes to
+        # the selling coach, but if that service is a SHARED (coach-less) one the product carries no
+        # coach and a pack has no booking either, so the split was written with `coach_user_id = NULL`
+        # — commission accrued to NOBODY, and the coach's statement could not see the sale at all.
+        # `_earnings_cte` has always resolved a pack via the wallet (which is why the Money tab showed
+        # the revenue against the coach while his own statement did not); these two now agree.
+        coach = ln["product_coach"] or ln["booking_coach"] or _wallet_coach_for_order(session, order_id)
         product_id = ln["product_id"]
         pct = resolve_commission_pct(session, club_id=club_id, product_id=product_id,
                                      coach_user_id=coach, at=at)
@@ -251,6 +259,20 @@ def record_split_for_order(session, *, club_id, order_id, payment_id, at=None) -
         {"club": club_id, "oid": str(order_id)},
     )
     return {"ok": True, "splits": splits, "earnings": earnings, "skipped": skipped}
+
+
+def _wallet_coach_for_order(session, order_id):
+    """The coach on the token_wallet this order granted — how a PACK SALE knows whose sale it was.
+    Mirrors `_earnings_cte`'s pack branch exactly. Guarded → None (the split stays club-attributed,
+    which is the pre-existing behaviour, never an exception)."""
+    try:
+        return session.execute(
+            text("SELECT coach_user_id FROM billing.token_wallet "
+                 "WHERE order_id = :o AND coach_user_id IS NOT NULL LIMIT 1"),
+            {"o": str(order_id)},
+        ).scalar()
+    except Exception:
+        return None
 
 
 def _write_split_pair(session, *, club_id, payment_id, order_line_id, booking_id,
@@ -1630,12 +1652,63 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
     # The document's own audit line. The month's commission ENTRIES must equal the net derived from
     # the splits — they are two views of the same event, so a mismatch means something wrote one
     # without the other and the statement should SAY so rather than quietly present a wrong number.
+    # WHAT THE COLLECTED MONEY WAS. Without this the statement says "Paid to the club R17,000" and
+    # leaves the coach to reconcile it against the lessons he remembers teaching — which will never
+    # agree, because the figure legitimately also contains CLASS seats and PACK SALES. A lesson/class
+    # pack carries the coach's own lesson/class price_id (so commission attributes to him), which
+    # means the FULL pack price lands here at the moment of sale, not spread over the sessions drawn
+    # from it. That is deliberate — pack revenue is sale-based — but it has to be visible, or the
+    # headline reads as a threefold error.
+    st["by_kind"] = _settlement_by_kind(session, club_id=club_id, coach_user_id=coach_user_id, ym=ym)
     st["ledger_commission_minor"] = led["commission_entries_minor"]
     st["reconciles"] = (led["commission_entries_minor"] == net)
     # What actually changes hands after rent and anything already settled this month.
     st["due_now_minor"] = net + led["rent_minor"] + led["adjustments_minor"] + led["payouts_minor"]
     return {"month": ym, "settlement": st, "ledger": led,
             "currency": _club_currency_code(session, club_id)}
+
+
+def _settlement_by_kind(session, *, club_id, coach_user_id, ym):
+    """The month's collected gross split by WHAT IT WAS — lesson / class / pack — and by who holds it.
+
+    `commission_split.basis` cannot tell a pack from a lesson: a lesson pack is deliberately hung on
+    the coach's own lesson price so the commission attributes to him, so it writes `lesson_commission`
+    too. A pack is identified the way `_earnings_cte` identifies one — the order granted a
+    `billing.token_wallet`. Guarded → {} (the statement just omits the breakdown)."""
+    try:
+        rows = session.execute(
+            text("""
+                SELECT CASE
+                         WHEN EXISTS (SELECT 1 FROM billing.token_wallet w WHERE w.order_id = o.id)
+                           THEN 'pack'
+                         WHEN cs.basis = 'class_commission' THEN 'class'
+                         WHEN cs.basis = 'arrears_commission' THEN 'lesson'
+                         ELSE 'lesson'
+                       END AS kind,
+                       (pm.provider IN ('yoco','eft')) AS club_banked,
+                       COUNT(*) AS n,
+                       COALESCE(SUM(cs.gross_minor), 0) AS gross
+                FROM billing.commission_split cs
+                LEFT JOIN billing.payment pm ON pm.id = cs.payment_id
+                LEFT JOIN billing.order_line ol ON ol.id = cs.order_line_id
+                LEFT JOIN billing."order" o ON o.id = ol.order_id
+                WHERE cs.club_id = :club AND cs.coach_user_id = CAST(:coach AS uuid)
+                  AND cs.party_type = 'owner' AND cs.basis <> 'refund_clawback'
+                  AND to_char(cs.occurred_at, 'YYYY-MM') = :ym
+                GROUP BY 1, 2
+            """),
+            {"club": club_id, "coach": str(coach_user_id), "ym": ym},
+        ).mappings().all()
+    except Exception:
+        session.rollback()
+        log.debug("settlement by-kind skipped", exc_info=False)
+        return {}
+    out = {}
+    for r in rows:
+        k = out.setdefault(r["kind"], {"club_minor": 0, "coach_minor": 0, "n": 0})
+        k["n"] += int(r["n"] or 0)
+        k["club_minor" if r["club_banked"] else "coach_minor"] += int(r["gross"] or 0)
+    return out
 
 
 def _club_currency_code(session, club_id):

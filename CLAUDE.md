@@ -26,11 +26,11 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 404 / billing 528 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 404 / billing 535 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (45/72/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (45/74/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. The check counts below are the gate line's, not per-bullet totals —
    **update line 25 only**, so the numbers can't drift apart.
@@ -915,6 +915,22 @@ member by email on the first authenticated hit.
   the arrears inversion below. Historical rows: `scripts/fix_desk_cash_coach_ledger.py` (dry-run
   default, idempotent, appends a correcting adjustment). Guarded by
   `sc_only_yoco_and_eft_reach_the_club`.
+- **THE COLLECTED FIGURE MUST SAY WHAT IT WAS (2026-07-30).** "Paid to the club R17,000" against the
+  R6,000 of lessons an owner remembers reads as a threefold error. It isn't one: a lesson/class PACK
+  is deliberately hung on the coach's own lesson/class `price_id` so its commission attributes to him,
+  which means the **FULL pack price** lands in the collected figure at the moment of **SALE** (pack
+  revenue is sale-based, not spread over the sessions drawn from it) — and CLASS SEATS are in there
+  too. `st.by_kind` breaks it into lesson / class / pack and the statement renders it under "Total
+  collected". **`basis` alone cannot produce that split** (a pack writes `lesson_commission`); a pack
+  is identified the way `_earnings_cte` does it — the order granted a `token_wallet`. Diagnose a
+  disputed figure with `scripts/diagnose_coach_statement.py --coach <name> --detail` (read-only; it
+  totals the month four independent ways). Guarded by `sc_settlement_says_what_the_money_was`.
+- **A PACK SALE RESOLVES ITS COACH FROM THE WALLET (2026-07-30).** `record_split_for_order` resolved
+  the earning coach as `product.coach_user_id or booking.coach_user_id` — but a pack has **no
+  booking**, so a pack sold on a SHARED (coach-less) service wrote `coach_user_id = NULL`: commission
+  accrued to NOBODY and the coach's own statement couldn't see the sale, while `_earnings_cte` (which
+  always resolved a pack via `token_wallet.coach_user_id`) showed the revenue against him. The two
+  now agree — `_wallet_coach_for_order` is the third fallback.
 - **THE COACH STATEMENT is the coach-side of a client invoice** (`billing.commission.coach_settlement`
   + `coach_sessions_by_day`, rendered by the ONE shared `Widgets.CoachStatement`; admin and coach
   differ by config only). Three blocks on TWO DELIBERATE DATE BASES: **sessions** by client by day

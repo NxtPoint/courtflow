@@ -3982,7 +3982,73 @@ def sc_only_yoco_and_eft_reach_the_club(s, fx):
           f"splits={st['net_minor']} ledger={st['ledger_commission_minor']}")
 
 
+def sc_settlement_says_what_the_money_was(s, fx):
+    """"Paid to the club R17,000" against R6,000 of remembered lessons reads as a threefold error.
+
+    It is not one. A lesson/class PACK is deliberately hung on the coach's own lesson price so its
+    commission attributes to him (`create_bundle_order`), which means `basis='lesson_commission'` and
+    the FULL pack price lands in the collected figure at the moment of SALE — not spread across the
+    sessions later drawn from it. Class SEATS are in there too. Both are correct; both are invisible
+    if the statement only prints a total, and a money document that cannot be reconciled against what
+    the reader remembers will simply be disbelieved.
+
+    So the settlement carries a BY-KIND breakdown, and `basis` alone cannot produce it: a pack and a
+    lesson write the same basis. A pack is identified the way `_earnings_cte` identifies one — the
+    order granted a `token_wallet`."""
+    print("\n# The settlement says WHAT the collected money was (lesson vs class vs pack)")
+    from billing.commission import coach_settlement
+
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',20,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+
+    # ---- a plain lesson, paid by EFT ----
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res,
+                         coach_user_id=fx.coach_uid, starts_at=iso(at(fx, 9)),
+                         ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    oid = r["booking"]["order_id"]
+    lesson_gross = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                             {"o": oid}).scalar()
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=oid, amount_minor=lesson_gross,
+                          provider="eft", provider_payment_id="EFT-KIND-1", user_id=fx.member)
+
+    # ---- a 10-session PACK on the same coach's lesson service, paid by EFT ----
+    prod = s.execute(text("SELECT product_id FROM billing.price WHERE id = ("
+                          " SELECT price_id FROM billing.order_line WHERE order_id=:o LIMIT 1)"),
+                     {"o": oid}).scalar()
+    plan = s.execute(
+        text("INSERT INTO billing.bundle_plan (club_id, service_kind, label, sessions_count, "
+             "duration_minutes, price_minor, currency_code, coach_user_id, product_id, "
+             "status, active) VALUES (:c,'lesson','10 lessons',10,60,:amt,'ZAR',:u,:p,'active',true) "
+             "RETURNING id"),
+        {"c": fx.club_id, "amt": 300000, "u": fx.coach_uid, "p": prod}).scalar()
+    pack = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                  bundle_plan_id=str(plan), settlement_mode="at_court")
+    pack_oid = pack.get("order_id") or (pack.get("order") or {}).get("id")
+    check("the pack order was raised", pack_oid is not None, str(pack))
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=pack_oid, amount_minor=300000,
+                          provider="eft", provider_payment_id="EFT-KIND-2", user_id=fx.member)
+
+    st = coach_settlement(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)["settlement"]
+    bk = st.get("by_kind") or {}
+    check("the collected total is the lesson PLUS the whole pack",
+          st["club_held_minor"] == lesson_gross + 300000, str(st["club_held_minor"]))
+    check("the breakdown separates the pack from the lesson",
+          set(bk.keys()) == {"lesson", "pack"}, str(list(bk.keys())))
+    check("...the lesson line is just the lesson",
+          bk.get("lesson", {}).get("club_minor") == lesson_gross, str(bk.get("lesson")))
+    check("...and the pack line is the FULL pack price (sale-based, not per session)",
+          bk.get("pack", {}).get("club_minor") == 300000, str(bk.get("pack")))
+    check("the breakdown adds back up to the collected total",
+          sum(v["club_minor"] + v["coach_minor"] for v in bk.values())
+          == st["total_collected_minor"], f"{bk} vs {st['total_collected_minor']}")
+    check("...and the statement still ties to the ledger", st["reconciles"] is True,
+          f"splits={st['net_minor']} ledger={st['ledger_commission_minor']}")
+
+
 SCENARIOS = [
+    sc_settlement_says_what_the_money_was,
     sc_only_yoco_and_eft_reach_the_club,
     sc_coach_settlement_statement,
     sc_service_editor_child_ownership,

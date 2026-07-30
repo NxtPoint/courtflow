@@ -21,7 +21,7 @@ the coach sets up services, then the client books against them. Expected results
 >   bill a stranger or another family's child) — and the **payment-gate** correctness: a **card-only service**
 >   refuses pay-at-court on the booking path (staff override kept), and **class enrolment** respects the
 >   service's payment rule (no free/membership-covered seat conjured, card-only refuses at-court).
-> - **billing / commercial** (`test_billing_scenarios`, **528** checks) — PAYG/membership/bundle settlement,
+> - **billing / commercial** (`test_billing_scenarios`, **535** checks) — PAYG/membership/bundle settlement,
 >   desk-payment idempotency, refunds, commission, refund clawback, membership-cancel-voids-order, the
 >   transaction log, dispute routing, client month-end, void clears arrears, abandoned reclaim on read, the
 >   booking + coach event stories, cancel-voids-order + phantom cleanup, the **client by-service breakdown**

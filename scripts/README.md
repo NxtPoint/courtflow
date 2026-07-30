@@ -24,7 +24,7 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
 ## Gates (run before every merge — KEEP)
 - `test_all.py` — runs the three scenario harnesses below. **The merge gate.**
 - `test_booking_scenarios.py` · `test_billing_scenarios.py` · `test_statement_reconciliation.py`
-  — rollback-only scratch-DB harnesses (**booking 404 / billing 528 / statement 64**).
+  — rollback-only scratch-DB harnesses (**booking 404 / billing 535 / statement 64**).
 
 ## Load-bearing at runtime (KEEP — do not touch)
 - `seed_nextpoint.py` — re-seeds club #1 on every prod boot (`SEED_NEXTPOINT=1`, imported by `app.py`). Idempotent.
@@ -63,6 +63,11 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
 - `diagnose_refund.py` — **READ-ONLY** (no boot DDL, pure SELECTs): why is a Yoco refund failing? "Insufficient funds" has two indistinguishable causes — (a) the refund aimed at the WRONG checkout (an order the member abandoned once and paid on the retry has several `ch_` ids; fixed 2026-07-28) or (b) the club's **Yoco balance** genuinely can't fund it (refunds draw on the balance, not the bank — no code change helps; refund by EFT and record it). One checkout on the order → (b); several → it was (a). No args lists every order with >1 checkout; `<order_id>` gives the full picture; `--recent N` lists recent online orders. Reads `DATABASE_URL` from a gitignored `.env.local` (never printed).
 - `fix_inverted_coach_ledger.py` — one-off remediation for the INVERTED off-platform arrears entry (fixed forward 2026-07-28). `mark_arrears_collected` used to post `+coach_net` — the entry for money the CLUB took — when the coach had in fact collected it themselves, so each such lesson moved the club↔coach balance by the FULL GROSS in the wrong direction ("Coach payouts due" told the owner to pay a coach who owed them). Finds every `commission_earning` whose split carries `basis='arrears_commission'` and appends ONE correcting `adjustment` per coach — it does **not** rewrite history, so the audit trail keeps both. **Dry-run by default**; `--commit` to write; `--club` to scope. Idempotent (fixed `ref_id`). Run once, then it's spent.
 - **`fix_desk_cash_coach_ledger.py`** — the SAME correction for coaching settled in CASH or
+- **`diagnose_coach_statement.py`** — READ-ONLY: explain a coach's statement figures line by
+  line when a number is disputed. Totals the month FOUR independent ways (what the club banked
+  off `billing.payment` · the commission splits by basis+provider · the settlement the statement
+  shows · what `coach_ledger` accumulated) plus the sessions delivered, so a disagreement points
+  at WHICH view is wrong. `--coach <name>` `--month YYYY-MM` `--detail`.
   card-at-desk. The club can only receive Yoco and EFT, so that money was the coach's, but
   `record_split_for_order` booked it as club-held. Dry-run by default; `--commit` appends one
   correcting adjustment per coach, idempotent.

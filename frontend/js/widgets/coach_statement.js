@@ -112,10 +112,34 @@
       var net = st.net_minor || 0;
       var owesCoach = net >= 0;
       var settleList = el("div", { class: "cf-list" }, [
-        row("Paid to the club", st.club_held_minor, "Yoco, EFT or taken at the desk", "good"),
+        row("Paid to the club", st.club_held_minor, "Yoco + EFT — the only two ways it can receive", "good"),
         row(isCoach ? "Collected by you" : "Collected by the coach", st.coach_held_minor,
             "Taken courtside — never reached the club", "warn"),
         row("Total collected", st.total_collected_minor, null, null, true),
+      ]);
+      // WHAT that money was. "Paid to the club R17,000" against R6,000 of remembered lessons reads
+      // as a threefold error until you can see that it also contains class seats and pack sales — a
+      // lesson pack is charged (and its commission attributed) at the moment of sale, at the FULL
+      // pack price, not spread across the sessions drawn from it.
+      var KIND_LABEL = { lesson: "Lessons", "class": "Class seats", pack: "Session packs" };
+      var kinds = st.by_kind || {};
+      var kindKeys = Object.keys(kinds).filter(function (k) {
+        return (kinds[k].club_minor || 0) || (kinds[k].coach_minor || 0);
+      });
+      var breakdown = null;
+      if (kindKeys.length > 1) {
+        breakdown = el("div", { class: "cf-list", style: "margin:6px 0 0" },
+          [el("div", { class: "cf-muted", style: "font-size:.8rem;font-weight:600;padding:2px 0",
+            text: "└ what that was" })].concat(kindKeys.map(function (k) {
+              var v = kinds[k];
+              return row("   " + (KIND_LABEL[k] || k) + " × " + (v.n || 0),
+                         (v.club_minor || 0) + (v.coach_minor || 0),
+                         (k === "pack"
+                           ? "Charged in full when the pack was sold, not per session"
+                           : null));
+            })));
+      }
+      var settleList2 = el("div", { class: "cf-list" }, [
         row("Club commission" + (st.effective_pct != null ? " (" + st.effective_pct + "%)" : ""),
             -(st.commission_minor || 0), "On everything collected, however it was collected", "bad"),
         row("Less: already held by the club", -(st.club_held_minor || 0),
@@ -146,8 +170,8 @@
         el("p", { class: "cf-muted", style: "margin:-4px 0 8px;font-size:.86rem",
           text: "Based on money that ACTUALLY ARRIVED this month. Commission is only ever charged on "
               + "funds received — a lesson taught this month but paid next month settles next month." }),
-        settleList, netLine,
-      ];
+        settleList,
+      ].concat(breakdown ? [breakdown] : []).concat([settleList2, netLine]);
 
       // Rent, payouts and adjustments move the number that actually changes hands, so show them
       // rather than leaving the coach to wonder why the transfer differs from the net above.
