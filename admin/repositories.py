@@ -2096,6 +2096,15 @@ def _earnings_cte(coach=False):
                  WHERE ol.order_id = ord.id AND ol.enrolment_id IS NOT NULL LIMIT 1) AS enrolment_id,
                (SELECT ol.description FROM billing.order_line ol
                  WHERE ol.order_id = ord.id ORDER BY ol.created_at LIMIT 1) AS description,
+               -- DID THIS MONEY REACH THE CLUB? Only a Yoco charge or an EFT ever does. An order
+               -- flipped to 'paid' any other way -- a coach marking his arrears collected, cash he
+               -- took at the court -- is settled from the CLIENT's side while the cash sits with the
+               -- COACH. Calling that "collected/banked" overstated what the club holds by the whole
+               -- gross (R15,950 on one coach in July 2026). Same rule as
+               -- billing.commission.cash_custody_for, so this page and the coach statement agree.
+               EXISTS(SELECT 1 FROM billing.payment pm WHERE pm.order_id = ord.id
+                       AND pm.direction = 'charge' AND pm.status = 'succeeded'
+                       AND pm.provider IN ('yoco','eft')) AS in_bank,
                EXISTS(SELECT 1 FROM billing.token_wallet w WHERE w.order_id = ord.id) AS is_pack,
                EXISTS(SELECT 1 FROM billing.membership_subscription ms
                        WHERE ms.order_id = ord.id) AS is_membership,
@@ -2119,7 +2128,7 @@ def _earnings_cte(coach=False):
     ),
     cat AS (
         SELECT id, user_id, status, amount_minor, billed_orig, created_at,
-               booking_id, enrolment_id, description, coach_user_id,
+               booking_id, enrolment_id, description, coach_user_id, in_bank,
                CASE WHEN is_pack THEN 'pack'
                     WHEN is_membership THEN 'membership'
                     WHEN kind = 'lesson' THEN 'lesson'
@@ -2140,6 +2149,8 @@ _EARNINGS_FOLD_COLS = """
     COALESCE(SUM(GREATEST(billed_orig - amount_minor, 0)),0) AS discount,
     COALESCE(SUM(amount_minor) FILTER (WHERE status='written_off'),0) AS written_off,
     COALESCE(SUM(amount_minor) FILTER (WHERE status='paid'),0) AS collected,
+    COALESCE(SUM(amount_minor) FILTER (WHERE status='paid' AND in_bank),0) AS collected_bank,
+    COALESCE(SUM(amount_minor) FILTER (WHERE status='paid' AND NOT in_bank),0) AS collected_coach,
     COALESCE(SUM(amount_minor) FILTER (WHERE status='open'),0) AS outstanding,
     COALESCE(SUM(amount_minor) FILTER (WHERE status='refunded'),0) AS refunded,
     COUNT(*) AS n
@@ -2152,12 +2163,20 @@ def _fold_from_row(r):
     billed = int(r["billed"] or 0)
     discount = int(r["discount"] or 0)
     written_off = int(r["written_off"] or 0)
+    collected = int(r["collected"] or 0)
+    # Split the SETTLED money by where it physically is. `banked` is the club's actual cash; the rest
+    # was collected by the coach and is still owed TO the club (its commission on it), which is the
+    # owner's rule: only Yoco + EFT less reversals counts as received.
+    banked = int(r["collected_bank"] or 0) if "collected_bank" in r.keys() else collected
+    coach_held = int(r["collected_coach"] or 0) if "collected_coach" in r.keys() else 0
     return {
         "billed_minor": billed,
         "discount_minor": discount,
         "written_off_minor": written_off,
         "invoiced_minor": billed - discount - written_off,
-        "collected_minor": int(r["collected"] or 0),      # = paid
+        "collected_minor": collected,                     # = paid (however it was paid)
+        "banked_minor": banked,                           # actually in the club's account
+        "coach_held_minor": coach_held,                   # settled, but the COACH has the cash
         "paid_minor": int(r["collected"] or 0),
         "outstanding_minor": int(r["outstanding"] or 0),
         "refunded_minor": int(r["refunded"] or 0),
@@ -2398,7 +2417,8 @@ def _drill_totals(rows):
 # The fold columns qualified for a `cat c` alias (the drill queries SELECT … FROM cat c).
 _FOLD_C = (_EARNINGS_FOLD_COLS.replace("billed_orig", "c.billed_orig")
                               .replace("amount_minor", "c.amount_minor")
-                              .replace("status", "c.status"))
+                              .replace("status", "c.status")
+                              .replace("in_bank", "c.in_bank"))
 
 
 def _coach_default_rate(session, club_id, coach_user_id):
@@ -2449,6 +2469,11 @@ def _coach_pnl_from_fold(f, rate, *, name=None, coach_user_id=None):
         "sales_minor": f["billed_minor"], "discount_minor": f["discount_minor"],
         "written_off_minor": f["written_off_minor"], "net_minor": f["invoiced_minor"],
         "received_minor": received, "owed_minor": owed, "rate_pct": round(rate * 100, 1),
+        # WHERE the received money physically is. `received` alone said "settled", which read as
+        # "banked" — and for a coach who collects at the court that is the club's money sitting in
+        # his pocket, not in its account.
+        "banked_minor": f.get("banked_minor", received),
+        "coach_held_minor": f.get("coach_held_minor", 0),
         "club_comm_received_minor": club_recv, "coach_keeps_received_minor": received - club_recv,
         "club_comm_owed_minor": club_owed, "coach_keeps_owed_minor": owed - club_owed,
         "club_comm_total_minor": club_recv + club_owed,
@@ -2552,6 +2577,14 @@ def revenue_club_overview(session, *, club_id, month=None):
         direct = []
 
     direct_received = sum(d["paid_minor"] for d in direct)
+    # THE CLUB'S ACTUAL CASH. `paid` means the client settled; `banked` means the money reached the
+    # club. For DIRECT services (court hire, memberships) those are almost always the same, but a
+    # coach-attributed sale settled at the court is the club's money in the coach's pocket — so the
+    # roll-up must not call it "banked".
+    direct_banked = sum(d.get("banked_minor", d["paid_minor"]) for d in direct)
+    coach_held_total = (sum(d.get("coach_held_minor", 0) for d in direct)
+                        + sum(c.get("coach_held_minor", 0) for c in coaches))
+    coach_banked_total = sum(c.get("banked_minor", c["received_minor"]) for c in coaches)
     direct_net = sum(d["invoiced_minor"] for d in direct)
     direct_owed = sum(d["outstanding_minor"] for d in direct)
     comm_recv = sum(c["club_comm_received_minor"] for c in coaches)
@@ -2562,6 +2595,11 @@ def revenue_club_overview(session, *, club_id, month=None):
         "direct_received_minor": direct_received, "direct_net_minor": direct_net, "direct_owed_minor": direct_owed,
         "commission_received_minor": comm_recv, "commission_owed_minor": comm_owed,
         "earnings_collected_minor": direct_received + comm_recv,
+        # What is genuinely in the club's account, and what is settled but held by a coach. The two
+        # sum back to the collected figure, so the page still reconciles to the Money band + Home.
+        "banked_minor": direct_banked + coach_banked_total,
+        "coach_held_minor": coach_held_total,
+        "settled_total_minor": direct_received + sum(c["received_minor"] for c in coaches),
         "earnings_projected_minor": direct_net + comm_recv + comm_owed,
         "coaches_keep_collected_minor": keep_recv,
         "coaches_keep_projected_minor": keep_recv + keep_owed,

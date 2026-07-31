@@ -4112,7 +4112,94 @@ def sc_statement_survives_a_refund(s, fx):
           == (before["by_kind"] or {}).get("lesson", {}).get("n"), str(after["by_kind"]))
 
 
+def sc_club_earnings_agrees_with_the_coach_statement(s, fx):
+    """CLUB EARNINGS AND THE COACH STATEMENT MUST TELL THE SAME STORY ABOUT THE SAME MONEY.
+
+    Found on production: Club earnings showed one coach R20,200 "in" under a headline reading
+    "Collected so far - banked". R15,950 of it was never banked - he had marked those lessons
+    collected himself, so the cash was in his pocket and what the club actually had was R4,250. The
+    coach statement had it right; Club earnings had no concept of custody at all and called every
+    settled order "collected".
+
+    The owner's rule: only Yoco and EFT (less reversals) is money the club has received. Anything
+    else is still owed - by the client if nobody collected it, by the COACH if he did.
+
+    Both pages now read the ONE rule (`cash_custody_for` / the same provider test), so:
+      * banked + coach-held == the old "collected" total, so nothing double-counts and the Money
+        band and Home still reconcile;
+      * the split matches what the coach's own statement reports for the same coach and month."""
+    print("\n# Club earnings and the coach statement agree on WHERE the money is")
+    from admin.repositories import revenue_club_overview, revenue_coach_pnl
+    from billing.commission import coach_settlement
+
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',30,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+
+    def lesson(hour):
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                             booking_type="lesson", resource_id=fx.coach_res,
+                             coach_user_id=fx.coach_uid, starts_at=iso(at(fx, hour)),
+                             ends_at=iso(at(fx, hour + 1)), settlement_mode="at_court")
+        return r["booking"]["order_id"]
+
+    # (1) the club banks one by EFT ...
+    o_bank = lesson(9)
+    gross = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                      {"o": o_bank}).scalar()
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=o_bank, amount_minor=gross,
+                          provider="eft", provider_payment_id="EFT-RECON", user_id=fx.member)
+    # (2) ... the COACH collects another himself (off-platform) ...
+    o_coach = lesson(11)
+    ol = _line_of(s, o_coach)
+    _seed_owed_arrears(s, fx, ol, gross=gross)
+    aid = s.execute(text("SELECT id FROM billing.coach_arrears WHERE order_line_id=:ol"),
+                    {"ol": ol}).scalar()
+    CM.mark_arrears_collected(s, club_id=fx.club_id, arrears_id=aid)
+    # (3) ... one he took as CASH at the court (a payment row EXISTS, but not a bank one - this is
+    #         the leg that actually tests the PROVIDER rule; the arrears path above writes no payment
+    #         row at all, so it would classify as coach-held even if the rule were wrong) ...
+    o_cash = lesson(15)
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=o_cash, amount_minor=gross,
+                          provider="cash", provider_payment_id="CASH-RECON", user_id=fx.member)
+    # (4) ... and one nobody has collected.
+    lesson(13)
+
+    ym = s.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    pnl = revenue_coach_pnl(s, club_id=fx.club_id, coach_user_id=fx.coach_uid, month=ym)
+
+    check("all THREE settled lessons still count as RECEIVED (nothing vanished)",
+          pnl["received_minor"] == gross * 3, str(pnl["received_minor"]))
+    check("...but only the EFT one is IN THE BANK",
+          pnl["banked_minor"] == gross, str(pnl["banked_minor"]))
+    check("...and the coach is holding the other TWO (his arrears collection AND the cash)",
+          pnl["coach_held_minor"] == gross * 2, str(pnl["coach_held_minor"]))
+    check("banked + held == received (so the Money band + Home still reconcile)",
+          pnl["banked_minor"] + pnl["coach_held_minor"] == pnl["received_minor"],
+          f"{pnl['banked_minor']}+{pnl['coach_held_minor']} vs {pnl['received_minor']}")
+    check("the uncollected one is still OWED by the client",
+          pnl["owed_minor"] == gross, str(pnl["owed_minor"]))
+
+    # THE RECONCILIATION: the coach's own statement must report the same custody split.
+    st = coach_settlement(s, club_id=fx.club_id, coach_user_id=fx.coach_uid, month=ym)["settlement"]
+    check("the coach STATEMENT agrees on what reached the club",
+          st["club_held_minor"] == pnl["banked_minor"],
+          f"statement={st['club_held_minor']} earnings={pnl['banked_minor']}")
+    check("...and on what the coach is holding",
+          st["coach_held_minor"] == pnl["coach_held_minor"],
+          f"statement={st['coach_held_minor']} earnings={pnl['coach_held_minor']}")
+
+    # And the club roll-up carries it too, so the landing page can't contradict the drill.
+    ov = revenue_club_overview(s, club_id=fx.club_id, month=ym)["club"]
+    check("the club roll-up reports coach-held money",
+          ov["coach_held_minor"] == gross * 2, str(ov["coach_held_minor"]))
+    check("...and banked + held still equals everything settled",
+          ov["banked_minor"] + ov["coach_held_minor"] == ov["settled_total_minor"],
+          f"{ov['banked_minor']}+{ov['coach_held_minor']} vs {ov['settled_total_minor']}")
+
+
 SCENARIOS = [
+    sc_club_earnings_agrees_with_the_coach_statement,
     sc_statement_survives_a_refund,
     sc_settlement_says_what_the_money_was,
     sc_only_yoco_and_eft_reach_the_club,

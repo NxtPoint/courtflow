@@ -89,6 +89,12 @@
       if (p.written_off_minor) box.appendChild(stmtLine("Less write-off", "− " + money(p.written_off_minor), { muted: true }));
       box.appendChild(stmtLine("Net", money(p.net_minor), { strong: true, border: true }));
       box.appendChild(stmtLine("Received", money(p.received_minor), { border: true }));
+      // WHERE that received money is. A coach-collected lesson is settled from the client's side but
+      // the cash never reached the club — it is the club's commission that is still owed, by him.
+      if (p.banked_minor != null && (p.coach_held_minor || 0) > 0) {
+        box.appendChild(stmtLine("in your bank", money(p.banked_minor), { indent: true, tone: "good", sub: "Yoco + EFT" }));
+        box.appendChild(stmtLine("held by " + (isCoach ? "you" : "the coach"), money(p.coach_held_minor), { indent: true, tone: "bad", sub: "Collected at the court — never reached the club" }));
+      }
       box.appendChild(stmtLine("Club commission", "+ " + money(p.club_comm_received_minor), { indent: true, tone: "good", sub: (p.rate_pct || 0) + "%" }));
       box.appendChild(stmtLine(keepLabel, money(p.coach_keeps_received_minor), { indent: true }));
       box.appendChild(stmtLine("Owed", money(p.owed_minor), { border: true }));
@@ -119,6 +125,10 @@
       box.appendChild(stmtLine("Total club earnings", money(c.earnings_projected_minor), { strong: true, sub: "projected" }));
       box.appendChild(stmtLine("Collected so far", money(c.earnings_collected_minor), { muted: true, sub: "banked" }));
       box.appendChild(stmtLine("Direct services", money(c.direct_net_minor), { border: true, sub: "100% club · " + money(c.direct_received_minor) + " in" }));
+      if ((c.coach_held_minor || 0) > 0) {
+        box.appendChild(stmtLine("Of what is settled, held by coaches", money(c.coach_held_minor), {
+          tone: "bad", sub: "Collected at the court — the club's commission on it is still owed to you" }));
+      }
       box.appendChild(stmtLine("Commission from coaches", money((c.commission_received_minor || 0) + (c.commission_owed_minor || 0)), { sub: money(c.commission_received_minor) + " in · " + money(c.commission_owed_minor) + " owed" }));
       box.appendChild(stmtLine("Club keeps", money(c.earnings_projected_minor), { strong: true, border: true, tone: "good" }));
       box.appendChild(stmtLine("Coaches keep", money(c.coaches_keep_projected_minor), { strong: true }));
@@ -138,7 +148,13 @@
         var coaches = d.coaches || [], direct = (d.direct || []).filter(function (x) { return (x.billed_minor || 0) > 0; });
         var cc = UI.card([CRMUI.sectionHead("Coaches" + (coaches.length ? " · " + coaches.length : ""))]);
         if (!coaches.length) cc.appendChild(el("div", { class: "cf-empty", text: "No coach revenue this month." }));
-        else { var cl = el("div", { class: "cf-list" }); coaches.forEach(function (p) { cl.appendChild(tapRow(p.name, money(p.received_minor) + " in · " + money(p.owed_minor) + " owed", money(p.net_minor), money(p.club_comm_total_minor) + " club", function () { renderCoach(p.coach_user_id, false); })); }); cc.appendChild(cl); }
+        else { var cl = el("div", { class: "cf-list" }); coaches.forEach(function (p) { var held = p.coach_held_minor || 0;
+          // "in" used to mean "the client settled" — which for a coach who collects at the court is
+          // the CLUB's money in HIS pocket. Only Yoco + EFT reaches the club, so say which is which.
+          var sub = money(p.banked_minor != null ? p.banked_minor : p.received_minor) + " in your bank"
+                  + (held ? " · " + money(held) + " held by them" : "")
+                  + " · " + money(p.owed_minor) + " owed by clients";
+          cl.appendChild(tapRow(p.name, sub, money(p.net_minor), money(p.club_comm_total_minor) + " club", function () { renderCoach(p.coach_user_id, false); })); }); cc.appendChild(cl); }
         wrap.appendChild(cc);
 
         if (direct.length) {

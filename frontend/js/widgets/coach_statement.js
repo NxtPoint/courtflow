@@ -228,8 +228,9 @@
           text: "Everything " + who(name) + " taught in " + monthLabel(MONTH)
               + ", by the day it ran. Outstanding sessions are money nobody has collected yet." }),
         el("div", { class: "cf-list" }, [
-          row("Paid to the club", tot.to_club_minor, null, "good"),
-          row(isCoach ? "Collected by you" : "Collected by the coach", tot.with_coach_minor, null, "warn"),
+          row("Already paid to the club", tot.to_club_minor, "Of the sessions below", "good"),
+          row(isCoach ? "Already collected by you" : "Already collected by the coach",
+              tot.with_coach_minor, "Of the sessions below", "warn"),
           row("Outstanding", tot.outstanding_minor, "Not collected by anyone", "bad"),
           tot.not_charged_minor ? row("Not charged", tot.not_charged_minor,
             "Covered by a membership, a pack, or written off") : null,

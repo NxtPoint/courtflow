@@ -26,11 +26,11 @@ requirements.txt` (Python 3.12).
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
 3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 404 / billing 535 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 404 / billing 551 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (45/74/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (45/78/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. The check counts below are the gate line's, not per-bullet totals —
    **update line 25 only**, so the numbers can't drift apart.
@@ -915,6 +915,19 @@ member by email on the first authenticated hit.
   the arrears inversion below. Historical rows: `scripts/fix_desk_cash_coach_ledger.py` (dry-run
   default, idempotent, appends a correcting adjustment). Guarded by
   `sc_only_yoco_and_eft_reach_the_club`.
+- **CLUB EARNINGS AND THE COACH STATEMENT MUST AGREE ON WHERE THE MONEY IS (2026-07-31).** Club
+  earnings had no concept of custody: `_earnings_cte`'s `collected` was `status='paid'`, i.e. "the
+  CLIENT settled" — and it was rendered under a headline reading **"Collected so far · banked"**. For
+  a coach who collects at the court that is the club's money in HIS pocket. On production one coach
+  showed **R20,200 "in"** of which **R15,950 was never banked**. The CTE now carries `in_bank`
+  (EXISTS a succeeded `yoco`/`eft` charge — the same rule as `commission.cash_custody_for`), the fold
+  splits into **`banked_minor` + `coach_held_minor`**, and both the coach P&L and the club roll-up
+  carry them. **`banked + coach_held == collected`**, so the Money band and Home still reconcile and
+  nothing double-counts. Guarded by `sc_club_earnings_agrees_with_the_coach_statement` — which also
+  pins that the STATEMENT reports the identical split for the same coach+month.
+  **The `mark_arrears_collected` path writes NO payment row, so it classifies coach-held even under a
+  broken provider test** — a scenario must include a CASH desk payment or it isn't testing the rule
+  (found by re-breaking: the first version caught nothing).
 - **THE COLLECTED FIGURE MUST SAY WHAT IT WAS (2026-07-30).** "Paid to the club R17,000" against the
   R6,000 of lessons an owner remembers reads as a threefold error. It isn't one: a lesson/class PACK
   is deliberately hung on the coach's own lesson/class `price_id` so its commission attributes to him,
