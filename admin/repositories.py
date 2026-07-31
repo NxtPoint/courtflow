@@ -2891,28 +2891,46 @@ def earnings_clients(session, *, club_id, month=None, category=None, earned_by=N
 
 
 def admin_home(session, *, club_id):
-    """The owner Home command-center payload — money · people-attention · approvals. Every block is
-    guarded (missing/empty table -> zeros) so Home never 500s. 'Today at the club' is composed on the
-    frontend from the tz-correct diary master read; this endpoint supplies the other three focuses."""
+    """The owner Home command-center payload — money · people-attention · approvals. 'Today at the
+    club' is composed on the frontend from the tz-correct diary master read; this endpoint supplies
+    the other three focuses.
+
+    EVERY BLOCK RUNS IN ITS OWN SAVEPOINT. A bare `try/except: return 0` is NOT a guard in Postgres:
+    the failing statement ABORTS the transaction, so every query after it raises
+    `InFailedSqlTransaction` and returns its own zero. One broken query silently zeroed the whole rest
+    of the payload — the People counts read 0/0/0 (indistinguishable from "nothing needs attention")
+    and the refund check reported `refund_requests_error`, which is how this was noticed at all. The
+    section pages were fine the whole time, because they each run in a fresh session.
+
+    `begin_nested()` (not `session.rollback()`) is the right tool for the same reason it is in
+    `client360`: this runs inside the CALLER's `session_scope`, so a full rollback would discard the
+    caller's work. Each failure is LOGGED with its block name, so the cause is named in the logs
+    rather than inferred from a screen full of zeros."""
     from datetime import datetime, timezone
     cur = _club_currency(session, club_id=club_id)
 
-    def _scalar(sql, params=None):
+    def _guard(label, fn, default):
+        """Run one block inside a SAVEPOINT; on failure roll back JUST that block and carry on."""
         try:
-            return int(session.execute(text(sql), params or {"c": club_id}).scalar() or 0)
+            with session.begin_nested():
+                return fn()
         except Exception:
-            return 0
+            log.exception("admin_home: %s failed club=%s", label, club_id)
+            return default
+
+    def _scalar(sql, params=None, label="scalar"):
+        return _guard(label, lambda: int(
+            session.execute(text(sql), params or {"c": club_id}).scalar() or 0), 0)
 
     # Money — what the club is owed (open orders = the unified statement's unpaid debt), plus a
     # this-month headline + coach settlement due. tz-approximate (UTC month); Money tab is precise.
     owed = _scalar("SELECT COALESCE(SUM(amount_minor),0) FROM billing.\"order\" "
-                   "WHERE club_id = :c AND status = 'open'")
+                   "WHERE club_id = :c AND status = 'open'", label="owed_to_club")
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    try:
-        summ = cockpit_summary(session, club_id=club_id, dt_from=month_start, dt_to=now)
-    except Exception:
-        summ = {}
+    summ = _guard("cockpit_summary",
+                  lambda: cockpit_summary(session, club_id=club_id,
+                                          dt_from=month_start, dt_to=now), {})
     money = {
         "currency": cur,
         "owed_to_club_minor": owed,
@@ -2924,27 +2942,31 @@ def admin_home(session, *, club_id):
     # People needing attention
     people = {
         "new_signups_7d": _scalar("SELECT COUNT(*) FROM iam.membership WHERE club_id = :c "
-                                  "AND role = 'member' AND created_at >= now() - interval '7 days'"),
+                                  "AND role = 'member' AND created_at >= now() - interval '7 days'",
+                                  label="new_signups_7d"),
         "coach_invites_pending": _scalar("SELECT COUNT(*) FROM iam.coach_invite "
-                                         "WHERE club_id = :c AND status = 'pending'"),
+                                         "WHERE club_id = :c AND status = 'pending'",
+                                         label="coach_invites_pending"),
         "memberships_expiring_14d": _scalar(
             "SELECT COUNT(*) FROM billing.membership_subscription WHERE club_id = :c "
             "AND status = 'active' AND current_period_end IS NOT NULL "
-            "AND current_period_end <= now() + interval '14 days'"),
+            "AND current_period_end <= now() + interval '14 days'",
+            label="memberships_expiring_14d"),
     }
 
     # Approvals / decisions
     # A FAILED read must not be reported as ZERO. This card is the club's only prompt that somebody
     # is waiting on a money decision, and "0" renders as "Nothing waiting for a decision" — a false
     # all-clear indistinguishable from the real thing. Flag the failure so the UI can say so.
-    refunds_pending = 0
-    refunds_error = False
-    try:
+    _MISSED = object()
+
+    def _count_refunds():
         from billing.refunds import list_refund_requests_admin
-        refunds_pending = len(list_refund_requests_admin(session, club_id=club_id, status="pending"))
-    except Exception:
-        log.exception("home approvals: refund-request count failed club=%s", club_id)
-        refunds_error = True
+        return len(list_refund_requests_admin(session, club_id=club_id, status="pending"))
+
+    _n = _guard("refund_request_count", _count_refunds, _MISSED)
+    refunds_error = _n is _MISSED
+    refunds_pending = 0 if refunds_error else _n
     approvals = {"refund_requests_pending": refunds_pending,
                  "refund_requests_error": refunds_error}
 

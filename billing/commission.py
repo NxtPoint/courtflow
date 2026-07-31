@@ -1423,6 +1423,7 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
     MONEY IS: with the club, with the coach, or not yet collected. Guarded \u2192 empty."""
     ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
     try:
+      with session.begin_nested():
         rows = session.execute(
             text("""
                 WITH src AS (
@@ -1478,7 +1479,9 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
             {"club": club_id, "coach": str(coach_user_id), "ym": ym},
         ).mappings().all()
     except Exception:
-        session.rollback()
+        # NOT session.rollback(): this runs inside the CALLER's session_scope, so a full rollback
+        # discards their work AND aborts every later block in this payload. The begin_nested above
+        # scopes the failure to this block. (Same discipline as client360._guard.)
         log.exception("coach_sessions_by_day failed")
         rows = []
 
@@ -1560,6 +1563,7 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
     z = {"club_held_minor": 0, "coach_held_minor": 0, "total_collected_minor": 0,
          "commission_minor": 0, "clawback_minor": 0, "net_minor": 0, "effective_pct": None}
     try:
+      with session.begin_nested():
         r = session.execute(
             text("""
                 WITH sp AS (
@@ -1594,8 +1598,7 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
             {"club": club_id, "coach": str(coach_user_id), "ym": ym},
         ).mappings().first() or {}
     except Exception:
-        session.rollback()
-        log.exception("coach_settlement splits failed")
+        log.exception("coach_settlement splits failed")     # savepoint above scopes the failure
         r = {}
 
     g = lambda k: int((r or {}).get(k) or 0)                                   # noqa: E731
@@ -1616,11 +1619,12 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
           "effective_pct": (round(commission * 100.0 / total, 2) if total else None)}
 
     # --- the ledger side: rent, payouts and adjustments this month, + the running balance ---------
-    led = {"rent_minor": 0, "payouts_minor": 0, "adjustments_minor": 0,
+    led = {"rent_minor": 0, "payouts_minor": 0, "adjustments_minor": 0, "clawback_minor": 0,
            "commission_entries_minor": 0, "balance_minor": 0, "entries": []}
     try:
+      with session.begin_nested():
         rows = session.execute(
-            text("SELECT entry_type, amount_minor, note, ref_id, occurred_at "
+            text("SELECT entry_type, amount_minor, note, ref_type, ref_id, occurred_at "
                  "FROM billing.coach_ledger "
                  "WHERE club_id = :club AND coach_user_id = CAST(:coach AS uuid) "
                  "  AND to_char(occurred_at,'YYYY-MM') = :ym "
@@ -1634,7 +1638,19 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
             elif e["entry_type"] == "payout":
                 led["payouts_minor"] += amt
             elif e["entry_type"] == "adjustment":
-                led["adjustments_minor"] += amt
+                # A REFUND CLAWBACK IS A COMMISSION REVERSAL, not a manual correction — it just has
+                # to be written as an `adjustment` because `commission_earning` carries a UNIQUE
+                # index on ref_id and the clawback references the same split. It belongs on the
+                # commission side of the reconciliation: the SPLITS already net it out of the
+                # settlement, so counting it as an adjustment made `reconciles` fail by exactly the
+                # clawback every time a coach had a refund — a warning banner on a document whose
+                # money was correct, which is the fastest way to make people stop believing the
+                # warning. `ref_type='split'` is what distinguishes it from a real manual entry.
+                if (e["ref_type"] or "") == "split":
+                    led["clawback_minor"] += amt
+                    led["commission_entries_minor"] += amt
+                else:
+                    led["adjustments_minor"] += amt
             else:                                     # commission_earning | commission_due
                 led["commission_entries_minor"] += amt
             led["entries"].append({
@@ -1646,8 +1662,7 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
                  "WHERE club_id = :club AND coach_user_id = CAST(:coach AS uuid)"),
             {"club": club_id, "coach": str(coach_user_id)}).scalar() or 0)
     except Exception:
-        session.rollback()
-        log.exception("coach_settlement ledger failed")
+        log.exception("coach_settlement ledger failed")     # savepoint above scopes the failure
 
     # The document's own audit line. The month's commission ENTRIES must equal the net derived from
     # the splits — they are two views of the same event, so a mismatch means something wrote one
@@ -1663,6 +1678,8 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
     st["ledger_commission_minor"] = led["commission_entries_minor"]
     st["reconciles"] = (led["commission_entries_minor"] == net)
     # What actually changes hands after rent and anything already settled this month.
+    # `adjustments_minor` is now MANUAL corrections only (the clawback moved to the commission side,
+    # where the splits already accounted for it) — so this cannot double-count it.
     st["due_now_minor"] = net + led["rent_minor"] + led["adjustments_minor"] + led["payouts_minor"]
     return {"month": ym, "settlement": st, "ledger": led,
             "currency": _club_currency_code(session, club_id)}
@@ -1681,21 +1698,30 @@ def _settlement_by_kind(session, *, club_id, coach_user_id, ym):
                 SELECT CASE
                          WHEN EXISTS (SELECT 1 FROM billing.token_wallet w WHERE w.order_id = o.id)
                            THEN 'pack'
+                         -- A clawback inherits the KIND of what it reverses, which basis alone
+                         -- cannot say (it is always 'refund_clawback'); resolve it from the
+                         -- original line's product instead.
                          WHEN cs.basis = 'class_commission' THEN 'class'
-                         WHEN cs.basis = 'arrears_commission' THEN 'lesson'
+                         WHEN cs.basis = 'refund_clawback' AND pr.kind = 'class' THEN 'class'
                          ELSE 'lesson'
                        END AS kind,
                        (pm.provider IN ('yoco','eft')) AS club_banked,
-                       COUNT(*) AS n,
+                       (cs.basis = 'refund_clawback') AS is_clawback,
+                       -- A clawback carries NEGATIVE gross, so it nets the refund out of its own
+                       -- kind and the breakdown still sums to `total_collected`. It must NOT be
+                       -- counted as a session though — it is the reversal of one.
+                       COUNT(*) FILTER (WHERE cs.basis <> 'refund_clawback') AS n,
                        COALESCE(SUM(cs.gross_minor), 0) AS gross
                 FROM billing.commission_split cs
                 LEFT JOIN billing.payment pm ON pm.id = cs.payment_id
                 LEFT JOIN billing.order_line ol ON ol.id = cs.order_line_id
                 LEFT JOIN billing."order" o ON o.id = ol.order_id
+                LEFT JOIN billing.price p2 ON p2.id = ol.price_id
+                LEFT JOIN billing.product pr ON pr.id = p2.product_id
                 WHERE cs.club_id = :club AND cs.coach_user_id = CAST(:coach AS uuid)
-                  AND cs.party_type = 'owner' AND cs.basis <> 'refund_clawback'
+                  AND cs.party_type = 'owner'
                   AND to_char(cs.occurred_at, 'YYYY-MM') = :ym
-                GROUP BY 1, 2
+                GROUP BY 1, 2, 3
             """),
             {"club": club_id, "coach": str(coach_user_id), "ym": ym},
         ).mappings().all()

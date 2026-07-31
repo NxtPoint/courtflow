@@ -4047,7 +4047,73 @@ def sc_settlement_says_what_the_money_was(s, fx):
           f"splits={st['net_minor']} ledger={st['ledger_commission_minor']}")
 
 
+def sc_statement_survives_a_refund(s, fx):
+    """A REFUND in the month must not make the statement cry wolf, and must not break its own maths.
+
+    Found by reading a real coach's live statement: it showed a red "commission entries don't match
+    the settlement" banner, and its "what that was" breakdown added up to R180 MORE than the total it
+    sat under. The MONEY was right both times; two readers were wrong.
+
+      (a) A refund clawback IS a commission reversal, but it has to be written to `coach_ledger` as an
+          `adjustment` \u2014 `commission_earning` carries a UNIQUE index on ref_id and the clawback
+          references the same split. The reconciliation counted it as a manual adjustment, so it fell
+          out of the commission side and `reconciles` failed by EXACTLY the clawback, every time a
+          coach had a refund. A false alarm on a money document is worse than no alarm: it teaches
+          the reader to ignore the one that matters. `ref_type='split'` distinguishes it.
+      (b) `by_kind` filtered clawbacks out entirely, so the breakdown showed the pre-refund gross
+          while the headline showed the post-refund total, and the two silently disagreed."""
+    print("\n# A refund in the month: the banner stays quiet and the breakdown still adds up")
+    from billing.commission import coach_settlement
+
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',30,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res,
+                         coach_user_id=fx.coach_uid, starts_at=iso(at(fx, 9)),
+                         ends_at=iso(at(fx, 10)), settlement_mode="online")
+    oid = r["booking"]["order_id"]
+    gross = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id=:o'),
+                      {"o": oid}).scalar()
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="yoco", kind="charge_succeeded", order_ref=str(oid),
+        provider_payment_id="p_refund_stmt", amount_minor=gross, currency="ZAR",
+        status="succeeded", direction="charge", club_id=str(fx.club_id),
+        user_id=str(fx.member)), session=s)
+
+    before = coach_settlement(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)["settlement"]
+    check("collected, and the statement ties", before["reconciles"] is True, str(before))
+    check("...the breakdown equals the total",
+          sum(v["club_minor"] + v["coach_minor"] for v in (before["by_kind"] or {}).values())
+          == before["total_collected_minor"], str(before["by_kind"]))
+
+    # A PARTIAL refund of a quarter of it — the clawback reverses a quarter of the commission.
+    part = gross // 4
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="yoco", kind="refunded", order_ref=str(oid),
+        provider_payment_id="p_refund_stmt_r1", amount_minor=part, currency="ZAR",
+        status="succeeded", direction="refund", club_id=str(fx.club_id),
+        user_id=str(fx.member)), session=s)
+
+    after = coach_settlement(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)["settlement"]
+    check("the refund came off what the club is holding",
+          after["club_held_minor"] == gross - part, str(after["club_held_minor"]))
+    check("...and off the commission proportionally",
+          after["commission_minor"] < before["commission_minor"], str(after["commission_minor"]))
+    check("THE BANNER STAYS QUIET \u2014 a refund is not a discrepancy",
+          after["reconciles"] is True,
+          f"splits={after['net_minor']} ledger={after['ledger_commission_minor']}")
+    check("...and the breakdown STILL equals the total (it nets the refund out)",
+          sum(v["club_minor"] + v["coach_minor"] for v in (after["by_kind"] or {}).values())
+          == after["total_collected_minor"], str(after["by_kind"]))
+    check("...without counting the reversal as another session",
+          (after["by_kind"] or {}).get("lesson", {}).get("n")
+          == (before["by_kind"] or {}).get("lesson", {}).get("n"), str(after["by_kind"]))
+
+
 SCENARIOS = [
+    sc_statement_survives_a_refund,
     sc_settlement_says_what_the_money_was,
     sc_only_yoco_and_eft_reach_the_club,
     sc_coach_settlement_statement,
