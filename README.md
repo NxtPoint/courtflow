@@ -92,7 +92,9 @@ Operational one-offs (audits, backfills, imports, live verification) are indexed
 - **[`CLAUDE.md`](CLAUDE.md)** — build state, architecture, lane ownership, invariants, gotchas.
 - **[`docs/specs/`](docs/specs/)** — the as-built spec set. Start at
   [`README.md`](docs/specs/README.md) → `SYSTEM` → `BUSINESS-RULES` → `INVENTORY` → `OUTSTANDING`.
-- **[`BUILD_PROMPT.md`](BUILD_PROMPT.md)** — the orchestrator + per-lane agent prompts.
+- **[`BUILD_PROMPT.md`](BUILD_PROMPT.md)** — the **HANDOVER**: paste Section 1 into a fresh Claude
+  Code session to pick up work. (It was the build-kickoff prompt until 2026-08-02; the build phase
+  is long over, so it now describes how to work on a live system instead.)
 
 **Frozen design docs (`docs/00`→`11`)** — the original pre-build spec. Still useful for *intent*, but
 where they differ from `docs/specs/`, the specs reflect reality.

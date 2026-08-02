@@ -310,6 +310,45 @@ operating guide; **this folder is the detail.**
 > §D6–D8.
 > **New gate baseline: booking 404 / billing 492 / statement 64.**
 
+> **2026-07-30 → 08-02 — THE COACH STATEMENT, AND WHAT READING THE LIVE SCREENS FOUND.** Built the
+> **coach statement** — the coach-side equivalent of a client invoice ([BUSINESS-RULES](BUSINESS-RULES.md)
+> §2/§6): sessions by client by DAY, where each payment sits, and the settlement (total collected ×
+> commission − what the club already holds = net). It sits on TWO deliberate date bases and says so on
+> the page — sessions by when they were TAUGHT, settlement by when the money ARRIVED (§D7) — and its net
+> equals the `coach_ledger` movement **by construction**, asserted on every render with a warning banner
+> when it fails. ONE shared `Widgets.CoachStatement`; admin and coach differ by config only.
+> **Then we opened the live site, and six bugs fell out that were invisible in the code.**
+> **(1) Admin Home was silently zeroing itself** — `try/except: return 0` is not a guard in Postgres: the
+> failing statement ABORTS the transaction, so every later block returned its own zero. The People
+> counts read 0/0/0 and the refund check errored, which is the only reason anyone noticed; the
+> Refund-requests SECTION was fine throughout because it runs in a fresh session, and that mismatch is
+> what gave it away. Third occurrence of this exact antipattern (client360, admin_home,
+> coach_settlement) — it is now called out in the handover.
+> **(2) The reconcile banner cried wolf on every refund** — a clawback IS a commission reversal but must
+> be written as an `adjustment` (unique index), so it fell off the commission side and the banner fired
+> by exactly the clawback. A false alarm on money teaches people to ignore the real one.
+> **(3) The by-kind breakdown didn't add up** (R20,700 of detail under a R20,520 headline) — refunds
+> again. **(4)** A missing `ref_type` in the ledger read blanked the whole breakdown.
+> **(5) CLUB EARNINGS CALLED COACH-HELD MONEY "BANKED".** Its `collected` was `status='paid'` — "the
+> CLIENT settled" — under a headline reading *"Collected so far · banked"*. One coach showed **R20,200
+> "in"** of which **R15,950 was never banked**; the club had R4,250. The CTE now carries `in_bank` using
+> the SAME `cash_custody_for` rule as the statement, the fold splits into `banked_minor` +
+> `coach_held_minor`, and **banked + held == collected** so Home and the Money band still reconcile.
+> **(6)** "Paid to the club" appeared TWICE on one statement with two different figures.
+> **Owner rule confirmed and now enforced in one place:** the club can only receive **Yoco and EFT** —
+> anything else on a coaching order is money the coach took directly, and the club's commission on it is
+> still owed BY him ([01 §D6](01-commission-and-coaching-decisions.md)). A `record_split_for_order` that
+> hard-coded `cash_held_by='club'` for every payment path was wrong by the whole gross on any
+> desk-collected lesson; production came back clean (no cash coaching had ever been recorded).
+> Also: **a pack sale could accrue commission to NOBODY** (a pack has no booking, so a pack on a
+> coach-less service wrote `coach_user_id = NULL` while `_earnings_cte` showed the revenue against him),
+> and **peak pricing survives a reschedule** (it re-priced at BASE regardless of the new time, and only
+> fired on a duration change — so the commonest move of all, same length into a peak hour, never
+> re-priced at all).
+> **STILL OPEN:** a coach's **60-min lesson priced R0.00** alongside a R600 one — the cheaper row wins,
+> so it bills nothing (owner fixes the data; we owe a guard). See [OUTSTANDING](OUTSTANDING.md).
+> **New gate baseline: booking 404 / billing 551 / statement 64.**
+
 ## Read in this order
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,
    request/auth flow, integrations, deploy. *"How it's wired."*

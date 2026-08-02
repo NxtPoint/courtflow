@@ -76,6 +76,37 @@ the refund, lesson and class lifecycles. All scenario-guarded, each verified by 
 - Setup → Equipment hire: tick each item's **payment options** (an item with none resolvable is now
   refused rather than silently billed at-court).
 
+### OPEN AS OF 2026-08-02 — from the live-screen review
+
+- [ ] **⚠ A COACH'S 60-MIN LESSON BILLS R0.00 — TOMO TO FIX IN THE UI.** Setup → Services → Lessons
+      shows **Terkaa Nambe** with TWO 60-minute variations: **R0.00** and R600.00. `price_for`
+      resolves the exact duration then tie-breaks on **`amount_minor ASC`**, so it picks the **R0.00**
+      row — every 60-minute lesson with him is billed nothing. Club earnings confirms it:
+      **R12,680 billed, R0.00 in.** **Tomo Stojakovic** has the same shape (60 min R550 *and* R700 —
+      the R550 silently wins). Fix: open the service → Edit → remove the R0.00 variation and decide
+      which 60-min price is right. **This is pricing data, so it is the owner's call, not a code fix.**
+- [ ] **CODE GUARD for the above.** The editor should refuse (or loudly warn on) a **R0 variation on a
+      paid service**, and should surface **duplicate durations** on one product — two rows for the same
+      length is always a mistake, and the cheaper one always wins silently.
+- [ ] **ROOT-CAUSE `admin_home`'s failing block.** Home reported `refund_requests_error` while the
+      Refund-requests SECTION worked — a query in `admin_home` was aborting the transaction and every
+      later block returned its own zero (so the People counts 0/0/0 were probably false too). Each
+      block is now savepointed **and logs its own name**, so the next deploy names the culprit in the
+      Render logs. **Check the logs and fix the actual query.** The symptom is gone; the cause is not.
+- [ ] **51 members show as ON TRIAL** (People → Trial). The trial gives free courts, so verify these
+      are genuine new signups and not mis-granted: `python -m scripts.audit_trials` (read-only;
+      `--cancel-flagged` reverts wrong ones to PAYG).
+- [ ] **Confirm PEAK PRICES are set.** The peak WINDOW is live (Mon–Thu 17:00–19:00, Setup → Club
+      profile), but peak only charges more where a **`peak_amount_minor` per duration** exists on the
+      court service. Window without amounts = inert.
+- [ ] **~1,000 Wix imports show as raw email addresses** in People (no first/last name), so the list
+      sorts and reads by email. Cosmetic, but it makes the roster hard to use.
+- [ ] **FINISH THE PAGE-BY-PAGE REVIEW.** Covered 2026-07-31: Home · Refund requests · Coach statement
+      (summary + a coach) · Club earnings · People · Setup (menu, club profile, memberships, services).
+      **Not yet reviewed: Diary · Overview · the rest of Setup · the whole coach app · the whole client
+      app · mobile widths.** Six real bugs came out of the screens that WERE reviewed, every one of
+      them invisible in the code — so the remainder is worth doing properly, with the console open.
+
 - [ ] **Klaviyo console work** (3 items, all in the Klaviyo UI, no code — full detail in
       `KLAVIYO-MASTER-PLAN.md` §7e/§8):
       **(a)** flow **`WSWr2C`** ("Court feedback") has `trigger_filter = null` — add **`booking_type` equals

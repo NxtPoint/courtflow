@@ -1,157 +1,142 @@
-# BUILD_PROMPT — Kick off the NextPoint / CourtFlow build in Claude Code
+# HANDOVER — pick up work on NextPoint / CourtFlow
 
-> Paste **Section 1** into Claude Code at the repo root to start. It will read the full spec in
-> `docs/` and orchestrate the lane agents. Sections 2–7 are the per‑agent briefs the orchestrator
-> (or you) can dispatch. Keep `docs/` open — it is the source of truth; this prompt just drives it.
-
----
-
-## Section 1 — Master orchestrator prompt
-
-```
-You are the lead engineer building "CourtFlow" — a multi-tenant tennis club management platform.
-NextPoint Tennis is tenant/club #1 (migrating off Wix). The complete specification is in ./docs
-(00..09) and ./README.md. READ ALL OF IT before writing code.
-
-Reuse the proven Ten-Fifty5 (1050) codebase patterns from C:\dev\webhook-server (READ-ONLY reference):
-auth_v2/ (Clerk JWKS verify), models_billing.py/db_init.py (idempotent boot DDL), subscriptions_api.py
-(apply_subscription_event = the provider-agnostic billing template), paypal_billing/ (vanilla gateway
-adapter shape), marketing_crm/ + core_db/ (own-CRM + Klaviyo sync + consent), locker_room_app.py +
-build_blog.py (host-switched marketing + SEO toolkit). Copy patterns, do NOT import 1050's code or
-touch its repo/DB.
-
-Hard constraints (from docs):
-- New repo (this one), NEW Postgres DB. Reuse the existing Render org, Clerk account, AWS (S3/SES),
-  Klaviyo account — new project-scoped values only. Secrets are sync:false in render.yaml.
-- Multi-tenant from day one: every domain row has club_id; never query domain data without it.
-- Python 3.12 + Flask + Gunicorn + Postgres; idempotent boot DDL (no migration framework); enable
-  btree_gist + pgcrypto.
-- The diary is the heart: one set of bookings, role-scoped lenses; court + lesson + class; full
-  edit/cancel/reschedule; DB-level exclusion constraint prevents double-booking.
-- Payments are provider-agnostic (gateway protocol → apply_payment_event). Launch with at_court /
-  monthly_account / membership_covered / free settlement; Yoco is the first online adapter (keys
-  exist) but online pay is behind a flag — design now, can switch on later. Do NOT hardcode a gateway
-  into core.
-- Klaviyo sends every booking/lesson/class confirmation (transactional), SES as fallback; marketing
-  email is opt-in only; no minor PII into Klaviyo.
-
-Plan of work: follow docs/09 phasing. Do Phase 0 (foundation) and Phase 1 (tenancy + NextPoint seed)
-YOURSELF first and commit. THEN fan out parallel agents by lane (docs/09 §2): B-Diary, C-Billing,
-D-CRM, E-Frontend, F-Marketing — each in its own git worktree, touching only its lane. Use the
-per-agent briefs in BUILD_PROMPT.md §2-§7. After B/C/D land, integrate E. Run the Phase-2 and Phase-3
-verification suites (docs/09 §5, esp. the edge cases in docs/03 §10) before merging anything that
-touches booking integrity.
-
-Deliver Phase 0-3 + a working member booking wizard against NextPoint seed data this session:
-book/edit/cancel/reschedule a court and a lesson, enrol in a class, with at-court + monthly settlement
-and a fired booking_confirmed event. Report what's done vs pending against docs/09 §5 at the end.
-
-Start by: (1) reading ./docs fully, (2) confirming the Postgres DATABASE_URL + env you have, (3)
-scaffolding the repo (app.py, wsgi.py, render.yaml, db.py, module folders), (4) writing the boot
-schema runner, (5) porting auth. Ask me only if a decision isn't covered by the docs.
-```
+> **Paste Section 1 into a fresh Claude Code session at the repo root.** This file replaced the
+> original build-kickoff prompt (2026-06-20) on 2026-08-02: the platform has been **live in
+> production for over a month**, so a prompt that says "build it" now actively misleads. The build
+> phase is over. What follows is how to work on a running system that handles real money.
 
 ---
 
-## Section 2 — Agent A: Foundation / Platform  (run first, alone)
+## Section 1 — the prompt
 
 ```
-Lane: app.py, wsgi.py, render.yaml, requirements.txt, db.py, iam/, auth/, scripts/ (seed/provision).
-Read docs/01, 02, 04, 09. Build:
-1. Repo skeleton + render.yaml (2 web services: courtflow-api, courtflow-web; crons). Secrets sync:false.
-2. db.py (psycopg pool) + a boot runner that calls every module's init() idempotently; enable
-   pgcrypto + btree_gist. Running boot twice must be a no-op.
-3. club.* + iam.* schemas (docs/02 §2-§3) via their init().
-4. Port auth_v2/: Clerk JWKS verify → principal; add iam.user upsert + membership/club resolution by
-   host/X-Club/default (docs/04 §3). Central iam/permissions.py (docs/04 §4).
-5. scripts/seed_nextpoint.py (docs/02 §7) + scripts/provision_club.py + a "template club" (docs/08 §4).
-Done when: app boots, schemas create idempotently, a Clerk JWT resolves {user_id, club_id, role},
-NextPoint club #1 + 9 courts + coaches + class resources + ZAR prices are seeded. Commit + push.
-```
+You are working on "CourtFlow", a LIVE multi-tenant tennis club management platform.
+NextPoint Tennis is club #1, in production at https://nextpointtennis.com with ~1,070 people,
+real bookings and real money moving through Yoco daily.
 
-## Section 3 — Agent B: Diary engine
+READ FIRST, IN THIS ORDER:
+  1. ./CLAUDE.md            — the operating guide. The "Gotchas" section is the accumulated
+                              scar tissue of every money bug we have found. Read it properly;
+                              most of it was written after something broke in production.
+  2. ./docs/specs/README.md — the authoritative current-state index, newest entry first.
+  3. ./docs/specs/OUTSTANDING.md — what is actually open right now.
 
-```
-Lane: diary/. Read docs/03 (whole), 02 §4. Build the booking heart:
-- diary.* schema incl. the GiST exclusion constraint on booking (resource_id, tstzrange) WHERE status
-  in ('held','confirmed').
-- Availability computation (docs/03 §3). Booking creation tx with held→confirmed + 409 SLOT_TAKEN on
-  conflict (docs/03 §4). Lesson = coach hold + linked court hold under one order_id.
-- Full edit/reschedule/cancel (atomic, policy-aware), recurrence (RRULE), classes + enrolment +
-  waitlist + promotion (docs/03 §5-§6). Crons: reminders, capacity-sweep, monthly-invoice trigger.
-- /api/diary/* endpoints (docs/03 §8), club_id from principal, role-gated via permissions.py.
-- Emit events (booking_confirmed/cancelled/rescheduled/reminder, class_enrolled/waitlisted,
-  lesson_completed) via the contract — call emit(); don't implement delivery (Agent D owns that).
-Done when: docs/03 §10 edge cases pass as automated asserts against a scratch DB.
-```
+THERE IS NO BUILD PHASE AND NO PYTEST. The gates are:
+  1. python -m py_compile $(git ls-files '*.py')
+  2. python -m db   TWICE   — the second run must be a clean no-op
+  3. python -m scripts.test_all   — three rollback-only scenario harnesses
+     Current green baseline: booking 404 / billing 551 / statement 64
+  4. node --check on every frontend JS file you touched
 
-## Section 4 — Agent C: Billing / Settlement + gateways
+HOW WE WORK — these are not style preferences, they are what has kept the money correct:
 
-```
-Lane: billing/, yoco_billing/, paypal_billing/. Read docs/05, 02 §5.
-- billing.* schema (product, price, order, order_line, payment, payment_attempt, account_ledger,
-  membership_subscription).
-- The PaymentGateway protocol + apply_payment_event(normalized) — idempotent via payment_attempt
-  event_hash; record-only refunds. Implement the 'manual' provider (desk cash/card) + the four launch
-  settlement modes (at_court / monthly_account / membership_covered / free). GET /api/billing/config.
-- THEN (flag-gated) yoco_billing/ adapter (create_checkout/verify_webhook/parse_event) + 'online'
-  mode. FIRST fetch Yoco's current API docs and build to them (docs/05 §6 warning). Port paypal_billing
-  as a 2nd provider to prove the abstraction.
-Done when: each settlement mode writes correct order/ledger rows; apply_payment_event replay = no-op;
-config probe flips online pay on/off cleanly.
-```
+  * REPRODUCE BEFORE YOU FIX. Do not reason your way to a diagnosis from the code alone.
+    Several of this project's worst bugs looked obvious and were wrong: a refund failure was
+    blamed on the Yoco balance, then on the payment method, then on a duplicate checkout,
+    before the actual cause (a frozen idempotency key) was found.
 
-## Section 5 — Agent D: CRM / Klaviyo
+  * VERIFY BY RE-BREAKING. After a fix passes, deliberately re-introduce the bug and confirm
+    the scenario goes RED. A guard that has never failed is a guard nobody has tested. This
+    has caught weak tests repeatedly — most recently a custody test that passed for the wrong
+    reason and guarded nothing at all.
 
-```
-Lane: core/, marketing_crm/. Read docs/06, 02 §6.
-- Port core.* (core_db) + marketing_crm/{tracking,crm_sync,consent,backoffice}; add club_id to events
-  + Klaviyo profile traits (segment per club).
-- contracts/events.md for the booking domain (docs/06 §2). Consume emit() from B/C → core.usage_event
-  → crm_sync → Klaviyo. Transactional confirmations always send (SES fallback for booking_confirmed);
-  marketing gated on marketing_opt_in; never minor PII.
-- Build Klaviyo TEMPLATES via the connector for the transactional set; document the Flow Builder wiring
-  (connector can't create flows). Club-admin cockpit views (occupancy/revenue/utilisation/attendance).
-Done when: a test booking_confirmed reaches a Klaviyo test profile; opt-in gating verified.
-```
+  * A SILENT ZERO IS A BUG. "0" and "the read failed" are indistinguishable on screen, and on
+    a money surface that is a false all-clear. Say the read failed.
 
-## Section 6 — Agent E: Frontend / Portal  (integrate after B/C/D)
+  * NEVER `session.rollback()` INSIDE A COMPOSER. These readers run in the CALLER's
+    session_scope. Use `session.begin_nested()` — a savepoint — or one failing block aborts the
+    transaction and every later block silently returns zero. This exact bug has now been found
+    THREE times (client360, admin_home, coach_settlement).
 
-```
-Lane: frontend/. Read docs/03 §9, 04, 08. Reuse 1050's vanilla-JS SPA + CSS conventions, NextPoint
-branding (green palette, logo). Build:
-- Member booking wizard (type → court/coach/class → slot → parties → settlement → confirm), mobile-first.
-- "My bookings" + cancel/reschedule UI.
-- Coach diary (my week, classes/rosters, mark attendance, availability editor).
-- Club-admin console: master diary calendar (evaluate FullCalendar resource-timeline), resources,
-  people, pricing, billing/settlement, cockpit, settings.
-- /login (Clerk, themed by host). Consume /api/diary/* + /api/billing/* + entitlement/config probes.
-Done when: a member books a court, a lesson, and a class end-to-end on a phone; coach + admin lenses work.
-```
+  * DATE-DEPENDENT ASSERTIONS DERIVE THEIR DATE FROM THE FIXTURE, never now(). The harness
+    books days ahead; a now()-based month fails for the last few days of every month and reads
+    as a regression.
 
-## Section 7 — Agent F: Marketing site + SEO migration
+  * PRODUCTION IS READ-ONLY TO YOU. You may look; Tomo clicks anything that writes. Never
+    change DNS. Never touch the Ten-Fifty5 repo/DB at C:\dev\webhook-server except the one
+    documented embed exception.
 
-```
-Lane: frontend/marketing/, build_blog.py, migration/. Read docs/07.
-- Port the host-switched native marketing site + blog generator + sitemap/robots/branded-404, themed
-  from club.branding. Pages: home, services, coaches (Neville Godwin/Ross Nemeth bios), high-performance,
-  juniors, socials, free-lesson, contact, careers + JSON-LD (LocalBusiness/SportsActivityLocation,
-  Service/Offer, FAQ, Breadcrumb).
-- migration/: build url_inventory.csv from GSC + Ahrefs + a live crawl; produce the 301 map (old Wix
-  URL → new path, docs/07 §3); implement host-aware 301s; self-canonicals.
-- Do NOT touch DNS or the api.nextpointtennis.com record. The cutover (docs/07 §4) is a separate,
-  supervised step with Tomo.
-Done when: site renders natively, every inventoried URL has a 301 target, sitemap validates.
+THE IRON RULE: every domain row is club_id-scoped. Never query domain data without it.
+
+Ask Tomo what he wants to work on. If he asks for a review rather than a change, look at the
+LIVE screens — every bug found on 2026-07-31 was invisible in the code and obvious on screen.
 ```
 
 ---
 
-## Pre-flight checklist for Tomo (before/while agents run)
-- [ ] New Postgres provisioned; `DATABASE_URL` ready.
-- [ ] New Clerk application created (`clerk.courtflow.app` or similar); JWKS URL + publishable key.
-- [ ] AWS S3 bucket + SES sender (`bookings@nextpointtennis.com`) verified; keys to hand.
-- [ ] `KLAVIYO_API_KEY`; decide per-club list vs `club` property; authenticate sending domain; postal address.
-- [ ] `YOCO_SECRET_KEY` / public / webhook secret (you have these) — for Phase 7.
-- [ ] Confirm current DNS for nextpointtennis.com (registrar + what points to Wix vs the 1050 api record).
-- [ ] Keep Wix live until SEO cutover is verified (rollback path).
+## Section 2 — where things stand (2026-08-02)
+
+**Live and working.** Booking (court / lesson / class / semi-private), the three purchasing models,
+Yoco payments + refunds, invoicing, the commission engine, month-end on the 25th, transactional
+email via SES, the marketing site + blog, GA4/Ads with an offline-conversion loop, and the
+Ten-Fifty5 match-analysis embed.
+
+**The money model, in one paragraph.** One debt = one `billing.order`, settled once. Commission
+accrues **on collection**, never on billing. `billing.coach_ledger` is signed (**+ = the club owes
+the coach, − = the coach owes the club**) and its direction follows **who holds the cash** — the club
+can only receive **Yoco and EFT**; anything else on a coaching order is money the coach took
+directly. That one rule (`billing.commission.cash_custody_for`) is read by the ledger, the coach
+statement and Club earnings, so the three cannot disagree. Read
+`docs/specs/01-commission-and-coaching-decisions.md` §D6–D8 before touching any of it.
+
+**What bit us most often**, in rough order: guarded reads that swallow an error and return zero;
+two surfaces computing the same number two different ways; and money labels that are broader than
+they sound ("collected", "banked", "paid to the club" have each been wrong at least once).
+
+---
+
+## Section 3 — the lanes
+
+Touch only your lane; coordinate on `contracts/events.md`, the schema docs and `render.yaml`
+(Foundation owns those). Full map + ownership: `CLAUDE.md` → "Lanes / module ownership map".
+
+| Lane | Owns |
+|---|---|
+| Foundation | `app.py`, `db.py`, `render.yaml`, `auth/`, `iam/`, `club/`, `core/`, `scripts/`, `crons/` |
+| Diary | `diary/` — bookings, classes, availability, the GiST no-double-book constraint |
+| Billing | `billing/`, `yoco_billing/` — orders, commission, invoicing, refunds |
+| CRM | `core/`, `marketing_crm/`, `offline_conversions/` |
+| Client 360 | `client360/` — the ONE cross-lane client read model |
+| Admin | `admin/`, `services/`, `insights/` |
+| Coach / Client | `coach/`, `me/` |
+| Frontend | `frontend/` — three role SPAs on ONE widget layer |
+| Marketing/SEO | `frontend/marketing/`, `build_blog.py`, `migration/`, `marketing_digest/` |
+
+**The frontend golden rule:** ONE widget per capability across all three SPAs. A second render of a
+capability is a bug — extend the widget's config. Role differences are configuration, never forked
+render code. Read `docs/specs/FRONTEND-STANDARDISATION.md` before any UI work.
+
+---
+
+## Section 4 — useful commands
+
+```bash
+# gates
+python -m py_compile $(git ls-files '*.py')      # PowerShell: (git ls-files '*.py')
+python -m db && python -m db                     # 2nd run must be a no-op
+python -m scripts.test_all
+
+# run it locally (needs DATABASE_URL = a LOCAL sandbox, never production)
+gunicorn wsgi:app            # API
+python web_wsgi.py           # web/portal, DB-less, PORT=5060
+
+# read-only diagnostics, safe against production (full index: scripts/README.md)
+python -m scripts.verify_live
+python -m scripts.diagnose_coach_statement --coach <name> --detail
+python -m scripts.diagnose_refund --client <name>
+python -m scripts.audit_trials
+python -m scripts.reconcile_coach_commission
 ```
+
+Remediation scripts are **dry-run by default**; `--commit` writes, they append corrections rather
+than rewriting history, and they are idempotent on a fixed `ref_id`.
+
+---
+
+## Section 5 — the original build prompt
+
+Replaced 2026-08-02. It described building the platform from scratch with parallel lane agents in
+git worktrees — three months stale, and it would send a new session down a path that no longer
+exists. Its lane split survives as Section 3 above; its phasing lives in
+`docs/09-build-plan-and-agents.md` if the history is ever needed, and `git log -- BUILD_PROMPT.md`
+has the original verbatim.

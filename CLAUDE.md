@@ -915,6 +915,23 @@ member by email on the first authenticated hit.
   the arrears inversion below. Historical rows: `scripts/fix_desk_cash_coach_ledger.py` (dry-run
   default, idempotent, appends a correcting adjustment). Guarded by
   `sc_only_yoco_and_eft_reach_the_club`.
+- **A DUPLICATE DURATION ON ONE SERVICE SILENTLY BILLS THE CHEAPER ROW (found live 2026-07-31).**
+  `pricing.price_for` resolves the EXACT duration first and then tie-breaks on **`amount_minor ASC`**,
+  so two price rows for the same length are never both offered — the cheaper one always wins, in
+  silence. Production had a coach with **60 min R0.00 AND 60 min R600.00**: every 60-minute lesson
+  with him billed **nothing** (Club earnings: R12,680 billed, R0.00 in), and a second coach with
+  R550/R700 where the R550 quietly won. **A R0 variation on a paid service, and any duplicate
+  duration on one product, should be refused or loudly flagged by the service editor** — see
+  OUTSTANDING. Nothing in the code is wrong here; the DATA is, which is why no gate caught it and
+  only looking at the screen did.
+- **A SILENT ZERO IS A BUG, AND `try/except: return 0` IS NOT A GUARD (2026-07-31).** In Postgres a
+  failing statement ABORTS the transaction, so every query after it raises and returns its own
+  fallback. `admin_home` guarded each block that way: one broken query zeroed the People counts
+  (indistinguishable from "nothing needs attention") and errored the refund check, which is the only
+  reason it was noticed — the Refund-requests SECTION was fine throughout because it runs in a fresh
+  session. Use **`session.begin_nested()`** (a savepoint) and **log the block name**, NEVER a bare
+  `session.rollback()` inside a composer that runs in the caller's `session_scope`. **This exact
+  antipattern has now been found three times** — `client360`, `admin_home`, `coach_settlement`.
 - **CLUB EARNINGS AND THE COACH STATEMENT MUST AGREE ON WHERE THE MONEY IS (2026-07-31).** Club
   earnings had no concept of custody: `_earnings_cte`'s `collected` was `status='paid'`, i.e. "the
   CLIENT settled" — and it was rendered under a headline reading **"Collected so far · banked"**. For
@@ -1110,7 +1127,8 @@ member by email on the first authenticated hit.
   (`.github/workflows/month-end.yml`) now fires on the **25th** (club billing day), issuing each client's
   consolidated statement invoice + pay-link email; Admin → Setup → **Company & billing details** filled (bank
   details → EFT instructions on invoices); invoice PDF email attachment on (above).
-- Volatile env/infra values and full pre-flight: `docs/specs/ENV-STATUS.md` + `BUILD_PROMPT.md`.
+- Volatile env/infra values: `docs/specs/ENV-STATUS.md`. **Session handover** (what to read, how we
+  work, the gates): `BUILD_PROMPT.md` — rewritten 2026-08-02 from the old build-kickoff prompt.
 
 ## Ground rules
 - **Multi-tenant from day one** (the Iron rule, above).
