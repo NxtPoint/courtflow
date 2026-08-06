@@ -25,7 +25,14 @@ requirements.txt` (Python 3.12).
 1. `python -m py_compile $(git ls-files '*.py')` — the `$(…)` is bash; from PowerShell use
    `python -m py_compile (git ls-files '*.py')`.
 2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
-3. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
+3. `python -m scripts.audit_docs` — **the DOCS gate.** Prose doesn't fail `py_compile`, so docs rot
+   invisibly and are then trusted precisely when they're wrong. This extracts the real routes, tables,
+   shared widgets, emitted events, scenarios and scripts from SOURCE and reports what the docs haven't
+   caught up with (plus broken internal links + disagreeing gate baselines). **Currently 0 misses —
+   keep it there.** It would have caught, on the day: an approval lifecycle documented as LIVE in six
+   files two days after deletion; `Widgets.CoachStatement` missing from the golden-rule register; and
+   13 live events absent from `contracts/events.md`. `--strict` exits 1 for a pre-merge gate.
+4. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
    **booking 404 / billing 551 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·

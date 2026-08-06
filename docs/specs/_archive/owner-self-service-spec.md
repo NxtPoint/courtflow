@@ -1,6 +1,6 @@
 # Owner Self-Service + Commission/Rental Revenue Model + Owner Cockpit — Spec
 
-> **AS-BUILT (2026-07-03/04): owner SPA COMPLETE + LIVE → see [ADMIN-REDESIGN.md](ADMIN-REDESIGN.md).**
+> **AS-BUILT (2026-07-03/04): owner SPA COMPLETE + LIVE → see [ADMIN-REDESIGN.md](../ADMIN-REDESIGN.md).**
 > The responsive drill-through admin SPA (`frontend/app/admin_app.html` + `frontend/js/admin_app.js`) now
 > serves **`/admin`**; the classic tab console (`admin.js`) is preserved at **`/admin-classic`**. The
 > detailed sections below reflect the classic console — the same capabilities, reorganised in the SPA. In short:
@@ -9,7 +9,7 @@
 > - **All 7 steps SHIPPED** — command-center Home (`GET /api/admin/home`) · People → unified person 360
 >   (`GET /api/admin/people/<id>`) · the ONE admin event story (`GET /api/admin/bookings/<id>`) · Money as
 >   Setup-style sections (incl. Sales by day) · Diary on the shared Calendar widget · Setup · Insights.
-> - Built on the shared widget layer — see [FRONTEND-STANDARDISATION.md](FRONTEND-STANDARDISATION.md).
+> - Built on the shared widget layer — see [FRONTEND-STANDARDISATION.md](../FRONTEND-STANDARDISATION.md).
 > - One design system (`cf-*`), the same drill-through + single-event-story golden rule as the client and
 >   coach SPAs.
 

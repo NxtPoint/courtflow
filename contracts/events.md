@@ -69,6 +69,35 @@ then best-effort forwards to Klaviyo. Off-key Klaviyo is a clean no-op. See
 | `nps_submitted` | NPS survey answered | `score` (0-10), `bucket?` (detractor\|passive\|promoter), `comment?` | detractor follow-up | marketing |
 | `feedback_submitted` | in-app feedback | `area?`, `sentiment?`, `comment?` | retention | marketing |
 
+### Added to the contract 2026-08-06 (they were LIVE but undocumented)
+
+Found by `python -m scripts.audit_docs`, which extracts every `emit(...)` from the source and checks
+it against this table. All thirteen had real producers — several with live email templates — so the
+rule at the top of this file ("if a name isn't here, it isn't an event yet; add it here first") had
+quietly stopped being true. The audit is now the thing that keeps it true.
+
+| event | fired when | payload (beyond `club_id`, `email`) | drives | txn? |
+|---|---|---|---|---|
+| `trial_started` | a genuinely-NEW member is granted the signup trial (`auth/principal.py`, gated on a fresh INSERT) | `plan_name?`, `trial_days?` | trial onboarding / conversion measurement | marketing |
+| `membership_activated` | admin grants or activates a membership offline (`admin/routes.py`) | `ref_type=membership_subscription`, `ref_id`, `plan_name` | "Membership active" | **transactional** |
+| `bundle_activated` | a pack's wallet is GRANTED — online at activation, offline at purchase (`yoco_billing/activation.py`, the ONE shared activator) | `ref_type=token_wallet`, `ref_id`, `label`, `tokens_total` | "Pack activated" | **transactional** |
+| `pack_low` | a token wallet drops to its low-balance threshold (`billing/bundles.py`) | `label`, `tokens_remaining` | top-up nudge | marketing |
+| `invoice_issued` | an invoice DOCUMENT is issued — ad-hoc, intra-month or month-end (`admin/routes.py`, `billing/invoicing.py`) | `ref_type=order`, `ref_id`, `invoice_no`, `amount_minor`, `pay_url?` | invoice email **+ the PDF attached** (`EMAIL_INVOICE_PDF_ENABLED`) | **transactional** |
+| `payment_refunded` | a refund is recorded against an order (`billing/events.py`) | `ref_type=order`, `ref_id`, `amount_minor`, `currency_code` | "Refund issued" | **transactional** |
+| `refund_requested` | a client raises a refund request (`me/routes.py`) | `ref_type=refund_request`, `ref_id`, `amount_minor?`, `reason?` | "Refund requested" + the admin queue | **transactional** |
+| `refund_decided` | admin/coach approves or declines one (`admin/routes.py`) | `ref_type=refund_request`, `ref_id`, `decision`, `amount_minor?`, `note?` | "Refund approved/declined" | **transactional** |
+| `class_cancelled` | a class SESSION is cancelled — fanned out PER PLAYER (the raw session carries no recipient) | `ref_type=class_session`, `ref_id`, `class_name`, `starts_at`, **`refunded`** | "Class cancelled" — states whether the money came back | **transactional** |
+| `promo_redeemed` | a promo code is redeemed at checkout (`billing/promotions.py`) | `ref_type=order`, `ref_id`, `code`, `kind`, `amount_off_minor?` | promotion reporting | marketing |
+| `coach_invited` | an owner invites a coach (`admin/routes.py`) | `invite_url?` | "You've been invited to coach" | **transactional** |
+| `dependent_added` | a parent adds a child (`me/routes.py`) | `first_name?` — **never** other minor PII | family onboarding | marketing |
+| `consent_updated` | a member changes their marketing consent (`me/routes.py`) | `consent_type`, `marketing_opt_in` | flips `marketing_opt_in`; no send | system |
+
+> **`class_cancelled` carries `refunded` for a reason.** `emit()` dispatches on a BACKGROUND THREAD
+> with its own session, so the email cannot see the refund the caller just wrote. The producer states
+> the outcome or the email guesses — and it used to guess wrong, promising "any payment will be
+> refunded" on a cancel that only ever voided. Any new event whose email reflects state the caller
+> just wrote must pass that state explicitly.
+
 `page_view` is also written by the beacon (`POST /api/track/page`) but is intentionally **not**
 forwarded to Klaviyo (too noisy/expensive) — DB only.
 

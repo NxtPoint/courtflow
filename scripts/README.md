@@ -64,6 +64,12 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
 - `fix_inverted_coach_ledger.py` — one-off remediation for the INVERTED off-platform arrears entry (fixed forward 2026-07-28). `mark_arrears_collected` used to post `+coach_net` — the entry for money the CLUB took — when the coach had in fact collected it themselves, so each such lesson moved the club↔coach balance by the FULL GROSS in the wrong direction ("Coach payouts due" told the owner to pay a coach who owed them). Finds every `commission_earning` whose split carries `basis='arrears_commission'` and appends ONE correcting `adjustment` per coach — it does **not** rewrite history, so the audit trail keeps both. **Dry-run by default**; `--commit` to write; `--club` to scope. Idempotent (fixed `ref_id`). Run once, then it's spent.
 - **`fix_desk_cash_coach_ledger.py`** — the SAME correction for coaching settled in CASH or
 - **`diagnose_coach_statement.py`** — READ-ONLY: explain a coach's statement figures line by
+- **`audit_docs.py`** — READ-ONLY: audit the DOCS against the CODE. Prose does not fail a gate,
+  so documentation rots invisibly and is then trusted precisely when it is wrong. Extracts the real
+  routes / tables / widgets / emitted events / scenarios / scripts from source and reports what the
+  docs have not caught up with, plus broken internal links and disagreeing gate baselines.
+  `--verbose` lists every miss; `--strict` exits 1 (usable as a pre-merge gate). Run it at the end
+  of any session that added a surface.
   line when a number is disputed. Totals the month FOUR independent ways (what the club banked
   off `billing.payment` · the commission splits by basis+provider · the settlement the statement
   shows · what `coach_ledger` accumulated) plus the sessions delivered, so a disagreement points

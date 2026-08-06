@@ -165,6 +165,9 @@ config) · **`GET/POST equipment`** (+`PATCH/DELETE /<resource_id>`) — equipme
 quantity · feature_on_home); `PATCH /policy` now also carries the `peak_days`/`peak_start_min`/`peak_end_min`
 court-peak window; the service editor's `PATCH /api/services/<id>` carries `members_covered` (court service)
 and `POST/PATCH .../variations` carry `peak_amount_minor` ·
+**`POST /api/coach/clients/<client_user_id>/issue-invoice`** — a coach issues ONE client their
+month-end coaching statement/invoice (`commission.issue_client_invoice`); emits `invoice_issued` with
+the PDF attached. Scoped to the coach's OWN clients ·
 **`GET coach-statement`** (`?month=&coach_user_id=`) — THE COACH SETTLEMENT STATEMENT, serving admin
 (any coach) AND the coach (their own; `coach_user_id` is ignored for them). Payload: `by_client` (the
 legacy per-client rollup) + **`sessions`** (`commission.coach_sessions_by_day` — the work log, by client
