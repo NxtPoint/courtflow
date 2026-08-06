@@ -301,6 +301,23 @@ not the client Home.
 - [ ] **Refund round-trip** — client requests a refund → the request opens the **transaction record**
       (`#/txn/<order_id>`), not a prompt → owner approves via the ONE refund modal → Yoco refund executes.
       Try a **partial** (e.g. R250 of R420) — it must reach Yoco as a partial and leave the order `paid`.
+- [ ] **THE COACH STATEMENT** (Money → Coach statement → a coach; and the coach's own Money tab).
+      Check the SETTLEMENT arithmetic reads down the page: total collected × commission − what the club
+      already holds = net, and the net's SIGN flips on its own (club owes the coach when the club
+      collected; the coach owes the club when he did). Check **"└ what that was"** splits the collected
+      figure into lessons / class seats / **session packs** — a pack is charged in full at the SALE, so
+      without that line the total looks inflated against the lessons you remember.
+- [ ] **The reconcile banner must be ABSENT.** If any coach shows the red "commission entries don't
+      match the settlement" warning, that is a real discrepancy — do not pay against it. Diagnose with
+      `python -m scripts.diagnose_coach_statement --coach <name> --detail`, which totals the month four
+      independent ways so you can see WHICH view is wrong.
+- [ ] **The two pages must agree.** Money → Club earnings and the coach statement must report the same
+      custody split for the same coach and month: `<banked> in your bank · <held> held by them · <owed>
+      owed by clients`. Only Yoco + EFT (less reversals) is "in your bank" — anything a coach marked
+      collected is HIS, and the club's commission on it is still owed BY him.
+- [ ] **Two date bases, on purpose.** A lesson taught this month but paid next month is OUTSTANDING in
+      this month's session log and SETTLES next month. That is the rule (commission on funds received),
+      not a mismatch — the page says so; check it still does.
 - [ ] **Custody direction** — a coach **"Mark collected"** on an owed lesson must move his balance
       **DOWN** (he now owes the club its commission), while a **desk payment** recorded by the owner moves it
       **UP** (the club owes him his net). See BUSINESS-RULES §6.

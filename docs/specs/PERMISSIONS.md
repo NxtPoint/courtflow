@@ -151,6 +151,8 @@ membership**). All own-scope (gated by `view_own_ledger`). Looks correct.
 | `provision_club`, `impersonate`, `cross_club` | platform_admin |
 | `cancel/reschedule/edit_booking`, `mark_attendance` | admin (any) · coach (own) · member/guest (own) |
 | `reschedule_class_session` (`PATCH /api/{admin,coach}/classes/sessions/<id>`) | admin (any) · coach (**own only**; may not reassign the class to another coach) |
+| `view_coach_statement` (`GET /api/admin/coach-statement`) | admin (**any** coach, via `?coach_user_id=`) · coach (**their own only** — the param is ignored for them, so a coach can never read another's settlement) |
+| `record_coach_payout` (`POST /api/admin/coach-payouts`) | **admin only** — the payout that clears the club↔coach balance is the club's decision; the coach's statement shows the balance but has no action |
 | `take_pay_at_court` (`POST /api/billing/desk-payment`) | **`club_admin` only** — a coach cannot record a desk payment; his collection verb is `mark_arrears_collected` (see BUSINESS-RULES §6 custody) |
 | **add a player to a semi-private lesson** (`POST /api/diary/bookings/<id>/add-player`) | **the SAME gate as reschedule** — `can(reschedule_booking)`: admin (any) · coach (own) · the booking's owner. A non-staff booker may only add a **club member** or **their OWN dependent** (`_addable_player_uid`); staff may add any member/child. Each added player is billed their own owed order per-head. |
 | `manage_own_availability / time_off`, `view_own_rosters` | club_admin, coach |

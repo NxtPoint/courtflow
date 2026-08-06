@@ -165,6 +165,12 @@ config) · **`GET/POST equipment`** (+`PATCH/DELETE /<resource_id>`) — equipme
 quantity · feature_on_home); `PATCH /policy` now also carries the `peak_days`/`peak_start_min`/`peak_end_min`
 court-peak window; the service editor's `PATCH /api/services/<id>` carries `members_covered` (court service)
 and `POST/PATCH .../variations` carry `peak_amount_minor` ·
+**`GET coach-statement`** (`?month=&coach_user_id=`) — THE COACH SETTLEMENT STATEMENT, serving admin
+(any coach) AND the coach (their own; `coach_user_id` is ignored for them). Payload: `by_client` (the
+legacy per-client rollup) + **`sessions`** (`commission.coach_sessions_by_day` — the work log, by client
+by DAY, bounded on the SESSION's date) + **`settlement`** (`commission.coach_settlement` — total collected
+× commission − club-held = net, bounded on when the money ARRIVED, with `by_kind` splitting the collected
+gross into lesson/class/pack and `reconciles` asserting the net against the ledger) + `ledger_detail` ·
 **`GET/PATCH billing-profile`** (the club's **company financial identity** — registered name, company reg
 no., bank details for EFT-payable invoices, invoice terms/footer + the dormant VAT block; `club.billing_profile`,
 surfaced at Setup → "Company & billing details") ·
@@ -388,6 +394,15 @@ coach BCC only on his own lesson/class. (`send_booking_confirmation` is legacy; 
     marker for the month-end statement sweep (PK `club_id,user_id,period_label` + `owed_minor`, `sent_at`), so
     a re-run never re-notifies a client. Plus **`billing.payment.recorded_by_user_id`** (cash-audit: who
     recorded a desk / at-court payment).
+  - *New money READERS + fold fields (2026-07-30 → 08-02):* **`billing.commission.cash_custody_for(provider)`**
+    — THE one custody rule (`'club'` for `yoco`/`eft`, `'coach'` for everything else incl. no provider at
+    all), read by `record_split_for_order` (the coach_ledger DIRECTION), `coach_settlement` and
+    `coach_sessions_by_day`, so those three can never disagree. **`billing.commission.coach_settlement`** /
+    **`coach_sessions_by_day`** / `_settlement_by_kind` — the statement readers. On the earnings fold
+    (`admin.repositories`): **`banked_minor`** + **`coach_held_minor`** (from a new `in_bank` column on
+    `_earnings_cte`) split the old `collected` by custody — **banked + coach_held == collected**, so Club
+    earnings, the Money band and Home still reconcile. New `billing.coach_ledger` entry type
+    **`commission_due`** (−owner_cut, written when the COACH holds the cash).
   - *New tables + columns (2026-07-27/29 — revenue-leak hardening, per-court peak, equipment scoping):*
     **`diary.equipment_service`** (many-to-many: which court SERVICES an equipment item is offered on —
     **no rows means ALL services**, so every pre-existing item is unchanged; server-re-checked on booking as
