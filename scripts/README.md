@@ -51,6 +51,16 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   25th and for how much, PLUS the money it will skip and why (abandoned checkouts, debt hidden
   behind a live 'Pay all' wrapper, unattributed orders). Run it before every billing day — a
   bare R0 from a hand-written query can't tell "all settled" from "looking at the wrong club".
+- `month_position.py` — READ-ONLY: **where a MONTH actually stands** — billed / discount /
+  written-off / collected / still-outstanding, who owes it (`--chase` adds contacts), the payments
+  that never completed (abandoned checkouts + missed webhooks, flagging any order with >1 checkout),
+  how much of the outstanding debt has never been invoiced at all, and the spread of ALL open debt
+  by delivery month. Exists because `month_end_targets`/`open_order_ids` filter on `status='open'`
+  with **no date bound**, so every built-in view mixes the months and "what is still outstanding for
+  July" cannot be answered. Buckets by the month the SERVICE WAS DELIVERED (the rule
+  `activity_summary` already follows), resolved through the SAME joins as
+  `invoicing._enriched_line_descriptions` — never a second resolver. `python -m
+  scripts.month_position [YYYY-MM] [--chase]`, default = last month. Run it on the Render Shell.
 - `settle_stranded_class_seats.py` — remediates class seats stuck in `awaiting_payment`
   forever (seat taken, class played, order never settled). `--settle` turns each into a
   normal owed debt so month-end invoices it; `--void` cancels it. Dry-run by default.
