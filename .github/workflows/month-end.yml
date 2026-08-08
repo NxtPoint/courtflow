@@ -1,6 +1,13 @@
-# month-end — fire the OPS-only monthly statement sweep on the 25th of each month (the club's
-# billing day). Accrues coach arrears + rent, consolidates each client's OPEN orders into ONE
-# numbered statement invoice + emails it with a pay link (else a plain balance reminder).
+# month-end — fire the OPS-only monthly statement sweep on the 1st of each month, FOR THE MONTH
+# JUST ENDED. Accrues coach arrears + rent, consolidates that month's OPEN orders into ONE numbered
+# statement invoice + emails it with a pay link (else a plain balance reminder).
+#
+# IT USED TO RUN ON THE 25th, and that was the root of the whole month-end mess. The sweep billed
+# 'everything owed right now', so the document was issued with five or six days of the month still
+# to come: lessons played on the 26th-31st were never on it (55 such orders in July 2026), the
+# client's live balance moved away from the invoice the moment they played again, and an unpaid
+# earlier debt rode onto the next invoice so no month was ever closed. Billing the month AFTER it
+# has ended is what makes an invoice complete, final and reconcilable.
 # Idempotent per (club,user,period=YYYY-MM), so a re-run never re-issues/re-notifies; the next
 # month's run (a new period) picks up anything still open. Free (GitHub Actions) — no always-on
 # Render cron needed (all four render.yaml crons stay commented out; rides the keep-warm CI pattern).
@@ -22,13 +29,18 @@ name: month-end
 
 on:
   schedule:
-    - cron: "0 6 25 * *"    # 06:00 UTC (08:00 SAST) on the 25th of each month — the billing day
+    - cron: "0 6 1 * *"     # 06:00 UTC (08:00 SAST) on the 1st — bills the month just ended
   workflow_dispatch:
     inputs:
       period:
-        description: "Period YYYY-MM to sweep (blank = current month)"
+        description: "Period YYYY-MM to sweep (blank = the month just ended)"
         required: false
         default: ""
+      reissue:
+        description: "Re-invoice a period already swept (closes a month swept before it ended)"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   sweep:
@@ -38,6 +50,7 @@ jobs:
         env:
           OPS_KEY: ${{ secrets.OPS_KEY }}
           PERIOD: ${{ github.event.inputs.period }}
+          REISSUE: ${{ github.event.inputs.reissue }}
         run: |
           if [ -z "$OPS_KEY" ]; then
             echo "OPS_KEY secret not set — skipping the sweep (add it in repo Settings → Secrets)."
@@ -60,7 +73,7 @@ jobs:
               https://courtflow-api.onrender.com/api/cron/month-end \
               -H "X-Ops-Key: $OPS_KEY" \
               -H "Content-Type: application/json" \
-              -d "{\"period\": \"${PERIOD}\"}") || {
+              -d "{\"period\": \"${PERIOD}\", \"reissue\": ${REISSUE:-false}}") || {
                 echo "❌ pass $pass: the request itself failed (timeout or network)" >> "$GITHUB_STEP_SUMMARY"
                 echo "Per-client commits mean any clients already swept are DONE. Re-run this workflow." >> "$GITHUB_STEP_SUMMARY"
                 exit 1

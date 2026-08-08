@@ -4267,6 +4267,72 @@ def sc_an_invoice_covers_its_own_month(s, fx):
           str(tg.get(str(fx.member))))
 
 
+def sc_a_month_swept_early_can_still_be_closed(s, fx):
+    """A period already swept can be RE-SWEPT to bill what arrived afterwards.
+
+    July 2026 is the live case: the sweep ran on the 25th, and 55 orders delivered on the 26th-31st
+    were never invoiced by anything. month_end_notice says "this client was notified for 2026-07",
+    so an ordinary re-run returns 'already' and that debt is billed by nothing, ever. reissue=True
+    ignores the claim; issue_invoice still skips any order on an ACTIVE invoice, so the second pass
+    covers only what is still uninvoiced — a supplementary invoice, not a duplicate."""
+    print("\n# A month swept BEFORE it ended can still be closed (reissue)")
+    import datetime as _dt
+    tz_now = s.execute(text("SELECT now() AT TIME ZONE 'Africa/Johannesburg'")).scalar()
+    prev = (tz_now.replace(day=1) - _dt.timedelta(days=1))
+    period = prev.strftime("%Y-%m")
+
+    def owed(desc, day, amount):
+        oid = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,'
+                             "currency_code,settlement_mode,status,service_date) "
+                             "VALUES (:c,:u,:a,'ZAR','monthly_account','open',CAST(:d AS date)) "
+                             "RETURNING id"),
+                        {"c": fx.club_id, "u": fx.member, "a": amount,
+                         "d": prev.strftime(f"%Y-%m-{day}")}).scalar_one()
+        s.execute(text("INSERT INTO billing.order_line (order_id,club_id,description,qty,"
+                       "amount_minor) VALUES (:o,:c,:d,1,:a)"),
+                  {"o": str(oid), "c": fx.club_id, "d": desc, "a": amount})
+        return str(oid)
+
+    owed("Lesson (before the sweep)", "10", 50000)
+    r1 = CM.month_end_client(s, club_id=fx.club_id, period=period, user_id=fx.member,
+                             owed=50000, cur="ZAR")
+    check("first sweep invoices the client", r1 == "notified", r1)
+    inv1 = s.execute(text("SELECT count(*) FROM billing.invoice WHERE club_id=:c AND user_id=:u"),
+                     {"c": fx.club_id, "u": fx.member}).scalar()
+
+    # Lessons played AFTER that sweep, still inside the same month.
+    owed("Lesson (after the sweep)", "27", 30000)
+    r2 = CM.month_end_client(s, club_id=fx.club_id, period=period, user_id=fx.member,
+                             owed=30000, cur="ZAR")
+    check("an ordinary re-run refuses (the notice claim)", r2 == "already", r2)
+    inv2 = s.execute(text("SELECT count(*) FROM billing.invoice WHERE club_id=:c AND user_id=:u"),
+                     {"c": fx.club_id, "u": fx.member}).scalar()
+    check("...and issues nothing", inv2 == inv1, f"{inv1} -> {inv2}")
+
+    r3 = CM.month_end_client(s, club_id=fx.club_id, period=period, user_id=fx.member,
+                             owed=30000, cur="ZAR", reissue=True)
+    check("reissue bills the late arrivals", r3 == "notified", r3)
+    # ORDER BY the GAPLESS NUMBER, not created_at: both invoices are issued inside one transaction,
+    # so now() is identical for each and created_at cannot order them (the same trap that made the
+    # refund path pick the wrong checkout). invoice_number is allocated sequentially at issue.
+    rows = s.execute(text("SELECT total_minor FROM billing.invoice WHERE club_id=:c AND user_id=:u "
+                          "ORDER BY invoice_number"), {"c": fx.club_id, "u": fx.member}).scalars().all()
+    check("a SECOND invoice exists", len(rows) == inv1 + 1, str(rows))
+    check("...covering ONLY the uninvoiced R300, never the R500 again",
+          rows[-1] == 30000, str(rows[-1]))
+
+    # And it stays idempotent: reissue again with nothing new bills nothing new.
+    CM.month_end_client(s, club_id=fx.club_id, period=period, user_id=fx.member,
+                        owed=0, cur="ZAR", reissue=True)
+    rows2 = s.execute(text("SELECT count(*) FROM billing.invoice WHERE club_id=:c AND user_id=:u"),
+                      {"c": fx.club_id, "u": fx.member}).scalar()
+    check("a reissue with nothing new issues nothing", rows2 == len(rows), f"{len(rows)} -> {rows2}")
+
+    # The default period is the month JUST ENDED — the sweep now runs on the 1st, not the 25th.
+    check("month_end_period defaults to the month just ended",
+          CM.month_end_period(s) == period, CM.month_end_period(s))
+
+
 def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
     """Tapping "Buy" twice must RE-OFFER the same unpaid order, not raise a second debt.
 
@@ -4343,6 +4409,7 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
 
 SCENARIOS = [
     sc_an_invoice_covers_its_own_month,
+    sc_a_month_swept_early_can_still_be_closed,
     sc_buy_click_never_mints_a_duplicate_debt,
     sc_club_earnings_agrees_with_the_coach_statement,
     sc_statement_survives_a_refund,

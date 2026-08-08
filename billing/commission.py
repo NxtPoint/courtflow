@@ -1247,7 +1247,12 @@ def list_coach_payouts(session, *, club_id, coach_user_id=None, limit=100) -> Li
 
 
 def month_end_period(session, period_label=None) -> str:
-    return period_label or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    """The month the sweep bills — by default the month JUST ENDED, because the sweep now runs on the
+    1st. It used to run on the 25th and default to the CURRENT month, which is why an invoice could
+    never be complete: five or six days of lessons were still to come when the document was issued,
+    and the client's live balance moved away from it immediately."""
+    return period_label or session.execute(
+        text("SELECT to_char(now() - interval '1 month','YYYY-MM')")).scalar()
 
 
 def month_end_accrue(session, *, club_id, period) -> int:
@@ -1294,9 +1299,12 @@ def month_end_targets(session, *, club_id, period=None):
     ).mappings().all()]
 
 
-def month_end_client(session, *, club_id, period, user_id, owed, cur) -> str:
+def month_end_client(session, *, club_id, period, user_id, owed, cur, reissue=False) -> str:
     """Phase 3 — ONE client: claim the idempotency row, issue their consolidated statement invoice,
     then notify. Returns 'notified' | 'already'.
+
+    `reissue=True` ignores the month_end_notice claim so a month swept before it ended can still be
+    completed (see below). Returns 'notified' | 'already'.
 
     THIS IS THE UNIT OF WORK THAT MUST COMMIT ON ITS OWN. It allocates a GAPLESS invoice number and
     emits an email — and emit() dispatches on a background thread with its own session, so the email
@@ -1310,8 +1318,14 @@ def month_end_client(session, *, club_id, period, user_id, owed, cur) -> str:
              "ON CONFLICT (club_id, user_id, period_label) DO NOTHING RETURNING user_id"),
         {"c": club_id, "u": user_id, "p": period, "owed": int(owed or 0)},
     ).first()
-    if not fresh:
+    if not fresh and not reissue:
         return "already"
+    # REISSUE is for closing a month that was swept BEFORE it ended. July 2026 is the live example:
+    # the sweep ran on the 25th, and 55 orders delivered on the 26th-31st were never invoiced at all
+    # — the notice row says "this client was notified for 2026-07", so an ordinary re-run skips them
+    # and that debt is never billed by anything. Re-issuing is safe because issue_invoice already
+    # skips any order on an ACTIVE invoice: a second pass covers only what is still uninvoiced, which
+    # is a supplementary invoice, not a duplicate.
     # Consolidate this client's open orders into ONE numbered statement invoice document (orders
     # already on an active invoice are skipped). If there's genuinely nothing new to invoice (all
     # already invoiced intra-month), fall back to a plain balance reminder so the client is still
@@ -1347,7 +1361,7 @@ def month_end_client(session, *, club_id, period, user_id, owed, cur) -> str:
     return "notified"
 
 
-def run_month_end(session, *, club_id, period_label=None) -> Dict[str, Any]:
+def run_month_end(session, *, club_id, period_label=None, reissue=False) -> Dict[str, Any]:
     """The month-end sweep (C3, OPS-triggered — no always-on cron, fired by the keep-warm Action):
     (1) accrue coach arrears + rent for the period so the coach tabs are current, then (2) notify
     EVERY client who owes an open statement balance with a `statement_ready` message (in-app + email
@@ -1365,7 +1379,8 @@ def run_month_end(session, *, club_id, period_label=None) -> Dict[str, Any]:
     already = 0
     for r in rows:
         outcome = month_end_client(session, club_id=club_id, period=period,
-                                   user_id=r["user_id"], owed=r["owed"], cur=r["cur"])
+                                   user_id=r["user_id"], owed=r["owed"], cur=r["cur"],
+                                   reissue=reissue)
         if outcome == "already":
             already += 1
         else:

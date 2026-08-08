@@ -33,11 +33,11 @@ requirements.txt` (Python 3.12).
    files two days after deletion; `Widgets.CoachStatement` missing from the golden-rule register; and
    13 live events absent from `contracts/events.md`. `--strict` exits 1 for a pre-merge gate.
 4. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 404 / billing 571 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 404 / billing 579 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (56/84/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (56/85/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. The check counts below are the gate line's, not per-bullet totals —
    **update the "Current green baseline" line above and nothing else**, so the numbers can't drift
@@ -131,7 +131,7 @@ re-run or a doubled schedule is safe. When adding a recurring job, add a workflo
 | `keep-warm.yml` | every 10 min, 07:00–22:00 SAST | pings both services (free tier sleeps after ~15 min) |
 | `reminders.yml` | hourly, 07:00–22:00 SAST | `diary.crons.run_reminders` — T-24h/T-2h booking + class reminders, deduped via `diary.reminder_log`, emits `booking_reminder` (LIVE via SES; a no-show reducer) |
 | `membership-refill.yml` | daily 07:30 SAST | membership-lapse sweep — `current_period_end` passed → `expired` + emits `membership_lapsed` (drives the Klaviyo E2 win-back) |
-| `month-end.yml` | monthly, the **25th** 08:00 SAST | `billing.commission.run_month_end` — coach arrears + rent, then one consolidated statement invoice + pay-link per client owing |
+| `month-end.yml` | monthly, the **1st** 08:00 SAST | `billing.commission.run_month_end` — coach arrears + rent, then one consolidated statement invoice + pay-link per client owing **for the month just ended** (it ran on the 25th until 2026-08-08, so every invoice was issued with days of the month still to come) |
 | `reconcile-payments.yml` | hourly, 07:00–22:00 SAST | `yoco_billing.reconcile.reconcile_pending` — recovers payments whose webhook never arrived (Render Free sleeps, so CLAUDE.md calls reconcile "the common path"). The handler shipped at launch but **nothing ever called it** until 2026-07-22 |
 | `reconcile-deep.yml` | weekly, Sun 07:40 SAST | the SAFETY NET behind the hourly sweep — `reconcile_pending` defaults to **`hours=72`** and the hourly job passes nothing, so an order that slips past 3 days **ages out and is never checked again**. Sweeps `hours=2400` (100 days) so nothing can hide unverified |
 | `marketing-digest.yml` | daily 07:00 SAST | cross-brand GA4/GSC organic report + the `core.web_daily` ingest push (see the analytics section) |
@@ -417,8 +417,8 @@ nothing gets NO email), idempotent per `(club,user,period)` via `billing.month_e
 PER-CLIENT-TRANSACTIONAL, TIME-BOXED and RESUMABLE** — the CRON ROUTE runs `month_end_client` in **its own
 `session_scope()` per client**, stops at `max_seconds` (default 90, under gunicorn's 120s reaper) and returns
 `{ok, complete, remaining, failed}` for the caller to loop; `run_month_end` is the single-transaction form
-(one club, harness only). Fired by **`.github/workflows/month-end.yml`** on the **25th** (the club billing
-day) — it **loops until `complete`** and **FAILS THE JOB LOUDLY** on any non-200/`ok:false`. Rides the
+(one club, harness only). Fired by **`.github/workflows/month-end.yml`** on the **1st** (billing the month just
+ended) — it **loops until `complete`** and **FAILS THE JOB LOUDLY** on any non-200/`ok:false`. Rides the
 keep-warm CI pattern — the four `render.yaml` crons stay commented out. Why one big transaction is not an
 option (gapless numbers + emails that don't roll back):
 **[UNIFIED-STATEMENT.md § As-built](docs/specs/UNIFIED-STATEMENT.md#the-month-end-sweep-is-per-client-transactional-time-boxed-and-resumable)**.
@@ -676,7 +676,7 @@ looks like a harmless simplification until you read what it cost.
   Klaviyo marketing stays dark until `KLAVIYO_API_KEY`.
 - **DNS / SEO cutover** for `nextpointtennis.com` — supervised, never an agent.
 - **Done (config that WAS pending):** `OPS_KEY` GitHub Actions secret set → the monthly statement sweep
-  (`.github/workflows/month-end.yml`) now fires on the **25th** (club billing day), issuing each client's
+  (`.github/workflows/month-end.yml`) now fires on the **1st**, billing the month just ended, issuing each client's
   consolidated statement invoice + pay-link email; Admin → Setup → **Company & billing details** filled (bank
   details → EFT instructions on invoices); invoice PDF email attachment on (above).
 - Volatile env/infra values: `docs/specs/ENV-STATUS.md`. **Session handover** (what to read, how we

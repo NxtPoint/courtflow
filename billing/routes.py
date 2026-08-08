@@ -369,6 +369,10 @@ def cron_month_end():
     except (TypeError, ValueError):
         budget = 90.0
     budget = max(5.0, min(budget, 600.0))
+    # REISSUE closes a month that was swept BEFORE it ended: it ignores the month_end_notice claim
+    # so orders delivered after that sweep still get invoiced. Safe because issue_invoice skips any
+    # order already on an active invoice — a second pass bills only what is still uninvoiced.
+    reissue = bool(body.get("reissue") or request.args.get("reissue"))
     remaining_clients = 0
     timed_out = False
 
@@ -404,7 +408,7 @@ def cron_month_end():
                 with session_scope() as s:      # phase 3: ONE client, ONE commit
                     outcome = comm.month_end_client(
                         s, club_id=cid, period=stats["period"], user_id=tgt["user_id"],
-                        owed=tgt["owed"], cur=tgt["cur"])
+                        owed=tgt["owed"], cur=tgt["cur"], reissue=reissue)
                 stats["already" if outcome == "already" else "notified"] += 1
             except Exception:
                 # One client's failure must never stop the sweep — and because it committed
