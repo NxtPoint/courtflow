@@ -71,6 +71,13 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
 - `audit_trials.py` — audits/cleans the 7-day trial grants.
 - `diagnose_coach_packs.py` — READ-ONLY: where each session PACK lands in the coach-earnings roll-up (its selling coach vs the CLUB, sale month, order status, whether it counts). Answers "why isn't coach X's pack showing on his earnings?" Optional args: `<name-needle> [YYYY-MM]`. Uses `DATABASE_URL` from env (Render Shell) or `.env.local`.
 - `reconcile_coach_commission.py` — READ-ONLY financial-integrity proof: every PAID lesson/class line (money collected via Yoco / cash / EFT / invoice / 'pay-all' statement) must carry a coach commission_split. Lists any paid coaching with NO split (a coach under-paid) + a covered/uncovered rand tie-out + paid-but-no-coach lines. Should read **CLEAN**. Optional arg `YYYY-MM`. Run monthly before coach payouts.
+- `set_coach_billing_model.py` — show or set how the club monetises a coach: `commission` (default)
+  or **`rent`** (they pay rent and invoice their own clients, so a lesson they book against
+  themselves raises NO club charge). No args lists every coach and their model; `--who <email|name>
+  --model rent [--rent-minor N] --commit` sets one. Dry-run by default. **Deliberately explicit
+  rather than inferred from a 0% commission rate:** `commission.resolve_rate` returns 0 when NO rule
+  exists, so "0%" and "not configured yet" are the same value — inferring would silently stop
+  billing every unconfigured coach's clients. This script IS the admin surface; there is no toggle.
 - `void_client_charges.py` — **cancel every still-owed charge for ONE client, in one action.**
   Dry-run by default; `--commit` writes. `--who <email|name>` (ambiguity is refused, never guessed),
   `--period YYYY-MM` scopes to a delivery month, `--reason` is recorded on `void_reason`,
