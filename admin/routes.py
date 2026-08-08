@@ -499,6 +499,10 @@ def post_price():
         )
     if price is None:
         return jsonify(error="PRODUCT_NOT_FOUND"), 404
+    # A second active price for the same duration would silently become THE price (price_for
+    # tie-breaks on amount ASC), so it is refused rather than created.
+    if isinstance(price, dict) and price.get("error"):
+        return jsonify(price), 409
     return jsonify(price=price), 201
 
 

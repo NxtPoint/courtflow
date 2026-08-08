@@ -756,6 +756,24 @@ def create_price(session, *, club_id, product_id, audience="any", amount_minor=0
     ).first()
     if not owned:
         return None
+    # ONE ACTIVE PRICE PER (SERVICE, DURATION). `pricing.price_for` resolves the exact duration and
+    # then tie-breaks on `amount_minor ASC`, so a second active row for the same length does not
+    # offer a choice — the CHEAPER one silently becomes the price, for ever, and the dearer row is
+    # decorative. Production ran a coach on 60min R0.00 beside 60min R600.00 and billed R12,680 of
+    # coaching at nothing; five weeks later two more pairs were still live (R550 vs R700, R350 vs
+    # R400), quietly discounting every lesson. Nothing was wrong with the code — the DATA was, which
+    # is why no gate caught it. Refusing the duplicate at the point of creation is the fix; use the
+    # editor's Remove (status='retired') to replace a price, never a second row beside it.
+    if duration_minutes is not None:
+        clash = session.execute(
+            text("SELECT amount_minor FROM billing.price "
+                 " WHERE club_id = :c AND product_id = :p AND active "
+                 "   AND duration_minutes = :d LIMIT 1"),
+            {"c": club_id, "p": product_id, "d": duration_minutes},
+        ).scalar()
+        if clash is not None:
+            return {"error": "DURATION_ALREADY_PRICED", "duration_minutes": duration_minutes,
+                    "existing_amount_minor": int(clash or 0)}
     pid = session.execute(
         text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
              "currency_code, unit, duration_minutes, peak_amount_minor, active) "

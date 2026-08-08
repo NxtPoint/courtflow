@@ -225,10 +225,19 @@ def add_variation(product_id):
         if err:
             return err
         _peak = b.get("peak_amount_minor")
-        admin_repo.create_price(s, club_id=p.club_id, product_id=product_id,
-                                amount_minor=int(b.get("amount_minor") or 0),
-                                duration_minutes=int(dur),
-                                peak_amount_minor=(int(_peak) if _peak not in (None, "") else None))
+        made = admin_repo.create_price(
+            s, club_id=p.club_id, product_id=product_id,
+            amount_minor=int(b.get("amount_minor") or 0),
+            duration_minutes=int(dur),
+            peak_amount_minor=(int(_peak) if _peak not in (None, "") else None))
+        # Refused: this service already prices that duration. A second active row does not offer a
+        # choice — the cheaper one silently wins every booking. Edit the existing variation, or
+        # Remove it (which retires it) and add the replacement.
+        if isinstance(made, dict) and made.get("error"):
+            return jsonify(dict(made, message=(
+                "This service already has a price for " + str(dur) + " minutes. Edit that one, or "
+                "remove it first — two prices for the same length means the cheaper one is charged."
+            ))), 409
         out = repo.get_service(s, club_id=p.club_id, product_id=product_id)
     return jsonify(service=out), 201
 

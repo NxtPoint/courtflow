@@ -2,6 +2,7 @@
 """READ-ONLY: find prices that silently bill NOTHING, and the R0 orders they produced.
 
     python -m scripts.audit_zero_prices
+    python -m scripts.audit_zero_prices --detail    # + the exact R0 orders worth investigating
 
 WHY. `diary.pricing.price_for` resolves the exact duration and then tie-breaks on
 **`amount_minor ASC`** — so if one service carries two active price rows for the SAME duration, the
@@ -89,7 +90,22 @@ SELECT o.settlement_mode, o.status, count(*) AS n,
 _BY_DESIGN = ("token", "membership_covered", "free")
 
 
+_ZERO_DETAIL = """
+SELECT o.id, o.settlement_mode, o.created_at::date AS d,
+       COALESCE(NULLIF(trim(coalesce(u.first_name,'')||' '||coalesce(u.surname,'')),''),'(none)') AS who,
+       COALESCE((SELECT string_agg(DISTINCT ol.description, ', ') FROM billing.order_line ol
+                  WHERE ol.order_id = o.id), 'charge') AS what
+  FROM billing."order" o
+  LEFT JOIN iam."user" u ON u.id = o.user_id
+ WHERE o.club_id = :c AND COALESCE(o.amount_minor,0) = 0
+   AND o.status IN ('open','awaiting_payment')
+   AND o.settlement_mode NOT IN ('token','membership_covered','free')
+ ORDER BY o.created_at
+"""
+
+
 def main():
+    detail = "--detail" in sys.argv
     _load_env()
     from sqlalchemy import create_engine, text
 
@@ -137,6 +153,16 @@ def main():
                         findings += 1
                 print("    (token / membership_covered / free are R0 BY DESIGN — a pack draw and a")
                 print("     covered court cost nothing. at_court and monthly_account at R0 are not.)")
+                if detail:
+                    rows = c.execute(text(_ZERO_DETAIL), cid).mappings().all()
+                    if rows:
+                        print("\n    The ones worth investigating:")
+                        for r in rows:
+                            print(f"      {str(r['d'])}  {r['settlement_mode']:<17} "
+                                  f"{r['who'][:22]:<22} {(r['what'] or '')[:30]}")
+                            print(f"        {r['id']}")
+                elif any(o["settlement_mode"] not in _BY_DESIGN for o in orders):
+                    print("    -> re-run with --detail to see exactly which orders those are.")
             print()
 
     print(f"{findings} thing(s) worth a look.")

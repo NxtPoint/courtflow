@@ -33,11 +33,11 @@ requirements.txt` (Python 3.12).
    files two days after deletion; `Widgets.CoachStatement` missing from the golden-rule register; and
    13 live events absent from `contracts/events.md`. `--strict` exits 1 for a pre-merge gate.
 4. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 405 / billing 634 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 405 / billing 641 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (56/90/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (56/91/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. The check counts below are the gate line's, not per-bullet totals —
    **update the "Current green baseline" line above and nothing else**, so the numbers can't drift
@@ -617,6 +617,7 @@ looks like a harmless simplification until you read what it cost.
 - An abandoned purchase has no booking, so nothing ever swept it — `sc_abandoned_purchases_expire_by_themselves`
 - A RENT coach bills his own clients — and books lessons, not courts in his own name — `sc_a_rent_coach_lesson_raises_no_club_charge`
 - VOID MEANS CANCEL — an invoice void cancels its charges too (`cascade=False` = the re-issue path) — `sc_bulk_void_cancels_charges_not_just_the_document`
+- ONE ACTIVE PRICE PER (service, duration) — a second row means the cheaper one silently wins — `sc_one_active_price_per_duration`
 
 **Courts, peak hours & equipment** — [GOTCHAS.md#courts-peak-hours--equipment](docs/specs/GOTCHAS.md#courts-peak-hours--equipment)
 - THE COURT IS THE ONE PLACE TO SEE A COURT (2026-07-29)

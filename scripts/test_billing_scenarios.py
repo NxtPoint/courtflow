@@ -4338,6 +4338,55 @@ def sc_a_month_swept_early_can_still_be_closed(s, fx):
           CM.month_end_period(s) == period, CM.month_end_period(s))
 
 
+def sc_one_active_price_per_duration(s, fx):
+    """A service may not carry two active prices for the same duration.
+
+    `pricing.price_for` resolves the exact duration and then tie-breaks on `amount_minor ASC`, so a
+    second active row does NOT offer a choice — the cheaper one silently becomes the price, for
+    ever, and the dearer row is decorative. Production ran a coach on 60min R0.00 beside 60min
+    R600.00 and billed R12,680 of coaching at nothing. Five weeks after that was written down, TWO
+    more pairs were still live (R550 vs R700, R350 vs R400) quietly discounting every lesson,
+    because nothing in the code was wrong — the DATA was, so no gate could catch it. Refusing the
+    duplicate at creation is what closes it."""
+    print("\n# One active price per (service, duration) — the cheaper row silently wins")
+    from admin import repositories as AR
+
+    prod = s.execute(text("INSERT INTO billing.product (club_id,kind,name,active) "
+                          "VALUES (:c,'lesson','Dup guard',true) RETURNING id"),
+                     {"c": fx.club_id}).scalar_one()
+    first = AR.create_price(s, club_id=fx.club_id, product_id=str(prod),
+                            amount_minor=70000, duration_minutes=60)
+    check("the first price for a duration is created", first and not first.get("error"), str(first))
+
+    dupe = AR.create_price(s, club_id=fx.club_id, product_id=str(prod),
+                           amount_minor=55000, duration_minutes=60)
+    check("a SECOND active price for 60min is refused",
+          isinstance(dupe, dict) and dupe.get("error") == "DURATION_ALREADY_PRICED", str(dupe))
+    check("...and it says what already prices that duration",
+          dupe.get("existing_amount_minor") == 70000, str(dupe))
+    n = s.execute(text("SELECT count(*) FROM billing.price WHERE product_id=:p AND active"),
+                  {"p": str(prod)}).scalar()
+    check("still exactly ONE active price", n == 1, f"{n} active prices")
+
+    # A DIFFERENT duration is a different variation — the guard must not block a real rate card.
+    other = AR.create_price(s, club_id=fx.club_id, product_id=str(prod),
+                            amount_minor=40000, duration_minutes=30)
+    check("a different duration is still allowed", other and not other.get("error"), str(other))
+
+    # RETIRE then re-add is the supported way to replace a price (Remove sets active=false).
+    s.execute(text("UPDATE billing.price SET active=false, status='retired' "
+                   "WHERE product_id=:p AND duration_minutes=60"), {"p": str(prod)})
+    again = AR.create_price(s, club_id=fx.club_id, product_id=str(prod),
+                            amount_minor=75000, duration_minutes=60)
+    check("after retiring the old one, the replacement IS allowed",
+          again and not again.get("error"), str(again))
+    from diary import pricing as PR
+    live = PR.price_for(s, club_id=fx.club_id, kind="lesson", duration_minutes=60,
+                        product_id=str(prod))
+    check("...and the live price is the new one, not the retired one",
+          live and live.get("amount_minor") == 75000, str(live))
+
+
 def sc_a_rent_coach_lesson_raises_no_club_charge(s, fx):
     """A coach on a RENT agreement bills their own clients — the club must raise no charge.
 
@@ -4799,6 +4848,7 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
 
 
 SCENARIOS = [
+    sc_one_active_price_per_duration,
     sc_a_rent_coach_lesson_raises_no_club_charge,
     sc_bulk_void_cancels_charges_not_just_the_document,
     sc_abandoned_purchases_expire_by_themselves,
