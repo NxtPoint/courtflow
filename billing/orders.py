@@ -137,6 +137,66 @@ def create_order_for_booking(session, *, club_id, user_id, lines: List[Dict[str,
     return order_id
 
 
+# How long a pending online purchase stays reusable. Long enough to absorb a real retry (the member
+# taps Buy, the card is declined, they try again — minutes apart), short enough that a purchase
+# abandoned last month can never be resurrected into THIS month's order. That second half matters:
+# the order's created_at dates a non-booking purchase for invoicing, so reviving a stale one would
+# bill it in the wrong period.
+_PENDING_REUSE_MINUTES = 120
+
+# The one place that knows how a pending purchase is IDENTIFIED per kind. A pack hangs a 'pending'
+# token_wallet off the order; a membership hangs an 'expired' placeholder subscription. Both are the
+# unpaid intent, so both are what makes the order re-offerable rather than duplicated.
+_PENDING_LINK_SQL = {
+    "pack": ("billing.token_wallet", "bundle_plan_id", "status = 'pending'"),
+    "membership": ("billing.membership_subscription", "price_id", "status = 'expired'"),
+}
+
+
+def reusable_pending_purchase(session, *, club_id, user_id, kind, ref_id, amount_minor,
+                              settlement_mode="online") -> Optional[str]:
+    """The member's existing UNPAID online order for this exact purchase, if there is one.
+
+    WHY THIS EXISTS. create_bundle_order and create_membership_order both INSERT unconditionally, so
+    every tap of "Buy" minted ANOTHER awaiting_payment order — plus another pending wallet or
+    placeholder subscription behind it. Production carried five identical R5,000 pack orders for one
+    member on one day, and R43,960 of July's "outstanding" was this. It is the same defect as the
+    documented Yoco one ("POST /checkout mints a FRESH checkout on every call, there is no reuse
+    guard"), one level up: there the duplicate was a checkout, here it is a DEBT.
+
+    Reuse is only ever correct for an unpaid ONLINE intent. An at_court/monthly purchase writes an
+    'open' order that IS a real debt and activates the pack/membership immediately — reusing one
+    would hand out a second pack for one payment. Guards, all required:
+      * status 'awaiting_payment' + the requested settlement_mode (never an owed 'open' order)
+      * the SAME product — the linked wallet/subscription still pending, on the same plan
+      * the SAME amount — a price change must raise a new order, not silently bill the old figure
+      * no succeeded/refunded charge, and not swallowed by a 'Pay all' wrapper
+      * created within _PENDING_REUSE_MINUTES (see above)
+    Returns the order id to re-offer, or None to mint a fresh one."""
+    if (settlement_mode or "online") != "online":
+        return None                      # an owed order is a real debt; never re-offer it
+    link = _PENDING_LINK_SQL.get(kind)
+    if not link or not user_id or not ref_id:
+        return None
+    table, col, alive = link
+    return session.execute(
+        text(f'SELECT o.id FROM billing."order" o '
+             f"  JOIN {table} k ON k.order_id = o.id "
+             f" WHERE o.club_id = :c AND o.user_id = :u "
+             f"   AND o.status = 'awaiting_payment' AND o.settlement_mode = 'online' "
+             f"   AND o.amount_minor = :amt "
+             f"   AND o.settled_by_order_id IS NULL AND o.covered_order_ids IS NULL "
+             f"   AND o.created_at > now() - (:mins || ' minutes')::interval "
+             f"   AND k.{col} = :ref AND k.{alive} "
+             f"   AND NOT EXISTS (SELECT 1 FROM billing.payment p WHERE p.order_id = o.id "
+             f"                     AND p.direction = 'charge' "
+             f"                     AND p.status IN ('succeeded','refunded')) "
+             f" ORDER BY o.created_at DESC, o.id LIMIT 1"),
+        {"c": str(club_id), "u": str(user_id), "amt": int(amount_minor or 0),
+         "ref": str(ref_id), "mins": _PENDING_REUSE_MINUTES},
+    ).scalar()
+
+
 def record_desk_payment(session, *, club_id, order_id, amount_minor, provider="cash",
                         currency_code=None, provider_payment_id=None,
                         user_id=None, recorded_by=None, allow_partial=False) -> Dict[str, Any]:

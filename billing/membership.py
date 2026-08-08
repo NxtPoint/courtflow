@@ -276,6 +276,19 @@ def create_membership_order(session, *, club_id, user_id, price_id=None,
     order_status = "awaiting_payment" if online else "open"
     provider = "yoco" if online else "manual"
 
+    # Re-offer this member's own unpaid online order for the same term instead of minting a second
+    # one (see billing.orders.reusable_pending_purchase — the same guard the pack path uses, so a
+    # membership and a pack cannot drift into two behaviours).
+    from billing.orders import reusable_pending_purchase
+    reuse = reusable_pending_purchase(
+        session, club_id=club_id, user_id=user_id, kind="membership",
+        ref_id=price_id, amount_minor=amount, settlement_mode=mode)
+    if reuse:
+        return {"order_id": str(reuse), "amount_minor": amount, "currency": currency,
+                "price_id": price_id, "term_months": term_months, "label": label,
+                "settlement_mode": mode, "needs_checkout": True, "activated": False,
+                "reused": True}
+
     order_id = session.execute(
         text("""
             INSERT INTO billing."order"

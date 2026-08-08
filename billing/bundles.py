@@ -753,6 +753,18 @@ def create_bundle_order(session, *, club_id, user_id, bundle_plan_id,
     amount = int(plan["price_minor"] or 0)
     currency = plan["currency"]
 
+    # Re-offer the member's own unpaid online order for this same pack instead of minting a second
+    # one. Without this every tap of "Buy" left another awaiting_payment order AND another pending
+    # wallet behind it — five identical R5,000 orders for one member in production.
+    from billing.orders import reusable_pending_purchase
+    reuse = reusable_pending_purchase(
+        session, club_id=club_id, user_id=user_id, kind="pack",
+        ref_id=plan["id"], amount_minor=amount, settlement_mode=mode)
+    if reuse:
+        return {"order_id": str(reuse), "amount_minor": amount, "currency": currency,
+                "plan": plan, "settlement_mode": mode, "needs_checkout": True,
+                "activated": False, "reused": True}
+
     order_id = session.execute(
         text("""
             INSERT INTO billing."order"

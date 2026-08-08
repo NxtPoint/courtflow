@@ -4198,7 +4198,82 @@ def sc_club_earnings_agrees_with_the_coach_statement(s, fx):
           f"{ov['banked_minor']}+{ov['coach_held_minor']} vs {ov['settled_total_minor']}")
 
 
+def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
+    """Tapping "Buy" twice must RE-OFFER the same unpaid order, not raise a second debt.
+
+    Production carried FIVE identical R5,000 pack orders for one member on one day (and five pending
+    wallets behind them): create_bundle_order/create_membership_order INSERTed unconditionally, with
+    no reuse guard — the same defect as the documented Yoco one, except the duplicate is a DEBT, not
+    a checkout. R43,960 of July's "outstanding" was this, and it is not even collectable: a pack is
+    granted ON PAYMENT, so an unpaid cluster means the member owns nothing and owes nothing. It was
+    a failed sale being reported as a receivable."""
+    print("\n# A repeated 'Buy' re-offers the SAME unpaid order (packs AND memberships)")
+    plan = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=10,
+                          price_minor=500000, duration_minutes=60, coach_user_id=fx.coach_uid,
+                          label="10 lessons")
+
+    o1 = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                bundle_plan_id=plan["id"], settlement_mode="online")
+    o2 = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                bundle_plan_id=plan["id"], settlement_mode="online")
+    check("2nd Buy returns the SAME order", o1["order_id"] == o2["order_id"],
+          f"{o1['order_id']} vs {o2['order_id']}")
+    check("2nd Buy is flagged reused", o2.get("reused") is True)
+    n = s.execute(text('SELECT count(*) FROM billing."order" WHERE club_id=:c AND user_id=:u '
+                       "AND status='awaiting_payment'"), {"c": fx.club_id, "u": fx.member}).scalar()
+    check("ONE debt, not two", n == 1, f"{n} awaiting_payment orders")
+    w = s.execute(text("SELECT count(*) FROM billing.token_wallet WHERE order_id=:o"),
+                  {"o": o1["order_id"]}).scalar()
+    check("ONE pending wallet behind it", w == 1, f"{w} wallets")
+
+    # A DIFFERENT pack is a different purchase — reuse must not collapse two real intents into one.
+    other = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=5,
+                           price_minor=275000, duration_minutes=60, coach_user_id=fx.coach_uid,
+                           label="5 lessons")
+    o3 = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                bundle_plan_id=other["id"], settlement_mode="online")
+    check("a DIFFERENT pack still raises its own order", o3["order_id"] != o1["order_id"])
+
+    # An OWED (at_court) purchase is a real debt and activates immediately — never re-offered, or a
+    # second pack would be handed out for one payment.
+    o4 = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                bundle_plan_id=plan["id"], settlement_mode="at_court")
+    o5 = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                bundle_plan_id=plan["id"], settlement_mode="at_court")
+    check("an OWED purchase is never reused (two real packs)", o4["order_id"] != o5["order_id"])
+    check("...and both granted their wallet", o4.get("activated") and o5.get("activated"))
+
+    # Once the member PAYS, the next Buy is a genuine second purchase.
+    apply_payment_event(
+        NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=o1["order_id"],
+                               provider_payment_id="p_dupe_guard_1", amount_minor=500000,
+                               currency="ZAR", status="succeeded", direction="charge",
+                               club_id=str(fx.club_id), user_id=str(fx.member), raw={"t": 1}),
+        session=s)
+    o6 = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                bundle_plan_id=plan["id"], settlement_mode="online")
+    check("after payment, a new Buy raises a NEW order", o6["order_id"] != o1["order_id"])
+
+    # MEMBERSHIP takes the identical path — one process, not two behaviours.
+    prod = s.execute(text("INSERT INTO billing.product (club_id,kind,name) "
+                          "VALUES (:c,'membership','Dup test') RETURNING id"),
+                     {"c": fx.club_id}).scalar_one()
+    pr = s.execute(text("INSERT INTO billing.price (club_id,product_id,audience,amount_minor,"
+                        "currency_code,unit,term_months,label,active,status) "
+                        "VALUES (:c,:p,'any',132000,'ZAR','per_month',1,'Unlimited',true,'active') "
+                        "RETURNING id"), {"c": fx.club_id, "p": prod}).scalar_one()
+    m1 = MB.create_membership_order(s, club_id=fx.club_id, user_id=fx.member,
+                                    price_id=str(pr), settlement_mode="online")
+    m2 = MB.create_membership_order(s, club_id=fx.club_id, user_id=fx.member,
+                                    price_id=str(pr), settlement_mode="online")
+    check("membership: 2nd Buy returns the SAME order", m1["order_id"] == m2["order_id"])
+    subs = s.execute(text("SELECT count(*) FROM billing.membership_subscription WHERE order_id=:o"),
+                     {"o": m1["order_id"]}).scalar()
+    check("membership: ONE placeholder subscription", subs == 1, f"{subs} subscriptions")
+
+
 SCENARIOS = [
+    sc_buy_click_never_mints_a_duplicate_debt,
     sc_club_earnings_agrees_with_the_coach_statement,
     sc_statement_survives_a_refund,
     sc_settlement_says_what_the_money_was,

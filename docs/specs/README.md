@@ -349,6 +349,13 @@ operating guide; **this folder is the detail.**
 > so it bills nothing (owner fixes the data; we owe a guard). See [OUTSTANDING](OUTSTANDING.md).
 > **New gate baseline: booking 404 / billing 551 / statement 64.**
 
+> **2026-08-08 — the duplicate-Buy guard: booking 404 / billing 561 / statement 64.**
+> `create_bundle_order`/`create_membership_order` INSERTed unconditionally, so every tap of
+> Buy minted another `awaiting_payment` order (5 identical R5,000 pack orders for one member
+> in production; R43,960 of July's "outstanding"). `billing.orders.reusable_pending_purchase`
+> re-offers the member's own unpaid online order instead. Guarded by
+> `sc_buy_click_never_mints_a_duplicate_debt`.
+
 ## Read in this order
 0. **[GOTCHAS.md](GOTCHAS.md)** — the **war stories behind the rules**: 45 bugs that reached production
    (or came within a merge of it), each with the reasoning and the `sc_…` scenario that pins it. Moved
