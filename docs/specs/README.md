@@ -350,6 +350,10 @@ operating guide; **this folder is the detail.**
 > **New gate baseline: booking 404 / billing 551 / statement 64.**
 
 ## Read in this order
+0. **[GOTCHAS.md](GOTCHAS.md)** — the **war stories behind the rules**: 45 bugs that reached production
+   (or came within a merge of it), each with the reasoning and the `sc_…` scenario that pins it. Moved
+   verbatim out of `CLAUDE.md` on 2026-08-08, which keeps the one-line rules as an index. *"Why the code
+   looks like that — read the entry before you 'simplify' it."*
 1. **[SYSTEM.md](SYSTEM.md)** — architecture: services, the 5 Postgres schemas, the code lanes,
    request/auth flow, integrations, deploy. *"How it's wired."*
 2. **[BUSINESS-RULES.md](BUSINESS-RULES.md)** — every business rule + capability we built: booking,

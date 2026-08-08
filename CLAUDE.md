@@ -37,10 +37,11 @@ requirements.txt` (Python 3.12).
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (45/78/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (56/82/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. The check counts below are the gate line's, not per-bullet totals —
-   **update line 25 only**, so the numbers can't drift apart.
+   **update the "Current green baseline" line above and nothing else**, so the numbers can't drift
+   apart (`scripts.audit_docs` fails any doc that claims a DIFFERENT current baseline).
    - `test_booking_scenarios` — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
      **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
      conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
@@ -260,31 +261,23 @@ is chosen — so a pack-holder can't be double-charged by a wrong tap or a stale
 defaults a pack-holder to "Covered by your pack"). Don't regress the draw to fire only on `settlement_mode='token'`.
 **One payment rule** (`billing.product.payment_modes`):
 >1 mode → choose · single non-online → immediate · online → Yoco. Frontend: `frontend/js/pay.js`.
-- **Every service purchase respects its OWN `payment_modes` — enforced SERVER-SIDE, per the EXACT service.**
-  A COURT/LESSON booking scopes the guard to the resolved `product_id` (`_service_payment_modes_guarded`),
-  so a card-only Clay court refuses pay-at-court/month-end (not just the UI). A PACK inherits its service's
-  modes (`billing.bundles.allowed_purchase_modes` intersects the pack's product modes with the club-enabled
-  set — a card-only pack is card-only, with **NO at-court fallback**: an unpayable restricted pack is
-  refused, never granted on an unpaid/owed order). A CLASS enrolment (`diary.classes.enrol`) is gated like
-  a booking — `membership_covered` is downgraded to at-court (classes are court-only-free), `free` is
-  admin-only, and the money mode must be club-enabled AND offered by that class's service. Members/guests
-  are bound to these; admins/coaches override. (Membership checkout already scoped to its own modes.)
+- **Every service purchase respects its OWN `payment_modes` — enforced SERVER-SIDE, per the EXACT service**
+  (never by `kind` alone). Bookings pass `product_id` to `_service_payment_modes_guarded`; a pack inherits its
+  service's modes via `billing.bundles.allowed_purchase_modes` (**no at-court fallback** — an unpayable
+  restricted pack is refused, not granted); `diary.classes.enrol` gates the mode the same way. Members/guests
+  are bound to these; admins/coaches override. Why, and what a kind-level check leaks:
+  [GOTCHAS.md#pricing--payment-rules](docs/specs/GOTCHAS.md#pricing--payment-rules).
 
 **Promotions — specials with promo codes, redeemed at checkout (`billing/promotions.py`, LIVE).** A promotion
 is an OFFER + a redeemable CODE (`billing.promotion` + `promotion_redemption` + `promotion_code`). **The
 invariant, same shape as the invoice rule: redeeming DELEGATES to `billing.statement.discount_order` — it
 NEVER invents a second debt store** (one debt = one order), so the pro-rata multi-line split, the
-coach-commission lockstep and the "was → now" audit all come for free. Four kinds, all live:
-`percent_off` · `amount_off` · **`bonus_period`** (membership "3 months → +1 free" — the bonus is just extra
-`months` on the existing period grant) · **`bonus_units`** (pack "buy a 10-pack, get 12" — reuses
-`adjust_wallet`). **A bonus is NOT a discount** — the order price is untouched and checkout says "N free
-months/sessions added". Both bonus kinds grant on BOTH paths (online → at activation/first wallet grant;
-offline → on the fresh redemption) and are **guarded against double-granting on a webhook replay** — don't
-regress that. Codes are either one shared `promotion.code` or a batch of **unique per-recipient codes**
-(`billing.promotion_code`, single-use, unguessable — minted for a Klaviyo campaign); lookup checks shared
-first, then per-recipient. Eligibility = scope/window/caps/min-spend/first-time/stacking; a refund or void
-reverses the redemption. Admin UI: **Setup → Promotions & offers** (+ "Unique codes →"). Emits
-`promo_redeemed`. Spec: `docs/specs/PROMOTIONS-ENGINE.md`.
+coach-commission lockstep and the "was → now" audit all come for free. Four kinds, all live: `percent_off` ·
+`amount_off` · `bonus_period` (membership 3+1) · `bonus_units` (pack "buy 10 get 12"). **A bonus is NOT a
+discount** — the order price is untouched — and both bonus kinds are **guarded against double-granting on a
+webhook replay**; don't regress that. Admin UI: **Setup → Promotions & offers** (+ "Unique codes →"). Emits
+`promo_redeemed`. Kinds, eligibility order, the unique-code batches and both grant paths in full:
+**[`docs/specs/PROMOTIONS-ENGINE.md`](docs/specs/PROMOTIONS-ENGINE.md)**.
 
 **Online payments (Yoco) — wired & verified.** `yoco_billing/` is a pure adapter behind
 `register_gateway`/`get_gateway` (`billing/` core untouched). An `online` booking creates an `awaiting_payment`
@@ -296,63 +289,33 @@ boot re-seed can't reset it).
 - **Refunds:** Admin → Billing → "Recent online payments" → "Refund only" or "Refund & cancel" →
   `POST /api/billing/yoco/refund`. Full refund sends NO amount; the lookup uses the CHECKOUT id (`ch_`), NOT
   the webhook's payment id (`p_`) — refunding a `p_` 404s.
-- **Reconciliation (missed-webhook recovery):** `yoco_billing/reconcile.py` — `client.get_checkout` asks Yoco;
-  a `completed`+`paymentId` replays `charge_succeeded` (idempotent). `POST /api/billing/yoco/reconcile/<order_id>`
-  + `POST /api/cron/reconcile-payments`. **Recovering the payment is NOT enough — the purchase must also be
-  ACTIVATED.** Both the webhook AND reconcile call the ONE shared `yoco_billing/activation.py::activate_purchase`
-  (activate the membership/pack + emit `bundle_activated`); it's idempotent and runs even on an `{ignored}`
-  replay, so a webhook-after-reconcile REPAIRS an un-granted pack. **Never let reconcile settle without calling
-  it** — the historic gap left online packs `paid` but `pending`/unusable with no email (Render Free sleeps →
-  webhook missed → reconcile is the common path). Remediate stragglers with `scripts/fix_bypassed_packs.py`.
-- **A successful charge may NOT re-open a CLOSED debt.** `_mark_order` was an unconditional UPDATE, so a
-  late/replayed `charge_succeeded` flipped **any** status to `paid` — and Yoco retries for 72h while
-  reconcile sweeps 100 days back, so 'late' is routine. `refunded`→`paid` re-books returned cash as
-  collected revenue; `written_off`→`paid` silently reverses the club's own decision; `void`→`paid`
-  resurrects a cancelled sale. `_mark_order_paid` allows only `open`/`awaiting_payment`/`paid`, **plus
-  the one void that IS recoverable** — a lapsed hold (`order_void_is_recoverable`, the SINGLE source of
-  truth; `yoco_billing.reconcile._is_expired_hold_void` delegates to it so the two can't drift apart and
-  silently widen the door). A refusal still RECORDS the payment (cash stays visible) but skips the whole
-  fan-out — no booking confirm, no pack grant, no commission, no "payment succeeded" email — and returns
-  `needs_attention='payment_on_closed_order'` for a human. Guarded by
-  `sc_payment_cannot_reopen_a_closed_debt`.
-- **Refund REQUESTS are decided on the transaction record, not in a separate queue.** Money → **Refund
-  requests** is an INBOX: each row opens `#/txn/<order_id>`, where a `Decision needed` banner offers
-  Approve & refund / Decline beside the payment history and audit trail. Deciding used to happen in the
-  list itself via `window.prompt`/`confirm` — no order context, nowhere to go when the gateway refused.
-  Three fixes behind it: (a) `approve_refund_request` passed the member's REQUESTED figure to Yoco, so
-  the ordinary "give me all of it back" sent an explicit amount equal to the order total and Yoco
-  refused — while the transaction record's button (which sends **no** amount = full refund) worked
-  seconds later; anything that isn't a strict partial now resolves to a full refund. (b) A direct refund
-  now calls `refunds.resolve_pending_requests_for_order`, so the member's ask closes instead of nagging
-  forever for money already paid back. (c) The queue hid any request whose order was `void` — but **void
-  ≠ the money came back**, and `_mark_order_paid` deliberately leaves a succeeded charge on a void order;
-  `_PENDING_STILL_REFUNDABLE` keeps those visible, hiding only `refunded`/`written_off`. The home
-  approvals count no longer reports a FAILED read as `0` (`refund_requests_error`) — a false all-clear on
-  money is indistinguishable from the real thing. Guarded by `sc_refund_request_visibility`.
+- **Reconciliation (missed-webhook recovery):** `yoco_billing/reconcile.py` asks Yoco about the checkout and
+  replays `charge_succeeded` (idempotent). `POST /api/billing/yoco/reconcile/<order_id>` +
+  `POST /api/cron/reconcile-payments`. **Recovering the payment is NOT enough — the purchase must also be
+  ACTIVATED** via the ONE shared `yoco_billing/activation.py::activate_purchase`; never let reconcile settle
+  without calling it. Remediate stragglers with `scripts/fix_bypassed_packs.py`. Why this is the COMMON path,
+  not the exception: [GOTCHAS.md](docs/specs/GOTCHAS.md#reconciliation-must-activate-not-just-settle).
+- **A successful charge may NOT re-open a CLOSED debt** — `_mark_order_paid` allows only
+  `open`/`awaiting_payment`/`paid` plus the one recoverable void (a lapsed hold, via
+  `order_void_is_recoverable`). A refusal still RECORDS the payment but skips the whole fan-out and returns
+  `needs_attention='payment_on_closed_order'`. `sc_payment_cannot_reopen_a_closed_debt` ·
+  [why](docs/specs/GOTCHAS.md#a-successful-charge-may-not-re-open-a-closed-debt).
+- **Refund REQUESTS are decided on the transaction record, not in a separate queue** — Money → Refund requests
+  is an INBOX; each row opens `#/txn/<order_id>` where a `Decision needed` banner offers Approve & refund /
+  Decline beside the payment history. `sc_refund_request_visibility` ·
+  [why](docs/specs/GOTCHAS.md#refund-requests-are-decided-on-the-transaction-record-not-in-a-separate-queue).
 - **Receipts:** `GET /api/billing/receipt/<order_id>` (online AND desk payments) → `frontend/app/receipt.html`
   (+ a professional PDF at `GET /api/billing/receipt/<order_id>/pdf`).
 
 **Invoice & receipt DOCUMENTS (`billing/invoicing.py` — the ONE module; `billing/invoice_pdf.py` = reportlab
 renderer).** An invoice is a **document that RENDERS over live orders, NEVER a second debt store** — the debt
-stays on `billing."order"` (one debt = one order). An invoice's line amounts FREEZE at issue (an immutable
-document + seller/bill-to snapshot); its **paid/outstanding derives LIVE** from the orders it references — so a
-mid-month card payment flips the invoice to Paid and double-counting is structurally impossible. Numbering is
-**gapless per club** (`club.billing_profile.invoice_prefix` + `next_invoice_seq`, allocated atomically at issue).
-- **Company financial identity** = `club.billing_profile` (registered name, company reg no., **bank details** for
-  EFT-payable invoices, invoice terms/footer, + a **DORMANT VAT block** — NextPoint is NOT VAT-registered, so
-  `vat_number` is NULL and no VAT line shows; flip it on later without a rebuild). Edited at Admin → Setup →
-  **"Company & billing details"** (`AdminUI.billingDetails`, `club_admin`+). Letterhead logo = `club.branding.logo_url`.
-- **Three issue paths, one document type:** admin **ad-hoc** invoice (`create_invoice` → numbered doc, emails it) ·
-  **intra-month** "invoice the outstanding balance" (`POST /api/admin/clients/<id>/statement-invoice`) · **month-end**
-  auto-consolidation (`run_month_end` rolls each client's open orders into ONE statement invoice). `issue_invoice`
-  skips orders already on an active invoice (one active invoice per open order — no double-issue).
-- **Serve/act:** `GET /api/billing/invoice/<id>` (+ `/pdf`), `POST …/mark-paid` (EFT/cash → settles every open order
-  via the desk-payment core → receipts fire → invoice derives Paid), `POST …/void`. Lists: `GET /api/me/invoices` ·
-  `GET /api/admin/clients/<id>/invoices`. Client UI: `#/invoices` (view + download PDF + pay-outstanding).
-- **Email:** the `invoice_issued` event reuses the booking-confirmation shell + a statement summary + a **"Pay online"**
-  box + the **PDF attached** — attachment is **flag-gated `EMAIL_INVOICE_PDF_ENABLED`, now ON** (verified
-  2026-07-18; the SES key carries `AmazonSESFullAccess`/`ses:SendRawEmail`, so MIME attachments send).
-  `EFT` desk payments carry a **reference** (`provider_payment_id`, captured in the "Mark as paid" modal).
+stays on `billing."order"` (one debt = one order). Line amounts FREEZE at issue; **paid/outstanding derives
+LIVE** from the orders referenced, so a mid-month card payment flips the invoice to Paid and double-counting is
+structurally impossible. Numbering is **gapless per club** (`club.billing_profile`, allocated atomically at
+issue). Three issue paths, one document type: admin ad-hoc · intra-month "invoice the outstanding balance" ·
+month-end auto-consolidation. Company identity + bank details (and the dormant VAT block) are edited at
+Admin → Setup → **"Company & billing details"**. The routes, the email/PDF attachment flag and the EFT
+reference: **[UNIFIED-STATEMENT.md § As-built](docs/specs/UNIFIED-STATEMENT.md#invoice--receipt-documents)**.
 
 **Booking flow** (`frontend/js/booking.js`, full-screen): Service → **Schedule** (month calendar with inline
 per-duration chips for court/lesson; live price or "Covered by your membership"; a court booking defaults the
@@ -385,58 +348,38 @@ fetch.
 front (`_court_is_free`, excluding the booking's OWN rows via `_linked_booking_ids` so it can't block itself)
 → `COURT_NOT_AVAILABLE` rather than a bare `SLOT_TAKEN`. Court moves are single-booking only, never a series
 (`COURT_MOVE_SINGLE_ONLY`). Omitting the key preserves the old behaviour exactly.
-**A court move re-runs the MONEY guards a time move runs** — a COURT booking may not cross court
-SERVICES (`COURT_SERVICE_CHANGED`: it is priced by its service, and `reprice_booking_order` re-prices
-on the SAME product so it could never correct the change), and a `membership_covered` booking
-re-runs the FULL entitlement against the TARGET court (`COURT_NOT_COVERED` — the time-window check
-alone let a free booking move onto a clay court members are never covered for). The service compare
-NORMALISES None (`str(a or "") != str(b or "")`): in a multi-service club an unallocated court
-resolves to an ambiguous None, and a short-circuit would wave that move through. A lesson's held
-court may move freely — a lesson is priced by its LESSON service. `CRMUI.rescheduleModal` filters the
-court list to the booking's own service so the UI never offers a move the server will refuse.
+**A court move re-runs the MONEY guards a time move runs** — a COURT booking may not cross court SERVICES
+(`COURT_SERVICE_CHANGED`) and a `membership_covered` booking re-runs the FULL entitlement against the TARGET
+court (`COURT_NOT_COVERED`). A lesson's held court may move freely — a lesson is priced by its LESSON service.
+[Why, and the None-normalisation that a short-circuit would skip](docs/specs/GOTCHAS.md#a-court-move-re-runs-the-money-guards-a-time-move-runs).
 **Frontend: `CRMUI.rescheduleModal` is the ONE reschedule UI** (date/time + configured durations + court),
 shared by client · coach · admin · home — it replaced four drifted forks, none of which could move a court.
 Role differences are config: `canChangeCourt` is false for a member's LESSON (the court is club-allocated)
 and true for their court hire and for all staff.
 
-**`diary.booking.product_id` remembers WHICH service was booked.** A coach can sell several lesson
-services (Private R400, Semi-private R250, Cardio R120). `create_booking` resolves the exact one — and
-used to discard it, which was invisible until the review gate: a `requested` lesson creates **no order**,
-so on accept the service was gone and `_create_order_guarded` fell back to `price_for(kind='lesson',
-coach)`, whose tie-break is **`amount_minor ASC LIMIT 1`** — the coach's CHEAPEST service. A R400 lesson
-billed R250, commission accrued on the wrong base, earnings attributed the sale to the wrong service, and
-the pack match degraded identically (a NULL request product matches anything). `accept_booking` now prices
-AND matches the pack off `bk["product_id"]`. **If you add a column here, add it to `_booking_dict`'s SELECT
-too** — it returns `None` otherwise and the fallback silently bites again. Guarded by
-`sc_gated_lesson_bills_the_booked_service`.
+**`diary.booking.product_id` remembers WHICH service was booked.** A coach can sell several lesson services
+(Private R400, Semi-private R250, Cardio R120) and pricing must use the exact one, never a `kind`-level
+fallback (whose tie-break is `amount_minor ASC LIMIT 1` — the coach's CHEAPEST service). **If you add a column
+here, add it to `_booking_dict`'s SELECT too** — it returns `None` otherwise and the fallback silently bites
+again. `sc_gated_lesson_bills_the_booked_service` ·
+[why](docs/specs/GOTCHAS.md#diarybookingproduct_id-remembers-which-service-was-booked).
 
 **Lesson lifecycle — there is ONE flow, and no approval gate.** A lesson books exactly like a court:
 it reserves coach ∩ court immediately, and the settlement mode alone decides `held` (online, awaiting
 payment) vs `confirmed`. `iam.coach_profile.review_bookings` gates nothing; `accept`/`propose`/`decline`
 and the `requested`/`proposed` statuses were **deleted 2026-07-29**. A coach who doesn't want a time
 **reschedules or cancels** it — and a paid lesson cancelled by the club refunds itself. Full reasoning +
-what must never be restored: the "THERE IS ONE LESSON FLOW" bullet in Gotchas.
+what must never be restored: [GOTCHAS.md § The lesson lifecycle](docs/specs/GOTCHAS.md#the-lesson-lifecycle).
 
 **"Pay all" settlement orders — the wrapper OWNS its contents.** A settlement order stands in for N real
-debts. Its coverage is snapshotted **immutably** on `billing."order".covered_order_ids` at creation; the
-child-side `settled_by_order_id` is MUTABLE (`_reclaim_abandoned_settlements` NULLs it after 30 min so an
-abandoned checkout stops hiding the debt) and must **never** be the only record — Yoco retries/reconcile run
-for **72 hours** against that 30-minute reclaim, and a payment landing after it used to mark the wrapper paid
-and settle **ZERO** children (debt survived a successful payment; the member was billed twice; the orphaned
-wrapper double-counted as revenue). `settle_settlement_order` and `is_settlement_order` read the snapshot
-first, back-reference second. **Refunding a wrapper must UN-SETTLE its children** (`unsettle_settlement_order`
-→ `open` **and** `settled_by_order_id = NULL`, or the debt returns invisible) — otherwise the club loses the
-cash AND the receivable. That un-settle runs **strictly AFTER `_accrue_refund_clawback`**, which only reverses
-commission on children still `paid`. A PARTIAL refund of a wrapper can't be allocated per child — it logs and
-flags rather than half-settling. **Changing a COVERED debt kills the wrapper**: `void_order` and
-`discount_order` call `invalidate_live_settlement_for` first, which detaches every child and voids the
-stale wrapper — its total froze at creation, so paying it would collect R900 for R600 of debt with the
-surplus landing nowhere (the fold still reconciles, because a voided child is excluded). `cancel_booking`
-voids unconditionally, so a member cancelling mid-checkout used to do this to themselves. We cannot
-retract a Yoco page already open, so `settle_settlement_order` also reports a **`surplus_minor`** when it
-collects more than it settles — prevention where possible, detection where not. Guarded by
+debts, snapshotted **immutably** on `billing."order".covered_order_ids` at creation; the child-side
+`settled_by_order_id` is MUTABLE and must **never** be the only record. **Refunding a wrapper must UN-SETTLE
+its children** (or the club loses the cash AND the receivable), and **changing a COVERED debt kills the
+wrapper** (`void_order`/`discount_order` → `invalidate_live_settlement_for`). Guarded by
 `sc_settlement_refund_restores_debt` + `sc_settlement_survives_reclaim` +
-`sc_settlement_invalidated_when_a_debt_changes`.
+`sc_settlement_invalidated_when_a_debt_changes`; the 30-min-reclaim-vs-72h-retry race and the `surplus_minor`
+report are in
+**[UNIFIED-STATEMENT.md § As-built](docs/specs/UNIFIED-STATEMENT.md#pay-all-settlement-orders--the-wrapper-owns-its-contents)**.
 **Unified client statement** (`billing/statement.py`): one debt = one `billing.order`, settled once. The account
 page shows ONE reconciled "Your statement", grouped by category with tick-to-part-settle; admin void/write-off;
 coach `coach_arrears` kept in **lockstep** with orders so commission accrues exactly once. Design:
@@ -471,19 +414,14 @@ club" + a **Record payout** button (`Widgets.Earnings` `cfg.onRecordPayout` → 
 rent, then for each client with an OPEN balance **consolidates their open orders into ONE numbered statement
 invoice + a pay-link email** (`invoice_issued`; else a plain `statement_ready` reminder — a client who owes
 nothing gets NO email), idempotent per `(club,user,period)` via `billing.month_end_notice`. **The sweep is
-PER-CLIENT-TRANSACTIONAL, TIME-BOXED and RESUMABLE** — `run_month_end` is the single-transaction form (one
-club, harness); the CRON ROUTE instead drives `month_end_period`/`month_end_accrue`/`month_end_targets` then
-`month_end_client` in **its own `session_scope()` per client**, stopping at `max_seconds` (default 90, under
-gunicorn's 120s reaper) and returning `{ok, complete, remaining, failed}` for the caller to loop. This is not
-optional polish: the sweep allocates **gapless invoice numbers** and `emit()`s the email from a **background
-thread with its own session**, so the email does NOT roll back — one big transaction meant a worker reaped at
-client #400 rolled back 400 invoices whose numbered emails had already landed, and a re-run allocated
-different numbers. One client's failure now costs one client, and `month_end_notice` makes every later pass
-skip the done. Fired by
-**`.github/workflows/month-end.yml`** on the **25th** (the club billing day) — it **loops until `complete`** and
-**FAILS THE JOB LOUDLY** on any non-200/`ok:false` (it used to end in `|| echo`, so the run went green even if
-nothing was billed — invisible for 30 days). Rides the keep-warm CI pattern — the
-four `render.yaml` crons stay commented out).
+PER-CLIENT-TRANSACTIONAL, TIME-BOXED and RESUMABLE** — the CRON ROUTE runs `month_end_client` in **its own
+`session_scope()` per client**, stops at `max_seconds` (default 90, under gunicorn's 120s reaper) and returns
+`{ok, complete, remaining, failed}` for the caller to loop; `run_month_end` is the single-transaction form
+(one club, harness only). Fired by **`.github/workflows/month-end.yml`** on the **25th** (the club billing
+day) — it **loops until `complete`** and **FAILS THE JOB LOUDLY** on any non-200/`ok:false`. Rides the
+keep-warm CI pattern — the four `render.yaml` crons stay commented out. Why one big transaction is not an
+option (gapless numbers + emails that don't roll back):
+**[UNIFIED-STATEMENT.md § As-built](docs/specs/UNIFIED-STATEMENT.md#the-month-end-sweep-is-per-client-transactional-time-boxed-and-resumable)**.
 
 **Client month-at-a-glance + the ONE month-aware 360.** `billing.me.activity_summary(month)` →
 `GET /api/me/activity-summary`: sessions PLAYED (lessons/court/classes, standalone courts only) + minutes +
@@ -628,449 +566,18 @@ member by email on the first authenticated hit.
   (`sportai-db`) is still off-limits.
 
 ## Gotchas
+**The war stories live in [`docs/specs/GOTCHAS.md`](docs/specs/GOTCHAS.md) — 45 entries, moved out
+verbatim. Below is the INDEX: the rule, and the `sc_…` scenario that pins it.** Follow the link before
+you change the code an entry names — each one is a bug that reached production, and every one of them
+looks like a harmless simplification until you read what it cost.
+
+**The short ones, in full — no story needed:**
 - **`api.nextpointtennis.com` is already live on the 1050 service** — do not break it. The new platform has its
   own API host; changing a Render custom domain can recreate a service. (The members-area **Ten-Fifty5 embed**
   now *deliberately* calls this API with federated NextPoint tokens — see the embed section.)
-- **Ten-Fifty5 embed — Render service names ≠ `render.yaml` `name:`.** The live 1050 API is the Render service
-  **"Sport AI - API call"** (custom domain `api.nextpointtennis.com`), NOT the service literally named
-  `webhook-server` (that's a **cron**). Set env on the real service; the blueprint does **not** auto-sync env.
-  Federation trap: **`AUTH_ISSUER` (singular) vs `AUTH_ISSUERS` (plural)** — the multi-issuer allowlist is
-  `AUTH_ISSUERS` (a comma-list in the singular var is now tolerated, but use the plural); leave `AUTH_JWKS_URLS`
-  UNSET (JWKS derived from each issuer, no ordering to break). The nested-portal iframe needs the **multi-hop
-  relay** in `auth_client.js` (a middle frame proxies its grandchild's auth up) or nested pages fall back to
-  legacy → "Missing email or API key".
 - **Never let an agent change DNS.** The Wix→Render SEO cutover is supervised by Tomo.
 - **The booking API returns `{booking:{order_id,status}, checkout}`** — read `res.booking.order_id`, NOT
   `res.order_id` (that bug silently confirmed online bookings without redirecting).
-- **`booking_type` must match the resource, and `'class'` is NOT bookable via `/api/diary/bookings`**
-  (`BOOKING_TYPE_NOT_ALLOWED` / `RESOURCE_KIND_MISMATCH`). The kind check used to live only inside the
-  lesson branch and the court-service guard only inside the court branch, while `'class'` is legal in the
-  schema CHECK (that's how a class GiST-reserves its court) — so POSTing a COURT as a `'class'` skipped
-  the court block entirely: cheapest class rate, class payment rules (usually none), a class pack drawn
-  for a court, and **a court GiST-blocked but INVISIBLE to staff** (the master feed excludes
-  `booking_type='class'` and a crafted row has no `class_session` behind it) — a phantom hold nobody could
-  see or cancel. A real class court hold is inserted by `diary.classes._reserve_court_for_class`, and
-  `create_booking` has exactly ONE caller (the route). Guarded by `sc_booking_type_must_match_resource`.
-- **A class name can NEVER break the class — enforced at THREE layers (2026-07-26).** A class is two
-  linked rows (`billing.product` = the service the editor renames + `diary.resource` = the class type
-  the diary schedules against), joined by `diary.resource.product_id`, with the name duplicated in both.
-  (1) **Identity, not names:** EVERY class resolver — `list_class_types`, `class_type_dict`, pricing,
-  `update_class_type` — resolves via `product_id` and DISPLAYS `billing.product.name`; the last
-  name-based resolver (`_class_product_for_resource`) was DELETED. A stale resource name can't affect
-  resolution. (2) **The DB makes drift impossible:** a trigger `diary._sync_class_resource_name` mirrors
-  `billing.product.name` → `diary.resource.name` on any UPDATE — so a rename via the service editor, the
-  diary edit, a SCRIPT or a manual SQL all stay in lockstep. (3) **Boot heals legacy:** `diary/schema.py`
-  backfills NULL `product_id` links (conservative, by name+coach) and force-syncs any linked-but-drifted
-  name every deploy. An unlinked+renamed class (the orphan) is a human call — `scripts/reconcile_class_names.py
-  --link-orphans` pairs a lone renamed class to its lone service. Editing a class name is SAFE and must
-  never be disabled. Guarded by `sc_class_name_cannot_break_the_class` (incl. a RAW-SQL trigger proof).
-- **A posted `product_id` is VALIDATED before anything uses it** (`SERVICE_NOT_VALID`): it must be an
-  ACTIVE product of this club whose `kind` matches the booking type, and for a lesson/class either shared
-  (NULL coach) or the RESOLVED coach's own. It arrives off the request body and used to be checked only on
-  the court branch — yet it drives the payment gate, the price guard AND the order price, and
-  `pricing.price_for`'s product branch carries **no kind, coach or `product.active` predicate** (those live
-  in its kind branch), falling through to `amount_minor ASC LIMIT 1`. Posting another service's id billed
-  the club's cheapest price, evaluated the card-only rule against the SUBSTITUTED service, and — if the id
-  named a court product — made commission classify a delivered lesson as court, so **the coach accrued
-  nothing**. Service ids are public to any member via `GET /api/diary/services`. Guarded by
-  `sc_posted_service_must_be_real`.
-- **A service's `payment_modes` is enforced SERVER-SIDE per the EXACT `product_id`** — resolve allowed modes
-  by the resolved service product, NEVER by `kind` alone (a kind-only resolve reads the club's default court
-  product and lets a card-only Clay court/pack/class be taken pay-at-court on an owed/unpaid order). Bookings
-  pass `product_id` to `_service_payment_modes_guarded`; packs use `billing.bundles.allowed_purchase_modes`
-  (no at-court fallback for a restricted pack — refuse if unpayable); `diary.classes.enrol` gates the mode
-  (and never lets a member conjure a free seat via `membership_covered`/`free`). Don't regress these to a
-  kind-level check.
-- **A CLASS resolves its service through `diary.resource.product_id`, NEVER by joining on names.**
-  `create_class_type` links the resource to its `billing.product` at birth, and `diary/schema.py` boot-
-  backfills legacy rows (conservatively — only a NULL link with exactly ONE name+coach match; ambiguous
-  or already-drifted rows are left for a human). The old name join broke silently on a service RENAME
-  (which updates `billing.product.name` only), leaving `class_session.price_id` NULL → a kind-level
-  fallback billed the class at some OTHER class's rate under that class's payment rules. Resolvers:
-  `_class_service_product_id` (durable link) · `_class_product_for_session` (price → else resource) ·
-  `_class_effective_price_id` (re-resolves when the frozen price row was RETIRED, so a removed
-  variation can't bill R0). `enrol` refuses `PRICE_NOT_CONFIGURED` like `create_booking` does.
-- **`membership_started` is emitted from `billing.membership.emit_membership_started`, NOT from the gateway.**
-  `apply_payment_event`'s `subscription_active` branch looks like the producer but **nothing produces that
-  kind** — NextPoint sells memberships as ONE-OFF ORDERS (`charge_succeeded` → `activate_membership_for_order`),
-  never provider-managed subscriptions, so that branch is unreachable and the event silently never fired
-  (which also killed the `on_trial=false` conversion flip that keys off it). The real emit sits in
-  **`_apply_term_grant`** — the ONE function every PURCHASE flows through (online webhook/reconcile AND the
-  offline desk buy) — fired only from its two non-replay branches, so a replayed webhook can't double-count.
-  **`admin.repositories.grant_membership` emits it too** (`source='admin_grant'`; an extension carries
-  `is_renewal=true` so the on_trial flip still runs but conversion measurement can filter renewals) — this club
-  grants most memberships by hand, so excluding them left the flag stale. It passes `provider='manual'`
-  **explicitly, never read off the row**: the extend branch matches ANY active subscription including a TRIAL
-  row, and the emitter drops `provider='trial'`, so reading it back would silently skip the very trialist you
-  need flipped. The trial (`grant_signup_trial`) and the Wix import stay excluded — they INSERT directly and
-  never reach either path. **It must carry `email`** — that's what the Klaviyo forward keys on. Guarded by
-  `sc_membership_started_emit`.
-- **ONE REFUND MODAL, AND IT OFFERS AN AMOUNT (2026-07-28).** `admin_app.refundModal` is THE dialog
-  for both ways a refund starts — the **Refund** action on a transaction record and **Approve &
-  refund** on a member's request — and it is the ONLY place `yocoRefund` / `approveRefundRequest`
-  are called. Partial refunds were supported by Yoco, `client.refund_checkout`, the route AND
-  `approve_refund_request` the whole way down, but **neither UI path ever sent an amount**, so a
-  part-refund was unreachable; approving also ran on `window.prompt`/`confirm`, which can neither
-  show a figure nor validate one. The modal now takes an amount (defaulted to what's still
-  refundable — collected MINUS already-returned), a note, and the cancel-booking choice.
-  **A FULL refund must still send NO amount** — an explicit figure equal to the total is the form
-  Yoco has refused before — so the modal omits it unless the figure is a genuine partial. DECLINE
-  stays a prompt (no money moves). Guarded by `sc_partial_refund_reaches_yoco_as_a_partial`.
-- **A REFUND'S IDEMPOTENCY KEY MUST NOT OUTLIVE A FAILED ATTEMPT (2026-07-28).** The Yoco adapter
-  keyed refunds `refund:{checkout_id}:{int(amount_minor or 0)}` — and a FULL refund passes
-  `amount_minor=None`, so `int(None or 0)` collapsed to **0**: ONE FIXED KEY per checkout, for all
-  time. Yoco honours `Idempotency-Key` by REPLAYING the response first stored against it, so once
-  any attempt failed, **every retry replayed that failure forever** regardless of what changed —
-  while the Yoco dashboard refunded the same payment without complaint. It presented as an
-  unchanging "insufficient funds" against an account with plenty in it, which sends you hunting a
-  balance problem that does not exist. The key now carries a **minute bucket**
-  (`refund:{ch}:full|{amount}:{YYYYMMDDHHMM}`): still collapses an accidental double-submit, no
-  longer blocks a deliberate retry. **The real double-refund guard belongs in OUR ledger, not the
-  gateway key** — `execute_order_refund` refuses `already_refunded` / `refund_exceeds_payment` by
-  summing `billing.payment` refunds against the charge, without calling Yoco at all. A frozen key
-  was never protecting the money; it was only preventing the retry. Guarded by
-  `sc_refund_retry_is_not_poisoned_by_the_idempotency_key`.
-- **THERE IS ONE LESSON FLOW (2026-07-29).** A lesson is booked exactly like a court: it holds the
-  coach AND a court immediately, and the SETTLEMENT alone decides `held` (online, pending payment)
-  vs `confirmed`. **Nothing about the coach changes the shape of the booking.**
-  `iam.coach_profile.review_bookings` no longer gates anything.
-  The gate it replaced created a `requested` lesson that reserved NOTHING and raised no order — a
-  different booking, a different notification and a different money path for the same act — so a
-  card-only coach was unbookable (no order ⇒ the client is never sent to checkout, and `can.pay`
-  needs an order), and TWO clients could each hold and pay for one slot. It also wasn't buying what
-  it looked like: **a coach can RESCHEDULE or CANCEL**, so a bad time is moved or returned, not
-  refused up front. Guarded by `sc_one_lesson_flow` + `sc_paying_is_the_acceptance`.
-- **THE COACH IS TOLD, ONCE, ABOUT EVERY LESSON.** `_emit_confirmed` → **`lesson_booked`**, addressed
-  to the coach (in-app + email: "open it to reschedule or cancel"). Who got told used to depend on
-  the settlement mode AND the review flag — only a gated booking emailed him directly, elsewhere he
-  was a BCC on the CLIENT's receipt, and a client who made a request got nothing at all. **The coach
-  BCC is dropped entirely** — a class now emits `class_booked` to him the same way, so nothing is
-  left to blind-copy. An ONLINE lesson confirms in the PAYMENT path, which `_emit_confirmed` never reaches,
-  so `billing.events` calls `notify_coach_of_confirmed_order` — without it the coach would hear
-  about every lesson EXCEPT the paid ones.
-- **A PAID lesson cancelled BY THE CLUB refunds itself.** Cancel used to void owed orders and leave a
-  paid one intact ("refunding is a separate explicit flow") — fine while a coach who didn't want a
-  lesson DECLINED it and that path refunded. With the gate gone **cancel IS how a coach returns a
-  lesson**, so leaving the money would keep payment for a lesson the club just cancelled. A CLIENT's
-  own cancellation is deliberately NOT auto-refunded — that is a request decided under the
-  cancellation policy (`was_paid` still flags it).
-- **accept / propose / decline are GONE (deleted 2026-07-29 once production's queue was empty).**
-  The approval lifecycle, its four email templates, the coach's approval queue, the client's
-  "needs your attention" blocks and the `requested`/`proposed` statuses were all removed — the
-  status CHECK is now `held|confirmed|cancelled|completed|no_show`, narrowed inside a **guarded**
-  DO block (it runs every boot; an ALTER that fails takes the deploy with it, so it only narrows
-  when no such rows remain). If a lesson ever needs approving again, do NOT restore the gate —
-  the coach reschedules or cancels, and a paid cancel refunds.
-- **A lesson email must state THIS booking's state, not the usual one.** `lesson_accepted` always
-  read "Your lesson is confirmed" — including when the booking was HELD and unpaid, so the one
-  email that could have prompted payment said there was nothing to do. It now says "one step left"
-  when `status='held'`, and `lesson_declined` says the money is coming back when `refunded`. Both
-  read state the PRODUCER passes on the payload (`_payload` carries `status`; `_lesson_event(...,
-  extra=)` carries outcomes) — emit dispatches on a background thread whose session cannot see the
-  caller's uncommitted work.
-- **A CLASS HAS THREE VERBS, AND CANCEL GIVES THE MONEY BACK (2026-07-29).** The class lifecycle got
-  the same treatment as the lesson one, and had three holes:
-  (a) **`reschedule_session` — the verb that didn't exist.** A class could be created, scheduled
-  forward and cancelled, never MOVED. A coach needing one session shifted an hour had to cancel it —
-  which releases every player and refunds — and re-schedule, losing the roster; so in practice the
-  session just ran at the wrong time. It is deliberately the same shape as
-  `bookings.reschedule_booking` and REUSES the same guards: `_coach_busy_at` (excluding this session
-  so it can't block itself) → `COACH_NOT_AVAILABLE`, and courts re-reserved through
-  `_reserve_courts_for_class` so the GiST exclusion, the busy-court auto-repick and the court-grid
-  visibility all behave as they do at schedule time. **The old holds are released inside the SAME
-  savepoint that re-takes them** — a small move (11:00→11:30, same court) overlaps itself, so the old
-  hold must go first or it GiST-blocks its own session; a failed re-take unwinds via `_NoCourt` and
-  the class is left exactly as it was. A class that HELD courts and can secure none at the target
-  **REFUSES (`NO_COURT_AVAILABLE`)** rather than half-moving: `schedule_sessions` may drop a court
-  when laying out a term, but a class people have PAID for may not move to a time it can't run at.
-  Enrolments/orders/waitlist are untouched — the seat follows the session. Routes: `PATCH
-  /api/admin/classes/sessions/<id>` (+ coach, own sessions only — a coach may not reassign the class
-  to another coach, so `coach_user_id` is deliberately not read off his body). UI: a **"Move"**
-  action on the sessions table, reusing the shared `CRMUI.rescheduleModal` — `canChangeCourt` became
-  config-driven rather than `booking_type !== 'class'`, and a class on SEVERAL courts gets no
-  single-court dropdown (it would silently drop the rest; they move with it).
-  (b) **The coach is now told: `class_booked`**, addressed to him, fired at the ONE point a seat
-  becomes real — at enrolment when owed/prepaid, on PAYMENT when online (a hold that may lapse is not
-  news), and on waitlist promotion, plus the late-payment re-instate (which clears `held_until`, so
-  `confirm_paid_enrolments`' own query no longer sees that seat — it must emit from there or never).
-  He previously only ever got a blind copy of the player's "you're enrolled" receipt. **The coach BCC
-  is now dropped everywhere** (`notifications.deliver`), lesson and class alike.
-  (c) **Cancelling a class REFUNDS the paid seats.** `cancel_session` called `void_order`, and
-  `void_order` deliberately no-ops on a paid order ("a paid order must be refunded, not voided") — so
-  every online payer lost the seat AND the money, under a `class_cancelled` email that literally
-  promised "any payment will be refunded or credited". Now a paid order refunds
-  (`execute_order_refund`, per-player guarded so one gateway failure doesn't abandon the rest of the
-  cancel) and only an unpaid one is voided; the producer states `refunded` on the payload and the
-  email says what actually happened. All three guarded by `sc_class_session_lifecycle`.
-- **THE COURT IS THE ONE PLACE TO SEE A COURT (2026-07-29).** Setup → Courts & hours → a court now
-  carries everything about it: details + service allocation, **its own peak window**, playing hours,
-  and a READ-ONLY **"Pricing & payment"** summary of the court SERVICE it sits on (price per
-  duration incl. peak, payment methods, members-covered, packs) with one button into THE service
-  editor (`window.ServiceEditor`, mounted in place, returning to the court on close).
-  **Price/payment/cover are NOT editable on the court and must not become so** — they belong to the
-  SERVICE, which several courts share (eight hard courts are one price list). Editing them per court
-  would either fork the model or silently mean "change this for all eight", which is worse than
-  sending the owner to the place that says so. Summarise here, edit there.
-- **PEAK HOURS ARE PER COURT (2026-07-29).** The peak AMOUNT was always per service+duration
-  (`billing.price.peak_amount_minor`); only the WINDOW was club-wide, so "peak on the show courts
-  only" was unexpressible. `diary.resource.peak_override` + `peak_days/start_min/end_min` give three
-  states — and **the third is why the flag exists**: `override=false` inherits the club window (every
-  court, unchanged); `override=true` makes the court's own window authoritative **including when it
-  is EMPTY**, which is how a club with peak hours marks a court never-peak. A nullable window alone
-  could only ever ADD peak, never remove it. `pricing.in_peak_window(..., resource_id=)` resolves it
-  and **BOTH price paths must pass the court** — `availability._slot_price` (what the grid shows)
-  and `_create_order_guarded._price` (what the order charges) — or the grid quotes the club window
-  while the booking charges the court's. Edited at Setup → Courts & hours → a court → "Peak hours
-  for this court". Guarded by `sc_peak_hours_can_differ_per_court` (asserts shown == charged for all
-  three states).
-- **THE SIGNUP TRIAL IS A TIER-LEVEL FLAG, AND A TIER IS SEVERAL PRICES.** `billing.price.is_trial` /
-  `trial_days` mark the tier a brand-new member is granted (Setup → Memberships → a tier → **"Signup
-  trial"**); `grant_signup_trial` prefers it and uses its `trial_days`, and `membership_plans`
-  excludes it from sale. Exclusivity (`_make_sole_trial`) clears **OTHER TIERS, never sibling
-  TERMS** — a tier is one price per term (1/3/12 months) and the editor saves it by PATCHing each
-  term in turn, so clearing by `p.id <> :pid` had every save undo the previous ones and only the
-  LAST term kept the flag. The trial still worked (the grant finds any flagged row) but the editor
-  reads the FIRST term, so re-opening showed the toggle OFF — tick, save, still off, forever. Tiers
-  are matched by `membership_tier` (`IS DISTINCT FROM`, so NULL-tier legacy rows group together).
-  Guarded by `sc_signup_trial_is_a_tier_level_flag`.
-- **THE TRIAL IS A MEMBERSHIP — it has no separate court rules.** `provider='trial'` goes through the
-  SAME resolver as a paid tier: the court service's **`members_covered`** flag, the duration/day caps
-  and the access window all apply identically. So "is clay in the free trial?" is answered by ONE
-  switch — Setup → Services → the court service → **"Included with a membership?"** (owner-only,
-  `billing.product.members_covered`, already wired through `services/` read+PATCH). Turning it off
-  makes that court PAYG for members AND trialists; the booking is never blocked, just billed.
-  Resist any urge to special-case the trial — a club would be giving its most expensive courts away
-  to every new signup. Guarded by `sc_trial_obeys_the_same_court_rules_as_a_membership`.
-- **`/api/me/plan` MUST REPORT THE CAP THE SERVER WILL ENFORCE (2026-07-29).** The booking UI hides
-  over-cap durations using `membership_status.max_covered_minutes`, while the ENGINE decides whether
-  to charge using `entitlement.active_caps` — which resolves a NULL tier cap to the **club default**
-  (`club.policy.default_max_covered_minutes`). `membership_status` returned the tier's RAW column, so
-  a club-level 90-minute cap was invisible to the UI: it kept offering a 2-hour court, told the
-  member "Covered by your membership", and the server then correctly charged for it. The owner sees
-  a cap that "isn't working"; the member gets a surprise bill. It now COALESCEs to the club default,
-  and a tier's own value still overrides. **Any new surface that shows entitlement must read the
-  EFFECTIVE cap, never a raw column** — shown == charged. Guarded by
-  `sc_plan_reports_the_cap_the_server_will_enforce`.
-- **EQUIPMENT IS SCOPED TO A COURT SERVICE, AND THE COURT IS STILL CHARGED (2026-07-29).** Equipment
-  was club-wide — every item offered on every court booking whatever service it belonged to, so
-  clay-only kit could be hired on a hard court. `diary.equipment_service` links an item to the court
-  SERVICES it's offered on, many-to-many, and **NO ROWS MEANS ALL SERVICES** so every pre-existing
-  item is unchanged. The picker filters (`GET /api/diary/equipment?court_product_id=`), and
-  `create_booking` re-checks server-side (`EQUIPMENT_NOT_FOR_SERVICE`) because `addons` arrives off
-  the request body — the same reason a posted `product_id` is validated rather than trusted.
-  `?starts=&ends=` returns `available` per item so the stepper clamps to what is FREE for the slot,
-  not to what the club owns (it used to let a client pick 4 racquets already out and refuse at the
-  very end). **The COURT is charged in full alongside the kit unless a membership genuinely covers
-  it** — a covered court + kit is an order for the kit ONLY, which is indistinguishable from a leak
-  by looking at the order, so all three cases are pinned: PAYG pays, covered doesn't, and covered
-  OVER THE CAP pays again. Both the court (GiST) and the kit (time-overlap count) are reserved, so
-  neither double-books. Guarded by `sc_equipment_court_is_charged_and_both_are_booked_out` +
-  `sc_equipment_is_scoped_to_its_court_service`.
-- **`billing.me.activity_summary` buckets EVERYTHING by the SESSION's month.** `paid_minor` used to
-  filter on the PAYMENT's own `created_at`, putting the money in a different month from the thing it
-  paid for whenever someone books ahead: an August session paid in July read "billed R400, paid R0"
-  in August and "paid R400, nothing played" in July — a fold that reconciles in NEITHER month, on
-  the client's own summary. One month view, one date basis. (Found because a harness scenario asked
-  for *today's* month while the fixture books 3 days out — **date-dependent assertions must derive
-  their date from the fixture**, or they fail for the last 3 days of every month and look like a
-  regression.)
-- **A REFUND NEEDS EVIDENCE OF A CARD PAYMENT, NOT A CHECKOUT (2026-07-28).** `billing.payment_attempt`
-  is written the moment a member taps "Pay online" — **BEFORE any money moves** — so it proves an
-  INTENT, never a payment. An order whose member started an online checkout, abandoned it and then
-  settled at the desk (or had a coach collect it, or an admin mark it paid) still carries that `ch_`
-  id while the money arrived elsewhere. `execute_order_refund` looked ONLY for that intent, so it
-  asked Yoco to return money it never took — and **Yoco answers "insufficient funds" about THAT
-  CHECKOUT's balance, not the merchant's**, which reads as an empty Yoco account and gets chased in
-  entirely the wrong place (a club with a day's takings sitting in Yoco still sees it). It now checks
-  `billing.payment` for a succeeded **yoco** charge first and refuses with a message NAMING the real
-  method (`not_paid_by_card`) — but ONLY when another provider positively succeeded. **No payment
-  rows at all is AMBIGUOUS, not refused**: the charge may sit on a 'Pay all' wrapper or a webhook may
-  never have been recorded while the money is genuinely at Yoco, so it reaches the gateway and lets
-  Yoco decide. (The already-refunded check is likewise gated on `charged > 0` — `0 >= 0` would
-  otherwise read an empty charge total as "already refunded in full".) **The order's own facts are checked BEFORE
-  `get_gateway`** — "this was never a card sale" is true whether or not Yoco is reachable, and
-  answering "online payments are not available" to that question helps nobody. Diagnose with
-  `scripts/diagnose_refund.py`. Guarded by `sc_refund_refuses_an_order_never_paid_by_card`.
-- **A REFUND MUST TARGET THE CHECKOUT THAT HOLDS THE MONEY, NOT THE FIRST ONE CREATED (2026-07-28).**
-  `POST /checkout` mints a FRESH Yoco checkout on every call and writes a `billing.payment_attempt`
-  row — **there is no reuse guard** — so a member who taps Pay, abandons, returns and pays leaves TWO
-  `ch_` ids on one order and only the second carries money. Both `execute_order_refund` and
-  `reconcile` picked `ORDER BY created_at ASC LIMIT 1` — the **oldest**, i.e. the abandoned one. Two
-  consequences, both money: a refund aimed at an uncollected checkout fails and **Yoco reports it as
-  INSUFFICIENT FUNDS**, which reads exactly like the club's own Yoco balance being empty (so it looks
-  like a banking problem, not a wrong id); and missed-webhook RECOVERY silently gave up on any order
-  with a retry — reconcile asked about the abandoned checkout, was correctly told it was never paid,
-  and left real money unrecovered. **`reconcile.paid_checkout_id_for_order` is now the ONE resolver**
-  both use: one attempt → returned with no API call (the common case, unchanged); several → ask Yoco
-  newest-first and take the one it says completed; unreachable → fall back to the NEWEST (the old
-  ordering had it backwards). Ordering carries an `id` tiebreak because `now()` is the TRANSACTION
-  timestamp, so same-transaction rows are indistinguishable by time. Guarded by
-  `sc_refund_finds_the_checkout_that_holds_the_money`. **NOTE:** "insufficient funds" is *also*
-  genuinely what Yoco says when the club's Yoco balance can't fund the refund (refunds draw on the
-  balance, not the bank) — check whether the order has >1 `payment_attempt` row before assuming which.
-- **THE CLUB CAN ONLY RECEIVE YOCO AND EFT (2026-07-29).** It has no facility for collecting on a
-  coach's behalf, so anything else recorded against a COACHING order is cash the coach took from the
-  client directly. ONE rule, ONE function — **`billing.commission.cash_custody_for(provider)`**:
-  `'club'` for `yoco`/`eft`, `'coach'` for everything else *including no provider at all* (an
-  arrears collection writes no `billing.payment` row). Read by `record_split_for_order` (the ledger
-  DIRECTION), `coach_settlement` (the statement) and `coach_sessions_by_day` (the work log), so the
-  three can never drift. **The provider is the only thing factually known** — `recorded_by_user_id`
-  can't decide it, because `/api/billing/desk-payment` is `club_admin`-only and every desk payment
-  is admin-recorded whoever actually took the note. `record_split_for_order` used to hard-code
-  `cash_held_by='club'` for EVERY path, so a lesson settled in cash at the court booked the coach's
-  net as owed TO him while he stood there holding it — wrong by the whole gross, the same shape as
-  the arrears inversion below. Historical rows: `scripts/fix_desk_cash_coach_ledger.py` (dry-run
-  default, idempotent, appends a correcting adjustment). Guarded by
-  `sc_only_yoco_and_eft_reach_the_club`.
-- **A DUPLICATE DURATION ON ONE SERVICE SILENTLY BILLS THE CHEAPER ROW (found live 2026-07-31).**
-  `pricing.price_for` resolves the EXACT duration first and then tie-breaks on **`amount_minor ASC`**,
-  so two price rows for the same length are never both offered — the cheaper one always wins, in
-  silence. Production had a coach with **60 min R0.00 AND 60 min R600.00**: every 60-minute lesson
-  with him billed **nothing** (Club earnings: R12,680 billed, R0.00 in), and a second coach with
-  R550/R700 where the R550 quietly won. **A R0 variation on a paid service, and any duplicate
-  duration on one product, should be refused or loudly flagged by the service editor** — see
-  OUTSTANDING. Nothing in the code is wrong here; the DATA is, which is why no gate caught it and
-  only looking at the screen did.
-- **A SILENT ZERO IS A BUG, AND `try/except: return 0` IS NOT A GUARD (2026-07-31).** In Postgres a
-  failing statement ABORTS the transaction, so every query after it raises and returns its own
-  fallback. `admin_home` guarded each block that way: one broken query zeroed the People counts
-  (indistinguishable from "nothing needs attention") and errored the refund check, which is the only
-  reason it was noticed — the Refund-requests SECTION was fine throughout because it runs in a fresh
-  session. Use **`session.begin_nested()`** (a savepoint) and **log the block name**, NEVER a bare
-  `session.rollback()` inside a composer that runs in the caller's `session_scope`. **This exact
-  antipattern has now been found three times** — `client360`, `admin_home`, `coach_settlement`.
-- **CLUB EARNINGS AND THE COACH STATEMENT MUST AGREE ON WHERE THE MONEY IS (2026-07-31).** Club
-  earnings had no concept of custody: `_earnings_cte`'s `collected` was `status='paid'`, i.e. "the
-  CLIENT settled" — and it was rendered under a headline reading **"Collected so far · banked"**. For
-  a coach who collects at the court that is the club's money in HIS pocket. On production one coach
-  showed **R20,200 "in"** of which **R15,950 was never banked**. The CTE now carries `in_bank`
-  (EXISTS a succeeded `yoco`/`eft` charge — the same rule as `commission.cash_custody_for`), the fold
-  splits into **`banked_minor` + `coach_held_minor`**, and both the coach P&L and the club roll-up
-  carry them. **`banked + coach_held == collected`**, so the Money band and Home still reconcile and
-  nothing double-counts. Guarded by `sc_club_earnings_agrees_with_the_coach_statement` — which also
-  pins that the STATEMENT reports the identical split for the same coach+month.
-  **The `mark_arrears_collected` path writes NO payment row, so it classifies coach-held even under a
-  broken provider test** — a scenario must include a CASH desk payment or it isn't testing the rule
-  (found by re-breaking: the first version caught nothing).
-- **THE COLLECTED FIGURE MUST SAY WHAT IT WAS (2026-07-30).** "Paid to the club R17,000" against the
-  R6,000 of lessons an owner remembers reads as a threefold error. It isn't one: a lesson/class PACK
-  is deliberately hung on the coach's own lesson/class `price_id` so its commission attributes to him,
-  which means the **FULL pack price** lands in the collected figure at the moment of **SALE** (pack
-  revenue is sale-based, not spread over the sessions drawn from it) — and CLASS SEATS are in there
-  too. `st.by_kind` breaks it into lesson / class / pack and the statement renders it under "Total
-  collected". **`basis` alone cannot produce that split** (a pack writes `lesson_commission`); a pack
-  is identified the way `_earnings_cte` does it — the order granted a `token_wallet`. Diagnose a
-  disputed figure with `scripts/diagnose_coach_statement.py --coach <name> --detail` (read-only; it
-  totals the month four independent ways). Guarded by `sc_settlement_says_what_the_money_was`.
-- **A PACK SALE RESOLVES ITS COACH FROM THE WALLET (2026-07-30).** `record_split_for_order` resolved
-  the earning coach as `product.coach_user_id or booking.coach_user_id` — but a pack has **no
-  booking**, so a pack sold on a SHARED (coach-less) service wrote `coach_user_id = NULL`: commission
-  accrued to NOBODY and the coach's own statement couldn't see the sale, while `_earnings_cte` (which
-  always resolved a pack via `token_wallet.coach_user_id`) showed the revenue against him. The two
-  now agree — `_wallet_coach_for_order` is the third fallback.
-- **THE COACH STATEMENT is the coach-side of a client invoice** (`billing.commission.coach_settlement`
-  + `coach_sessions_by_day`, rendered by the ONE shared `Widgets.CoachStatement`; admin and coach
-  differ by config only). Three blocks on TWO DELIBERATE DATE BASES: **sessions** by client by day
-  (bounded on the SESSION's date — "what did I teach"), **custody** (paid to club / collected by
-  coach / outstanding), and the **settlement** — total collected × commission = owed to the club,
-  minus what the club already holds, = net (bounded on when the money ARRIVED, per §D7). A lesson
-  taught in July and paid in August is outstanding in July and settles in August; the page says so.
-  The net equals the `coach_ledger` movement **by construction**, and `reconciles` asserts it on
-  every render — a mismatch shows a WARNING BANNER rather than a number nobody can check. Admin:
-  Money → Coach statement = summary + a coach dropdown (ONE coach at a time). Guarded by
-  `sc_coach_settlement_statement`.
-- **THE COACH LEDGER'S DIRECTION FOLLOWS WHO HOLDS THE CASH (2026-07-28).** `billing.coach_ledger` is
-  SIGNED — **+ = the club owes the coach, − = the coach owes the club** (the rent entry is
-  deliberately negative). A `commission_earning` of `+coach_net` is correct ONLY when the club took
-  the gross and is holding it. But `mark_arrears_collected` — **off-platform by definition**
-  (docs/specs/01: the coach chases the EFT into their OWN account) — posted the SAME `+coach_net`.
-  The coach already held the full gross, so the club was owed its commission and the ledger said the
-  exact opposite: **wrong by the whole gross, every time**, surfacing as "Coach payouts due" telling
-  the owner to pay a coach who was holding the club's money. `_write_split_pair` now takes
-  **`cash_held_by`** — `'club'` → `+coach_net` as `commission_earning`; `'coach'` → **`−owner_cut` as
-  `commission_due`** (a new entry type; no read filters on `commission_earning`, balances just
-  `SUM(amount_minor)`, so it flows through everywhere). **The `commission_split` rows are IDENTICAL
-  either way** — the sale was divided the same whoever held the cash — so commission REPORTING
-  (`cockpit_coach_earnings`, the Money P&L) is untouched; only the running balance changes, which is
-  the thing that was lying. Historical rows: `scripts/fix_inverted_coach_ledger.py` (dry-run by
-  default) appends ONE correcting `adjustment` per coach rather than rewriting history, idempotent on
-  a fixed `ref_id`. Guarded by `sc_ledger_direction_follows_who_holds_the_cash`.
-- **"PAID" IS NOT "IN THE BANK" — Money → Coach statement is the split.** `order.status='paid'` merges
-  Yoco + EFT (the club's bank — the ONLY two ways it can receive) with cash/card taken at the court (the
-  COACH; there is no facility for collecting on his behalf) and
-  a coach's off-platform collection (the coach only). The last is **exactly derivable**:
-  `mark_arrears_collected` flips the order to `paid` with **no `billing.payment` row at all** (the
-  money never touched the platform), so *paid + zero succeeded charges* == the coach collected it.
-  `admin.repositories.coach_statement_report` classifies off the ORDER (not the payment rows) so the
-  custody buckets sum EXACTLY to the Money tab's `paid`, and pairs it with `payments_received` — an
-  INDEPENDENT read of `billing.payment` by landing date, which is the bank-reconciliation figure and
-  deliberately not derived from the fold (it sees money the order CTE excludes, e.g. both sides of a
-  settled 'Pay all' wrapper, and counts when cash landed, not when the sale happened).
-- **ENTITLEMENT IS EVALUATED ON THE BOOKING'S DATE, NEVER `CURRENT_DATE` (2026-07-27).**
-  `membership_covers` + `entitlement.active_caps` used to test `current_period_end >= CURRENT_DATE`
-  — "is this plan alive right now" — while `starts_at` only ever drove the access WINDOW. So a
-  member could book FORWARD past their own expiry and the row was written `membership_covered` at
-  R0 **permanently**: the term lapsing later changed nothing, the price was already fixed. Reported
-  as trialists booking beyond their 7 days; it was never trial-specific — a monthly member could
-  book out all of next month on the last day of this one and not renew, and
-  `club.policy.booking_window_days` (default 14) was the only limit on the reach. Both now compare
-  against the booking's CLUB-LOCAL date (`entitlement.local_date`), and the picker fetches
-  `pricing.membership_covered_until` once per range so it can't advertise "Covered" on a day the
-  server will charge for. Guarded by `sc_membership_cannot_book_past_its_own_expiry`.
-- **ONE PERSON, ONE PLACE — the GiST constraint can't express it.** `booking_no_overlap` is keyed on
-  `resource_id`, so it stops one COURT (or coach RESOURCE) being taken twice and says nothing about a
-  human. Three things slipped through: a class books NO row on the coach's resource (only court
-  holds), a coach's own court booking sits on the COURT's resource, and the court↔coach direction was
-  checked in neither `_coach_class_conflict` (lesson branch only) nor `classes._coach_busy_at`
-  (`booking_type='lesson'` only) — so a coach could hold a court AND deliver a lesson AND run a class
-  at 09:00 with no constraint violated. `bookings._coach_commitment_at` checks all three shapes on
-  create/accept/reschedule and returns which one clashed; a class's several court-holds are
-  `booking_type='class'` and never read as a clash with itself. **Members are NOT blocked** (a
-  doubles group legitimately holds two courts) — their 2nd *concurrent* covered court simply
-  downgrades to PAYG via `entitlement._has_overlapping_covered`. Guarded by
-  `sc_one_coach_one_place_at_a_time` + `sc_member_second_concurrent_court_is_payg`.
-- **EQUIPMENT IS A SERVICE AND PAYS LIKE ONE.** It rides the court's order, so where the court was
-  FREE (`membership_covered`) or prepaid (`token`) `_create_order_guarded` **hard-coded the order to
-  `at_court`** to collect the fee — assumed, never checked — and `create_booking` had already picked
-  `confirmed` from the COURT's free mode. A card-only club therefore got an owed pay-at-court debt
-  for the ball machine on a confirmed booking nobody could collect against: the "equipment always
-  comes as pay at court" report. Now `equipment.quote` prices the kit and intersects every requested
-  item's own `payment_modes` BEFORE any insert, `create_booking` resolves a method the club **and**
-  the kit both offer (empty → `EQUIPMENT_NOT_PAYABLE`, refused not granted — the pack rule), the hold
-  decision is made from BOTH modes, and the response carries **`requires_payment`** because the
-  client can no longer infer it from its own choice (`booking.js` redirects to Yoco on
-  `st.settlement === "online"`). Set the modes at Setup → Equipment hire. Guarded by
-  `sc_equipment_follows_its_own_payment_rule`.
-- **MEMBERSHIP CAPS HAVE A CLUB-LEVEL FLOOR — the per-tier ones alone never reached the trial.** The
-  caps live on `billing.price`, so they only applied to a tier that HAD a price row; the signup trial
-  usually doesn't (`grant_signup_trial` links one only when a trial TIER is configured), so trial
-  members were uncapped — and `active_caps._best` treated a NULL cap as "an unconstrained tier wins",
-  so merely HOLDING the price-less trial cancelled a paid tier's caps too. `club.policy.default_max_*`
-  is the floor every membership inherits (a tier's own value still overrides; NULL = inherit, as
-  `payment_modes` already works). **The owner's rule — one covered booking a day, 90 min max — is
-  exactly `default_max_covered_per_day=1` + `default_max_covered_minutes=90`**; no daily-minutes
-  accumulator exists or is needed. Every cap DOWNGRADES to PAYG, never blocks. Admin → Settings →
-  "What a membership includes (per day)". Guarded by `sc_club_default_caps_cover_every_membership`.
-- **A WAITLIST PROMOTION CANNOT CONFIRM AN UNPAID CARD-ONLY SEAT.** `_bill_promoted_enrolment`
-  rewrote an `online` intent to `at_court` ("async promotion can't drive a checkout") and
-  `_promote_waitlist` then marked the seat `enrolled` and emitted `class_enrolled` — on a card-only
-  class, a confirmed seat plus a "you're enrolled" email against an owed order, straight past the
-  payment gate `enrol` enforces two functions up. The downgrade now happens ONLY when the class
-  actually offers at-court; otherwise the seat is billed `online`, stamped `held_until` (the same
-  lazy-expiry rails as an online self-enrolment, so an unpaid promotion frees the seat and promotes
-  the next player) and emits **`class_seat_awaiting_payment`** instead — `class_enrolled` stays the
-  single confirmation and fires from `confirm_paid_enrolments` when the charge lands. Guarded by
-  `sc_waitlist_promotion_into_a_cardonly_class_is_held`.
-- **`marketing/` is NOT platform code** — local-only ad-ops notes, **gitignored as `/marketing/` since
-  2026-07-22** (previously untracked-but-committable, one `git add -A` away from being published). The
-  **leading slash is load-bearing**: a bare `marketing/` would also match the tracked public site at
-  `frontend/marketing/`, silently ignoring any new page added there. Don't confuse the three: `marketing/`
-  (ad-ops, ignored) · `frontend/marketing/` (the public site) · `marketing_crm/` (the CRM lane).
-- **`UI.clear(node)` must drop the `cf-loading` class** (it does, in `frontend/js/ui.js`) — `.cf-loading` paints
-  a CSS `::before` spinner; emptying children without removing the class leaves the spinner over new content.
-  Render results with `UI.clear(box)` before appending.
-- **Free-tier cold starts → use timeouts, not infinite spinners.** `auth_client.js` puts a 70s timeout on every
-  `apiFetch`. A GitHub Action (`.github/workflows/keep-warm.yml`) pings both services 07:00–21:59 SAST.
 - **SQL `:param IS NULL` needs a CAST** (psycopg `AmbiguousParameter`): write `CAST(:df AS timestamptz) IS NULL`,
   never a bare `:df IS NULL`. (This 500'd the master diary.)
 - **Cockpit revenue must let refunds through** — refund `billing.payment` rows have `status='refunded'`, so a
@@ -1083,42 +590,80 @@ member by email on the first authenticated hit.
 - **`core.usage_event` page_view `club_id` is set server-side in `beacon.py`**, not by the client. The client
   sends NO email/identity (so `account_id` is effectively always NULL — for "logged in" use `metadata->>'authed'`,
   not `account_id`).
-- **Capacity-sweep needs no cron:** abandoned `held` bookings are released by **lazy expiry** —
-  `release_expired_holds` runs at the top of `compute_availability` + `create_booking`. **It also VOIDS
-  the abandoned order** (via `_void_orders_with_no_live_bookings`, and only once EVERY booking on that
-  order is dead — a lesson is coach + held court on ONE order, a squad is many heads on one order).
-  It used to cancel the booking and orphan the order, leaving `awaiting_payment` rows pointing at
-  cancelled bookings that the statement self-heal (`_void_phantom_cancelled_orders`, `open`-only)
-  never cleared. A late payment is still safe — `_confirm_held_bookings` re-instates a booking
-  cancelled as `hold_expired`. Backlog cleanup: `scripts/void_orphaned_orders.py`.
-  **RECONCILE MUST ALSO REACH THAT VOID** — `yoco_billing.reconcile._is_expired_hold_void` re-opens the
-  door for an order voided *purely* by hold expiry (the member paid after the hold lapsed and the
-  webhook was missed → money with Yoco, no booking, no receipt, invisible in every pending view). An
-  order an ADMIN voided has no `hold_expired` booking behind it and stays untouchable, so a cancelled
-  sale can't be resurrected. Guarded by `sc_expired_void_is_recoverable`. The four `render.yaml`
-  crons stay commented out. **Classes have the same seam:** an `online` class enrolment holds its seat
-  (`diary.enrolment.held_until`) pending the Yoco payment; `release_expired_enrolments` (top of
-  `list_sessions` + `enrol`) cancels the lapsed-unpaid seat, voids its `awaiting_payment` order, and promotes
-  the waitlist — a **paid** seat (order no longer `awaiting_payment`) is never touched.
-- **Transactional email = ONE confirm+receipt per purchase** (`marketing_crm/notifications.py::deliver`):
-  `booking_detail.load` resolves an order-keyed event (`payment_succeeded`) to its booking/class → the RICH
-  block (retitled "Booking confirmed"), else a purchase block for membership/pack. The client block always
-  names **"Booked by"** (the actor on an on-behalf/staff booking, the client themselves on a self-book; for a
-  class, the guardian when a child's seat is paid by them) and the client's **exact membership tier**
-  ("Adult Anytime Play", via `_MEMBERSHIP_LABEL_SQL`) — PAYG simply omits the row. Guarded by
-  `sc_confirmation_email_block`; `deliver` SUPPRESSES the
-  `payment_succeeded` email for pack + class orders (their own email is the one). **`emit()` DISPATCHES ON A BACKGROUND THREAD WITH ITS OWN SESSION**, so anything the email re-reads
-  runs in a transaction that CANNOT see the caller's uncommitted work. A `payment_succeeded` email
-  therefore read the PRE-payment order status and labelled the confirmation from it — "Awaiting online
-  payment" on a paid booking, and once expiry began voiding abandoned orders, **"Cancelled" on a
-  payment that succeeded** (including every order a reconcile sweep recovers). The producer now states
-  the outcome — `payment_state="paid"` on the emit payload → `ctx["payment_state"]` →
-  `_pay_status(state_override=)` — and the email stops re-deriving it. **Any new emit whose email
-  reflects state the caller just wrote must pass that state explicitly.** Guarded by
-  `sc_email_payment_status_not_racy`. **Payment-status wording is
-  single-sourced** in `billing.statement.settlement_status_label(state, mode)` — email AND `client360` both
-  delegate, so a receipt/email/client-record never disagree. **Coach BCC only on his own lesson/class.** Every
-  order-keyed email needs `booking_detail.load` to import `text` (a missing import silently blanks the block).
+- **`UI.clear(node)` must drop the `cf-loading` class** (it does, in `frontend/js/ui.js`) — `.cf-loading` paints
+  a CSS `::before` spinner; emptying children without removing the class leaves the spinner over new content.
+  Render results with `UI.clear(box)` before appending.
+- **Free-tier cold starts → use timeouts, not infinite spinners.** `auth_client.js` puts a 70s timeout on every
+  `apiFetch`. A GitHub Action (`.github/workflows/keep-warm.yml`) pings both services 07:00–21:59 SAST.
+- **`marketing/` is NOT platform code** — local-only ad-ops notes, **gitignored as `/marketing/` since
+  2026-07-22** (previously untracked-but-committable, one `git add -A` away from being published). The
+  **leading slash is load-bearing**: a bare `marketing/` would also match the tracked public site at
+  `frontend/marketing/`, silently ignoring any new page added there. Don't confuse the three: `marketing/`
+  (ad-ops, ignored) · `frontend/marketing/` (the public site) · `marketing_crm/` (the CRM lane).
+
+**Everything else — the rule here, the reasoning in [GOTCHAS.md](docs/specs/GOTCHAS.md):**
+
+**Booking & the diary** — [GOTCHAS.md#booking--the-diary](docs/specs/GOTCHAS.md#booking--the-diary)
+- `booking_type` must match the resource, and `'class'` is NOT bookable via `/api/diary/bookings` — `sc_booking_type_must_match_resource`
+- A posted `product_id` is VALIDATED before anything uses it — `sc_posted_service_must_be_real`
+- ONE PERSON, ONE PLACE — the GiST constraint can't express it — `sc_one_coach_one_place_at_a_time` · `sc_member_second_concurrent_court_is_payg`
+- ENTITLEMENT IS EVALUATED ON THE BOOKING'S DATE, NEVER `CURRENT_DATE` (2026-07-27) — `sc_membership_cannot_book_past_its_own_expiry`
+- Capacity-sweep needs no cron — `sc_expired_void_is_recoverable`
+
+**Courts, peak hours & equipment** — [GOTCHAS.md#courts-peak-hours--equipment](docs/specs/GOTCHAS.md#courts-peak-hours--equipment)
+- THE COURT IS THE ONE PLACE TO SEE A COURT (2026-07-29)
+- PEAK HOURS ARE PER COURT (2026-07-29) — `sc_peak_hours_can_differ_per_court`
+- EQUIPMENT IS SCOPED TO A COURT SERVICE, AND THE COURT IS STILL CHARGED (2026-07-29) — `sc_equipment_court_is_charged_and_both_are_booked_out` · `sc_equipment_is_scoped_to_its_court_service`
+- EQUIPMENT IS A SERVICE AND PAYS LIKE ONE — `sc_equipment_follows_its_own_payment_rule`
+
+**The lesson lifecycle** — [GOTCHAS.md#the-lesson-lifecycle](docs/specs/GOTCHAS.md#the-lesson-lifecycle)
+- THERE IS ONE LESSON FLOW (2026-07-29) — `sc_one_lesson_flow` · `sc_paying_is_the_acceptance`
+- THE COACH IS TOLD, ONCE, ABOUT EVERY LESSON
+- A PAID lesson cancelled BY THE CLUB refunds itself
+- accept / propose / decline are GONE (deleted 2026-07-29 once production's queue was empty)
+- A lesson email must state THIS booking's state, not the usual one
+
+**Classes** — [GOTCHAS.md#classes](docs/specs/GOTCHAS.md#classes)
+- A class name can NEVER break the class — enforced at THREE layers (2026-07-26) — `sc_class_name_cannot_break_the_class`
+- A CLASS resolves its service through `diary.resource.product_id`, NEVER by joining on names
+- A CLASS HAS THREE VERBS, AND CANCEL GIVES THE MONEY BACK (2026-07-29) — `sc_class_session_lifecycle`
+- A WAITLIST PROMOTION CANNOT CONFIRM AN UNPAID CARD-ONLY SEAT — `sc_waitlist_promotion_into_a_cardonly_class_is_held`
+
+**Memberships, the trial & entitlement caps** — [GOTCHAS.md#memberships-the-trial--entitlement-caps](docs/specs/GOTCHAS.md#memberships-the-trial--entitlement-caps)
+- THE SIGNUP TRIAL IS A TIER-LEVEL FLAG, AND A TIER IS SEVERAL PRICES — `sc_signup_trial_is_a_tier_level_flag`
+- THE TRIAL IS A MEMBERSHIP — it has no separate court rules — `sc_trial_obeys_the_same_court_rules_as_a_membership`
+- `/api/me/plan` MUST REPORT THE CAP THE SERVER WILL ENFORCE (2026-07-29) — `sc_plan_reports_the_cap_the_server_will_enforce`
+- MEMBERSHIP CAPS HAVE A CLUB-LEVEL FLOOR — the per-tier ones alone never reached the trial — `sc_club_default_caps_cover_every_membership`
+- `membership_started` is emitted from `billing.membership.emit_membership_started`, NOT from the gateway — `sc_membership_started_emit`
+
+**Pricing & payment rules** — [GOTCHAS.md#pricing--payment-rules](docs/specs/GOTCHAS.md#pricing--payment-rules)
+- A service's `payment_modes` is enforced SERVER-SIDE per the EXACT `product_id`
+- A DUPLICATE DURATION ON ONE SERVICE SILENTLY BILLS THE CHEAPER ROW (found live 2026-07-31)
+
+**Refunds & the Yoco gateway** — [GOTCHAS.md#refunds--the-yoco-gateway](docs/specs/GOTCHAS.md#refunds--the-yoco-gateway)
+- ONE REFUND MODAL, AND IT OFFERS AN AMOUNT (2026-07-28) — `sc_partial_refund_reaches_yoco_as_a_partial`
+- A REFUND'S IDEMPOTENCY KEY MUST NOT OUTLIVE A FAILED ATTEMPT (2026-07-28) — `sc_refund_retry_is_not_poisoned_by_the_idempotency_key`
+- A REFUND NEEDS EVIDENCE OF A CARD PAYMENT, NOT A CHECKOUT (2026-07-28) — `sc_refund_refuses_an_order_never_paid_by_card`
+- A REFUND MUST TARGET THE CHECKOUT THAT HOLDS THE MONEY, NOT THE FIRST ONE CREATED (2026-07-28) — `sc_refund_finds_the_checkout_that_holds_the_money`
+
+**Money custody & the coach ledger** — [GOTCHAS.md#money-custody--the-coach-ledger](docs/specs/GOTCHAS.md#money-custody--the-coach-ledger)
+- THE CLUB CAN ONLY RECEIVE YOCO AND EFT (2026-07-29) — `sc_only_yoco_and_eft_reach_the_club`
+- THE COACH LEDGER'S DIRECTION FOLLOWS WHO HOLDS THE CASH (2026-07-28) — `sc_ledger_direction_follows_who_holds_the_cash`
+- "PAID" IS NOT "IN THE BANK" — Money → Coach statement is the split
+- CLUB EARNINGS AND THE COACH STATEMENT MUST AGREE ON WHERE THE MONEY IS (2026-07-31) — `sc_club_earnings_agrees_with_the_coach_statement`
+- THE COLLECTED FIGURE MUST SAY WHAT IT WAS (2026-07-30) — `sc_settlement_says_what_the_money_was`
+- A PACK SALE RESOLVES ITS COACH FROM THE WALLET (2026-07-30)
+- THE COACH STATEMENT is the coach-side of a client invoice — `sc_coach_settlement_statement`
+
+**Reads that lie** — [GOTCHAS.md#reads-that-lie](docs/specs/GOTCHAS.md#reads-that-lie)
+- A SILENT ZERO IS A BUG, AND `try/except: return 0` IS NOT A GUARD (2026-07-31)
+- `billing.me.activity_summary` buckets EVERYTHING by the SESSION's month
+
+**Email & notifications** — [GOTCHAS.md#email--notifications](docs/specs/GOTCHAS.md#email--notifications)
+- Transactional email = ONE confirm+receipt per purchase — `sc_confirmation_email_block` · `sc_email_payment_status_not_racy`
+
+**Infrastructure & environment** — [GOTCHAS.md#infrastructure--environment](docs/specs/GOTCHAS.md#infrastructure--environment)
+- Ten-Fifty5 embed — Render service names ≠ `render.yaml` `name:`
 
 ## Still needs Tomo (config, not code)
 - **S3** (`S3_BUCKET` + AWS keys) for coach photo uploads — until set, coaches paste a photo URL.
@@ -1150,6 +695,6 @@ member by email on the first authenticated hit.
 ## Build history
 This file is present-state only. For the dated build history (the booking-flow audit sprint, Frankfurt
 migration, admin console redesign, frontend standardisation, unified statement, etc.), see the memory index at
-`MEMORY.md` and the authoritative specs under `docs/specs/` (START at `README.md` → `SYSTEM.md` →
-`BUSINESS-RULES.md` → `INVENTORY.md` → `OUTSTANDING.md`). `docs/` (`00`→`11`) are the original design docs;
+`MEMORY.md` and the authoritative specs under `docs/specs/` (START at `README.md` → `GOTCHAS.md` →
+`SYSTEM.md` → `BUSINESS-RULES.md` → `INVENTORY.md` → `OUTSTANDING.md`). `docs/` (`00`→`11`) are the original design docs;
 `docs/11` = locked decisions + the 1050 reuse map.

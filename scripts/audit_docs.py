@@ -117,6 +117,36 @@ def check_scenarios(docs):
     return "Scenarios NAMED in docs but absent from a harness", len(named), sorted(named - real)
 
 
+# The three harnesses, in the order every doc writes them (booking / billing / statement).
+_HARNESSES = ("test_booking_scenarios", "test_billing_scenarios", "test_statement_reconciliation")
+
+
+def check_scenario_counts(docs):
+    """A doc that counts the `sc_*` functions must count the ones that ARE there.
+
+    check_baselines holds the CHECK totals (booking 404 / …) against each other, but nothing held
+    either number against the harnesses themselves — so `45/78/12` sat in CLAUDE.md while the files
+    defined 56/82/12. That number is load-bearing: it is quoted right beside "there is no per-test
+    filter — each harness runs its whole SCENARIOS list", so an undercount tells the next session the
+    suite is smaller than the one their change has to survive.
+
+    A claim reads "(56/82/12 `sc_*` functions". Its ABSENCE is a miss too — a check nothing can fail
+    is a check that has gone dark."""
+    actual = []
+    for h in _HARNESSES:
+        src = (ROOT / "scripts" / f"{h}.py").read_text(encoding="utf-8", errors="ignore")
+        actual.append(len(re.findall(r"^def sc_\w+", src, re.M)))
+    claims = set(re.findall(r"(\d+)\s*/\s*(\d+)\s*/\s*(\d+)\s+`sc_\*`", docs))
+    misses = []
+    if not claims:
+        misses.append(f"no doc states the per-harness sc_* counts (they are {'/'.join(map(str, actual))})")
+    for c in sorted(claims):
+        if [int(x) for x in c] != actual:
+            misses.append(f"docs claim {'/'.join(c)} sc_* functions; the harnesses define "
+                          f"{'/'.join(map(str, actual))}")
+    return "Documented `sc_*` counts vs the harnesses", len(_HARNESSES), misses
+
+
 def check_scripts(docs):
     have = {p.stem for p in (ROOT / "scripts").glob("*.py")}
     named = {a or b for a, b in re.findall(r"scripts[/.](\w+)\.py|scripts\.(\w+)\b", docs)} - {"README"}
@@ -178,7 +208,8 @@ def main(argv):
     print(f"DOC AUDIT — {len(doc_paths)} docs vs the codebase   (read-only)\n")
     results = [
         check_routes(docs), check_tables(docs), check_widgets(docs), check_events(docs),
-        check_scenarios(docs), check_scripts(docs), check_undocumented_scripts(docs),
+        check_scenarios(docs), check_scenario_counts(docs), check_scripts(docs),
+        check_undocumented_scripts(docs),
         check_doc_links(doc_paths), check_baselines(doc_paths),
     ]
     total = 0

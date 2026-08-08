@@ -15,13 +15,13 @@ still reads the scenario that guards any entry.
 
 ## Contents
 
-- [Booking & the diary](#booking--the-diary) — 5 entries
+- [Booking & the diary](#booking--the-diary) — 7 entries
 - [Courts, peak hours & equipment](#courts-peak-hours--equipment) — 4 entries
 - [The lesson lifecycle](#the-lesson-lifecycle) — 5 entries
 - [Classes](#classes) — 4 entries
 - [Memberships, the trial & entitlement caps](#memberships-the-trial--entitlement-caps) — 5 entries
 - [Pricing & payment rules](#pricing--payment-rules) — 2 entries
-- [Refunds & the Yoco gateway](#refunds--the-yoco-gateway) — 4 entries
+- [Refunds & the Yoco gateway](#refunds--the-yoco-gateway) — 7 entries
 - [Money custody & the coach ledger](#money-custody--the-coach-ledger) — 7 entries
 - [Reads that lie](#reads-that-lie) — 2 entries
 - [Email & notifications](#email--notifications) — 1 entry
@@ -104,6 +104,31 @@ crons stay commented out. **Classes have the same seam:** an `online` class enro
 (`diary.enrolment.held_until`) pending the Yoco payment; `release_expired_enrolments` (top of
 `list_sessions` + `enrol`) cancels the lapsed-unpaid seat, voids its `awaiting_payment` order, and promotes
 the waitlist — a **paid** seat (order no longer `awaiting_payment`) is never touched.
+
+### A court move re-runs the MONEY guards a time move runs
+
+**A court move re-runs the MONEY guards a time move runs** — a COURT booking may not cross court
+SERVICES (`COURT_SERVICE_CHANGED`: it is priced by its service, and `reprice_booking_order` re-prices
+on the SAME product so it could never correct the change), and a `membership_covered` booking
+re-runs the FULL entitlement against the TARGET court (`COURT_NOT_COVERED` — the time-window check
+alone let a free booking move onto a clay court members are never covered for). The service compare
+NORMALISES None (`str(a or "") != str(b or "")`): in a multi-service club an unallocated court
+resolves to an ambiguous None, and a short-circuit would wave that move through. A lesson's held
+court may move freely — a lesson is priced by its LESSON service. `CRMUI.rescheduleModal` filters the
+court list to the booking's own service so the UI never offers a move the server will refuse.
+
+### `diary.booking.product_id` remembers WHICH service was booked
+
+**`diary.booking.product_id` remembers WHICH service was booked.** A coach can sell several lesson
+services (Private R400, Semi-private R250, Cardio R120). `create_booking` resolves the exact one — and
+used to discard it, which was invisible until the review gate: a `requested` lesson creates **no order**,
+so on accept the service was gone and `_create_order_guarded` fell back to `price_for(kind='lesson',
+coach)`, whose tie-break is **`amount_minor ASC LIMIT 1`** — the coach's CHEAPEST service. A R400 lesson
+billed R250, commission accrued on the wrong base, earnings attributed the sale to the wrong service, and
+the pack match degraded identically (a NULL request product matches anything). `accept_booking` now prices
+AND matches the pack off `bk["product_id"]`. **If you add a column here, add it to `_booking_dict`'s SELECT
+too** — it returns `None` otherwise and the fallback silently bites again. Guarded by
+`sc_gated_lesson_bills_the_booked_service`.
 
 
 ---
@@ -481,6 +506,48 @@ timestamp, so same-transaction rows are indistinguishable by time. Guarded by
 `sc_refund_finds_the_checkout_that_holds_the_money`. **NOTE:** "insufficient funds" is *also*
 genuinely what Yoco says when the club's Yoco balance can't fund the refund (refunds draw on the
 balance, not the bank) — check whether the order has >1 `payment_attempt` row before assuming which.
+
+### A successful charge may NOT re-open a CLOSED debt
+
+**A successful charge may NOT re-open a CLOSED debt.** `_mark_order` was an unconditional UPDATE, so a
+late/replayed `charge_succeeded` flipped **any** status to `paid` — and Yoco retries for 72h while
+reconcile sweeps 100 days back, so 'late' is routine. `refunded`→`paid` re-books returned cash as
+collected revenue; `written_off`→`paid` silently reverses the club's own decision; `void`→`paid`
+resurrects a cancelled sale. `_mark_order_paid` allows only `open`/`awaiting_payment`/`paid`, **plus
+the one void that IS recoverable** — a lapsed hold (`order_void_is_recoverable`, the SINGLE source of
+truth; `yoco_billing.reconcile._is_expired_hold_void` delegates to it so the two can't drift apart and
+silently widen the door). A refusal still RECORDS the payment (cash stays visible) but skips the whole
+fan-out — no booking confirm, no pack grant, no commission, no "payment succeeded" email — and returns
+`needs_attention='payment_on_closed_order'` for a human. Guarded by
+`sc_payment_cannot_reopen_a_closed_debt`.
+
+### Reconciliation must ACTIVATE, not just settle
+
+**Reconciliation (missed-webhook recovery):** `yoco_billing/reconcile.py` — `client.get_checkout` asks Yoco;
+a `completed`+`paymentId` replays `charge_succeeded` (idempotent). `POST /api/billing/yoco/reconcile/<order_id>`
++ `POST /api/cron/reconcile-payments`. **Recovering the payment is NOT enough — the purchase must also be
+ACTIVATED.** Both the webhook AND reconcile call the ONE shared `yoco_billing/activation.py::activate_purchase`
+(activate the membership/pack + emit `bundle_activated`); it's idempotent and runs even on an `{ignored}`
+replay, so a webhook-after-reconcile REPAIRS an un-granted pack. **Never let reconcile settle without calling
+it** — the historic gap left online packs `paid` but `pending`/unusable with no email (Render Free sleeps →
+webhook missed → reconcile is the common path). Remediate stragglers with `scripts/fix_bypassed_packs.py`.
+
+### Refund REQUESTS are decided on the transaction record, not in a separate queue
+
+**Refund REQUESTS are decided on the transaction record, not in a separate queue.** Money → **Refund
+requests** is an INBOX: each row opens `#/txn/<order_id>`, where a `Decision needed` banner offers
+Approve & refund / Decline beside the payment history and audit trail. Deciding used to happen in the
+list itself via `window.prompt`/`confirm` — no order context, nowhere to go when the gateway refused.
+Three fixes behind it: (a) `approve_refund_request` passed the member's REQUESTED figure to Yoco, so
+the ordinary "give me all of it back" sent an explicit amount equal to the order total and Yoco
+refused — while the transaction record's button (which sends **no** amount = full refund) worked
+seconds later; anything that isn't a strict partial now resolves to a full refund. (b) A direct refund
+now calls `refunds.resolve_pending_requests_for_order`, so the member's ask closes instead of nagging
+forever for money already paid back. (c) The queue hid any request whose order was `void` — but **void
+≠ the money came back**, and `_mark_order_paid` deliberately leaves a succeeded charge on a void order;
+`_PENDING_STILL_REFUNDABLE` keeps those visible, hiding only `refunded`/`written_off`. The home
+approvals count no longer reports a FAILED read as `0` (`refund_requests_error`) — a false all-clear on
+money is indistinguishable from the real thing. Guarded by `sc_refund_request_visibility`.
 
 
 ---

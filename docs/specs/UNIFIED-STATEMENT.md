@@ -22,6 +22,77 @@ month, with a hard guarantee that nothing can over- or under-charge.
 
 ---
 
+## As-built: the three things built ON the invariant
+
+*Moved verbatim out of `CLAUDE.md` on 2026-08-08 — each is a corollary of "one debt = one order", and each
+is a place where a plausible-looking change re-introduces a second debt store or loses money outright.
+`CLAUDE.md` keeps the one-line rule and links here.*
+
+### Invoice & receipt DOCUMENTS
+
+**Invoice & receipt DOCUMENTS (`billing/invoicing.py` — the ONE module; `billing/invoice_pdf.py` = reportlab
+renderer).** An invoice is a **document that RENDERS over live orders, NEVER a second debt store** — the debt
+stays on `billing."order"` (one debt = one order). An invoice's line amounts FREEZE at issue (an immutable
+document + seller/bill-to snapshot); its **paid/outstanding derives LIVE** from the orders it references — so a
+mid-month card payment flips the invoice to Paid and double-counting is structurally impossible. Numbering is
+**gapless per club** (`club.billing_profile.invoice_prefix` + `next_invoice_seq`, allocated atomically at issue).
+- **Company financial identity** = `club.billing_profile` (registered name, company reg no., **bank details** for
+  EFT-payable invoices, invoice terms/footer, + a **DORMANT VAT block** — NextPoint is NOT VAT-registered, so
+  `vat_number` is NULL and no VAT line shows; flip it on later without a rebuild). Edited at Admin → Setup →
+  **"Company & billing details"** (`AdminUI.billingDetails`, `club_admin`+). Letterhead logo = `club.branding.logo_url`.
+- **Three issue paths, one document type:** admin **ad-hoc** invoice (`create_invoice` → numbered doc, emails it) ·
+  **intra-month** "invoice the outstanding balance" (`POST /api/admin/clients/<id>/statement-invoice`) · **month-end**
+  auto-consolidation (`run_month_end` rolls each client's open orders into ONE statement invoice). `issue_invoice`
+  skips orders already on an active invoice (one active invoice per open order — no double-issue).
+- **Serve/act:** `GET /api/billing/invoice/<id>` (+ `/pdf`), `POST …/mark-paid` (EFT/cash → settles every open order
+  via the desk-payment core → receipts fire → invoice derives Paid), `POST …/void`. Lists: `GET /api/me/invoices` ·
+  `GET /api/admin/clients/<id>/invoices`. Client UI: `#/invoices` (view + download PDF + pay-outstanding).
+- **Email:** the `invoice_issued` event reuses the booking-confirmation shell + a statement summary + a **"Pay online"**
+  box + the **PDF attached** — attachment is **flag-gated `EMAIL_INVOICE_PDF_ENABLED`, now ON** (verified
+  2026-07-18; the SES key carries `AmazonSESFullAccess`/`ses:SendRawEmail`, so MIME attachments send).
+  `EFT` desk payments carry a **reference** (`provider_payment_id`, captured in the "Mark as paid" modal).
+
+### "Pay all" settlement orders — the wrapper OWNS its contents
+
+**"Pay all" settlement orders — the wrapper OWNS its contents.** A settlement order stands in for N real
+debts. Its coverage is snapshotted **immutably** on `billing."order".covered_order_ids` at creation; the
+child-side `settled_by_order_id` is MUTABLE (`_reclaim_abandoned_settlements` NULLs it after 30 min so an
+abandoned checkout stops hiding the debt) and must **never** be the only record — Yoco retries/reconcile run
+for **72 hours** against that 30-minute reclaim, and a payment landing after it used to mark the wrapper paid
+and settle **ZERO** children (debt survived a successful payment; the member was billed twice; the orphaned
+wrapper double-counted as revenue). `settle_settlement_order` and `is_settlement_order` read the snapshot
+first, back-reference second. **Refunding a wrapper must UN-SETTLE its children** (`unsettle_settlement_order`
+→ `open` **and** `settled_by_order_id = NULL`, or the debt returns invisible) — otherwise the club loses the
+cash AND the receivable. That un-settle runs **strictly AFTER `_accrue_refund_clawback`**, which only reverses
+commission on children still `paid`. A PARTIAL refund of a wrapper can't be allocated per child — it logs and
+flags rather than half-settling. **Changing a COVERED debt kills the wrapper**: `void_order` and
+`discount_order` call `invalidate_live_settlement_for` first, which detaches every child and voids the
+stale wrapper — its total froze at creation, so paying it would collect R900 for R600 of debt with the
+surplus landing nowhere (the fold still reconciles, because a voided child is excluded). `cancel_booking`
+voids unconditionally, so a member cancelling mid-checkout used to do this to themselves. We cannot
+retract a Yoco page already open, so `settle_settlement_order` also reports a **`surplus_minor`** when it
+collects more than it settles — prevention where possible, detection where not. Guarded by
+`sc_settlement_refund_restores_debt` + `sc_settlement_survives_reclaim` +
+`sc_settlement_invalidated_when_a_debt_changes`.
+
+### The month-end sweep is PER-CLIENT-TRANSACTIONAL, TIME-BOXED and RESUMABLE
+
+**The sweep is
+PER-CLIENT-TRANSACTIONAL, TIME-BOXED and RESUMABLE** — `run_month_end` is the single-transaction form (one
+club, harness); the CRON ROUTE instead drives `month_end_period`/`month_end_accrue`/`month_end_targets` then
+`month_end_client` in **its own `session_scope()` per client**, stopping at `max_seconds` (default 90, under
+gunicorn's 120s reaper) and returning `{ok, complete, remaining, failed}` for the caller to loop. This is not
+optional polish: the sweep allocates **gapless invoice numbers** and `emit()`s the email from a **background
+thread with its own session**, so the email does NOT roll back — one big transaction meant a worker reaped at
+client #400 rolled back 400 invoices whose numbered emails had already landed, and a re-run allocated
+different numbers. One client's failure now costs one client, and `month_end_notice` makes every later pass
+skip the done. Fired by
+**`.github/workflows/month-end.yml`** on the **25th** (the club billing day) — it **loops until `complete`** and
+**FAILS THE JOB LOUDLY** on any non-200/`ok:false` (it used to end in `|| echo`, so the run went green even if
+nothing was billed — invisible for 30 days).
+
+---
+
 ## 1. The problem (what's wrong today)
 
 A client's "what I owe" is currently computed by **two independent systems that overlap**:
