@@ -221,6 +221,70 @@ def release_abandoned_purchases(session, *, club_id, user_id=None) -> int:
         return 0
 
 
+def client_open_charges(session, *, club_id, user_id, period_label=None) -> List[Dict[str, Any]]:
+    """Every still-owed charge for ONE client — the preview behind a bulk void. `period_label`
+    ('YYYY-MM') scopes to the DELIVERY month, the same basis invoicing uses.
+
+    Includes `awaiting_payment` as well as `open`: a wrongly-raised debt can be either, and a
+    cleanup that silently skipped half of them would leave a balance nobody could explain."""
+    from billing.invoicing import DELIVERED_AT_SQL
+    where = ""
+    params = {"c": str(club_id), "u": str(user_id)}
+    if period_label:
+        where = (f"AND to_char(({DELIVERED_AT_SQL} AT TIME ZONE COALESCE("
+                 "(SELECT timezone FROM club.club WHERE id = :c),'Africa/Johannesburg')),"
+                 "'YYYY-MM') = :period")
+        params["period"] = period_label
+    return [dict(r) for r in session.execute(
+        text('SELECT o.id, o.amount_minor, o.currency_code, o.status, o.settlement_mode, '
+             f'       {DELIVERED_AT_SQL} AS delivered_at, '
+             "       COALESCE((SELECT string_agg(DISTINCT ol.description, ', ') "
+             "                   FROM billing.order_line ol WHERE ol.order_id = o.id), "
+             "                'charge') AS what "
+             'FROM billing."order" o '
+             " WHERE o.club_id = :c AND o.user_id = :u "
+             "   AND o.status IN ('open','awaiting_payment') "
+             "   AND o.settled_by_order_id IS NULL AND o.covered_order_ids IS NULL "
+             f"  {where} "
+             " ORDER BY delivered_at"),
+        params).mappings().all()]
+
+
+def void_client_charges(session, *, club_id, user_id, period_label=None, reason=None,
+                        write_off=False) -> Dict[str, Any]:
+    """Cancel EVERY still-owed charge for one client, in one action.
+
+    Voiding an invoice cancels the DOCUMENT, not the debt (an invoice renders over live orders and
+    is never a second debt store) — so cleaning up a wrongly-billed client means voiding the charges
+    themselves, and there can be dozens: one live account carried 73. Clicking through 73 dialogs on
+    real money is not a plan, and the alternative people reach for (editing the rows by hand) skips
+    every consequence the void path owns.
+
+    So this is a LOOP OVER void_order, never a bulk UPDATE. Each charge still detaches any live
+    'Pay all' wrapper covering it, drops the matching coach_arrears so no commission survives a
+    cancelled sale, and records WHY on void_reason. A PAID order is untouched — void_order no-ops on
+    one, because money that has moved is the refund path's business.
+
+    `write_off=True` records them as forgiven debt (it shows in the month's numbers) rather than
+    never-owed. Returns {ok, voided, skipped, amount_minor, currency, order_ids}."""
+    rows = client_open_charges(session, club_id=club_id, user_id=user_id,
+                               period_label=period_label)
+    voided, skipped, total, cur = 0, 0, 0, None
+    done = []
+    for r in rows:
+        res = void_order(session, club_id=club_id, order_id=str(r["id"]),
+                         write_off=write_off, reason=(reason or "bulk cancel"))
+        if res.get("ok"):
+            voided += 1
+            total += int(r["amount_minor"] or 0)
+            cur = cur or r["currency_code"]
+            done.append(str(r["id"]))
+        else:
+            skipped += 1
+    return {"ok": True, "voided": voided, "skipped": skipped, "amount_minor": total,
+            "currency": cur or "ZAR", "order_ids": done}
+
+
 def unpaid_orders(session, *, club_id, user_id) -> List[Dict[str, Any]]:
     """The client's OWED orders (status='open', not already being settled by an in-flight settlement
     order), one line each, oldest-first. kind is derived from the order's first line (its booking

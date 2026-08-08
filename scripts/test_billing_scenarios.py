@@ -4338,6 +4338,73 @@ def sc_a_month_swept_early_can_still_be_closed(s, fx):
           CM.month_end_period(s) == period, CM.month_end_period(s))
 
 
+def sc_bulk_void_cancels_charges_not_just_the_document(s, fx):
+    """Cancelling a wrongly-billed client means voiding the CHARGES — the invoice is only paper.
+
+    Voiding an invoice cancels the DOCUMENT and deliberately leaves every charge owed (an invoice
+    renders over live orders; it is never a second debt store). An owner voided one for R12,680, saw
+    the balance unchanged, and reasonably read it as a bug. The real cleanup is per-charge, and a
+    live account carried 73 of them across two months — so it has to be one action, and it has to
+    keep every consequence the single-void path owns."""
+    print("\n# Bulk void cancels the CHARGES (voiding the invoice only cancels the paper)")
+    from billing import statement as ST3, invoicing as INV5
+
+    ids = []
+    for i in range(4):
+        oid = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,'
+                             "currency_code,settlement_mode,status,service_date) "
+                             "VALUES (:c,:u,25000,'ZAR','monthly_account','open',CAST(:d AS date)) "
+                             "RETURNING id"),
+                        {"c": fx.club_id, "u": fx.member, "d": f"2026-04-{10 + i:02d}"}).scalar_one()
+        s.execute(text("INSERT INTO billing.order_line (order_id,club_id,description,qty,"
+                       "amount_minor) VALUES (:o,:c,'Lesson',1,25000)"),
+                  {"o": str(oid), "c": fx.club_id})
+        ids.append(str(oid))
+
+    inv = INV5.issue_invoice(s, club_id=fx.club_id, user_id=fx.member, order_ids=ids,
+                             kind="statement")
+    before = ST3.statement(s, club_id=fx.club_id, user_id=fx.member)["total_owed_minor"]
+    check("R1,000 owed before", before >= 100000, str(before))
+
+    # THE REPORTED SYMPTOM: voiding the invoice leaves the debt exactly where it was.
+    INV5.void_invoice(s, club_id=fx.club_id, invoice_id=inv["invoice_id"])
+    after_doc = ST3.statement(s, club_id=fx.club_id, user_id=fx.member)["total_owed_minor"]
+    check("voiding the INVOICE changes nothing owed (it is only the document)",
+          after_doc == before, f"{before} -> {after_doc}")
+
+    # The preview must show what the bulk void would take.
+    prev = ST3.client_open_charges(s, club_id=fx.club_id, user_id=fx.member, period_label="2026-04")
+    check("preview finds the 4 April charges", len(prev) == 4, str(len(prev)))
+
+    res = ST3.void_client_charges(s, club_id=fx.club_id, user_id=fx.member,
+                                  period_label="2026-04", reason="coach test account")
+    check("bulk void cancels all 4", res["voided"] == 4 and res["amount_minor"] == 100000, str(res))
+    check("...and the reason is recorded, not thrown away",
+          s.execute(text('SELECT void_reason FROM billing."order" WHERE id=:o'),
+                    {"o": ids[0]}).scalar() == "coach test account")
+    after = ST3.statement(s, club_id=fx.club_id, user_id=fx.member)["total_owed_minor"]
+    check("the April debt is gone", after == before - 100000, f"{before} -> {after}")
+
+    # PERIOD SCOPE is real: a charge from another month must survive.
+    other = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,currency_code,'
+                           "settlement_mode,status,service_date) "
+                           "VALUES (:c,:u,44000,'ZAR','monthly_account','open','2026-05-11') "
+                           "RETURNING id"), {"c": fx.club_id, "u": fx.member}).scalar_one()
+    s.execute(text("INSERT INTO billing.order_line (order_id,club_id,description,qty,amount_minor) "
+                   "VALUES (:o,:c,'May lesson',1,44000)"), {"o": str(other), "c": fx.club_id})
+    ST3.void_client_charges(s, club_id=fx.club_id, user_id=fx.member, period_label="2026-04")
+    check("a charge OUTSIDE the period is untouched",
+          _order(s, str(other))["status"] == "open")
+
+    # A PAID charge is never cancelled — that is the refund path's business.
+    paid = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,currency_code,'
+                          "settlement_mode,status,service_date) "
+                          "VALUES (:c,:u,30000,'ZAR','monthly_account','paid','2026-06-02') "
+                          "RETURNING id"), {"c": fx.club_id, "u": fx.member}).scalar_one()
+    ST3.void_client_charges(s, club_id=fx.club_id, user_id=fx.member)
+    check("a PAID charge is never bulk-voided", _order(s, str(paid))["status"] == "paid")
+
+
 def sc_abandoned_purchases_expire_by_themselves(s, fx):
     """An abandoned pack/membership checkout expires like an abandoned booking hold — and a late
     payment can still settle it.
@@ -4614,6 +4681,7 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
 
 
 SCENARIOS = [
+    sc_bulk_void_cancels_charges_not_just_the_document,
     sc_abandoned_purchases_expire_by_themselves,
     sc_partial_payment_leaves_the_invoice_open,
     sc_one_payment_one_receipt,

@@ -24,7 +24,7 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
 ## Gates (run before every merge — KEEP)
 - `test_all.py` — runs the three scenario harnesses below. **The merge gate.**
 - `test_booking_scenarios.py` · `test_billing_scenarios.py` · `test_statement_reconciliation.py`
-  — rollback-only scratch-DB harnesses (**booking 404 / billing 613 / statement 64**).
+  — rollback-only scratch-DB harnesses (**booking 404 / billing 621 / statement 64**).
 
 ## Load-bearing at runtime (KEEP — do not touch)
 - `seed_nextpoint.py` — re-seeds club #1 on every prod boot (`SEED_NEXTPOINT=1`, imported by `app.py`). Idempotent.
@@ -71,6 +71,15 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
 - `audit_trials.py` — audits/cleans the 7-day trial grants.
 - `diagnose_coach_packs.py` — READ-ONLY: where each session PACK lands in the coach-earnings roll-up (its selling coach vs the CLUB, sale month, order status, whether it counts). Answers "why isn't coach X's pack showing on his earnings?" Optional args: `<name-needle> [YYYY-MM]`. Uses `DATABASE_URL` from env (Render Shell) or `.env.local`.
 - `reconcile_coach_commission.py` — READ-ONLY financial-integrity proof: every PAID lesson/class line (money collected via Yoco / cash / EFT / invoice / 'pay-all' statement) must carry a coach commission_split. Lists any paid coaching with NO split (a coach under-paid) + a covered/uncovered rand tie-out + paid-but-no-coach lines. Should read **CLEAN**. Optional arg `YYYY-MM`. Run monthly before coach payouts.
+- `void_client_charges.py` — **cancel every still-owed charge for ONE client, in one action.**
+  Dry-run by default; `--commit` writes. `--who <email|name>` (ambiguity is refused, never guessed),
+  `--period YYYY-MM` scopes to a delivery month, `--reason` is recorded on `void_reason`,
+  `--write-off` records forgiven debt instead of never-owed. Exists because voiding an INVOICE
+  cancels the DOCUMENT, not the debt — the cleanup is per-charge, and one live account carried 73.
+  Loops `void_order` rather than issuing a bulk UPDATE, so each charge still kills any live 'Pay
+  all' wrapper and drops its coach_arrears. A PAID order is never touched (that is the refund
+  path). Deliberately a script and not an admin button: "wipe this client's balance" is one
+  mis-click from erasing a real member's real debt.
 - `audit_zero_prices.py` — READ-ONLY: **prices that silently bill NOTHING.** `pricing.price_for`
   resolves the exact duration then tie-breaks on `amount_minor ASC`, so two active rows for one
   product+duration make the CHEAPER one authoritative, in silence — production ran a coach on
