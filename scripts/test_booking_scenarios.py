@@ -597,12 +597,24 @@ def sc_member_cannot_bypass_online_only(s, fx):
     r4 = _try("online", product_id=online_only)
     check("online (the one allowed mode) IS accepted", r4.get("ok") is True, str(r4))
 
-    # (e) STAFF override remains intentional and documented — a coach booking the same court is fine.
-    r5 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+    # (e) STAFF override remains intentional and documented — staff may take a card-only service at
+    # the desk. This used to be asserted with a COACH self-booking the court; that path is now
+    # refused outright (owner decision 2026-08-08 — a coach books lessons, not club courts in his own
+    # name), so the OVERRIDE is asserted through an admin, which is what it was always about. The
+    # coach's own refusal is asserted below, by ITS error, so neither rule can silently lapse.
+    r5 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="club_admin",
+                          booked_for_user_id=m,
                           booking_type="court", resource_id=fx.courts[0],
                           starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 14)),
                           settlement_mode="at_court")
-    check("a COACH may still override (by design, BUSINESS-RULES.md:63)", r5.get("ok") is True, str(r5))
+    check("STAFF may still override a card-only service (by design, BUSINESS-RULES.md)",
+          r5.get("ok") is True, str(r5))
+    r6 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=utc_iso(at(fx, 15)), ends_at=utc_iso(at(fx, 16)),
+                          settlement_mode="at_court")
+    check("...but a coach may NOT put a club court in his own name",
+          r6.get("error") == "COACH_CANNOT_BOOK_COURT", str(r6))
 
 
 def sc_expired_void_is_recoverable(s, fx):

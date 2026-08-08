@@ -4370,7 +4370,8 @@ def sc_a_rent_coach_lesson_raises_no_club_charge(s, fx):
     check("now resolves as rent",
           CM2.coach_billing_model(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == "rent")
 
-    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+    # The coach books AGAINST HIMSELF — this is the case that was billing him for his own work.
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
                           booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
                           starts_at=iso(at(fx, 10)), ends_at=iso(at(fx, 11)),
                           settlement_mode="at_court")
@@ -4385,9 +4386,33 @@ def sc_a_rent_coach_lesson_raises_no_club_charge(s, fx):
                            starts_at=iso(at(fx, 10)), ends_at=iso(at(fx, 11)),
                            settlement_mode="at_court").get("error") is not None)
 
+    # NARROW BY DESIGN: booking a NAMED CLIENT still bills. "Never bill a rent coach's lessons"
+    # would mean the club stops billing a real member while the coach invoices them directly —
+    # nobody billed. Only the self-booking is skipped.
+    rc = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+                          booked_for_user_id=fx.member, booking_type="lesson",
+                          resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=iso(at(fx, 14)), ends_at=iso(at(fx, 15)),
+                          settlement_mode="at_court")
+    check("a rent coach booking a NAMED CLIENT still bills that client",
+          bool(rc.get("booking", {}).get("order_id")), str(rc.get("booking", {})))
+
+    # A COACH BOOKS LESSONS, NEVER COURTS — the "court for a mate" hole.
+    cc = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+                          booking_type="court", resource_id=fx.courts[1],
+                          starts_at=iso(at(fx, 16)), ends_at=iso(at(fx, 17)),
+                          settlement_mode="at_court")
+    check("a coach cannot book a raw court", cc.get("error") == "COACH_CANNOT_BOOK_COURT", str(cc))
+    ac = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="club_admin",
+                          booked_for_user_id=fx.member, booking_type="court",
+                          resource_id=fx.courts[1],
+                          starts_at=iso(at(fx, 16)), ends_at=iso(at(fx, 17)),
+                          settlement_mode="at_court")
+    check("...but an ADMIN still can (for anyone, including a coach)", ac.get("ok") is True, str(ac))
+
     # THE TRAP: an ONLINE settlement would have inserted the row HELD, and a hold with no order
     # behind it awaits a payment that can never arrive and lazy-expires under the coach.
-    r3 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+    r3 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
                           booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
                           starts_at=iso(at(fx, 12)), ends_at=iso(at(fx, 13)),
                           settlement_mode="online")
@@ -4397,11 +4422,14 @@ def sc_a_rent_coach_lesson_raises_no_club_charge(s, fx):
           f"{bk3.get('status')} / {bk3.get('order_id')}")
     check("...and no checkout is offered", not r3.get("checkout"))
 
-    # Nothing lands on the coach's statement — which is the whole point.
-    owed = ST.statement(s, club_id=fx.club_id, user_id=fx.member)["total_owed_minor"]
-    only = s.execute(text('SELECT count(*) FROM billing."order" WHERE club_id=:c AND user_id=:u '
-                          "AND status='open'"), {"c": fx.club_id, "u": fx.member}).scalar()
-    check("only the COMMISSION lesson is owed (1 order, not 3)", only == 1, f"{only} open orders")
+    # THE WHOLE POINT: nothing lands on the COACH's own statement. He booked two lessons against
+    # himself; neither may appear as a debt against him.
+    his = s.execute(text('SELECT count(*), COALESCE(sum(amount_minor),0) '
+                         'FROM billing."order" WHERE club_id=:c AND user_id=:u '
+                         "AND status IN ('open','awaiting_payment')"),
+                    {"c": fx.club_id, "u": fx.coach_uid}).one()
+    check("the COACH owes the club nothing for his own lessons", his[0] == 0 and his[1] == 0,
+          f"{his[0]} orders / {his[1]} minor")
 
 
 def sc_bulk_void_cancels_charges_not_just_the_document(s, fx):

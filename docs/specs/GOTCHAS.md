@@ -15,7 +15,7 @@ still reads the scenario that guards any entry.
 
 ## Contents
 
-- [Booking & the diary](#booking--the-diary) — 9 entries
+- [Booking & the diary](#booking--the-diary) — 10 entries
 - [Courts, peak hours & equipment](#courts-peak-hours--equipment) — 4 entries
 - [The lesson lifecycle](#the-lesson-lifecycle) — 5 entries
 - [Classes](#classes) — 4 entries
@@ -164,6 +164,35 @@ booking hold — two shapes of the same thing, a void nobody chose. An ADMIN voi
 marker and stays untouchable. (`billing.order.void_reason` is new and worth having anyway:
 `void_order` had always taken a `reason` and thrown it away, so the audit trail could not say whether
 a void was a decision or an expiry.) Guarded by `sc_abandoned_purchases_expire_by_themselves`.
+
+### A RENT COACH BILLS HIS OWN CLIENTS — AND BOOKS LESSONS, NOT COURTS (2026-08-08)
+
+Four coaches at NextPoint pay monthly **rent** and invoice their clients **directly**. They hold
+their teaching slots by booking lessons **against themselves** — and nothing read
+`billing.coach_agreement` when deciding whether to bill, so each of those bookings raised a real
+client debt against the coach **for his own work**. R68,000 of phantom "outstanding" accumulated
+across four accounts, had to be voided by hand, and made every People and earnings figure
+untrustworthy until it was.
+
+`coach_agreement.billing_model` (`'commission'` default | `'rent'`) is the record the club already
+half-had: `rent_minor` existed, but nothing consumed it at billing time. `create_booking` resolves
+it and raises no order when a rent coach books **himself**.
+
+**Deliberately narrow — only when the billed party IS the coach.** "Never bill a rent coach's
+lessons at all" is a bigger claim about the relationship than the evidence supports, and it fails
+dangerously: if the club stops billing a NAMED client while the coach invoices them directly,
+**nobody** is billed. A rent coach booking a named client still bills that client.
+
+**A coach may not put a club court in his own name** (`COACH_CANNOT_BOOK_COURT`). He never needs to
+— the lesson flow allocates a court itself — and what a raw self-booked court allows is holding club
+courts for friends outside any service, with a payer who was never going to pay. **On-behalf is
+still allowed**: booking a court for a NAMED client is a real service action and that client is
+billed, which is the point. **This NARROWS a documented rule** — BUSINESS-RULES' staff override let
+a coach book a court to override a service's payment modes. That override still stands for staff and
+for on-behalf bookings, and `sc_member_cannot_bypass_online_only` now asserts it through an admin plus the
+coach's refusal by its own error code, so neither rule can silently lapse. Owner decision.
+
+Guarded by `sc_a_rent_coach_lesson_raises_no_club_charge`.
 
 ---
 

@@ -33,7 +33,7 @@ requirements.txt` (Python 3.12).
    files two days after deletion; `Widgets.CoachStatement` missing from the golden-rule register; and
    13 live events absent from `contracts/events.md`. `--strict` exits 1 for a pre-merge gate.
 4. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 404 / billing 630 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 405 / billing 633 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -570,7 +570,7 @@ member by email on the first authenticated hit.
   (`sportai-db`) is still off-limits.
 
 ## Gotchas
-**The war stories live in [`docs/specs/GOTCHAS.md`](docs/specs/GOTCHAS.md) — 51 entries, moved out
+**The war stories live in [`docs/specs/GOTCHAS.md`](docs/specs/GOTCHAS.md) — 52 entries, moved out
 verbatim. Below is the INDEX: the rule, and the `sc_…` scenario that pins it.** Follow the link before
 you change the code an entry names — each one is a bug that reached production, and every one of them
 looks like a harmless simplification until you read what it cost.
@@ -615,6 +615,7 @@ looks like a harmless simplification until you read what it cost.
 - Capacity-sweep needs no cron — `sc_expired_void_is_recoverable`
 - A repeated "Buy" must RE-OFFER the unpaid order, not mint a second debt — `sc_buy_click_never_mints_a_duplicate_debt`
 - An abandoned purchase has no booking, so nothing ever swept it — `sc_abandoned_purchases_expire_by_themselves`
+- A RENT coach bills his own clients — and books lessons, not courts in his own name — `sc_a_rent_coach_lesson_raises_no_club_charge`
 
 **Courts, peak hours & equipment** — [GOTCHAS.md#courts-peak-hours--equipment](docs/specs/GOTCHAS.md#courts-peak-hours--equipment)
 - THE COURT IS THE ONE PLACE TO SEE A COURT (2026-07-29)

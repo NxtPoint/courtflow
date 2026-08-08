@@ -646,6 +646,27 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     release_expired_holds(session, club_id, now=now)  # lazy expiry: free abandoned holds (no cron)
     # On-behalf override: persist the booking under the client, not the actor.
     owner_user_id = booked_for_user_id or booked_by_user_id
+
+    # A COACH BOOKS LESSONS, NOT COURTS IN HIS OWN NAME. He never needs to: the lesson flow
+    # allocates a court itself (_pick_court_for_lesson), so teaching is fully served. What a raw
+    # self-booked court allows is holding club courts for friends and family outside any service —
+    # no coach, no service, and a payer who was never going to pay, which is how coaches ran up
+    # court charges nobody could account for.
+    #
+    # ON-BEHALF IS STILL ALLOWED (booked_for_user_id set): booking a court for a NAMED client is a
+    # real service action and that client is billed for it — someone owes, which is the whole point.
+    # Staff (club_admin/owner) are unaffected and can book a court for anyone, including for a coach
+    # who genuinely wants to play. The lesson's own auto-held court row is inserted directly by
+    # _insert_booking and never passes through here, so it is untouched.
+    #
+    # THIS NARROWS A DOCUMENTED RULE. BUSINESS-RULES.md §"staff override" let a coach book a court
+    # to override a service's payment modes; that override still stands for lessons and for
+    # on-behalf court bookings, but a coach may no longer put a club court in his own name. Owner
+    # decision, 2026-08-08.
+    if booking_type == "court" and (role or "") == "coach" and not booked_for_user_id:
+        return _err("COACH_CANNOT_BOOK_COURT", 403,
+                    message="Coaches book lessons, not courts — a lesson reserves a court for you. "
+                            "Ask an admin if you need a court to play on.")
     parties = parties or []
     # SEMI-PRIVATE (squad) lessons: extra CLIENTS ride the SAME lesson slot but are billed PER HEAD —
     # each gets their OWN owed order at the service price (never merged onto the primary's order). They
@@ -1019,16 +1040,23 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         return _err("INTEGRITY_ERROR", 409)
 
     # --- order / settlement (guarded billing call) ----------------------
-    # A RENT COACH'S LESSON RAISES NO CLUB CHARGE. They pay the club rent and invoice their own
-    # clients directly, so there is no debt for the club to record — and when they book against
-    # themselves (which is how they hold the slot) the old behaviour billed them as a client for
-    # their own work. Four coaches accumulated R68,000 of phantom "outstanding" that way, which had
-    # to be voided by hand and made every People/earnings figure untrustworthy in the meantime.
-    # The BOOKING is unaffected: coach and court are still reserved, it still shows in the diary and
-    # in utilisation. Only the money stops. Commission cannot be short-changed by this because a
-    # rent coach earns no split by definition — that is what the rent replaces.
+    # A RENT COACH BOOKING AGAINST HIMSELF RAISES NO CLUB CHARGE. He pays rent and invoices his own
+    # clients, and he holds his teaching slots by booking them in his OWN name — so the old
+    # behaviour billed him, as a client, for his own work. Four coaches accumulated R68,000 of
+    # phantom "outstanding" that way; it had to be voided by hand and made every People and earnings
+    # figure untrustworthy until it was.
+    #
+    # DELIBERATELY NARROW — only when the billed party IS the coach. "Never bill a rent coach's
+    # lessons at all" is a bigger claim about the relationship than the evidence supports, and it
+    # fails dangerously: if the club stops billing a NAMED client and the coach invoices them
+    # directly, nobody is billed. Skipping only the self-booking fixes exactly what was broken.
+    #
+    # The BOOKING is unaffected: coach and court still reserved, still in the diary and in
+    # utilisation. Only the money stops. Commission cannot be short-changed — a rent coach earns no
+    # split by definition, which is what the rent replaces.
     duration_minutes = int((ends - starts).total_seconds() // 60)
-    if booking_type == "lesson" and coach_uid:
+    if (booking_type == "lesson" and coach_uid
+            and str(owner_user_id) == str(coach_uid)):
         from billing.commission import coach_billing_model
         if coach_billing_model(session, club_id=club_id, coach_user_id=coach_uid) == "rent":
             # FORCE confirmed. The row was inserted with the status the settlement mode implied,
