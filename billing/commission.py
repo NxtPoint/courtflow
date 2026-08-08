@@ -1246,6 +1246,31 @@ def list_coach_payouts(session, *, club_id, coach_user_id=None, limit=100) -> Li
     return [dict(r) for r in rows]
 
 
+def coach_billing_model(session, *, club_id, coach_user_id) -> str:
+    """How the club monetises this coach: 'commission' (default) or 'rent'.
+
+    'rent' means the coach pays the club rent and bills their OWN clients directly — so the club
+    must raise NO client charge for a lesson they deliver. Nothing used to read this: a rent coach
+    booking a lesson against themselves raised a real debt against themselves, and four of them
+    accumulated R68,000 of phantom "outstanding" before it could be explained. Every coach without
+    an explicit 'rent' agreement resolves to 'commission', so this can only ever change behaviour
+    for someone an owner has deliberately marked.
+
+    Guarded → 'commission': the safe answer is the one that keeps billing, because failing to bill
+    silently loses revenue while an over-bill is visible and correctable."""
+    try:
+        return (session.execute(
+            text("SELECT billing_model FROM billing.coach_agreement "
+                 " WHERE club_id = :c AND coach_user_id = :u AND status = 'active' "
+                 "   AND (effective_to IS NULL OR effective_to >= CURRENT_DATE) "
+                 " ORDER BY effective_from DESC LIMIT 1"),
+            {"c": str(club_id), "u": str(coach_user_id)},
+        ).scalar()) or "commission"
+    except Exception:
+        log.debug("coach billing model lookup skipped coach=%s", coach_user_id, exc_info=False)
+        return "commission"
+
+
 def month_end_period(session, period_label=None) -> str:
     """The month the sweep bills — by default the month JUST ENDED, because the sweep now runs on the
     1st. It used to run on the 25th and default to the CURRENT month, which is why an invoice could

@@ -371,6 +371,12 @@ _DDL = [
     #                      coach marks it collected -> commission accrues (docs/specs/01).
     # ---------------------------------------------------------------------------
 
+    # HOW THE CLUB MONETISES THIS COACH. 'commission' (the default, and how every existing row
+    # behaves): the club bills the client and the coach earns a split. 'rent': the coach pays rent
+    # and bills their OWN clients directly, so the club must raise NO client charge for lessons they
+    # deliver. Nothing read rent_minor when deciding whether to BILL, so a rent coach booking a
+    # lesson against themselves raised a real client debt against themselves — four coaches
+    # accumulated R68,000 of phantom "outstanding" that way before anyone could explain it.
     # 1. coach_agreement — rent posture, one active row per coach.
     f"""
     CREATE TABLE IF NOT EXISTS {SCHEMA}.coach_agreement (
@@ -385,10 +391,23 @@ _DDL = [
                           CHECK (status IN ('active','ended')),
         effective_from  date NOT NULL DEFAULT CURRENT_DATE,
         effective_to    date,
+        billing_model   text NOT NULL DEFAULT 'commission'
+                          CHECK (billing_model IN ('commission','rent')),
         notes           text,
         created_at      timestamptz NOT NULL DEFAULT now(),
         updated_at      timestamptz NOT NULL DEFAULT now()
     );
+    """,
+    # Existing installs already have the table, so the column needs its own idempotent ALTER.
+    # DEFAULT 'commission' means every current agreement keeps behaving exactly as it does today —
+    # 'rent' only ever applies to a coach an owner has explicitly marked.
+    f"ALTER TABLE {SCHEMA}.coach_agreement ADD COLUMN IF NOT EXISTS billing_model text "
+    f"NOT NULL DEFAULT 'commission';",
+    f"""
+    DO $$ BEGIN
+        ALTER TABLE {SCHEMA}.coach_agreement ADD CONSTRAINT coach_agreement_billing_model_chk
+            CHECK (billing_model IN ('commission','rent'));
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     """,
     f"CREATE INDEX IF NOT EXISTS ix_coach_agreement_club "
     f"ON {SCHEMA}.coach_agreement (club_id, coach_user_id);",

@@ -4338,6 +4338,72 @@ def sc_a_month_swept_early_can_still_be_closed(s, fx):
           CM.month_end_period(s) == period, CM.month_end_period(s))
 
 
+def sc_a_rent_coach_lesson_raises_no_club_charge(s, fx):
+    """A coach on a RENT agreement bills their own clients — the club must raise no charge.
+
+    Four coaches at NextPoint pay monthly rent and invoice their clients directly. They hold their
+    slots by booking lessons against THEMSELVES, and nothing read coach_agreement when deciding
+    whether to bill — so each of those bookings raised a real client debt against the coach for
+    their own work. R68,000 of phantom "outstanding" accumulated across four accounts, had to be
+    voided by hand, and made every People and earnings figure untrustworthy until it was.
+
+    The BOOKING is untouched — coach and court still reserved, still in the diary and in
+    utilisation. Only the money stops."""
+    print("\n# A rent coach's lesson raises no club charge (they bill their own clients)")
+    from billing import commission as CM2
+
+    check("a coach with no agreement is 'commission' (nothing changes by default)",
+          CM2.coach_billing_model(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == "commission")
+
+    # Commission coach: the lesson bills, exactly as before.
+    r1 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=iso(at(fx, 8)), ends_at=iso(at(fx, 9)),
+                          settlement_mode="at_court")
+    check("commission coach still raises a charge", bool(r1.get("booking", {}).get("order_id")),
+          str(r1.get("booking", {}).get("order_id")))
+
+    # Put the coach on RENT.
+    s.execute(text("INSERT INTO billing.coach_agreement (club_id,coach_user_id,rent_minor,"
+                   "billing_model,status) VALUES (:c,:u,500000,'rent','active')"),
+              {"c": fx.club_id, "u": fx.coach_uid})
+    check("now resolves as rent",
+          CM2.coach_billing_model(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == "rent")
+
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=iso(at(fx, 10)), ends_at=iso(at(fx, 11)),
+                          settlement_mode="at_court")
+    bk2 = r2.get("booking", {})
+    check("a rent coach's lesson raises NO order", not bk2.get("order_id"), str(bk2.get("order_id")))
+    check("...but the booking is real and CONFIRMED", bk2.get("status") == "confirmed",
+          str(bk2.get("status")))
+    check("...and it still holds the coach (the slot is genuinely taken)",
+          B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                           booking_type="lesson", resource_id=fx.coach_res,
+                           coach_user_id=fx.coach_uid,
+                           starts_at=iso(at(fx, 10)), ends_at=iso(at(fx, 11)),
+                           settlement_mode="at_court").get("error") is not None)
+
+    # THE TRAP: an ONLINE settlement would have inserted the row HELD, and a hold with no order
+    # behind it awaits a payment that can never arrive and lazy-expires under the coach.
+    r3 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                          starts_at=iso(at(fx, 12)), ends_at=iso(at(fx, 13)),
+                          settlement_mode="online")
+    bk3 = r3.get("booking", {})
+    check("an ONLINE rent lesson is confirmed, never left held with nothing to pay",
+          bk3.get("status") == "confirmed" and not bk3.get("order_id"),
+          f"{bk3.get('status')} / {bk3.get('order_id')}")
+    check("...and no checkout is offered", not r3.get("checkout"))
+
+    # Nothing lands on the coach's statement — which is the whole point.
+    owed = ST.statement(s, club_id=fx.club_id, user_id=fx.member)["total_owed_minor"]
+    only = s.execute(text('SELECT count(*) FROM billing."order" WHERE club_id=:c AND user_id=:u '
+                          "AND status='open'"), {"c": fx.club_id, "u": fx.member}).scalar()
+    check("only the COMMISSION lesson is owed (1 order, not 3)", only == 1, f"{only} open orders")
+
+
 def sc_bulk_void_cancels_charges_not_just_the_document(s, fx):
     """Cancelling a wrongly-billed client means voiding the CHARGES — the invoice is only paper.
 
@@ -4681,6 +4747,7 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
 
 
 SCENARIOS = [
+    sc_a_rent_coach_lesson_raises_no_club_charge,
     sc_bulk_void_cancels_charges_not_just_the_document,
     sc_abandoned_purchases_expire_by_themselves,
     sc_partial_payment_leaves_the_invoice_open,

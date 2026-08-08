@@ -1019,7 +1019,33 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         return _err("INTEGRITY_ERROR", 409)
 
     # --- order / settlement (guarded billing call) ----------------------
+    # A RENT COACH'S LESSON RAISES NO CLUB CHARGE. They pay the club rent and invoice their own
+    # clients directly, so there is no debt for the club to record — and when they book against
+    # themselves (which is how they hold the slot) the old behaviour billed them as a client for
+    # their own work. Four coaches accumulated R68,000 of phantom "outstanding" that way, which had
+    # to be voided by hand and made every People/earnings figure untrustworthy in the meantime.
+    # The BOOKING is unaffected: coach and court are still reserved, it still shows in the diary and
+    # in utilisation. Only the money stops. Commission cannot be short-changed by this because a
+    # rent coach earns no split by definition — that is what the rent replaces.
     duration_minutes = int((ends - starts).total_seconds() // 60)
+    if booking_type == "lesson" and coach_uid:
+        from billing.commission import coach_billing_model
+        if coach_billing_model(session, club_id=club_id, coach_user_id=coach_uid) == "rent":
+            # FORCE confirmed. The row was inserted with the status the settlement mode implied,
+            # and 'online' would have made it HELD — a hold with no order behind it awaits a payment
+            # that can never arrive and lazy-expires under a coach who thinks the slot is theirs.
+            session.execute(
+                text("UPDATE diary.booking SET status='confirmed', held_until=NULL, "
+                     "       updated_at=now() WHERE id = :b AND status <> 'cancelled'"),
+                {"b": booking_id})
+            if linked_court_id:
+                session.execute(
+                    text("UPDATE diary.booking SET status='confirmed', held_until=NULL, "
+                         "       updated_at=now() WHERE id = :b AND status <> 'cancelled'"),
+                    {"b": linked_court_id})
+            booking = _booking_dict(session, booking_id)
+            _emit_confirmed(session, booking, res, settlement_mode)
+            return {"ok": True, "booking": booking, "checkout": None}
     order = _create_order_guarded(
         session, club_id=club_id, user_id=owner_user_id, booking_id=booking_id,
         booking_type=booking_type, settlement_mode=settlement_mode, parties=parties,
