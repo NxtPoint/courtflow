@@ -24,13 +24,15 @@ READ FIRST, IN THIS ORDER:
 THERE IS NO BUILD PHASE AND NO PYTEST. The gates are:
   1. python -m py_compile $(git ls-files '*.py')
   2. python -m db   TWICE   — the second run must be a clean no-op
-  3. python -m scripts.test_all   — three rollback-only scenario harnesses
-     Current green baseline: booking 404 / billing 551 / statement 64
-  4. node --check on every frontend JS file you touched
-  5. python -m scripts.audit_docs  — the DOCS gate. Prose never fails a compile, so docs rot
+  3. python -m scripts.audit_docs  — the DOCS gate. Prose never fails a compile, so docs rot
      silently and get trusted when wrong. It checks the real routes/tables/widgets/events/
      scenarios/scripts from SOURCE against the prose. Currently 0 misses; keep it there.
      RUN IT AT THE END OF ANY SESSION THAT ADDED A SURFACE.
+  4. python -m scripts.test_all   — three rollback-only scenario harnesses
+     Current green baseline: booking 404 / billing 551 / statement 64
+  5. node --check on every frontend JS file you touched
+
+  (Same numbering as CLAUDE.md's "Gates" section — they must not drift apart.)
 
 HOW WE WORK — these are not style preferences, they are what has kept the money correct:
 
