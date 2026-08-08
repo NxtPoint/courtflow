@@ -234,6 +234,11 @@ _DDL = [
     # without this dates itself to July by created_at and lands on the wrong invoice forever.
     # NULL = fall back to created_at (every existing row, unchanged).
     f"ALTER TABLE {SCHEMA}.order ADD COLUMN IF NOT EXISTS service_date date;",
+    # WHY an order was voided. void_order has always taken a `reason` and thrown it away, so the
+    # audit trail could not say whether a void was an admin decision or an expiry. It also decides
+    # RECOVERABILITY: billing.events.order_void_is_recoverable lets a late payment settle a void
+    # that nobody chose (a lapsed hold, an abandoned purchase) but never one an admin made.
+    f"ALTER TABLE {SCHEMA}.order ADD COLUMN IF NOT EXISTS void_reason text;",
     # The ORIGINAL charge before a coaching discount (so the by-service view can show "was → now"
     # while amount_minor holds the CURRENT/discounted figure the client actually owes). NULL = never discounted.
     f"ALTER TABLE {SCHEMA}.order_line ADD COLUMN IF NOT EXISTS original_amount_minor int;",

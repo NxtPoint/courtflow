@@ -4333,6 +4333,65 @@ def sc_a_month_swept_early_can_still_be_closed(s, fx):
           CM.month_end_period(s) == period, CM.month_end_period(s))
 
 
+def sc_abandoned_purchases_expire_by_themselves(s, fx):
+    """An abandoned pack/membership checkout expires like an abandoned booking hold — and a late
+    payment can still settle it.
+
+    Lazy expiry is driven by expired BOOKING rows, so it cleans up an abandoned court/lesson order
+    and voids it. A pack or membership has NO booking, so nothing ever swept those: they sat
+    'awaiting_payment' for ever and were reported as outstanding. R43,960 of July 2026's "outstanding"
+    was exactly this — and none of it collectable, because a pack is granted ON PAYMENT.
+
+    Voiding must not lose a late payment: Yoco retries for 72h and reconcile sweeps 100 days, so the
+    void is recorded as 'abandoned_purchase', which order_void_is_recoverable treats exactly like a
+    lapsed booking hold."""
+    print("\n# Abandoned pack/membership purchases expire by themselves (and stay recoverable)")
+    from billing import statement as ST2
+    from billing.events import order_void_is_recoverable
+
+    plan = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=10,
+                          price_minor=500000, duration_minutes=60, coach_user_id=fx.coach_uid,
+                          label="10 lessons")
+    o = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                               bundle_plan_id=plan["id"], settlement_mode="online")
+    oid = o["order_id"]
+
+    n = ST2.release_abandoned_purchases(s, club_id=fx.club_id, user_id=fx.member)
+    check("an IN-FLIGHT checkout is never swept", n == 0 and _order(s, oid)["status"] == "awaiting_payment")
+
+    # Age it past the window.
+    s.execute(text('UPDATE billing."order" SET created_at = now() - interval \'5 days\' '
+                   "WHERE id = :o"), {"o": oid})
+    n = ST2.release_abandoned_purchases(s, club_id=fx.club_id, user_id=fx.member)
+    check("an ABANDONED one is voided", n == 1 and _order(s, oid)["status"] == "void",
+          f"{n} / {_order(s, oid)['status']}")
+    check("...and recorded as abandoned, not an admin decision",
+          s.execute(text('SELECT void_reason FROM billing."order" WHERE id=:o'),
+                    {"o": oid}).scalar() == "abandoned_purchase")
+    check("a LATE payment may still settle it", order_void_is_recoverable(s, oid) is True)
+
+    # An ADMIN void stays untouchable — the marker must not be handed out to everything.
+    o2 = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                bundle_plan_id=plan["id"], settlement_mode="online")
+    ST2.void_order(s, club_id=fx.club_id, order_id=o2["order_id"], reason="admin cancelled the sale")
+    check("an ADMIN void is NOT recoverable",
+          order_void_is_recoverable(s, o2["order_id"]) is False)
+
+    # Money already taken is never swept, whatever its age.
+    o3 = BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                bundle_plan_id=plan["id"], settlement_mode="online")
+    apply_payment_event(
+        NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=o3["order_id"],
+                               provider_payment_id="p_abandon_guard", amount_minor=500000,
+                               currency="ZAR", status="succeeded", direction="charge",
+                               club_id=str(fx.club_id), user_id=str(fx.member), raw={"t": 1}),
+        session=s)
+    s.execute(text('UPDATE billing."order" SET created_at = now() - interval \'9 days\' '
+                   "WHERE id = :o"), {"o": o3["order_id"]})
+    ST2.release_abandoned_purchases(s, club_id=fx.club_id, user_id=fx.member)
+    check("a PAID order is never swept", _order(s, o3["order_id"])["status"] == "paid")
+
+
 def sc_partial_payment_leaves_the_invoice_open(s, fx):
     """A part payment settles whole lines, oldest first, and the invoice stays open for the rest.
 
@@ -4550,6 +4609,7 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
 
 
 SCENARIOS = [
+    sc_abandoned_purchases_expire_by_themselves,
     sc_partial_payment_leaves_the_invoice_open,
     sc_one_payment_one_receipt,
     sc_an_invoice_covers_its_own_month,

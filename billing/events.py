@@ -455,10 +455,19 @@ def order_void_is_recoverable(session, order_id) -> bool:
     an error must never be read as permission."""
     try:
         return bool(session.execute(
-            text("SELECT 1 FROM billing.order_line ol "
-                 "JOIN diary.booking b ON b.id = ol.booking_id "
-                 "WHERE ol.order_id = :o AND b.status = 'cancelled' "
-                 "  AND b.cancellation_reason = 'hold_expired' LIMIT 1"),
+            # Two shapes of the SAME thing — a void nobody chose. A booking carries it as a
+            # 'hold_expired' cancellation; a pack or membership has NO booking at all, so the
+            # abandoned-purchase sweep records it as void_reason instead. Both must stay
+            # recoverable: Yoco retries for 72h and reconcile sweeps 100 days, so a payment landing
+            # after the sweep is routine, and refusing it would leave the member's money with Yoco
+            # and no pack. An ADMIN void carries neither marker and stays untouchable.
+            text("SELECT 1 WHERE EXISTS ("
+                 "  SELECT 1 FROM billing.order_line ol "
+                 "    JOIN diary.booking b ON b.id = ol.booking_id "
+                 "   WHERE ol.order_id = :o AND b.status = 'cancelled' "
+                 "     AND b.cancellation_reason = 'hold_expired') "
+                 ' OR EXISTS (SELECT 1 FROM billing."order" o '
+                 "   WHERE o.id = :o AND o.void_reason = 'abandoned_purchase')"),
             {"o": str(order_id)},
         ).first())
     except Exception:

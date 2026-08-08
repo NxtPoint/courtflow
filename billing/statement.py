@@ -160,6 +160,67 @@ def _void_written_off_arrears_orders(session, *, club_id, user_id) -> None:
         log.debug("written-off-arrears self-heal skipped", exc_info=False)
 
 
+# How long an unpaid ONLINE purchase with nothing live behind it may sit before it is swept. A Yoco
+# checkout does not stay payable for days, and a genuinely-late payment is still safe — the void is
+# recorded as 'abandoned_purchase', which order_void_is_recoverable treats exactly like a lapsed
+# booking hold, so reconcile can still settle it.
+_ABANDONED_PURCHASE_HOURS = 48
+
+
+def release_abandoned_purchases(session, *, club_id, user_id=None) -> int:
+    """Void unpaid ONLINE pack/membership purchases that were abandoned — the booking-less half of
+    lazy expiry.
+
+    diary.bookings.release_expired_holds cleans up an abandoned BOOKING and voids its order, but it
+    is driven by expired booking rows: a pack or membership order has no booking, so it was never
+    swept by anything and sat 'awaiting_payment' for ever. That is where R43,960 of July 2026's
+    reported "outstanding" came from — none of it collectable, because a pack is granted ON PAYMENT,
+    so an unpaid order means the member owns nothing and owes nothing.
+
+    Same guards as the manual cleanup (scripts/void_orphaned_orders): nothing live may depend on the
+    order and no money may have been taken — no live booking, no live enrolment, no succeeded or
+    refunded charge — and it must be older than _ABANDONED_PURCHASE_HOURS so an in-flight checkout is
+    never killed under the customer. Guarded end-to-end: money hygiene must never break the read that
+    triggered it."""
+    # SAVEPOINT, not a bare try/except. In Postgres a failing statement ABORTS the transaction, so a
+    # swallowed error here would make every later query in the caller's session_scope fail too — the
+    # "a silent zero is not a guard" antipattern this codebase has now hit four times. begin_nested
+    # rolls back only this block.
+    try:
+        with session.begin_nested():
+            rows = session.execute(
+                text('SELECT o.id FROM billing."order" o '
+                     " WHERE o.club_id = :c AND o.status = 'awaiting_payment' "
+                     "   AND o.settlement_mode = 'online' "
+                     # CAST is required: a bare ":u IS NULL" raises psycopg AmbiguousParameter.
+                     "   AND (CAST(:u AS uuid) IS NULL OR o.user_id = CAST(:u AS uuid)) "
+                     "   AND o.created_at < now() - (:hrs || ' hours')::interval "
+                     "   AND NOT EXISTS (SELECT 1 FROM billing.order_line ol "
+                     "                     JOIN diary.booking b ON b.id = ol.booking_id "
+                     "                    WHERE ol.order_id = o.id "
+                     "                      AND b.status NOT IN ('cancelled','expired')) "
+                     "   AND NOT EXISTS (SELECT 1 FROM diary.enrolment e "
+                     "                    WHERE e.order_id = o.id "
+                     "                      AND e.status NOT IN ('cancelled','expired')) "
+                     "   AND NOT EXISTS (SELECT 1 FROM billing.payment p "
+                     "                    WHERE p.order_id = o.id AND p.direction = 'charge' "
+                     "                      AND p.status IN ('succeeded','refunded'))"),
+                {"c": str(club_id), "u": (str(user_id) if user_id else None),
+                 "hrs": _ABANDONED_PURCHASE_HOURS},
+            ).scalars().all()
+        n = 0
+        for oid in rows:
+            # 'abandoned_purchase' is load-bearing, not a note: order_void_is_recoverable reads it
+            # so a late Yoco payment can still settle this order rather than being refused.
+            if void_order(session, club_id=club_id, order_id=str(oid),
+                          reason="abandoned_purchase").get("ok"):
+                n += 1
+        return n
+    except Exception:
+        log.warning("abandoned-purchase sweep skipped club=%s", club_id, exc_info=True)
+        return 0
+
+
 def unpaid_orders(session, *, club_id, user_id) -> List[Dict[str, Any]]:
     """The client's OWED orders (status='open', not already being settled by an in-flight settlement
     order), one line each, oldest-first. kind is derived from the order's first line (its booking
@@ -167,6 +228,7 @@ def unpaid_orders(session, *, club_id, user_id) -> List[Dict[str, Any]]:
     _reclaim_abandoned_settlements(session, club_id=club_id, user_id=user_id)  # stale-only (grace)
     _void_phantom_cancelled_orders(session, club_id=club_id, user_id=user_id)  # clear cancelled-booking debt
     _void_written_off_arrears_orders(session, club_id=club_id, user_id=user_id)  # clear written-off coaching debt
+    release_abandoned_purchases(session, club_id=club_id, user_id=user_id)     # booking-less lazy expiry
     try:
         rows = session.execute(
             text("""
@@ -502,10 +564,10 @@ def void_order(session, *, club_id, order_id, write_off=False, reason=None) -> D
     invalidate_live_settlement_for(session, club_id=club_id, order_id=order_id)
     new_status = "written_off" if write_off else "void"
     row = session.execute(
-        text('UPDATE billing."order" SET status = :ns, updated_at = now() '
+        text('UPDATE billing."order" SET status = :ns, void_reason = :why, updated_at = now() '
              "WHERE club_id = :c AND id = :o AND status IN ('open','awaiting_payment') "
              "RETURNING id"),
-        {"ns": new_status, "c": str(club_id), "o": str(order_id)},
+        {"ns": new_status, "c": str(club_id), "o": str(order_id), "why": reason},
     ).first()
     if not row:
         return {"ok": False, "error": "NOT_OPEN"}
