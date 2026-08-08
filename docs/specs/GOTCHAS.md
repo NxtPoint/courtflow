@@ -622,7 +622,10 @@ client was already notified, so an ordinary re-run returns `already` and the lat
 invoiced by **nothing, ever** — 55 such orders in July 2026. `reissue=True` (a `workflow_dispatch`
 input and a body flag on `/api/cron/month-end`) ignores that claim; `issue_invoice` still skips any
 order on an ACTIVE invoice, so the second pass bills only what is still uninvoiced — a supplementary
-invoice, not a duplicate. Guarded by `sc_a_month_swept_early_can_still_be_closed`.
+invoice, not a duplicate. A reissue with nothing new is SILENT — it neither issues nor
+re-sends, because the ordinary sweep's helpful "you owe money and have no fresh document, here
+is your existing one" fallback becomes ~21 unwanted emails when you are closing a month.
+Guarded by `sc_a_month_swept_early_can_still_be_closed`.
 
 ### ONE PAYMENT IS ONE RECEIPT, HOWEVER MANY LINES IT SETTLES (2026-08-08)
 

@@ -4321,12 +4321,17 @@ def sc_a_month_swept_early_can_still_be_closed(s, fx):
     check("...covering ONLY the uninvoiced R300, never the R500 again",
           rows[-1] == 30000, str(rows[-1]))
 
-    # And it stays idempotent: reissue again with nothing new bills nothing new.
-    CM.month_end_client(s, club_id=fx.club_id, period=period, user_id=fx.member,
-                        owed=0, cur="ZAR", reissue=True)
+    # And it stays idempotent: a reissue with nothing new bills nothing AND says nothing. Re-sending
+    # a document the client already holds is noise — closing July would otherwise email ~21 people an
+    # invoice they already have.
+    with _EmitRecorder() as rec:
+        again = CM.month_end_client(s, club_id=fx.club_id, period=period, user_id=fx.member,
+                                    owed=0, cur="ZAR", reissue=True)
+        quiet = rec.calls
     rows2 = s.execute(text("SELECT count(*) FROM billing.invoice WHERE club_id=:c AND user_id=:u"),
                       {"c": fx.club_id, "u": fx.member}).scalar()
     check("a reissue with nothing new issues nothing", rows2 == len(rows), f"{len(rows)} -> {rows2}")
+    check("...and emails nobody", again == "already" and not quiet, f"{again} / {quiet}")
 
     # The default period is the month JUST ENDED — the sweep now runs on the 1st, not the 25th.
     check("month_end_period defaults to the month just ended",

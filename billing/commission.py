@@ -1338,6 +1338,13 @@ def month_end_client(session, *, club_id, period, user_id, owed, cur, reissue=Fa
             scope_to_period=True)
         if res.get("ok"):
             invoice_id = res.get("invoice_id")
+        elif reissue and not fresh:
+            # A REISSUE exists to bill what arrived AFTER the first sweep. If there is nothing new,
+            # this client already holds the right document and re-sending it is noise, not service —
+            # closing July would otherwise email ~21 people an invoice they already have. The
+            # ordinary sweep still re-sends (below): there, a client owing money with no fresh
+            # document genuinely needs one.
+            return "already"
         else:
             # Nothing NEW to invoice because the balance is already on an active invoice. Don't send a
             # contentless "pay online" reminder — re-send that EXISTING invoice (PDF + pay-link), so
