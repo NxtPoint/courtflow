@@ -376,7 +376,10 @@ def cron_month_end():
     # REISSUE closes a month that was swept BEFORE it ended: it ignores the month_end_notice claim
     # so orders delivered after that sweep still get invoiced. Safe because issue_invoice skips any
     # order already on an active invoice — a second pass bills only what is still uninvoiced.
-    reissue = bool(body.get("reissue") or request.args.get("reissue"))
+    # NOT bool(): a query string carries STRINGS, and bool("false") is True — "?reissue=false" would
+    # have switched it ON. Parse the word, not its truthiness.
+    _rq = body.get("reissue", request.args.get("reissue"))
+    reissue = (_rq is True or str(_rq).strip().lower() in ("1", "true", "yes", "on"))
     remaining_clients = 0
     timed_out = False
 
@@ -388,7 +391,12 @@ def cron_month_end():
         if timed_out:
             break
         stats = {"club_id": cid, "notified": 0, "already": 0, "failed": 0,
-                 "rent_charges": 0, "clients_owing": 0, "period": period}
+                 "rent_charges": 0, "clients_owing": 0, "period": period,
+                 # ECHO WHAT WE WERE TOLD TO DO. Without this, "already: 23, notified: 0" is
+                 # ambiguous — it reads the same whether every client genuinely had nothing new or
+                 # the reissue flag never arrived. A run that cannot say what it did is a run you
+                 # have to guess about, and this one moves real invoices.
+                 "reissue": reissue}
         try:
             with session_scope() as s:          # phase 1+2: accruals + the worklist, one commit
                 stats["period"] = comm.month_end_period(s, period)
