@@ -135,8 +135,10 @@
     invoiceMarkPaid: function (invoiceId, body) {
       return A().apiJSON("/api/billing/invoice/" + encodeURIComponent(invoiceId) + "/mark-paid", { method: "POST", body: body });
     },
-    invoiceVoid: function (invoiceId) {
-      return A().apiJSON("/api/billing/invoice/" + encodeURIComponent(invoiceId) + "/void", { method: "POST", body: {} });
+    // Default cancels the charges too ("void" means cancel). Pass {keep_charges:true} for the
+    // re-issue case: void the document, leave the debt billable.
+    invoiceVoid: function (invoiceId, body) {
+      return A().apiJSON("/api/billing/invoice/" + encodeURIComponent(invoiceId) + "/void", { method: "POST", body: (body || {}) });
     },
 
     // ---- me: client self-service ("My Account") -------------------------

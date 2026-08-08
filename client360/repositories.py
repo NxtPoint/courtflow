@@ -667,6 +667,8 @@ def _can(scope):
                 "wallet_expire": True, "grant_membership": True, "revoke_membership": True,
                 "refund": True, "issue": True, "edit": True,
                 "issue_statement_invoice": True, "invoice_mark_paid": True, "invoice_void": True,
+                # The re-issue path: void the DOCUMENT, keep the debt billable.
+                "invoice_void_keep_charges": True,
                 "approve_refund_request": True, "decline_refund_request": True}
     if scope == "coach":
         # A coach decides a dispute routed to them (the backend still enforces they own it).

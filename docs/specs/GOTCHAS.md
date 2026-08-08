@@ -22,7 +22,7 @@ still reads the scenario that guards any entry.
 - [Memberships, the trial & entitlement caps](#memberships-the-trial--entitlement-caps) — 5 entries
 - [Pricing & payment rules](#pricing--payment-rules) — 2 entries
 - [Refunds & the Yoco gateway](#refunds--the-yoco-gateway) — 7 entries
-- [Invoicing & the month-end close](#invoicing--the-month-end-close) — 4 entries
+- [Invoicing & the month-end close](#invoicing--the-month-end-close) — 5 entries
 - [Money custody & the coach ledger](#money-custody--the-coach-ledger) — 7 entries
 - [Reads that lie](#reads-that-lie) — 2 entries
 - [Email & notifications](#email--notifications) — 1 entry
@@ -620,6 +620,24 @@ money is indistinguishable from the real thing. Guarded by `sc_refund_request_vi
 *Added 2026-08-08, after an owner review of the whole month-end process. Every one of these was
 reported as "the invoices don't balance" or "outstanding looks wrong"; all four turned out to be one
 missing idea — an invoice with no PERIOD — plus the debris it left behind.*
+
+### VOID MEANS CANCEL — AND THAT WAS A DELIBERATE REVERSAL (2026-08-08)
+
+`void_invoice` originally voided the DOCUMENT only and left every charge owed, because an invoice
+renders over live orders and is never a second debt store. Technically right; it read as a bug. The
+owner voided an invoice for R12,680, saw the balance unchanged, and reported it — one word meaning
+two things on the same screen. Relabelling it ("Void document", a prompt naming the money that would
+stay owed) was the first attempt, and it was not enough: the mental model is *void = cancel*, and
+making someone perform two actions for one intent is how mistakes happen.
+
+So the DEFAULT now cancels the charges with the document. **`cascade=False` is not decoration** — it
+is the only way to void a document you intend to RE-ISSUE (wrong bill-to, wrong period, a missing
+line). Cascading there would destroy the charges, and **nothing un-voids an order**: the debt would
+be gone for good. It is surfaced as a second button, "Void, keep charges". A PAID charge is never
+touched either way, so voiding a part-paid invoice cancels what is still owed and leaves the money
+that arrived alone. Both directions are asserted, so neither can silently flip back.
+
+Guarded by `sc_bulk_void_cancels_charges_not_just_the_document`.
 
 ### AN INVOICE COVERS ITS OWN MONTH, OR NO MONTH CAN EVER BE CLOSED (2026-08-08)
 

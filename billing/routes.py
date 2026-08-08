@@ -322,7 +322,12 @@ def billing_invoice_void(invoice_id):
             return jsonify(error="not_found"), 404
         if not can(p, "view_finances", {"club_id": head["club_id"]}):
             return jsonify(error="forbidden"), 403
-        res = invoicing.void_invoice(s, club_id=head["club_id"], invoice_id=invoice_id)
+        # "Void" means CANCEL by default — the document AND the charges under it. keep_charges=true
+        # is the re-issue path: void the paper, leave the debt so it can be billed again.
+        body = request.get_json(silent=True) or {}
+        res = invoicing.void_invoice(
+            s, club_id=head["club_id"], invoice_id=invoice_id,
+            cascade=not bool(body.get("keep_charges")))
         if not res.get("ok"):
             return jsonify(res), 422
     return jsonify(res), 200

@@ -4460,11 +4460,35 @@ def sc_bulk_void_cancels_charges_not_just_the_document(s, fx):
     before = ST3.statement(s, club_id=fx.club_id, user_id=fx.member)["total_owed_minor"]
     check("R1,000 owed before", before >= 100000, str(before))
 
-    # THE REPORTED SYMPTOM: voiding the invoice leaves the debt exactly where it was.
-    INV5.void_invoice(s, club_id=fx.club_id, invoice_id=inv["invoice_id"])
+    # VOID MEANS CANCEL (owner decision 2026-08-08). It used to void the DOCUMENT only and leave
+    # every charge owed — technically right, since an invoice renders over live orders, and it read
+    # as a bug: an invoice for R12,680 voided, balance unchanged. One word must not mean two things.
+    keep = INV5.void_invoice(s, club_id=fx.club_id, invoice_id=inv["invoice_id"], cascade=False)
     after_doc = ST3.statement(s, club_id=fx.club_id, user_id=fx.member)["total_owed_minor"]
-    check("voiding the INVOICE changes nothing owed (it is only the document)",
-          after_doc == before, f"{before} -> {after_doc}")
+    check("cascade=False still voids the DOCUMENT only (the re-issue path)",
+          after_doc == before and keep.get("charges_voided") == 0, f"{before} -> {after_doc}")
+
+    # ...and the DEFAULT cancels the charges with it.
+    inv_b = INV5.issue_invoice(s, club_id=fx.club_id, user_id=fx.member, order_ids=ids,
+                               kind="statement")
+    res_v = INV5.void_invoice(s, club_id=fx.club_id, invoice_id=inv_b["invoice_id"])
+    after_cascade = ST3.statement(s, club_id=fx.club_id, user_id=fx.member)["total_owed_minor"]
+    check("voiding an invoice CANCELS its charges by default",
+          res_v.get("charges_voided") == 4 and after_cascade == before - 100000,
+          f"{res_v} / {before} -> {after_cascade}")
+
+    # Rebuild the four charges the rest of this scenario needs.
+    ids = []
+    for i in range(4):
+        oid = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,'
+                             "currency_code,settlement_mode,status,service_date) "
+                             "VALUES (:c,:u,25000,'ZAR','monthly_account','open',CAST(:d AS date)) "
+                             "RETURNING id"),
+                        {"c": fx.club_id, "u": fx.member, "d": f"2026-04-{20 + i:02d}"}).scalar_one()
+        s.execute(text("INSERT INTO billing.order_line (order_id,club_id,description,qty,"
+                       "amount_minor) VALUES (:o,:c,'Lesson',1,25000)"),
+                  {"o": str(oid), "c": fx.club_id})
+        ids.append(str(oid))
 
     # The preview must show what the bulk void would take.
     prev = ST3.client_open_charges(s, club_id=fx.club_id, user_id=fx.member, period_label="2026-04")

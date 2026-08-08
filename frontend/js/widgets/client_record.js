@@ -158,8 +158,11 @@
           var mp = actBtn("invoice_mark_paid", iv, { label: "Mark paid" }); if (mp) actions.appendChild(mp);
         }
         if (iv.doc_status !== "void") {
-          // "Void DOCUMENT", never a bare "Void": this cancels the piece of paper, not the debt.
-          var vd = actBtn("invoice_void", iv, { label: "Void document", tone: "ghost" }); if (vd) actions.appendChild(vd);
+          // "Void" cancels the invoice AND its charges. The keep-charges variant sits beside it for
+          // the re-issue case, so one word never has to mean two things.
+          var vd = actBtn("invoice_void", iv, { label: "Void", tone: "danger" }); if (vd) actions.appendChild(vd);
+          var vk = actBtn("invoice_void_keep_charges", iv, { label: "Void, keep charges", tone: "ghost" });
+          if (vk) actions.appendChild(vk);
         }
         l.appendChild(el("div", { class: "cf-item" }, [
           el("span", { class: "cf-chip " + (CHIP[iv.status_label] || ""), text: iv.status_label }),

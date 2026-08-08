@@ -519,26 +519,48 @@
         // owner voided one, saw the balance unchanged, and reasonably filed it as a bug. So the
         // button says "Void document", the prompt leads with the money that will STILL be owed,
         // and the toast repeats it rather than saying a cheerful "Invoice voided."
+        // VOID MEANS CANCEL. The document AND the charges under it — one word, one meaning, which
+        // is what an owner expects and what he asked for after voiding an invoice and finding the
+        // balance unchanged. invoice_void_keep_charges is the escape hatch for the one case that
+        // would otherwise lose money: voiding a document you intend to RE-ISSUE (wrong bill-to,
+        // wrong period, a missing line). Nothing un-voids an order, so cascading there would
+        // destroy the debt for good.
         invoice_void: {
-          tone: "ghost", label: "Void document",
+          tone: "danger", label: "Void",
           confirm: function (iv) {
             var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
-            return "Void the DOCUMENT " + (iv.number || "") + "?
+            return "Void invoice " + (iv.number || "") + "?
 
 "
-              + "This cancels the invoice only. " + owed + " of charges STAY OWED and will be "
-              + "re-invoiced at month-end.
+              + "This cancels the invoice AND the " + owed + " of charges on it. Anything already "
+              + "PAID is left alone.
 
-To cancel the debt itself, void the individual "
-              + "charges instead (open a charge → Void).";
+This cannot be undone — there is no un-void. If you "
+              + "mean to correct and RE-ISSUE it, use “Void, keep charges” instead.";
+          },
+          done: function (iv, res) {
+            var n = (res && res.charges_voided) || 0;
+            return n ? ("Invoice voided — " + n + " charge(s) cancelled, "
+                        + money((res && res.amount_minor) || 0, iv.currency || clubCur()) + ".")
+                     : "Invoice voided.";
+          },
+          run: function (iv) { return window.API.invoiceVoid(iv.invoice_id); },
+        },
+        invoice_void_keep_charges: {
+          tone: "ghost", label: "Void, keep charges",
+          confirm: function (iv) {
+            var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
+            return "Void the DOCUMENT " + (iv.number || "") + ", keeping the debt?
+
+"
+              + owed + " of charges STAY OWED and can be re-invoiced. Use this when you mean to "
+              + "correct and re-issue.";
           },
           done: function (iv) {
             var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
-            return (iv.outstanding_minor > 0)
-              ? "Document voided — " + owed + " of charges are still owed."
-              : "Document voided.";
+            return "Document voided — " + owed + " of charges are still owed and billable.";
           },
-          run: function (iv) { return window.API.invoiceVoid(iv.invoice_id); },
+          run: function (iv) { return window.API.invoiceVoid(iv.invoice_id, { keep_charges: true }); },
         },
         // Decide a pending refund REQUEST in place (same endpoints as Money → Approvals; the record
         // reloads on success so the status updates here without leaving the client). A cancelled prompt

@@ -717,15 +717,43 @@ def mark_invoice_paid(session, *, club_id, invoice_id, provider="eft", reference
             "invoice_id": str(invoice_id)}
 
 
-def void_invoice(session, *, club_id, invoice_id) -> Dict[str, Any]:
-    """Mark an invoice document void (it stops covering its orders → they can be re-invoiced).
-    Does NOT touch the orders/debt. Only an 'issued' invoice can be voided."""
+def void_invoice(session, *, club_id, invoice_id, cascade=True, reason=None) -> Dict[str, Any]:
+    """Void an invoice. By DEFAULT this cancels the charges too — "void" means cancel.
+
+    It used to void the DOCUMENT only and deliberately leave every charge owed, because an invoice
+    renders over live orders and is never a second debt store. Technically right, and it read as a
+    bug to the person using it: he voided an invoice for R12,680, saw the balance unchanged, and had
+    to be told the debt lives somewhere else. Two meanings of one word on the same screen.
+
+    `cascade=False` keeps the old behaviour, and it is not decoration — it is the ONLY way to void a
+    document you intend to RE-ISSUE (wrong bill-to, wrong period, a missing line). Cascading there
+    would destroy the charges, and nothing un-voids an order: the debt would be gone for good.
+
+    A PAID charge is never touched — void_order no-ops on one, so voiding a part-paid invoice
+    cancels what is still owed and leaves the money that arrived alone. Returns
+    {ok, charges_voided, amount_minor}."""
     n = session.execute(
         text("UPDATE billing.invoice SET status = 'void' "
              "WHERE id = :i AND club_id = :c AND status = 'issued'"),
         {"i": str(invoice_id), "c": str(club_id)},
     ).rowcount
-    return {"ok": bool(n)} if n else {"ok": False, "error": "NOT_ISSUED"}
+    if not n:
+        return {"ok": False, "error": "NOT_ISSUED"}
+    voided, amount = 0, 0
+    if cascade:
+        from billing.statement import void_order
+        rows = session.execute(
+            text('SELECT DISTINCT o.id, o.amount_minor FROM billing.invoice_line il '
+                 '  JOIN billing."order" o ON o.id = il.order_id '
+                 " WHERE il.invoice_id = :i AND o.status IN ('open','awaiting_payment')"),
+            {"i": str(invoice_id)},
+        ).mappings().all()
+        for r in rows:
+            if void_order(session, club_id=club_id, order_id=str(r["id"]),
+                          reason=(reason or "invoice voided")).get("ok"):
+                voided += 1
+                amount += int(r["amount_minor"] or 0)
+    return {"ok": True, "charges_voided": voided, "amount_minor": amount}
 
 
 # ---------------------------------------------------------------------------
