@@ -313,7 +313,11 @@ stays on `billing."order"` (one debt = one order). Line amounts FREEZE at issue;
 LIVE** from the orders referenced, so a mid-month card payment flips the invoice to Paid and double-counting is
 structurally impossible. Numbering is **gapless per club** (`club.billing_profile`, allocated atomically at
 issue). Three issue paths, one document type: admin ad-hoc · intra-month "invoice the outstanding balance" ·
-month-end auto-consolidation. Company identity + bank details (and the dormant VAT block) are edited at
+month-end auto-consolidation. **AN INVOICE COVERS A PERIOD** — the month the SERVICE WAS DELIVERED
+(`invoicing.DELIVERED_AT_SQL`, the ONE resolver; `order.service_date` carries it for a charge with no
+session). Earlier debt is never re-billed: `brought_forward_minor` freezes it at issue as DISPLAY ONLY.
+Settling by EFT/cash sends **ONE `invoice_paid` receipt**, not one per line, and
+`mark_invoice_paid(amount_minor=)` **part-pays** — whole lines, oldest first, remainder left owed. Company identity + bank details (and the dormant VAT block) are edited at
 Admin → Setup → **"Company & billing details"**. The routes, the email/PDF attachment flag and the EFT
 reference: **[UNIFIED-STATEMENT.md § As-built](docs/specs/UNIFIED-STATEMENT.md#invoice--receipt-documents)**.
 
@@ -566,7 +570,7 @@ member by email on the first authenticated hit.
   (`sportai-db`) is still off-limits.
 
 ## Gotchas
-**The war stories live in [`docs/specs/GOTCHAS.md`](docs/specs/GOTCHAS.md) — 45 entries, moved out
+**The war stories live in [`docs/specs/GOTCHAS.md`](docs/specs/GOTCHAS.md) — 51 entries, moved out
 verbatim. Below is the INDEX: the rule, and the `sc_…` scenario that pins it.** Follow the link before
 you change the code an entry names — each one is a bug that reached production, and every one of them
 looks like a harmless simplification until you read what it cost.
@@ -609,6 +613,8 @@ looks like a harmless simplification until you read what it cost.
 - ONE PERSON, ONE PLACE — the GiST constraint can't express it — `sc_one_coach_one_place_at_a_time` · `sc_member_second_concurrent_court_is_payg`
 - ENTITLEMENT IS EVALUATED ON THE BOOKING'S DATE, NEVER `CURRENT_DATE` (2026-07-27) — `sc_membership_cannot_book_past_its_own_expiry`
 - Capacity-sweep needs no cron — `sc_expired_void_is_recoverable`
+- A repeated "Buy" must RE-OFFER the unpaid order, not mint a second debt — `sc_buy_click_never_mints_a_duplicate_debt`
+- An abandoned purchase has no booking, so nothing ever swept it — `sc_abandoned_purchases_expire_by_themselves`
 
 **Courts, peak hours & equipment** — [GOTCHAS.md#courts-peak-hours--equipment](docs/specs/GOTCHAS.md#courts-peak-hours--equipment)
 - THE COURT IS THE ONE PLACE TO SEE A COURT (2026-07-29)
@@ -639,6 +645,12 @@ looks like a harmless simplification until you read what it cost.
 **Pricing & payment rules** — [GOTCHAS.md#pricing--payment-rules](docs/specs/GOTCHAS.md#pricing--payment-rules)
 - A service's `payment_modes` is enforced SERVER-SIDE per the EXACT `product_id`
 - A DUPLICATE DURATION ON ONE SERVICE SILENTLY BILLS THE CHEAPER ROW (found live 2026-07-31)
+
+**Invoicing & the month-end close** — [GOTCHAS.md#invoicing--the-month-end-close](docs/specs/GOTCHAS.md#invoicing--the-month-end-close)
+- AN INVOICE COVERS ITS OWN MONTH, or no month can ever be closed — `sc_an_invoice_covers_its_own_month`
+- BILL THE MONTH AFTER IT ENDS, and let a month swept early be closed — `sc_a_month_swept_early_can_still_be_closed`
+- ONE PAYMENT IS ONE RECEIPT, however many lines it settles — `sc_one_payment_one_receipt`
+- A PART PAYMENT SETTLES WHOLE LINES, oldest first — it never part-settles an order — `sc_partial_payment_leaves_the_invoice_open`
 
 **Refunds & the Yoco gateway** — [GOTCHAS.md#refunds--the-yoco-gateway](docs/specs/GOTCHAS.md#refunds--the-yoco-gateway)
 - ONE REFUND MODAL, AND IT OFFERS AN AMOUNT (2026-07-28) — `sc_partial_refund_reaches_yoco_as_a_partial`

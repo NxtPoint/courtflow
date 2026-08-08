@@ -15,13 +15,14 @@ still reads the scenario that guards any entry.
 
 ## Contents
 
-- [Booking & the diary](#booking--the-diary) — 7 entries
+- [Booking & the diary](#booking--the-diary) — 9 entries
 - [Courts, peak hours & equipment](#courts-peak-hours--equipment) — 4 entries
 - [The lesson lifecycle](#the-lesson-lifecycle) — 5 entries
 - [Classes](#classes) — 4 entries
 - [Memberships, the trial & entitlement caps](#memberships-the-trial--entitlement-caps) — 5 entries
 - [Pricing & payment rules](#pricing--payment-rules) — 2 entries
 - [Refunds & the Yoco gateway](#refunds--the-yoco-gateway) — 7 entries
+- [Invoicing & the month-end close](#invoicing--the-month-end-close) — 4 entries
 - [Money custody & the coach ledger](#money-custody--the-coach-ledger) — 7 entries
 - [Reads that lie](#reads-that-lie) — 2 entries
 - [Email & notifications](#email--notifications) — 1 entry
@@ -130,6 +131,39 @@ AND matches the pack off `bk["product_id"]`. **If you add a column here, add it 
 too** — it returns `None` otherwise and the fallback silently bites again. Guarded by
 `sc_gated_lesson_bills_the_booked_service`.
 
+
+### A REPEATED "BUY" MUST RE-OFFER THE UNPAID ORDER, NOT MINT A SECOND DEBT (2026-08-08)
+
+`create_bundle_order` and `create_membership_order` both INSERTed unconditionally with no reuse
+guard, so every tap of Buy minted ANOTHER `awaiting_payment` order — plus another pending
+`token_wallet` or placeholder `membership_subscription` behind it. Production carried **five
+identical R5,000 pack orders for one member on ONE DAY**, and R43,960 of July 2026's reported
+"outstanding" was this. Same defect as the documented Yoco one ("POST /checkout mints a FRESH
+checkout on every call"), one level up: there the duplicate was a checkout, here it is a DEBT. And
+worse than noise — an online pack is granted ON PAYMENT, so an unpaid cluster means the member owns
+nothing and owes nothing: it was a **failed sale** being chased as a receivable.
+`billing.orders.reusable_pending_purchase` is the ONE guard both paths call, so a pack and a
+membership cannot drift apart. It re-offers only an unpaid ONLINE intent, only when the product,
+the amount, and the absence of any charge all match, and only inside `_PENDING_REUSE_MINUTES` —
+that window is load-bearing in BOTH directions: long enough for a real retry, short enough that a
+purchase abandoned last month can never be revived into this month's order, because `created_at`
+dates a non-booking purchase for period-scoped invoicing. An at_court/monthly purchase is NEVER
+reused: it writes a real `open` debt and grants immediately, so re-offering one would hand out a
+second pack for one payment. Guarded by `sc_buy_click_never_mints_a_duplicate_debt`.
+
+### AN ABANDONED PURCHASE HAS NO BOOKING, SO NOTHING EVER SWEPT IT (2026-08-08)
+
+Lazy expiry is driven by expired BOOKING rows (`_void_orders_with_no_live_bookings`), so it cleans up
+an abandoned court/lesson order and voids it. A pack or membership has **no booking at all**, so it
+never entered that set and sat `awaiting_payment` for ever, reported as outstanding for ever.
+`billing.statement.release_abandoned_purchases` is the booking-less half, hooked into the same
+statement self-heal chain, with the same guards as the manual cleanup. **A late payment is not
+lost:** Yoco retries 72h and reconcile sweeps 100 days, so the void records
+`void_reason='abandoned_purchase'` and `order_void_is_recoverable` treats it exactly like a lapsed
+booking hold — two shapes of the same thing, a void nobody chose. An ADMIN void carries neither
+marker and stays untouchable. (`billing.order.void_reason` is new and worth having anyway:
+`void_order` had always taken a `reason` and thrown it away, so the audit trail could not say whether
+a void was a decision or an expiry.) Guarded by `sc_abandoned_purchases_expire_by_themselves`.
 
 ---
 
@@ -548,6 +582,76 @@ forever for money already paid back. (c) The queue hid any request whose order w
 `_PENDING_STILL_REFUNDABLE` keeps those visible, hiding only `refunded`/`written_off`. The home
 approvals count no longer reports a FAILED read as `0` (`refund_requests_error`) — a false all-clear on
 money is indistinguishable from the real thing. Guarded by `sc_refund_request_visibility`.
+
+
+---
+
+## Invoicing & the month-end close
+
+*Added 2026-08-08, after an owner review of the whole month-end process. Every one of these was
+reported as "the invoices don't balance" or "outstanding looks wrong"; all four turned out to be one
+missing idea — an invoice with no PERIOD — plus the debris it left behind.*
+
+### AN INVOICE COVERS ITS OWN MONTH, OR NO MONTH CAN EVER BE CLOSED (2026-08-08)
+
+`month_end_targets` and `invoicing.open_order_ids` filtered on `status='open'` with **no date bound at
+all**, so a "month-end" invoice was a photograph of everything owed at the instant the sweep ran.
+`billing.invoice.period_label` existed — but only as a LABEL; nothing selected on it. Both reported
+symptoms fall out of that one fact: a lesson played after the sweep was **missing from the document
+while the client's live balance already counted it** (the invoice "not balancing"), and an unpaid
+June debt **rode onto the July invoice**, so no month was ever closed and "what is still outstanding
+for July" had no answer in any view. A charge belongs to the month the SERVICE WAS DELIVERED —
+`invoicing.DELIVERED_AT_SQL` is the ONE resolver (booking session → class session →
+`order.service_date` → `created_at`), and it must stay the one, because
+`billing.me.activity_summary` already buckets by the session's month: two resolvers means the invoice
+and the client's own summary disagree by construction. `order.service_date` exists for a charge with
+no session — production carries a July order described "Lessons - April -", a catch-up bill that
+would otherwise date itself to July for ever. Earlier debt is **never re-billed**:
+`brought_forward_minor` freezes it at issue as DISPLAY ONLY, never an `invoice_line` and never in
+`total_minor`, because those orders are already invoiced on their own month's document and a line
+with no `order_id` could never be settled by `mark_invoice_paid`. Guarded by
+`sc_an_invoice_covers_its_own_month`.
+
+### BILL THE MONTH AFTER IT ENDS, AND LET A MONTH SWEPT EARLY BE CLOSED (2026-08-08)
+
+The sweep ran on the **25th** and defaulted to the CURRENT month, so every invoice was issued with
+five or six days still to come — it could not be complete, whatever else was fixed. It now runs on
+the **1st** for the month just ended (`month_end_period` defaults to `now() - 1 month`). That leaves
+one hole worth knowing about: a month swept BEFORE it ended has `month_end_notice` rows saying the
+client was already notified, so an ordinary re-run returns `already` and the late arrivals are
+invoiced by **nothing, ever** — 55 such orders in July 2026. `reissue=True` (a `workflow_dispatch`
+input and a body flag on `/api/cron/month-end`) ignores that claim; `issue_invoice` still skips any
+order on an ACTIVE invoice, so the second pass bills only what is still uninvoiced — a supplementary
+invoice, not a duplicate. Guarded by `sc_a_month_swept_early_can_still_be_closed`.
+
+### ONE PAYMENT IS ONE RECEIPT, HOWEVER MANY LINES IT SETTLES (2026-08-08)
+
+`mark_invoice_paid` loops every order the invoice covers and calls `record_desk_payment` on each;
+each emits `payment_succeeded`, and the notification engine turned every one into an email. Settling
+a 12-lesson month by EFT sent the client **TWELVE "Booking confirmed" emails for ONE payment**, and
+the owner had to receipt each one by hand. (The ONLINE path was always fine — a 'Pay all' wrapper
+settles its children and emits once.) A settled order now carries `settlement_batch` through to the
+payload and `notifications.deliver` returns early on it, while `mark_invoice_paid` emits ONE
+`invoice_paid` — which is also the only place that can state the real figure, because no individual
+order knows the payment total. **The suppression is in the NOTIFIER, not the producer**: the event
+must still reach `core.usage_event`, Klaviyo and the offline-conversion recorder; only the
+client-facing noise stops. Guarded by `sc_one_payment_one_receipt`, including the control that the
+same payload WITHOUT the batch key still notifies.
+
+### A PART PAYMENT SETTLES WHOLE LINES, OLDEST FIRST — IT NEVER PART-SETTLES AN ORDER (2026-08-08)
+
+"Full closes the invoice, partial leaves it open", with the debt model intact. An ORDER is never
+part-settled — one debt = one order settled once, which is exactly why `record_desk_payment` refuses
+a short amount — so `mark_invoice_paid(amount_minor=)` clears whole LINES and the remainder stays
+owed, and the document derives "Partially paid" from its own orders rather than storing a second
+figure that could disagree. Two traps, both hit while building it: **`ORDER BY created_at` cannot
+order these** (several orders are routinely raised in ONE transaction, where `now()` is identical for
+all of them — the same trap that made the refund path pick the abandoned checkout), so it orders by
+delivery date then `created_at` then `id`; and the loop must **STOP at the first line it cannot
+cover, never skip ahead to a smaller one** — paying R800 against R500/R300/R200 must clear the R500
+and R300 and leave the R200, not settle a NEWER R200 and leave the older R300 open. Money that
+cannot fill the next line comes back as `unallocated_minor` for a human to place, never silently
+absorbed. Guarded by `sc_partial_payment_leaves_the_invoice_open`.
 
 
 ---
