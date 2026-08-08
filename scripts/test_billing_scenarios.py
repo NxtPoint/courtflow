@@ -4198,6 +4198,75 @@ def sc_club_earnings_agrees_with_the_coach_statement(s, fx):
           f"{ov['banked_minor']}+{ov['coach_held_minor']} vs {ov['settled_total_minor']}")
 
 
+def sc_an_invoice_covers_its_own_month(s, fx):
+    """A month-end invoice bills the month it is FOR, and a later lesson can never change it.
+
+    month_end_targets and open_order_ids filtered on status='open' with NO date bound, so the sweep
+    billed "everything owed at the instant it ran". Two consequences, both reported by the owner:
+    a lesson played AFTER the sweep was missing from the document while the client's live balance
+    already counted it (the invoice "not balancing"), and an unpaid June debt rode onto the July
+    invoice — so no month was ever closed and "what is still outstanding for July" had no answer.
+
+    The month is the one the SERVICE WAS DELIVERED in, matching activity_summary. Earlier debt is
+    NOT re-billed; it shows as brought-forward."""
+    print("\n# An invoice covers its own month — a later lesson can't change a closed one")
+    import datetime as _dt
+    from billing import invoicing as INV2
+    tz_now = s.execute(text("SELECT now() AT TIME ZONE 'Africa/Johannesburg'")).scalar()
+    this_m = tz_now.strftime("%Y-%m")
+    prev = (tz_now.replace(day=1) - _dt.timedelta(days=1))
+    prev_m = prev.strftime("%Y-%m")
+
+    def owed(desc, when, amount=20000):
+        """An owed charge DELIVERED on `when` (service_date — the ad-hoc catch-up path)."""
+        oid = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,'
+                             "currency_code,settlement_mode,status,service_date) "
+                             "VALUES (:c,:u,:a,'ZAR','monthly_account','open',CAST(:d AS date)) "
+                             "RETURNING id"),
+                        {"c": fx.club_id, "u": fx.member, "a": amount, "d": when}).scalar_one()
+        s.execute(text("INSERT INTO billing.order_line (order_id,club_id,description,qty,"
+                       "amount_minor) VALUES (:o,:c,:d,1,:a)"),
+                  {"o": str(oid), "c": fx.club_id, "d": desc, "a": amount})
+        return str(oid)
+
+    last_month = owed("Lesson (last month)", prev.strftime("%Y-%m-15"), 40000)
+    early = owed("Lesson (1st)", tz_now.strftime("%Y-%m-01"), 30000)
+
+    ids = INV2.open_order_ids(s, club_id=fx.club_id, user_id=fx.member, period_label=this_m)
+    check("period scope excludes last month's debt", early in ids and last_month not in ids)
+    check("...and unscoped still returns everything (intra-month action unchanged)",
+          set(INV2.open_order_ids(s, club_id=fx.club_id, user_id=fx.member)) >= {early, last_month})
+
+    res = INV2.issue_statement_invoice(s, club_id=fx.club_id, user_id=fx.member,
+                                       period_label=this_m, scope_to_period=True)
+    check("invoice issued for the period", res.get("ok"), str(res))
+    check("its total is THIS month only", res["total_minor"] == 30000, str(res.get("total_minor")))
+    check("last month shows as brought forward, not re-billed",
+          res.get("brought_forward_minor") == 40000, str(res.get("brought_forward_minor")))
+    lines = s.execute(text("SELECT count(*) FROM billing.invoice_line WHERE invoice_id=:i"),
+                      {"i": res["invoice_id"]}).scalar()
+    check("one line per order, none for the brought-forward", lines == 1, f"{lines} lines")
+
+    # THE ORIGINAL BUG: a lesson played after the sweep must not alter the issued document.
+    late = owed("Lesson (after the sweep)", tz_now.strftime("%Y-%m-28"), 25000)
+    frozen = s.execute(text("SELECT total_minor FROM billing.invoice WHERE id=:i"),
+                       {"i": res["invoice_id"]}).scalar()
+    check("a later lesson does NOT change the issued invoice", frozen == 30000, str(frozen))
+    check("...and it is still owed on the live statement",
+          late in INV2.open_order_ids(s, club_id=fx.club_id, user_id=fx.member))
+
+    # A R0 covered/free order is not a debt and must never reach an invoice as a R0 line.
+    zero = owed("Membership-covered court", tz_now.strftime("%Y-%m-05"), 0)
+    check("a R0 order is not billable",
+          zero not in INV2.open_order_ids(s, club_id=fx.club_id, user_id=fx.member))
+
+    # The sweep's own worklist must agree with the scoping.
+    tg = {str(t["user_id"]): t for t in CM.month_end_targets(s, club_id=fx.club_id, period=prev_m)}
+    check("month_end_targets(prev) sees ONLY last month's debt",
+          str(fx.member) in tg and tg[str(fx.member)]["owed"] == 40000,
+          str(tg.get(str(fx.member))))
+
+
 def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
     """Tapping "Buy" twice must RE-OFFER the same unpaid order, not raise a second debt.
 
@@ -4273,6 +4342,7 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
 
 
 SCENARIOS = [
+    sc_an_invoice_covers_its_own_month,
     sc_buy_click_never_mints_a_duplicate_debt,
     sc_club_earnings_agrees_with_the_coach_statement,
     sc_statement_survives_a_refund,

@@ -227,6 +227,13 @@ _DDL = [
         created_at   timestamptz NOT NULL DEFAULT now()
     );
     """,
+    # WHICH MONTH THIS CHARGE BELONGS TO, when nothing else can say. A charge is invoiced in the month
+    # the SERVICE WAS DELIVERED (the rule billing.me.activity_summary already follows), resolved from
+    # the booking's or class session's start. An ad-hoc admin charge has neither — production carries
+    # a July order described "Lessons - April -", i.e. a catch-up bill for April coaching, which
+    # without this dates itself to July by created_at and lands on the wrong invoice forever.
+    # NULL = fall back to created_at (every existing row, unchanged).
+    f"ALTER TABLE {SCHEMA}.order ADD COLUMN IF NOT EXISTS service_date date;",
     # The ORIGINAL charge before a coaching discount (so the by-service view can show "was → now"
     # while amount_minor holds the CURRENT/discounted figure the client actually owes). NULL = never discounted.
     f"ALTER TABLE {SCHEMA}.order_line ADD COLUMN IF NOT EXISTS original_amount_minor int;",
@@ -888,6 +895,14 @@ _DDL = [
     f"CREATE INDEX IF NOT EXISTS ix_invoice_club_status ON {SCHEMA}.invoice (club_id, status);",
     f"CREATE INDEX IF NOT EXISTS ix_invoice_club_period "
     f"ON {SCHEMA}.invoice (club_id, period_label) WHERE period_label IS NOT NULL;",
+    # Balance BROUGHT FORWARD from earlier periods, frozen at issue — DISPLAY ONLY, deliberately not
+    # part of total_minor and never an invoice_line. A period invoice covers ITS OWN month's orders,
+    # one line per order, so the month can be closed and "what is still outstanding for July" stays
+    # answerable forever. Older debt is already invoiced on its own month's document; re-billing it
+    # here would double-issue the same order, and a line with no order_id could never be settled.
+    # So: shown as "brought forward", added to the printed "total due incl. arrears", collected
+    # through the client's live statement (which is what "pay everything" has always meant).
+    f"ALTER TABLE {SCHEMA}.invoice ADD COLUMN IF NOT EXISTS brought_forward_minor int NOT NULL DEFAULT 0;",
 
     f"""
     CREATE TABLE IF NOT EXISTS {SCHEMA}.invoice_line (

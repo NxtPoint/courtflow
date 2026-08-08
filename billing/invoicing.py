@@ -508,17 +508,71 @@ def issue_invoice(session, *, club_id, user_id, order_ids, kind="statement",
             "total_minor": total, "order_ids": order_ids}
 
 
-def open_order_ids(session, *, club_id, user_id) -> List[str]:
-    """A client's currently OWED orders (status 'open', not part of a settlement wrapper),
-    oldest first — the debts a statement/month-end invoice should cover."""
+# WHEN A CHARGE WAS DELIVERED — the single source of truth, in SQL, as a scalar expression over an
+# order aliased `o`. Everything that asks "which month does this belong to?" must use THIS, or the
+# invoice, the month-end sweep and the client's own activity summary will each answer differently.
+#
+# Precedence: the booking's session → the class session → an explicit service_date (an ad-hoc
+# catch-up charge, e.g. a July bill for April coaching) → when the charge was raised.
+# `order_line.booking_id` (not booking.order_id) is deliberate: a squad partner's own head hangs off
+# the LINE, so each player resolves to the session they actually played.
+DELIVERED_AT_SQL = """
+COALESCE(
+  (SELECT min(b.starts_at) FROM billing.order_line ol
+     JOIN diary.booking b ON b.id = ol.booking_id WHERE ol.order_id = o.id),
+  (SELECT min(cs.starts_at) FROM diary.enrolment e
+     JOIN diary.class_session cs ON cs.id = e.class_session_id WHERE e.order_id = o.id),
+  o.service_date::timestamptz,
+  o.created_at
+)"""
+
+
+def open_order_ids(session, *, club_id, user_id, period_label=None) -> List[str]:
+    """A client's currently OWED orders (status 'open', not part of a settlement wrapper), oldest
+    first — the debts a statement/month-end invoice should cover.
+
+    `period_label` ('YYYY-MM') scopes to the month the service was DELIVERED, which is what makes an
+    invoice closeable. Without it this returned every open order regardless of age, so a "month-end"
+    invoice was a photograph of everything owed at the instant it ran: lessons played after the sweep
+    were missing from the document while the client's live balance already included them (the invoice
+    "not balancing"), and an unpaid June debt rode onto the July invoice, so no month was ever closed
+    and "what is still outstanding for July" had no answer. Omitting it preserves the old behaviour
+    exactly — the intra-month "invoice the outstanding balance" action still wants everything."""
+    where = ("AND to_char(({d} AT TIME ZONE COALESCE((SELECT timezone FROM club.club WHERE id = :c),"
+             "'Africa/Johannesburg')), 'YYYY-MM') = :period").format(d=DELIVERED_AT_SQL) \
+        if period_label else ""
+    params = {"c": str(club_id), "u": str(user_id)}
+    if period_label:
+        params["period"] = period_label
     rows = session.execute(
-        text('SELECT id FROM billing."order" '
-             "WHERE club_id = :c AND user_id = :u AND status = 'open' "
-             "AND settled_by_order_id IS NULL "
-             "ORDER BY created_at"),
-        {"c": str(club_id), "u": str(user_id)},
+        text('SELECT o.id FROM billing."order" o '
+             "WHERE o.club_id = :c AND o.user_id = :u AND o.status = 'open' "
+             "AND o.settled_by_order_id IS NULL AND o.covered_order_ids IS NULL "
+             "AND o.amount_minor > 0 "                    # a R0 covered/free order is not a debt
+             f"{where} "
+             "ORDER BY o.created_at"),
+        params,
     ).scalars().all()
     return [str(r) for r in rows]
+
+
+def brought_forward_minor(session, *, club_id, user_id, period_label) -> int:
+    """What this client still owed from BEFORE `period_label`, at this moment.
+
+    Frozen onto the invoice at issue and shown as "Balance brought forward" — display only. It is
+    deliberately NOT an invoice_line and NOT part of total_minor: those older orders are already
+    invoiced on their own month's document, so re-billing them here would issue the same debt twice,
+    and a line carrying no order_id could never be settled by mark_invoice_paid."""
+    return int(session.execute(
+        text('SELECT COALESCE(SUM(o.amount_minor), 0) FROM billing."order" o '
+             "WHERE o.club_id = :c AND o.user_id = :u AND o.status = 'open' "
+             "AND o.settled_by_order_id IS NULL AND o.covered_order_ids IS NULL "
+             "AND o.amount_minor > 0 "
+             f"AND to_char(({DELIVERED_AT_SQL} AT TIME ZONE "
+             "     COALESCE((SELECT timezone FROM club.club WHERE id = :c),'Africa/Johannesburg')),"
+             "     'YYYY-MM') < :period"),
+        {"c": str(club_id), "u": str(user_id), "period": period_label},
+    ).scalar() or 0)
 
 
 def latest_active_invoice_with_open_debt(session, *, club_id, user_id) -> Optional[str]:
@@ -539,17 +593,33 @@ def latest_active_invoice_with_open_debt(session, *, club_id, user_id) -> Option
 
 
 def issue_statement_invoice(session, *, club_id, user_id, period_label=None, due_date=None,
-                            created_by_user_id=None):
-    """Consolidate a client's current OPEN orders into ONE statement invoice document
-    (month-end auto, or intra-month on demand). Orders already on an active invoice are
-    skipped (no double-issue). Returns issue_invoice() result, or {ok:False,error:'NOTHING_OWED'}
-    when there is nothing new to invoice."""
-    oids = open_order_ids(session, club_id=club_id, user_id=user_id)
+                            created_by_user_id=None, scope_to_period=False):
+    """Consolidate a client's OPEN orders into ONE statement invoice document.
+
+    `scope_to_period=True` (the month-end sweep) bills ONLY what was DELIVERED in `period_label`, and
+    freezes the earlier balance as "brought forward" — so each month's invoice stays that month's,
+    permanently. `scope_to_period=False` (the intra-month "invoice the outstanding balance" action)
+    keeps the original behaviour: bill everything currently owed, because that is exactly what an
+    owner asking for a balance invoice mid-month means.
+
+    Orders already on an active invoice are skipped (no double-issue). Returns issue_invoice()'s
+    result, or {ok:False, error:'NOTHING_OWED'}."""
+    oids = open_order_ids(session, club_id=club_id, user_id=user_id,
+                          period_label=(period_label if scope_to_period else None))
     if not oids:
         return {"ok": False, "error": "NOTHING_OWED"}
-    return issue_invoice(session, club_id=club_id, user_id=user_id, order_ids=oids,
-                         kind="statement", period_label=period_label, due_date=due_date,
-                         created_by_user_id=created_by_user_id, skip_already_invoiced=True)
+    res = issue_invoice(session, club_id=club_id, user_id=user_id, order_ids=oids,
+                        kind="statement", period_label=period_label, due_date=due_date,
+                        created_by_user_id=created_by_user_id, skip_already_invoiced=True)
+    if res.get("ok") and scope_to_period and period_label:
+        bf = brought_forward_minor(session, club_id=club_id, user_id=user_id,
+                                   period_label=period_label)
+        if bf:
+            session.execute(
+                text("UPDATE billing.invoice SET brought_forward_minor = :bf WHERE id = :i"),
+                {"bf": bf, "i": res["invoice_id"]})
+            res["brought_forward_minor"] = bf
+    return res
 
 
 def mark_invoice_paid(session, *, club_id, invoice_id, provider="eft", reference=None,

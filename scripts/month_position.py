@@ -50,8 +50,12 @@ def _load_env():
         sys.exit("!! no DATABASE_URL (env or .env.local)")
 
 
-# Every order, with the month it was DELIVERED in. A booking/class resolves to its session; a pack,
-# membership, fee or ad-hoc charge has no session, so it falls back to when it was raised.
+# Every order, with the month it was DELIVERED in — using billing.invoicing.DELIVERED_AT_SQL, the
+# SAME expression the invoice and the month-end sweep bill on. This script exists to answer "is the
+# month right?", so a private copy of that rule could agree with itself while disagreeing with the
+# thing it is auditing.
+from billing.invoicing import DELIVERED_AT_SQL                       # noqa: E402
+
 _DELIVERED = """
 WITH delivered AS (
   SELECT o.id,
@@ -60,15 +64,7 @@ WITH delivered AS (
          o.amount_minor,
          o.settlement_mode,
          o.created_at,
-         COALESCE(
-           (SELECT min(b.starts_at) FROM billing.order_line ol
-              JOIN diary.booking b ON b.id = ol.booking_id
-             WHERE ol.order_id = o.id),
-           (SELECT min(cs.starts_at) FROM diary.enrolment e
-              JOIN diary.class_session cs ON cs.id = e.class_session_id
-             WHERE e.order_id = o.id),
-           o.created_at
-         ) AS delivered_at,
+         """ + DELIVERED_AT_SQL + """ AS delivered_at,
          COALESCE(
            (SELECT string_agg(DISTINCT ol.description, ', ') FROM billing.order_line ol
              WHERE ol.order_id = o.id), 'charge') AS what,

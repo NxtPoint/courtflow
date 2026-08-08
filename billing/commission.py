@@ -1263,16 +1263,34 @@ def month_end_accrue(session, *, club_id, period) -> int:
         return 0
 
 
-def month_end_targets(session, *, club_id):
-    """Phase 2 — every client with an OPEN statement balance (the unified debt = the sum of open,
-    unsettled orders). Read-only, so it is safe to take once and then process client-by-client in
-    separate transactions."""
+def month_end_targets(session, *, club_id, period=None):
+    """Phase 2 — every client to invoice for `period`: those with an OPEN balance DELIVERED in that
+    month. Read-only, so it is safe to take once and then process client-by-client in separate
+    transactions.
+
+    The period bound is the whole point. Without it this returned everyone with any open order, of
+    any age, so the sweep billed "everything owed right now" — the invoice went stale the moment the
+    next lesson was played, and no month could ever be closed. Anything still owed from an earlier
+    month is not re-billed here; it is already on its own month's invoice and shows on this one as
+    "brought forward" (billing.invoicing.brought_forward_minor). Omitting `period` keeps the old
+    behaviour for callers that genuinely want everything."""
+    where = ""
+    params = {"c": club_id}
+    if period:
+        from billing.invoicing import DELIVERED_AT_SQL
+        where = (f"AND to_char(({DELIVERED_AT_SQL} AT TIME ZONE "
+                 "COALESCE((SELECT timezone FROM club.club WHERE id = :c),'Africa/Johannesburg')),"
+                 "'YYYY-MM') = :period")
+        params["period"] = period
     return [dict(r) for r in session.execute(
-        text('SELECT user_id, COALESCE(SUM(amount_minor),0) AS owed, MIN(currency_code) AS cur '
-             'FROM billing."order" WHERE club_id = :c AND status = \'open\' '
-             '  AND settled_by_order_id IS NULL AND user_id IS NOT NULL '
-             'GROUP BY user_id HAVING COALESCE(SUM(amount_minor),0) > 0'),
-        {"c": club_id},
+        text('SELECT o.user_id, COALESCE(SUM(o.amount_minor),0) AS owed, '
+             '       MIN(o.currency_code) AS cur '
+             'FROM billing."order" o WHERE o.club_id = :c AND o.status = \'open\' '
+             '  AND o.settled_by_order_id IS NULL AND o.covered_order_ids IS NULL '
+             '  AND o.user_id IS NOT NULL AND o.amount_minor > 0 '
+             f'  {where} '
+             'GROUP BY o.user_id HAVING COALESCE(SUM(o.amount_minor),0) > 0'),
+        params,
     ).mappings().all()]
 
 
@@ -1302,7 +1320,8 @@ def month_end_client(session, *, club_id, period, user_id, owed, cur) -> str:
     try:
         from billing import invoicing
         res = invoicing.issue_statement_invoice(
-            session, club_id=club_id, user_id=str(user_id), period_label=period)
+            session, club_id=club_id, user_id=str(user_id), period_label=period,
+            scope_to_period=True)
         if res.get("ok"):
             invoice_id = res.get("invoice_id")
         else:
@@ -1341,7 +1360,7 @@ def run_month_end(session, *, club_id, period_label=None) -> Dict[str, Any]:
     client instead of rolling back a whole club's already-emailed invoices (see month_end_client)."""
     period = month_end_period(session, period_label)
     rent_charges = month_end_accrue(session, club_id=club_id, period=period)
-    rows = month_end_targets(session, club_id=club_id)
+    rows = month_end_targets(session, club_id=club_id, period=period)
     notified = 0
     already = 0
     for r in rows:

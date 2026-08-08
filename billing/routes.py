@@ -386,7 +386,7 @@ def cron_month_end():
                 stats["period"] = comm.month_end_period(s, period)
                 stats["rent_charges"] = comm.month_end_accrue(
                     s, club_id=cid, period=stats["period"])
-                targets = comm.month_end_targets(s, club_id=cid)
+                targets = comm.month_end_targets(s, club_id=cid, period=stats["period"])
             stats["clients_owing"] = len(targets)
         except Exception:
             log.warning("month-end setup failed for club=%s", cid, exc_info=True)
