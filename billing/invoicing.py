@@ -623,7 +623,7 @@ def issue_statement_invoice(session, *, club_id, user_id, period_label=None, due
 
 
 def mark_invoice_paid(session, *, club_id, invoice_id, provider="eft", reference=None,
-                      recorded_by=None) -> Dict[str, Any]:
+                      recorded_by=None, amount_minor=None) -> Dict[str, Any]:
     """Mark an invoice PAID by an off-platform method (EFT / cash / card-at-desk). Settles every
     STILL-OPEN order the invoice covers through the desk-payment core (record_desk_payment) — so
     each writes a billing.payment row, flips its order to 'paid', and emits payment_succeeded
@@ -638,19 +638,45 @@ def mark_invoice_paid(session, *, club_id, invoice_id, provider="eft", reference
     if not inv:
         return {"ok": False, "error": "NOT_FOUND"}
 
+    # OLDEST FIRST, by the date the service was DELIVERED — a part payment clears the oldest debt,
+    # the way any statement is settled. created_at alone cannot order these: several orders are
+    # routinely raised in ONE transaction, where now() is identical for all of them, so the tie-break
+    # has to be deterministic (the same trap that made the refund path pick the abandoned checkout).
     open_orders = session.execute(
-        text('SELECT DISTINCT o.id, o.amount_minor, o.currency_code '
+        text('SELECT DISTINCT o.id, o.amount_minor, o.currency_code, '
+             f'       {DELIVERED_AT_SQL} AS delivered_at, o.created_at '
              'FROM billing.invoice_line il JOIN billing."order" o ON o.id = il.order_id '
-             "WHERE il.invoice_id = :i AND o.status = 'open'"),
+             "WHERE il.invoice_id = :i AND o.status = 'open' "
+             "ORDER BY delivered_at, o.created_at, o.id"),
         {"i": str(invoice_id)},
     ).mappings().all()
     if not open_orders:
         return {"ok": True, "settled": 0, "invoice_id": str(invoice_id), "note": "already_paid"}
 
+    # A PART payment settles whole lines and leaves the rest owed — so the invoice derives
+    # "Partially paid" and the client's statement still shows exactly what is left. An order is
+    # never part-settled: one debt = one order, settled once, and record_desk_payment refuses a
+    # short amount for that reason. Anything that cannot fill the next line is returned as
+    # `unallocated_minor` for the admin to place, rather than silently marking a bill paid.
+    budget = None if amount_minor is None else max(0, int(amount_minor))
+    if budget is not None:
+        total_open = sum(int(o["amount_minor"] or 0) for o in open_orders)
+        if budget >= total_open:
+            budget = None                        # covers everything → a full settlement
+
     settled = 0
     collected = 0
     currency = None
     for o in open_orders:
+        due = int(o["amount_minor"] or 0)
+        if budget is not None:
+            if due > budget:
+                # STOP, never skip ahead to a smaller line. Allocation is oldest-first: paying R800
+                # against R500/R300/R200 must clear the R500 and R300 and leave the R200 owed. A
+                # heuristic that hunts for a line the remainder happens to fit would settle a NEWER
+                # lesson and leave an older one open, which is not how anyone reads a statement.
+                break
+            budget -= due
         # A stable, per-order reference: keeps the human EFT ref on the receipt while avoiding the
         # (provider, provider_payment_id) unique collision across a multi-order invoice + making a
         # re-click idempotent.
@@ -683,7 +709,11 @@ def mark_invoice_paid(session, *, club_id, invoice_id, provider="eft", reference
                 "provider": provider, "reference": reference})
         except Exception:
             log.info("invoice_paid emit skipped invoice=%s", invoice_id)
+    still_owed = sum(int(o["amount_minor"] or 0) for o in open_orders) - collected
     return {"ok": True, "settled": settled, "collected_minor": collected,
+            "unallocated_minor": (int(budget) if budget else 0),
+            "outstanding_minor": max(0, still_owed),
+            "fully_paid": still_owed <= 0,
             "invoice_id": str(invoice_id)}
 
 
@@ -743,7 +773,8 @@ def build_invoice_document(session, *, invoice_id, club_id=None) -> Optional[Dic
     """Assemble the full document dict for an issued invoice: frozen seller/bill-to/lines
     snapshot + paid/outstanding DERIVED LIVE from the referenced orders. None if not found."""
     q = ('SELECT id, club_id, invoice_number, user_id, kind, status, currency_code, '
-         'total_minor, issued_at, due_date, period_label, bill_to, seller, notes '
+         'total_minor, issued_at, due_date, period_label, bill_to, seller, notes, '
+         'COALESCE(brought_forward_minor,0) AS brought_forward_minor '
          'FROM billing.invoice WHERE id = :i')
     params = {"i": str(invoice_id)}
     if club_id is not None:
@@ -760,9 +791,17 @@ def build_invoice_document(session, *, invoice_id, club_id=None) -> Optional[Dic
              "WHERE invoice_id = :i ORDER BY created_at"),
         {"i": str(invoice_id)},
     ).mappings().all():
+        st_line = _order_state(session, r["order_id"]) if r["order_id"] else None
         lines.append({"description": r["description"], "qty": int(r["qty"] or 1),
                       "amount_minor": int(r["amount_minor"] or 0),
-                      "order_id": (str(r["order_id"]) if r["order_id"] else None)})
+                      "order_id": (str(r["order_id"]) if r["order_id"] else None),
+                      # LIVE per-line state. A part payment settles whole lines, so the document has
+                      # to say WHICH ones — otherwise "Partially paid" is a number with no story,
+                      # and a written-off or discounted line looks unpaid forever.
+                      "state": (st_line or {}).get("status"),
+                      "settled": bool(st_line and st_line["status"] == "paid"),
+                      "written_off": bool(st_line and st_line["status"] == "written_off"),
+                      "outstanding_minor": (st_line or {}).get("owed_minor", 0)})
         if r["order_id"]:
             order_ids.append(str(r["order_id"]))
 
@@ -822,6 +861,12 @@ def build_invoice_document(session, *, invoice_id, club_id=None) -> Optional[Dic
         "total_minor": int(inv["total_minor"] or 0),
         "paid_minor": paid_minor,
         "outstanding_minor": max(0, outstanding_minor),
+        # Arrears from EARLIER months, frozen at issue. Display only — deliberately not in
+        # total_minor and not an invoice_line, because those debts are already invoiced on their own
+        # month's document (see brought_forward_minor). `total_due_minor` is what the client should
+        # actually pay to be square: this month's outstanding PLUS what was already owed.
+        "brought_forward_minor": int(inv["brought_forward_minor"] or 0),
+        "total_due_minor": max(0, outstanding_minor) + int(inv["brought_forward_minor"] or 0),
         "payments": payments,
         "notes": inv["notes"] or (seller.get("footer") if isinstance(seller, dict) else None),
     }

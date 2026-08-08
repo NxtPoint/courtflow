@@ -290,7 +290,11 @@ def billing_invoice_mark_paid(invoice_id):
             s, club_id=head["club_id"], invoice_id=invoice_id,
             provider=(body.get("provider") or "eft"),
             reference=((body.get("reference") or "").strip() or None),
-            recorded_by=p.user_id)
+            recorded_by=p.user_id,
+            # A PART payment: settles whole lines oldest-first and leaves the rest owed, so the
+            # invoice derives "Partially paid". Omit for the full settlement (unchanged).
+            amount_minor=(int(body["amount_minor"]) if str(body.get("amount_minor") or "").strip()
+                          else None))
         if not res.get("ok"):
             return jsonify(res), 422
         doc = invoicing.build_invoice_document(s, invoice_id=invoice_id)

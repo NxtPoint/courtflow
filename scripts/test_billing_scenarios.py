@@ -4333,6 +4333,83 @@ def sc_a_month_swept_early_can_still_be_closed(s, fx):
           CM.month_end_period(s) == period, CM.month_end_period(s))
 
 
+def sc_partial_payment_leaves_the_invoice_open(s, fx):
+    """A part payment settles whole lines, oldest first, and the invoice stays open for the rest.
+
+    "Full closes the invoice, partial leaves it open" — with the debt model intact. An ORDER is
+    never part-settled: one debt = one order settled once, which is exactly why record_desk_payment
+    refuses a short amount. So a part payment clears whole lines and the remainder stays owed, and
+    the document derives "Partially paid" from its own orders rather than storing a second figure
+    that could disagree. Money that cannot fill the next line is REPORTED, never silently absorbed."""
+    print("\n# A part payment settles whole lines and leaves the invoice open")
+    from billing import invoicing as INV4
+
+    ids = []
+    for i, amt in enumerate((50000, 30000, 20000)):        # R500, R300, R200 — oldest first
+        # DISTINCT service dates: the allocation orders by DELIVERY date, and all three rows are
+        # inserted in one transaction where created_at is identical for each.
+        oid = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,'
+                             "currency_code,settlement_mode,status,service_date) "
+                             "VALUES (:c,:u,:a,'ZAR','monthly_account','open',"
+                             "        CAST(:d AS date)) RETURNING id"),
+                        {"c": fx.club_id, "u": fx.member, "a": amt,
+                         "d": f"2026-05-{10 + i:02d}"}).scalar_one()
+        s.execute(text("INSERT INTO billing.order_line (order_id,club_id,description,qty,"
+                       "amount_minor) VALUES (:o,:c,:d,1,:a)"),
+                  {"o": str(oid), "c": fx.club_id, "d": f"Lesson {i + 1}", "a": amt})
+        ids.append(str(oid))
+    inv = INV4.issue_invoice(s, club_id=fx.club_id, user_id=fx.member, order_ids=ids,
+                             kind="statement")
+    check("invoice totals R1,000", inv["total_minor"] == 100000, str(inv["total_minor"]))
+
+    # Pay R800 of R1,000 → clears the R500 and R300 lines, leaves the R200.
+    part = INV4.mark_invoice_paid(s, club_id=fx.club_id, invoice_id=inv["invoice_id"],
+                                  provider="eft", reference="PART1", amount_minor=80000)
+    check("two whole lines settled", part["settled"] == 2, str(part))
+    check("collected exactly what was paid", part["collected_minor"] == 80000, str(part))
+    check("R200 still outstanding", part["outstanding_minor"] == 20000, str(part))
+    check("not marked fully paid", part["fully_paid"] is False, str(part))
+    check("nothing left unallocated", part["unallocated_minor"] == 0, str(part))
+
+    doc = INV4.build_invoice_document(s, invoice_id=inv["invoice_id"])
+    check("the DOCUMENT reads 'Partially paid'", doc["status_label"] == "Partially paid",
+          doc["status_label"])
+    check("...deriving R800 paid / R200 outstanding",
+          doc["paid_minor"] == 80000 and doc["outstanding_minor"] == 20000,
+          f'{doc["paid_minor"]}/{doc["outstanding_minor"]}')
+    settled_lines = [l for l in doc["lines"] if l["settled"]]
+    check("and says WHICH lines are settled", len(settled_lines) == 2,
+          str([(l["description"], l["state"]) for l in doc["lines"]]))
+
+    # An amount that cannot fill the next line is reported, never silently absorbed.
+    odd = INV4.mark_invoice_paid(s, club_id=fx.club_id, invoice_id=inv["invoice_id"],
+                                 provider="cash", amount_minor=5000)
+    check("R50 against a R200 line settles nothing", odd["settled"] == 0, str(odd))
+    check("...and is reported back as unallocated", odd["unallocated_minor"] == 5000, str(odd))
+
+    # Paying the rest closes it.
+    rest = INV4.mark_invoice_paid(s, club_id=fx.club_id, invoice_id=inv["invoice_id"],
+                                  provider="eft", reference="PART2", amount_minor=20000)
+    check("the last line settles", rest["settled"] == 1 and rest["fully_paid"], str(rest))
+    doc2 = INV4.build_invoice_document(s, invoice_id=inv["invoice_id"])
+    check("the DOCUMENT now reads 'Paid'", doc2["status_label"] == "Paid", doc2["status_label"])
+
+    # WRITE-OFF closes a line without money, and the document must say so rather than show it unpaid.
+    w = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,currency_code,'
+                       "settlement_mode,status) VALUES (:c,:u,15000,'ZAR','monthly_account','open') "
+                       "RETURNING id"), {"c": fx.club_id, "u": fx.member}).scalar_one()
+    s.execute(text("INSERT INTO billing.order_line (order_id,club_id,description,qty,amount_minor) "
+                   "VALUES (:o,:c,'Goodwill lesson',1,15000)"), {"o": str(w), "c": fx.club_id})
+    inv2 = INV4.issue_invoice(s, club_id=fx.club_id, user_id=fx.member, order_ids=[str(w)],
+                              kind="statement")
+    ST.void_order(s, club_id=fx.club_id, order_id=str(w), write_off=True, reason="goodwill")
+    doc3 = INV4.build_invoice_document(s, invoice_id=inv2["invoice_id"])
+    check("a written-off line is flagged, not left looking unpaid",
+          doc3["lines"][0]["written_off"] is True, str(doc3["lines"][0]))
+    check("...and the invoice owes nothing", doc3["outstanding_minor"] == 0,
+          str(doc3["outstanding_minor"]))
+
+
 def sc_one_payment_one_receipt(s, fx):
     """Settling a multi-line invoice sends ONE receipt, not one per line.
 
@@ -4473,6 +4550,7 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
 
 
 SCENARIOS = [
+    sc_partial_payment_leaves_the_invoice_open,
     sc_one_payment_one_receipt,
     sc_an_invoice_covers_its_own_month,
     sc_a_month_swept_early_can_still_be_closed,

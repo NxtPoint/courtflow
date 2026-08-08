@@ -24,7 +24,7 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
 ## Gates (run before every merge — KEEP)
 - `test_all.py` — runs the three scenario harnesses below. **The merge gate.**
 - `test_booking_scenarios.py` · `test_billing_scenarios.py` · `test_statement_reconciliation.py`
-  — rollback-only scratch-DB harnesses (**booking 404 / billing 591 / statement 64**).
+  — rollback-only scratch-DB harnesses (**booking 404 / billing 606 / statement 64**).
 
 ## Load-bearing at runtime (KEEP — do not touch)
 - `seed_nextpoint.py` — re-seeds club #1 on every prod boot (`SEED_NEXTPOINT=1`, imported by `app.py`). Idempotent.
