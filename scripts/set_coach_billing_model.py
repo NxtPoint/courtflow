@@ -73,6 +73,7 @@ def main():
 
     import db
     from sqlalchemy import text
+    from billing import commission as CM
 
     with db.session_scope() as s:
         clubs = s.execute(text("SELECT id, name FROM club.club ORDER BY created_at")).mappings().all()
@@ -81,13 +82,32 @@ def main():
             if not rows:
                 continue
             print(f"\n== {club['name']}")
-            print(f"   {'coach':<26} {'model':<12} {'rent/mo':>10}   email")
+            # SHOW BOTH SIDES OF THE ARRANGEMENT. An earlier version printed rent only, and a rent of
+            # R0.00 got read back as "0% commission" — two different columns with opposite meanings.
+            # The club % is resolved through the SAME function billing uses at settlement
+            # (resolve_commission_pct), so this table can never quote a rate the money does not.
+            print(f"   {'coach':<26} {'model':<12} {'club %':>8} {'rent/mo':>11}   email")
             for r in rows:
                 if args.who and args.who.lower() not in (r["name"] + " " + (r["email"] or "")).lower():
                     continue
+                # "no rule at all" and "a rule that says 0%" BOTH resolve to 0 — the exact ambiguity
+                # that keeps the rent flag explicit rather than inferred. Say which one it is.
+                has_rule = s.execute(
+                    text("SELECT 1 FROM billing.commission_rule "
+                         " WHERE club_id = :c AND active "
+                         "   AND (coach_user_id IS NULL OR coach_user_id = :u) "
+                         "   AND effective_from <= now() "
+                         "   AND (effective_to IS NULL OR effective_to > now()) LIMIT 1"),
+                    {"c": str(club["id"]), "u": str(r["id"])}).first()
+                try:
+                    pct = CM.resolve_commission_pct(s, club_id=str(club["id"]),
+                                                    coach_user_id=str(r["id"]))
+                    pct_s = f"{float(pct):g}%" if has_rule else "no rule"
+                except Exception:
+                    pct_s = "?"
                 flag = "  <<" if (args.who and args.model) else ""
-                print(f"   {r['name'][:26]:<26} {r['model']:<12} "
-                      f"{RAND(r['rent_minor'] / 100):>10}   {r['email']}{flag}")
+                print(f"   {r['name'][:26]:<26} {r['model']:<12} {pct_s:>8} "
+                      f"{RAND(r['rent_minor'] / 100):>11}   {r['email']}{flag}")
 
             if not (args.who and args.model):
                 continue
