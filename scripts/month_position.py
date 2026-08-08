@@ -5,6 +5,7 @@ and which payments are stuck half-finished. Run it on the Render Shell to close 
     python -m scripts.month_position              # the month just ended
     python -m scripts.month_position 2026-07      # a specific month
     python -m scripts.month_position 2026-07 --chase   # + a per-client chase list with contacts
+    python -m scripts.month_position 2026-07 --dupes   # + repeat "Buy" clusters (failed sales)
 
 Why this exists: `month_end_targets` and `invoicing.open_order_ids` select every `status='open'`
 order with **no date filter at all**, so a "month-end" invoice is a photograph of everything owed
@@ -103,6 +104,7 @@ def main(argv):
 
     period = next((a for a in argv if not a.startswith("-")), None)
     chase = "--chase" in argv
+    dupes = "--dupes" in argv
     url = os.environ["DATABASE_URL"].replace("postgresql://", "postgresql+psycopg://", 1)
     eng = create_engine(url, pool_pre_ping=True)
 
@@ -163,6 +165,50 @@ def main(argv):
                           f"attempts={att}{flag}")
                 print("    -> python -m scripts.diagnose_refund <order_id>   (per-order detail)")
                 print("    -> POST /api/billing/yoco/reconcile/<order_id>    (recover a missed webhook)")
+
+            # ---- repeat attempts at the SAME purchase ------------------------------------
+            # `create_bundle_order` / `create_membership_order` INSERT unconditionally — there is no
+            # reuse guard — so every tap of "Buy" leaves ANOTHER awaiting_payment order. A cluster
+            # here is one member trying repeatedly, not N purchases.
+            #
+            # READ IT AS A FAILED SALE, NOT A DEBT. An online pack/membership is granted ON PAYMENT,
+            # so an unpaid cluster means the member has no pack, owes nothing, and WANTED TO BUY.
+            # The money to chase is in `open`; this is a conversion problem, and the bigger the
+            # cluster the harder they tried.
+            if dupes:
+                clusters = defaultdict(list)
+                for r in rows:
+                    if r["status"] == "awaiting_payment":
+                        clusters[(str(r["user_id"]), int(r["amount_minor"] or 0),
+                                  (r["what"] or "")[:40])].append(r)
+                repeated = {k: v for k, v in clusters.items() if len(v) > 1}
+                if repeated:
+                    lost = sum(k[1] for k in repeated)          # ONE of each, not the pile
+                    print(f"\n  REPEATED ATTEMPTS AT THE SAME PURCHASE ({len(repeated)} cluster(s))")
+                    print(f"  Phantom debt: {RAND((sum(k[1]*len(v) for k, v in repeated.items()) - lost)/100)}"
+                          f"   |   Genuinely LOST SALES: {RAND(lost/100)}")
+                    for (uid, amt, what), grp in sorted(repeated.items(), key=lambda kv: -kv[0][1]*len(kv[1])):
+                        u = c.execute(
+                            text('SELECT COALESCE(first_name,\'\')||\' \'||COALESCE(surname,\'\') n, email '
+                                 'FROM iam."user" WHERE id = :u'), {"u": uid}).mappings().first()
+                        print(f"\n    {(u['n'].strip() if u and u['n'] else '(unknown)')} — "
+                              f"{len(grp)} x {RAND(amt/100)} — {what}")
+                        print(f"      {u['email'] if u else ''}")
+                        for r in sorted(grp, key=lambda x: x["created_at"]):
+                            att = c.execute(
+                                text("SELECT count(*) FROM billing.payment_attempt WHERE order_id = :o"),
+                                {"o": r["id"]}).scalar() or 0
+                            paid = c.execute(
+                                text("SELECT count(*) FROM billing.payment WHERE order_id = :o "
+                                     "AND direction='charge' AND status IN ('succeeded','refunded')"),
+                                {"o": r["id"]}).scalar() or 0
+                            note = ("  << TOOK MONEY — do NOT void" if paid else
+                                    ("  (no checkout ever created)" if att == 0 else ""))
+                            print(f"      {r['id']}  {str(r['created_at'])[:16]}  "
+                                  f"attempts={att}{note}")
+                    print("\n    None of the above is collectable debt. Clean up with:")
+                    print("      python -m scripts.void_orphaned_orders            # dry run")
+                    print("      python -m scripts.void_orphaned_orders --commit")
 
             # ---- who owes ----------------------------------------------------------------
             owing = defaultdict(lambda: {"minor": 0, "n": 0, "oldest": None, "what": set()})

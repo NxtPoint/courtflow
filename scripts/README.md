@@ -59,8 +59,11 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   with **no date bound**, so every built-in view mixes the months and "what is still outstanding for
   July" cannot be answered. Buckets by the month the SERVICE WAS DELIVERED (the rule
   `activity_summary` already follows), resolved through the SAME joins as
-  `invoicing._enriched_line_descriptions` — never a second resolver. `python -m
-  scripts.month_position [YYYY-MM] [--chase]`, default = last month. Run it on the Render Shell.
+  `invoicing._enriched_line_descriptions` — never a second resolver. `--dupes` groups the repeat-`Buy` clusters (`create_bundle_order`/`create_membership_order` INSERT
+  unconditionally, so every tap leaves another `awaiting_payment` order) and splits PHANTOM debt from
+  the genuinely LOST SALE — an online pack is granted on payment, so an unpaid cluster is a member who
+  tried to buy and couldn't, not a debtor. Clean up with `void_orphaned_orders`. `python -m
+  scripts.month_position [YYYY-MM] [--chase] [--dupes]`, default = last month. Run it on the Render Shell.
 - `settle_stranded_class_seats.py` — remediates class seats stuck in `awaiting_payment`
   forever (seat taken, class played, order never settled). `--settle` turns each into a
   normal owed debt so month-end invoices it; `--void` cancels it. Dry-run by default.
