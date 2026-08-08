@@ -241,6 +241,37 @@ def main(argv):
                     {"ids": open_ids}).scalar() or 0
                 print(f"\n  INVOICE COVERAGE: {inv} of {len(open_ids)} outstanding orders sit on an "
                       f"issued invoice; {len(open_ids) - inv} have never been invoiced at all.")
+                # NAME them. A bare count cannot distinguish "these are R0 rows we deliberately
+                # never bill" from "real money nobody has been asked for", and those need opposite
+                # actions. Each is tagged with WHY it was skipped, so only the last tag is work.
+                gaps = [dict(r) for r in c.execute(
+                    text('SELECT o.id, o.user_id, o.amount_minor, '
+                         '       COALESCE((SELECT string_agg(DISTINCT ol.description, \', \') '
+                         '                   FROM billing.order_line ol '
+                         '                  WHERE ol.order_id = o.id), \'charge\') AS what '
+                         'FROM billing."order" o WHERE o.id = ANY(:ids) '
+                         '  AND NOT EXISTS (SELECT 1 FROM billing.invoice_line il '
+                         '                    JOIN billing.invoice i ON i.id = il.invoice_id '
+                         '                   WHERE il.order_id = o.id AND i.status = \'issued\') '
+                         'ORDER BY o.amount_minor DESC'),
+                    {"ids": open_ids}).mappings()]
+                if gaps:
+                    print("    Not on any invoice:")
+                    for g in gaps:
+                        if not int(g["amount_minor"] or 0):
+                            why = "R0 — not a debt, never invoiced (by design)"
+                        elif not g["user_id"]:
+                            why = "NO CLIENT on the order — cannot be invoiced to anyone"
+                        else:
+                            why = "<< REAL DEBT, NOT INVOICED — investigate"
+                        who = ""
+                        if g["user_id"]:
+                            u = c.execute(
+                                text('SELECT COALESCE(first_name,\'\')||\' \'||COALESCE(surname,\'\')'
+                                     ' FROM iam."user" WHERE id = :u'), {"u": g["user_id"]}).scalar()
+                            who = (u or "").strip() or "(unnamed)"
+                        print(f"      {RAND(g['amount_minor']/100):>10}  {who[:22]:<22} "
+                              f"{(g['what'] or '')[:22]:<22} {why}")
 
             # ---- how mixed-up is the CURRENT open balance? -------------------------------
             # The cutover question: today's "outstanding" view spans every month at once.
