@@ -209,7 +209,14 @@ def _apply(session, event: NormalizedPaymentEvent) -> Dict[str, Any]:
               # "Awaiting online payment" on a paid booking; after, it reads "Cancelled", and every
               # order recovered by a reconcile sweep emails the payer that their payment was
               # cancelled. Stating it explicitly removes the race instead of narrowing it.
-              payment_state="paid")
+              payment_state="paid",
+              # When this settlement is one line of a batch (an invoice paid by EFT/cash), the batch
+              # sends ONE receipt naming every line. Without this, marking a 12-lesson invoice paid
+              # sent the client TWELVE "Booking confirmed" emails, one per order, and the owner had
+              # to receipt each payment by hand. The event is still emitted (usage_event, Klaviyo,
+              # the offline-conversion feed all still see the money) — only the per-order
+              # notification is suppressed, by notifications.deliver.
+              settlement_batch=(event.raw or {}).get("settlement_batch"))
 
     elif kind == "charge_failed":
         _record_payment(session, event, order, club_id, direction="charge", status="failed")

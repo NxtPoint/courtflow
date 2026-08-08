@@ -178,6 +178,26 @@ def _t_statement_ready(ctx):
     return ("Your statement is ready", body, "/portal")
 
 
+def _t_invoice_paid(ctx):
+    """ONE receipt for ONE payment against an invoice, however many lines it settled.
+
+    Settling an invoice loops the orders it covers and each emits payment_succeeded, so a 12-lesson
+    month used to send the client twelve "Booking confirmed" emails. Those per-order notifications
+    are now suppressed (see deliver) and this is the single confirmation — which is also the only
+    one that can state the real figure, because no individual order knows the payment total."""
+    amt = _money(_g(ctx, "amount_minor"), _g(ctx, "currency_code", "currency"))
+    n = _g(ctx, "lines")
+    num = _g(ctx, "invoice_number")
+    what = f"Invoice {num}" if num else "Your invoice"
+    items = f" covering {n} item{'s' if str(n) != '1' else ''}" if n else ""
+    ref = _g(ctx, "reference")
+    body = (f"Thank you — we've received {amt} for {what.lower()}{items}." if amt
+            else f"Thank you — {what.lower()} is settled{items}.")
+    if ref:
+        body += f" Reference: {ref}."
+    return ("Payment received — thank you", body, "/portal")
+
+
 def _t_invoice_issued(ctx):
     num = _g(ctx, "invoice_number")
     amt = _money(_g(ctx, "amount_minor"), _g(ctx, "currency_code", "currency"))
@@ -334,6 +354,7 @@ KIND_MAP = {
     "coach_invited":         _t_coach_invited,
     "statement_ready":       _t_statement_ready,         # month-end: balance reminder → pay online
     "invoice_issued":        _t_invoice_issued,          # issued invoice DOCUMENT (summary + PDF + pay-online)
+    "invoice_paid":          _t_invoice_paid,            # ONE receipt for a batch settlement
     "lesson_booked":         _t_lesson_booked,           # THE coach's notification (→ coach)
     "class_booked":          _t_class_booked,            # THE coach's notification for a class (→ coach)
     # Booking/money lifecycle — these WERE emitted but silent (no map entry = no email/inbox).
@@ -405,6 +426,14 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
             invoice_doc = invoice_detail.load(session, club_id, ctx or {})
         except Exception:
             invoice_doc = None
+
+    # A payment that is one line of a BATCH (an invoice settled by EFT/cash) gets no notification of
+    # its own — billing.invoicing.mark_invoice_paid sends ONE invoice_paid receipt naming every line.
+    # Suppressed here rather than at the producer so the EVENT still reaches usage_event, Klaviyo and
+    # the offline-conversion recorder; only the client-facing noise stops. Twelve lessons on one
+    # invoice used to mean twelve "Booking confirmed" emails.
+    if kind == "payment_succeeded" and (ctx or {}).get("settlement_batch"):
+        return None
 
     if kind == "payment_succeeded" and detail:
         if detail.get("is_purchase"):

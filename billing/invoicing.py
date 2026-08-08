@@ -648,6 +648,8 @@ def mark_invoice_paid(session, *, club_id, invoice_id, provider="eft", reference
         return {"ok": True, "settled": 0, "invoice_id": str(invoice_id), "note": "already_paid"}
 
     settled = 0
+    collected = 0
+    currency = None
     for o in open_orders:
         # A stable, per-order reference: keeps the human EFT ref on the receipt while avoiding the
         # (provider, provider_payment_id) unique collision across a multi-order invoice + making a
@@ -657,10 +659,32 @@ def mark_invoice_paid(session, *, club_id, invoice_id, provider="eft", reference
             session, club_id=club_id, order_id=str(o["id"]),
             amount_minor=int(o["amount_minor"] or 0), provider=provider,
             currency_code=o["currency_code"], provider_payment_id=pid,
-            user_id=inv["user_id"], recorded_by=recorded_by)
+            user_id=inv["user_id"], recorded_by=recorded_by,
+            # ONE receipt for ONE payment. Each settled order still emits payment_succeeded (the
+            # usage feed, Klaviyo and the offline-conversion recorder all need it), but naming the
+            # batch tells notifications.deliver not to send that order its own email. Settling a
+            # 12-lesson invoice used to send the client TWELVE "Booking confirmed" emails and make
+            # the owner receipt each payment by hand.
+            settlement_batch=str(invoice_id))
         if not (isinstance(res, dict) and res.get("error")):
             settled += 1
-    return {"ok": True, "settled": settled, "invoice_id": str(invoice_id)}
+            collected += int(o["amount_minor"] or 0)
+            currency = currency or o["currency_code"]
+
+    # The ONE receipt, naming what it covers. Emitted only when money actually moved, so a
+    # double-click (every order already paid, settled == 0) re-sends nothing.
+    if settled:
+        try:
+            from marketing_crm.tracking import emit
+            emit("invoice_paid", {
+                "club_id": str(club_id), "user_id": str(inv["user_id"]),
+                "invoice_id": str(invoice_id), "amount_minor": collected,
+                "currency": currency or "ZAR", "lines": settled,
+                "provider": provider, "reference": reference})
+        except Exception:
+            log.info("invoice_paid emit skipped invoice=%s", invoice_id)
+    return {"ok": True, "settled": settled, "collected_minor": collected,
+            "invoice_id": str(invoice_id)}
 
 
 def void_invoice(session, *, club_id, invoice_id) -> Dict[str, Any]:

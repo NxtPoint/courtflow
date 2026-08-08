@@ -4333,6 +4333,71 @@ def sc_a_month_swept_early_can_still_be_closed(s, fx):
           CM.month_end_period(s) == period, CM.month_end_period(s))
 
 
+def sc_one_payment_one_receipt(s, fx):
+    """Settling a multi-line invoice sends ONE receipt, not one per line.
+
+    mark_invoice_paid loops every order the invoice covers and calls record_desk_payment on each;
+    each emits payment_succeeded, and the notification engine turned each of those into an email. A
+    12-lesson month therefore sent the client TWELVE "Booking confirmed" emails for ONE EFT, and the
+    owner had to receipt each payment by hand. The events must all still fire (usage feed, Klaviyo,
+    the offline-conversion recorder read them) — only the client-facing noise stops, so the
+    suppression lives in notifications.deliver, not at the producer."""
+    print("\n# One payment, one receipt (a multi-line invoice settles with ONE email)")
+    from billing import invoicing as INV3
+    from marketing_crm import notifications as NT
+
+    ids = []
+    for i in range(4):
+        oid = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,'
+                             "currency_code,settlement_mode,status) "
+                             "VALUES (:c,:u,20000,'ZAR','monthly_account','open') RETURNING id"),
+                        {"c": fx.club_id, "u": fx.member}).scalar_one()
+        s.execute(text("INSERT INTO billing.order_line (order_id,club_id,description,qty,"
+                       "amount_minor) VALUES (:o,:c,:d,1,20000)"),
+                  {"o": str(oid), "c": fx.club_id, "d": f"Lesson {i + 1}"})
+        ids.append(str(oid))
+
+    res = INV3.issue_invoice(s, club_id=fx.club_id, user_id=fx.member, order_ids=ids,
+                             kind="statement")
+    check("invoice covers 4 lines", res.get("ok") and res["total_minor"] == 80000, str(res))
+
+    with _EmitRecorder() as rec:
+        paid = INV3.mark_invoice_paid(s, club_id=fx.club_id, invoice_id=res["invoice_id"],
+                                      provider="eft", reference="FNB123")
+        succeeded = rec.of("payment_succeeded")
+        receipts = rec.of("invoice_paid")
+    check("all 4 orders settled", paid.get("settled") == 4, str(paid))
+    check("the batch reports what it collected", paid.get("collected_minor") == 80000, str(paid))
+    check("every order still emits payment_succeeded (the feed is intact)",
+          len(succeeded) == 4, f"got {len(succeeded)}")
+    check("...each naming its settlement batch",
+          all(e.get("settlement_batch") == res["invoice_id"] for e in succeeded),
+          str([e.get("settlement_batch") for e in succeeded]))
+    check("exactly ONE receipt event", len(receipts) == 1, f"got {len(receipts)}")
+    check("...stating the FULL amount, which no single order knows",
+          receipts and receipts[0].get("amount_minor") == 80000, str(receipts))
+    check("...and how many lines it covered", receipts and receipts[0].get("lines") == 4)
+
+    # The suppression must live in the NOTIFIER (so the event still reaches the CRM/ads feed), and
+    # it must be the BATCH KEY doing it — not some unrelated reason the notification was dropped.
+    payload = dict(succeeded[0])
+    batched = NT.deliver(s, club_id=fx.club_id, user_id=fx.member,
+                         kind="payment_succeeded", ctx=payload)
+    check("a batched payment produces NO client notification", batched is None, str(batched))
+    payload.pop("settlement_batch", None)
+    lone = NT.deliver(s, club_id=fx.club_id, user_id=fx.member,
+                      kind="payment_succeeded", ctx=payload)
+    check("...while the SAME payment without a batch still notifies (it is the batch key)",
+          lone is not None, str(lone))
+
+    # A double-click settles nothing more and must not re-send the receipt.
+    with _EmitRecorder() as rec2:
+        again = INV3.mark_invoice_paid(s, club_id=fx.club_id, invoice_id=res["invoice_id"],
+                                       provider="eft", reference="FNB123")
+        check("a re-click settles nothing", again.get("settled") in (0, None), str(again))
+        check("...and sends no second receipt", len(rec2.of("invoice_paid")) == 0)
+
+
 def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
     """Tapping "Buy" twice must RE-OFFER the same unpaid order, not raise a second debt.
 
@@ -4408,6 +4473,7 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
 
 
 SCENARIOS = [
+    sc_one_payment_one_receipt,
     sc_an_invoice_covers_its_own_month,
     sc_a_month_swept_early_can_still_be_closed,
     sc_buy_click_never_mints_a_duplicate_debt,

@@ -199,7 +199,8 @@ def reusable_pending_purchase(session, *, club_id, user_id, kind, ref_id, amount
 
 def record_desk_payment(session, *, club_id, order_id, amount_minor, provider="cash",
                         currency_code=None, provider_payment_id=None,
-                        user_id=None, recorded_by=None, allow_partial=False) -> Dict[str, Any]:
+                        user_id=None, recorded_by=None, allow_partial=False,
+                        settlement_batch=None) -> Dict[str, Any]:
     """Admin/coach records money taken at the desk/court (cash / card_at_desk / eft) — the at_court
     settlement close-out. Routes through the SAME apply_payment_event core (via a manual
     charge_succeeded event) so the order flips to 'paid' and any held booking confirms,
@@ -240,7 +241,11 @@ def record_desk_payment(session, *, club_id, order_id, amount_minor, provider="c
         club_id=str(club_id),
         user_id=str(user_id) if user_id else None,
         recorded_by=str(recorded_by) if recorded_by else None,
-        raw={"source": "desk", "provider": provider},
+        # settlement_batch names the ONE document this payment belongs to (an invoice). It rides
+        # through to the payment_succeeded emit so the notification engine can stay silent per order
+        # and let the batch send ONE receipt — see billing.invoicing.mark_invoice_paid.
+        raw={"source": "desk", "provider": provider,
+             **({"settlement_batch": str(settlement_batch)} if settlement_batch else {})},
     )
     # Join the caller's transaction (do not open a second one).
     return apply_payment_event(event, session=session)
