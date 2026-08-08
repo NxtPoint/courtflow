@@ -46,7 +46,13 @@
       if (a.manual) { try { a.run(ctx); } catch (e) { UI.toast(UI.errMsg(e), "error"); } return; }
       try {
         Promise.resolve(a.run(ctx)).then(
-          function () { UI.toast(a.done || "Done.", "info"); load(); },
+          function (res) {
+            // `done` may be a FUNCTION so the confirmation can state the CONSEQUENCE, not just
+            // "Done." — voiding an invoice, for one, leaves the charges owed, and a toast that
+            // doesn't say so lets you believe a debt is cancelled when it isn't.
+            var msg = (typeof a.done === "function") ? a.done(ctx, res) : a.done;
+            UI.toast(msg || "Done.", "info"); load();
+          },
           function (e) { if (e) UI.toast(UI.errMsg(e), "error"); });
       } catch (e) { UI.toast(UI.errMsg(e), "error"); }
     }
@@ -152,7 +158,8 @@
           var mp = actBtn("invoice_mark_paid", iv, { label: "Mark paid" }); if (mp) actions.appendChild(mp);
         }
         if (iv.doc_status !== "void") {
-          var vd = actBtn("invoice_void", iv, { label: "Void", tone: "ghost" }); if (vd) actions.appendChild(vd);
+          // "Void DOCUMENT", never a bare "Void": this cancels the piece of paper, not the debt.
+          var vd = actBtn("invoice_void", iv, { label: "Void document", tone: "ghost" }); if (vd) actions.appendChild(vd);
         }
         l.appendChild(el("div", { class: "cf-item" }, [
           el("span", { class: "cf-chip " + (CHIP[iv.status_label] || ""), text: iv.status_label }),

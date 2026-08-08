@@ -513,10 +513,32 @@
         // or void it. All render over the LIVE orders, so paid-status always matches the statement.
         issue_statement_invoice: { manual: true, run: function () { issueStatementInvoice(id); } },
         invoice_mark_paid: { manual: true, run: function (iv) { invoiceMarkPaidModal(iv, function () { renderPerson(id); }); } },
+        // VOIDING AN INVOICE CANCELS THE DOCUMENT, NOT THE DEBT. An invoice renders over live
+        // orders and is never a second debt store, so tearing up the printout leaves every charge
+        // owed. That is correct and deliberate — but "Void" reads as "cancel this bill", and an
+        // owner voided one, saw the balance unchanged, and reasonably filed it as a bug. So the
+        // button says "Void document", the prompt leads with the money that will STILL be owed,
+        // and the toast repeats it rather than saying a cheerful "Invoice voided."
         invoice_void: {
-          tone: "ghost",
-          confirm: function (iv) { return "Void invoice " + (iv.number || "") + "? It stops covering its charges (they can be re-invoiced). The underlying debt is untouched."; },
-          done: "Invoice voided.", run: function (iv) { return window.API.invoiceVoid(iv.invoice_id); },
+          tone: "ghost", label: "Void document",
+          confirm: function (iv) {
+            var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
+            return "Void the DOCUMENT " + (iv.number || "") + "?
+
+"
+              + "This cancels the invoice only. " + owed + " of charges STAY OWED and will be "
+              + "re-invoiced at month-end.
+
+To cancel the debt itself, void the individual "
+              + "charges instead (open a charge → Void).";
+          },
+          done: function (iv) {
+            var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
+            return (iv.outstanding_minor > 0)
+              ? "Document voided — " + owed + " of charges are still owed."
+              : "Document voided.";
+          },
+          run: function (iv) { return window.API.invoiceVoid(iv.invoice_id); },
         },
         // Decide a pending refund REQUEST in place (same endpoints as Money → Approvals; the record
         // reloads on success so the status updates here without leaving the client). A cancelled prompt
