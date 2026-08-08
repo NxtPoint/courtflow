@@ -91,6 +91,48 @@ they sound ("collected", "banked", "paid to the club" have each been wrong at le
 
 ---
 
+## Section 2b — PICK UP HERE (as at 2026-08-08)
+
+`docs/specs/OUTSTANDING.md` is the full backlog; this is the short list a fresh session should start
+from, newest first. **Everything below is open unless marked done.**
+
+1. **FINISH THE PAGE-BY-PAGE FRONT-END REVIEW.** Half done. Reviewed 2026-07-31: Home · Refund
+   requests · Coach statement (summary + one coach) · Club earnings · People · Setup (menu, club
+   profile, memberships, services). **NOT reviewed: Diary · Overview · the rest of Setup · the entire
+   coach app · the entire client app · mobile widths.**
+   **Six real bugs came out of the half that WAS reviewed, and every one was invisible in the code** —
+   silent zeros, a warning banner crying wolf, a breakdown that didn't add up, a headline calling
+   coach-held money "banked", one label used twice with two different figures, and a price row that
+   billed nothing. Do it with the browser open and the console open on each screen; it is the
+   highest-yield work available.
+
+2. **Root-cause `admin_home`'s failing block.** A query in `admin_home` was aborting the transaction
+   so every later block returned zero (People counts read 0/0/0; the refund check errored, which is
+   the only reason it was noticed). Each block is now savepointed **and logs its own name**, so the
+   cause is named in the Render logs — `grep "admin_home:"`. **The symptom is fixed; the cause is
+   not.**
+
+3. **A CODE GUARD against R0 / duplicate-duration price rows.** A coach had 60 min R0.00 next to
+   60 min R600.00 and every 60-minute lesson billed nothing; `price_for` tie-breaks `amount_minor ASC`
+   so the free row always won. Tomo removed the bad row on 2026-08-08 — nothing stops it being
+   re-entered tomorrow.
+
+4. **Audit the 51 members showing as on TRIAL** (People → Trial). The trial gives free courts:
+   `python -m scripts.audit_trials` (read-only; `--cancel-flagged` reverts wrong grants to PAYG).
+
+5. **Confirm the PEAK PRICES exist.** The peak WINDOW is live (Mon–Thu 17:00–19:00) but peak only
+   charges more where a `peak_amount_minor` per duration is set on the court service. Window without
+   amounts is inert.
+
+6. **~1,000 Wix imports render as raw email addresses** in People (no first/last name), so the roster
+   sorts and reads by email. Cosmetic, but it makes the list hard to use.
+
+**Config Tomo has already done** (do not re-raise): membership caps 1 booking / 90 minutes · all three
+payment methods enabled · peak window set · equipment payment options · company + bank details ·
+`OPS_KEY` so month-end fires on the 25th.
+
+---
+
 ## Section 3 — the lanes
 
 Touch only your lane; coordinate on `contracts/events.md`, the schema docs and `render.yaml`

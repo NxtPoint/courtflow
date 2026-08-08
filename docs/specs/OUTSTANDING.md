@@ -78,16 +78,15 @@ the refund, lesson and class lifecycles. All scenario-guarded, each verified by 
 
 ### OPEN AS OF 2026-08-02 — from the live-screen review
 
-- [ ] **⚠ A COACH'S 60-MIN LESSON BILLS R0.00 — TOMO TO FIX IN THE UI.** Setup → Services → Lessons
-      shows **Terkaa Nambe** with TWO 60-minute variations: **R0.00** and R600.00. `price_for`
-      resolves the exact duration then tie-breaks on **`amount_minor ASC`**, so it picks the **R0.00**
-      row — every 60-minute lesson with him is billed nothing. Club earnings confirms it:
-      **R12,680 billed, R0.00 in.** **Tomo Stojakovic** has the same shape (60 min R550 *and* R700 —
-      the R550 silently wins). Fix: open the service → Edit → remove the R0.00 variation and decide
-      which 60-min price is right. **This is pricing data, so it is the owner's call, not a code fix.**
-- [ ] **CODE GUARD for the above.** The editor should refuse (or loudly warn on) a **R0 variation on a
-      paid service**, and should surface **duplicate durations** on one product — two rows for the same
-      length is always a mistake, and the cheaper one always wins silently.
+- [x] ~~**A coach's 60-min lesson billed R0.00**~~ — **FIXED BY TOMO 2026-08-08** (the duplicate R0.00
+      60-minute variation was removed in Setup → Services). Kept here for the WHY, because the shape
+      recurs: `price_for` resolves the exact duration then tie-breaks on **`amount_minor ASC`**, so two
+      price rows for one duration are never both offered — **the cheaper one always wins, silently**.
+      This was DATA, not code, which is why no gate caught it and only looking at the live screen did.
+- [ ] **CODE GUARD so it cannot recur (OURS — still open).** The service editor should refuse, or at
+      minimum loudly warn on, a **R0 variation on a paid service**, and should surface **duplicate
+      durations** on one product. Two rows for the same length is always a mistake, and the cheaper
+      one always wins in silence. The data is fixed; nothing stops it being re-entered tomorrow.
 - [ ] **ROOT-CAUSE `admin_home`'s failing block.** Home reported `refund_requests_error` while the
       Refund-requests SECTION worked — a query in `admin_home` was aborting the transaction and every
       later block returned its own zero (so the People counts 0/0/0 were probably false too). Each
