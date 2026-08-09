@@ -1,5 +1,10 @@
 # Local / build artefacts
-.claude/
+# .claude/ is ignored EXCEPT skills/ — the skills are shared team assets (the marketing-manager and
+# tennis-reel operators) and must be version-controlled + backed up. settings.local.json stays ignored:
+# it holds this machine's permission grants. Note `.claude/*` not `.claude/`, because git cannot
+# re-include anything inside a directory that is itself excluded.
+.claude/*
+!.claude/skills/
 .venv/
 .venv-*/
 __pycache__/
