@@ -59,9 +59,16 @@ The org policy `iam.disableServiceAccountKeyCreation` blocks downloadable SA key
 Both repos run the same `build_blog.py`: a Markdown post in `frontend/blog/_posts/<slug>.md` (frontmatter
 `title/description/date/image:`) → `python build_blog.py` → SEO HTML (Article + BreadcrumbList JSON-LD, OG
 card, canonical `/post/<slug>`, sitemap auto-include). Filename = slug; hero `image:` also becomes the OG
-share card + index thumbnail. Optimize images to WebP (Pillow), ~16:9. NextPoint images at `/img/`,
-Ten-Fifty5 at `/blog/images/`. Ten-Fifty5 has a WEEKLY coworker SEO-scan → blog workflow (see the memory
-`ten-fifty5-weekly-seo-blog-workflow`).
+share card + index thumbnail — **a post without one has dead social/link previews**. NextPoint images at
+`/img/`, Ten-Fifty5 at `/blog/images/`. Ten-Fifty5 has a WEEKLY coworker SEO-scan → blog workflow (see the
+memory `ten-fifty5-weekly-seo-blog-workflow`).
+- **The picture library is `C:\Users\tomos\OneDrive\Documentos\blog`** — where Tomo drops every hero /
+  infographic, for BOTH brands. It is the ONLY picture source; `ls` it before publishing or refreshing and
+  match by filename against the topic. Convert with Pillow at `quality=82, method=6` (a ~1.6MB PNG lands at
+  ~130–150KB).
+- **Do NOT crop an infographic to 16:9.** They are dense full-canvas designs with headers and footers, so a
+  crop eats content — keep the source aspect (existing heroes are a mix of 1536x1024 and 1600x900, both
+  in-convention). Crop to 16:9 only for photographs.
 
 ## 6. Google Business Profile (NextPoint only — physical club)
 Ten-Fifty5 is a SaaS (no physical location → no GBP). NextPoint's GBP is optimized off the digest's #1
@@ -75,7 +82,9 @@ ask every happy player for a review.
   generation shows up in the digest/measurement alongside bookings.
 
 ## The operator — the `/marketing-manager` skill
-On-demand deep-tune companion to this automated engine (local skill `.claude/skills/marketing-manager/SKILL.md`).
+On-demand deep-tune companion to this automated engine (`.claude/skills/marketing-manager/SKILL.md` — **version-
+controlled since 2026-08-09**; `.gitignore` excludes `.claude/*` but re-includes `skills/`, so the operating
+procedure is backed up and shared while `settings.local.json` stays private).
 ONE command runs the full routine for BOTH brands — measurement health, organic/SEO scorecard (from the digest),
 technical SEO crawl, Google Ads review+tune (Adspirer), content (website pages + GBP posts, **de-duping the weekly
 Cowork output** against already-published slugs), reviews/GBP — and outputs a per-brand scorecard + prioritized
@@ -83,23 +92,59 @@ action list, executing the safe tunes (spend changes are approval-gated). Run it
 also has an **autonomous weekly Claude Cowork task** (deep-research SEO scan + blog + infographic → outputs folder;
 the skill publishes/de-dupes it — a duplicate topic REFRESHES the existing post, never a competing new page).
 
-## Current state (2026-07-26) — the machine, complete ✅
+**⚠ Two things about the Cowork output that cost real time if you trust it (both seen 2026-08-08):**
+- **It can write the SAME brief on different weeks.** Two handed-over folders held the same article under the
+  same `slug: how-to-read-a-tennis-heatmap`. Two drafts ≠ two posts — **de-dupe the drafts against EACH OTHER,
+  not just against published slugs**, and merge into ONE page (strongest draft as the base, graft in what the
+  other uniquely adds). Identical slugs would silently overwrite at build time anyway.
+- **Its weekly SEO report invents issues — VERIFY every claim against the live site before filing the work.**
+  It recurrently asserts a **"Wix template vs custom template" split** for `/pricing` `/coaching` `/contact-us`
+  and then derives a whole action list from that fiction (missing meta descriptions, a contact-email typo, a
+  raw `wixstudio.com` CTA, orphaned posts, absent JSON-LD). **On 2026-08-07 every single item was false** — one
+  Render stack, meta description + og:image + schema on all pages, all 11 posts linked from `/blog`. Same false
+  positive as 2026-07-26 (a grep matching a Wix *link*, not a page origin). One `curl` per claim settles it.
+  Its **competitor scan and topic ideas remain useful** — those don't rest on the broken site analysis.
+
+## Current state (2026-08-09) — the machine, complete ✅
 - ✅ Both brands **measured** + **digest emailing daily** (+ dashboard-ingested); NextPoint **GBP live**; content
   engines running (blog + GBP posts + Ten-Fifty5 weekly Cowork + the tennis-reel skill).
-- ✅ **NextPoint Google Ads TUNED:** bidding = **Maximize Conversions**; budget **R90/day** (was R66 and
-  budget-capped — scale further while CPA holds); **~R76 cost-per-member** and improving; 28 negatives (incl.
-  `popyrin`); Cyborg PMax stays paused. **Judge by CPA, NOT the ROAS** (conversion values are R1 placeholders
-  except the offline loop). Ten-Fifty5 = **organic-only by choice**.
+- ✅ **NextPoint Google Ads TUNED:** bidding = **Maximize Conversions**; budget **R115/day** (raised from R90
+  on 2026-08-08 — it was spending ~R85/day against a R90 cap while CPA improved); 31 negatives (incl. `popyrin`,
+  and `padel` phrase + `tennis`/`tennis court` **exact-only**); Cyborg PMax stays paused. **Judge by CPA, NOT
+  the ROAS** (conversion values are R1 placeholders except the offline loop). Ten-Fifty5 = **organic-only by choice**.
+  - **Two different CPAs — do not conflate them.** *Web-conversion* CPA (free-week signups / booking starts)
+    was **R45 over 30 days**, having fallen from **R99 → R30** week-on-week as Maximize Conversions exited its
+    learning phase. *Cost-per-MEMBER* — the figure that actually matters, from the offline loop — is the older
+    **~R76** and is necessarily higher, since not every signup becomes a paying member. Judge a scale-up against
+    R45, expecting some drift up as extra budget buys less-qualified traffic at the margin.
+  - **⚠ Do NOT bulk-apply Adspirer's negative-keyword list.** It flags any term with high cost and zero
+    conversions, which at this volume means 1–5 clicks of noise. On 2026-08-08 it recommended blocking
+    `tennis lessons johannesburg`, `tennis clubs in johannesburg`, `tennis coach johannesburg` — core money
+    queries — and `next point`, the brand itself. Worse, `tennis` and `tennis court` as broad/phrase negatives
+    would block every search containing those words and switch the campaign off. Vet by hand; exact-match only
+    for single generic words.
 - ✅ **Offline-conversion loop LIVE + importing** (`offline_conversions/`): gclid capture (`attribution.js`) →
   `core.offline_conversion` → the password-gated CSV feed `/feeds/google-ads/offline-conversions.csv`
   (`GOOGLE_ADS_FEED_USER`/`PASS`) → Google Ads' **daily scheduled upload** → the **"Offline purchase"** conversion
   action (`UPLOAD_CLICKS`, ENABLED, real member value). Already matched **2 ad-clickers → paying members (R360,
   95.7% of all conversion value)** — teaching bidding to chase real members, not clickers. *(Only keep ONE scheduled
   upload in the Ads UI — a duplicate is harmless, Google dedupes, but tidy to one.)*
-- ✅ **Content shipped this build:** NextPoint (`book-a-tennis-court-in-killarney-johannesburg`,
+- ✅ **Content shipped 2026-07-26:** NextPoint (`book-a-tennis-court-in-killarney-johannesburg`,
   `tennis-lessons-in-johannesburg` + matching GBP posts); Ten-Fifty5 (`how-to-reduce-unforced-errors-in-tennis-using-data`,
   refreshed `tennis-return-of-serve-analysis` with a branded infographic). SEO polish: trimmed meta/titles, blog-index schema.
+- ✅ **Content shipped 2026-08-08/09:** NextPoint (`tennis-courts-in-johannesburg` — a city-level landing page
+  for the head terms `tennis courts johannesburg` / `tennis club johannesburg`, pos ~10–11 with no dedicated
+  page until then; + a matching GBP post drafted). Ten-Fifty5 now at **13 posts**: new
+  `how-to-read-a-tennis-heatmap` (the two duplicate Cowork drafts merged into one) and
+  `tennis-analytics-for-junior-players` (the tennis-PARENT audience — unclaimed by every competitor, and the
+  blog's first non-player reader); refreshed `the-complete-guide-to-tennis-rally-analysis` onto definition
+  intent (it ranked pos 8.5–15.7 for `tennis rally meaning` with **zero clicks** — the title promised tactical
+  analysis, the searcher wanted a definition) and `how-to-film-your-tennis-match-for-analysis` to absorb
+  `swingvision stick alternative` rather than give it a competing page. Hero infographics added to all three
+  Ten-Fifty5 posts. **All refreshes kept their canonicals — no new URLs.**
 - **Optional next levers (not urgent):** set real conversion **VALUES** on the other actions → value-based /
   Target-ROAS bidding; **Customer Match** (exclude existing members from ad spend + seed lookalikes).
 - Ten-Fifty5 keeps **dormant DB-coupled Wix scaffolding** — a staged decommission is scoped in the 1050 repo's
-  `docs/DE-WIX-DECOMMISSION.md` (**DO NOT rush**). Coworker Ahrefs **free DR endpoint needs a free API key before 1 Aug 2026**.
+  `docs/DE-WIX-DECOMMISSION.md` (**DO NOT rush**). Coworker Ahrefs **free DR endpoint needs a free API key — the
+  2026-08-07 report puts the cutoff at 2026-08-10**, so this is overdue-imminent; Domain Rating (11/100) is the
+  only live figure in that weekly report and stops flowing without it.
