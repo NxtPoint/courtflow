@@ -91,6 +91,15 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   all' wrapper and drops its coach_arrears. A PAID order is never touched (that is the refund
   path). Deliberately a script and not an admin button: "wipe this client's balance" is one
   mis-click from erasing a real member's real debt.
+- `reconcile_coach_cash.py` — READ-ONLY: **ties a coach's commission splits back to the CASH that
+  produced them**, following `commission_split.payment_id` to the payment and the ORDER it was
+  recorded against. Answers the "these two numbers should match and don't" question that
+  `diagnose_coach_statement` raises: a split paid via a **'Pay all' wrapper** is real money whose
+  payment row hangs on the wrapper — and a wrapper carries no coach, so a per-coach read of
+  `billing.payment` cannot see it while the splits can. Classifies every split as paid-directly /
+  via-a-wrapper / no-payment-row (an off-platform arrears collection) and prints anything left as
+  UNEXPLAINED. `--coach <name|email> [--month YYYY-MM]`. Resolves the coach FIRST and uses THEIR
+  club, never "the first club".
 - `audit_zero_prices.py` — READ-ONLY: **prices that silently bill NOTHING.** `pricing.price_for`
   resolves the exact duration then tie-breaks on `amount_minor ASC`, so two active rows for one
   product+duration make the CHEAPER one authoritative, in silence — production ran a coach on
