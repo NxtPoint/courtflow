@@ -504,7 +504,29 @@ def seat_a_new_booking(session, *, club_id, booking_id, holder_user_id, holder_o
         return None
 
     fmt = play_format or booking.get("play_format") or "singles"
+    if fmt not in SEATS_BY_FORMAT:
+        fmt = "singles"
+    # A crafted `seats` can only change how many people SHARE the fee, never what the fee is — but an
+    # absurd one would still divide the court into unpayable slivers, so it is clamped to the format's
+    # own count as a floor and a sane ceiling above it.
     total_seats = int(seats or booking.get("seats") or SEATS_BY_FORMAT.get(fmt, 1))
+    total_seats = max(SEATS_BY_FORMAT.get(fmt, 1), min(total_seats, 8))
+
+    # The fill deadline is the CLUB's, never the caller's: it decides when an unfilled seat becomes
+    # the holder's to pay for, so a deadline that outlives the game is a court held for free.
+    #
+    # CLAMPED, not defaulted. The first cut only computed this when the caller passed nothing, which
+    # left a supplied value to sail straight through — and the route passing None was the only reason
+    # that wasn't reachable over HTTP. create_booking is a public function; the money core has to hold
+    # this on its own. A caller may bring the deadline FORWARD (a shorter window is their business);
+    # it can never be pushed past the club's cutoff.
+    if visibility == "open":
+        from datetime import timedelta
+        cutoff_h = int(pol.get("open_game_cutoff_hours") or 12)
+        club_cutoff = booking["starts_at"] - timedelta(hours=cutoff_h)
+        open_until = club_cutoff if open_until is None else min(open_until, club_cutoff)
+    else:
+        open_until = None
     session.execute(
         text("UPDATE diary.booking SET play_format = :f, seats = :n, visibility = :v, "
              "       open_until = :ou, updated_at = now() WHERE club_id = :c AND id = :b"),

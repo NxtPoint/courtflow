@@ -164,9 +164,16 @@ caught it if they weren't. Any lane emitting via a helper has the same blind spo
 
 ## Still to build
 
-The `booking.js` **"Who's playing?"** step (the booking flow still can't set seats/format from the UI —
-`create_booking` accepts them, but only an API caller can pass them). Admin surfacing of open games and
-invites. The two owed money scenarios below.
+Admin surfacing of open games, invites and level overrides. The two owed money scenarios below
+(a refund restoring the split; a collapsed seat on a card-only court). Phase 2 as listed above.
+
+**Done since:** the `booking.js` **"Who's playing?"** step — format (singles / doubles / on my own),
+named players, and a "let another member take the spare seat" tick. It appears ONLY where the club has
+`seat_rule_enforced` on (`GET /api/community/config`), because `create_booking` ignores seats otherwise
+and collecting them would be a lie. Where it appears, the old free-guest step is suppressed: an unbilled
+"guest" is precisely the leak the seat rule closes, so offering both on one screen would contradict
+itself. The step states plainly that an unfilled seat is added to the booker's bill — that charge lands
+at the cutoff whether or not anyone read the screen.
 
 **Phase 2 (not now):** dynamic ratings from results, reliability score, Flex leagues, groups, doubles
 matchmaking, Smart Match. **Never:** a social feed — an empty feed across 1,100 members reads as a dead
@@ -180,7 +187,7 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
 read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
 the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
-(`courtflow-dev`) at booking 504 / billing 693 / statement 64, with `python -m db` twice a clean
+(`courtflow-dev`) at booking 508 / billing 693 / statement 64, with `python -m db` twice a clean
 no-op including `community.schema`.
 
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart

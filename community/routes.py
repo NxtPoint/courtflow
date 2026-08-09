@@ -71,6 +71,27 @@ def _staff(p):
 # discovery + games
 # ---------------------------------------------------------------------------
 
+@community_bp.get("/config")
+def config():
+    """The club's community switches, for the UI.
+
+    Exists so the booking flow can offer a "Who's playing?" step ONLY where the seat rule is actually
+    on. Without it the step would collect players that `create_booking` then silently ignores (it only
+    seats a court when `seat_rule_enforced`), which is worse than not offering it: the member would
+    believe they had named someone and be charged for an unfilled seat anyway."""
+    p = _principal()
+    if not p:
+        return jsonify(error="unauthorized"), 401
+    from community import seats
+    with session_scope() as s:
+        pol = seats.policy(s, p.club_id)
+    return jsonify(community_enabled=pol["community_enabled"],
+                   seat_rule_enforced=pol["seat_rule_enforced"],
+                   open_game_cutoff_hours=pol["open_game_cutoff_hours"],
+                   seat_pay_hours=pol["seat_pay_hours"],
+                   seats_by_format=seats.SEATS_BY_FORMAT), 200
+
+
 @community_bp.get("/games")
 def list_games():
     p = _principal()

@@ -3761,9 +3761,41 @@ def sc_community_reads_never_leak_contact_details(s, fx):
     check("suggestions carry no email either", "@" not in str(sugg), str(sugg)[:300])
 
 
+def sc_a_crafted_game_cannot_cheapen_or_outlive_its_own_bill(s, fx):
+    """`seats`, `play_format` and `visibility` arrive off the REQUEST BODY, so they get the same
+    treatment as the posted product_id: read, then bounded server-side.
+
+    Two things a crafted request would otherwise buy. A huge `seats` divides one court fee into
+    unpayable slivers, so it is clamped. And `open_until` — the instant an unfilled seat becomes the
+    holder's to pay for — is NEVER taken from the body at all: a client that could set it could push
+    its own charge past the game and never be billed for the court it held."""
+    print("\n# a crafted game can't cheapen its share or push its own deadline past the game")
+    from community import seats as S
+    _enable_seat_rule(s, fx)
+    m = fx.members[0]
+    _membership_for_court(s, fx, m)
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="membership_covered",
+                         starts_at=utc_iso(at(fx, 18)), ends_at=utc_iso(at(fx, 19)),
+                         play_format="singles", seats=99, visibility="open",
+                         # A caller trying to outlive its own bill: a deadline AFTER the game starts.
+                         open_until=at(fx, 23))
+    check("the booking still succeeds", r.get("ok"), str(r))
+    bid = r["booking"]["id"]
+    row = s.execute(text("SELECT seats, open_until, starts_at FROM diary.booking WHERE id=:b"),
+                    {"b": bid}).mappings().first()
+    check("a 99-seat singles court is clamped, not honoured", int(row["seats"]) <= 8, str(row["seats"]))
+    check("the fill deadline is the CLUB's, and falls BEFORE the game starts",
+          row["open_until"] is not None and row["open_until"] < row["starts_at"], str(dict(row)))
+    check("…so the sweep can still collapse it and bill the holder",
+          S.seat_plan(s, club_id=fx.club_id, booking_id=bid)["open_count"] > 0)
+
+
 SCENARIOS = [
     # THE SEAT RULE (community/) — the money core, pinned before create_booking learns about seats.
     sc_seat_split_covers_the_court_exactly,
+    sc_a_crafted_game_cannot_cheapen_or_outlive_its_own_bill,
     sc_invited_friend_is_trialed_once_only,
     sc_joining_an_open_game_bills_the_new_seat,
     sc_leaving_a_game_frees_the_seat_and_the_debt,

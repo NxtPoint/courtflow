@@ -67,6 +67,10 @@
     // Loaded unscoped here (no service or slot chosen yet); refreshEquipmentForSlot() re-fetches it
     // scoped to the CHOSEN court service + time once we reach the confirm step.
     try { ctx.equipment = (await window.TFAuth.apiJSON("/api/diary/equipment")).equipment || []; } catch (e) { ctx.equipment = []; }
+    // Community switches — decides whether the court flow offers a "Who's playing?" step. Guarded
+    // like every other ctx load: if the lane is absent or the call fails we simply don't offer it,
+    // which is exactly today's behaviour.
+    try { ctx.community = await window.TFAuth.apiJSON("/api/community/config"); } catch (e) { ctx.community = null; }
     ctx.policy = (principal && principal.policy) || null;
     ctx.loaded = true;
   }
@@ -913,9 +917,17 @@
     var squad = squadSection();
     if (squad) card.appendChild(squad);
 
+    // COURT: who's on the court, under the seat rule. Same shape as the squad section above — and for
+    // the same reason: a player who isn't covered gets their OWN bill, never a free ride on the
+    // booker's membership.
+    var players = playersSection();
+    if (players) card.appendChild(players);
+
     // On-behalf: the client IS the booked party (posted via for_email) — no self player/guest step.
     // A semi-private lesson uses the squad section above (billable partners), not the free-guest step.
-    if (st.type !== "class" && !st.onBehalf && !isSemiPrivate()) {
+    // The free-guest step is ALSO suppressed once the seat rule is on: an unbilled "guest" is exactly
+    // the leak the seat rule closes, so offering both on one screen would contradict itself.
+    if (st.type !== "class" && !st.onBehalf && !isSemiPrivate() && !seatRuleOn()) {
       var gName = el("input", { class: "cf-input", placeholder: "Guest name", value: (st.guest && st.guest.name) || "" });
       var gEmail = el("input", { class: "cf-input", type: "email", placeholder: "Guest email (optional)", value: (st.guest && st.guest.email) || "" });
       st._gName = gName; st._gEmail = gEmail;
@@ -1073,6 +1085,100 @@
     }
     return sec;
   }
+  // ---- WHO'S PLAYING (court bookings, community lane) -------------------------
+  // The seat rule means a court's price is split among the players who are NOT covered by a
+  // membership. So the booking flow has to ask who is on the court — and it has to be honest that an
+  // unfilled seat becomes the booker's to pay for, because that charge lands at the cutoff whether or
+  // not anyone read the screen.
+  //
+  // Only offered when the club has actually switched the rule on (ctx.community.seat_rule_enforced).
+  // Otherwise create_booking ignores seats entirely and collecting them would be a lie.
+  function seatRuleOn() {
+    return !!(ctx.community && ctx.community.seat_rule_enforced && st.type === "court");
+  }
+  function seatsForFormat(fmt) {
+    var m = (ctx.community && ctx.community.seats_by_format) || { singles: 2, doubles: 4, practice: 1 };
+    return m[fmt] || 2;
+  }
+  function playersPickerConfig() {
+    var picked = (st.players || []).map(function (x) { return x.payload && x.payload.user_id; }).filter(Boolean);
+    return {
+      excludeIds: picked,
+      searchFn: (st.onBehalf || st.coachLock) ? function (q) { return window.API.searchMembers(q); } : null,
+      toast: false,
+      onSubmit: function (payload, label) {
+        st.players = st.players || [];
+        st.players.push({ payload: payload, name: label || (payload && payload.email) || "Player" });
+        renderConfirm();
+        return true;
+      },
+    };
+  }
+  function playersSection() {
+    if (!seatRuleOn()) return null;
+    if (!st.players) st.players = [];
+    if (!st.playFormat) st.playFormat = "singles";
+    var total = seatsForFormat(st.playFormat);
+    var named = st.players.length + 1;                 // + the booker
+    var open = Math.max(0, total - named);
+
+    var sec = el("div", { class: "cf-confirm-sec" });
+    sec.appendChild(el("h3", { text: "Who's playing?" }));
+
+    var fmtRow = el("div", { class: "cf-row", style: "gap:8px;margin-bottom:8px" });
+    ["singles", "doubles", "practice"].forEach(function (f) {
+      var b = el("button", {
+        type: "button",
+        class: "cf-btn cf-btn-sm" + (st.playFormat === f ? " cf-btn-primary" : ""),
+        text: f === "practice" ? "On my own" : (f.charAt(0).toUpperCase() + f.slice(1)),
+      });
+      b.addEventListener("click", function () {
+        st.playFormat = f;
+        if (f === "practice") st.players = [];
+        renderConfirm();
+      });
+      fmtRow.appendChild(b);
+    });
+    sec.appendChild(fmtRow);
+
+    if (st.playFormat !== "practice") {
+      var list = el("div", { class: "cf-list" });
+      st.players.forEach(function (item, i) {
+        list.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: item.name })]),
+          el("span", { class: "cf-spacer" }),
+          el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", type: "button", text: "Remove",
+            onclick: function () { st.players.splice(i, 1); renderConfirm(); } }),
+        ]));
+      });
+      sec.appendChild(list);
+      if (open > 0) {
+        sec.appendChild(el("button", { class: "cf-btn cf-btn-sm", type: "button", style: "margin-top:8px",
+          text: "+ Add a player",
+          onclick: function () { window.CRMUI.addLessonPlayerModal(playersPickerConfig()); } }));
+        var openLbl = el("label", { class: "cf-check", style: "display:block;margin-top:10px" });
+        var cb = el("input", { type: "checkbox" });
+        cb.checked = st.openGame !== false;
+        cb.addEventListener("change", function () { st.openGame = cb.checked; });
+        openLbl.appendChild(cb);
+        openLbl.appendChild(el("span", { text: " Let another member take the spare seat" }));
+        sec.appendChild(openLbl);
+      }
+    }
+
+    // The honest sentence. A member who reads nothing else on this screen should still know that an
+    // empty seat is theirs to pay for if nobody takes it.
+    var note = st.playFormat === "practice"
+      ? "You'll be charged for the court."
+      : (open > 0
+        ? "Members play on their membership. Anyone who isn't a member shares the court fee. "
+          + "If the spare seat isn't taken by a few hours before you play, it's added to your bill."
+        : "Members play on their membership. Anyone who isn't a member is billed their share "
+          + "separately — the court is confirmed once everyone has paid.");
+    sec.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:8px", text: note }));
+    return sec;
+  }
+
   function captureGuest() {
     if (st.type !== "class" && st._gName) {
       var n = st._gName.value.trim(), em = st._gEmail.value.trim();
@@ -1145,6 +1251,21 @@
           var addons = Object.keys(st.addonQty).filter(function (id) { return st.addonQty[id] > 0; })
             .map(function (id) { return { resource_id: id, qty: st.addonQty[id] }; });
           if (addons.length) body.addons = addons;
+        }
+        // THE SEAT RULE: who's on the court, and whether the spare seat is offered to the club.
+        // Sent only when the club has the rule ON — otherwise the server ignores it and collecting
+        // it would have been a lie. Every named player gets their OWN bill if they aren't covered.
+        if (seatRuleOn()) {
+          body.play_format = st.playFormat || "singles";
+          body.seats = seatsForFormat(body.play_format);
+          if (st.players && st.players.length) {
+            var mates = st.players.map(function (x) { return x.payload; }).filter(Boolean);
+            if (mates.length) body.extra_clients = mates;
+          }
+          var stillOpen = body.seats - ((st.players || []).length + 1);
+          if (body.play_format !== "practice" && stillOpen > 0 && st.openGame !== false) {
+            body.visibility = "open";
+          }
         }
       }
       mergeProfileFields(body);   // Client-360 Step 4: carry captured name/surname/cell

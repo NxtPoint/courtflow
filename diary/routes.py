@@ -404,6 +404,19 @@ def create_booking():
             product_id=b.get("product_id"),   # the chosen SERVICE (Private/Semi-private) → price exactly it
             addons=b.get("addons"),            # equipment hire [{resource_id, qty}] on a court booking
             extra_clients=extra_clients,       # semi-private squad members (each billed their own order)
+            # THE SEAT RULE (community/): who is on the court. `seats` and `play_format` set the
+            # denominator of the money split, so they are read from the body but the SPLIT itself is
+            # computed server-side from the club's own court price — a crafted `seats` can only change
+            # how many people share the fee, never what the fee is.
+            #
+            # `open_until` is deliberately NOT taken from the body: it is the deadline after which an
+            # unfilled seat is billed to the holder, so a client that could set it could push its own
+            # charge past the game and never be billed. The server computes it from the club's
+            # open_game_cutoff_hours.
+            play_format=b.get("play_format"),
+            seats=b.get("seats"),
+            visibility=("open" if b.get("visibility") == "open" else "private"),
+            open_until=None,
             audience=audience, notes=b.get("notes"),
             recurrence_id=b.get("recurrence_id"),
             booked_for_user_id=booked_for_user_id,
