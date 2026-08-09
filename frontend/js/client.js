@@ -440,55 +440,72 @@
       box.appendChild(l);
     }
     box.appendChild(el("div", { class: "cf-row", style: "margin-top:8px" }, [
-      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Invoices ›", onclick: function () { go("#/invoices"); } }),
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Billing by month ›", onclick: function () { go("#/invoices"); } }),
     ]));
   }
 
   // ---- INVOICES (the member's issued invoice documents — view / download PDF) ----
+  // BILLING, MONTH BY MONTH — the shape a member thinks in, and the same one the invoice and the
+  // coach settlement now use. It replaced a flat invoice list sitting beside a single running
+  // balance: mid-August a member saw July's unpaid R5,000 and August's part-month as ONE figure
+  // here and as separate documents there, and the only settle action paid the lot.
+  //
+  // The CURRENT month has no invoice yet — charges accrue and the sweep bills them on the 1st. It
+  // is still payable: paying early simply leaves less for the month-end invoice, because the sweep
+  // only ever picks up orders still open. The row says "Not yet invoiced" so that reads as normal
+  // rather than as something forgotten.
   async function renderInvoices() {
     loading();
-    var invoices = [];
-    try { invoices = (await window.TFAuth.apiJSON("/api/me/invoices")).invoices || []; }
-    catch (e) { set(el("div", {}, [pageHeader("Invoices", "Home", "#/"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
-    var wrap = el("div", {}, [pageHeader("Invoices", "Home", "#/")]);
-    if (!invoices.length) { wrap.appendChild(el("div", { class: "cf-empty", text: "You have no invoices yet." })); set(wrap); return; }
-    var chipCls = { "Paid": "confirmed", "Unpaid": "owed", "Partially paid": "owed", "Void": "" };
+    var data = null;
+    try { data = await window.TFAuth.apiJSON("/api/me/statement/months"); }
+    catch (e) { set(el("div", {}, [pageHeader("Billing", "Home", "#/"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
+    var months = (data && data.months) || [];
+    var wrap = el("div", {}, [pageHeader("Billing", "Home", "#/")]);
+    if (!months.length) { wrap.appendChild(el("div", { class: "cf-empty", text: "Nothing billed yet." })); set(wrap); return; }
+    var chipCls = { "Paid": "confirmed", "Unpaid": "owed", "Partially paid": "owed",
+                    "Not yet invoiced": "", "Void": "", "Cancelled": "" };
     var l = el("div", { class: "cf-list" });
-    invoices.forEach(function (iv) {
+    months.forEach(function (m) {
+      var owed = m.outstanding_minor || 0;
       var right = el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [
-        el("span", { style: "font-weight:700", text: money(iv.total_minor, iv.currency) }),
-        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "PDF", onclick: function () { UI.openAuthedFile("/api/billing/invoice/" + iv.invoice_id + "/pdf", (iv.number || "invoice") + ".pdf"); } }),
+        el("span", { style: "font-weight:700", text: money(m.billed_minor, m.currency) }),
       ]);
-      // PAY THIS INVOICE — not the whole account. "Pay outstanding online" below settles everything
-      // owed, which for a member holding a July invoice while August is already accruing charges
-      // more than the invoice asks for. The pay path always accepted explicit order ids; the screen
-      // simply had none to give it.
-      if ((iv.outstanding_minor || 0) > 0 && (iv.open_order_ids || []).length) {
-        right.appendChild(el("button", {
-          class: "cf-btn cf-btn-sm cf-btn-primary",
-          text: "Pay " + money(iv.outstanding_minor, iv.currency),
-          onclick: function () { payOrders(iv.open_order_ids); },
-        }));
+      if (m.invoice) {
+        right.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "PDF",
+          onclick: function () { UI.openAuthedFile("/api/billing/invoice/" + m.invoice.invoice_id + "/pdf", (m.invoice.number || "invoice") + ".pdf"); } }));
       }
+      // Pay THIS month — never the whole account. A part payment is fine and expected: it just
+      // reduces what the month-end invoice picks up.
+      if (owed > 0 && (m.open_order_ids || []).length) {
+        right.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary",
+          text: "Pay " + money(owed, m.currency),
+          onclick: function () { payOrders(m.open_order_ids); } }));
+      }
+      var sub = [];
+      if (m.paid_minor) sub.push(money(m.paid_minor, m.currency) + " paid");
+      if (owed > 0) sub.push(money(owed, m.currency) + " due");
+      if (m.written_off_minor) sub.push(money(m.written_off_minor, m.currency) + " written off");
+      if (m.invoice && m.invoice.number) sub.push(m.invoice.number);
       l.appendChild(el("div", { class: "cf-item" }, [
-        el("span", { class: "cf-chip " + (chipCls[iv.status_label] || ""), text: iv.status_label }),
+        el("span", { class: "cf-chip " + (chipCls[m.status_label] || ""), text: m.status_label }),
         el("div", { class: "cf-item-main" }, [
-          el("div", { class: "cf-item-t", text: iv.number || "Invoice" }),
-          el("div", { class: "cf-item-s", text: (iv.issued_at ? UI.fmtDate(iv.issued_at) : "") + (iv.outstanding_minor > 0 ? " · " + money(iv.outstanding_minor, iv.currency) + " due" : "") }),
+          el("div", { class: "cf-item-t", text: monthName(m.period) }),
+          el("div", { class: "cf-item-s", text: sub.join(" · ") }),
         ]),
         right,
       ]));
     });
     wrap.appendChild(l);
-    // A card-settle shortcut for anything still outstanding (reuses the unified pay-all).
-    if (invoices.some(function (iv) { return iv.outstanding_minor > 0; })) {
-      wrap.appendChild(el("div", { class: "cf-row", style: "margin-top:12px" }, [
-        el("button", { class: "cf-btn cf-btn-primary", text: "Pay everything outstanding", onclick: function () { payOrders(null); } }),
-      ]));
-    }
     set(wrap);
   }
 
+  function monthName(ym) {
+    try {
+      var p = String(ym).split("-");
+      return new Date(p[0], parseInt(p[1], 10) - 1, 1)
+        .toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    } catch (e) { return ym; }
+  }
   // ---- MY RECORD (the ONE Client-360 widget, client scope — golden rule) ----
   // The member's full account is a VIEW off the one client360 composer (API.my360 →
   // GET /api/me/360, scope='client') rendered by the SAME Widgets.ClientRecord used in the

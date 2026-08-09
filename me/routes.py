@@ -459,6 +459,21 @@ def get_invoices():
     return jsonify(invoices=invoices), 200
 
 
+@me_bp.get("/statement/months")
+def get_statement_months():
+    """The caller's account MONTH BY MONTH — billed / paid / outstanding per month, the invoice if
+    one has been issued, and the order ids to settle just that month. STRICTLY member-scoped."""
+    p, err = _principal()
+    if err:
+        return err
+    if not can(p, "view_own_ledger", {"club_id": p.club_id}):
+        return jsonify(error="forbidden"), 403
+    from billing import me as me_repo
+    with session_scope() as s:
+        data = me_repo.statement_by_month(s, club_id=p.club_id, user_id=p.user_id)
+    return jsonify(data), 200
+
+
 @me_bp.get("/activity")
 def get_activity():
     """The client's monthly ACTIVITY — answers 'what did I book', 'what did I spend on what', and

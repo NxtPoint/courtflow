@@ -40,11 +40,11 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    13 live events absent from `contracts/events.md`. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 455 / billing 677 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 455 / billing 686 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (62/93/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (62/94/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **Update the "Current green baseline" line above and nothing else**, so
    the numbers can't drift apart (`scripts.audit_docs` fails any doc that claims a DIFFERENT current

@@ -320,7 +320,7 @@ pay-link email (`invoice_issued`; else a plain `statement_ready`), idempotent pe
 Google-review funnel) · `GET/POST /api/subscribe` (token-guarded re-permission opt-in) ·
 `GET /api/insights/{overview,bookings-by-day,sales-by-day,court-utilisation,trial-cohorts,web-metrics}` ·
 the INVOICE surface `GET /api/billing/invoice/<id>` (+ `/pdf`, `POST .../mark-paid`, `POST .../void`),
-`GET /api/me/invoices`, `GET /api/admin/clients/<id>/invoices`, `POST /api/admin/clients/<id>/statement-invoice`,
+`GET /api/me/invoices` · `GET /api/me/statement/months` (the account MONTH BY MONTH — billed/paid/outstanding per month, its invoice once issued, and the order ids to settle just that month; the CURRENT month has no invoice yet and is still payable), `GET /api/admin/clients/<id>/invoices`, `POST /api/admin/clients/<id>/statement-invoice`,
 `GET /api/billing/receipt/<id>/pdf` · the PROMOTIONS surface `/api/admin/promotions*` +
 `POST /api/billing/promo/{validate,apply}` · `DELETE /api/diary/time-off/<id>` ·
 `POST /api/diary/bookings/<id>/add-player` · `GET /api/diary/members/search`.
@@ -649,7 +649,7 @@ dashboard (`sync:false`).
   No DB, no env, ~1s. A JS file that doesn't parse is dead in the browser entirely.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 455 / billing 677 / statement 64** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 455 / billing 686 / statement 64** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
   on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +

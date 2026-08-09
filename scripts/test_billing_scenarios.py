@@ -4338,6 +4338,81 @@ def sc_a_month_swept_early_can_still_be_closed(s, fx):
           CM.month_end_period(s) == period, CM.month_end_period(s))
 
 
+def sc_the_client_account_reads_month_by_month(s, fx):
+    """A member's account is one row per MONTH — billed, paid, still due, and payable on its own.
+
+    It used to be a flat invoice list beside a single running balance: mid-August a member saw
+    July's unpaid R5,000 and August's part-month as ONE figure on the statement and as separate
+    documents on another screen, and the only settle action paid the lot. A member wanting to clear
+    July would have been charged for August too.
+
+    Same DELIVERY-month basis as the invoice and the coach settlement, so a charge cannot sit on a
+    different row from the invoice that bills it. The CURRENT month has no invoice yet and is still
+    payable — paying early just leaves less for the month-end sweep."""
+    print("\n# The client account reads month by month, and each month pays on its own")
+    from billing import me as ME2, invoicing as INV6
+
+    import datetime as _dt
+    tz_now = s.execute(text("SELECT now() AT TIME ZONE 'Africa/Johannesburg'")).scalar()
+    this_m = tz_now.strftime("%Y-%m")
+    prev = (tz_now.replace(day=1) - _dt.timedelta(days=1))
+    prev_m = prev.strftime("%Y-%m")
+
+    def charge(day, amount):
+        oid = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,'
+                             "currency_code,settlement_mode,status,service_date) "
+                             "VALUES (:c,:u,:a,'ZAR','monthly_account','open',CAST(:d AS date)) "
+                             "RETURNING id"),
+                        {"c": fx.club_id, "u": fx.member, "a": amount, "d": day}).scalar_one()
+        s.execute(text("INSERT INTO billing.order_line (order_id,club_id,description,qty,"
+                       "amount_minor) VALUES (:o,:c,'Lesson',1,:a)"),
+                  {"o": str(oid), "c": fx.club_id, "a": amount})
+        return str(oid)
+
+    last1 = charge(prev.strftime("%Y-%m-10"), 300000)
+    charge(prev.strftime("%Y-%m-20"), 200000)
+    charge(tz_now.strftime("%Y-%m-03"), 120000)
+
+    d = ME2.statement_by_month(s, club_id=fx.club_id, user_id=fx.member)
+    by = {m["period"]: m for m in d["months"]}
+    check("last month is its own row", by.get(prev_m, {}).get("billed_minor") == 500000,
+          str(by.get(prev_m)))
+    check("this month is its own row", by.get(this_m, {}).get("billed_minor") == 120000,
+          str(by.get(this_m)))
+    check("the current month says it is NOT YET INVOICED, not 'missing'",
+          by[this_m]["status_label"] == "Not yet invoiced", by[this_m]["status_label"])
+    check("...and is still payable on its own",
+          len(by[this_m]["open_order_ids"]) == 1, str(by[this_m]["open_order_ids"]))
+
+    # Paying LAST month must not touch THIS month — the whole point.
+    from billing import orders as O3
+    for oid in by[prev_m]["open_order_ids"]:
+        O3.record_desk_payment(s, club_id=fx.club_id, order_id=oid,
+                               amount_minor=_order(s, oid)["amount_minor"], provider="eft",
+                               user_id=fx.member)
+    d2 = ME2.statement_by_month(s, club_id=fx.club_id, user_id=fx.member)
+    by2 = {m["period"]: m for m in d2["months"]}
+    check("last month settles to zero", by2[prev_m]["outstanding_minor"] == 0, str(by2[prev_m]))
+    check("...and reads Paid", by2[prev_m]["status_label"] == "Paid", by2[prev_m]["status_label"])
+    check("...while THIS month is untouched", by2[this_m]["outstanding_minor"] == 120000,
+          str(by2[this_m]))
+
+    # An invoice issued for a month attaches to THAT month's row, though it is raised on the 1st of
+    # the next one.
+    res = INV6.issue_statement_invoice(s, club_id=fx.club_id, user_id=fx.member,
+                                       period_label=this_m, scope_to_period=True)
+    d3 = ME2.statement_by_month(s, club_id=fx.club_id, user_id=fx.member)
+    by3 = {m["period"]: m for m in d3["months"]}
+    check("the invoice attaches to the month it BILLS, not the day it was issued",
+          res.get("ok") and by3[this_m]["invoice"] is not None, str(by3[this_m]))
+
+    # PART-PAYING the current month is fine — it just leaves less for the month-end sweep.
+    check("a part payment leaves less for the month-end invoice",
+          INV6.open_order_ids(s, club_id=fx.club_id, user_id=fx.member,
+                              period_label=prev_m) == [],
+          "last month has nothing left to invoice once paid")
+
+
 def sc_a_desk_payment_recorded_in_error_can_be_undone(s, fx):
     """A charge ticked 'paid' by mistake can be UNDONE — and that is not a refund.
 
@@ -5090,6 +5165,7 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
 
 
 SCENARIOS = [
+    sc_the_client_account_reads_month_by_month,
     sc_a_desk_payment_recorded_in_error_can_be_undone,
     sc_coach_earnings_carries_the_settlement,
     sc_one_active_price_per_duration,

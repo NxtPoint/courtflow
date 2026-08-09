@@ -531,3 +531,71 @@ def member_financials(session, *, club_id, user_id) -> Dict[str, Any]:
         "account": account,
         "next_charge": next_charge,
     }
+
+
+def statement_by_month(session, *, club_id, user_id, months=12) -> Dict[str, Any]:
+    """The client's account, MONTH BY MONTH — the shape a member actually thinks in.
+
+    Their statement was a single running balance: mid-August a member saw July's unpaid R5,000 and
+    August's part-month as one figure, while the Invoices list showed the months apart. Two views of
+    the same money in two shapes, and the only settle action paid the lot.
+
+    So: one row per month, on the same DELIVERY-month basis the invoice and the coach settlement use
+    (billing.invoicing.DELIVERED_AT_SQL — the ONE definition; a third copy would drift and put a
+    charge on a different row from the invoice that bills it). Each row carries what was billed, what
+    has been paid, what is still owed, the invoice if one has been issued, and the order ids to
+    settle just that month.
+
+    THE CURRENT MONTH HAS NO INVOICE, and that is not a gap: charges accrue and the sweep bills them
+    on the 1st. A member can still pay it down early — which simply means less is left for the
+    month-end invoice, because issue_statement_invoice only ever picks up orders still open.
+    """
+    from billing.invoicing import DELIVERED_AT_SQL, list_invoices
+    cur = (session.execute(text("SELECT currency_code FROM club.club WHERE id = :c"),
+                           {"c": str(club_id)}).scalar()) or "ZAR"
+    rows = session.execute(
+        text('SELECT to_char(({d} AT TIME ZONE COALESCE('
+             "         (SELECT timezone FROM club.club WHERE id = :c),'Africa/Johannesburg')),"
+             "        'YYYY-MM') AS period, "
+             "       COALESCE(SUM(o.amount_minor) FILTER (WHERE o.status <> 'void'),0) AS billed, "
+             "       COALESCE(SUM(o.amount_minor) FILTER (WHERE o.status = 'paid'),0)  AS paid, "
+             "       COALESCE(SUM(o.amount_minor) FILTER (WHERE o.status IN "
+             "                ('open','awaiting_payment')),0)                          AS outstanding, "
+             "       COALESCE(SUM(o.amount_minor) FILTER (WHERE o.status = 'written_off'),0) AS written_off, "
+             "       ARRAY_REMOVE(ARRAY_AGG(CASE WHEN o.status IN ('open','awaiting_payment') "
+             "                              THEN o.id END), NULL) AS open_ids, "
+             "       MIN(o.currency_code) AS cur "
+             'FROM billing."order" o '
+             " WHERE o.club_id = :c AND o.user_id = :u AND o.amount_minor > 0 "
+             "   AND o.settled_by_order_id IS NULL AND o.covered_order_ids IS NULL "
+             " GROUP BY 1 ORDER BY 1 DESC LIMIT :lim".format(d=DELIVERED_AT_SQL)),
+        {"c": str(club_id), "u": str(user_id), "lim": int(months)},
+    ).mappings().all()
+
+    by_period = {}
+    for iv in list_invoices(session, club_id=club_id, user_id=user_id, limit=200):
+        # An invoice belongs to the month it BILLS (period_label), not the day it was issued —
+        # the sweep runs on the 1st of the following month.
+        key = iv.get("period_label") or (iv.get("issued_at") or "")[:7]
+        if key and key not in by_period:
+            by_period[key] = iv
+
+    out = []
+    for r in rows:
+        iv = by_period.get(r["period"])
+        out.append({
+            "period": r["period"],
+            "billed_minor": int(r["billed"] or 0),
+            "paid_minor": int(r["paid"] or 0),
+            "outstanding_minor": int(r["outstanding"] or 0),
+            "written_off_minor": int(r["written_off"] or 0),
+            "currency": r["cur"] or cur,
+            "open_order_ids": [str(x) for x in (r["open_ids"] or [])],
+            "invoice": ({"invoice_id": iv["invoice_id"], "number": iv["number"],
+                         "status_label": iv["status_label"]} if iv else None),
+            # Says WHY there is no invoice yet, so "no invoice" never reads as "we forgot you".
+            "status_label": (iv["status_label"] if iv
+                             else ("Paid" if int(r["outstanding"] or 0) <= 0
+                                   else "Not yet invoiced")),
+        })
+    return {"months": out, "currency": cur}
