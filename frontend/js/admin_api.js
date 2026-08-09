@@ -1557,38 +1557,6 @@
           rentI, el("span", { class: "cf-muted", text: "on day" }), dayI,
           el("span", { class: "cf-spacer" }), rentSave])));
 
-      // HOW THE CLUB MONETISES THIS COACH. 'rent' means he invoices his own clients, so a lesson he
-      // books AGAINST HIMSELF raises no club charge — that is how a rent coach holds his teaching
-      // slots, and billing him for his own work is what put R68,000 of phantom debt on four coach
-      // accounts. Deliberately explicit rather than inferred from a 0% commission rate: a coach with
-      // NO rule resolves to 0% too, so inferring would silently stop billing every unconfigured
-      // coach's clients.
-      var modelS = el("select", { class: "cf-input", style: "max-width:260px" }, [
-        el("option", { value: "commission", text: "Commission — the club bills their clients" }),
-        el("option", { value: "rent", text: "Rent — they bill their own clients" }),
-      ]);
-      modelS.value = coach.billing_model || "commission";
-      var modelNote = el("div", { class: "cf-muted", style: "margin-top:4px;font-size:12px" });
-      function syncNote() {
-        modelNote.textContent = (modelS.value === "rent")
-          ? "Lessons this coach books against themselves raise NO club charge. Booking a named client still bills that client."
-          : "The club bills this coach's clients and takes the commission set below.";
-      }
-      syncNote();
-      modelS.addEventListener("change", syncNote);
-      var modelSave = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
-      modelSave.addEventListener("click", async function () {
-        modelSave.disabled = true;
-        try {
-          await window.AdminAPI.putCoachAgreement(coach.coach_user_id, { billing_model: modelS.value });
-          UI.toast("Billing model saved.", "info");
-        } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { modelSave.disabled = false; }
-      });
-      c.appendChild(field("Billing model",
-        el("div", {}, [
-          el("div", { class: "cf-row", style: "gap:8px;align-items:center" },
-             [modelS, el("span", { class: "cf-spacer" }), modelSave]),
-          modelNote])));
 
       // coach-level commission % (the DEFAULT for all this coach's services) — Set/Clear.
       c.appendChild(field("Default commission % — all this coach's services",
@@ -1982,6 +1950,7 @@
       var uid = c.user_id || c.id, ag = aggFor(uid), pending = isPending(c), life = coachLife(c);
       var subbits = [c.email || ""];
       if (ag.rent_minor) subbits.push("rent " + UI.money(ag.rent_minor));
+      if (ag.billing_model === "rent") subbits.push("bills own clients");
       if (ag.coach_pct != null) subbits.push(ag.coach_pct + "% commission");
       if (pending) subbits.push("invite pending");
       function setStatus(ns) { window.AdminAPI.patchCoach(uid, { status: ns }).then(renderList, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
@@ -2017,7 +1986,7 @@
 
     function openCoach(c, ag) {
       var uid = c.user_id || c.id, pending = isPending(c);
-      var m = { rent_minor: ag.rent_minor || 0, rent_day: ag.rent_day || 1, coach_pct: (ag.coach_pct != null ? ag.coach_pct : "") };
+      var m = { rent_minor: ag.rent_minor || 0, rent_day: ag.rent_day || 1, coach_pct: (ag.coach_pct != null ? ag.coach_pct : ""), billing_model: ag.billing_model || "commission" };
       render();
       function render() {
         UI.clear(host);
@@ -2030,13 +1999,34 @@
         var rentI = input({ value: fromMinor(m.rent_minor), placeholder: "0.00", style: "max-width:120px" }); rentI.addEventListener("input", function () { m.rent_minor = toMinor(rentI.value) || 0; });
         var dayI = input({ type: "number", min: 1, max: 28, value: m.rent_day, style: "max-width:80px" }); dayI.addEventListener("input", function () { m.rent_day = num(dayI.value) || 1; });
         host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Monthly rent" }), el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [rentI, el("span", { class: "cf-muted", text: "on day" }), dayI])]));
+        // HOW THE CLUB MONETISES THIS COACH — sits with rent and commission because those three
+        // together are the whole arrangement. 'rent' means he invoices his own clients, so a lesson
+        // he books AGAINST HIMSELF raises no club charge; that is how a rent coach holds a teaching
+        // slot, and billing him for his own work put R68,000 of phantom debt on four coach accounts.
+        // Explicit, never inferred from a 0% rate: a coach with NO commission rule resolves to 0%
+        // too, so inferring would silently stop billing every unconfigured coach's clients.
+        var modelS = el("select", { class: "cf-input", style: "max-width:300px" }, [
+          el("option", { value: "commission", text: "Commission — the club bills their clients" }),
+          el("option", { value: "rent", text: "Rent — they bill their own clients" }),
+        ]);
+        modelS.value = m.billing_model || "commission";
+        var modelNote = el("p", { class: "cf-muted cf-tiny", style: "margin:6px 0 0" });
+        function syncModelNote() {
+          modelNote.textContent = (modelS.value === "rent")
+            ? "Lessons this coach books against themselves raise NO club charge. Booking a named client still bills that client."
+            : "The club bills this coach's clients and keeps the commission below.";
+        }
+        syncModelNote();
+        modelS.addEventListener("change", function () { m.billing_model = modelS.value; syncModelNote(); });
+        host.appendChild(el("div", { class: "cf-card" }, [
+          el("h3", { text: "Billing model" }), modelS, modelNote]));
         var pctI = input({ type: "number", min: 0, max: 100, value: m.coach_pct, placeholder: String(DATA.agg.club_default_pct || 0), style: "max-width:100px" }); pctI.addEventListener("input", function () { m.coach_pct = pctI.value; });
         host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Default commission" }), el("p", { class: "cf-muted cf-tiny", text: "The % the club keeps on all this coach's lessons. Blank = the club default (" + (DATA.agg.club_default_pct || 0) + "%). Per-service overrides live in the service editor." }), el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [pctI, el("span", { class: "cf-muted", text: "% to the club" })])]));
       }
       async function save(btn) {
         btn.disabled = true; btn.textContent = "Saving…";
         try {
-          await window.AdminAPI.putCoachAgreement(uid, { rent_minor: m.rent_minor, rent_day: m.rent_day });
+          await window.AdminAPI.putCoachAgreement(uid, { rent_minor: m.rent_minor, rent_day: m.rent_day, billing_model: m.billing_model });
           if (m.coach_pct !== "" && m.coach_pct != null) { var v = parseFloat(m.coach_pct); if (!isNaN(v)) await window.AdminAPI.setCommissionRule({ coach_user_id: uid, commission_pct: Math.max(0, Math.min(100, v)) }); }
           UI.toast("Saved.", "info"); renderList();
         } catch (e) { btn.disabled = false; btn.textContent = "Save & close"; UI.toast(UI.errMsg(e) || "Couldn't save.", "error"); }
