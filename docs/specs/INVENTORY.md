@@ -377,6 +377,27 @@ coach BCC only on his own lesson/class. (`send_booking_confirmation` is legacy; 
     qty, price_id, amount_minor`) — the equipment items hired on a court booking; drives BOTH the billing
     line(s) on the booking's order AND the TIME-overlap availability count. `diary.resource` gained
     `kind='equipment'` + `quantity` (how many you own) + `feature_on_home` (a client-Home hero tile).
+- **`community`** (NEW 2026-08-09 — Find a Game + the seat rule): `player_invite`, `message`,
+  `match_result`, `play_again`, `favourite`
+  - **A GAME IS A BOOKING** — there is deliberately NO `community.game` table. An open game is a
+    `diary.booking` with `visibility='open'` and open seats, and a **seat is a `diary.booking_party`
+    row**. A parallel game object would have forked the GiST no-double-book constraint, the diary
+    grid, reschedule/cancel, the unified statement, Client-360 and month-end.
+  - *New columns on `diary.booking`:* `visibility private|open`, `play_format singles|doubles|practice`,
+    `seats`, `open_until` (the fill deadline), `split_locked_at` (set by the FIRST seat payment —
+    after it, shares never move, so nobody who paid can be re-billed).
+  - *New columns on `diary.booking_party` (the party row BECOMES the seat):* `seat_status
+    open|invited|held|confirmed|released|collapsed`, `order_id` (THIS seat's own debt; NULL = covered),
+    `share_minor` (its frozen share of the court fee), `covered` (why it was free — auditable later),
+    `invited_by_user_id`, `invited_at`, `joined_at`.
+  - *New columns on `iam.player_profile`* (the dormant table becomes the player profile): `level_num`
+    (NextPoint Level 1.0–10.0), `level_source self|onboarding|coach|calculated`,
+    `level_set_by_user_id`, `prefers_format`, `prefers_play`, `prefers_times`, `photo_url`,
+    **`visible_in_community` (explicit opt-in, DEFAULT false)**.
+  - *New `club.policy` flags — the module ships DARK:* **`community_enabled`** + **`seat_rule_enforced`**
+    (both DEFAULT false, independently switchable), `open_game_cutoff_hours` (12),
+    `seat_pay_hours` (24), `guest_trial_days` (7). See
+    [FEATURE-FLAGS.md](FEATURE-FLAGS.md) and [COMMUNITY-ENGINE.md](COMMUNITY-ENGINE.md).
 - **`billing`**: `product`, `price`, `order`, `order_line`, `payment`, `payment_attempt`,
   `account_ledger`, `membership_subscription`, `refund_request`, `bundle_plan`, `token_wallet`,
   `token_ledger`, `coach_agreement`, `commission_rule`, `commission_split`, `coach_ledger`,
