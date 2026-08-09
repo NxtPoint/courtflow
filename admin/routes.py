@@ -1281,7 +1281,11 @@ def put_coach_agreement(coach_user_id):
         agr = repo.upsert_agreement(
             s, club_id=p.club_id, coach_user_id=coach_user_id,
             rent_minor=b.get("rent_minor"), rent_day=b.get("rent_day"),
-            status=b.get("status"), notes=b.get("notes"))
+            status=b.get("status"), notes=b.get("notes"),
+            # 'rent' = the coach bills his own clients, so a lesson he books against himself
+            # raises NO club charge (billing.commission.coach_billing_model).
+            billing_model=(b.get("billing_model") if b.get("billing_model") in
+                           ("commission", "rent") else None))
     return jsonify(agreement=agr), 200
 
 

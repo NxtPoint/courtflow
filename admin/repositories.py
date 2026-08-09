@@ -1750,7 +1750,8 @@ def get_agreement(session, *, club_id, coach_user_id):
     """The coach's current (active, open-ended) agreement, or None."""
     return _row(session.execute(
         text("SELECT id, club_id, coach_user_id, rent_minor, rent_currency, rent_day, status, "
-             "       effective_from, effective_to, notes "
+             "       effective_from, effective_to, notes, "
+             "       COALESCE(billing_model,'commission') AS billing_model "
              "FROM billing.coach_agreement "
              "WHERE club_id = :c AND coach_user_id = :u "
              "  AND status = 'active' AND effective_to IS NULL "
@@ -1760,7 +1761,7 @@ def get_agreement(session, *, club_id, coach_user_id):
 
 
 def upsert_agreement(session, *, club_id, coach_user_id, rent_minor=None, rent_day=None,
-                     status=None, notes=None):
+                     status=None, notes=None, billing_model=None):
     """Upsert the coach's active agreement (one open-ended active row per coach). COALESCE
     partial update; inserts a fresh row if none exists. Currency = club currency."""
     existing = get_agreement(session, club_id=club_id, coach_user_id=coach_user_id)
@@ -1772,20 +1773,23 @@ def upsert_agreement(session, *, club_id, coach_user_id, rent_minor=None, rent_d
                     rent_day   = COALESCE(:day, rent_day),
                     status     = COALESCE(:status, status),
                     notes      = COALESCE(:notes, notes),
+                    billing_model = COALESCE(:model, billing_model),
                     updated_at = now()
                 WHERE id = :id
             """),
             {"rent": rent_minor, "day": rent_day, "status": status,
-             "notes": notes, "id": existing["id"]},
+             "notes": notes, "model": billing_model, "id": existing["id"]},
         )
     else:
         session.execute(
             text("""
                 INSERT INTO billing.coach_agreement
-                    (club_id, coach_user_id, rent_minor, rent_currency, rent_day, status, notes)
-                VALUES (:c, :u, COALESCE(:rent, 0), :cur, COALESCE(:day, 1), 'active', :notes)
+                    (club_id, coach_user_id, rent_minor, rent_currency, rent_day, status, notes,
+                     billing_model)
+                VALUES (:c, :u, COALESCE(:rent, 0), :cur, COALESCE(:day, 1), 'active', :notes,
+                        COALESCE(:model, 'commission'))
             """),
-            {"c": club_id, "u": coach_user_id, "rent": rent_minor,
+            {"c": club_id, "u": coach_user_id, "rent": rent_minor, "model": billing_model,
              "cur": _club_currency(session, club_id=club_id), "day": rent_day, "notes": notes},
         )
     return get_agreement(session, club_id=club_id, coach_user_id=coach_user_id)
@@ -1898,6 +1902,9 @@ def coach_agreements_overview(session, *, club_id):
             "name": name,
             "rent_minor": int(agreement["rent_minor"]) if agreement else 0,
             "rent_day": int(agreement["rent_day"]) if agreement else 1,
+            # 'rent' = the coach bills his own clients directly, so a lesson he books against
+            # HIMSELF raises no club charge (see billing.commission.coach_billing_model).
+            "billing_model": (agreement.get("billing_model") if agreement else None) or "commission",
             "currency": currency,
             "coach_pct": coach_level_pct,
             "lesson_types": lt_out,

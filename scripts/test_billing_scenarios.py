@@ -4412,10 +4412,14 @@ def sc_a_rent_coach_lesson_raises_no_club_charge(s, fx):
     check("commission coach still raises a charge", bool(r1.get("booking", {}).get("order_id")),
           str(r1.get("booking", {}).get("order_id")))
 
-    # Put the coach on RENT.
-    s.execute(text("INSERT INTO billing.coach_agreement (club_id,coach_user_id,rent_minor,"
-                   "billing_model,status) VALUES (:c,:u,500000,'rent','active')"),
-              {"c": fx.club_id, "u": fx.coach_uid})
+    # Put the coach on RENT — through the SAME repo the Setup screen calls, so the screen and the
+    # booking engine cannot drift apart.
+    from admin import repositories as AR2
+    AR2.upsert_agreement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
+                         rent_minor=500000, billing_model="rent")
+    check("the agreement reads back as rent",
+          AR2.get_agreement(s, club_id=fx.club_id,
+                            coach_user_id=str(fx.coach_uid))["billing_model"] == "rent")
     check("now resolves as rent",
           CM2.coach_billing_model(s, club_id=fx.club_id, coach_user_id=fx.coach_uid) == "rent")
 

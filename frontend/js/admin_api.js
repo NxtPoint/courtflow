@@ -1557,6 +1557,39 @@
           rentI, el("span", { class: "cf-muted", text: "on day" }), dayI,
           el("span", { class: "cf-spacer" }), rentSave])));
 
+      // HOW THE CLUB MONETISES THIS COACH. 'rent' means he invoices his own clients, so a lesson he
+      // books AGAINST HIMSELF raises no club charge — that is how a rent coach holds his teaching
+      // slots, and billing him for his own work is what put R68,000 of phantom debt on four coach
+      // accounts. Deliberately explicit rather than inferred from a 0% commission rate: a coach with
+      // NO rule resolves to 0% too, so inferring would silently stop billing every unconfigured
+      // coach's clients.
+      var modelS = el("select", { class: "cf-input", style: "max-width:260px" }, [
+        el("option", { value: "commission", text: "Commission — the club bills their clients" }),
+        el("option", { value: "rent", text: "Rent — they bill their own clients" }),
+      ]);
+      modelS.value = coach.billing_model || "commission";
+      var modelNote = el("div", { class: "cf-muted", style: "margin-top:4px;font-size:12px" });
+      function syncNote() {
+        modelNote.textContent = (modelS.value === "rent")
+          ? "Lessons this coach books against themselves raise NO club charge. Booking a named client still bills that client."
+          : "The club bills this coach's clients and takes the commission set below.";
+      }
+      syncNote();
+      modelS.addEventListener("change", syncNote);
+      var modelSave = el("button", { class: "cf-btn cf-btn-sm", text: "Save" });
+      modelSave.addEventListener("click", async function () {
+        modelSave.disabled = true;
+        try {
+          await window.AdminAPI.putCoachAgreement(coach.coach_user_id, { billing_model: modelS.value });
+          UI.toast("Billing model saved.", "info");
+        } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { modelSave.disabled = false; }
+      });
+      c.appendChild(field("Billing model",
+        el("div", {}, [
+          el("div", { class: "cf-row", style: "gap:8px;align-items:center" },
+             [modelS, el("span", { class: "cf-spacer" }), modelSave]),
+          modelNote])));
+
       // coach-level commission % (the DEFAULT for all this coach's services) — Set/Clear.
       c.appendChild(field("Default commission % — all this coach's services",
         pctCell(coach.coach_pct, "coach", null, coach.coach_user_id, "Coach commission saved.")));

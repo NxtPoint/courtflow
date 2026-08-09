@@ -1,5 +1,5 @@
-# month-end — fire the OPS-only monthly statement sweep on the 1st of each month, FOR THE MONTH
-# JUST ENDED. Accrues coach arrears + rent, consolidates that month's OPEN orders into ONE numbered
+# month-end — fire the OPS-only monthly statement sweep at ~06:00 SAST on the 1st of each month,
+# FOR THE MONTH JUST ENDED. Accrues coach arrears + rent, consolidates that month's OPEN orders into ONE numbered
 # statement invoice + emails it with a pay link (else a plain balance reminder).
 #
 # IT USED TO RUN ON THE 25th, and that was the root of the whole month-end mess. The sweep billed
@@ -29,7 +29,16 @@ name: month-end
 
 on:
   schedule:
-    - cron: "0 6 1 * *"     # 06:00 UTC (08:00 SAST) on the 1st — bills the month just ended
+    # 04:07 UTC = 06:07 SAST on the 1st. GitHub cron is ALWAYS UTC — there is no timezone setting —
+    # so SAST (UTC+2) means subtracting two hours here, and nothing about the schedule is local.
+    #
+    # THE :07 IS DELIBERATE. A run scheduled at 08:00 SAST was observed starting at 10:00. That was
+    # not a timezone fault (06:00 UTC really is 08:00 SAST); GitHub's scheduler is BEST-EFFORT and
+    # queues hardest on the hour, so :00 jobs are the most likely to be delayed — sometimes by hours.
+    # An odd minute is the standard way to dodge that queue. Treat the time as "shortly after 06:00",
+    # never as a guarantee: this job is idempotent per (club,user,period), so a late or repeated run
+    # is safe, and that is what makes best-effort scheduling acceptable for it at all.
+    - cron: "7 4 1 * *"
   workflow_dispatch:
     inputs:
       period:

@@ -19,21 +19,28 @@ in production at `https://nextpointtennis.com`** — what remains is config + ba
 
 ## Gates (run before every merge — there is no pytest suite)
 **"Guarded by `sc_…`" throughout this file names a scenario function in one of the three harnesses
-below** — `grep -rn "def sc_the_name" scripts/` to read the war story it encodes. `py_compile` is the
-WHOLE static gate: no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r
-requirements.txt` (Python 3.12).
+below** — `grep -rn "def sc_the_name" scripts/` to read the war story it encodes. The static gate is
+`py_compile` for the Python **and `node --check` for the frontend JS** — those two, and nothing else:
+no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requirements.txt` (Python 3.12).
 1. `python -m py_compile $(git ls-files '*.py')` — the `$(…)` is bash; from PowerShell use
    `python -m py_compile (git ls-files '*.py')`.
-2. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
-3. `python -m scripts.audit_docs` — **the DOCS gate.** Prose doesn't fail `py_compile`, so docs rot
+2. `python -m scripts.check_frontend_js` — **the JS PARSE gate.** `node --check` over every
+   `frontend/js/**/*.js`. No DB, no env, ~1s. A JS file that doesn't parse is dead in the browser in its
+   ENTIRETY — nothing it defines exists — so `test_all` runs it first too. Run it here as well: it's the
+   only gate needing no `DATABASE_URL`, so it still works when the others can't. Added 2026-08-09 after
+   real newlines inside a string stopped `admin_app.js` parsing and took `/admin` down for 11 hours
+   (Gotchas). **Fails CLOSED if `node` is absent** — a gate that can't verify must not report success.
+3. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
+4. `python -m scripts.audit_docs` — **the DOCS gate.** Prose doesn't fail `py_compile`, so docs rot
    invisibly and are then trusted precisely when they're wrong. This extracts the real routes, tables,
    shared widgets, emitted events, scenarios and scripts from SOURCE and reports what the docs haven't
    caught up with (plus broken internal links + disagreeing gate baselines). **Currently 0 misses —
    keep it there.** It would have caught, on the day: an approval lifecycle documented as LIVE in six
    files two days after deletion; `Widgets.CoachStatement` missing from the golden-rule register; and
    13 live events absent from `contracts/events.md`. `--strict` exits 1 for a pre-merge gate.
-4. `python -m scripts.test_all` — three rollback-only scratch-DB harnesses. Current green baseline:
-   **booking 405 / billing 641 / statement 64**. Each uses its own scratch club and always rolls back.
+5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
+   scratch-DB harnesses. Current green baseline:
+   **booking 405 / billing 642 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -131,7 +138,7 @@ re-run or a doubled schedule is safe. When adding a recurring job, add a workflo
 | `keep-warm.yml` | every 10 min, 07:00–22:00 SAST | pings both services (free tier sleeps after ~15 min) |
 | `reminders.yml` | hourly, 07:00–22:00 SAST | `diary.crons.run_reminders` — T-24h/T-2h booking + class reminders, deduped via `diary.reminder_log`, emits `booking_reminder` (LIVE via SES; a no-show reducer) |
 | `membership-refill.yml` | daily 07:30 SAST | membership-lapse sweep — `current_period_end` passed → `expired` + emits `membership_lapsed` (drives the Klaviyo E2 win-back) |
-| `month-end.yml` | monthly, the **1st** 08:00 SAST | `billing.commission.run_month_end` — coach arrears + rent, then one consolidated statement invoice + pay-link per client owing **for the month just ended** (it ran on the 25th until 2026-08-08, so every invoice was issued with days of the month still to come) |
+| `month-end.yml` | monthly, the **1st** ~06:00 SAST | `billing.commission.run_month_end` — coach arrears + rent, then one consolidated statement invoice + pay-link per client owing **for the month just ended** (it ran on the 25th until 2026-08-08, so every invoice was issued with days of the month still to come) |
 | `reconcile-payments.yml` | hourly, 07:00–22:00 SAST | `yoco_billing.reconcile.reconcile_pending` — recovers payments whose webhook never arrived (Render Free sleeps, so CLAUDE.md calls reconcile "the common path"). The handler shipped at launch but **nothing ever called it** until 2026-07-22 |
 | `reconcile-deep.yml` | weekly, Sun 07:40 SAST | the SAFETY NET behind the hourly sweep — `reconcile_pending` defaults to **`hours=72`** and the hourly job passes nothing, so an order that slips past 3 days **ages out and is never checked again**. Sweeps `hours=2400` (100 days) so nothing can hide unverified |
 | `marketing-digest.yml` | daily 07:00 SAST | cross-brand GA4/GSC organic report + the `core.web_daily` ingest push (see the analytics section) |
@@ -679,6 +686,9 @@ looks like a harmless simplification until you read what it cost.
 
 **Infrastructure & environment** — [GOTCHAS.md#infrastructure--environment](docs/specs/GOTCHAS.md#infrastructure--environment)
 - Ten-Fifty5 embed — Render service names ≠ `render.yaml` `name:`
+- A JS FILE THAT DOESN'T PARSE IS DEAD IN ITS ENTIRETY, AND PRESENTS AS A BROKEN LOGIN (2026-08-09) —
+  guarded by `python -m scripts.check_frontend_js`. A page that loads and then makes ZERO API calls is
+  a dead script, not an auth problem.
 
 ## Still needs Tomo (config, not code)
 - **S3** (`S3_BUCKET` + AWS keys) for coach photo uploads — until set, coaches paste a photo URL.

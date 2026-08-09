@@ -15,7 +15,9 @@ at the screen did — the DATA is wrong, and it keeps billing wrongly until some
 This is the check for it. Three things, cheapest first:
 
   1. DUPLICATE DURATIONS — two active price rows, one product, one duration. The tie-break makes
-     the cheaper row authoritative, so the expensive one is decorative.
+     the cheaper row authoritative, so the expensive one is decorative. ONLY LIVE SERVICES are
+     reported: a deactivated or terminated product cannot bill anything, so flagging it is a false
+     alarm, and an audit that cries wolf is one people stop reading.
   2. R0 ROWS ON A PAID SERVICE — an active zero price alongside a real one. Same trap, stated the
      other way round, and the version that costs the whole fee rather than the difference.
   3. THE R0 ORDERS THEMSELVES, split by settlement_mode — because a R0 order is often CORRECT.
@@ -56,6 +58,7 @@ SELECT p.name, p.kind, pr.duration_minutes AS mins, count(*) AS n,
   JOIN billing.product p ON p.id = pr.product_id
   LEFT JOIN iam."user" u ON u.id = p.coach_user_id
  WHERE pr.active AND p.club_id = :c AND pr.duration_minutes IS NOT NULL
+   AND p.active AND COALESCE(p.status,'active') = 'active'
  GROUP BY p.name, p.kind, pr.duration_minutes, coach
 HAVING count(*) > 1
  ORDER BY (max(pr.amount_minor) - min(pr.amount_minor)) DESC
@@ -69,6 +72,7 @@ SELECT p.name, p.kind, pr.duration_minutes AS mins, pr.label,
   JOIN billing.product p ON p.id = pr.product_id
   LEFT JOIN iam."user" u ON u.id = p.coach_user_id
  WHERE pr.active AND p.club_id = :c AND COALESCE(pr.amount_minor,0) = 0
+   AND p.active AND COALESCE(p.status,'active') = 'active'
    AND EXISTS (SELECT 1 FROM billing.price p2
                 WHERE p2.product_id = pr.product_id AND p2.active AND p2.amount_minor > 0)
  ORDER BY p.name

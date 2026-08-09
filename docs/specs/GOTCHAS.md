@@ -26,7 +26,7 @@ still reads the scenario that guards any entry.
 - [Money custody & the coach ledger](#money-custody--the-coach-ledger) — 7 entries
 - [Reads that lie](#reads-that-lie) — 2 entries
 - [Email & notifications](#email--notifications) — 1 entry
-- [Infrastructure & environment](#infrastructure--environment) — 1 entry
+- [Infrastructure & environment](#infrastructure--environment) — 2 entries
 
 
 ---
@@ -879,3 +879,40 @@ Federation trap: **`AUTH_ISSUER` (singular) vs `AUTH_ISSUERS` (plural)** — the
 UNSET (JWKS derived from each issuer, no ordering to break). The nested-portal iframe needs the **multi-hop
 relay** in `auth_client.js` (a middle frame proxies its grandchild's auth up) or nested pages fall back to
 legacy → "Missing email or API key".
+
+### A JS file that doesn't parse is dead in its ENTIRETY — and it presents as a broken login
+
+**2026-08-09. `/admin` hung on "Loading…" for 11 hours and was reported as "I cannot log in".** Auth was
+healthy the whole time.
+
+`640b2b8` wrote the void-invoice confirm prompts with **real newlines inside double-quoted strings**
+instead of `\n\n`. JavaScript has no multi-line string literal, so `admin_app.js` — all 173KB of it —
+failed to parse. `AdminApp` was never defined, the inline `AdminApp.start()` threw, and the page never
+rendered. **The bad line was in a confirm dialog nobody had opened; the whole file died anyway.** That is
+the thing to internalise: a parse error is not local to its function, and the blast radius of a typo in
+one prompt string is every feature in the file.
+
+**Why it read as a login failure.** An admin signing in is handed off by `client.js:51`
+(`location.href = "/admin"`), so the last thing the member area does before dying is a redirect. The API
+log showed the handoff working perfectly — `whoami 200`, `/api/me/profile 200`, `/api/admin/onboarding
+200` — and then **nothing at all**. That silence was the diagnosis: a page that loads and makes zero
+requests is indistinguishable from a hung login. **Read the absence of requests as a signal, not as
+missing data.**
+
+Two dead ends cost time and are worth naming so the next reader skips them. `/api/billing/config`
+returning `provider:"manual"` looks like wiped env but is just the `os.getenv(...) or "manual"` fallback
+on a probe called without `club_id`. And `PyJWKClientError` in the log was **our own diagnostic curl**,
+not a user — check the source IP and user-agent before building a theory on a log line you may have
+authored yourself.
+
+Note `client.js:41` turns any non-401 whoami failure into a permanent spinner
+(`if (e.status === 401) requireAuth(); return;`) — a 401 redirects to sign-in, everything else returns
+silently. That is not what broke here, but it is why a frontend failure of *any* kind tends to surface as
+"stuck loading" rather than an error.
+
+**The real gap was the gate.** `scripts/` gated `py_compile` for the Python and **nothing** for the JS, so
+a file that no browser could load passed every check and shipped. Closed by
+**`python -m scripts.check_frontend_js`** (`node --check` over `frontend/js/**/*.js`, first in
+`test_all`). It is guarded by the gate itself rather than an `sc_…` scenario, and was verified in **both**
+directions — 34/34 clean, and exit 1 naming the file and line when the original string is reintroduced. A
+gate proven only in the passing direction proves nothing.
