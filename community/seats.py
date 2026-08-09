@@ -133,14 +133,21 @@ def _booking(session, club_id, booking_id):
 
 
 def _seats(session, booking_id):
-    """Every party row on the booking, in a STABLE order. The order decides who carries the rounding
-    remainder, so it must be deterministic across re-runs or a re-priced split would move a cent
-    between two people's orders."""
+    """Every party row on the booking, in a STABLE, MEANINGFUL order. The order decides who carries
+    the rounding remainder, so it must be deterministic across re-runs — otherwise re-pricing a split
+    moves a cent between two people's orders for no reason either of them can see.
+
+    THE HOST SORTS FIRST, deliberately: the organiser carries the odd cent, which is the one answer
+    that needs no explanation. `created_at` alone does NOT order these — `now()` is transaction-stable
+    in Postgres, so every seat inserted by one create_booking call shares a timestamp to the
+    microsecond and the tie fell through to `gen_random_uuid()`. That is stable per row (a uuid does
+    not change) but arbitrary between people, so the remainder landed on whoever's random id sorted
+    first. Deterministic, but indefensible if anyone ever asked."""
     return [dict(r) for r in session.execute(
         text("SELECT id, user_id, party_role, guest_name, guest_email, seat_status, order_id, "
              "       share_minor, covered, invited_by_user_id, joined_at, created_at "
              "FROM diary.booking_party WHERE booking_id = :b "
-             "ORDER BY created_at, id"),
+             "ORDER BY (party_role = 'host') DESC, created_at, id"),
         {"b": str(booking_id)},
     ).mappings().all()]
 
@@ -365,6 +372,14 @@ def apply_seat_orders(session, *, club_id, booking_id, now=None):
         charged += 1
         total += int(share or 0)
         if seat.get("order_id"):
+            # An un-covered seat that ALREADY carries an order — normally the holder's, which rides
+            # the booking's own order. Record `covered = false` here too: the resync path used to
+            # leave it NULL, so the holder's seat was the one row in the game that could not say why
+            # it had been charged. `covered` is the audit answer to "why was this seat free (or not)?"
+            # long after the member's tier has changed, and a NULL is not an answer.
+            session.execute(
+                text("UPDATE diary.booking_party SET covered = false WHERE id = :id"),
+                {"id": str(seat["id"])})
             if not plan["locked"]:
                 _resync_seat_order(session, seat_id=seat["id"], order_id=seat["order_id"],
                                    share_minor=share)
@@ -393,21 +408,33 @@ def apply_seat_orders(session, *, club_id, booking_id, now=None):
             "total_minor": total}
 
 
+# The order-line descriptions this module owns. Re-pricing must touch ONLY these.
+_COURT_LINES = ("court", "court seat", "unfilled court seat")
+
+
 def _resync_seat_order(session, *, seat_id, order_id, share_minor):
     """Re-price an EXISTING seat order when the split moved (someone joined or left before anyone
     paid). Refuses to touch an order that has taken money — that is what split_locked_at exists to
-    prevent, and this is the belt to its braces."""
+    prevent, and this is the belt to its braces.
+
+    ONLY the court line is re-priced, and the order total is then RECOMPUTED from its lines rather
+    than assumed. The holder's seat rides the booking's own order, and on a court with equipment hire
+    that order also carries the equipment lines — blanket-updating every line to the seat share would
+    have silently rewritten a R250 ball-machine line to R75 and lost the hire fee. Recomputing the
+    total from the lines is also what keeps the order honest if a line is ever added later."""
     st = session.execute(
         text('SELECT status FROM billing."order" WHERE id = :o'), {"o": str(order_id)},
     ).scalar()
     if st in ("paid", "refunded", "void"):
         return False
     session.execute(
-        text('UPDATE billing."order" SET amount_minor = :a, updated_at = now() WHERE id = :o'),
-        {"a": int(share_minor or 0), "o": str(order_id)})
+        text("UPDATE billing.order_line SET amount_minor = :a "
+             "WHERE order_id = :o AND description = ANY(:d)"),
+        {"a": int(share_minor or 0), "o": str(order_id), "d": list(_COURT_LINES)})
     session.execute(
-        text("UPDATE billing.order_line SET amount_minor = :a WHERE order_id = :o"),
-        {"a": int(share_minor or 0), "o": str(order_id)})
+        text('UPDATE billing."order" SET amount_minor = COALESCE((SELECT SUM(amount_minor * qty) '
+             "  FROM billing.order_line WHERE order_id = :o), 0), updated_at = now() WHERE id = :o"),
+        {"o": str(order_id)})
     session.execute(
         text("UPDATE diary.booking_party SET share_minor = :a WHERE id = :id"),
         {"a": int(share_minor or 0), "id": str(seat_id)})
@@ -448,6 +475,68 @@ def all_prepaid_seats_settled(session, *, club_id, booking_id):
         {"b": str(booking_id), "c": str(club_id), "holding": list(_HOLDING_SEAT)},
     ).scalar()
     return int(unpaid or 0) == 0
+
+
+def seat_a_new_booking(session, *, club_id, booking_id, holder_user_id, holder_order_id=None,
+                       extra_user_ids=(), play_format=None, seats=None, visibility="private",
+                       open_until=None, now=None):
+    """THE ONE ENTRY POINT the diary calls. Turn a freshly-created court booking into a seated game
+    and bill its seats. Returns None when the club has not enabled the rule — the caller then behaves
+    exactly as it always has.
+
+    Called at the END of create_booking, after the booking and the holder's order already exist, so
+    everything before it is untouched: the GiST insert, the payment-mode gate, equipment, pack draws
+    and the price guard all ran first. That ordering is deliberate — the seat rule decides who pays
+    what, not whether the booking is legal.
+
+    The holder's seat is linked to the booking's OWN order (`holder_order_id`), so apply_seat_orders
+    re-prices that existing order down to their share instead of raising a second debt beside it. The
+    alternative — a booking order for the full fee PLUS seat orders — would double-bill the club's
+    own member, which is the failure mode this whole module exists to avoid, pointing the other way.
+
+    Returns {applied: True, holds_court: bool, …} so the caller can decide the booking's status."""
+    pol = policy(session, club_id)
+    if not pol["seat_rule_enforced"]:
+        return None
+
+    booking = _booking(session, club_id, booking_id)
+    if booking["booking_type"] != "court":
+        return None
+
+    fmt = play_format or booking.get("play_format") or "singles"
+    total_seats = int(seats or booking.get("seats") or SEATS_BY_FORMAT.get(fmt, 1))
+    session.execute(
+        text("UPDATE diary.booking SET play_format = :f, seats = :n, visibility = :v, "
+             "       open_until = :ou, updated_at = now() WHERE club_id = :c AND id = :b"),
+        {"f": fmt, "n": total_seats, "v": visibility, "ou": open_until,
+         "c": str(club_id), "b": str(booking_id)})
+
+    # The holder's own seat. Linked to the booking's existing order so it is RE-PRICED, never
+    # duplicated. A 'practice' booking is a single seat and simply keeps the whole fee.
+    existing = {str(s["user_id"]) for s in _seats(session, booking_id) if s.get("user_id")}
+    if str(holder_user_id) not in existing:
+        session.execute(
+            text("INSERT INTO diary.booking_party (booking_id, club_id, user_id, party_role, "
+                 "       seat_status, order_id, joined_at) "
+                 "VALUES (:b, :c, :u, 'host', 'confirmed', CAST(:o AS uuid), now())"),
+            {"b": str(booking_id), "c": str(club_id), "u": str(holder_user_id),
+             "o": str(holder_order_id) if holder_order_id else None})
+        existing.add(str(holder_user_id))
+
+    for uid in (extra_user_ids or ()):
+        if not uid or str(uid) in existing:
+            continue
+        existing.add(str(uid))
+        session.execute(
+            text("INSERT INTO diary.booking_party (booking_id, club_id, user_id, party_role, "
+                 "       seat_status, joined_at) "
+                 "VALUES (:b, :c, :u, 'player', 'confirmed', now())"),
+            {"b": str(booking_id), "c": str(club_id), "u": str(uid)})
+
+    applied = apply_seat_orders(session, club_id=club_id, booking_id=booking_id, now=now)
+    holds = not all_prepaid_seats_settled(session, club_id=club_id, booking_id=booking_id)
+    return {"applied": True, "holds_court": holds, "seats": total_seats,
+            "pay_hours": pol["seat_pay_hours"], **applied}
 
 
 def collapse_open_seats(session, *, club_id, booking_id, now=None):

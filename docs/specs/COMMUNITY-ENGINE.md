@@ -153,17 +153,21 @@ no-op including `community.schema`.
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart
 (this file already carried a stale 659 for an afternoon).
 
-### Written and green (`test_booking_scenarios`, +50 checks)
+### Written and green (`test_booking_scenarios`, +69 checks)
 
-`sc_seat_split_covers_the_court_exactly` · `sc_member_plus_guest_bills_the_guest_in_full` ·
-`sc_two_payg_split_and_both_must_settle` · `sc_open_seat_collapses_onto_the_holder_at_cutoff` ·
-`sc_split_locks_on_first_payment` · `sc_seat_rule_off_changes_nothing`.
+*The money core, exercised directly:* `sc_seat_split_covers_the_court_exactly` ·
+`sc_member_plus_guest_bills_the_guest_in_full` · `sc_two_payg_split_and_both_must_settle` ·
+`sc_open_seat_collapses_onto_the_holder_at_cutoff` · `sc_split_locks_on_first_payment` ·
+`sc_seat_rule_off_changes_nothing`.
 
-They exercise `community.seats` **directly**, against ordinary bookings with seats added by hand,
-because `create_booking` is not seat-aware yet. The money core is pinned first on purpose: it is the
-part that decides what people are charged.
+*Through the live booking path:* `sc_seat_rule_bills_through_create_booking` ·
+`sc_seat_rule_holds_the_court_until_every_seat_settles` · `sc_cancelling_a_game_voids_every_seat_debt`
+· `sc_an_expired_membership_is_an_uncovered_seat`.
 
-**Writing them found two real bugs before a single club saw them**, both in the "looks obviously
+The money core was pinned FIRST, before anything called it: it is the part that decides what people
+are charged.
+
+**Writing them found FOUR real bugs before a single club saw them**, all in the "looks obviously
 fine" category:
 
 1. **`collapse_open_seats` was not idempotent.** A `collapsed` seat did not count as OCCUPYING its
@@ -177,6 +181,17 @@ fine" category:
    court off the back of someone else's payment — so the read now reports the seat as **unpriced** and
    `apply_seat_orders` **raises `SPLIT_LOCKED`**, leaving the product decision (close the game, or
    allow a free joiner once the fee is banked) to the join path where it belongs.
+3. **The holder's seat could not say why it had been charged.** `covered` was written on the
+   new-order branch but not on the re-price branch, so the one seat that rides the booking's own
+   order — the holder's — was left NULL. `covered` is the audit answer to "why was this seat free, or
+   not?" long after the member's tier has changed, and NULL is not an answer.
+4. **The "stable" seat order was ordering by random UUID.** `_seats` sorted by `created_at, id` to
+   make the rounding remainder deterministic — but **`now()` is transaction-stable in Postgres**, so
+   every seat inserted by one `create_booking` shares a timestamp to the microsecond and the tie fell
+   through to `gen_random_uuid()`. Stable per row, arbitrary between people: the odd cent landed on
+   whoever's random id sorted first. Now **the host sorts first** — the organiser carries the odd
+   cent, which is the one answer that needs no explanation. The same trap made a scenario pass or
+   fail on a coin toss, which is how it was found.
 
 ### Still owed
 

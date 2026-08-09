@@ -627,7 +627,8 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                    coach_user_id=None, court_resource_id=None, audience="member",
                    notes=None, recurrence_id=None, hold_minutes=HOLD_MINUTES_DEFAULT,
                    booked_for_user_id=None, propose=False, product_id=None, addons=None,
-                   allow_past=False, now=None, extra_clients=None):
+                   allow_past=False, now=None, extra_clients=None,
+                   seats=None, play_format=None, visibility="private", open_until=None):
     """Create a court/lesson/class booking, concurrency-safe (docs/03 §4).
 
     For a lesson, pass court_resource_id to auto-hold a court in the SAME transaction (two
@@ -1108,6 +1109,52 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         if eo.get("order_id"):
             extra_order_ids.append(eo["order_id"])
 
+    # ---- THE SEAT RULE (community/) -------------------------------------------------------
+    # A court booking has SEATS, and the court fee is split among the seats nobody covers — so one
+    # membership can no longer cover a second player who never pays. Runs LAST, after the booking and
+    # the holder's order already exist, because it decides WHO PAYS WHAT, not whether the booking is
+    # legal: the GiST insert, the payment-mode gate, equipment, the pack draw and the price guard all
+    # had their say first, unchanged.
+    #
+    # OFF unless club.policy.seat_rule_enforced — seat_a_new_booking returns None and this whole block
+    # is inert, which is the regression contract (sc_seat_rule_off_changes_nothing).
+    #
+    # The holder's seat is linked to the booking's OWN order, so it is RE-PRICED down to their share
+    # rather than joined by a second debt beside it. Billing the holder the full fee AND the guest a
+    # share would double-charge the member — the same leak pointing the other way.
+    holds_for_seats = False
+    if booking_type == "court":
+        from community.seats import SeatError as _SeatError, seat_a_new_booking as _seat_booking
+        try:
+            seat_res = _seat_booking(
+                session, club_id=club_id, booking_id=booking_id,
+                holder_user_id=owner_user_id, holder_order_id=order_id,
+                extra_user_ids=[(ec.get("user_id") if isinstance(ec, dict) else ec)
+                                for ec in (extra_clients or [])],
+                play_format=play_format, seats=seats, visibility=visibility,
+                open_until=open_until, now=now)
+        except _SeatError as e:
+            # A seat that cannot be priced or paid for must fail the BOOKING, not be waved through
+            # unbilled. The savepoint above already committed the rows, so the caller's session_scope
+            # rollback is what undoes them — same contract as any other post-insert refusal.
+            return _err(e.code, 422, message=e.message, **(e.extra or {}))
+        if seat_res and seat_res.get("holds_court"):
+            # A seat still owes online. The court is HELD until every prepaid seat settles — "two PAYG
+            # players, and the booking confirms only when both have paid". The window is hours, not
+            # HOLD_MINUTES_DEFAULT's 30: that is sized for one person at a checkout, not for a friend
+            # who has to read an email, sign up and pay.
+            holds_for_seats = True
+            session.execute(
+                text("UPDATE diary.booking SET status = 'held', held_until = :hu, updated_at = now() "
+                     "WHERE id = :b AND status <> 'cancelled'"),
+                {"hu": now + timedelta(hours=int(seat_res.get("pay_hours") or 24)), "b": booking_id})
+            if linked_court_id:
+                session.execute(
+                    text("UPDATE diary.booking SET status = 'held', held_until = :hu, "
+                         "       updated_at = now() WHERE id = :b AND status <> 'cancelled'"),
+                    {"hu": now + timedelta(hours=int(seat_res.get("pay_hours") or 24)),
+                     "b": linked_court_id})
+
     booking = _booking_dict(session, booking_id)
     if extra_order_ids:
         booking["extra_order_ids"] = extra_order_ids
@@ -1120,7 +1167,14 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
         # to Yoco on `st.settlement === "online"`, so without this flag the booking would sit held
         # and quietly lazy-expire while the member believed they were done.
         return {"ok": True, "booking": booking, "checkout": order.get("checkout"),
-                "requires_payment": True}
+                "requires_payment": True, "awaiting_seats": holds_for_seats}
+
+    if holds_for_seats:
+        # The HOLDER owes nothing (covered, or already settled) but a fellow player does. Deliberately
+        # NOT `requires_payment` — that flag sends booking.js to a Yoco checkout, and pointing the
+        # holder at a checkout for somebody else's R0 order is how you get a member stuck on a payment
+        # page they can't complete. They are done; the court is simply held until the others pay.
+        return {"ok": True, "booking": booking, "checkout": None, "awaiting_seats": True}
 
     _emit_confirmed(session, booking, res, settlement_mode)
     return {"ok": True, "booking": booking, "checkout": None}

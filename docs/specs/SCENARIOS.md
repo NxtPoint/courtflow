@@ -64,6 +64,17 @@ rather than priced at zero** (`sc_split_locks_on_first_payment`) · and with `se
 a court booking behaves exactly as it always has, raising no seat orders at all
 (`sc_seat_rule_off_changes_nothing`).
 
+**THE SEAT RULE, THROUGH THE LIVE BOOKING PATH** — `create_booking` seats the court and bills the
+guest on ONE call, the holder's own order is RE-PRICED to their share instead of being joined by a
+second debt (`sc_seat_rule_bills_through_create_booking` — billing the member the full fee AND the
+guest a share would double-charge the club's own member) · a paid seat does NOT confirm a court whose
+other seat is still unpaid, and the first payment locks the split
+(`sc_seat_rule_holds_the_court_until_every_seat_settles`) · cancelling voids EVERY seat's debt so
+nobody is left owing for a game that never happened (`sc_cancelling_a_game_voids_every_seat_debt`) ·
+and a member whose term has lapsed by the day of the game is simply an un-covered seat who pays like
+anyone else (`sc_an_expired_membership_is_an_uncovered_seat` — coverage is a property of the SEAT at
+that moment, not of the person).
+
 ---
 
 ## `test_billing_scenarios` — money (92 scenarios)

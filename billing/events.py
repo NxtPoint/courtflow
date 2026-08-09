@@ -541,8 +541,41 @@ def _confirm_held_bookings(session, order_id, club_id) -> int:
                       -- both; the EXISTS keeps the original order_line match as a defensive fallback.
                       AND (b.order_id = :order_id
                            OR EXISTS (SELECT 1 FROM billing.order_line ol
-                                       WHERE ol.order_id = :order_id AND ol.booking_id = b.id))
+                                       WHERE ol.order_id = :order_id AND ol.booking_id = b.id)
+                           -- A SEAT's order (community/): the seat links to the booking, and its
+                           -- order carries an order_line for it, so the clause above already
+                           -- matches — this makes the intent explicit and survives a seat order
+                           -- that ever loses its line.
+                           OR EXISTS (SELECT 1 FROM diary.booking_party sp
+                                       WHERE sp.order_id = :order_id AND sp.booking_id = b.id))
+                      -- EVERY PREPAID SEAT MUST HAVE SETTLED. A court with two paying players raises
+                      -- two orders, and the first one to pay must NOT confirm the court out from
+                      -- under the second — "the booking is only confirmed when both settle". A seat
+                      -- owed at the desk or on the monthly tab is a real debt on the statement and
+                      -- deliberately does NOT hold the court, exactly as a single at-court booking
+                      -- has always confirmed immediately. Bookings with no seat rows (every booking
+                      -- made before community/, and every one made with the rule off) match nothing
+                      -- here, so this is a no-op for them.
+                      AND NOT EXISTS (
+                          SELECT 1 FROM diary.booking_party bp
+                            JOIN billing."order" so ON so.id = bp.order_id
+                           WHERE bp.booking_id = b.id
+                             AND bp.seat_status IN ('invited','held','confirmed')
+                             AND so.settlement_mode = 'online'
+                             AND so.status <> 'paid')
                 """),
+                {"order_id": str(order_id), "club_id": str(club_id) if club_id else None},
+            )
+            # A settled seat LOCKS the game's split: once money has moved the shares can never be
+            # recomputed, or a later joiner would re-price a seat somebody already paid for. Same
+            # statement, same savepoint, and idempotent against a replayed webhook (COALESCE keeps
+            # the first timestamp).
+            session.execute(
+                text("UPDATE diary.booking SET split_locked_at = COALESCE(split_locked_at, now()), "
+                     "       updated_at = now() "
+                     " WHERE club_id = :club_id AND split_locked_at IS NULL "
+                     "   AND id IN (SELECT booking_id FROM diary.booking_party "
+                     "               WHERE order_id = :order_id)"),
                 {"order_id": str(order_id), "club_id": str(club_id) if club_id else None},
             )
             return res.rowcount or 0
