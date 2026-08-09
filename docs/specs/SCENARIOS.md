@@ -11,13 +11,13 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 405 / billing 677 / statement 64** (56 / 93 / 12 `sc_*` functions).
+  **booking 455 / billing 677 / statement 64** (62 / 93 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
 ---
 
-## `test_booking_scenarios` — the diary (56 scenarios)
+## `test_booking_scenarios` — the diary (62 scenarios)
 
 Double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
 **court→service allocation** (per-service courts + pricing), **classes reserve N courts** (held +
@@ -49,6 +49,20 @@ full class (that logs a refund case).
 `diary.resource.product_id` (the DURABLE link, set at `create_class_type` and boot-backfilled), never
 a name join; an orphaned class REFUSES with `PRICE_NOT_CONFIGURED` rather than billing another class's
 rate, and a retired price variation can never enrol at R0.
+
+**THE SEAT RULE** (`community/`, 2026-08-09 — see [COMMUNITY-ENGINE.md](COMMUNITY-ENGINE.md)) — the
+court fee is split among the seats nobody covers, so one membership can no longer cover a second
+player who never pays. The shares re-sum to the court fee EXACTLY, remainder to the first seat
+(`sc_seat_split_covers_the_court_exactly` — a lost cent is a statement fold that stops reconciling) ·
+a member + a non-member puts the WHOLE fee on the non-member and re-applying mints no second debt
+(`sc_member_plus_guest_bills_the_guest_in_full`) · two PAYG players split R75/R75 and the court is
+NOT confirmable until BOTH settle (`sc_two_payg_split_and_both_must_settle`) · an unfilled OPEN seat
+collapses onto the holder, closes the game, and **collapses only once however often the hourly sweep
+re-runs** (`sc_open_seat_collapses_onto_the_holder_at_cutoff`) · the first payment LOCKS the split, a
+replayed lock is a no-op, and an un-covered seat added after the lock is **refused (`SPLIT_LOCKED`)
+rather than priced at zero** (`sc_split_locks_on_first_payment`) · and with `seat_rule_enforced=false`
+a court booking behaves exactly as it always has, raising no seat orders at all
+(`sc_seat_rule_off_changes_nothing`).
 
 ---
 

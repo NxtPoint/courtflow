@@ -3201,7 +3201,270 @@ def sc_equipment_is_scoped_to_its_court_service(s, fx):
     check("…while the SAME kit books fine on a clay court", good.get("ok"), str(good))
 
 
+# ---------------------------------------------------------------------------
+# THE SEAT RULE (community/) — a court fee is split by the seats nobody covers
+# ---------------------------------------------------------------------------
+# The leak these guard: a membership makes court bookings free, but nothing knew WHO ELSE was on the
+# court, so one membership could cover a second, third or fourth player who never paid. The
+# entitlement caps limit how MUCH a member books; they cannot express who it was for.
+#
+# These exercise community.seats DIRECTLY, against bookings made the ordinary way with seats added by
+# hand. create_booking is not seat-aware yet — the money core is built and pinned FIRST, because it is
+# the part that decides what people are charged.
+
+def _seat(s, fx, booking_id, user_id=None, *, seat_status="confirmed", role="player"):
+    """Add a seat (a diary.booking_party row) to a booking."""
+    return s.execute(
+        text("INSERT INTO diary.booking_party (booking_id, club_id, user_id, party_role, seat_status) "
+             "VALUES (:b, :c, :u, :r, :st) RETURNING id"),
+        {"b": booking_id, "c": fx.club_id, "u": user_id, "r": role, "st": seat_status},
+    ).scalar_one()
+
+
+def _as_game(s, booking_id, *, seats=2, play_format="singles", visibility="private"):
+    s.execute(
+        text("UPDATE diary.booking SET seats = :n, play_format = :f, visibility = :v WHERE id = :b"),
+        {"n": seats, "f": play_format, "v": visibility, "b": booking_id})
+
+
+def _seat_rows(s, booking_id):
+    """Every seat that carries an order, with what it owes. Read through booking_party.order_id (NOT
+    order_line.booking_id) so the booking's OWN order isn't mistaken for a seat's."""
+    return [dict(r) for r in s.execute(
+        text('SELECT bp.user_id, bp.share_minor, bp.covered, bp.seat_status, '
+             '       o.amount_minor, o.settlement_mode, o.status '
+             'FROM diary.booking_party bp JOIN billing."order" o ON o.id = bp.order_id '
+             'WHERE bp.booking_id = :b ORDER BY bp.created_at, bp.id'),
+        {"b": booking_id}).mappings().all()]
+
+
+def _covered_court(s, fx, user_id, hour=10, court=0):
+    """A membership-covered court booking, the shape the seat rule has to reason about."""
+    return B.create_booking(s, club_id=fx.club_id, booked_by_user_id=user_id, role="member",
+                            booking_type="court", resource_id=fx.courts[court],
+                            settlement_mode="membership_covered",
+                            starts_at=utc_iso(at(fx, hour)), ends_at=utc_iso(at(fx, hour + 1)))
+
+
+def sc_seat_split_covers_the_court_exactly(s, fx):
+    """The shares MUST re-sum to the court fee. R150 across 3 seats is 5000/5000/5000, but R100
+    across 3 is 3334/3333/3333 — and if those don't add back up to the court fee, the club either
+    loses a cent on every such booking or the statement fold (Billed − Discount − Written-off =
+    Invoiced = Paid + Outstanding) stops reconciling, which is the invariant the whole money layer
+    rests on."""
+    print("\n# The seat split re-sums to the court fee EXACTLY (a lost cent breaks the fold)")
+    from community.seats import split_minor
+    for total, n in ((15000, 1), (15000, 2), (15000, 3), (10000, 3), (10000, 7), (1, 3), (0, 2)):
+        parts = split_minor(total, n)
+        check(f"{total} minor across {n} seats re-sums exactly and yields {n} shares",
+              sum(parts) == total and len(parts) == n, str(parts))
+    check("the remainder lands on the FIRST seat — deterministic, never dropped",
+          split_minor(10000, 3) == [3334, 3333, 3333], str(split_minor(10000, 3)))
+    check("no seats to charge is an empty split, not a crash", split_minor(15000, 0) == [])
+
+
+def sc_member_plus_guest_bills_the_guest_in_full(s, fx):
+    """THE LEAK, CLOSED. A member brings a friend who is not a member: the member's own seat is
+    covered, and the WHOLE court fee lands on the friend. Before this, the friend played free on the
+    member's membership — which is how two friends shared one membership and halved their court cost
+    indefinitely."""
+    print("\n# member + non-member: the WHOLE court fee lands on the non-member")
+    from community import seats as S
+    m, guest = fx.members[0], fx.members[1]
+    _membership_for_court(s, fx, m)                 # only the member is covered
+    r = _covered_court(s, fx, m, hour=10)
+    check("the member's own court booking is covered (R0)",
+          r.get("ok") and r["booking"]["settlement_mode"] == "membership_covered", str(r))
+    bid = r["booking"]["id"]
+    _as_game(s, bid, seats=2)
+    _seat(s, fx, bid, m, role="host")
+    _seat(s, fx, bid, guest)
+
+    plan = S.seat_plan(s, club_id=fx.club_id, booking_id=bid)
+    check("the court is priced at R150", plan["court_price_minor"] == 15000,
+          str(plan["court_price_minor"]))
+    check("both seats are occupied — nothing left open", plan["open_count"] == 0, str(plan))
+    covered = [row for row in plan["rows"] if row["covered"]]
+    check("exactly ONE seat is covered (the member's)", len(covered) == 1, str(plan["rows"]))
+
+    res = S.apply_seat_orders(s, club_id=fx.club_id, booking_id=bid)
+    check("exactly one seat is charged", res["charged"] == 1, str(res))
+    check("…and it carries the WHOLE R150, not half of it", res["total_minor"] == 15000, str(res))
+    rows = _seat_rows(s, bid)
+    check("the member is billed nothing at all (no seat order)",
+          all(str(x["user_id"]) != str(m) for x in rows), str(rows))
+    check("the guest owes R150", len(rows) == 1 and rows[0]["amount_minor"] == 15000, str(rows))
+    check("…recorded as un-covered, so the money is auditable later",
+          rows and rows[0]["covered"] is False, str(rows))
+
+    # Re-running must not mint a second debt for the same seat — the sweep re-runs hourly.
+    again = S.apply_seat_orders(s, club_id=fx.club_id, booking_id=bid)
+    check("re-applying is idempotent (no second debt for the same seat)",
+          again["charged"] == 1 and len(_seat_rows(s, bid)) == 1, str(_seat_rows(s, bid)))
+
+
+def sc_two_payg_split_and_both_must_settle(s, fx):
+    """Two non-members split the court fee, and the court confirms only when BOTH have paid. A single
+    Yoco checkout cannot collect from two payers, so this is N orders against one booking — the same
+    shape semi-private lessons already use, with the confirmation gate widened from one order to N."""
+    print("\n# two PAYG players: R75 + R75, and the court is held until BOTH settle")
+    from community import seats as S
+    p1, p2 = fx.members[1], fx.members[2]           # neither holds a membership
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=p1, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="at_court",
+                         starts_at=utc_iso(at(fx, 12)), ends_at=utc_iso(at(fx, 13)))
+    check("the booking is made", r.get("ok"), str(r))
+    bid = r["booking"]["id"]
+    _as_game(s, bid, seats=2)
+    _seat(s, fx, bid, p1, role="host")
+    _seat(s, fx, bid, p2)
+
+    S.apply_seat_orders(s, club_id=fx.club_id, booking_id=bid)
+    rows = _seat_rows(s, bid)
+    check("both seats are charged", len(rows) == 2, str(rows))
+    check("…R75 each — one court fee, split", sorted(x["amount_minor"] for x in rows) == [7500, 7500],
+          str(rows))
+    check("…and they re-sum to the court fee exactly",
+          sum(x["amount_minor"] for x in rows) == 15000, str(rows))
+    check("the club offers online, so each seat must PREPAY",
+          all(x["settlement_mode"] == "online" for x in rows), str(rows))
+
+    check("nothing is settled yet, so the court must NOT confirm",
+          S.all_prepaid_seats_settled(s, club_id=fx.club_id, booking_id=bid) is False)
+    first = s.execute(
+        text('SELECT bp.order_id FROM diary.booking_party bp WHERE bp.booking_id = :b '
+             '  AND bp.order_id IS NOT NULL ORDER BY bp.created_at LIMIT 1'), {"b": bid}).scalar()
+    s.execute(text('UPDATE billing."order" SET status = \'paid\' WHERE id = :o'), {"o": first})
+    check("ONE of the two has paid — still not confirmable (the trap)",
+          S.all_prepaid_seats_settled(s, club_id=fx.club_id, booking_id=bid) is False)
+    s.execute(text('UPDATE billing."order" SET status = \'paid\' WHERE id IN '
+                   '(SELECT order_id FROM diary.booking_party WHERE booking_id = :b '
+                   ' AND order_id IS NOT NULL)'), {"b": bid})
+    check("…once BOTH have settled, the court may confirm",
+          S.all_prepaid_seats_settled(s, club_id=fx.club_id, booking_id=bid) is True)
+
+
+def sc_open_seat_collapses_onto_the_holder_at_cutoff(s, fx):
+    """A member may book a court and go looking for a partner — they simply cannot end up having held
+    a second seat, free, that nobody ever filled. At the cutoff the empty seat's share becomes theirs.
+
+    The idempotency half of this is the one that bites: the sweep runs hourly, and a collapsed seat
+    that did not count as OCCUPYING its seat was collapsed again on every single run."""
+    print("\n# an unfilled OPEN seat collapses onto the holder — and only once, however often we sweep")
+    from community import seats as S
+    m = fx.members[0]
+    _membership_for_court(s, fx, m)
+    r = _covered_court(s, fx, m, hour=14)
+    bid = r["booking"]["id"]
+    _as_game(s, bid, seats=2, visibility="open")
+    _seat(s, fx, bid, m, role="host")
+
+    plan = S.seat_plan(s, club_id=fx.club_id, booking_id=bid)
+    check("one seat is open", plan["open_count"] == 1, str(plan))
+    check("the member's own seat is covered, so nothing is owed yet",
+          all(row["covered"] for row in plan["rows"]), str(plan["rows"]))
+
+    out = S.collapse_open_seats(s, club_id=fx.club_id, booking_id=bid)
+    check("the open seat collapses", out["collapsed"] == 1, str(out))
+    check("…and the holder is billed the WHOLE R150 (nobody to share with)",
+          out["amount_minor"] == 15000, str(out))
+    rows = _seat_rows(s, bid)
+    check("the charge belongs to the holder", len(rows) == 1 and str(rows[0]["user_id"]) == str(m),
+          str(rows))
+    check("…recorded as a collapsed seat, not a mystery charge",
+          rows and rows[0]["seat_status"] == "collapsed", str(rows))
+    check("the game is closed to new joiners once it has collapsed",
+          s.execute(text("SELECT visibility FROM diary.booking WHERE id = :b"),
+                    {"b": bid}).scalar() == "private")
+
+    again = S.collapse_open_seats(s, club_id=fx.club_id, booking_id=bid)
+    check("sweeping again collapses NOTHING (idempotent — the hourly job re-runs all day)",
+          again["collapsed"] == 0, str(again))
+    check("…and the holder is not billed twice", len(_seat_rows(s, bid)) == 1,
+          str(_seat_rows(s, bid)))
+
+
+def sc_split_locks_on_first_payment(s, fx):
+    """Once money has moved the split can never be recomputed. Re-pricing a seat somebody already
+    paid for means refunding cents, or billing a player an amount they never agreed to, because a
+    third person turned up."""
+    print("\n# the first payment LOCKS the split — a later joiner never re-prices a paid seat")
+    from community import seats as S
+    p1, p2, p3 = fx.members[0], fx.members[1], fx.members[2]
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=p1, role="member",
+                         booking_type="court", resource_id=fx.courts[1],
+                         settlement_mode="at_court",
+                         starts_at=utc_iso(at(fx, 16)), ends_at=utc_iso(at(fx, 17)))
+    bid = r["booking"]["id"]
+    _as_game(s, bid, seats=4, play_format="doubles")
+    _seat(s, fx, bid, p1, role="host")
+    _seat(s, fx, bid, p2)
+    S.apply_seat_orders(s, club_id=fx.club_id, booking_id=bid)
+    check("two un-covered seats split R150 → R75 each",
+          sorted(x["amount_minor"] for x in _seat_rows(s, bid)) == [7500, 7500],
+          str(_seat_rows(s, bid)))
+
+    paid = s.execute(
+        text("SELECT order_id FROM diary.booking_party WHERE booking_id = :b "
+             "  AND order_id IS NOT NULL ORDER BY created_at LIMIT 1"), {"b": bid}).scalar()
+    s.execute(text('UPDATE billing."order" SET status = \'paid\' WHERE id = :o'), {"o": paid})
+    check("the first payment locks the split",
+          S.lock_split(s, club_id=fx.club_id, booking_id=bid) is True)
+    check("locking twice is a no-op (a replayed webhook must not move it)",
+          S.lock_split(s, club_id=fx.club_id, booking_id=bid) is False)
+
+    # A third, un-covered player turns up after the lock. The money core must REFUSE to price them
+    # rather than guess — billing a made-up share charges someone an amount nobody quoted, and
+    # billing zero hands out a free court off the back of somebody else's payment. (The first cut
+    # did exactly that: `int(None or 0)` gave the joiner a R0 seat.)
+    _seat(s, fx, bid, p3)
+    plan = S.seat_plan(s, club_id=fx.club_id, booking_id=bid)
+    unpriced = [row for row in plan["rows"] if row.get("unpriced")]
+    check("the read reports the new seat as UNPRICED, not as free",
+          len(unpriced) == 1 and unpriced[0]["share_minor"] is None, str(plan["rows"]))
+    try:
+        S.apply_seat_orders(s, club_id=fx.club_id, booking_id=bid)
+        check("billing a post-lock paying seat is REFUSED", False, "no SeatError raised")
+    except S.SeatError as e:
+        check("billing a post-lock paying seat is REFUSED (SPLIT_LOCKED)", e.code == "SPLIT_LOCKED",
+              e.code)
+    rows = _seat_rows(s, bid)
+    check("the PAID seat is untouched at R75",
+          any(x["amount_minor"] == 7500 and x["status"] == "paid" for x in rows), str(rows))
+    check("…the other original seat is not re-priced either",
+          sorted(x["amount_minor"] for x in rows) == [7500, 7500], str(rows))
+    check("…and the late joiner was given NO free seat", len(rows) == 2, str(rows))
+
+
+def sc_seat_rule_off_changes_nothing(s, fx):
+    """The regression contract. Both switches default false, so a club that has not opted in books
+    exactly as it did before — no seats, no seat orders, no behaviour change anywhere."""
+    print("\n# with the seat rule OFF, a court booking behaves exactly as it always has")
+    from community import seats as S
+    pol = S.policy(s, fx.club_id)
+    check("community_enabled defaults OFF", pol["community_enabled"] is False, str(pol))
+    check("seat_rule_enforced defaults OFF", pol["seat_rule_enforced"] is False, str(pol))
+    check("a club with no policy row is OFF too, not accidentally ON",
+          S.policy(s, "00000000-0000-0000-0000-000000000000")["seat_rule_enforced"] is False)
+
+    m = fx.members[0]
+    _membership_for_court(s, fx, m)
+    r = _covered_court(s, fx, m, hour=8)
+    check("the covered booking still confirms immediately", r.get("ok")
+          and r["booking"]["status"] == "confirmed", str(r))
+    check("…still at R0", (_order_for_booking(s, r["booking"]["id"]) or {}).get("amount_minor") == 0)
+    check("…and NO seat order was raised behind it", _seat_rows(s, r["booking"]["id"]) == [])
+
+
 SCENARIOS = [
+    # THE SEAT RULE (community/) — the money core, pinned before create_booking learns about seats.
+    sc_seat_split_covers_the_court_exactly,
+    sc_member_plus_guest_bills_the_guest_in_full,
+    sc_two_payg_split_and_both_must_settle,
+    sc_open_seat_collapses_onto_the_holder_at_cutoff,
+    sc_split_locks_on_first_payment,
+    sc_seat_rule_off_changes_nothing,
     sc_cancel_after_start_guard,
     sc_unpriced_booking_refused,
     sc_court_book_cancel,

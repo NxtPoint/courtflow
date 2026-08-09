@@ -52,9 +52,25 @@ class SeatError(Exception):
 # hitting alone or against the ball machine) — there is no second seat to account for.
 SEATS_BY_FORMAT = {"singles": 2, "doubles": 4, "practice": 1}
 
-# Seat states that occupy a seat (so it isn't open) and therefore count in the split denominator when
-# they are not covered. 'released' and 'collapsed' seats are NOT occupied by their original holder.
-_LIVE_SEAT = ("invited", "held", "confirmed")
+# Seat states that OCCUPY a seat (so it isn't open) and therefore count in the split denominator when
+# they are not covered.
+#
+# 'collapsed' belongs here and it is not obvious. A collapsed seat is one nobody filled, whose share
+# was re-billed to the booking holder — so it is paid for, and it is no longer open. Leaving it out
+# made collapse_open_seats NON-IDEMPOTENT: seat_plan recomputed open_count from the live seats only,
+# saw the same empty seat a second time, and the hourly sweep would have charged the holder again on
+# every run until the game started. Found by sc_open_seat_collapses_onto_the_holder_at_cutoff before
+# it ever ran against a club.
+#
+# 'released' is correctly absent: an invitee who never paid has vacated the seat, and it goes back to
+# being open (or collapses).
+_LIVE_SEAT = ("invited", "held", "confirmed", "collapsed")
+
+# ...but a COLLAPSED seat does not HOLD THE COURT. all_prepaid_seats_settled deliberately excludes it:
+# the collapse happens BECAUSE the member is keeping the court, hours before they play, so letting a
+# non-payment then lazy-expire the booking out from under them would be perverse. It becomes a debt on
+# their statement like any other, which is what the month-end sweep is for.
+_HOLDING_SEAT = ("invited", "held", "confirmed")
 
 
 # ---------------------------------------------------------------------------
@@ -260,8 +276,16 @@ def seat_plan(session, *, club_id, booking_id):
             uncovered.append(entry)
 
     if locked:
+        # A locked seat keeps the share it was told. A seat that joined AFTER the lock has no share
+        # at all, and it must NOT fall through to zero — `int(None or 0)` handed a post-lock joiner a
+        # free court, which is the silent zero this module's header refuses. It is left UNPRICED here
+        # (a truthful read the UI can render) and apply_seat_orders refuses to bill it, so the
+        # decision — close the game, or let the club allow a free joiner once the fee is banked —
+        # is made deliberately in the join path rather than by a fallthrough in the money core.
         for e in uncovered:
-            e["share_minor"] = int(e["seat"].get("share_minor") or 0)
+            raw = e["seat"].get("share_minor")
+            e["share_minor"] = int(raw) if raw is not None else None
+            e["unpriced"] = raw is None
     else:
         for e, share in zip(uncovered, split_minor(price, len(uncovered))):
             e["share_minor"] = share
@@ -330,11 +354,20 @@ def apply_seat_orders(session, *, club_id, booking_id, now=None):
                 {"id": str(seat["id"])})
             continue
 
+        if entry.get("unpriced"):
+            # An un-covered seat added after the split locked. Refusing is the only safe answer the
+            # money core can give: billing it a guessed share would charge someone an amount nobody
+            # quoted them, and billing it zero would hand out a free court.
+            raise SeatError("SPLIT_LOCKED",
+                            "this game's split is already locked by a payment — a new paying seat "
+                            "can't be priced into it", seat_id=str(seat["id"]))
+
         charged += 1
         total += int(share or 0)
         if seat.get("order_id"):
-            _resync_seat_order(session, seat_id=seat["id"], order_id=seat["order_id"],
-                               share_minor=share)
+            if not plan["locked"]:
+                _resync_seat_order(session, seat_id=seat["id"], order_id=seat["order_id"],
+                                   share_minor=share)
             continue
 
         if mode is None:
@@ -410,9 +443,9 @@ def all_prepaid_seats_settled(session, *, club_id, booking_id):
         text('SELECT count(*) FROM diary.booking_party bp '
              '  JOIN billing."order" o ON o.id = bp.order_id '
              " WHERE bp.booking_id = :b AND bp.club_id = :c "
-             "   AND bp.seat_status IN ('invited','held','confirmed') "
+             "   AND bp.seat_status = ANY(:holding) "
              "   AND o.settlement_mode = 'online' AND o.status <> 'paid'"),
-        {"b": str(booking_id), "c": str(club_id)},
+        {"b": str(booking_id), "c": str(club_id), "holding": list(_HOLDING_SEAT)},
     ).scalar()
     return int(unpaid or 0) == 0
 

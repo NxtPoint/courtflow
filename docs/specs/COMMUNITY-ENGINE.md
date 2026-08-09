@@ -147,26 +147,47 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
 read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
 the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
-(`courtflow-dev`) at booking 405 / billing 677 / statement 64, with `python -m db` twice a clean
+(`courtflow-dev`) at booking 455 / billing 677 / statement 64, with `python -m db` twice a clean
 no-op including `community.schema`.
 
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart
 (this file already carried a stale 659 for an afternoon).
 
-**Scenarios are NOT yet written** — they land with the booking-path integration, and their names are
-deliberately not listed here in backticks until they exist, because `scripts.audit_docs` treats a
-named `sc_…` as a claim that it is already guarded (that check is the whole reason this doc can be
-trusted). The coverage they must provide, in the order it matters:
+### Written and green (`test_booking_scenarios`, +50 checks)
 
-*Diary / seats* — the split re-sums to the court fee exactly, remainder included · a member + a
-non-member puts the WHOLE fee on the non-member · two PAYG players split it and the booking stays
-`held` after the first payment, confirming only on the second · an unfilled seat collapses onto the
-holder at the cutoff, emits, and is idempotent on re-run · the split locks on first payment so a later
-joiner never re-prices a paid seat · a member past their expiry or over their daily cap is an
-un-covered seat and is billed (the same rule the existing entitlement scenarios pin) · **the flag
-actually gates it — with `seat_rule_enforced=false` nothing changes** · an invited friend is trialed
-once and never twice, and never a Wix import · a junior never appears in discovery.
+`sc_seat_split_covers_the_court_exactly` · `sc_member_plus_guest_bills_the_guest_in_full` ·
+`sc_two_payg_split_and_both_must_settle` · `sc_open_seat_collapses_onto_the_holder_at_cutoff` ·
+`sc_split_locks_on_first_payment` · `sc_seat_rule_off_changes_nothing`.
 
-*Money* — each seat is one debt and one order (no second debt store), and a cancel voids every seat
-order · a refund restores the split · a collapsed seat respects its court service's own
+They exercise `community.seats` **directly**, against ordinary bookings with seats added by hand,
+because `create_booking` is not seat-aware yet. The money core is pinned first on purpose: it is the
+part that decides what people are charged.
+
+**Writing them found two real bugs before a single club saw them**, both in the "looks obviously
+fine" category:
+
+1. **`collapse_open_seats` was not idempotent.** A `collapsed` seat did not count as OCCUPYING its
+   seat, so `seat_plan` recomputed `open_count` from the live seats, saw the same empty seat again,
+   and the **hourly** sweep would have re-billed the holder on every run until the game started. Fixed
+   by putting `collapsed` in `_LIVE_SEAT` — and *not* in `_HOLDING_SEAT`, because a collapsed seat is
+   a debt, not a reason to lazy-expire the member's court out from under them hours before they play.
+2. **A post-lock joiner got a FREE court.** `seat_plan` read a new seat's NULL share as
+   `int(None or 0)`. That is exactly the silent zero this module's header refuses, in the module that
+   refuses it. A guessed share would bill someone an amount nobody quoted them; zero hands out a
+   court off the back of someone else's payment — so the read now reports the seat as **unpriced** and
+   `apply_seat_orders` **raises `SPLIT_LOCKED`**, leaving the product decision (close the game, or
+   allow a free joiner once the fee is banked) to the join path where it belongs.
+
+### Still owed
+
+*Diary* — a member past their expiry or over their daily cap is an un-covered seat and is billed ·
+an invited friend is trialed once and never twice, and never a Wix import · a junior never appears in
+discovery.
+
+*Money* (`test_billing_scenarios`) — each seat is one debt and one order, and a cancel voids every
+seat order · a refund restores the split · a collapsed seat respects its court service's own
 `payment_modes` and can never become an unpayable at-court debt on a card-only court.
+
+These names are deliberately left out of backticks until they exist: `scripts.audit_docs` treats a
+named `sc_…` as a claim that it is already guarded, and that check is the whole reason this doc can
+be trusted.
