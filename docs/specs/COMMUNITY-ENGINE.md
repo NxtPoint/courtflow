@@ -145,8 +145,13 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 ## Verification
 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
-read exactly **booking 405 / billing 659 / statement 64**. Any drift means the rule leaked into the
-default path.
+read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
+the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
+(`courtflow-dev`) at booking 405 / billing 677 / statement 64, with `python -m db` twice a clean
+no-op including `community.schema`.
+
+The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart
+(this file already carried a stale 659 for an afternoon).
 
 **Scenarios are NOT yet written** — they land with the booking-path integration, and their names are
 deliberately not listed here in backticks until they exist, because `scripts.audit_docs` treats a
