@@ -140,6 +140,18 @@
       box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:0 0 10px", text:
         "Money that ARRIVED this month — commission is paid on funds received, so a lesson taught "
         + "last month and paid this month settles here." }));
+      // WHY THIS DOES NOT TIE TO THE CARD ABOVE. Asked the moment the two blocks first shared a
+      // page, and a fair question: both say "received" and the figures differ. They answer
+      // different questions and always will, so the page states it rather than leaving the reader
+      // to assume one of them is broken.
+      if (p.received_minor != null && st.total_collected_minor != null
+          && p.received_minor !== st.total_collected_minor) {
+        box.appendChild(el("div", { class: "cf-note", style: "margin:0 0 12px;font-size:.78rem", text:
+          "This is not the " + money(p.received_minor) + " above, and should not be. That is this "
+          + "MONTH'S SALES that have been paid — some of them settled later. This is CASH THAT "
+          + "ARRIVED this month, some of it for earlier months' lessons. Neither is wrong; they are "
+          + "different questions, and the coach is paid on this one." }));
+      }
       box.appendChild(stmtLine("Paid to the club", money(st.club_held_minor), { sub: "Yoco / EFT" }));
       box.appendChild(stmtLine(isCoach ? "Collected by you" : "Collected by the coach",
                                money(st.coach_held_minor), { sub: "cash at the court" }));
@@ -149,10 +161,17 @@
       // price_id so its commission attributes to him — which puts the FULL pack price here at the
       // moment of SALE, not spread across the sessions drawn from it. Without this the headline
       // reads as a threefold error against the lessons anyone remembers teaching.
+      // by_kind is {kind: {club_minor, coach_minor, n}} — a breakdown per kind, not a flat amount.
+      // Passing the object straight to money() rendered every line as "—".
       var bk = st.by_kind || {};
       ["lesson", "class", "pack"].forEach(function (k) {
-        if (bk[k]) box.appendChild(stmtLine(k === "pack" ? "of which packs (at sale)" : "of which " + k,
-                                            money(bk[k]), { indent: true, muted: true }));
+        var v = bk[k];
+        if (!v) return;
+        var amt = (v.club_minor || 0) + (v.coach_minor || 0);
+        if (!amt) return;
+        box.appendChild(stmtLine((k === "pack" ? "of which packs (at sale)" : "of which " + k),
+                                 money(amt), { indent: true, muted: true,
+                                               sub: v.n ? (v.n + "x") : null }));
       });
       var pct = (st.effective_pct != null) ? (" @ " + st.effective_pct + "%") : "";
       box.appendChild(stmtLine("Club commission" + pct, "- " + money(Math.abs(st.commission_minor || 0)),
