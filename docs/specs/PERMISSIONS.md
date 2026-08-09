@@ -230,3 +230,24 @@ Note here what's wrong / should move / which staff tiers you want, and we build 
 - _e.g. "front_desk must NOT see Cockpit"_ …
 - _e.g. "merge Settings→Services into Pricing"_ …
 - _e.g. "we only need owner + front_desk, drop manager"_ …
+
+
+## View as a member (2026-08-09)
+
+An owner can open a member's OWN screens — `/app.html?as=<user_id>`, reached from **People → a
+client → "View as member"**. It answers a question the admin record cannot: *what does my member
+actually see?* — which is the one worth asking after changing a member-facing page.
+
+**Read-only by construction, not by convention.** `me/routes._principal` is the single gate for every
+`/api/me/*` route, and it refuses any **non-GET** carrying `?as_user` **before** it swaps the
+principal — so viewing can never book, pay, cancel or edit on someone's behalf. The browser side
+refuses to attach the parameter to a non-GET as well (belt and braces), and confines it to
+`/api/me/*`.
+
+`impersonate` was widened from `platform_admin` to **`club_admin`** for this: the risk of an owner
+reading their own club's member screens is small, and the alternative is an owner who cannot see
+what they are shipping. The target is **re-read and club-checked** — the id is never trusted from the
+query string — and every view is logged with both identities. A banner sits on every page of the
+session saying it is read-only.
+
+Guarded by `sc_view_as_a_member_is_read_only`.

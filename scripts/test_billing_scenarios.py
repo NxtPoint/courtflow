@@ -4338,6 +4338,46 @@ def sc_a_month_swept_early_can_still_be_closed(s, fx):
           CM.month_end_period(s) == period, CM.month_end_period(s))
 
 
+def sc_view_as_a_member_is_read_only(s, fx):
+    """An owner can open a member's OWN screens — and can never act as them.
+
+    The People record shows an ADMIN's rendering of a member's money, which is a different question
+    from "what does my member actually see?" — the one worth asking after changing a member-facing
+    page. So /app.html?as=<id> makes every /api/me/* READ resolve to that member.
+
+    THE DANGER IS WRITES, and it is closed structurally rather than by convention: me.routes
+    ._principal refuses any non-GET carrying ?as_user BEFORE it swaps the principal, so viewing can
+    never book, pay, cancel or edit on someone's behalf. Scope is the caller's own club, and the
+    target is re-read and club-checked — the id is never trusted from the query string."""
+    print("\n# View-as is admin-only, own-club-only, and can never write")
+    from iam.permissions import can as _can
+    from auth.principal import Principal
+
+    owner = Principal(user_id=str(fx.member), club_id=str(fx.club_id), role="club_admin",
+                      method="jwt")
+    coach = Principal(user_id=str(fx.coach_uid), club_id=str(fx.club_id), role="coach",
+                      method="jwt")
+    member = Principal(user_id=str(fx.member), club_id=str(fx.club_id), role="member",
+                       method="jwt")
+    check("an OWNER may view as a member",
+          _can(owner, "impersonate", {"club_id": str(fx.club_id)}) is True)
+    check("a COACH may not", not _can(coach, "impersonate", {"club_id": str(fx.club_id)}))
+    check("a MEMBER may not", not _can(member, "impersonate", {"club_id": str(fx.club_id)}))
+
+    # The read-only guarantee is enforced in me.routes._principal, which needs a request context —
+    # so assert the RULE it encodes here, and that the source actually contains it. A permission
+    # that is only read-only by convention is one write away from acting as somebody else.
+    import inspect
+    from me import routes as me_routes
+    src = inspect.getsource(me_routes._principal)
+    check("the gate refuses any non-GET carrying as_user",
+          'request.method != "GET"' in src and "view_as_is_read_only" in src, "guard missing")
+    check("...and re-reads the target scoped to the caller's club",
+          "iam.membership" in src and "m.club_id" in src, "club scoping missing")
+    check("...and checks the impersonate permission before swapping",
+          src.index('can(p, "impersonate"') < src.index("dataclasses.replace"), "order wrong")
+
+
 def sc_the_client_account_reads_month_by_month(s, fx):
     """A member's account is one row per MONTH — billed, paid, still due, and payable on its own.
 
@@ -5173,6 +5213,7 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
 
 
 SCENARIOS = [
+    sc_view_as_a_member_is_read_only,
     sc_the_client_account_reads_month_by_month,
     sc_a_desk_payment_recorded_in_error_can_be_undone,
     sc_coach_earnings_carries_the_settlement,

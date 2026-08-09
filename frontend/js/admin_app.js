@@ -509,6 +509,8 @@
         },
         // The SAME action the transaction record uses — one definition, four call sites.
         unreceipt: unreceiptAction(function (it) { return it.order_id || it.id; }),
+        // Declared so the record's has() gate passes; the widget opens the member's app itself.
+        view_as: { manual: true, run: function () {} },
         // Online payment refund (reuses the shared refund modal)
         refund: { manual: true, run: function (pay) { refundModal(pay.order_id, { amount_minor: pay.amount_minor, currency: pay.currency_code || clubCur() }, function () { renderPerson(id); }); } },
         // Invoices — issue one for the current outstanding balance, mark an unpaid one paid (EFT/cash),

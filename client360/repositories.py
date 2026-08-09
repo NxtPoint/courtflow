@@ -670,6 +670,9 @@ def _can(scope):
                 # diary.bookings.order_story (paid + desk provider + nothing granted); this only
                 # says the ADMIN role may do it at all.
                 "unreceipt": True,
+                # Open the member's OWN screens, read-only (me/routes._principal refuses any
+                # non-GET carrying ?as_user). Admin scope only — never coach, never the client.
+                "view_as": True,
                 "issue_statement_invoice": True, "invoice_mark_paid": True, "invoice_void": True,
                 # The re-issue path: void the DOCUMENT, keep the debt billable.
                 "invoice_void_keep_charges": True,

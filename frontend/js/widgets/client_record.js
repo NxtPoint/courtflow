@@ -108,6 +108,16 @@
           (has("edit") || cfg.onEditProfile)
             ? el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Edit", onclick: function () { if (cfg.onEditProfile) cfg.onEditProfile(); else editModal(pn); } })
             : null,
+          // VIEW AS — open the MEMBER'S own screens, read-only. This record shows an admin's
+          // rendering of their money; it does not show what they see, which is a different and
+          // frequently more useful question when you have just changed a member-facing page.
+          has("view_as")
+            ? el("button", {
+                class: "cf-btn cf-btn-sm cf-btn-ghost", text: "View as member",
+                title: "Open their app as they see it — read only",
+                onclick: function () { window.open("/app.html?as=" + encodeURIComponent(cfg.scope && cfg.scope.id), "_blank"); },
+              })
+            : null,
         ].filter(Boolean)),
       ]);
       // Kids (dependents) inline — who this person can book for.

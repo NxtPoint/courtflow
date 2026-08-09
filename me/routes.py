@@ -50,7 +50,37 @@ def _principal():
         return None, (jsonify(error="unauthorized"), 401)
     if p.club_id is None:
         return None, (jsonify(error="no_club_scope"), 400)
-    return p, None
+
+    # VIEW AS A MEMBER — an owner answering "what does my member actually see?". Every client screen
+    # reads /api/me/*, so this ONE helper is the whole surface, which is why it is enforced here and
+    # nowhere else: there is no second path to keep in step.
+    #
+    # READ-ONLY BY CONSTRUCTION, not by convention. Any non-GET carrying ?as_user is refused before
+    # the principal is swapped, so viewing can never book, pay, cancel or edit on someone's behalf —
+    # the failure mode that makes impersonation dangerous. A club_admin may only ever view a member
+    # of their OWN club (the target is re-read and club-checked; the id is never trusted from the
+    # query string alone), and every view is logged with both identities.
+    as_user = (request.args.get("as_user") or "").strip()
+    if not as_user:
+        return p, None
+    if request.method != "GET":
+        return None, (jsonify(error="view_as_is_read_only",
+                              message="Viewing as a member is read-only."), 403)
+    if not can(p, "impersonate", {"club_id": p.club_id}):
+        return None, (jsonify(error="forbidden"), 403)
+    from sqlalchemy import text
+    with session_scope() as s:
+        row = s.execute(
+            text('SELECT u.id, u.email FROM iam."user" u '
+                 " JOIN iam.membership m ON m.user_id = u.id AND m.club_id = CAST(:c AS uuid) "
+                 " WHERE u.id = CAST(:u AS uuid)"),
+            {"c": str(p.club_id), "u": as_user}).mappings().first()
+    if not row:
+        return None, (jsonify(error="not_in_this_club"), 404)
+    import dataclasses
+    log.info("view-as: %s (%s) viewing member %s", p.user_id, p.email, row["id"])
+    return dataclasses.replace(p, user_id=str(row["id"]), email=row["email"],
+                               role="member"), None
 
 
 def _body():

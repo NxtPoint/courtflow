@@ -185,8 +185,27 @@
 
   // apiJSON — apiFetch + JSON body helper. Throws {status, body} on non-2xx so
   // callers can surface the server's {error, message} (e.g. 409 SLOT_TAKEN).
+  // VIEW AS A MEMBER (owner support): /app.html?as=<user_id> makes every /api/me/* READ carry the
+  // member's id, so the owner sees the member's own screens rather than an admin rendering of their
+  // data. Appended here, in the one place every client call goes through, so no screen can forget.
+  //
+  // READS ONLY. The server refuses any non-GET carrying as_user, and this refuses to attach it to
+  // one — belt and braces, because a write that silently acted as the member is the exact failure
+  // that makes impersonation dangerous. Confined to /api/me/* for the same reason.
+  var VIEW_AS = (function () {
+    try { return new URLSearchParams(location.search).get("as") || ""; } catch (e) { return ""; }
+  })();
+  function withViewAs(path, opts) {
+    if (!VIEW_AS) return path;
+    var method = ((opts && opts.method) || "GET").toUpperCase();
+    if (method !== "GET") return path;
+    if (path.indexOf("/api/me/") !== 0) return path;
+    return path + (path.indexOf("?") >= 0 ? "&" : "?") + "as_user=" + encodeURIComponent(VIEW_AS);
+  }
+
   async function apiJSON(path, opts) {
     opts = Object.assign({}, opts || {});
+    path = withViewAs(path, opts);
     if (opts.body && typeof opts.body !== "string") {
       opts.body = JSON.stringify(opts.body);
       opts.headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
@@ -221,6 +240,7 @@
     authHeaders: authHeaders,
     apiFetch: apiFetch,
     apiJSON: apiJSON,
+    viewingAs: function () { return VIEW_AS || null; },
     isAuthed: isAuthed,
     email: email,
     requireAuth: requireAuth,

@@ -82,7 +82,12 @@ _MIN_ROLE = {
     "view_club_diary":    "coach",
     # provisioning (platform-only)
     "provision_club":     "platform_admin",
-    "impersonate":        "platform_admin",
+    # VIEW-AS: an owner answering "what does my member actually see?" needs this, and it is
+    # READ-ONLY by construction — me/routes._principal refuses any non-GET carrying ?as_user, so it
+    # can never book, pay or edit on a member's behalf. Widened from platform_admin deliberately;
+    # the risk of an owner reading their own club's member screens is small, and the alternative is
+    # an owner who cannot see what they are shipping.
+    "impersonate":        "club_admin",
     "cross_club":         "platform_admin",
 }
 

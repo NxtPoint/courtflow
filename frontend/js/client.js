@@ -101,6 +101,15 @@
       ]);
       document.body.insertBefore(bar, document.body.firstChild);
       mountBell(document.getElementById("cf-bell"));
+      // VIEWING AS A MEMBER — say so, loudly and permanently. An owner who forgets which account
+      // they are looking at is how a support view turns into a mistake, and the banner is the only
+      // thing standing between "reading their screen" and "believing it is yours".
+      if (window.TFAuth.viewingAs && window.TFAuth.viewingAs()) {
+        var b = el("div", { style: "background:var(--warn,#8a5a00);color:#fff;padding:6px 12px;"
+                                 + "font-size:.82rem;font-weight:600;text-align:center" },
+          [el("span", { text: "Viewing as a member — read only. Nothing you do here can book, pay or change anything." })]);
+        document.body.insertBefore(b, document.body.firstChild);
+      }
     }
     view = document.getElementById("cf-main");
     if (!view) { view = el("main", { class: "cf-main", id: "cf-main" }); document.body.appendChild(view); }
