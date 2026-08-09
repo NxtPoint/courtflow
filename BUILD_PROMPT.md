@@ -23,16 +23,23 @@ READ FIRST, IN THIS ORDER:
 
 THERE IS NO BUILD PHASE AND NO PYTEST. The gates are:
   1. python -m py_compile $(git ls-files '*.py')
-  2. python -m db   TWICE   — the second run must be a clean no-op
-  3. python -m scripts.audit_docs  — the DOCS gate. Prose never fails a compile, so docs rot
+  2. python -m scripts.check_frontend_js — the JS PARSE gate. node --check over frontend/js.
+     A JS file that does not parse is dead in the browser ENTIRELY, and it presents as a broken
+     login, not as a frontend error. Needs no DATABASE_URL, so it runs when nothing else can.
+  3. python -m db   TWICE   — the second run must be a clean no-op
+  4. python -m scripts.audit_docs  — the DOCS gate. Prose never fails a compile, so docs rot
      silently and get trusted when wrong. It checks the real routes/tables/widgets/events/
      scenarios/scripts from SOURCE against the prose. Currently 0 misses; keep it there.
      RUN IT AT THE END OF ANY SESSION THAT ADDED A SURFACE.
-  4. python -m scripts.test_all   — three rollback-only scenario harnesses
+  5. python -m scripts.test_all   — the JS parse gate, then three rollback-only scenario harnesses
      Current green baseline: booking 405 / billing 642 / statement 64
-  5. node --check on every frontend JS file you touched
 
   (Same numbering as CLAUDE.md's "Gates" section — they must not drift apart.)
+
+  Gate 2 replaces the old step "node --check on every frontend JS file you touched". That
+  instruction existed and was not enough, twice over: it was MANUAL, and it was scoped to the
+  files you touched. On 2026-08-09 a broken admin_app.js shipped and took /admin down for 11
+  hours. Automated, and over EVERY file — a gate you have to remember is not a gate.
 
 HOW WE WORK — these are not style preferences, they are what has kept the money correct:
 
@@ -161,6 +168,7 @@ render code. Read `docs/specs/FRONTEND-STANDARDISATION.md` before any UI work.
 ```bash
 # gates
 python -m py_compile $(git ls-files '*.py')      # PowerShell: (git ls-files '*.py')
+python -m scripts.check_frontend_js              # node --check over frontend/js — no DB, ~1s
 python -m db && python -m db                     # 2nd run must be a no-op
 python -m scripts.test_all
 

@@ -624,6 +624,8 @@ dashboard (`sync:false`).
 
 ## 7. Verify gates (no live infra)
 - Compile: `python -m py_compile $(git ls-files '*.py')`.
+- Frontend parse: `python -m scripts.check_frontend_js` — `node --check` over `frontend/js/**/*.js`.
+  No DB, no env, ~1s. A JS file that doesn't parse is dead in the browser entirely.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
   `python -m scripts.test_all` → **booking 405 / billing 642 / statement 64** (`test_booking_scenarios` /

@@ -48,12 +48,13 @@ Preview the public marketing site (Chrome needs `threaded=True` for parallel ass
 MARKETING_HOSTS=localhost python -c "import web_app; web_app.app.run(port=5061, threaded=True)"
 ```
 
-### Gates — run all three before every merge
+### Gates — run all four before every merge
 
 ```bash
 python -m py_compile $(git ls-files '*.py')   # PowerShell: python -m py_compile (git ls-files '*.py')
+python -m scripts.check_frontend_js           # node --check over frontend/js — no DB, ~1s
 python -m db && python -m db                  # the 2nd run must be a clean no-op
-python -m scripts.test_all                    # booking / billing / statement harnesses
+python -m scripts.test_all                    # JS parse gate + booking / billing / statement harnesses
 ```
 
 Each harness can be run standalone while iterating — `python -m scripts.test_booking_scenarios`,
