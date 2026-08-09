@@ -161,12 +161,32 @@ def main():
 
         gap = tot(rows) - (charged - refunded)
         print(f"\n  SPLIT GROSS minus CASH RECEIVED: {RAND(gap / 100)}")
-        if abs(gap) <= 100:
-            print("  -> They agree. The gap in diagnose_coach_statement is the per-coach FILTER on")
-            print("     billing.payment, not missing money: a wrapper's payment carries no coach.")
+        # DIRECTION MATTERS MORE THAN SIZE, and the two directions are not symmetrical.
+        #
+        # gap < 0 (cash EXCEEDS the splits) is ordinary and not a loss: one payment can settle an
+        # order carrying non-coaching value too — equipment on a lesson, a court on the same tab —
+        # and only the coaching line raises a split. More money arrived than this coach's commission
+        # is computed on, which is the safe direction.
+        #
+        # gap > 0 (splits EXCEED the cash) is the one that matters: commission would be charged on
+        # money the club cannot show arriving. And only `odd` rows — splits with no traceable
+        # payment at all — can mean money is genuinely missing; a wrapper-paid split is real money
+        # by definition, so listing those as suspects teaches people to ignore this report.
+        if not odd and gap <= 0:
+            print("  -> RECONCILED. Every split traces to a real payment, and the cash received is")
+            print(f"     {RAND(abs(gap) / 100)} MORE than the coaching splits — a payment that also")
+            print("     covered non-coaching value on the same order. Nothing is missing.")
+            print("     The gap in diagnose_coach_statement is its per-coach FILTER on")
+            print("     billing.payment: a wrapper's payment carries no coach, so that read cannot")
+            print("     see it while the splits can.")
+        elif not odd:
+            print(f"  -> Every split traces to a payment, but the splits EXCEED the cash by "
+                  f"{RAND(gap / 100)}.")
+            print("     Commission would be charged on money the bank cannot show arriving. Check")
+            print("     whether a wrapper settled children in a DIFFERENT month than these splits.")
         else:
-            print("  -> They do NOT agree. The rows below are the ones to look at.")
-            for r in (odd or wrapper)[:20]:
+            print("  -> UNEXPLAINED — these splits carry no traceable payment at all:")
+            for r in odd[:20]:
                 print(f"     {str(r['d'])}  {RAND(int(r['gross_minor'] or 0) / 100):>10}  "
                       f"{r['basis']:<18} {(r['client'] or '')[:22]:<22} pay={r['provider'] or '—'}")
         print()
