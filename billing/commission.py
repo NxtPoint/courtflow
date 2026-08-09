@@ -1673,6 +1673,11 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
                     LEFT JOIN billing."order" o ON o.id = ol.order_id
                     WHERE cs.club_id = :club AND cs.coach_user_id = CAST(:coach AS uuid)
                       AND cs.party_type = 'owner'
+                      -- A payment REVERSED as recorded-in-error never happened, so its split is
+                      -- kept for audit but must not count as collected. Filtering here rather than
+                      -- deleting the split keeps the ledger append-only and leaves the mistake
+                      -- visible, which is the point of keeping it.
+                      AND COALESCE(pm.status, 'succeeded') <> 'reversed'
                       AND """ + _SPLIT_WORK_MONTH + """ = :ym
                 )
                 SELECT

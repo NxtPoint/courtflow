@@ -4338,6 +4338,95 @@ def sc_a_month_swept_early_can_still_be_closed(s, fx):
           CM.month_end_period(s) == period, CM.month_end_period(s))
 
 
+def sc_a_desk_payment_recorded_in_error_can_be_undone(s, fx):
+    """A charge ticked 'paid' by mistake can be UNDONE — and that is not a refund.
+
+    A refund means money went BACK to the client. This means it never arrived and somebody marked
+    the charge paid. Recording one as the other puts a refund the club never issued into its books.
+    There was no way to do it at all: void_order no-ops on a paid order, and the refund path moves
+    real money.
+
+    The commission is the half that gets forgotten — the coach is credited the moment a payment is
+    recorded, so leaving that in place pays him on a collection that never happened."""
+    print("\n# A desk payment recorded in error can be undone (and the commission comes back)")
+    from billing import orders as O2
+
+    # A real commission rate, or there is no split to claw back and the assertion would pass
+    # vacuously — 0 -> 0 is not proof that anything was reversed.
+    s.execute(text("INSERT INTO billing.commission_rule (club_id,scope,coach_user_id,commission_pct,"
+                   "active,effective_from) VALUES (:c,'coach',:u,30,true,CURRENT_DATE - 30)"),
+              {"c": fx.club_id, "u": fx.coach_uid})
+
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res,
+                         coach_user_id=fx.coach_uid,
+                         starts_at=iso(at(fx, 7)), ends_at=iso(at(fx, 8)),
+                         settlement_mode="at_court")
+    oid = r["booking"]["order_id"]
+    def ledger():
+        return s.execute(text("SELECT COALESCE(SUM(amount_minor),0) FROM billing.coach_ledger "
+                              "WHERE club_id=:c AND coach_user_id=:u"),
+                         {"c": fx.club_id, "u": fx.coach_uid}).scalar()
+
+    at_start = ledger()
+    O2.record_desk_payment(s, club_id=fx.club_id, order_id=oid,
+                           amount_minor=_order(s, oid)["amount_minor"], provider="cash",
+                           user_id=fx.member)
+    check("the order is paid", _order(s, oid)["status"] == "paid")
+    before = ledger()
+
+    res = O2.reverse_desk_payment(s, club_id=fx.club_id, order_id=oid, reason="ticked by mistake")
+    check("the reversal succeeds", res.get("ok") is True, str(res))
+    check("the order is OWED again", _order(s, oid)["status"] == "open",
+          _order(s, oid)["status"])
+    check("the payment row is kept, marked reversed (the audit trail is the point)",
+          s.execute(text("SELECT status FROM billing.payment WHERE order_id=:o"),
+                    {"o": oid}).scalar() == "reversed")
+    check("NO refund row was invented", not s.execute(
+        text("SELECT 1 FROM billing.payment WHERE order_id=:o AND direction='refund'"),
+        {"o": oid}).first())
+    after = ledger()
+    check("there WAS commission to reverse (not a vacuous pass)", before != at_start,
+          f"{at_start} -> {before}")
+    # Direction-agnostic and stronger than "it moved": a CASH collection is coach-held, so its
+    # ledger entry is NEGATIVE (-owner_cut) and reversing it moves the balance UP. What must be
+    # true either way is that the coach is back exactly where he stood before the mistake.
+    check("the coach's ledger is back exactly where it started", after == at_start,
+          f"start={at_start} paid={before} reversed={after}")
+    # And the settlement must stop counting it as collected — the split is kept for audit, so this
+    # is the assertion that proves the reversal actually reaches the money screens.
+    from billing import commission as CMr
+    stl = CMr.coach_settlement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid))["settlement"]
+    check("...and the settlement no longer counts it as collected",
+          stl["total_collected_minor"] == 0, str(stl["total_collected_minor"]))
+
+    # A GATEWAY payment is refused by name — real money moved, so it is a refund, not a reversal.
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="lesson", resource_id=fx.coach_res,
+                          coach_user_id=fx.coach_uid,
+                          starts_at=iso(at(fx, 15)), ends_at=iso(at(fx, 16)),
+                          settlement_mode="at_court")
+    oid2 = r2["booking"]["order_id"]
+    apply_payment_event(
+        NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid2,
+                               provider_payment_id="p_reverse_guard",
+                               amount_minor=_order(s, oid2)["amount_minor"], currency="ZAR",
+                               status="succeeded", direction="charge", club_id=str(fx.club_id),
+                               user_id=str(fx.member), raw={"t": 1}), session=s)
+    bad = O2.reverse_desk_payment(s, club_id=fx.club_id, order_id=oid2)
+    check("a CARD payment is refused — that is a refund, not a reversal",
+          bad.get("error") == "GATEWAY_PAYMENT_MUST_BE_REFUNDED", str(bad))
+    check("...and the order stays paid", _order(s, oid2)["status"] == "paid")
+
+    # An unpaid order has nothing to reverse.
+    r3 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=iso(at(fx, 18)), ends_at=iso(at(fx, 19)),
+                          settlement_mode="at_court")
+    none = O2.reverse_desk_payment(s, club_id=fx.club_id, order_id=r3["booking"]["order_id"])
+    check("an UNPAID order is refused", none.get("error") == "ORDER_NOT_PAID", str(none))
+
+
 def sc_coach_earnings_carries_the_settlement(s, fx):
     """ONE coach money screen: the P&L carries the settlement, and a payout credits the month it's FOR.
 
@@ -4979,6 +5068,7 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
 
 
 SCENARIOS = [
+    sc_a_desk_payment_recorded_in_error_can_be_undone,
     sc_coach_earnings_carries_the_settlement,
     sc_one_active_price_per_duration,
     sc_a_rent_coach_lesson_raises_no_club_charge,

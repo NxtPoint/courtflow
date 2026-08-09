@@ -197,6 +197,124 @@ def reusable_pending_purchase(session, *, club_id, user_id, kind, ref_id, amount
     ).scalar()
 
 
+# Providers whose money physically moved through the club — a Yoco charge is real cash in the
+# merchant account. Those can only be REFUNDED, never "un-recorded".
+_GATEWAY_PROVIDERS = ("yoco", "paypal")
+
+
+def reverse_desk_payment(session, *, club_id, order_id, reason=None, actor_user_id=None) -> Dict[str, Any]:
+    """UNDO a desk payment recorded in error — the charge never happened, so the debt comes back.
+
+    NOT a refund. A refund is "money came back to the client"; this is "the money never arrived and
+    somebody ticked it paid". Conflating them is how a club's books end up showing a refund it never
+    issued, so this writes no refund row and touches no gateway.
+
+    ONLY a desk payment (cash / card_at_desk / eft). A Yoco charge means real money is sitting in the
+    merchant account: reversing it here would flip the order back to owed while the club still holds
+    the cash, and nothing would ever put them back in step. That case is a refund, and it is refused
+    by name rather than silently doing something adjacent.
+
+    What it undoes, all together — the commission is the half that gets forgotten:
+      * the payment row is marked 'reversed' (kept, never deleted: the audit trail is the point);
+      * the order returns to 'open', so it is owed again and appears on the statement;
+      * the coach's COMMISSION is clawed back, because he was credited for money that never came —
+        without this the club pays commission on a phantom collection;
+      * a 'Pay all' wrapper it settled is un-settled, or its children stay hidden as paid.
+
+    REFUSED when the payment granted something that has since been used — a pack or a membership —
+    because revoking a wallet somebody has already drawn from is a human decision, not a script's.
+    Returns {ok, reversed_minor, clawback} or {ok:False, error}."""
+    order = get_order(session, order_id=order_id)
+    if order is None:
+        return {"ok": False, "error": "ORDER_NOT_FOUND"}
+    if order["status"] != "paid":
+        return {"ok": False, "error": "ORDER_NOT_PAID", "status": order["status"]}
+
+    pay = session.execute(
+        text("SELECT id, provider, amount_minor FROM billing.payment "
+             " WHERE order_id = :o AND direction = 'charge' AND status = 'succeeded' "
+             " ORDER BY created_at DESC, id DESC LIMIT 1"),
+        {"o": str(order_id)},
+    ).mappings().first()
+    if not pay:
+        # Paid with NO payment row is an off-platform arrears collection
+        # (mark_arrears_collected). Reversing that is a different act on a different record.
+        return {"ok": False, "error": "NO_PAYMENT_TO_REVERSE"}
+    if (pay["provider"] or "").lower() in _GATEWAY_PROVIDERS:
+        return {"ok": False, "error": "GATEWAY_PAYMENT_MUST_BE_REFUNDED",
+                "provider": pay["provider"],
+                "message": "This was paid by card — real money moved. Refund it instead; "
+                           "un-recording it would owe the client twice."}
+
+    granted = session.execute(
+        text("SELECT 1 FROM billing.token_wallet WHERE order_id = :o "
+             " UNION ALL SELECT 1 FROM billing.membership_subscription WHERE order_id = :o LIMIT 1"),
+        {"o": str(order_id)},
+    ).first()
+    if granted:
+        return {"ok": False, "error": "PURCHASE_ALREADY_GRANTED",
+                "message": "This payment activated a pack or membership. Revoking something the "
+                           "member may already have used needs a person, not this action."}
+
+    amt = int(pay["amount_minor"] or 0)
+
+    # THE COMMISSION, WHICH IS THE HALF THAT GETS FORGOTTEN. The coach was credited the moment the
+    # payment was recorded; leaving that in place pays him on a collection that never happened.
+    #
+    # NOT record_refund_clawback — that is for a real REFUND (the charge happened, the money went
+    # back) and it keys idempotently on the refund's own payment id, so pointing it at the original
+    # charge collides with the split already there and silently does nothing. A reversal is a
+    # different act: the event was false.
+    #
+    # So the SPLIT is kept (the mistake stays visible and coach_ledger stays append-only) and the
+    # settlement ignores splits whose payment is 'reversed'; the ledger gets an equal and opposite
+    # ADJUSTMENT so the running balance corrects itself.
+    ledger_reversed = 0
+    try:
+        rows = session.execute(
+            text("SELECT l.id, l.amount_minor FROM billing.coach_ledger l "
+                 " WHERE l.club_id = :c AND l.ref_type = 'split' "
+                 "   AND EXISTS (SELECT 1 FROM billing.commission_split cs "
+                 "                WHERE CAST(cs.id AS text) = l.ref_id AND cs.payment_id = :p)"),
+            {"c": str(club_id), "p": str(pay["id"])},
+        ).mappings().all()
+        for r in rows:
+            session.execute(
+                text("INSERT INTO billing.coach_ledger (club_id, coach_user_id, entry_type, "
+                     "  amount_minor, currency, ref_type, ref_id, note) "
+                     "SELECT :c, cs.coach_user_id, 'adjustment', :amt, 'ZAR', 'reversal', :ref, :note "
+                     "  FROM billing.commission_split cs WHERE CAST(cs.id AS text) = "
+                     "       (SELECT ref_id FROM billing.coach_ledger WHERE id = :lid) LIMIT 1"),
+                {"c": str(club_id), "amt": -int(r["amount_minor"] or 0),
+                 "ref": str(pay["id"]), "lid": r["id"],
+                 "note": "payment reversed — " + (reason or "recorded in error")})
+            ledger_reversed += int(r["amount_minor"] or 0)
+    except Exception:
+        log.warning("commission reversal failed order=%s", order_id, exc_info=True)
+        return {"ok": False, "error": "COMMISSION_REVERSAL_FAILED",
+                "message": "The coach's commission could not be reversed, so nothing was changed."}
+
+    session.execute(
+        text("UPDATE billing.payment SET status = 'reversed' WHERE id = :p"), {"p": str(pay["id"])})
+    session.execute(
+        text('UPDATE billing."order" SET status = \'open\', updated_at = now() WHERE id = :o'),
+        {"o": str(order_id)})
+
+    # If this order was a 'Pay all' wrapper, its children were marked settled by it — put them back
+    # or the debt stays invisible.
+    try:
+        from billing.statement import is_settlement_order, unsettle_settlement_order
+        if is_settlement_order(session, order_id=str(order_id)):
+            unsettle_settlement_order(session, settlement_order_id=str(order_id))
+    except Exception:
+        log.warning("wrapper un-settle failed on reversal order=%s", order_id, exc_info=True)
+
+    log.info("desk payment reversed order=%s amount=%s by=%s reason=%s",
+             order_id, amt, actor_user_id, reason)
+    return {"ok": True, "reversed_minor": amt, "provider": pay["provider"],
+            "commission_reversed_minor": ledger_reversed}
+
+
 def record_desk_payment(session, *, club_id, order_id, amount_minor, provider="cash",
                         currency_code=None, provider_payment_id=None,
                         user_id=None, recorded_by=None, allow_partial=False,

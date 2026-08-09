@@ -28,7 +28,7 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   real newlines inside a JS string: `admin_app.js` stopped parsing entirely and `/admin` hung on
   "Loading…" for 11 hours, reading as "cannot log in". Fails CLOSED if `node` is missing.
 - `test_booking_scenarios.py` · `test_billing_scenarios.py` · `test_statement_reconciliation.py`
-  — rollback-only scratch-DB harnesses (**booking 405 / billing 663 / statement 64**).
+  — rollback-only scratch-DB harnesses (**booking 405 / billing 674 / statement 64**).
 
 ## Load-bearing at runtime (KEEP — do not touch)
 - `seed_nextpoint.py` — re-seeds club #1 on every prod boot (`SEED_NEXTPOINT=1`, imported by `app.py`). Idempotent.
@@ -91,6 +91,14 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   all' wrapper and drops its coach_arrears. A PAID order is never touched (that is the refund
   path). Deliberately a script and not an admin button: "wipe this client's balance" is one
   mis-click from erasing a real member's real debt.
+- `reverse_payment.py` — **undo a DESK payment recorded in error** — the money never arrived, so the
+  debt comes back. NOT a refund (that is money going BACK to the client; recording one as the other
+  puts a refund the club never issued into its books). Marks the payment `reversed` (kept, never
+  deleted), returns the order to `open`, REVERSES the coach's commission — he was credited the moment
+  it was recorded — and un-settles any 'Pay all' wrapper it paid. Refuses a Yoco/PayPal charge by
+  name (real money moved: refund it) and any payment that granted a pack or membership (revoking a
+  wallet someone may have drawn from is a person's call). `--order <id> [--reason] [--commit]`,
+  dry-run by default.
 - `reconcile_coach_cash.py` — READ-ONLY: **ties a coach's commission splits back to the CASH that
   produced them**, following `commission_split.payment_id` to the payment and the ORDER it was
   recorded against. Answers the "these two numbers should match and don't" question that

@@ -271,6 +271,19 @@ _DDL = [
     # order.user_id (the PAYER). Null for gateway (Yoco) charges — those have no human cashier. The
     # METHOD is already the `provider` column (cash|card_at_desk|eft). (A2 — desk-payment audit trail.)
     f"ALTER TABLE {SCHEMA}.payment ADD COLUMN IF NOT EXISTS recorded_by_user_id uuid;",
+    # 'reversed' — a DESK payment recorded in error and undone (billing.orders.reverse_desk_payment).
+    # Distinct from 'refunded' on purpose: a refund means money went BACK to the client, a reversal
+    # means it never arrived and somebody ticked it paid. Recording one as the other would put a
+    # refund the club never issued into its books. WIDENING a CHECK is safe (nothing existing can
+    # violate it); the row is kept and re-labelled rather than deleted, because the audit trail of a
+    # mistaken payment is exactly what someone will want to see later.
+    f"""
+    DO $$ BEGIN
+        ALTER TABLE {SCHEMA}.payment DROP CONSTRAINT IF EXISTS payment_status_check;
+        ALTER TABLE {SCHEMA}.payment ADD CONSTRAINT payment_status_check
+            CHECK (status IN ('pending','succeeded','failed','refunded','reversed'));
+    EXCEPTION WHEN others THEN NULL; END $$;
+    """,
     f"CREATE INDEX IF NOT EXISTS ix_payment_club ON {SCHEMA}.payment (club_id);",
     f"CREATE INDEX IF NOT EXISTS ix_payment_order ON {SCHEMA}.payment (order_id);",
     # The idempotency guard (1050 pattern). Partial: desk payments may carry no provider id.
