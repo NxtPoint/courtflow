@@ -507,6 +507,21 @@
           confirm: function (it) { return "Write off " + money(it.amount_minor, it.currency || clubCur()) + "? Forgives the debt — no money is collected."; },
           done: "Written off.", run: function (it) { return window.AdminAPI.voidOrder(it.order_id, { write_off: true }); },
         },
+        // UN-RECEIPT — undo a desk payment recorded in error. The confirm states what it is NOT,
+        // because "un-receipt" sitting next to "Refund" invites the assumption that money moves.
+        unreceipt: {
+          tone: "danger",
+          confirm: function (it) {
+            return "Un-receipt this charge?\n\n"
+              + "This undoes a payment recorded in error: no money moves and no refund is issued "
+              + "— the charge simply becomes OWED again, and the coach's commission on it is "
+              + "reversed.\n\nIf money really did go back to the client, use Refund instead.";
+          },
+          done: "Un-receipted — the charge is owed again.",
+          run: function (it) {
+            return window.API.unreceiptOrder(it.order_id || it.id, { reason: "recorded in error" });
+          },
+        },
         // Online payment refund (reuses the shared refund modal)
         refund: { manual: true, run: function (pay) { refundModal(pay.order_id, { amount_minor: pay.amount_minor, currency: pay.currency_code || clubCur() }, function () { renderPerson(id); }); } },
         // Invoices — issue one for the current outstanding balance, mark an unpaid one paid (EFT/cash),

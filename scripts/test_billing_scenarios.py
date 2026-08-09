@@ -4400,6 +4400,25 @@ def sc_a_desk_payment_recorded_in_error_can_be_undone(s, fx):
     check("...and the settlement no longer counts it as collected",
           stl["total_collected_minor"] == 0, str(stl["total_collected_minor"]))
 
+    # THE BUTTON MUST ONLY APPEAR WHEN IT WORKS. An action you can press and be refused teaches
+    # people the screen is unreliable, so order_story gates it on the same conditions the engine
+    # enforces.
+    r_paid = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                              booking_type="lesson", resource_id=fx.coach_res,
+                              coach_user_id=fx.coach_uid,
+                              starts_at=iso(at(fx, 20)), ends_at=iso(at(fx, 21)),
+                              settlement_mode="at_court")
+    oid_p = r_paid["booking"]["order_id"]
+    check("an UNPAID charge offers no Un-receipt",
+          not B.order_story(s, club_id=fx.club_id, order_id=oid_p, scope="owner")["can"]
+          .get("unreceipt"))
+    O2.record_desk_payment(s, club_id=fx.club_id, order_id=oid_p,
+                           amount_minor=_order(s, oid_p)["amount_minor"], provider="cash",
+                           user_id=fx.member)
+    check("a DESK-paid charge offers Un-receipt",
+          B.order_story(s, club_id=fx.club_id, order_id=oid_p, scope="owner")["can"]
+          .get("unreceipt") is True)
+
     # A GATEWAY payment is refused by name — real money moved, so it is a refund, not a reversal.
     r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
                           booking_type="lesson", resource_id=fx.coach_res,
@@ -4416,6 +4435,9 @@ def sc_a_desk_payment_recorded_in_error_can_be_undone(s, fx):
     bad = O2.reverse_desk_payment(s, club_id=fx.club_id, order_id=oid2)
     check("a CARD payment is refused — that is a refund, not a reversal",
           bad.get("error") == "GATEWAY_PAYMENT_MUST_BE_REFUNDED", str(bad))
+    check("...and the button is not offered on it either",
+          not B.order_story(s, club_id=fx.club_id, order_id=oid2, scope="owner")["can"]
+          .get("unreceipt"))
     check("...and the order stays paid", _order(s, oid2)["status"] == "paid")
 
     # An unpaid order has nothing to reverse.

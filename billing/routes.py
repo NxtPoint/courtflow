@@ -152,6 +152,32 @@ def promo_apply():
     return jsonify(res), 200
 
 
+@billing_bp.post("/api/billing/orders/<order_id>/unreceipt")
+def unreceipt_order(order_id):
+    """Admin-only. Undo a DESK payment recorded in error: the money never arrived, so the debt comes
+    back. NOT a refund — no gateway is touched and no refund row is written. Body: {reason?}."""
+    from auth import resolve_principal
+    from iam.permissions import can
+    from db import session_scope
+    from sqlalchemy import text
+    from billing import orders as orders_repo
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return jsonify(error="unauthorized"), 401
+    body = request.get_json(silent=True) or {}
+    with session_scope() as s:
+        club_id = s.execute(text('SELECT club_id FROM billing."order" WHERE id = :o'),
+                            {"o": str(order_id)}).scalar()
+        if not club_id:
+            return jsonify(error="not_found"), 404
+        if not can(p, "take_pay_at_court", {"club_id": str(club_id)}):
+            return jsonify(error="forbidden"), 403
+        res = orders_repo.reverse_desk_payment(
+            s, club_id=str(club_id), order_id=str(order_id),
+            reason=((body.get("reason") or "").strip() or None), actor_user_id=p.user_id)
+    return jsonify(res), (200 if res.get("ok") else 422)
+
+
 @billing_bp.post("/api/billing/desk-payment")
 def desk_payment():
     """Admin-only. Body: {order_id, amount_minor, provider?(cash|card_at_desk|eft),

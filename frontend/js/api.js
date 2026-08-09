@@ -137,6 +137,11 @@
     },
     // Default cancels the charges too ("void" means cancel). Pass {keep_charges:true} for the
     // re-issue case: void the document, leave the debt billable.
+    // Undo a DESK payment recorded in error — the debt comes back. NOT a refund (no gateway, no
+    // refund row); the server refuses a card charge by name.
+    unreceiptOrder: function (orderId, body) {
+      return A().apiJSON("/api/billing/orders/" + encodeURIComponent(orderId) + "/unreceipt", { method: "POST", body: (body || {}) });
+    },
     invoiceVoid: function (invoiceId, body) {
       return A().apiJSON("/api/billing/invoice/" + encodeURIComponent(invoiceId) + "/void", { method: "POST", body: (body || {}) });
     },

@@ -2519,8 +2519,25 @@ def order_story(session, *, club_id, order_id, scope="owner", user_id=None):
             # club's money actions (desk_pay/void/write_off/refund stay owner-only).
             can = {"receipt": state in ("paid", "refunded", "part_refunded")}
         else:
+            # UN-RECEIPT: undo a DESK payment recorded in error. Offered only when it can actually
+            # work — the order is paid, the money came in at the desk (a card charge is real money
+            # and must be REFUNDED), and nothing was granted off it. Gating here rather than letting
+            # the button fail on click: an action you can press and be refused teaches people the
+            # screen is unreliable.
+            unreceiptable = False
+            if state == "paid":
+                pay = session.execute(
+                    text("SELECT provider FROM billing.payment WHERE order_id = :o "
+                         " AND direction = 'charge' AND status = 'succeeded' "
+                         " ORDER BY created_at DESC LIMIT 1"), {"o": str(order_id)}).scalar()
+                granted = session.execute(
+                    text("SELECT 1 FROM billing.token_wallet WHERE order_id = :o "
+                         " UNION ALL SELECT 1 FROM billing.membership_subscription "
+                         " WHERE order_id = :o LIMIT 1"), {"o": str(order_id)}).first()
+                unreceiptable = bool(pay) and pay.lower() not in ("yoco", "paypal") and not granted
             can = {"desk_pay": owed_or_pending, "void": owed_or_pending, "write_off": owed_or_pending,
-                   "refund": bool(charge.get("refundable")), "receipt": True}
+                   "refund": bool(charge.get("refundable")), "receipt": True,
+                   "unreceipt": unreceiptable}
 
     return {
         "id": str(o["id"]), "order_id": str(o["id"]),

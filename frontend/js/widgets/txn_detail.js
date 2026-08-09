@@ -31,6 +31,9 @@
     ["desk_pay", "Client charge", "Mark as paid", "primary"],
     ["receipt", "Client charge", "Receipt", "ghost"],
     ["refund", "Client charge", "Refund", ""],
+    // Sits beside Receipt/Refund because that is where you are when you notice the mistake. It is
+    // NOT a refund: no money goes back, the charge simply becomes owed again.
+    ["unreceipt", "Client charge", "Un-receipt", ""],
     ["request_refund", "Client charge", "Request refund", ""],
     ["void", "Client charge", "Void", ""],
     ["write_off", "Client charge", "Write off", "danger"],

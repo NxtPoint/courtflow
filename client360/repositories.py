@@ -666,6 +666,10 @@ def _can(scope):
         return {"void": True, "write_off": True, "discount": True, "wallet_adjust": True,
                 "wallet_expire": True, "grant_membership": True, "revoke_membership": True,
                 "refund": True, "issue": True, "edit": True,
+                # Undo a desk payment recorded in error. The per-charge gate lives in
+                # diary.bookings.order_story (paid + desk provider + nothing granted); this only
+                # says the ADMIN role may do it at all.
+                "unreceipt": True,
                 "issue_statement_invoice": True, "invoice_mark_paid": True, "invoice_void": True,
                 # The re-issue path: void the DOCUMENT, keep the debt billable.
                 "invoice_void_keep_charges": True,

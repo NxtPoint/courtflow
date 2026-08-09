@@ -110,7 +110,7 @@ the slot, not to what the club owns).
 **DELETED 2026-07-29:** `POST /api/diary/bookings/<id>/{accept,propose,decline}` — the lesson approval
 lifecycle is gone (see BUSINESS-RULES §2). Do not reinstate.
 
-**Billing `/api/billing/*`:** `GET config` · `GET receipt/<order_id>` · `POST desk-payment` ·
+**Billing `/api/billing/*`:** `GET config` · `GET receipt/<order_id>` · `POST desk-payment` · `POST orders/<id>/unreceipt` (undo a DESK payment recorded in error — the debt returns and the coach's commission is reversed; a card charge is refused by name, that is a refund) ·
 `GET bundles` (+`allowed_payment_modes`) · `GET bundles/wallets` · `POST bundles/checkout` (the pack's
 allowed modes = its SERVICE modes ∩ club-enabled via pure **`billing.bundles.allowed_purchase_modes`** — no
 at-court fallback, an unpayable pack is refused) ·
@@ -649,7 +649,7 @@ dashboard (`sync:false`).
   No DB, no env, ~1s. A JS file that doesn't parse is dead in the browser entirely.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 405 / billing 674 / statement 64** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 405 / billing 677 / statement 64** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
   on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +
