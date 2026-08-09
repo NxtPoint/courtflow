@@ -8,9 +8,15 @@ the coach sets up services, then the client books against them. Expected results
 > This plan only exercises what's **built & live**. Anything failing that *isn't* in §6 (known
 > limitations) is a real bug — log it (§7).
 
-> **Automated gate (separate from this manual plan):** the backend money/booking invariants are also
-> proven by scratch-DB scenario harnesses — **`python -m scripts.test_all`** runs **THREE** (each in its
-> own scratch club, always rolled back, never persisted):
+> **Automated gate (separate from this manual plan):** **`python -m scripts.test_all`** runs the
+> frontend-JS parse gate first, then THREE scratch-DB harnesses.
+>
+> - **frontend JS** (`check_frontend_js`) — `node --check` over every `frontend/js/**/*.js`. No DB,
+>   no env, ~1s. A file that does not parse is dead in the browser *in its entirety*, so this runs
+>   before anything slow. Added after `admin_app.js` shipped with real newlines inside a string and
+>   took `/admin` down for 11 hours while auth was healthy the whole time — it read as a login bug.
+>
+> The three scratch-DB harnesses (each in its own scratch club, always rolled back, never persisted):
 > - **booking** (`test_booking_scenarios`, **404** checks) — double-book refusal, coach∩court integrity,
 >   recurrence/waitlist, lazy hold-expiry, off-peak per-slot pricing, court→service allocation (per-service
 >   courts + pricing), **classes reserve N courts** (held + conflict guard + auto-repick) + editable, the

@@ -22,7 +22,11 @@ If month-end itself needs a re-run, just re-trigger `.github/workflows/month-end
 it's idempotent per `(club,user,period)`, so it skips everyone already invoiced and picks up the rest.
 
 ## Gates (run before every merge — KEEP)
-- `test_all.py` — runs the three scenario harnesses below. **The merge gate.**
+- `test_all.py` — runs the JS parse gate + the three scenario harnesses below. **The merge gate.**
+- `check_frontend_js.py` — `node --check` over every `frontend/js/**/*.js`. No DB, no env, ~1s, so
+  it runs FIRST. Catches a file that cannot load in the browser AT ALL. Added after 640b2b8 shipped
+  real newlines inside a JS string: `admin_app.js` stopped parsing entirely and `/admin` hung on
+  "Loading…" for 11 hours, reading as "cannot log in". Fails CLOSED if `node` is missing.
 - `test_booking_scenarios.py` · `test_billing_scenarios.py` · `test_statement_reconciliation.py`
   — rollback-only scratch-DB harnesses (**booking 405 / billing 641 / statement 64**).
 
