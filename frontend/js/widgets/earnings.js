@@ -79,8 +79,9 @@
     }
 
     // The coach P&L card — sales − disc − w/off = net ; net = received + owed ; commission split on each.
-    // `onRecordPayout` (admin only) adds the running club↔coach balance + a "Record payout" action.
-    function pnlCard(p, onRecordPayout) {
+    // The month's P&L. The Record-payout ACTION lives on the Settlement card below, next to the
+    // figure that says what to pay for THIS month — not next to the all-time balance.
+    function pnlCard(p) {
       var box = UI.card([]);
       box.appendChild(el("h1", { style: "margin:0 0 2px;font-size:1.2rem", text: p.name || "Coach" }));
       box.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin-bottom:6px", text: monthLabel(MONTH) + " · " + (p.rate_pct || 0) + "% club commission" }));
@@ -102,17 +103,18 @@
       box.appendChild(stmtLine(keepLabel, money(p.coach_keeps_owed_minor), { indent: true, muted: true }));
       box.appendChild(stmtLine(keepLabel + " (total)", money(p.coach_keeps_total_minor), { strong: true, border: true }));
       box.appendChild(stmtLine("Club commission (total)", money(p.club_comm_total_minor), { strong: true, tone: "good" }));
-      // Running club↔coach ledger balance + (admin) a Record-payout action to net it after paying out.
+      // THE RUNNING BALANCE IS ALL TIME — every other figure on this card is the MONTH. That one
+      // unlabelled difference is a five-figure trap: an owner opened July, read "Net balance with
+      // the club R23,407 · owed to Allon Rock" directly above a Record-payout button, and R23,407
+      // was June+July+August less what had already been paid, while July itself owed R3,682. So the
+      // label says "all time", and the payout action moved DOWN to the Settlement card, which is
+      // the block that actually computes what to pay for the month being viewed.
       if (p.ledger_balance_minor != null) {
         var bal = p.ledger_balance_minor || 0;
         var sub = isCoach ? (bal > 0 ? "the club owes you" : (bal < 0 ? "you owe the club" : "settled"))
                           : (bal > 0 ? "owed to " + (p.name || "the coach") : (bal < 0 ? "owed by " + (p.name || "the coach") : "settled"));
-        box.appendChild(stmtLine("Net balance with the club", money(Math.abs(bal)), { strong: true, border: true, sub: sub }));
-        if (typeof onRecordPayout === "function") {
-          box.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:8px" }, [
-            el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Record payout", onclick: function () { onRecordPayout(); } }),
-          ]));
-        }
+        box.appendChild(stmtLine("Net balance with the club · ALL TIME", money(Math.abs(bal)),
+                                 { strong: true, border: true, sub: sub + " across every month" }));
       }
       return box;
     }
@@ -272,7 +274,7 @@
         var payoutFn = (!isCoach && typeof cfg.onRecordPayout === "function")
           ? function () { cfg.onRecordPayout(p, function () { renderCoach(coachId, isL0); }); }
           : null;
-        wrap.appendChild(pnlCard(p, payoutFn));
+        wrap.appendChild(pnlCard(p));
         // The settlement + work log, merged in from the retired Coach-statement screen so one
         // screen answers "what did we earn", "what do I pay", and "what did I teach".
         wrap.appendChild(settlementCard(p, payoutFn));
