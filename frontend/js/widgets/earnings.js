@@ -78,10 +78,11 @@
       ]);
     }
 
-    // The coach P&L card — sales − disc − w/off = net ; net = received + owed ; commission split on each.
-    // The month's P&L. The Record-payout ACTION lives on the Settlement card below, next to the
-    // figure that says what to pay for THIS month — not next to the all-time balance.
-    function pnlCard(p) {
+    // THE coach card — ONE statement, top to bottom: sales − disc − w/off = net ; net = received +
+    // owed ; commission on each ; then what actually changes hands after rent and anything already
+    // paid. It was two cards for a day and that was a mistake: two money blocks that did not add up
+    // to each other, and the owner asked which one to believe. One card, one story.
+    function pnlCard(p, onRecordPayout) {
       var box = UI.card([]);
       box.appendChild(el("h1", { style: "margin:0 0 2px;font-size:1.2rem", text: p.name || "Coach" }));
       box.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin-bottom:6px", text: monthLabel(MONTH) + " · " + (p.rate_pct || 0) + "% club commission" }));
@@ -103,6 +104,55 @@
       box.appendChild(stmtLine(keepLabel, money(p.coach_keeps_owed_minor), { indent: true, muted: true }));
       box.appendChild(stmtLine(keepLabel + " (total)", money(p.coach_keeps_total_minor), { strong: true, border: true }));
       box.appendChild(stmtLine("Club commission (total)", money(p.club_comm_total_minor), { strong: true, tone: "good" }));
+
+      // THE SETTLEMENT, ON THE SAME CARD. It was a second card below this one, and two money blocks
+      // that did not add up to each other is what made the page unreadable — the owner asked which
+      // one to believe. Everything above is the month; these last lines are what actually changes
+      // hands after rent and anything already paid, which is the only figure anyone acts on.
+      var st = p.settlement;
+      if (st) {
+        if (st.by_kind) {
+          var bits = [];
+          ["lesson", "class", "pack"].forEach(function (k) {
+            var v = st.by_kind[k];
+            if (!v) return;
+            var amt = (v.club_minor || 0) + (v.coach_minor || 0);
+            if (amt) bits.push((v.n ? v.n + " " : "") + k + " " + money(amt));
+          });
+          if (bits.length) {
+            box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:8px 0 0",
+              text: "Collected: " + bits.join(" · ")
+                  + (st.by_kind.pack ? "  (a pack counts in full at the moment it is sold)" : "") }));
+          }
+        }
+        if (p.ledger && p.ledger.rent_minor) {
+          box.appendChild(stmtLine("Less rent", money(p.ledger.rent_minor), { border: true }));
+        }
+        if (p.ledger && p.ledger.payouts_minor) {
+          box.appendChild(stmtLine("Less already paid", money(p.ledger.payouts_minor),
+                                   { sub: "credited to this month" }));
+        }
+        if (st.due_now_minor != null) {
+          var due = st.due_now_minor || 0;
+          box.appendChild(stmtLine(
+            due >= 0 ? (isCoach ? "DUE TO YOU NOW" : "DUE TO THE COACH NOW")
+                     : (isCoach ? "YOU OWE THE CLUB" : "OWED BY THE COACH"),
+            money(Math.abs(due)), { strong: true, border: true, tone: due >= 0 ? "" : "bad" }));
+          box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:4px 0 0", text:
+            "Commission is only ever calculated on money already collected, so this rises as "
+            + "clients pay and “Owed” falls." }));
+        }
+        if (st.reconciles === false) {
+          box.appendChild(el("div", { class: "cf-note cf-note-warn", style: "margin-top:10px", text:
+            "These figures don't tie to the ledger. Don't settle from this screen until it's checked." }));
+        }
+        if (typeof onRecordPayout === "function") {
+          box.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:10px" }, [
+            el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Record payout",
+                           onclick: function () { onRecordPayout(); } }),
+          ]));
+        }
+      }
       // THE RUNNING BALANCE IS ALL TIME — every other figure on this card is the MONTH. That one
       // unlabelled difference is a five-figure trap: an owner opened July, read "Net balance with
       // the club R23,407 · owed to Allon Rock" directly above a Record-payout button, and R23,407
@@ -119,107 +169,6 @@
       return box;
     }
 
-    // THE SETTLEMENT — what actually changes hands, and the only block that answers "what do I pay
-    // this coach now". It used to live on a separate Coach-statement screen, which meant closing a
-    // month required reading two screens on two date bases and reconciling them by hand. Merged
-    // here so admin and coach read the same numbers from the same call.
-    //
-    // THE TWO BASES SURVIVE THE MERGE AND ARE LABELLED. The P&L above is dated by ORDER; this is
-    // dated by when the MONEY ARRIVED, because commission is paid on funds received. A lesson
-    // taught in July and paid in August is in July's P&L and August's settlement — that is the
-    // rule, not a mismatch, and the sub-labels say so on the page.
-    function settlementCard(p, onRecordPayout) {
-      var st = p.settlement, led = p.ledger || {};
-      var box = el("div", { class: "cf-card", style: "margin-top:14px" });
-      box.appendChild(el("h3", { text: "Settlement" }));
-      if (!st) {
-        box.appendChild(el("div", { class: "cf-empty", text:
-          "The settlement figures couldn't be loaded. Don't pay from this screen until they're back." }));
-        return box;
-      }
-      box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:0 0 10px", text:
-        "THIS MONTH'S WORK. Commission is calculated only on the part that has been collected — the "
-        + "club never pays for money it hasn't received — and the rest follows when the client pays, "
-        + "in this month, not the month the cash happens to land." }));
-      // WHY THIS DOES NOT TIE TO THE CARD ABOVE. Asked the moment the two blocks first shared a
-      // page, and a fair question: both say "received" and the figures differ. They answer
-      // different questions and always will, so the page states it rather than leaving the reader
-      // to assume one of them is broken.
-      // Both blocks are now on the SAME month basis, so they should broadly agree; where they
-      // don't it is the P&L's ORDER date against this block's DELIVERY date (a pack sold in June
-      // and taught in July, say). Say so rather than leave two similar figures unexplained.
-      if (p.received_minor != null && st.total_collected_minor != null
-          && p.received_minor !== st.total_collected_minor) {
-        box.appendChild(el("div", { class: "cf-note", style: "margin:0 0 12px;font-size:.78rem", text:
-          "Both blocks now cover THIS month. Small differences against the " + money(p.received_minor)
-          + " above are the P&L dating a charge when it was RAISED and this block dating it when the "
-          + "session was DELIVERED. The coach is paid on this one." }));
-      }
-      box.appendChild(stmtLine("Paid to the club", money(st.club_held_minor), { sub: "Yoco / EFT" }));
-      box.appendChild(stmtLine(isCoach ? "Collected by you" : "Collected by the coach",
-                               money(st.coach_held_minor), { sub: "cash at the court" }));
-      box.appendChild(stmtLine("Total collected", money(st.total_collected_minor),
-                               { strong: true, border: true }));
-      // WHY the collected figure is what it is. A lesson/class PACK hangs on the coach's own
-      // price_id so its commission attributes to him — which puts the FULL pack price here at the
-      // moment of SALE, not spread across the sessions drawn from it. Without this the headline
-      // reads as a threefold error against the lessons anyone remembers teaching.
-      // by_kind is {kind: {club_minor, coach_minor, n}} — a breakdown per kind, not a flat amount.
-      // Passing the object straight to money() rendered every line as "—".
-      var bk = st.by_kind || {};
-      ["lesson", "class", "pack"].forEach(function (k) {
-        var v = bk[k];
-        if (!v) return;
-        var amt = (v.club_minor || 0) + (v.coach_minor || 0);
-        if (!amt) return;
-        box.appendChild(stmtLine((k === "pack" ? "of which packs (at sale)" : "of which " + k),
-                                 money(amt), { indent: true, muted: true,
-                                               sub: v.n ? (v.n + "x") : null }));
-      });
-      var pct = (st.effective_pct != null) ? (" @ " + st.effective_pct + "%") : "";
-      box.appendChild(stmtLine("Club commission" + pct, "- " + money(Math.abs(st.commission_minor || 0)),
-                               { tone: "good", border: true }));
-      if (st.clawback_minor) {
-        box.appendChild(stmtLine("Refund clawback", money(st.clawback_minor), { indent: true, muted: true }));
-      }
-      box.appendChild(stmtLine(isCoach ? "Net to you" : "Net to the coach", money(st.net_minor),
-                               { strong: true, border: true }));
-      // THE REST OF THE MONTH. Without this the statement looks like it lost half a coach's July:
-      // he is owed that share too, it simply follows when the client pays.
-      if (st.outstanding_minor) {
-        box.appendChild(stmtLine("Still to collect on this month's work", money(st.outstanding_minor),
-                                 { muted: true, sub: "not yet paid by clients" }));
-        box.appendChild(stmtLine(isCoach ? "…your share, when it lands" : "…the coach's share, when it lands",
-                                 money(st.outstanding_net_minor), { indent: true, muted: true }));
-      }
-      if (led.rent_minor) {
-        box.appendChild(stmtLine("Rent", money(led.rent_minor), { sub: "charged this month" }));
-      }
-      if (led.payouts_minor) {
-        box.appendChild(stmtLine("Already paid", money(led.payouts_minor),
-                                 { sub: "credited to this month" }));
-      }
-      if (st.due_now_minor != null) {
-        var due = st.due_now_minor || 0;
-        box.appendChild(stmtLine(due >= 0 ? (isCoach ? "DUE TO YOU" : "DUE TO THE COACH")
-                                          : (isCoach ? "YOU OWE THE CLUB" : "OWED BY THE COACH"),
-                                 money(Math.abs(due)), { strong: true, border: true,
-                                                         tone: due >= 0 ? "" : "bad" }));
-      }
-      // THE INTEGRITY CHECK. The net equals the coach_ledger movement BY CONSTRUCTION, so a
-      // mismatch means something drifted — and a number nobody can check is worse than a warning.
-      if (st.reconciles === false) {
-        box.appendChild(el("div", { class: "cf-note cf-note-warn", style: "margin-top:10px", text:
-          "These figures don't tie to the ledger. Don't settle from this screen until it's checked." }));
-      }
-      if (typeof onRecordPayout === "function") {
-        box.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:10px" }, [
-          el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Record payout",
-                         onclick: function () { onRecordPayout(); } }),
-        ]));
-      }
-      return box;
-    }
 
     // THE WORK LOG — sessions by the day they RAN, which is the other question a coach asks and the
     // P&L cannot answer ("what did I teach in July"). Deliberately a different date basis again.
@@ -304,10 +253,9 @@
         var payoutFn = (!isCoach && typeof cfg.onRecordPayout === "function")
           ? function () { cfg.onRecordPayout(p, function () { renderCoach(coachId, isL0); }); }
           : null;
-        wrap.appendChild(pnlCard(p));
-        // The settlement + work log, merged in from the retired Coach-statement screen so one
-        // screen answers "what did we earn", "what do I pay", and "what did I teach".
-        wrap.appendChild(settlementCard(p, payoutFn));
+        wrap.appendChild(pnlCard(p, payoutFn));
+        // ONE card for the money (above) + the work log. The settlement used to be a second money
+        // card and two blocks that didn't add up to each other is what made the page unreadable.
         var sc = sessionsCard(p); if (sc) wrap.appendChild(sc);
         // By client (the coach's clients this month) → transactions.
         var q = { month: MONTH };
