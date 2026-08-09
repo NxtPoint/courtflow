@@ -533,6 +533,11 @@ def member_financials(session, *, club_id, user_id) -> Dict[str, Any]:
     }
 
 
+# ONE category vocabulary for a client's money — used by spend_by_category and by the month rows.
+_CAT_LABEL = {"court": "Court hire", "court_booking": "Court hire", "lesson": "Lessons",
+              "class": "Classes", "membership": "Membership"}
+
+
 def statement_by_month(session, *, club_id, user_id, months=12) -> Dict[str, Any]:
     """The client's account, MONTH BY MONTH — the shape a member actually thinks in.
 
@@ -572,6 +577,41 @@ def statement_by_month(session, *, club_id, user_id, months=12) -> Dict[str, Any
         {"c": str(club_id), "u": str(user_id), "lim": int(months)},
     ).mappings().all()
 
+    # WHAT THE MONTH IS MADE OF. The current month has no invoice to open, so without this its row
+    # is a bare total and a member cannot see what they are accruing — the same question Render
+    # answers with "Unbilled charges". Categories are resolved EXACTLY as spend_by_category does
+    # (booking_type, else the product kind, with pack and membership taking precedence), so the
+    # breakdown and the spend chart can never disagree about what a charge was.
+    cats = {}
+    try:
+        for r in session.execute(
+            text('SELECT to_char(({d} AT TIME ZONE COALESCE('
+                 "         (SELECT timezone FROM club.club WHERE id = :c),'Africa/Johannesburg')),"
+                 "        'YYYY-MM') AS period, o.amount_minor, o.status, "
+                 "       (SELECT COALESCE(b.booking_type, pr.kind) FROM billing.order_line ol "
+                 "          LEFT JOIN diary.booking b  ON b.id = ol.booking_id "
+                 "          LEFT JOIN billing.price   p  ON p.id = ol.price_id "
+                 "          LEFT JOIN billing.product pr ON pr.id = p.product_id "
+                 "         WHERE ol.order_id = o.id ORDER BY ol.created_at LIMIT 1) AS kind, "
+                 "       EXISTS (SELECT 1 FROM billing.token_wallet w WHERE w.order_id = o.id) AS is_pack, "
+                 "       EXISTS (SELECT 1 FROM billing.membership_subscription ms "
+                 "               WHERE ms.order_id = o.id) AS is_membership "
+                 'FROM billing."order" o '
+                 " WHERE o.club_id = :c AND o.user_id = :u AND o.amount_minor > 0 "
+                 "   AND o.status <> 'void' AND o.settled_by_order_id IS NULL "
+                 "   AND o.covered_order_ids IS NULL".format(d=DELIVERED_AT_SQL)),
+            {"c": str(club_id), "u": str(user_id)},
+        ).mappings():
+            label = ("Session packs" if r["is_pack"] else
+                     "Membership" if r["is_membership"] else
+                     _CAT_LABEL.get((r["kind"] or "").lower(), "Other"))
+            b = cats.setdefault(r["period"], {})
+            e = b.setdefault(label, {"amount_minor": 0, "n": 0})
+            e["amount_minor"] += int(r["amount_minor"] or 0)
+            e["n"] += 1
+    except Exception:
+        log.debug("month category breakdown suppressed", exc_info=False)
+
     by_period = {}
     for iv in list_invoices(session, club_id=club_id, user_id=user_id, limit=200):
         # An invoice belongs to the month it BILLS (period_label), not the day it was issued —
@@ -591,6 +631,9 @@ def statement_by_month(session, *, club_id, user_id, months=12) -> Dict[str, Any
             "written_off_minor": int(r["written_off"] or 0),
             "currency": r["cur"] or cur,
             "open_order_ids": [str(x) for x in (r["open_ids"] or [])],
+            "by_category": sorted(
+                [dict(v, label=k) for k, v in (cats.get(r["period"]) or {}).items()],
+                key=lambda x: -x["amount_minor"]),
             "invoice": ({"invoice_id": iv["invoice_id"], "number": iv["number"],
                          "status_label": iv["status_label"]} if iv else None),
             # Says WHY there is no invoice yet, so "no invoice" never reads as "we forgot you".

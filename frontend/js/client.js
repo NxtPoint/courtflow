@@ -494,6 +494,23 @@
         ]),
         right,
       ]));
+      // WHAT THE MONTH IS MADE OF. A closed month has an invoice you can open; the CURRENT one has
+      // nothing to click, so without this its row is a bare total and a member cannot see what they
+      // are accruing. Shown inline for the un-invoiced month only — for the rest the PDF is the
+      // detail, and repeating it here would just be noise.
+      if (!m.invoice && (m.by_category || []).length) {
+        var det = el("div", { style: "padding:2px 0 10px 12px" });
+        m.by_category.forEach(function (c) {
+          det.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;padding:2px 0" }, [
+            el("span", { class: "cf-muted", style: "font-size:.84rem",
+                         text: c.label + (c.n ? " · " + c.n : "") }),
+            el("span", { style: "font-size:.84rem;font-weight:600", text: money(c.amount_minor, m.currency) }),
+          ]));
+        });
+        det.appendChild(el("div", { class: "cf-muted", style: "font-size:.76rem;margin-top:4px",
+          text: "Accrued so far this month — your invoice is issued on the 1st." }));
+        l.appendChild(det);
+      }
     });
     wrap.appendChild(l);
     set(wrap);

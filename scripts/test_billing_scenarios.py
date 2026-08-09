@@ -4381,6 +4381,14 @@ def sc_the_client_account_reads_month_by_month(s, fx):
           str(by.get(this_m)))
     check("the current month says it is NOT YET INVOICED, not 'missing'",
           by[this_m]["status_label"] == "Not yet invoiced", by[this_m]["status_label"])
+    # The un-invoiced month has no document to open, so the row has to say what it is MADE of. The
+    # invariant is that the breakdown ACCOUNTS FOR THE WHOLE MONTH — a category view that quietly
+    # drops a charge is worse than none, because it reads as complete. (Which label a charge lands
+    # under is spend_by_category's rule, shared with this via _CAT_LABEL; a bare order with no
+    # booking or price legitimately resolves to "Other", as here.)
+    check("...and shows what it is made of, accounting for every rand",
+          sum(c["amount_minor"] for c in by[this_m]["by_category"]) == by[this_m]["billed_minor"],
+          str(by[this_m]["by_category"]))
     check("...and is still payable on its own",
           len(by[this_m]["open_order_ids"]) == 1, str(by[this_m]["open_order_ids"]))
 
