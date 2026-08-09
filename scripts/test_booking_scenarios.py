@@ -3585,9 +3585,190 @@ def sc_an_expired_membership_is_an_uncovered_seat(s, fx):
           sorted(x["amount_minor"] for x in rows) == [7500, 7500], str(rows))
 
 
+def _open_game(s, fx, host, hour=11, seats=2, court=0):
+    """A published game with an open seat, made the way create_booking makes one."""
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=host, role="member",
+                         booking_type="court", resource_id=fx.courts[court],
+                         settlement_mode="membership_covered",
+                         starts_at=utc_iso(at(fx, hour)), ends_at=utc_iso(at(fx, hour + 1)),
+                         play_format="singles" if seats == 2 else "doubles",
+                         seats=seats, visibility="open",
+                         open_until=at(fx, hour) - timedelta(hours=2))
+    return r
+
+
+def sc_invited_friend_is_trialed_once_only(s, fx):
+    """"First seven days free, then they pay" — with NO new free-play mechanism to police.
+
+    The free week IS the existing 7-day trial membership, so while it runs the friend's seats resolve
+    covered through the ORDINARY entitlement path, and when it lapses the seat rule bills them like
+    anybody else. grant_signup_trial refuses anyone who has EVER held a subscription, which is what
+    makes a second invite worthless and what protects the ~880 imported Wix members."""
+    print("\n# an invited friend gets the free week ONCE — never twice, never a Wix import")
+    from community import invites
+    host = fx.members[0]
+    inv = invites.invite_player(s, club_id=fx.club_id, inviter_user_id=host,
+                                email="newfriend@scratch.test")
+    check("the invite is created with a signed link", inv.get("ok") and "/join.html?t=" in inv["url"],
+          str(inv))
+    check("…and it knows they're not a member yet", inv.get("already_a_member") is False)
+
+    dup = invites.invite_player(s, club_id=fx.club_id, inviter_user_id=host,
+                                email="NewFriend@scratch.test")   # same person, different case
+    check("re-inviting RE-SENDS rather than minting a second free week", dup.get("resent") is True,
+          str(dup))
+
+    friend = _mk_user(s, "newfriend@scratch.test", "Friend")
+    acc = invites.accept_invite(s, token=inv["token"], user_id=friend, club_id=fx.club_id)
+    check("accepting grants the free week", acc["trial"].get("granted") is True, str(acc["trial"]))
+    check("…and they're now a member of the club",
+          s.execute(text("SELECT 1 FROM iam.membership WHERE club_id=:c AND user_id=:u"),
+                    {"c": fx.club_id, "u": friend}).first() is not None)
+
+    inv2 = invites.invite_player(s, club_id=fx.club_id, inviter_user_id=fx.members[1],
+                                 email="newfriend@scratch.test")
+    acc2 = invites.accept_invite(s, token=inv2["token"], user_id=friend, club_id=fx.club_id)
+    check("a SECOND invite grants NO second free week (the trap)",
+          acc2["trial"].get("granted") is False, str(acc2["trial"]))
+    check("…and says why", acc2["trial"].get("reason") == "already_has_subscription",
+          str(acc2["trial"]))
+
+    # A member who already has subscription history — the shape every imported Wix user has.
+    wix = _mk_user(s, "wiximport@scratch.test", "Imported")
+    _membership_for(s, fx, wix, days=30)
+    inv3 = invites.invite_player(s, club_id=fx.club_id, inviter_user_id=host,
+                                 email="wiximport@scratch.test")
+    acc3 = invites.accept_invite(s, token=inv3["token"], user_id=wix, club_id=fx.club_id)
+    check("an EXISTING member is never trialed by an invite", acc3["trial"].get("granted") is False,
+          str(acc3["trial"]))
+
+
+def sc_joining_an_open_game_bills_the_new_seat(s, fx):
+    """The Open Match loop, end to end: a member posts a game with a seat free, someone takes it, and
+    the money follows the moment they do."""
+    print("\n# joining an open game takes the seat AND raises that player's own debt")
+    from community import games
+    _enable_seat_rule(s, fx)
+    host, joiner = fx.members[0], fx.members[1]
+    _membership_for_court(s, fx, host)
+    r = _open_game(s, fx, host, hour=11)
+    check("the game is published with a seat open", r.get("ok"), str(r))
+    bid = r["booking"]["id"]
+
+    feed = games.list_open_games(s, club_id=fx.club_id, user_id=joiner)
+    mine = [g for g in feed if g["booking_id"] == str(bid)]
+    check("it appears in the Find-a-Game feed", len(mine) == 1, str(feed))
+    check("…advertising exactly one open seat", mine and mine[0]["open_seats"] == 1, str(mine))
+    check("…and does NOT leak the host's email",
+          all("email" not in g for g in feed), str(feed))
+
+    out = games.join_game(s, club_id=fx.club_id, booking_id=bid, user_id=joiner)
+    check("the join succeeds", out.get("ok"), str(out))
+    rows = _seat_rows(s, bid)
+    joined = [x for x in rows if str(x["user_id"]) == str(joiner)]
+    check("the joiner owes the WHOLE R150 (the host's seat is covered)",
+          len(joined) == 1 and joined[0]["amount_minor"] == 15000, str(rows))
+    check("the game is now full", games.game_detail(
+        s, club_id=fx.club_id, booking_id=bid, viewer_user_id=host)["open_seats"] == 0)
+    try:
+        games.join_game(s, club_id=fx.club_id, booking_id=bid, user_id=fx.members[2])
+        check("a third player is refused", False, "no GameError")
+    except games.GameError as e:
+        check("a third player is refused (GAME_FULL)", e.code == "GAME_FULL", e.code)
+
+
+def sc_leaving_a_game_frees_the_seat_and_the_debt(s, fx):
+    """Leaving must not leave a bill behind — and must not let someone walk away from money already
+    taken, which is a refund decision rather than a self-service one."""
+    print("\n# leaving gives the seat back and voids the unpaid share; the host can't leave")
+    from community import games
+    _enable_seat_rule(s, fx)
+    host, joiner = fx.members[0], fx.members[1]
+    _membership_for_court(s, fx, host)
+    bid = _open_game(s, fx, host, hour=12)["booking"]["id"]
+    games.join_game(s, club_id=fx.club_id, booking_id=bid, user_id=joiner)
+    check("the joiner has a debt",
+          any(str(x["user_id"]) == str(joiner) and x["amount_minor"] > 0
+              for x in _seat_rows(s, bid)), str(_seat_rows(s, bid)))
+
+    games.leave_game(s, club_id=fx.club_id, booking_id=bid, user_id=joiner)
+    # The HOST's own R0 membership_covered order legitimately survives and reads 'paid' — a covered
+    # seat is settled, not owed. Only the LEAVER's debt must be gone, and their seat detached from it.
+    after = _seat_rows(s, bid)
+    check("…which is VOIDED and detached when they leave",
+          all(str(x["user_id"]) != str(joiner) for x in after), str(after))
+    check("…while the host's own covered seat is untouched",
+          any(str(x["user_id"]) == str(host) and x["amount_minor"] == 0 for x in after), str(after))
+    check("the seat is open again",
+          games.game_detail(s, club_id=fx.club_id, booking_id=bid)["open_seats"] == 1)
+
+    try:
+        games.leave_game(s, club_id=fx.club_id, booking_id=bid, user_id=host)
+        check("the HOST cannot leave their own booking", False, "no GameError")
+    except games.GameError as e:
+        check("the HOST cannot leave their own booking (that's a cancel)",
+              e.code == "HOST_CANNOT_LEAVE", e.code)
+
+
+def sc_open_game_sweep_collapses_and_is_idempotent(s, fx):
+    """The hourly job. It must be safe to run all day: the collapse charges once, and a second sweep
+    finds nothing to do."""
+    print("\n# the open-game sweep collapses an unfilled seat exactly once")
+    from community.crons import sweep_open_games
+    _enable_seat_rule(s, fx)
+    host = fx.members[0]
+    _membership_for_court(s, fx, host)
+    bid = _open_game(s, fx, host, hour=9)["booking"]["id"]
+    # Push the fill deadline into the past — the sweep's trigger condition.
+    s.execute(text("UPDATE diary.booking SET open_until = now() - interval '1 hour' WHERE id=:b"),
+              {"b": bid})
+
+    out = sweep_open_games(s, club_id=fx.club_id)
+    check("the sweep collapses the unfilled seat", out.get("collapsed") == 1, str(out))
+    rows = _seat_rows(s, bid)
+    check("…and the holder is billed R150 for it",
+          any(x["amount_minor"] == 15000 and str(x["user_id"]) == str(host) for x in rows), str(rows))
+
+    again = sweep_open_games(s, club_id=fx.club_id)
+    check("a second sweep collapses NOTHING (idempotent)", again.get("collapsed") == 0, str(again))
+    check("…and raises no second charge", len(_seat_rows(s, bid)) == len(rows), str(_seat_rows(s, bid)))
+
+
+def sc_community_reads_never_leak_contact_details(s, fx):
+    """The privacy promise the whole feature rests on: match chat exists precisely so nobody has to
+    swap a phone number, so no community read may return one. Discovery is also OPT-IN — being
+    findable by 1,100 strangers is a choice, not something a member acquires because we shipped."""
+    print("\n# community reads carry names and levels — never an email or a phone")
+    from community import games, matching, repositories as repo
+    _enable_seat_rule(s, fx)
+    host, other = fx.members[0], fx.members[1]
+    _membership_for_court(s, fx, host)
+    bid = _open_game(s, fx, host, hour=16)["booking"]["id"]
+
+    detail = games.game_detail(s, club_id=fx.club_id, booking_id=bid, viewer_user_id=other)
+    blob = str(detail)
+    check("the game detail has no email address", "@" not in blob, blob[:300])
+    check("…and shows the VIEWER no other player's amount",
+          all(x["amount_minor"] is None for x in detail["seats"] if not x["is_me"]), str(detail["seats"]))
+
+    check("a member is NOT discoverable until they opt in",
+          all(p["user_id"] != str(other) for p in
+              matching.suggest_players(s, club_id=fx.club_id, user_id=host)))
+    repo.upsert_player_profile(s, club_id=fx.club_id, user_id=other,
+                               fields={"level_num": 5.0, "visible_in_community": True})
+    sugg = matching.suggest_players(s, club_id=fx.club_id, user_id=host)
+    check("…and IS once they do", any(p["user_id"] == str(other) for p in sugg), str(sugg))
+    check("suggestions carry no email either", "@" not in str(sugg), str(sugg)[:300])
+
+
 SCENARIOS = [
     # THE SEAT RULE (community/) — the money core, pinned before create_booking learns about seats.
     sc_seat_split_covers_the_court_exactly,
+    sc_invited_friend_is_trialed_once_only,
+    sc_joining_an_open_game_bills_the_new_seat,
+    sc_leaving_a_game_frees_the_seat_and_the_debt,
+    sc_open_game_sweep_collapses_and_is_idempotent,
+    sc_community_reads_never_leak_contact_details,
     sc_seat_rule_bills_through_create_booking,
     sc_seat_rule_holds_the_court_until_every_seat_settles,
     sc_cancelling_a_game_voids_every_seat_debt,

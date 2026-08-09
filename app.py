@@ -94,6 +94,8 @@ def create_app():
     _try_register(app, "coach.routes", "coach_bp")          # Coach: /api/coach/* (self-service profile/hours/services)
     _try_register(app, "me.routes", "me_bp")                # Client: /api/me/* (My Account: profile + dependents)
     _try_register(app, "services.routes", "services_bp")    # Unified service editor: /api/services/* (owner + coach)
+    _try_register(app, "community.routes", "community_bp")  # Community: /api/community/* (Find a Game + seats)
+    _try_register(app, "community.routes", "community_cron_bp")  # Community: POST /api/cron/open-games
 
     return app
 

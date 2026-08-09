@@ -141,6 +141,8 @@
     if (top === "activity") return renderRecord();   // "Full activity ›" now opens the ONE Client-360 record
     if (top === "invoices") return renderInvoices();  // the member's issued invoices (view/download PDF)
     if (top === "txn") return renderTxn(parts[1]);    // a purchase (pack/membership/invoice) transaction record
+    if (top === "play") return renderFindAGame();     // Find a Game — the open-games feed
+    if (top === "game") return renderGame(parts[1]);  // one game: seats, money, chat
     if (top === "analysis") return renderAnalysis();  // embedded Ten-Fifty5 match analysis / technique
     if (top === "plan") return renderPlan(parts[1]);
     if (top === "profile") return parts[1] === "child" ? renderChildEdit(parts[2]) : renderProfile();  // /profile/edit → the same one screen
@@ -329,6 +331,61 @@
     return aiPanel(
       "AI match stats and stroke-by-stroke technique breakdowns from your video. Landing in your account soon.",
       el("span", { class: "cf-ai-soon", text: "Coming soon" }));
+  }
+
+  // ---- FIND A GAME ---------------------------------------------------------
+  // Both screens are the SHARED widgets (Widgets.GameList / Widgets.Game) — the client app supplies
+  // only the data adapter, the actions map and the routing. A second render of a game anywhere else
+  // in the three apps is a bug (the GOLDEN RULE).
+  function renderFindAGame() {
+    var wrap = el("div", {});
+    wrap.appendChild(pageHeader("Find a game", "Home", "#/"));
+    var host = el("div", {});
+    wrap.appendChild(host);
+    set(wrap);
+    window.Widgets.GameList.mount(host, {
+      data: { list: function () { return window.API.openGames({ days: 14 }); } },
+      actions: { create: { run: function () { go("#/book/court"); } } },
+      onNavigate: function (n) { if (n.kind === "game") go("#/game/" + n.id); },
+    });
+  }
+
+  function renderGame(id) {
+    if (!id) { go("#/play"); return; }
+    var wrap = el("div", {});
+    wrap.appendChild(pageHeader("Game", "Find a game", "#/play"));
+    var host = el("div", {});
+    wrap.appendChild(host);
+    set(wrap);
+    var w = window.Widgets.Game.mount(host, {
+      id: id,
+      me: principal && principal.user_id,
+      data: {
+        get: function (gid) { return window.API.game(gid); },
+        chat: function (gid) { return window.API.gameChat(gid); },
+      },
+      actions: {
+        join: { run: function (g) { act(function () { return window.API.joinGame(g.booking_id); }, "You're in."); } },
+        leave: { run: function (g) { act(function () { return window.API.leaveGame(g.booking_id); }, "Seat given back."); } },
+        post: { run: function (g, body) { return window.API.postGameChat(g.booking_id, body); } },
+        invite: {
+          run: function (g) {
+            // The ONE add-a-player modal, reused: it already does name search, a parent's children
+            // and an email fallback. Here it invites by email, which is what brings a NON-member in.
+            window.CRMUI.addLessonPlayerModal({
+              searchFn: null,
+              toast: "Invitation sent — they get a free week to try the club.",
+              onSubmit: function (payload) { return window.API.inviteToGame(g.booking_id, payload.email); },
+              onDone: function () { w.refresh(); },
+            });
+          }
+        },
+        // A seat's own share is paid through the SAME Yoco seam every other online order uses —
+        // there is no second payment path for community money.
+        pay: { run: function (seat) { window.Pay.startYocoCheckout(seat.order_id); } },
+      },
+      onNavigate: function (n) { if (n.kind === "booking") go("#/booking/" + n.id); },
+    });
   }
 
   function renderAnalysis() {

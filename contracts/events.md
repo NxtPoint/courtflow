@@ -93,6 +93,25 @@ quietly stopped being true. The audit is now the thing that keeps it true.
 | `dependent_added` | a parent adds a child (`me/routes.py`) | `first_name?` — **never** other minor PII | family onboarding | marketing |
 | `consent_updated` | a member changes their marketing consent (`me/routes.py`) | `consent_type`, `marketing_opt_in` | flips `marketing_opt_in`; no send | system |
 
+### Community — Find a Game + the seat rule (added 2026-08-09, `community/`)
+
+See [`docs/specs/COMMUNITY-ENGINE.md`](../docs/specs/COMMUNITY-ENGINE.md). Three of these are
+**money** events — a player learning what they owe, or why they were charged — so they are
+transactional and go out over SES regardless of marketing consent. `game_opened` is the only one that
+is marketing (a "someone's looking for a game" nudge is promotion, not a receipt) and stays behind
+`marketing_opt_in`.
+
+| event | fired when | payload (beyond `club_id`, `email`) | drives | txn? |
+|---|---|---|---|---|
+| `player_invited` | a member invites someone to play (`community/invites.py`) | `inviter_name`, `join_url`, `already_a_member`, `ref_type=booking?`, `ref_id?` | **"You're invited to play"** → `/join.html` — the ONE page a non-member sees. Carries the free-week offer | **transactional** |
+| `game_opened` | a booking is published to the community (`community/games.py`) | `ref_type=booking`, `ref_id`, `starts_at`, `resource_name?` | "A game's looking for players" digest | marketing |
+| `game_seat_taken` | someone takes an open seat (`community/games.py`) | `ref_type=booking`, `ref_id`, `starts_at`, `resource_name?` | "You're in" + tells the host who joined | **transactional** |
+| `game_full` | the last open seat is filled (`community/games.py`) | `ref_type=booking`, `ref_id`, `starts_at` | "Your game is full" (→ the host) | **transactional** |
+| `game_seat_unpaid_reminder` | the sweep nudges a seat that still owes (`community/crons.py`) | `ref_type=booking`, `ref_id` | "Pay to keep your seat" — deduped via `diary.reminder_log`, so one nudge per seat however often the hourly sweep runs | **transactional** |
+| `game_seat_released` | a player leaves, or an unpaid seat is released at the deadline (`community/games.py`, `crons.py`) | `ref_type=booking`, `ref_id` | "The seat is open again" (→ the host) | **transactional** |
+| `game_seat_collapsed` | an unfilled seat is re-billed to the booking holder at the cutoff (`community/crons.py`) | `ref_type=booking`, `ref_id`, `amount_minor`, `starts_at` | **"Nobody took the spare seat"** — states the charge and WHY. A charge that appears with no explanation is a support ticket and a trust problem | **transactional** |
+| `game_result_recorded` | a player records what happened (`community/results.py`) | `ref_type=booking`, `ref_id`, `outcome` (`played`\|`cancelled`\|`no_show`) | result confirmation ask (→ the other player) | marketing |
+
 > **`class_cancelled` carries `refunded` for a reason.** `emit()` dispatches on a BACKGROUND THREAD
 > with its own session, so the email cannot see the refund the caller just wrote. The producer states
 > the outcome or the email guesses — and it used to guess wrong, promising "any payment will be

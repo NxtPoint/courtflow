@@ -128,12 +128,45 @@ junior play needs its own consent design.
 
 ---
 
+## The rest of the lane (built 2026-08-09)
+
+| Module | What it does |
+|---|---|
+| `community/invites.py` | invite by email → signed `play_invite` token → `/join.html`; accepting grants **the existing 7-day trial** and claims the held seat |
+| `community/games.py` | `list_open_games` (the feed) · `game_detail` · `join_game` · `leave_game` · `set_visibility` |
+| `community/matching.py` | `suggest_players` — a **deterministic** score (level 50, availability 20, format 12, play-type 8, history 10) + the 5-question level quiz |
+| `community/chat.py` | match chat; only players in the game may read or post |
+| `community/results.py` | `record_result` / `confirm_result` (never self-confirm) · the private `play_again` signal · favourites · `reliability` |
+| `community/crons.py` | `sweep_open_games` — remind → release → collapse, per club, each game in its own SAVEPOINT |
+| `community/routes.py` | 21 endpoints under `/api/community/*` + `POST /api/cron/open-games` |
+| `community/repositories.py` | display reads (`_guard`-wrapped) + the player-profile upsert |
+
+Fired by **`.github/workflows/open-games.yml`** (hourly, 07:00–22:00 SAST, `OPS_KEY`-guarded, loops
+until `complete`, **fails the job loudly**) — not a `render.yaml` cron.
+
+**The free week needs no new mechanism.** `grant_signup_trial` already refuses anyone who has EVER
+held a subscription, so a second invite is worthless and an imported Wix member can never be trialed.
+While the trial runs, the friend's seats resolve covered through the *ordinary* entitlement path —
+`community/seats.py` has no idea a trial is involved — and when it lapses the seat rule bills them.
+That is the whole of "first seven days free, then they pay".
+
+**Frontend** (GOLDEN RULE — one widget per capability): `Widgets.Game` + `Widgets.GameList`
+(`frontend/js/widgets/game.js`), the client routes `#/play` and `#/game/<id>`, and `join.html` served
+by the never-sleeps web service. Inviting reuses `CRMUI.addLessonPlayerModal`; paying a seat reuses
+`Pay.startYocoCheckout` — there is **no second payment path** for community money. Money is rendered
+only for the viewer's own seat, and only their own `order_id` is ever returned.
+
+**A gap in the docs gate, worth knowing.** `scripts.audit_docs` finds emitted events by matching a
+*literal* first argument. `community/games.py` emits through a helper (`_emit(session, event, …)`), so
+its four events (`game_opened`, `game_seat_taken`, `game_full`, `game_seat_released`) are **invisible
+to the audit**. They are in `contracts/events.md` because they were added by hand — nothing would have
+caught it if they weren't. Any lane emitting via a helper has the same blind spot.
+
 ## Still to build
 
-Invites + `/join.html` · open games (create/join/leave) · the sweep cron
-(`.github/workflows/open-games.yml` → `POST /api/cron/open-games`, `OPS_KEY`-guarded, idempotent —
-**not** a `render.yaml` cron) · `Widgets.Game` + `Widgets.GameList` · the `booking.js` "Who's playing?"
-step · matching, chat, results.
+The `booking.js` **"Who's playing?"** step (the booking flow still can't set seats/format from the UI —
+`create_booking` accepts them, but only an API caller can pass them). Admin surfacing of open games and
+invites. The two owed money scenarios below.
 
 **Phase 2 (not now):** dynamic ratings from results, reliability score, Flex leagues, groups, doubles
 matchmaking, Smart Match. **Never:** a social feed — an empty feed across 1,100 members reads as a dead
@@ -147,7 +180,7 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
 read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
 the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
-(`courtflow-dev`) at booking 474 / billing 693 / statement 64, with `python -m db` twice a clean
+(`courtflow-dev`) at booking 504 / billing 693 / statement 64, with `python -m db` twice a clean
 no-op including `community.schema`.
 
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart

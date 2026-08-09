@@ -11,13 +11,13 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 474 / billing 693 / statement 64** (66 / 95 / 12 `sc_*` functions).
+  **booking 504 / billing 693 / statement 64** (71 / 95 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
 ---
 
-## `test_booking_scenarios` — the diary (62 scenarios)
+## `test_booking_scenarios` — the diary (71 scenarios)
 
 Double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
 **court→service allocation** (per-service courts + pricing), **classes reserve N courts** (held +
@@ -74,6 +74,18 @@ nobody is left owing for a game that never happened (`sc_cancelling_a_game_voids
 and a member whose term has lapsed by the day of the game is simply an un-covered seat who pays like
 anyone else (`sc_an_expired_membership_is_an_uncovered_seat` — coverage is a property of the SEAT at
 that moment, not of the person).
+
+**FIND A GAME — the flows** — an invited friend gets the free week ONCE: a re-invite RE-SENDS rather
+than minting a second one, a second invite grants nothing, and an existing member (the shape every
+imported Wix user has) is never trialed (`sc_invited_friend_is_trialed_once_only` — the free week IS
+the existing 7-day trial, so there is no second free-play mechanism to police) · joining an open game
+takes the seat AND raises that player's own debt, and a third player is refused
+(`sc_joining_an_open_game_bills_the_new_seat`) · leaving voids and detaches the unpaid share while
+the host's own covered seat is untouched, and **the host cannot leave their own booking** — that is a
+cancel (`sc_leaving_a_game_frees_the_seat_and_the_debt`) · the hourly sweep collapses an unfilled seat
+exactly once and raises no second charge (`sc_open_game_sweep_collapses_and_is_idempotent`) · and
+**no community read carries an email**, a member is not discoverable until they opt in, and the viewer
+is shown nobody's amount but their own (`sc_community_reads_never_leak_contact_details`).
 
 ---
 

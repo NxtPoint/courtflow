@@ -94,6 +94,17 @@ widgets/_registry → widgets/* → <role>_app`):
     **`Widgets.ServiceList`** (the ONE services list: edit via ServiceEditor + lifecycle
     deactivate/reactivate/terminate + optional create; owner sees ALL, coach sees only OWN;
     `/api/services` enforces who-may-change-what). Adopted by BOTH the owner and coach Setup.
+  - `game.js` → **`Widgets.Game`** + **`Widgets.GameList`** (added 2026-08-09, the community lane) —
+    the ONE render of a game and of the Find-a-Game feed.
+    `cfg = { id, me, data:{get(id), chat(id)|list()}, actions:{join,leave,invite,post,pay,result,create},
+    onNavigate({kind,id}) }`. **A GAME IS A BOOKING**, so this widget deliberately does NOT duplicate
+    the booking record — money history, receipts, refunds and the audit log stay on
+    `Widgets.TransactionDetail`, reached via `onNavigate({kind:"booking"})`. What lives here is only
+    what a booking never had: who is on the court, what each of them owes, and the chat. Money is
+    rendered **only for the viewer's own seat** (the API returns `null` for everyone else's amount and
+    order id). Inviting delegates to `CRMUI.addLessonPlayerModal`; paying delegates to
+    `Pay.startYocoCheckout` — no second payment path. Adopted by the **client** app (`#/play`,
+    `#/game/<id>`); the coach and admin apps mount the same widget when they surface games.
   - `client_record.js` → **`Widgets.ClientRecord`** (added 2026-07-09) — the ONE **client record** across
     all three apps, on the same cfg contract (`data` adapter + `actions` map + `fields` + `onNavigate`). It
     renders identity, membership, packages (admin: adjust/remove), the owed statement (admin: void/write-off/

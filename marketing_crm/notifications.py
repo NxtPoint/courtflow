@@ -161,6 +161,59 @@ def _t_class_seat_awaiting_payment(ctx):
     return ("A spot opened — pay to confirm it", body, "/portal")
 
 
+def _t_player_invited(ctx):
+    """The ONE email a non-member receives before they are a member. It has to carry the whole offer —
+    including what happens AFTER the free week. Burying "then you pay" is how a goodwill gesture turns
+    into an argument at the desk."""
+    who = _g(ctx, "inviter_name", default="A member")
+    url = _g(ctx, "join_url", default="/join")
+    when = _when(ctx)
+    if _g(ctx, "already_a_member"):
+        body = (f"{who} has invited you to play at NextPoint"
+                + (f" on {when}" if when else "") + ". Tap to take your seat.")
+        return ("You've been invited to a game", body, url)
+    body = (f"{who} has invited you to play at NextPoint"
+            + (f" on {when}" if when else "") + ". Your first week is on us — "
+            "court time is included for 7 days. After that, court time is shared between whoever "
+            "isn't a member. Tap to take your seat.")
+    return ("You're invited to play at NextPoint", body, url)
+
+
+def _t_game_seat_taken(ctx):
+    when = _when(ctx)
+    body = ("Someone's taken a seat in your game" + (f" on {when}" if when else "")
+            + ". You can message them in the app to sort out the details.")
+    return ("A player joined your game", body, "/app#/play")
+
+
+def _t_game_full(ctx):
+    when = _when(ctx)
+    return ("Your game is full",
+            "Every seat in your game" + (f" on {when}" if when else "") + " is taken. Enjoy it.",
+            "/app#/play")
+
+
+def _t_game_seat_unpaid_reminder(ctx):
+    """The nudge that arrives while there is still time to act. Deduped upstream via
+    diary.reminder_log, so one seat gets one of these however often the hourly sweep runs."""
+    when = _when(ctx)
+    body = ("Your seat" + (f" on {when}" if when else "")
+            + " isn't paid for yet. The court is only confirmed once every player has paid their "
+              "share — pay now to keep it.")
+    return ("Pay to keep your seat", body, "/app#/play")
+
+
+def _t_game_seat_collapsed(ctx):
+    """A charge that appears with no explanation is a support ticket and a trust problem. This email
+    exists so the member knows the spare seat they left open is the reason — and it says the amount."""
+    amt = _money(_g(ctx, "amount_minor"), _g(ctx, "currency_code"))
+    when = _when(ctx)
+    body = ("Nobody took the spare seat in your game" + (f" on {when}" if when else "")
+            + ", so the court time is yours to cover"
+            + (f" — {amt}" if amt else "") + ". The court is still booked for you.")
+    return ("Nobody took the spare seat", body, "/app#/play")
+
+
 def _t_coach_invited(ctx):
     body = ("You've been invited to coach. Sign in to set up your profile, hours and "
             "services to start taking bookings.")
@@ -364,6 +417,15 @@ KIND_MAP = {
     "class_cancelled":       _t_class_cancelled,          # session cancelled (→ each enrolled, fanned out)
     "class_rescheduled":     _t_class_rescheduled,        # session moved (→ each enrolled, fanned out)
     "booking_reminder":      _t_booking_reminder,         # T-24h / T-2h (→ booker)
+    # --- community: Find a Game + the seat rule (community/) ------------------
+    # Only the ones a player MUST act on or would otherwise be confused by. game_opened and
+    # game_result_recorded are deliberately absent: a "someone's looking for a game" nudge is
+    # promotion, not a receipt, and an email every time a scoreline is typed would be noise.
+    "player_invited":            _t_player_invited,
+    "game_seat_taken":           _t_game_seat_taken,
+    "game_seat_unpaid_reminder": _t_game_seat_unpaid_reminder,
+    "game_seat_collapsed":       _t_game_seat_collapsed,
+    "game_full":                 _t_game_full,
 }
 
 

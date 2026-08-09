@@ -228,6 +228,60 @@
     markNotificationsRead: function (body) {
       return A().apiJSON("/api/me/notifications/read", { method: "POST", body: body || {} });
     },
+
+    // ---- community: Find a Game (community/routes.py) --------------------
+    // The seat rule means every one of these can change what somebody owes, so each returns the
+    // lane's stable error CODE on refusal (GAME_FULL, SPLIT_LOCKED, SEAT_ALREADY_PAID, …) and the
+    // caller shows the message rather than inventing its own.
+    openGames: function (opts) { return A().apiJSON("/api/community/games" + qs(opts)); },
+    game: function (id) {
+      return A().apiJSON("/api/community/games/" + encodeURIComponent(id));
+    },
+    joinGame: function (id) {
+      return A().apiJSON("/api/community/games/" + encodeURIComponent(id) + "/join",
+        { method: "POST", body: {} });
+    },
+    leaveGame: function (id) {
+      return A().apiJSON("/api/community/games/" + encodeURIComponent(id) + "/leave",
+        { method: "POST", body: {} });
+    },
+    setGameVisibility: function (id, open) {
+      return A().apiJSON("/api/community/games/" + encodeURIComponent(id) + "/visibility",
+        { method: "POST", body: { open: !!open } });
+    },
+    inviteToGame: function (id, email) {
+      return A().apiJSON("/api/community/games/" + encodeURIComponent(id) + "/invite",
+        { method: "POST", body: { email: email } });
+    },
+    gameChat: function (id) {
+      return A().apiJSON("/api/community/games/" + encodeURIComponent(id) + "/chat");
+    },
+    postGameChat: function (id, body) {
+      return A().apiJSON("/api/community/games/" + encodeURIComponent(id) + "/chat",
+        { method: "POST", body: { body: body } });
+    },
+    recordGameResult: function (id, body) {
+      return A().apiJSON("/api/community/games/" + encodeURIComponent(id) + "/result",
+        { method: "POST", body: body || {} });
+    },
+    suggestedPlayers: function (opts) { return A().apiJSON("/api/community/players" + qs(opts)); },
+    playerProfile: function () { return A().apiJSON("/api/community/profile"); },
+    savePlayerProfile: function (body) {
+      return A().apiJSON("/api/community/profile", { method: "PATCH", body: body || {} });
+    },
+    levelQuestions: function () { return A().apiJSON("/api/community/onboarding"); },
+    submitLevelAnswers: function (answers) {
+      return A().apiJSON("/api/community/onboarding", { method: "POST", body: { answers: answers } });
+    },
+    // The invite landing page (/join.html) is PUBLIC — the signed token is the authorization — but
+    // ACCEPTING requires a signed-in user, which is the deliberate product choice: the friend signs
+    // up, so they become a real CRM record and the free week is grantable.
+    peekInvite: function (token) {
+      return A().apiJSON("/api/community/invites/" + encodeURIComponent(token));
+    },
+    acceptInvite: function (token) {
+      return A().apiJSON("/api/community/invites/accept", { method: "POST", body: { token: token } });
+    },
   };
 
   window.API = API;

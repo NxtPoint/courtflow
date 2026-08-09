@@ -1,0 +1,69 @@
+name: open-games sweep
+
+# The ONE recurring job the community lane needs, and the reason it needs one at all: everything else
+# in the diary is released by LAZY EXPIRY (release_expired_holds runs whenever anyone loads the
+# diary), but a seat COLLAPSE moves money and sends email. That cannot wait for someone to happen to
+# open a page.
+#
+# Rides the established pattern: a free GitHub Action POSTs to an OPS_KEY-guarded /api/cron/<job>
+# inside the keep-warm window, the handler is idempotent, and the job NO-OPS without the secret
+# rather than failing the run. NOT a render.yaml cron — all four of those stay commented out.
+#
+# Hourly is deliberate. The collapse deadline is per club (open_game_cutoff_hours, default 12), so an
+# hourly sweep lands a member's "your seat wasn't filled" charge within an hour of the cutoff rather
+# than at some arbitrary point the next day.
+
+on:
+  schedule:
+    # Hourly, 07:00–22:00 SAST (05:00–20:00 UTC) — the same window as reminders.yml. Nothing useful
+    # happens overnight and the free tier sleeps.
+    - cron: "5 5-20 * * *"
+  workflow_dispatch:
+
+concurrency:
+  # Never two sweeps at once. The handler is idempotent, but overlapping runs would race on the same
+  # bookings and double the log noise for no benefit.
+  group: open-games
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sweep open games (remind → release → collapse)
+        env:
+          OPS_KEY: ${{ secrets.OPS_KEY }}
+          API_BASE: ${{ vars.CRON_API_BASE || 'https://courtflow-api.onrender.com' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPS_KEY:-}" ]; then
+            echo "OPS_KEY not set — skipping (this is not a failure)."
+            exit 0
+          fi
+          # The sweep is TIME-BOXED (max_seconds, under gunicorn's 120s reaper) and resumable, so we
+          # loop until it reports complete — the same shape month-end.yml uses.
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            body="$(curl -sS -m 180 -w '\n%{http_code}' -X POST \
+              -H "X-Ops-Key: ${OPS_KEY}" \
+              "${API_BASE}/api/cron/open-games?max_seconds=90")"
+            code="$(printf '%s' "$body" | tail -n1)"
+            json="$(printf '%s' "$body" | sed '$d')"
+            echo "attempt ${attempt}: HTTP ${code} ${json}"
+            # FAIL LOUDLY. A sweep that silently stops collapsing seats is money the club never
+            # billed, and nobody would notice for a month.
+            if [ "$code" != "200" ]; then
+              echo "::error::open-games sweep returned HTTP ${code}"
+              exit 1
+            fi
+            if printf '%s' "$json" | grep -q '"ok": *false'; then
+              echo "::error::open-games sweep reported ok:false"
+              exit 1
+            fi
+            if printf '%s' "$json" | grep -q '"complete": *true'; then
+              echo "sweep complete"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::open-games sweep did not complete after 10 attempts"
+          exit 1

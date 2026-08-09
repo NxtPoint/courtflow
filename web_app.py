@@ -567,6 +567,18 @@ def feedback_page():
     return _app_shell("feedback.html")
 
 
+@app.get("/join.html")
+@app.get("/join")
+def join_game_page():
+    # Tokened invite landing — the ONE page a non-member sees before they are a member. The signed
+    # token in ?t= is the authorization (same shape as /feedback and /subscribe); what it shows
+    # before sign-in is only the club, the inviter's first name and the game's time. ACCEPTING needs
+    # a signed-in user on purpose: the friend signs up, which makes them a real CRM record, makes the
+    # existing 7-day free week grantable, and makes their seat billable to a person. Served on the
+    # never-sleeps web so an emailed link never hits an API cold start.
+    return _app_shell("join.html")
+
+
 @app.get("/subscribe")
 def subscribe_page():
     # Tokened, NO-LOGIN re-permission opt-in page. The one-off "we've moved — keep hearing from us?"
