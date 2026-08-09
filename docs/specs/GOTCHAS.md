@@ -22,7 +22,7 @@ still reads the scenario that guards any entry.
 - [Memberships, the trial & entitlement caps](#memberships-the-trial--entitlement-caps) — 5 entries
 - [Pricing & payment rules](#pricing--payment-rules) — 2 entries
 - [Refunds & the Yoco gateway](#refunds--the-yoco-gateway) — 7 entries
-- [Invoicing & the month-end close](#invoicing--the-month-end-close) — 5 entries
+- [Invoicing & the month-end close](#invoicing--the-month-end-close) — 6 entries
 - [Money custody & the coach ledger](#money-custody--the-coach-ledger) — 7 entries
 - [Reads that lie](#reads-that-lie) — 2 entries
 - [Email & notifications](#email--notifications) — 1 entry
@@ -638,6 +638,23 @@ touched either way, so voiding a part-paid invoice cancels what is still owed an
 that arrived alone. Both directions are asserted, so neither can silently flip back.
 
 Guarded by `sc_bulk_void_cancels_charges_not_just_the_document`.
+
+### AN INVOICE MUST RECONCILE ON ITS FACE AFTER A LATE CHANGE (2026-08-09)
+
+Line amounts FREEZE at issue — an invoice is an immutable document — while paid/outstanding derive
+LIVE from the orders. Discount or write off a charge AFTER the invoice went out and the page
+contradicted itself: **total R600, paid R0, outstanding R500**, with nothing explaining the missing
+R100. A fully written-off invoice was worse — outstanding R0 made it read **"Paid"** when nobody had
+paid anything.
+
+Neither half was wrong on its own; they simply were not shown together. `build_invoice_document` now
+derives, per line, what that line is worth NOW (0 if the order was voided or written off, else its
+CURRENT amount) and surfaces the difference as `adjustments_minor` / `billed_now_minor`, so
+**total − adjustments = paid + outstanding** holds on the page. A wholly adjusted-away invoice reads
+"Cancelled", never "Paid". The frozen line still shows what was issued — the document is not
+rewritten, the change is disclosed beside it, which is what a credit note does on paper.
+
+Guarded by `sc_partial_payment_leaves_the_invoice_open`.
 
 ### AN INVOICE COVERS ITS OWN MONTH, OR NO MONTH CAN EVER BE CLOSED (2026-08-08)
 

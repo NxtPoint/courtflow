@@ -40,7 +40,7 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    13 live events absent from `contracts/events.md`. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 405 / billing 642 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 405 / billing 647 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -577,7 +577,7 @@ member by email on the first authenticated hit.
   (`sportai-db`) is still off-limits.
 
 ## Gotchas
-**The war stories live in [`docs/specs/GOTCHAS.md`](docs/specs/GOTCHAS.md) — 53 entries, moved out
+**The war stories live in [`docs/specs/GOTCHAS.md`](docs/specs/GOTCHAS.md) — 54 entries, moved out
 verbatim. Below is the INDEX: the rule, and the `sc_…` scenario that pins it.** Follow the link before
 you change the code an entry names — each one is a bug that reached production, and every one of them
 looks like a harmless simplification until you read what it cost.
@@ -625,6 +625,7 @@ looks like a harmless simplification until you read what it cost.
 - A RENT coach bills his own clients — and books lessons, not courts in his own name — `sc_a_rent_coach_lesson_raises_no_club_charge`
 - VOID MEANS CANCEL — an invoice void cancels its charges too (`cascade=False` = the re-issue path) — `sc_bulk_void_cancels_charges_not_just_the_document`
 - ONE ACTIVE PRICE PER (service, duration) — a second row means the cheaper one silently wins — `sc_one_active_price_per_duration`
+- AN INVOICE MUST RECONCILE after a late discount/write-off (`adjustments_minor`) — `sc_partial_payment_leaves_the_invoice_open`
 
 **Courts, peak hours & equipment** — [GOTCHAS.md#courts-peak-hours--equipment](docs/specs/GOTCHAS.md#courts-peak-hours--equipment)
 - THE COURT IS THE ONE PLACE TO SEE A COURT (2026-07-29)

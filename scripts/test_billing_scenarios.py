@@ -4710,6 +4710,31 @@ def sc_partial_payment_leaves_the_invoice_open(s, fx):
           doc3["lines"][0]["written_off"] is True, str(doc3["lines"][0]))
     check("...and the invoice owes nothing", doc3["outstanding_minor"] == 0,
           str(doc3["outstanding_minor"]))
+    # A fully written-off invoice must not read "Paid" — nobody paid anything.
+    check("...and reads Cancelled, never Paid", doc3["status_label"] == "Cancelled",
+          doc3["status_label"])
+    check("...with the write-off shown as the adjustment",
+          doc3["adjustments_minor"] == 15000 and doc3["billed_now_minor"] == 0, str(doc3))
+
+    # A DISCOUNT APPLIED AFTER ISSUE MUST STILL RECONCILE ON THE PAGE. Line amounts freeze at issue
+    # (an invoice is immutable) while paid/outstanding derive live, so discounting a charge later
+    # left the document contradicting itself: total R600, paid R0, outstanding R500, and nothing
+    # explaining the missing R100.
+    d = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,currency_code,'
+                       "settlement_mode,status) VALUES (:c,:u,60000,'ZAR','monthly_account','open') "
+                       "RETURNING id"), {"c": fx.club_id, "u": fx.member}).scalar_one()
+    s.execute(text("INSERT INTO billing.order_line (order_id,club_id,description,qty,amount_minor) "
+                   "VALUES (:o,:c,'Lesson',1,60000)"), {"o": str(d), "c": fx.club_id})
+    inv3 = INV4.issue_invoice(s, club_id=fx.club_id, user_id=fx.member, order_ids=[str(d)],
+                              kind="statement")
+    ST.discount_order(s, club_id=fx.club_id, order_id=str(d), discount_minor=10000,
+                      reason="goodwill")
+    doc4 = INV4.build_invoice_document(s, invoice_id=inv3["invoice_id"])
+    check("the frozen line still shows what was issued", doc4["lines"][0]["amount_minor"] == 60000)
+    check("...the adjustment names the discount", doc4["adjustments_minor"] == 10000, str(doc4))
+    check("...and the page RECONCILES: total - adjustments = paid + outstanding",
+          doc4["billed_now_minor"] == doc4["paid_minor"] + doc4["outstanding_minor"],
+          f'{doc4["billed_now_minor"]} vs {doc4["paid_minor"]}+{doc4["outstanding_minor"]}')
 
 
 def sc_one_payment_one_receipt(s, fx):

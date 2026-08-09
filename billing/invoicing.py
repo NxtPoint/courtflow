@@ -820,8 +820,22 @@ def build_invoice_document(session, *, invoice_id, club_id=None) -> Optional[Dic
         {"i": str(invoice_id)},
     ).mappings().all():
         st_line = _order_state(session, r["order_id"]) if r["order_id"] else None
+        # WHAT THIS LINE IS WORTH NOW. Line amounts FREEZE at issue (an invoice is an immutable
+        # document) while paid/outstanding derive LIVE — so discounting or writing off a charge
+        # AFTER the invoice went out left the document contradicting itself: total R600, paid R0,
+        # outstanding R500, and nothing on the page explaining the missing R100. A voided or
+        # written-off line is worth nothing; anything else is worth the order's CURRENT amount.
+        frozen = int(r["amount_minor"] or 0)
+        if st_line is None:
+            live = frozen
+        elif st_line["status"] in ("void", "written_off"):
+            live = 0
+        else:
+            live = int(st_line["amount_minor"] or 0)
         lines.append({"description": r["description"], "qty": int(r["qty"] or 1),
-                      "amount_minor": int(r["amount_minor"] or 0),
+                      "amount_minor": frozen,
+                      "amount_now_minor": live,
+                      "adjustment_minor": frozen - live,
                       "order_id": (str(r["order_id"]) if r["order_id"] else None),
                       # LIVE per-line state. A part payment settles whole lines, so the document has
                       # to say WHICH ones — otherwise "Partially paid" is a number with no story,
@@ -856,8 +870,16 @@ def build_invoice_document(session, *, invoice_id, club_id=None) -> Optional[Dic
                 "status": r["status"], "created_at": _iso(r["created_at"]),
             })
 
+    # The document must RECONCILE on its face: total − adjustments = paid + outstanding. Without
+    # this an invoice discounted after issue reads as a R600 bill asking for R500, and a fully
+    # written-off one reads "Paid" when nobody paid anything.
+    adjustments_minor = sum(int(l.get("adjustment_minor") or 0) for l in lines)
+    billed_now_minor = max(0, int(inv["total_minor"] or 0) - adjustments_minor)
+
     if inv["status"] == "void":
         status_label = "Void"
+    elif adjustments_minor and billed_now_minor <= 0 and paid_minor <= 0:
+        status_label = "Cancelled"
     elif outstanding_minor <= 0:
         status_label = "Paid"
     elif paid_minor > 0:
@@ -893,6 +915,10 @@ def build_invoice_document(session, *, invoice_id, club_id=None) -> Optional[Dic
         # total_minor and not an invoice_line, because those debts are already invoiced on their own
         # month's document (see brought_forward_minor). `total_due_minor` is what the client should
         # actually pay to be square: this month's outstanding PLUS what was already owed.
+        # Changed since issue — a discount, void or write-off applied AFTER the document went out.
+        # Shown as its own line so the page adds up instead of quietly disagreeing with itself.
+        "adjustments_minor": adjustments_minor,
+        "billed_now_minor": billed_now_minor,
         "brought_forward_minor": int(inv["brought_forward_minor"] or 0),
         "total_due_minor": max(0, outstanding_minor) + int(inv["brought_forward_minor"] or 0),
         "payments": payments,
