@@ -459,6 +459,17 @@
         el("span", { style: "font-weight:700", text: money(iv.total_minor, iv.currency) }),
         el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "PDF", onclick: function () { UI.openAuthedFile("/api/billing/invoice/" + iv.invoice_id + "/pdf", (iv.number || "invoice") + ".pdf"); } }),
       ]);
+      // PAY THIS INVOICE — not the whole account. "Pay outstanding online" below settles everything
+      // owed, which for a member holding a July invoice while August is already accruing charges
+      // more than the invoice asks for. The pay path always accepted explicit order ids; the screen
+      // simply had none to give it.
+      if ((iv.outstanding_minor || 0) > 0 && (iv.open_order_ids || []).length) {
+        right.appendChild(el("button", {
+          class: "cf-btn cf-btn-sm cf-btn-primary",
+          text: "Pay " + money(iv.outstanding_minor, iv.currency),
+          onclick: function () { payOrders(iv.open_order_ids); },
+        }));
+      }
       l.appendChild(el("div", { class: "cf-item" }, [
         el("span", { class: "cf-chip " + (chipCls[iv.status_label] || ""), text: iv.status_label }),
         el("div", { class: "cf-item-main" }, [
@@ -472,7 +483,7 @@
     // A card-settle shortcut for anything still outstanding (reuses the unified pay-all).
     if (invoices.some(function (iv) { return iv.outstanding_minor > 0; })) {
       wrap.appendChild(el("div", { class: "cf-row", style: "margin-top:12px" }, [
-        el("button", { class: "cf-btn cf-btn-primary", text: "Pay outstanding online", onclick: function () { payOrders(null); } }),
+        el("button", { class: "cf-btn cf-btn-primary", text: "Pay everything outstanding", onclick: function () { payOrders(null); } }),
       ]));
     }
     set(wrap);

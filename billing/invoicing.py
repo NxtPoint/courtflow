@@ -793,6 +793,16 @@ def list_invoices(session, *, club_id, user_id, limit=100) -> List[Dict[str, Any
             "total_minor": int(r["total_minor"] or 0), "currency": r["currency_code"],
             "outstanding_minor": outstanding, "is_paid": (r["status"] != "void" and outstanding <= 0),
             "status_label": label,
+            # THE ORDERS THIS INVOICE STILL WANTS PAID, so a client can settle THIS invoice rather
+            # than everything they owe. The pay-all path takes explicit order ids and always could
+            # — but the invoice screen had none to give it, so "Pay outstanding online" charged the
+            # whole account. A member settling their July invoice would have paid August's
+            # part-month too, which is not what the button says.
+            "open_order_ids": [str(x) for x in (session.execute(
+                text('SELECT DISTINCT o.id FROM billing.invoice_line il '
+                     '  JOIN billing."order" o ON o.id = il.order_id '
+                     " WHERE il.invoice_id = :i AND o.status IN ('open','awaiting_payment')"),
+                {"i": str(r["id"])}).scalars().all())],
         })
     return out
 
