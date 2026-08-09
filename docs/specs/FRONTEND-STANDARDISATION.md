@@ -106,14 +106,17 @@ widgets/_registry → widgets/* → <role>_app`):
     2026-07-14:** an interim coach-only "lean" client view (spun up during the money-as-an-outcome work)
     was retired again — coach `renderClient` renders through the SAME `Widgets.ClientRecord`, scoped
     **server-side** (the composer returns only the coach's own relationship), so there is no coach fork.
-  - `coach_statement.js` → **`Widgets.CoachStatement`** (added 2026-07-30) — the ONE **coach settlement
-    statement**, the coach-side equivalent of a client invoice, shared by ADMIN (any coach) and the COACH
-    (their own). Role is CONFIG only: `scope.role` switches the wording ("you" vs the coach's name) and
-    gates the **Record payout** action; everything else is identical. Three blocks — the SETTLEMENT
-    (total collected × commission − what the club already holds = net, with a by-kind breakdown of what
-    the collected money actually was), WHERE THAT MONEY IS (paid to the club / collected by the coach /
-    outstanding), and the SESSIONS delivered by client by DAY. Fed by `GET /api/admin/coach-statement`
-    (`?coach_user_id=` for admin; a coach is scoped server-side to themselves).
+  - ~~`coach_statement.js` → `Widgets.CoachStatement`~~ — **RETIRED 2026-08-09, merged into
+    `Widgets.Earnings`.** It was a second money screen for the same coach, on a different date basis
+    from Club earnings, and closing a month meant reading both and reconciling them by hand: one
+    showed a coach's July collections as R9,610 and the other R20,700, because a per-coach read of
+    `billing.payment` cannot see a 'Pay all' wrapper's payment while the commission splits can. Both
+    were right; neither was complete. Its unique blocks — the SETTLEMENT (collected × commission −
+    what the club holds = net, with rent, payouts already made, **due now** and the ledger
+    `reconciles` check) and the SESSIONS work log — now render inside the coach P&L, fed by the same
+    `revenue_coach_pnl` call, so admin and coach cannot drift. **The two date bases survive and are
+    labelled on the page** (P&L by order date, settlement by when the money ARRIVED) — collapsing
+    them onto one basis would silently change what a coach is paid.
     **Two deliberate date bases, stated on the page:** sessions are bounded by when they were TAUGHT,
     the settlement by when the money ARRIVED — so a lesson taught in July and paid in August is
     outstanding in July and settles in August. The widget also renders a **warning banner** when the

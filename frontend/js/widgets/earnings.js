@@ -117,6 +117,98 @@
       return box;
     }
 
+    // THE SETTLEMENT — what actually changes hands, and the only block that answers "what do I pay
+    // this coach now". It used to live on a separate Coach-statement screen, which meant closing a
+    // month required reading two screens on two date bases and reconciling them by hand. Merged
+    // here so admin and coach read the same numbers from the same call.
+    //
+    // THE TWO BASES SURVIVE THE MERGE AND ARE LABELLED. The P&L above is dated by ORDER; this is
+    // dated by when the MONEY ARRIVED, because commission is paid on funds received. A lesson
+    // taught in July and paid in August is in July's P&L and August's settlement — that is the
+    // rule, not a mismatch, and the sub-labels say so on the page.
+    function settlementCard(p, onRecordPayout) {
+      var st = p.settlement, led = p.ledger || {};
+      var box = el("div", { class: "cf-card", style: "margin-top:14px" });
+      box.appendChild(el("h3", { text: "Settlement" }));
+      if (!st) {
+        box.appendChild(el("div", { class: "cf-empty", text:
+          "The settlement figures couldn't be loaded. Don't pay from this screen until they're back." }));
+        return box;
+      }
+      box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:0 0 10px", text:
+        "Money that ARRIVED this month — commission is paid on funds received, so a lesson taught "
+        + "last month and paid this month settles here." }));
+      box.appendChild(stmtLine("Paid to the club", money(st.club_held_minor), { sub: "Yoco / EFT" }));
+      box.appendChild(stmtLine(isCoach ? "Collected by you" : "Collected by the coach",
+                               money(st.coach_held_minor), { sub: "cash at the court" }));
+      box.appendChild(stmtLine("Total collected", money(st.total_collected_minor),
+                               { strong: true, border: true }));
+      // WHY the collected figure is what it is. A lesson/class PACK hangs on the coach's own
+      // price_id so its commission attributes to him — which puts the FULL pack price here at the
+      // moment of SALE, not spread across the sessions drawn from it. Without this the headline
+      // reads as a threefold error against the lessons anyone remembers teaching.
+      var bk = st.by_kind || {};
+      ["lesson", "class", "pack"].forEach(function (k) {
+        if (bk[k]) box.appendChild(stmtLine(k === "pack" ? "of which packs (at sale)" : "of which " + k,
+                                            money(bk[k]), { indent: true, muted: true }));
+      });
+      var pct = (st.effective_pct != null) ? (" @ " + st.effective_pct + "%") : "";
+      box.appendChild(stmtLine("Club commission" + pct, "- " + money(Math.abs(st.commission_minor || 0)),
+                               { tone: "good", border: true }));
+      if (st.clawback_minor) {
+        box.appendChild(stmtLine("Refund clawback", money(st.clawback_minor), { indent: true, muted: true }));
+      }
+      box.appendChild(stmtLine(isCoach ? "Net to you" : "Net to the coach", money(st.net_minor),
+                               { strong: true, border: true }));
+      if (led.rent_minor) {
+        box.appendChild(stmtLine("Rent", money(led.rent_minor), { sub: "charged this month" }));
+      }
+      if (led.payouts_minor) {
+        box.appendChild(stmtLine("Already paid", money(led.payouts_minor),
+                                 { sub: "credited to this month" }));
+      }
+      if (st.due_now_minor != null) {
+        var due = st.due_now_minor || 0;
+        box.appendChild(stmtLine(due >= 0 ? (isCoach ? "DUE TO YOU" : "DUE TO THE COACH")
+                                          : (isCoach ? "YOU OWE THE CLUB" : "OWED BY THE COACH"),
+                                 money(Math.abs(due)), { strong: true, border: true,
+                                                         tone: due >= 0 ? "" : "bad" }));
+      }
+      // THE INTEGRITY CHECK. The net equals the coach_ledger movement BY CONSTRUCTION, so a
+      // mismatch means something drifted — and a number nobody can check is worse than a warning.
+      if (st.reconciles === false) {
+        box.appendChild(el("div", { class: "cf-note cf-note-warn", style: "margin-top:10px", text:
+          "These figures don't tie to the ledger. Don't settle from this screen until it's checked." }));
+      }
+      if (typeof onRecordPayout === "function") {
+        box.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:10px" }, [
+          el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Record payout",
+                         onclick: function () { onRecordPayout(); } }),
+        ]));
+      }
+      return box;
+    }
+
+    // THE WORK LOG — sessions by the day they RAN, which is the other question a coach asks and the
+    // P&L cannot answer ("what did I teach in July"). Deliberately a different date basis again.
+    function sessionsCard(p) {
+      var sess = p.sessions, t = (sess && sess.totals) || null;
+      if (!t || !t.sessions) return null;
+      var box = el("div", { class: "cf-card", style: "margin-top:14px" });
+      box.appendChild(el("h3", { text: "Sessions delivered" }));
+      box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:0 0 10px",
+        text: "Dated by the day they RAN — the work, not the money. This will not equal the "
+            + "settlement above, and is not meant to: one is what was taught, the other what was paid." }));
+      box.appendChild(stmtLine(t.sessions + " session" + (t.sessions === 1 ? "" : "s"),
+                               money(t.billed_minor), { strong: true, border: true }));
+      box.appendChild(stmtLine("Paid to the club", money(t.to_club_minor), { indent: true, muted: true }));
+      box.appendChild(stmtLine(isCoach ? "With you" : "With the coach",
+                               money(t.with_coach_minor), { indent: true, muted: true }));
+      box.appendChild(stmtLine("Still outstanding", money(t.outstanding_minor),
+                               { indent: true, muted: true }));
+      return box;
+    }
+
     // The CLUB earnings card — direct services + commission from coaches → club total & club-vs-coach.
     function clubCard(d) {
       var c = d.club || {};
@@ -181,6 +273,10 @@
           ? function () { cfg.onRecordPayout(p, function () { renderCoach(coachId, isL0); }); }
           : null;
         wrap.appendChild(pnlCard(p, payoutFn));
+        // The settlement + work log, merged in from the retired Coach-statement screen so one
+        // screen answers "what did we earn", "what do I pay", and "what did I teach".
+        wrap.appendChild(settlementCard(p, payoutFn));
+        var sc = sessionsCard(p); if (sc) wrap.appendChild(sc);
         // By client (the coach's clients this month) → transactions.
         var q = { month: MONTH };
         if (!isCoach && p.coach_user_id) q.earned_by = p.coach_user_id;   // admin: filter to this coach

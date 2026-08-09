@@ -2544,6 +2544,31 @@ def revenue_coach_pnl(session, *, club_id, coach_user_id, month=None, coach_scop
         session.rollback()
     pnl.update({"month": ym, "currency": cur, "scope": ("coach" if coach_scope else "admin"),
                 "ledger_balance_minor": bal})
+
+    # THE SETTLEMENT, ON THE SAME PAYLOAD. Club earnings is a P&L — what was sold, split and
+    # collected — and it could not answer the one question an owner actually acts on: what do I pay
+    # this coach now. That lived on a separate Coach-statement screen with rent, the payouts already
+    # made and `due_now`, so closing a month meant reading two screens that were on different date
+    # bases and reconciling them by hand. One of them showed a coach's July collections as R9,610
+    # while the other showed R20,700; both were right and neither was complete.
+    #
+    # They are merged here rather than in the frontend so admin and coach read the SAME numbers from
+    # the SAME call and cannot drift. The two date bases survive the merge and are labelled on the
+    # screen — the P&L is dated by ORDER, the settlement by when the MONEY ARRIVED (§D7) — because
+    # collapsing them onto one basis would silently change what a coach is paid.
+    try:
+        from billing.commission import coach_settlement, coach_sessions_by_day
+        st = coach_settlement(session, club_id=club_id, coach_user_id=str(coach_user_id), month=ym)
+        pnl["settlement"] = st.get("settlement") or {}
+        pnl["ledger"] = st.get("ledger") or {}
+        pnl["sessions"] = coach_sessions_by_day(
+            session, club_id=club_id, coach_user_id=str(coach_user_id), month=ym)
+    except Exception:
+        # Guarded, not silent: the P&L still renders, and the screen shows the settlement block as
+        # unavailable rather than printing a confident R0 next to "pay this coach".
+        log.warning("settlement block unavailable coach=%s month=%s", coach_user_id, ym,
+                    exc_info=True)
+        pnl["settlement"] = None
     return pnl
 
 

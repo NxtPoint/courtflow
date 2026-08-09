@@ -92,7 +92,10 @@
     if (top === "roster") return renderRoster(parts[1]);
     if (top === "class") return renderClassEvent(parts[1]);
     if (top === "txn") return renderTxn(parts[1]);
-    if (top === "money") return parts[1] === "statement" ? renderStatement() : renderMoney();
+    // RETIRED 2026-08-09 — the settlement block moved onto the Money P&L (Widgets.Earnings), so a
+    // coach sees ONE screen and it is the SAME one the owner sees of him. #/money/statement is kept
+    // as a redirect so an existing link does not dead-end.
+    if (top === "money") return renderMoney();
     if (top === "setup") return renderSetup(parts[1]);
     if (top === "service") return renderService(parts[1]);
     if (top === "profile") return renderProfilePage();
@@ -639,17 +642,6 @@
 
   // The coach's OWN settlement statement — the SAME shared widget the admin opens for any coach.
   // Role is the only difference: this one says "you", and has no payout action (the club records that).
-  function renderStatement() {
-    ensureMonth();
-    var host = el("div", {});
-    set(host);
-    window.Widgets.CoachStatement.mount(host, {
-      scope: { role: "coach" },
-      month: MONTH,
-      back: { label: "Money", hash: "#/money" },
-      load: function (_cid, month) { MONTH = month || MONTH; return window.CoachAPI.statement(month); },
-    });
-  }
   // The coach's pending refund-request queue — an ACTION card below the earnings (a dispute is a decision
   // the coach makes on their own lesson). Async-fills so the widget can append it synchronously.
   function disputesCard() {

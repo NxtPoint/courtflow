@@ -4338,6 +4338,64 @@ def sc_a_month_swept_early_can_still_be_closed(s, fx):
           CM.month_end_period(s) == period, CM.month_end_period(s))
 
 
+def sc_coach_earnings_carries_the_settlement(s, fx):
+    """ONE coach money screen: the P&L carries the settlement, and a payout credits the month it's FOR.
+
+    Club earnings answered "what did we earn" and the Coach statement answered "what do I pay him" —
+    two screens on two date bases, and closing a month meant reconciling them by hand. One showed a
+    coach's July collections as R9,610 while the other showed R20,700, because a per-coach read of
+    billing.payment cannot see a 'Pay all' wrapper's payment while the splits can. Both right,
+    neither complete.
+
+    The settlement now rides on revenue_coach_pnl, so admin and coach read the SAME numbers from the
+    SAME call. And a payout is credited to the month it SETTLES (`coach_payout.period_label`), not
+    the day the cash moved — July's commission is paid in early August, and counting it in August
+    left July permanently unsettled while August carried a credit belonging elsewhere."""
+    print("\n# The coach P&L carries the settlement, and a payout credits the month it settles")
+    from admin import repositories as AR3
+    from billing import commission as CM3
+    import datetime as _dt
+
+    tz_now = s.execute(text("SELECT now() AT TIME ZONE 'Africa/Johannesburg'")).scalar()
+    this_m = tz_now.strftime("%Y-%m")
+    prev = (tz_now.replace(day=1) - _dt.timedelta(days=1))
+    prev_m = prev.strftime("%Y-%m")
+
+    pnl = AR3.revenue_coach_pnl(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
+                                month=this_m)
+    check("the P&L carries a settlement block", pnl.get("settlement") is not None, str(pnl.keys()))
+    check("...and the ledger behind it", "ledger" in pnl)
+    check("...and the sessions work log", "sessions" in pnl)
+    for k in ("club_held_minor", "coach_held_minor", "total_collected_minor", "net_minor",
+              "due_now_minor"):
+        check(f"settlement carries {k}", k in (pnl["settlement"] or {}), str(pnl.get("settlement")))
+
+    # A PAYOUT CREDITS THE MONTH IT SETTLES. Record one NOW (this month) but label it for LAST month.
+    CM3.record_coach_payout(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
+                            amount_minor=50000, direction="club_to_coach", method="eft",
+                            reference="prior month commission", period_label=prev_m)
+    prev_st = CM3.coach_settlement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
+                                   month=prev_m)
+    this_st = CM3.coach_settlement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
+                                   month=this_m)
+    check("the payout lands in the month it is FOR, not the month it was paid",
+          prev_st["ledger"]["payouts_minor"] != 0, str(prev_st["ledger"]["payouts_minor"]))
+    check("...and does NOT land in the month the cash moved",
+          this_st["ledger"]["payouts_minor"] == 0, str(this_st["ledger"]["payouts_minor"]))
+    check("...so the settled month's DUE NOW drops by what was paid",
+          prev_st["settlement"]["due_now_minor"] == prev_st["settlement"]["net_minor"] - 50000,
+          f'{prev_st["settlement"]["due_now_minor"]} vs {prev_st["settlement"]["net_minor"]}')
+
+    # An UNLABELLED payout must keep the old behaviour — nothing already recorded may move.
+    CM3.record_coach_payout(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
+                            amount_minor=10000, direction="club_to_coach", method="eft",
+                            reference="no period")
+    again = CM3.coach_settlement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
+                                 month=this_m)
+    check("an UNLABELLED payout still lands by its date",
+          again["ledger"]["payouts_minor"] == -10000, str(again["ledger"]["payouts_minor"]))
+
+
 def sc_one_active_price_per_duration(s, fx):
     """A service may not carry two active prices for the same duration.
 
@@ -4877,6 +4935,7 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
 
 
 SCENARIOS = [
+    sc_coach_earnings_carries_the_settlement,
     sc_one_active_price_per_duration,
     sc_a_rent_coach_lesson_raises_no_club_charge,
     sc_bulk_void_cancels_charges_not_just_the_document,

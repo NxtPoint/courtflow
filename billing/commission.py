@@ -1689,12 +1689,32 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
            "commission_entries_minor": 0, "balance_minor": 0, "entries": []}
     try:
       with session.begin_nested():
+        # A PAYOUT IS CREDITED TO THE MONTH IT SETTLES, NOT THE DAY THE CASH MOVED. July's commission
+        # is routinely paid in the first days of August — and counting it in August left July looking
+        # unsettled for ever while August carried a credit belonging to another month, so no month
+        # could be closed and every conversation ran across two. `coach_payout.period_label` says
+        # which month a payout is FOR; when it is set, that is the month it lands in here. Unlabelled
+        # payouts keep the old behaviour exactly (occurred_at), so nothing already recorded moves.
+        #
+        # This is deliberately the OPPOSITE basis from the commission side, and that is not an
+        # inconsistency: commission is earned when the money arrives (§D7), while a payout is a
+        # settlement OF a stated month. The screen says which is which.
         rows = session.execute(
-            text("SELECT entry_type, amount_minor, note, ref_type, ref_id, occurred_at "
-                 "FROM billing.coach_ledger "
-                 "WHERE club_id = :club AND coach_user_id = CAST(:coach AS uuid) "
-                 "  AND to_char(occurred_at,'YYYY-MM') = :ym "
-                 "ORDER BY occurred_at"),
+            text("SELECT l.entry_type, l.amount_minor, l.note, l.ref_type, l.ref_id, l.occurred_at "
+                 "FROM billing.coach_ledger l "
+                 # coach_ledger.ref_id is TEXT and carries three different things — a split id, a
+                 # 'YYYY-MM' rent period, a payout id — so it cannot be compared to a uuid directly
+                 # (that raises, and the guard around this block would swallow it and return ZEROS
+                 # for rent, payouts and due-now on every coach). The shape test makes the cast safe
+                 # for the rent rows, whose ref_id is not a uuid at all.
+                 "LEFT JOIN billing.coach_payout p "
+                 "       ON l.entry_type = 'payout' "
+                 "      AND p.id = CASE WHEN l.ref_id ~ "
+                 "                 '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                 "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' THEN CAST(l.ref_id AS uuid) END "
+                 "WHERE l.club_id = :club AND l.coach_user_id = CAST(:coach AS uuid) "
+                 "  AND COALESCE(NULLIF(p.period_label,''), to_char(l.occurred_at,'YYYY-MM')) = :ym "
+                 "ORDER BY l.occurred_at"),
             {"club": club_id, "coach": str(coach_user_id), "ym": ym},
         ).mappings().all()
         for e in rows:

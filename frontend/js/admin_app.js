@@ -749,7 +749,6 @@
     ["invoice", "New invoice", "Bill a client for a service (× times) or a custom fee — emailed to pay online"],
     ["sales", "Sales by day", "Daily takings incl. Yoco reversals — net income"],
     ["revenue", "Club earnings", "Courts + memberships + commission from coaches → coach → client → transaction"],
-    ["coach-statement", "Coach statement", "Per coach → client → service: what's paid, how, and whether it reached your bank"],
     ["bookings", "Bookings by day", "Every booking — client, service and coach"],
     ["approvals", "Refund requests", "Members asking for money back — opens the transaction to decide"],
     ["activity", "Club activity", "Every payment, refund and adjustment"],
@@ -759,7 +758,9 @@
     if (section === "invoice") return moneyInvoice();
     if (section === "sales") return moneySales();
     if (section === "revenue") return moneyRevenue();
-    if (section === "coach-statement") return sub ? coachSettlement(sub) : moneyCoachStatement();
+    // RETIRED 2026-08-09 — Club earnings now carries the settlement, so there is ONE screen. Old
+    // links (and bookmarks) land on the coach's P&L, which is where those numbers live now.
+    if (section === "coach-statement") return sub ? go("#/money/revenue/" + sub) : go("#/money/revenue");
     if (section === "bookings") return moneyBookings();
     if (section === "approvals") return moneyApprovals();
     if (section === "activity") return moneyActivity();
@@ -1057,126 +1058,6 @@
     set(wrap);
   }
 
-  // Sales by day — the daily takings, one month at a time; each sale drills to its detail.
-  // MONEY → Coach statement. The month-end close-out: per coach → client → service, showing not just
-  // whether a lesson is paid but WHERE that money is. `order.status='paid'` merges Yoco and EFT (your
-  // bank) with desk cash (your till OR the coach's pocket) and a coach's off-platform collection (the
-  // coach only) — this screen pulls those apart. Read-only; it states what it knows and flags what it
-  // can't know rather than guessing.
-  // ONE coach's settlement statement — the coach-side equivalent of a client invoice. The SAME shared
-  // widget the coach sees of themselves (Widgets.CoachStatement); admin differs only by config: it
-  // names the coach rather than saying "you", and it can record the payout that clears the balance.
-  function coachSettlement(coachUserId) {
-    var host = el("div", {});
-    set(host);
-    window.Widgets.CoachStatement.mount(host, {
-      scope: { role: "admin" },
-      coachUserId: coachUserId,
-      month: MONEY_MONTH,
-      back: { label: "Coach statement", hash: "#/money/coach-statement" },
-      load: function (cid, month) { return window.AdminAPI.coachSettlementStatement(cid, month); },
-      onRecordPayout: function (data, refresh) {
-        // Reuses the existing payout modal — one way to record a payout, wherever you start from.
-        recordPayoutModal({
-          coach_user_id: coachUserId,
-          name: data.coach_name,                       // recordPayoutModal reads `name`, not coach_name
-          currency: data.currency,
-          ledger_balance_minor: (data.ledger_detail || {}).balance_minor || 0,
-        }, refresh);
-      },
-    });
-  }
-
-  // MONEY -> COACH STATEMENT. A club-level summary, then ONE COACH AT A TIME.
-  //
-  // This replaced a club-wide per-client custody drill. That screen answered "where is all the money"
-  // by listing every coach's every client at once, which is not how a settlement conversation happens
-  // - you settle with one coach, about their sessions, and you need a document to do it from. The
-  // summary keeps the club-level answer (who is holding what, who to chase); the dropdown opens the
-  // real statement.
-  async function moneyCoachStatement() {
-    loading();
-    var data;
-    try { data = await window.AdminAPI.coachStatement(MONEY_MONTH); }
-    catch (e) { set(el("div", {}, [backBar("Money", "#/money"), el("div", { class: "cf-empty", text: UI.errMsg(e) })])); return; }
-    MONEY_MONTH = data.month;
-    var cur = data.currency || clubCur();
-    var wrap = el("div", {});
-    wrap.appendChild(backBar("Money", "#/money"));
-    function shift(n) { MONEY_MONTH = addMonth(data.month, n); moneyCoachStatement(); }
-    wrap.appendChild(el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center;margin-bottom:4px" }, [
-      el("h1", { style: "margin:0", text: "Coach statement" }),
-      el("div", { class: "cf-row", style: "gap:6px;align-items:center" }, [
-        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "\u2039", onclick: function () { shift(-1); } }),
-        el("span", { style: "font-weight:600;min-width:104px;text-align:center", text: monthLabel(data.month) }),
-        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "\u203a", onclick: function () { shift(1); } }),
-      ]),
-    ]));
-
-    // Only real coaches can be settled with - the synthetic "club" node (court hire, memberships)
-    // has no coach to owe anything to.
-    var coaches = (data.coaches || []).filter(function (n) { return n.coach_user_id; });
-
-    // (1) THE SUMMARY: of what was collected, how much actually reached the club. The club only ever
-    // receives Yoco and EFT; anything else marked paid on a coaching order is money the coach took
-    // from the client directly.
-    var cu = data.custody || {}, b = cu.by_bucket || {};
-    var toClub = (b.bank_yoco || 0) + (b.bank_eft || 0);
-    var withCoach = (b.desk_cash || 0) + (b.desk_card || 0) + (b.coach_offplatform || 0);
-    function figure(label, minor, sub, tone) {
-      return el("div", { class: "cf-item" }, [
-        el("div", {}, [
-          el("div", { style: "font-weight:600", text: label }),
-          sub ? el("div", { class: "cf-muted", style: "font-size:.8rem", text: sub }) : null,
-        ].filter(Boolean)),
-        el("div", { style: "font-weight:700;text-align:right"
-          + (tone === "bad" ? ";color:var(--danger)" : tone === "good" ? ";color:var(--success)" : ""),
-          text: money(minor || 0, cur) }),
-      ]);
-    }
-    wrap.appendChild(card([
-      el("h3", { text: "Where the collected money is" }),
-      el("p", { class: "cf-muted", style: "margin:-4px 0 8px;font-size:.86rem", text:
-        "The club can only receive Yoco and EFT. Anything else marked paid on a coaching order is "
-        + "money the coach took from the client directly - the commission on it is still owed to you." }),
-      el("div", { class: "cf-list" }, [
-        figure("Paid to the club", toClub, "Yoco + EFT - actually in your account", "good"),
-        figure("Collected by coaches", withCoach, "Never reached the club", "bad"),
-        figure("Still outstanding", b.unpaid, "Not collected by anyone yet"),
-      ]),
-      // An INDEPENDENT read of the payment log by the date money LANDED — the figure to hold against
-      // a bank statement. It won't always equal the line above: a payment can land in a different
-      // month from the sale. That difference is real, so it is shown rather than reconciled away.
-      (data.payments && data.payments.net_to_bank_minor != null) ? el("p", { class: "cf-muted",
-        style: "margin:10px 0 0;font-size:.84rem", text:
-        "Payment log for " + monthLabel(data.month) + ": " + money(data.payments.net_to_bank_minor, cur)
-        + " expected in your bank (Yoco + EFT − refunds, counted by when it landed)." }) : null,
-    ].filter(Boolean)));
-
-    // (2) ONE COACH AT A TIME. A picker, then the statement itself.
-    var pick = el("select", { class: "cf-input" }, [el("option", { value: "", text: "Choose a coach\u2026" })].concat(
-      coaches.map(function (n) {
-        var nc = n.custody || {}, nb = nc.by_bucket || {};
-        var mine = (nb.desk_cash || 0) + (nb.desk_card || 0) + (nb.coach_offplatform || 0);
-        return el("option", { value: n.coach_user_id, text:
-          (n.coach_name || "Coach") + " \u00b7 " + money((n.fold || {}).paid_minor || 0, cur) + " collected"
-          + (mine ? " (" + money(mine, cur) + " held by them)" : "") });
-      })));
-    pick.addEventListener("change", function () {
-      if (pick.value) go("#/money/coach-statement/" + pick.value);
-    });
-    wrap.appendChild(card([
-      el("h3", { text: "Open a coach's statement" }),
-      el("p", { class: "cf-muted", style: "margin:-4px 0 8px;font-size:.86rem", text:
-        "Sessions by client and day, where each payment sits, and the net between you." }),
-      el("div", { class: "cf-field" }, [el("label", { text: "Coach" }), pick]),
-    ]));
-
-    if (!coaches.length) {
-      wrap.appendChild(el("div", { class: "cf-empty", text: "No coaching billed in " + monthLabel(data.month) + "." }));
-    }
-    set(wrap);
-  }
 
   async function moneySales() {
     loading();
