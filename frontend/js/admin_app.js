@@ -529,13 +529,9 @@
           tone: "danger", label: "Void",
           confirm: function (iv) {
             var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
-            return "Void invoice " + (iv.number || "") + "?
-
-"
+            return "Void invoice " + (iv.number || "") + "?\n\n"
               + "This cancels the invoice AND the " + owed + " of charges on it. Anything already "
-              + "PAID is left alone.
-
-This cannot be undone — there is no un-void. If you "
+              + "PAID is left alone.\n\nThis cannot be undone — there is no un-void. If you "
               + "mean to correct and RE-ISSUE it, use “Void, keep charges” instead.";
           },
           done: function (iv, res) {
@@ -550,9 +546,7 @@ This cannot be undone — there is no un-void. If you "
           tone: "ghost", label: "Void, keep charges",
           confirm: function (iv) {
             var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
-            return "Void the DOCUMENT " + (iv.number || "") + ", keeping the debt?
-
-"
+            return "Void the DOCUMENT " + (iv.number || "") + ", keeping the debt?\n\n"
               + owed + " of charges STAY OWED and can be re-invoiced. Use this when you mean to "
               + "correct and re-issue.";
           },
