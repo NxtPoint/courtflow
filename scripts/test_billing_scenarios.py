@@ -4370,6 +4370,50 @@ def sc_coach_earnings_carries_the_settlement(s, fx):
               "due_now_minor"):
         check(f"settlement carries {k}", k in (pnl["settlement"] or {}), str(pnl.get("settlement")))
 
+    # A COACH IS SETTLED ON THE MONTH HE WORKED, NOT THE MONTH THE CASH LANDED. Invoicing on the
+    # 1st for the month just ended means an on-account client pays in the FOLLOWING month — under a
+    # cash-dated settlement every coach's pay slid a month, and they would open July and find it
+    # nearly empty. Commission is still only ever computed on money ALREADY COLLECTED, so the club
+    # never fronts a coach; the attribution moved, not the cash rule.
+    lesson_at = prev.strftime("%Y-%m-15")
+    oid = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,currency_code,'
+                         "settlement_mode,status,service_date) "
+                         "VALUES (:c,:u,60000,'ZAR','monthly_account','open',CAST(:d AS date)) "
+                         "RETURNING id"),
+                    {"c": fx.club_id, "u": fx.member, "d": lesson_at}).scalar_one()
+    lid = s.execute(text("INSERT INTO billing.order_line (order_id,club_id,description,qty,"
+                         "amount_minor) VALUES (:o,:c,'lesson',1,60000) RETURNING id"),
+                    {"o": str(oid), "c": fx.club_id}).scalar_one()
+    # The client pays THIS month for LAST month's lesson — the exact case that used to disappear.
+    pay = s.execute(text("INSERT INTO billing.payment (club_id,order_id,provider,direction,status,"
+                         "amount_minor,currency_code) VALUES (:c,:o,'yoco','charge','succeeded',"
+                         "60000,'ZAR') RETURNING id"), {"c": fx.club_id, "o": str(oid)}).scalar_one()
+    split_id = s.execute(
+        text("INSERT INTO billing.commission_split (club_id,payment_id,order_line_id,"
+             "coach_user_id,party_type,basis,gross_minor,commission_pct,amount_minor,"
+             "occurred_at) VALUES (:c,:p,:l,:u,'owner','lesson_commission',60000,30,18000,"
+             "now()) RETURNING id"),
+        {"c": fx.club_id, "p": str(pay), "l": str(lid), "u": fx.coach_uid}).scalar_one()
+    # The real path (record_split_for_order) posts the split AND its ledger entry together — a
+    # club-held collection books +coach_net. The fixture has to do both or `reconciles` correctly
+    # reports the drift, which is exactly what it caught the first time this ran.
+    s.execute(text("INSERT INTO billing.coach_ledger (club_id,coach_user_id,entry_type,"
+                   "amount_minor,currency,ref_type,ref_id) "
+                   "VALUES (:c,:u,'commission_earning',42000,'ZAR','split',:r)"),
+              {"c": fx.club_id, "u": fx.coach_uid, "r": str(split_id)})
+    prev_work = CM3.coach_settlement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
+                                     month=prev_m)["settlement"]
+    this_work = CM3.coach_settlement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
+                                     month=this_m)["settlement"]
+    check("last month's LESSON settles in last month, though paid this month",
+          prev_work["total_collected_minor"] == 60000, str(prev_work["total_collected_minor"]))
+    check("...and does NOT land in the month the cash arrived",
+          this_work["total_collected_minor"] == 0, str(this_work["total_collected_minor"]))
+    check("...with the club's cut on it", prev_work["commission_minor"] == 18000,
+          str(prev_work["commission_minor"]))
+    check("...and the ledger ties on the same basis", prev_work["reconciles"] is True,
+          f'net={prev_work["net_minor"]} ledger={prev_work.get("ledger_for_month_minor")}')
+
     # A PAYOUT CREDITS THE MONTH IT SETTLES. Record one NOW (this month) but label it for LAST month.
     CM3.record_coach_payout(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
                             amount_minor=50000, direction="club_to_coach", method="eft",

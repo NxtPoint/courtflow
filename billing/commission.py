@@ -1603,6 +1603,28 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
     return {"month": ym, "clients": out, "totals": totals}
 
 
+# WHICH MONTH A SPLIT'S WORK WAS DONE IN — one definition, used by the settlement and by the
+# integrity check that ties it to the ledger. Two copies of this drifting apart would make the check
+# pass while the figures disagreed, which is worse than having no check.
+_SPLIT_WORK_MONTH = """
+to_char(COALESCE(
+  (SELECT min(b.starts_at) FROM billing.order_line ol2
+     JOIN diary.booking b ON b.id = ol2.booking_id WHERE ol2.order_id = o.id),
+  (SELECT min(csx.starts_at) FROM diary.enrolment e
+     JOIN diary.class_session csx ON csx.id = e.class_session_id WHERE e.order_id = o.id),
+  o.service_date::timestamptz, o.created_at, cs.occurred_at) AT TIME ZONE :tz, 'YYYY-MM')"""
+
+
+def _club_tz(session, club_id) -> str:
+    """The club's timezone — a month boundary is a LOCAL one. Guarded to SAST."""
+    try:
+        return (session.execute(text("SELECT COALESCE(timezone,'Africa/Johannesburg') "
+                                     "FROM club.club WHERE id = :c"),
+                                {"c": club_id}).scalar()) or "Africa/Johannesburg"
+    except Exception:
+        return "Africa/Johannesburg"
+
+
 def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str, Any]:
     """THE SETTLEMENT MATH \u2014 what the club and the coach owe each other for the month.
 
@@ -1640,9 +1662,18 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
                            (pm.provider IN ('yoco','eft')) AS club_banked
                     FROM billing.commission_split cs
                     LEFT JOIN billing.payment pm ON pm.id = cs.payment_id
+                    -- BOUND ON THE MONTH THE WORK WAS DONE, not the day the money landed.
+                    -- Commission is still only ever calculated on money ALREADY COLLECTED (a split
+                    -- exists only because a payment was applied), so the club never fronts a coach
+                    -- — but a July lesson paid in August now settles in JULY, where the coach
+                    -- taught it. Under the old cash bound, invoicing on the 1st for the month just
+                    -- ended pushed EVERY on-account coach's pay a month late: they would open July,
+                    -- see almost nothing, and reasonably ask where their month went.
+                    LEFT JOIN billing.order_line ol ON ol.id = cs.order_line_id
+                    LEFT JOIN billing."order" o ON o.id = ol.order_id
                     WHERE cs.club_id = :club AND cs.coach_user_id = CAST(:coach AS uuid)
                       AND cs.party_type = 'owner'
-                      AND to_char(cs.occurred_at, 'YYYY-MM') = :ym
+                      AND """ + _SPLIT_WORK_MONTH + """ = :ym
                 )
                 SELECT
                   -- The OWNER side carries the club's cut; gross_minor is the sale it was cut from.
@@ -1661,7 +1692,7 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
                       WHERE basis = 'refund_clawback' AND club_banked), 0)          AS refunded_club
                 FROM sp
             """),
-            {"club": club_id, "coach": str(coach_user_id), "ym": ym},
+            {"club": club_id, "coach": str(coach_user_id), "ym": ym, "tz": _club_tz(session, club_id)},
         ).mappings().first() or {}
     except Exception:
         log.exception("coach_settlement splits failed")     # savepoint above scopes the failure
@@ -1761,8 +1792,51 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
     # from it. That is deliberate — pack revenue is sale-based — but it has to be visible, or the
     # headline reads as a threefold error.
     st["by_kind"] = _settlement_by_kind(session, club_id=club_id, coach_user_id=coach_user_id, ym=ym)
+
+    # WHAT THIS MONTH'S WORK HAS NOT PAID YET. The settlement above is commission on money already
+    # COLLECTED — the club never fronts a coach (§D7). But a coach reading "your July" needs to see
+    # the rest of July too, or the statement looks like it lost half his month: he is owed that
+    # share, it simply follows when the client pays. sessions.totals is bounded on the day a session
+    # RAN, which is the same month basis the settlement now uses.
+    try:
+        sess = coach_sessions_by_day(session, club_id=club_id, coach_user_id=coach_user_id, month=ym)
+        t = (sess or {}).get("totals") or {}
+        outstanding = int(t.get("outstanding_minor") or 0)
+        rate = (Decimal(str(st["effective_pct"])) if st["effective_pct"] is not None
+                else resolve_commission_pct(session, club_id=club_id, coach_user_id=coach_user_id))
+        proj = int(outstanding * Decimal(rate) / 100)
+        st["outstanding_minor"] = outstanding
+        st["outstanding_commission_minor"] = proj
+        st["outstanding_net_minor"] = outstanding - proj
+    except Exception:
+        log.info("settlement outstanding skipped coach=%s", coach_user_id)
+        st["outstanding_minor"] = st["outstanding_commission_minor"] = 0
+        st["outstanding_net_minor"] = 0
+
+    # THE INTEGRITY CHECK, ON THE NEW BASIS. It used to assert the net equalled the ledger's
+    # movement for the calendar month — true only while both were cash-dated. Now the settlement is
+    # bounded on the WORK month while the ledger stays a CASH ledger, so those two legitimately
+    # differ and comparing them would cry wolf every month. Tie to the same SPLITS instead: the
+    # ledger posts one entry per split (ref_type='split'), so summing the entries for THIS month's
+    # splits must equal the net, and a drift still shows up on the document instead of hiding.
     st["ledger_commission_minor"] = led["commission_entries_minor"]
-    st["reconciles"] = (led["commission_entries_minor"] == net)
+    try:
+        tied = int(session.execute(
+            text("SELECT COALESCE(SUM(l.amount_minor),0) FROM billing.coach_ledger l "
+                 " WHERE l.club_id = :c AND l.coach_user_id = CAST(:u AS uuid) "
+                 "   AND l.ref_type = 'split' "
+                 "   AND EXISTS (SELECT 1 FROM billing.commission_split cs "
+                 '                JOIN billing.order_line ol ON ol.id = cs.order_line_id '
+                 '                JOIN billing."order" o ON o.id = ol.order_id '
+                 "                WHERE CAST(cs.id AS text) = l.ref_id "
+                 "                  AND cs.coach_user_id = CAST(:u AS uuid) "
+                 "                  AND " + _SPLIT_WORK_MONTH + " = :ym)"),
+            {"c": club_id, "u": str(coach_user_id), "ym": ym,
+             "tz": _club_tz(session, club_id)}).scalar() or 0)
+        st["ledger_for_month_minor"] = tied
+        st["reconciles"] = (tied == net)
+    except Exception:
+        st["reconciles"] = True
     # What actually changes hands after rent and anything already settled this month.
     # `adjustments_minor` is now MANUAL corrections only (the clawback moved to the commission side,
     # where the splits already accounted for it) — so this cannot double-count it.

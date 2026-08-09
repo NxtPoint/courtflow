@@ -621,6 +621,33 @@ money is indistinguishable from the real thing. Guarded by `sc_refund_request_vi
 reported as "the invoices don't balance" or "outstanding looks wrong"; all four turned out to be one
 missing idea — an invoice with no PERIOD — plus the debris it left behind.*
 
+### A COACH IS SETTLED ON THE MONTH HE WORKED, NOT THE MONTH THE CASH LANDED (2026-08-09)
+
+`coach_settlement` was bounded on `commission_split.occurred_at` — when the MONEY arrived — because
+the owner's locked rule is that commission is paid on funds received (§D7). Correct about cash, and
+it became untenable the moment invoicing moved to the 1st for the month just ended: an on-account
+client now pays in the FOLLOWING month, so **every** coach's pay slid a month. They would open July,
+see almost nothing, and reasonably ask where their month went. Allon's July: R29,400 taught, only
+R20,700 of cash arrived inside July.
+
+**"Which month does it belong to" and "when do we pay it" are separate questions**, and they were
+welded together. The settlement is now bounded on the month the WORK was delivered, while commission
+is still computed only on money ALREADY COLLECTED — a split exists only because a payment was
+applied — so the club still never fronts a coach. The uncollected remainder is shown as "still to
+collect on this month's work", because a statement that silently omits half a coach's July reads as
+a mistake.
+
+Consequences that are deliberate: a settled month can REOPEN when late money arrives (it belongs to
+the work, so July's total grows and a top-up is due) — `coach_payout.period_label` is what stops that
+month being paid twice. And `reconciles` had to be rebased: it used to assert the net equalled the
+ledger's movement for the calendar month, true only while BOTH were cash-dated. The ledger is still a
+cash ledger, so it now ties through the SPLITS themselves (one ledger entry per split), which is a
+check that can still fail rather than one that cannot. `_SPLIT_WORK_MONTH` is the single definition
+of the work month, used by both the settlement and the check — two copies would let the check pass
+while the figures disagreed.
+
+Guarded by `sc_coach_earnings_carries_the_settlement`.
+
 ### VOID MEANS CANCEL — AND THAT WAS A DELIBERATE REVERSAL (2026-08-08)
 
 `void_invoice` originally voided the DOCUMENT only and left every charge owed, because an invoice

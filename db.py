@@ -95,6 +95,8 @@ BOOT_MODULES = [
     "diary.schema",    # Agent B — resources/bookings (GiST exclusion)/classes; reads billing.price
     "admin.schema",    # Admin — club.onboarding_completed + iam.coach_invite (after club/iam/billing/diary)
     "coach.schema",    # Coach — iam.coach_profile.onboarding_completed + billing.product.coach_user_id
+    "community.schema",  # Community — community.* + the SEAT columns on diary.booking/booking_party
+                         # (+ iam.player_profile, club.policy flags). LAST: it ALTERs four lanes.
 ]
 
 # Extensions every schema depends on. pgcrypto -> gen_random_uuid(); btree_gist ->

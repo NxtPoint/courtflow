@@ -138,19 +138,22 @@
         return box;
       }
       box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:0 0 10px", text:
-        "Money that ARRIVED this month — commission is paid on funds received, so a lesson taught "
-        + "last month and paid this month settles here." }));
+        "THIS MONTH'S WORK. Commission is calculated only on the part that has been collected — the "
+        + "club never pays for money it hasn't received — and the rest follows when the client pays, "
+        + "in this month, not the month the cash happens to land." }));
       // WHY THIS DOES NOT TIE TO THE CARD ABOVE. Asked the moment the two blocks first shared a
       // page, and a fair question: both say "received" and the figures differ. They answer
       // different questions and always will, so the page states it rather than leaving the reader
       // to assume one of them is broken.
+      // Both blocks are now on the SAME month basis, so they should broadly agree; where they
+      // don't it is the P&L's ORDER date against this block's DELIVERY date (a pack sold in June
+      // and taught in July, say). Say so rather than leave two similar figures unexplained.
       if (p.received_minor != null && st.total_collected_minor != null
           && p.received_minor !== st.total_collected_minor) {
         box.appendChild(el("div", { class: "cf-note", style: "margin:0 0 12px;font-size:.78rem", text:
-          "This is not the " + money(p.received_minor) + " above, and should not be. That is this "
-          + "MONTH'S SALES that have been paid — some of them settled later. This is CASH THAT "
-          + "ARRIVED this month, some of it for earlier months' lessons. Neither is wrong; they are "
-          + "different questions, and the coach is paid on this one." }));
+          "Both blocks now cover THIS month. Small differences against the " + money(p.received_minor)
+          + " above are the P&L dating a charge when it was RAISED and this block dating it when the "
+          + "session was DELIVERED. The coach is paid on this one." }));
       }
       box.appendChild(stmtLine("Paid to the club", money(st.club_held_minor), { sub: "Yoco / EFT" }));
       box.appendChild(stmtLine(isCoach ? "Collected by you" : "Collected by the coach",
@@ -181,6 +184,14 @@
       }
       box.appendChild(stmtLine(isCoach ? "Net to you" : "Net to the coach", money(st.net_minor),
                                { strong: true, border: true }));
+      // THE REST OF THE MONTH. Without this the statement looks like it lost half a coach's July:
+      // he is owed that share too, it simply follows when the client pays.
+      if (st.outstanding_minor) {
+        box.appendChild(stmtLine("Still to collect on this month's work", money(st.outstanding_minor),
+                                 { muted: true, sub: "not yet paid by clients" }));
+        box.appendChild(stmtLine(isCoach ? "…your share, when it lands" : "…the coach's share, when it lands",
+                                 money(st.outstanding_net_minor), { indent: true, muted: true }));
+      }
       if (led.rent_minor) {
         box.appendChild(stmtLine("Rent", money(led.rent_minor), { sub: "charged this month" }));
       }
