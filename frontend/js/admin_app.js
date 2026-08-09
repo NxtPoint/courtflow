@@ -507,21 +507,8 @@
           confirm: function (it) { return "Write off " + money(it.amount_minor, it.currency || clubCur()) + "? Forgives the debt — no money is collected."; },
           done: "Written off.", run: function (it) { return window.AdminAPI.voidOrder(it.order_id, { write_off: true }); },
         },
-        // UN-RECEIPT — undo a desk payment recorded in error. The confirm states what it is NOT,
-        // because "un-receipt" sitting next to "Refund" invites the assumption that money moves.
-        unreceipt: {
-          tone: "danger",
-          confirm: function (it) {
-            return "Un-receipt this charge?\n\n"
-              + "This undoes a payment recorded in error: no money moves and no refund is issued "
-              + "— the charge simply becomes OWED again, and the coach's commission on it is "
-              + "reversed.\n\nIf money really did go back to the client, use Refund instead.";
-          },
-          done: "Un-receipted — the charge is owed again.",
-          run: function (it) {
-            return window.API.unreceiptOrder(it.order_id || it.id, { reason: "recorded in error" });
-          },
-        },
+        // The SAME action the transaction record uses — one definition, four call sites.
+        unreceipt: unreceiptAction(function (it) { return it.order_id || it.id; }),
         // Online payment refund (reuses the shared refund modal)
         refund: { manual: true, run: function (pay) { refundModal(pay.order_id, { amount_minor: pay.amount_minor, currency: pay.currency_code || clubCur() }, function () { renderPerson(id); }); } },
         // Invoices — issue one for the current outstanding balance, mark an unpaid one paid (EFT/cash),
@@ -1509,6 +1496,7 @@
         add_to_calendar: { manual: true, run: function (b) { addToCalendar(b.ics_url); } },
         desk_pay: { manual: true, run: function (b) { deskPayModal(b.order_id, b.charge, function () { renderEvent(id); }); } },
         refund: { manual: true, run: function (b) { refundModal(b.order_id, b.charge, function () { renderEvent(id); }); } },
+        unreceipt: unreceiptAction(function (b) { return b.order_id; }),
         void: { confirm: "Void this charge (a mistake)? It drops off the client's statement.", done: "Voided.", run: function (b) { return window.AdminAPI.voidOrder(b.order_id, { write_off: false }); } },
         write_off: { tone: "danger", confirm: "Write off (forgive) this charge? No money is collected.", done: "Written off.", run: function (b) { return window.AdminAPI.voidOrder(b.order_id, { write_off: true }); } },
         collect: { done: "Marked collected.", run: function (b) { return window.AdminAPI.arrearsCollected(b.arrears.id); } },
@@ -1565,6 +1553,7 @@
       actions: {
         desk_pay: { manual: true, run: function (b) { deskPayModal(b.order_id, b.charge, function () { renderTxn(orderId); }); } },
         refund: { manual: true, run: function (b) { refundModal(b.order_id, b.charge, function () { renderTxn(orderId); }); } },
+        unreceipt: unreceiptAction(function (b) { return b.order_id; }),
         void: { tone: "danger", back: true, confirm: "Cancel & void this purchase? It's removed from the client's statement, and any linked membership or pack is cancelled.", done: "Cancelled.", run: function (b) { return window.AdminAPI.voidOrder(b.order_id, { write_off: false }); } },
         write_off: { tone: "danger", confirm: "Write off (forgive) this charge? No money is collected.", done: "Written off.", run: function (b) { return window.AdminAPI.voidOrder(b.order_id, { write_off: true }); } },
         receipt: { manual: true, run: function (b) { window.open("/receipt.html?order=" + encodeURIComponent(b.order_id), "_blank"); } },
@@ -1586,6 +1575,7 @@
         cancel: { tone: "danger", back: true, confirm: "Cancel this enrolment and free the seat?", done: "Cancelled.", run: function (b) { return window.API.cancelEnrolment(b.class_session_id, b.player_user_id ? { user_id: b.player_user_id } : {}); } },
         desk_pay: { manual: true, run: function (b) { deskPayModal(b.charge.order_id, b.charge, function () { renderClassEvent(id); }); } },
         refund: { manual: true, run: function (b) { refundModal(b.charge.order_id, b.charge, function () { renderClassEvent(id); }); } },
+        unreceipt: unreceiptAction(function (b) { return b.charge.order_id; }),
         void: { confirm: "Void this charge (a mistake)? It drops off the client's statement.", done: "Voided.", run: function (b) { return window.AdminAPI.voidOrder(b.charge.order_id, { write_off: false }); } },
         write_off: { tone: "danger", confirm: "Write off (forgive) this charge?", done: "Written off.", run: function (b) { return window.AdminAPI.voidOrder(b.charge.order_id, { write_off: true }); } },
         receipt: { manual: true, run: function (b) { window.open("/receipt.html?order=" + encodeURIComponent(b.charge.order_id), "_blank"); } },
@@ -1645,6 +1635,29 @@
                 function (e) { UI.toast(UI.errMsg(e), "error"); });
       } }),
     ]));
+  }
+
+  // UN-RECEIPT — undo a desk payment recorded in error. Defined ONCE and handed to every
+  // TransactionDetail mount: the widget is shared, but its ACTIONS map was forked three ways (event,
+  // purchase, class), so an action added to one screen silently missed the other two. `orderOf`
+  // exists only because those three payloads carry the order id in different places.
+  //
+  // The confirm says what this is NOT, because "Un-receipt" beside "Refund" invites the assumption
+  // that money moves. It does not: the charge simply becomes owed again.
+  function unreceiptAction(orderOf) {
+    return {
+      tone: "danger",
+      confirm: function () {
+        return "Un-receipt this charge?\n\n"
+          + "This undoes a payment recorded in error: no money moves and no refund is issued "
+          + "— the charge simply becomes OWED again, and the coach's commission on it is "
+          + "reversed.\n\nIf money really did go back to the client, use Refund instead.";
+      },
+      done: "Un-receipted — the charge is owed again.",
+      run: function (b) {
+        return window.API.unreceiptOrder(orderOf(b), { reason: "recorded in error" });
+      },
+    };
   }
 
   function deskPayModal(orderId, ch, then) {
