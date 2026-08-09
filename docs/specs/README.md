@@ -374,6 +374,10 @@ operating guide; **this folder is the detail.**
    (env-gated / unwired / commented-out) and exactly how to switch it on. *"What we can turn on."*
 5. **[TESTING.md](TESTING.md)** — the **end-to-end test plan** (3 profiles, role-by-role, with expected
    results). *"How to verify it all."*
+5b. **[SCENARIOS.md](SCENARIOS.md)** — the **coverage catalogue** of the three scratch-DB harnesses:
+   what booking / billing / statement each already prove, so you can tell whether the rule you are about
+   to change is guarded. Moved out of `CLAUDE.md` on 2026-08-09, which keeps the commands + baseline.
+   *"What's already guarded."*
 6. **[FEATURES.md](FEATURES.md)** — the **white-label feature & function catalogue** (plain-language,
    grouped by area, with automated-test coverage flags). *"What can it do."* The scratch-DB scenario
    harnesses (`python -m scripts.test_all`) back the ✅-flagged items.

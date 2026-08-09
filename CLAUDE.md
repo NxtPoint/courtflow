@@ -46,64 +46,23 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    `python -m scripts.test_statement_reconciliation`.
    **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (56/92/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
-   don't commit the narrowing. The check counts below are the gate line's, not per-bullet totals —
-   **update the "Current green baseline" line above and nothing else**, so the numbers can't drift
-   apart (`scripts.audit_docs` fails any doc that claims a DIFFERENT current baseline).
-   - `test_booking_scenarios` — double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
-     **court→service allocation (per-service courts + pricing), classes reserve N courts (held +
-     conflict guard + auto-repick) + editable, online class seat held → lazy-expired on abandonment →
-     waitlister promoted (paid seat never expired), cancel-after-start refused, unpriced booking refused,
-     PEAK court pricing (shown==charged), membership entitlement caps (duration/courts-per-day → PAYG) +
-     clay-court exclusion, configurable trial inherits its tier's caps, equipment hire (one order/no
-     double-bill + time-based availability, single ball machine can't double-book, cancel voids the add-on),
-     coach back-capture of a PAST lesson (staff-only allow_past, resource resolved from coach_user_id),
-     SEMI-PRIVATE (squad) lessons — per-head billing (one owed order per client), add-a-player-later,
-     a parent's kids bill the guardian, a member can't add a stranger/another family's child, cancel
-     voids every head; a card-only SERVICE refuses pay-at-court on the booking; a class enrolment is
-     payment-gated (no free seat via membership_covered/free, card-only class refuses pay-at-court),
-     **RESCHEDULE CAN MOVE THE COURT (a court booking's own resource; a lesson keeps the coach and its
-     held-court row moves), a busy target refuses with COURT_NOT_AVAILABLE, re-picking the SAME court
-     doesn't block itself; COACH PREFERRED COURT honoured when free → falls back when busy (never
-     blocks a lesson) → an explicit court still wins,
-     **CLASS PAYMENT STATE — the roster FLAGS an unpaid seat (`unpaid` + `payment_label`, never a bare
-     "Enrolled"), CHECK-IN settles a held online seat into a real owed debt (an `awaiting_payment` order
-     is invisible to statement/month-end/invoicing and the sweep only matches 'enrolled', so marking
-     attendance used to strand it forever), promotion treats a VOIDED order_id as NOT-billed (a stale id
-     used to hand out a FREE class), and a LATE payment RE-INSTATES a swept seat — but never overbooks a
-     full class (that logs a refund case), **CLASS PRICE SURVIVES A SERVICE RENAME — a class resolves
-     its service through `diary.resource.product_id` (the DURABLE link, set at create_class_type and
-     boot-backfilled), never a name join; an orphaned class REFUSES with PRICE_NOT_CONFIGURED rather
-     than billing another class's rate, and a retired price variation can never enrol at R0**.
-   - `test_billing_scenarios` — settlement modes, commission, tokens, membership (offline + per-tier),
-     refunds + clawback, dispute routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards,
-     **wallet adjust/expire, general order discount, 7-day-trial grant guard, lesson+class pack coach-linking,
-     class↔coach commission parity, per-service packs (product-aware draw), desk-payment amount guard,
-     partial-refund state, coach payout nets the ledger, month-end sweep idempotent, pack service-isolation
-     (assign + buy-wizard coach/product scoping), admin ad-hoc invoice (service×qty + fee − discount,
-     tamper-proof), client activity-summary (counts/minutes/by-service/by-week), a pack respects its
-     SERVICE's payment rule (a card-only pack is card-only — no at-court fallback that grants it unpaid),
-     PAID PACK NEVER BYPASSED (owed-mode booking auto-draws a matching pack), RECONCILE activates the
-     pack/wallet (behavioural GUARD — reconcile must call activate_purchase, not just mark paid),
-     **PROMOTIONS** — a redeemed code discounts the ONE order (asserted: no second debt row + coach-arrears
-     lockstep + `original_amount_minor` was→now), `validate()` writes nothing, `amount_off` clamps at the
-     total, reverse frees the usage slot, every refusal by ERROR CODE (window/scope/min-spend/per-customer +
-     global caps/first-time/stacking/paid-order), unique per-recipient codes (single-use, own cap not the
-     shared one, revoke, recipient-bound), and the **bonus REPLAY GUARDS** — `bonus_period` 3+1 and
-     `bonus_units` "buy 10 get 12" grant exactly once on BOTH the online (at activation) and offline (at
-     redemption) paths, and a replayed activation/grant does NOT re-add them**, **`membership_started` fires
-     ONCE per real activation (online + offline) carrying the email, never on a replay, and NEVER on the
-     7-day trial (a `_EmitRecorder` context manager swaps the stubbed `marketing_crm.tracking.emit` for a
-     recorder — late binding is what makes that work)**.
-     **REVENUE-LEAK HARDENING (2026-07-27, +43 checks)** — a membership is judged on the BOOKING'S
-     date not today (book past your expiry → PAYG, never a locked-in R0), one coach can't be in two
-     places (court↔lesson↔class both ways, a class's many court-holds excepted), a member's 2nd
-     CONCURRENT covered court is PAYG (the booking still succeeds), equipment obeys its OWN
-     payment_modes and HOLDS the booking when the resolved method is online (unpayable → refused),
-     club-default caps reach EVERY membership incl. the price-less trial (and a NULL-cap tier no
-     longer wipes a capped one), and a waitlist promotion into a card-only class is HELD pending
-     payment with the confirmation deferred (never `class_enrolled` on an unpaid seat).
-   - `test_statement_reconciliation` — no double-count, pay-all-once, part-settle, reclaim,
-     membership-covered R0 never owed, void/write-off, arrears↔orders lockstep, **discount reprices one debt**.
+   don't commit the narrowing. **Update the "Current green baseline" line above and nothing else**, so
+   the numbers can't drift apart (`scripts.audit_docs` fails any doc that claims a DIFFERENT current
+   baseline). **What each harness actually covers is catalogued in
+   [`docs/specs/SCENARIOS.md`](docs/specs/SCENARIOS.md)** — read it when you need to know whether a
+   rule is already guarded; you don't need it to run the gate.
+
+## Local setup (what every gate except the JS one needs)
+`pip install -r requirements.txt` (Python 3.12), then **`DATABASE_URL` pointed at a LOCAL sandbox
+Postgres — never production.** The harnesses roll back, but they roll back on whatever DB you give
+them. Extensions `btree_gist` + `pgcrypto` are created by `python -m db`; the role needs rights to
+`CREATE EXTENSION`. There is no `.env.example` — export it in your shell, or drop it in a gitignored
+`.env.local` (the only script that reads that file is `scripts/verify_live.py`, which is read-only
+against REAL Render Postgres and never prints the URL).
+**This is a Windows/PowerShell box.** Bash-isms in the examples below (`$(git ls-files …)`) need the
+PowerShell form `(git ls-files '*.py')`; the Bash tool is available for POSIX scripts when you want it.
+**Commits are conventional-commits whose subject carries the WHY, not the what** — the house style is
+`fix(scripts): reconcile_coach_cash judged the residual by size, not direction`, not `fix: bug`.
 
 ## Deployment (LIVE on Render)
 - Repo `NxtPoint/courtflow`; Render auto-deploys `master`. Two web services + a Postgres DB, **all
@@ -117,8 +76,8 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
   `docs/specs/ENV-STATUS.md` — keep them there, not here, so they can rot independently of code.
 
 ## Architecture (big picture)
-The platform re-assembles ~80% of the proven **Ten-Fifty5 (1050)** architecture around one new domain
-model: the **diary**. Same shape as 1050, fewer services (no ML/GPU/video).
+The platform re-assembles ~80% of the proven **Ten-Fifty5** architecture around one new domain
+model: the **diary**. Same shape as Ten-Fifty5, fewer services (no ML/GPU/video).
 
 **Services** (`render.yaml`): `courtflow-api` (booking/diary/billing API, Clerk-JWT auth) + `courtflow-web`
 (host-switched marketing site **and** the portal SPAs) + **four cron services** (reminders / capacity-sweep /
@@ -154,7 +113,7 @@ re-run or a doubled schedule is safe. When adding a recurring job, add a workflo
   membership_subscription, bundle_plan/token_wallet, commission engine (`coach_agreement`/`commission_rule`/
   `commission_split`/`coach_ledger`/`coach_arrears`), **`coach_payout`** (recorded club↔coach settlements —
   nets the ledger) + **`month_end_notice`** (month-end-sweep idempotency)
-- `core.*` — account/user/person, usage_event, consent, nps (ported from 1050 `core_db`)
+- `core.*` — account/user/person, usage_event, consent, nps (ported from Ten-Fifty5 `core_db`)
 
 **Decoupling interfaces** (why the lanes stay independent): the **schema** is the contract between diary,
 billing, and CRM; `contracts/events.md` is the producer→consumer **event contract** (diary/billing `emit()`
@@ -250,14 +209,12 @@ never merged. `create_booking(extra_clients=[…])` inserts each as a `diary.boo
 billed to whoever **PAYS**: the player if a member, else their **GUARDIAN** (`_bill_owner` →
 `iam.guardian_user_id_for`) — so a parent's two kids raise two orders BOTH owned by the parent (spend rolls
 up to the payer, activity to the player). **Add a player LATER** (squad confirmations land late):
-`diary.bookings.add_lesson_partner` + `POST /api/diary/bookings/<id>/add-player` (email or user_id; same
-edit gate as reschedule) — surfaced as an "Add player" action on the shared `Widgets.TransactionDetail`
-(`can.add_player`, true only when the lesson is semi-private + below its cap). The player PICKER is
-`GET /api/diary/members/search` (staff-only) → `iam.search_members_with_dependents` (members AND a parent's
-kids as their own rows); the shared `CRMUI.addLessonPlayerModal` (staff = name search, self-booking member =
-own-kids search, email fallback) serves BOTH the add-later modal and the upfront booking-flow squad step.
-`_addable_player_uid` (route) validates each extra player: a non-staff booker may add only club members +
-their OWN kids, never an arbitrary account or another family's child; staff add any in-club member/child.
+`diary.bookings.add_lesson_partner` + `POST /api/diary/bookings/<id>/add-player`, same edit gate as reschedule,
+surfaced on the shared `Widgets.TransactionDetail`. `_addable_player_uid` (route) validates each extra player:
+**a non-staff booker may add only club members + their OWN kids**, never an arbitrary account or another
+family's child; staff add any in-club member/child. The picker is `GET /api/diary/members/search` (staff-only)
+→ `iam.search_members_with_dependents`, rendered by the shared `CRMUI.addLessonPlayerModal` which serves BOTH
+the add-later modal and the upfront booking-flow squad step.
 **Cancel voids EVERY order on the booking** (primary + per-head partners), so no partner is left owing.
 
 **Three purchasing models:** PAYG (per-duration) · membership (term plans) · tokens/bundles (prepaid packs,
@@ -315,18 +272,14 @@ boot re-seed can't reset it).
   (+ a professional PDF at `GET /api/billing/receipt/<order_id>/pdf`).
 
 **Invoice & receipt DOCUMENTS (`billing/invoicing.py` — the ONE module; `billing/invoice_pdf.py` = reportlab
-renderer).** An invoice is a **document that RENDERS over live orders, NEVER a second debt store** — the debt
-stays on `billing."order"` (one debt = one order). Line amounts FREEZE at issue; **paid/outstanding derives
-LIVE** from the orders referenced, so a mid-month card payment flips the invoice to Paid and double-counting is
-structurally impossible. Numbering is **gapless per club** (`club.billing_profile`, allocated atomically at
-issue). Three issue paths, one document type: admin ad-hoc · intra-month "invoice the outstanding balance" ·
-month-end auto-consolidation. **AN INVOICE COVERS A PERIOD** — the month the SERVICE WAS DELIVERED
-(`invoicing.DELIVERED_AT_SQL`, the ONE resolver; `order.service_date` carries it for a charge with no
-session). Earlier debt is never re-billed: `brought_forward_minor` freezes it at issue as DISPLAY ONLY.
-Settling by EFT/cash sends **ONE `invoice_paid` receipt**, not one per line, and
-`mark_invoice_paid(amount_minor=)` **part-pays** — whole lines, oldest first, remainder left owed. Company identity + bank details (and the dormant VAT block) are edited at
-Admin → Setup → **"Company & billing details"**. The routes, the email/PDF attachment flag and the EFT
-reference: **[UNIFIED-STATEMENT.md § As-built](docs/specs/UNIFIED-STATEMENT.md#invoice--receipt-documents)**.
+renderer).** The invariants, all load-bearing: an invoice is a **document that RENDERS over live orders, NEVER
+a second debt store** (the debt stays on `billing."order"`) — line amounts FREEZE at issue but paid/outstanding
+derives LIVE, so double-counting is structurally impossible; numbering is **gapless per club**; **AN INVOICE
+COVERS A PERIOD** — the month the SERVICE WAS DELIVERED (`invoicing.DELIVERED_AT_SQL`, the ONE resolver), with
+earlier debt frozen as DISPLAY-ONLY `brought_forward_minor`, never re-billed; ONE `invoice_paid` receipt per
+payment however many lines it settles; a part-payment settles WHOLE lines, oldest first. The three issue paths,
+the routes, the PDF/email flag, the EFT reference and company/bank setup:
+**[UNIFIED-STATEMENT.md § As-built](docs/specs/UNIFIED-STATEMENT.md#invoice--receipt-documents)**.
 
 **Booking flow** (`frontend/js/booking.js`, full-screen): Service → **Schedule** (month calendar with inline
 per-duration chips for court/lesson; live price or "Covered by your membership"; a court booking defaults the
@@ -348,10 +301,8 @@ court picker for a lesson (they do for court hire). When `create_booking` isn't 
 it calls `diary.bookings._pick_court_for_lesson`: the **coach's preferred court**
 (`iam.coach_profile.preferred_court_resource_id`, set at Coach → profile → "Preferred court") when it's FREE,
 else `_first_free_court`. It is a **preference, never a lock** — a busy favourite must never make a lesson
-unbookable. An explicitly-passed court always wins. The **staff** on-behalf booking flow shows a court
-dropdown pre-defaulted to that coach's preference (`booking.js`, gated on `st.onBehalf || st.coachLock`);
-`/api/diary/resources` carries `preferred_court_resource_id` on each coach row so the picker needs no extra
-fetch.
+unbookable. An explicitly-passed court always wins. The **staff** on-behalf flow shows a court dropdown
+pre-defaulted to that coach's preference (`booking.js`, gated on `st.onBehalf || st.coachLock`).
 
 **Reschedule moves TIME and/or COURT** — `reschedule_booking(..., new_court_resource_id=)`, body key
 `court_resource_id` on `PATCH /api/diary/bookings/<id>`. A **court** booking's own `resource_id` changes; a
@@ -397,51 +348,37 @@ coach `coach_arrears` kept in **lockstep** with orders so commission accrues exa
 `docs/specs/UNIFIED-STATEMENT.md`.
 
 **The Money tab = ONE `Widgets.Earnings` (`frontend/js/widgets/earnings.js`) — a club-vs-coach P&L across
-admin + coach, config-only (no fork).** Admin Money HOME is the reconciling band + a section menu (New invoice ·
-Sales by day · **Club earnings** · Bookings by day · Approvals · Club activity). **"Club earnings"**
-(`#/money/revenue`) is the roll-up: **CLUB earnings = the DIRECT services it runs** (court/membership/pack, 100%
-club) **+ the COMMISSION taken from each coach** → Total (collected-now + projected-when-all-owed) + **Club keeps
-vs Coaches keep**; drill a coach → their **P&L** (Total sales − discount − write-off = Net ; Net = Received +
-Owed ; commission −coach/+club REALISED on received + PROJECTED on owed at the same rate ; Coach-keeps-total vs
-Club-commission-total) → by client → transaction → the shared record; a direct service drills to its clients.
-The **coach app** Money is the coach's OWN P&L (same widget, "You keep" wording — never other coaches / the club
-roll-up). All off the ONE `_earnings_cte` (per-order coach attribution — lesson/class/pack → that coach,
-court/membership → NULL = club) via `admin.repositories.revenue_club_overview` / `revenue_coach_pnl` /
-`earnings_clients` / `earnings_transactions`; commission split = realised from `cockpit_coach_earnings`,
-projected-on-owed at the `commission_rule` rate. Retired: the admin **Coach-settlement** + **Online-payments**
-tabs (+ `earnings_coaches`). **Commission accrues to the coach on EVERY collection method** (Yoco / invoice
-paylink / cash-EFT desk / 'pay-all' statement) through the ONE payment core — no method short-changes a coach
-(monthly guard: `python -m scripts.reconcile_coach_commission`).
+admin + coach, config-only (no fork).** **CLUB earnings = the DIRECT services it runs** (court/membership/pack,
+100% club) **+ the COMMISSION taken from each coach**; drill coach → client → transaction → the shared record.
+The coach app renders the SAME widget as the coach's OWN P&L ("You keep" wording — never other coaches or the
+club roll-up). All of it off the ONE `_earnings_cte` (per-order coach attribution — lesson/class/pack → that
+coach, court/membership → NULL = club) via `admin.repositories.revenue_club_overview` / `revenue_coach_pnl` /
+`earnings_clients` / `earnings_transactions`. **Commission accrues to the coach on EVERY collection method**
+(Yoco / invoice paylink / cash-EFT desk / 'pay-all' statement) through the ONE payment core — no method
+short-changes a coach (monthly guard: `python -m scripts.reconcile_coach_commission`). Screen-by-screen
+breakdown: [BUSINESS-RULES.md § 6](docs/specs/BUSINESS-RULES.md).
 
-**Club↔coach settlement.** The coach's running `coach_ledger` balance surfaces in the coach P&L (net balance
-with the club) + the roll-up's "Coach payouts due" (`billing.commission.settlement_overview`); a recorded
-**`coach_payout`** (`record_coach_payout`, both directions + offset, idempotent on `ref_id=payout.id`) nets it —
-routes `POST/PATCH/GET /api/admin/coach-payouts` + `GET /api/admin/financials/settlement` remain. The standalone
-Settlement Money tab was retired, but the **Record-payout action was re-homed onto the coach P&L card** —
-`revenue_coach_pnl` returns `ledger_balance_minor`, and the admin drill's coach P&L shows "Net balance with the
-club" + a **Record payout** button (`Widgets.Earnings` `cfg.onRecordPayout` → `recordPayoutModal` →
-`AdminAPI.recordCoachPayout`, prefilled to settle) that posts the netting `coach_ledger` entry. **Month-end sweep**
-(`billing.commission.run_month_end` → `POST /api/cron/month-end`, `OPS_KEY`-guarded): accrues coach arrears +
-rent, then for each client with an OPEN balance **consolidates their open orders into ONE numbered statement
-invoice + a pay-link email** (`invoice_issued`; else a plain `statement_ready` reminder — a client who owes
-nothing gets NO email), idempotent per `(club,user,period)` via `billing.month_end_notice`. **The sweep is
-PER-CLIENT-TRANSACTIONAL, TIME-BOXED and RESUMABLE** — the CRON ROUTE runs `month_end_client` in **its own
-`session_scope()` per client**, stops at `max_seconds` (default 90, under gunicorn's 120s reaper) and returns
-`{ok, complete, remaining, failed}` for the caller to loop; `run_month_end` is the single-transaction form
-(one club, harness only). Fired by **`.github/workflows/month-end.yml`** on the **1st** (billing the month just
-ended) — it **loops until `complete`** and **FAILS THE JOB LOUDLY** on any non-200/`ok:false`. Rides the
-keep-warm CI pattern — the four `render.yaml` crons stay commented out. Why one big transaction is not an
-option (gapless numbers + emails that don't roll back):
+**Club↔coach settlement.** The coach's running `coach_ledger` balance surfaces in the coach P&L + the roll-up's
+"Coach payouts due" (`billing.commission.settlement_overview`); a recorded **`coach_payout`**
+(`record_coach_payout`, both directions + offset, idempotent on `ref_id=payout.id`) nets it, actioned from the
+**Record payout** button on the coach P&L card. **Month-end sweep** (`billing.commission.run_month_end` →
+`POST /api/cron/month-end`, `OPS_KEY`-guarded): accrues coach arrears + rent, then consolidates each client's
+open orders into ONE numbered statement invoice + pay-link email (a client who owes nothing gets NO email),
+idempotent per `(club,user,period)` via `billing.month_end_notice`. **The sweep is PER-CLIENT-TRANSACTIONAL,
+TIME-BOXED and RESUMABLE** — the CRON ROUTE runs `month_end_client` in its own `session_scope()` per client and
+stops at `max_seconds` (default 90, under gunicorn's 120s reaper) for the caller to loop; `run_month_end` is the
+single-transaction form (one club, harness only). Fired by **`.github/workflows/month-end.yml`** on the **1st**
+(billing the month just ended); it loops until `complete` and **FAILS THE JOB LOUDLY**. Why one big transaction
+is not an option (gapless numbers + emails that don't roll back):
 **[UNIFIED-STATEMENT.md § As-built](docs/specs/UNIFIED-STATEMENT.md#the-month-end-sweep-is-per-client-transactional-time-boxed-and-resumable)**.
 
 **Client month-at-a-glance + the ONE month-aware 360.** `billing.me.activity_summary(month)` →
-`GET /api/me/activity-summary`: sessions PLAYED (lessons/court/classes, standalone courts only) + minutes +
-spend-by-service + billed/paid/outstanding + weekly buckets. Surfaced on `get_client_360` (now takes `month=`,
-adds a per-service breakdown — the **month → client → service → transaction** coach drill; the parallel
-`coach.get_client` reader was retired, so every coach client view is a view off the ONE composer). Frontend:
-`CRMUI.activityBlock / spendBlock / weekChart` = ONE shared renderer for the client Home modules AND the Client
-360 rollup (no chart on the 360). The client Home is Book(services) → Your sessions → Match-analysis (an "AI"
-gradient panel) → a month-navigable Billing+Activity summary → Plan; **no emoji** (drawn line-glyphs).
+`GET /api/me/activity-summary`: sessions PLAYED + minutes + spend-by-service + billed/paid/outstanding + weekly
+buckets. `get_client_360` takes `month=` and adds the per-service breakdown — the **month → client → service →
+transaction** coach drill; the parallel `coach.get_client` reader was retired, so **every coach client view is a
+view off the ONE composer**. `CRMUI.activityBlock / spendBlock / weekChart` = ONE shared renderer for the client
+Home modules AND the Client 360 rollup. The client Home is Book(services) → Your sessions → Match-analysis →
+a month-navigable Billing+Activity summary → Plan; **no emoji** (drawn line-glyphs).
 
 ## First-party analytics + the admin Overview tab
 `analytics/` is a read-only, platform-owner dashboard (`/overview.html`, rolling `?days=`) built on **guarded**
@@ -480,7 +417,7 @@ Know which ad clicks become paying members, and feed that back to Google so bidd
   `core.repositories.acquisition.record_acquisition` persists onto `core.acquisition` (FIRST-TOUCH WINS).
   Populated the previously-dark `core.acquisition.gclid`.
 - **Offline conversions** (`offline_conversions/` — a SHARED, PORTABLE package kept **byte-identical** with the
-  1050/ten-fifty5 repo, like the analytics engine): when a gclid'd buyer PAYS, the `emit()` funnel's 4th forward
+  Ten-Fifty5 repo, like the analytics engine): when a gclid'd buyer PAYS, the `emit()` funnel's 4th forward
   (`recorder.record_from_emit`, event `payment_succeeded`) ledgers a `core.offline_conversion` row; the feed
   `GET /feeds/google-ads/offline-conversions.csv` (HTTP Basic auth via `GOOGLE_ADS_FEED_USER`/`PASS`, **dark/404
   until set**) serves it to Google Ads' scheduled upload. **NO developer token / manager account needed** — the
@@ -513,14 +450,14 @@ touches NO app code — so `frontend/marketing/` and `marketing/` (the untracked
   `render.yaml`, never blank — see the render.yaml marketing-tag comments.)
 - **Repo model (where marketing work lives):** the ENGINE (digest + keyless WIF access) lives HERE and
   covers BOTH brands; each brand's SITE + blog CONTENT lives in ITS repo — NextPoint here (`frontend/blog/_posts/`,
-  images `/img/`), **Ten-Fifty5 in the 1050 repo** (`frontend/blog/_posts/`, images `/blog/images/`, published via
+  images `/img/`), **Ten-Fifty5 in its own repo** (`frontend/blog/_posts/`, images `/blog/images/`, published via
   its own `build_blog.py`, commit `CLAUDE_CODE=1`; weekly coworker SEO-scan→post workflow). Full spec:
   **`docs/specs/MARKETING-ENGINE.md`**. NextPoint also has a Google Business Profile playbook (physical club →
   local map pack). Ten-Fifty5 is **Render-only for users** (Clerk auth + PayPal, no Wix) but retains dormant,
-  DB-coupled Wix scaffolding — a decommission is scoped (DO NOT rush) in the 1050 repo's `docs/DE-WIX-DECOMMISSION.md`.
+  DB-coupled Wix scaffolding — a decommission is scoped (DO NOT rush) in the Ten-Fifty5 repo's `docs/DE-WIX-DECOMMISSION.md`.
 
 ## Ten-Fifty5 embed — match analysis inside the members area (LIVE, private test)
-A logged-in member opens **Ten-Fifty5** (AI match analysis / technique — the 1050 product; web at
+A logged-in member opens **Ten-Fifty5** (AI match analysis / technique — the Ten-Fifty5 product; web at
 `ten-fifty5.com`, API at `api.nextpointtennis.com`) **inside** the client SPA in an iframe, signed in with
 their OWN NextPoint Clerk token — **no second login**. The two products are **separate Clerk apps**
 (`clerk.nextpointtennis.com` vs `clerk.ten-fifty5.com`); the seam is a `postMessage` **token relay** (both
@@ -536,7 +473,7 @@ member by email on the first authenticated hit.
 - **Gated to a PRIVATE prod test** via `TF5_EMBED_ALLOW_EMAILS` (courtflow-web). **Launch = clear that env**
   (empty → all members). Marketing funnel: a public **"Match analysis"** CTA on `frontend/marketing/home.html`
   → `ten-fifty5.com` (this is separate from the embed and stays live).
-- **The 1050 repo IS modified for this** (the ONE exception to "read-only reference" below): `auth_v2/verifier.py`
+- **The Ten-Fifty5 repo IS modified for this** (the ONE exception to "read-only reference" below): `auth_v2/verifier.py`
   (multi-issuer allowlist), `frontend/auth_client.js` (trusted-parent guard + **multi-hop relay** — the portal
   nests each page in a content iframe, so a middle frame proxies its grandchild's auth up to its own parent;
   without this only the empty portal shell authed), `locker_room_app.py`, `render.yaml`. All additive +
@@ -564,7 +501,7 @@ member by email on the first authenticated hit.
   boot, before the catch-all) — it loads `migration/redirects.csv` (48-rule Wix→Render map, live since cutover).
   **Never let an agent change DNS or flip the SEO cutover — Tomo does this.**
 
-## Tech defaults (match 1050 so reuse is clean)
+## Tech defaults (match Ten-Fifty5 so reuse is clean)
 - Python 3.12 + Flask + Gunicorn + Postgres. **DB access = SQLAlchemy Core** (`db.get_engine`/`text()`,
   explicit `session`; **repos never commit** — callers compose via `db.session_scope()`) over **psycopg 3**.
   **Idempotent boot DDL** (`ADD COLUMN IF NOT EXISTS`) — no Alembic. Extensions: `btree_gist` + `pgcrypto`.
@@ -583,7 +520,7 @@ you change the code an entry names — each one is a bug that reached production
 looks like a harmless simplification until you read what it cost.
 
 **The short ones, in full — no story needed:**
-- **`api.nextpointtennis.com` is already live on the 1050 service** — do not break it. The new platform has its
+- **`api.nextpointtennis.com` is already live on the Ten-Fifty5 service** — do not break it. The new platform has its
   own API host; changing a Render custom domain can recreate a service. (The members-area **Ten-Fifty5 embed**
   now *deliberately* calls this API with federated NextPoint tokens — see the embed section.)
 - **Never let an agent change DNS.** The Wix→Render SEO cutover is supervised by Tomo.
@@ -611,6 +548,10 @@ looks like a harmless simplification until you read what it cost.
   **leading slash is load-bearing**: a bare `marketing/` would also match the tracked public site at
   `frontend/marketing/`, silently ignoring any new page added there. Don't confuse the three: `marketing/`
   (ad-ops, ignored) · `frontend/marketing/` (the public site) · `marketing_crm/` (the CRM lane).
+- **`.claude/` is ignored EXCEPT `skills/`** — same shape, same reason to be careful. It is written
+  `.claude/*` + `!.claude/skills/`, **not** `.claude/`, because git cannot re-include anything inside a
+  directory that is itself excluded. The skills (`marketing-manager`, `tennis-reel`) are shared team
+  assets and must stay version-controlled; `settings.local.json` is this machine's grants and stays out.
 
 **Everything else — the rule here, the reasoning in [GOTCHAS.md](docs/specs/GOTCHAS.md):**
 
@@ -724,4 +665,4 @@ This file is present-state only. For the dated build history (the booking-flow a
 migration, admin console redesign, frontend standardisation, unified statement, etc.), see the memory index at
 `MEMORY.md` and the authoritative specs under `docs/specs/` (START at `README.md` → `GOTCHAS.md` →
 `SYSTEM.md` → `BUSINESS-RULES.md` → `INVENTORY.md` → `OUTSTANDING.md`). `docs/` (`00`→`11`) are the original design docs;
-`docs/11` = locked decisions + the 1050 reuse map.
+`docs/11` = locked decisions + the Ten-Fifty5 reuse map.
