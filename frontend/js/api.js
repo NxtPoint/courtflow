@@ -231,7 +231,7 @@
 
     // ---- community: Find a Game (community/routes.py) --------------------
     // The seat rule means every one of these can change what somebody owes, so each returns the
-    // lane's stable error CODE on refusal (GAME_FULL, SPLIT_LOCKED, SEAT_ALREADY_PAID, …) and the
+    // lane's stable error CODE on refusal (GAME_FULL, SEAT_ALREADY_PAID, HOST_CANNOT_LEAVE, …) and the
     // caller shows the message rather than inventing its own.
     openGames: function (opts) { return A().apiJSON("/api/community/games" + qs(opts)); },
     game: function (id) {

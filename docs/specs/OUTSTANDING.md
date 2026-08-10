@@ -37,8 +37,9 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
       and DARK. Admin → Setup → **Community & games**:
       1. **Community features** first, on its own — members get Find a Game, open games, invitations and
          match chat. **Nobody's bill changes.** Zero-risk, and it is the half members will love.
-      2. Check **Seats per format**: doubles splits the court fee FOUR ways, so two members + two guests
-         means each guest pays a quarter. If that is not your intended doubles pricing, do not go on.
+      2. Check **What one player pays** — the screen shows the actual rands per duration (R50/80/110/140
+         at the default 50% rounded up to R10). Note two payers settle R160 on a R150 court (rounding),
+         and doubles with four non-members pays four shares, i.e. more than one court fee.
       3. **Tell the members** — the second switch changes what they pay.
       4. **Charge for every seat**. Then watch Setup → Games & invitations → *Games* → the **owed** column.
       Rollback is the same switch: flipping it off restores the previous booking behaviour exactly

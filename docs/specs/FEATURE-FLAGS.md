@@ -36,22 +36,26 @@ sweep. When you activate one, tick it and move the detail into the relevant spec
 | # | Feature | Gate (`club.policy`) | Default | Turn on |
 |---|---------|----------------------|---------|---------|
 | **AB1** | **Community / Find a Game** — open games, join/leave, invitations, match chat, results, player levels | `community_enabled` | **false** | **Admin → Setup → Community & games.** Members get the social surface; **nothing about anyone's bill changes.** Safe to switch on first, on its own. |
-| **AB2** | **THE SEAT RULE** — a court's fee is split among the seats not covered by a membership | `seat_rule_enforced` | **false** | Same screen, second switch. ⚠️ **This changes what members pay.** See the pre-flight below. |
+| **AB2** | **THE SEAT RULE** — every player not covered by a membership pays a SHARE of the court (a fixed %, default 50) | `seat_rule_enforced` | **false** | Same screen, second switch. ⚠️ **This changes what members pay.** See the pre-flight below. |
 
 Two switches on purpose, and they are independent: a club can give members Find a Game as a *benefit*
 before it changes what anyone pays. `seat_rule_enforced=false` means the booking path behaves **exactly**
 as it did before the lane existed — that is the regression contract, and
 `sc_seat_rule_off_changes_nothing` asserts it.
 
-Timings on the same screen (all `club.policy`, sensible defaults, clamped 1–720):
-`open_game_cutoff_hours` (12) · `seat_pay_hours` (24) · `guest_trial_days` (7).
+Also on that screen (all `club.policy`): **`seat_share_pct`** (0–100, default 50) and
+**`seat_rounding`** (`none`/`up_5`/`up_10`/`nearest_5`/`nearest_10`, default `up_10`), plus the timings
+`open_game_cutoff_hours` (12) · `seat_pay_hours` (24) · `guest_trial_days` (7), clamped 1–720.
 
 **Pre-flight before AB2 — this one is not just a flag.** It is the only switch on this page that
 changes what a member is charged:
 
-1. **Check the doubles denominator.** A doubles game splits the court fee **four** ways, so two members
-   plus two guests means each guest pays a quarter. The Setup screen states this; if it is not how you
-   want doubles priced, do not switch it on yet.
+1. **Check the share, in rands.** A share is a fixed fraction of the court (`seat_share_pct`, default
+   **50%**, rounded up to R10) — so on the seeded prices a player pays **R50 / R80 / R110 / R140** for
+   30/60/90/120. The Setup screen shows these amounts for your own durations rather than a percentage.
+   Two things to be deliberate about: rounding up means **two payers settle R160 on a R150 court**, and
+   **more than two payers collect more than one court fee** (doubles with four non-members = four
+   shares). Both are intended; neither should be a surprise.
 2. **Tell the members first.** They lose a free ride they have had for years. The Open Game framing
    ("bring anyone — they pay their share") is the message, and it lands far better before the first bill
    than after it.

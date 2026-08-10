@@ -173,9 +173,10 @@ def join_game(session, *, club_id, booking_id, user_id, now=None):
     """Take an open seat. The money follows immediately: apply_seat_orders decides whether this seat
     is covered by the joiner's own membership or owes a share, and raises their debt if it does.
 
-    Refuses a LOCKED game for an un-covered joiner (SPLIT_LOCKED, raised by seats) — someone has
-    already paid, and re-splitting would either re-bill them or hand this joiner a free court. A
-    COVERED member may still take a remaining seat: they owe nothing, so no split moves."""
+    A late joiner is simply priced — no refusal, and nothing about anyone else's seat moves. That is
+    the pay-off of a share being a FIXED FRACTION of the court rather than a division of it: the
+    game's quoted share is frozen on the booking, so whoever arrives last pays exactly what the people
+    already in it paid, however many of them turned out to be members."""
     now = now or datetime.now(timezone.utc)
     _require_enabled(session, club_id)
     plan = _seats.seat_plan(session, club_id=club_id, booking_id=booking_id)

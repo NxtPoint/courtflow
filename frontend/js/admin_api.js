@@ -2387,9 +2387,51 @@
       flag("community_enabled", "Community features",
         "Members can see open games, join them, invite friends and message each other.");
       flag("seat_rule_enforced", "Charge for every seat",
-        "A court's fee is split between the players who aren't members. Members play on their membership; guests pay their share.",
+        "Each player pays a share of the court. Members play on their membership; anyone who isn't a member pays their share.",
         "This changes what members pay. A member who books a court and doesn't fill the spare seat is charged for it. Tell your members before you switch it on.");
       wrap.appendChild(c);
+
+      // --- what one player pays ---
+      // The single most consequential number on this screen, so it shows the ACTUAL rands for the
+      // club's own durations rather than leaving the owner to do percentages in their head.
+      var sh = el("div", { class: "cf-card" }, [
+        el("h3", { text: "What one player pays" }),
+        el("p", { class: "cf-muted", text: "A share is a fixed slice of the court price — it does NOT change when someone else joins, leaves, or turns out to be a member. At 50%, two paying players add up to the court price." }),
+      ]);
+      var pct = el("input", { class: "cf-input", type: "number", min: "0", max: "100",
+        style: "max-width:110px", value: String(cfg.seat_share_pct == null ? 50 : cfg.seat_share_pct) });
+      var rnd = el("select", { class: "cf-input", style: "max-width:220px" }, [
+        ["none", "No rounding"], ["up_5", "Round up to nearest R5"], ["up_10", "Round up to nearest R10"],
+        ["nearest_5", "Nearest R5"], ["nearest_10", "Nearest R10"],
+      ].map(function (o) { return el("option", { value: o[0], text: o[1] }); }));
+      rnd.value = cfg.seat_rounding || "up_10";
+      function saveShare() {
+        window.AdminAPI.saveCommunitySettings({
+          seat_share_pct: parseInt(pct.value, 10), seat_rounding: rnd.value,
+        }).then(function (r) { UI.toast("Saved", "info"); draw(r); },
+          function (e) { UI.toast(UI.errMsg(e), "error"); });
+      }
+      pct.addEventListener("change", saveShare);
+      rnd.addEventListener("change", saveShare);
+      sh.appendChild(el("div", { class: "cf-row", style: "gap:12px;align-items:flex-end;margin-top:8px" }, [
+        el("div", { class: "cf-field", style: "margin:0" }, [el("label", { text: "Share of the court (%)" }), pct]),
+        el("div", { class: "cf-field", style: "margin:0" }, [el("label", { text: "Rounding" }), rnd]),
+      ]));
+      var ex = el("div", { class: "cf-list", style: "margin-top:10px" });
+      (cfg.share_examples || []).forEach(function (x) {
+        ex.appendChild(el("div", { class: "cf-item" }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: x.duration_minutes + " min · court " + UI.money(x.court_minor, "ZAR") }),
+            el("div", { class: "cf-item-s", text: "two paying players = " + UI.money(x.share_minor * 2, "ZAR")
+              + (x.share_minor * 2 === x.court_minor ? " (exactly the court)" : "") }),
+          ]),
+          el("span", { class: "cf-chip", text: UI.money(x.share_minor, "ZAR") + " each" }),
+        ]));
+      });
+      if ((cfg.share_examples || []).length) sh.appendChild(ex);
+      sh.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:8px",
+        text: "With more than two paying players the club collects more than one court fee — a doubles game with four non-members pays four shares. That is deliberate: four people use a court more than two." }));
+      wrap.appendChild(sh);
 
       // --- what it's doing right now ---
       var stats = el("div", { class: "cf-card" }, [el("h3", { text: "Right now" })]);

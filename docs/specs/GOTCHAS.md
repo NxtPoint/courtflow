@@ -1013,7 +1013,7 @@ question. A collapsed seat is a DEBT; it is not a reason to lazy-expire the memb
 under them hours before they play, which is what including it in the holding set would have done.
 Guarded by `sc_open_seat_collapses_onto_the_holder_at_cutoff`.
 
-### `int(None or 0)` HANDED A LATE JOINER A FREE COURT (2026-08-09)
+### `int(None or 0)` HANDED A LATE JOINER A FREE COURT (2026-08-09, model since replaced)
 
 Once any seat is paid the split LOCKS, so shares can never be recomputed — otherwise a third player
 arriving would re-price a seat somebody had already paid for. The locked branch read each seat's frozen
@@ -1027,11 +1027,15 @@ A seat that joined *after* the lock has no frozen share at all. `None or 0` → 
 the back of another player's payment. This is the silent zero that
 [§ Reads that lie](#reads-that-lie) is about, in the one module whose header says it refuses to do that.
 
-The fix was not to pick a number. A guessed share bills someone an amount nobody quoted them; zero gives
-the court away. The read now reports the seat as **unpriced** and `apply_seat_orders` **raises
-`SPLIT_LOCKED`**, which pushes the product decision (close the game, or allow a free joiner once the fee
-is banked) into the join path where it is a decision rather than a fallthrough.
-Guarded by `sc_split_locks_on_first_payment`.
+The fix was not to pick a number: a guessed share bills someone an amount nobody quoted them, and zero
+gives the court away. It was first fixed by refusing (`SPLIT_LOCKED`).
+
+**The model has since changed and this whole class of bug is gone.** A share is now a FIXED FRACTION of
+the court (2026-08-10), frozen per game on `diary.booking.seat_share_minor`, so it does not move when
+anyone joins, leaves or turns out to be a member — there is nothing to re-price, and a late joiner simply
+pays what everyone else in that game paid. Keep the story: *the reason* the divided-fee model needed a
+lock, a re-price and a refusal is exactly why it was replaced.
+Now guarded by `sc_the_quoted_share_is_frozen_for_the_life_of_the_game`.
 
 ### THE HOLDER'S SEAT COULD NOT SAY WHY IT HAD BEEN CHARGED (2026-08-09)
 
@@ -1107,3 +1111,25 @@ The docs gate finds emitted events with `emit\(\s*["'](\w+)["']` — a **literal
 They are in `contracts/events.md` because they were added by hand. **Nothing would have caught it if they
 weren't** — and the gate would have reported a confident green. Any lane that emits via a helper has the
 same blind spot; if you add one, add the contract row yourself and do not wait to be told.
+
+
+### AN EXPLICIT SELECT THAT OMITS A COLUMN IS A SILENT DEFAULT (2026-08-10)
+
+`diary.booking` gained `seat_share_minor` — the share a game was quoted, frozen so a later price change
+cannot re-price a game already sold. `community.seats._booking()` reads the booking with an **explicit
+column list**, and the new column was not added to it.
+
+Nothing failed. `booking.get("seat_share_minor")` simply returned `None`, every read fell through to
+"recompute from the CURRENT policy", and the freeze never happened. Changing the club's `seat_share_pct`
+mid-flight silently re-priced games that were already sold, including seats people had been quoted.
+
+**This is the same bug as `diary.booking.product_id` and `_booking_dict`**, one day later, in a module
+written by someone who had just documented the first one:
+
+> *"If you add a column here, add it to `_booking_dict`'s SELECT too — it returns `None` otherwise and
+> the fallback silently bites again."*
+
+An explicit SELECT is a promise you will maintain it. `SELECT *` has its own problems, but it does not
+quietly invent a default. If a module reads a column, that column belongs in its SELECT — and the way you
+find out you forgot is a scenario that asserts the FROZEN value, not the computed one.
+Caught by `sc_the_quoted_share_is_frozen_for_the_life_of_the_game`.

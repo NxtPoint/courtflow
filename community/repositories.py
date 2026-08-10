@@ -109,6 +109,27 @@ def settings(session, *, club_id):
     def _read():
         pol = _seats.policy(session, club_id)
         pol["seats_by_format"] = dict(_seats.SEATS_BY_FORMAT)
+        # WHAT ONE PLAYER ACTUALLY PAYS, in rands, for each court duration the club sells. The share
+        # is the single most consequential number on the settings screen, and "50%" is not an amount —
+        # an owner should not have to do percentages in their head to find out they just set R110.
+        try:
+            rows = session.execute(
+                text("SELECT DISTINCT p.duration_minutes, p.amount_minor "
+                     "FROM billing.price p JOIN billing.product pr ON pr.id = p.product_id "
+                     " WHERE pr.club_id = :c AND pr.kind = 'court_booking' AND p.active = true "
+                     "   AND p.duration_minutes IS NOT NULL "
+                     " ORDER BY p.duration_minutes"),
+                {"c": str(club_id)},
+            ).mappings().all()
+            pol["share_examples"] = [
+                {"duration_minutes": int(r["duration_minutes"]),
+                 "court_minor": int(r["amount_minor"]),
+                 "share_minor": _seats.share_minor(int(r["amount_minor"]),
+                                                   pct=pol["seat_share_pct"],
+                                                   rounding=pol["seat_rounding"])}
+                for r in rows]
+        except Exception:
+            pol["share_examples"] = []
         pol["open_games"] = int(session.execute(
             text("SELECT count(*) FROM diary.booking WHERE club_id = :c AND visibility = 'open' "
                  "  AND status IN ('held','confirmed') AND starts_at > now()"),
@@ -137,21 +158,32 @@ def settings(session, *, club_id):
 def save_settings(session, *, club_id, fields):
     """Write the switches. NOT guarded — a save that silently does nothing is the worst possible
     outcome on a screen whose whole job is turning a money rule on."""
+    from community import seats as _seats
+
     allowed = {"community_enabled": bool, "seat_rule_enforced": bool,
-               "open_game_cutoff_hours": int, "seat_pay_hours": int, "guest_trial_days": int}
+               "open_game_cutoff_hours": int, "seat_pay_hours": int, "guest_trial_days": int,
+               "seat_share_pct": int, "seat_rounding": str}
     sets, params = [], {"c": str(club_id)}
     for k, cast in allowed.items():
-        if k in (fields or {}):
-            v = fields[k]
-            if cast is int:
-                try:
-                    v = max(1, min(int(v), 720))
-                except (TypeError, ValueError):
-                    continue
-            else:
-                v = bool(v)
-            sets.append(f"{k} = :{k}")
-            params[k] = v
+        if k not in (fields or {}):
+            continue
+        v = fields[k]
+        if cast is int:
+            try:
+                v = int(v)
+            except (TypeError, ValueError):
+                continue
+            # The share is a PERCENTAGE and clamps 0..100; the timings are hours/days and clamp 1..720.
+            # One shared clamp would have let a 720% seat share through, which on a R210 court is
+            # R1,512 a head.
+            v = max(0, min(v, 100)) if k == "seat_share_pct" else max(1, min(v, 720))
+        elif cast is str:
+            if k == "seat_rounding" and v not in _seats._ROUNDERS:
+                continue
+        else:
+            v = bool(v)
+        sets.append(f"{k} = :{k}")
+        params[k] = v
     if not sets:
         return settings(session, club_id=club_id)
     # INSERT-ONLY upsert, the same shape allow_online_payment uses: the boot re-seed must never be

@@ -160,6 +160,33 @@ _DDL = [
     # inventing a second kind of free play (see community/invites.py).
     "ALTER TABLE club.policy ADD COLUMN IF NOT EXISTS guest_trial_days int DEFAULT 7;",
 
+    # --- THE SHARE: what ONE player pays, as a % of the court's price ---------------------
+    #
+    # A SHARE IS A FIXED FRACTION OF THE COURT, NOT A DIVISION OF IT. That is the whole design
+    # (owner decision, 2026-08-10), and it is what makes the price a player is quoted STABLE: it does
+    # not move when someone else joins, leaves, or turns out to be a member. The earlier model divided
+    # one court fee among the un-covered seats, which meant your share changed under you — and needed a
+    # lock, a re-price and a refusal to keep it honest. None of that is necessary now.
+    #
+    # 50% is the default because two people is the normal case: singles with two payers then collects
+    # exactly the court price. With MORE than two payers the club collects more than one court fee —
+    # deliberately, since four people use a court more than two — and that is the consequence to
+    # understand before switching the money rule on.
+    "ALTER TABLE club.policy ADD COLUMN IF NOT EXISTS seat_share_pct int DEFAULT 50;",
+    # Rounding is applied to the SHARE, once, after the percentage. 'up_10' keeps every amount a
+    # member sees a whole, tidy number — and is a small price RISE wherever the raw share ends in 5
+    # (R75 -> R80), which is intended rather than incidental.
+    "ALTER TABLE club.policy ADD COLUMN IF NOT EXISTS seat_rounding text NOT NULL DEFAULT 'up_10' "
+    "CHECK (seat_rounding IN ('none','up_5','up_10','nearest_5','nearest_10'));",
+
+    # The share this game was QUOTED, frozen the first time its seats were priced.
+    #
+    # Why freeze it on the booking rather than recompute: the club can change seat_share_pct or the
+    # court's price at any time, and a game already sold must not silently re-price under the people
+    # who are in it. It also means a LATE joiner pays exactly what everyone else in that game paid,
+    # which is the fair answer and removes the need to refuse them.
+    "ALTER TABLE diary.booking ADD COLUMN IF NOT EXISTS seat_share_minor int;",
+
     # ------------------------------------------------------------------ #
     # 5) community.player_invite — "bring a friend".
     # ------------------------------------------------------------------ #

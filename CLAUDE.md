@@ -43,7 +43,7 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 552 / billing 702 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 555 / billing 702 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -408,14 +408,18 @@ courts sit empty. **An unpaid second player and an empty seat are the same objec
 accounted for. Account for seats and the leak closes; publish the unaccounted seats and you have Find a
 Game. That is why this is one lane and not two.
 
-> **THE SEAT RULE.** A court booking has SEATS. Every seat is a covered member (free), a payer (owes a
-> share), or OPEN. **The court's price is split equally among the seats that are NOT covered.** An OPEN
-> seat unfilled at the cutoff **collapses** onto the booking holder as a charged seat.
+> **THE SEAT RULE.** A court booking has SEATS. Every seat is a covered member (free), a payer (owes
+> **a share**), or OPEN. **A SHARE IS A FIXED FRACTION OF THE COURT PRICE** (`seat_share_pct`, default
+> 50%, rounded — NOT a division of the fee among whoever happens to be playing). An OPEN seat unfilled
+> at the cutoff **collapses** onto the booking holder as one charged share.
 
-The club banks **exactly one court fee** per court hour unless every player is a member — membership
-decides WHO pays, never WHETHER the court is paid for. member+member R0 · member+guest puts the whole
-fee on the guest · two PAYG split it and **the court confirms only when both settle** · a seat nobody
-took becomes the booker's.
+A fixed fraction, not a split, because **the price a player is quoted has to survive somebody else
+joining, leaving or turning out to be a member.** That one property removed a lock, a re-price and a
+refusal from the design. At 50% two payers add up to the court price; with more than two the club
+takes more than one court fee, deliberately. On the club's own list (R90/150/210/280, 50% rounded up to
+R10) a share is **R50 / R80 / R110 / R140**. member+member R0 · member+guest = one share on the guest ·
+two PAYG = a share each and **the court confirms only when both settle** · a seat nobody took becomes
+the booker's.
 
 - **`community/seats.py` is the ONE place the split lives, and it RAISES rather than guards.** Every
   `analytics/`+`insights/` read is `_guard`-wrapped so a panel degrades to empty; that is right for a
@@ -429,8 +433,9 @@ took becomes the booker's.
   grid, reschedule/cancel, the unified statement, Client-360 and month-end.
 - **One debt = one order still holds.** Seats raise real `billing."order"` rows through the existing
   interface, so they reach the statement, Client-360, month-end and Club earnings with no extra work.
-- **The split LOCKS on the first payment** (`diary.booking.split_locked_at`). After that shares never
-  move; an un-covered seat added later is **refused (`SPLIT_LOCKED`), never priced at zero**.
+- **The quoted share is FROZEN per game** (`diary.booking.seat_share_minor`, written at first pricing).
+  A later change to the club's `seat_share_pct`, its rounding rule, or the court's price cannot re-price
+  a game already sold, and a late joiner pays exactly what everyone else in it paid.
 - **The free week for an invited friend IS the existing 7-day trial** — no second free-play mechanism.
   `grant_signup_trial` already refuses anyone who has EVER held a subscription, so a second invite is
   worthless and an imported Wix member can never be trialed.
@@ -691,7 +696,7 @@ looks like a harmless simplification until you read what it cost.
 *All eight were found by WRITING THE SCENARIOS, in code that looked finished. Each is a place where a
 money decision quietly defaulted instead of being made.*
 - A COLLAPSED SEAT STILL OCCUPIES ITS SEAT — else the hourly sweep re-bills the holder every run — `sc_open_seat_collapses_onto_the_holder_at_cutoff`
-- `int(None or 0)` HANDED A LATE JOINER A FREE COURT — a post-lock seat is REFUSED (`SPLIT_LOCKED`), never priced at zero — `sc_split_locks_on_first_payment`
+- `int(None or 0)` HANDED A LATE JOINER A FREE COURT — a post-lock seat is REFUSED (`SPLIT_LOCKED`), never priced at zero — `sc_the_quoted_share_is_frozen_for_the_life_of_the_game`
 - THE HOLDER'S SEAT COULD NOT SAY WHY IT HAD BEEN CHARGED (`covered` left NULL on the re-price branch) — `sc_an_expired_membership_is_an_uncovered_seat`
 - THE "STABLE" SEAT ORDER WAS SORTING BY RANDOM UUID — **`now()` is transaction-stable in Postgres**; the host sorts first so the organiser carries the odd cent
 - RE-PRICING A SEAT NEARLY ATE THE EQUIPMENT HIRE — re-price the court line only, then recompute the order total from its lines

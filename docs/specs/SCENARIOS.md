@@ -11,7 +11,7 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 552 / billing 702 / statement 64** (77 / 95 / 12 `sc_*` functions).
+  **booking 555 / billing 702 / statement 64** (77 / 95 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
@@ -50,18 +50,19 @@ full class (that logs a refund case).
 a name join; an orphaned class REFUSES with `PRICE_NOT_CONFIGURED` rather than billing another class's
 rate, and a retired price variation can never enrol at R0.
 
-**THE SEAT RULE** (`community/`, 2026-08-09 — see [COMMUNITY-ENGINE.md](COMMUNITY-ENGINE.md)) — the
-court fee is split among the seats nobody covers, so one membership can no longer cover a second
-player who never pays. The shares re-sum to the court fee EXACTLY, remainder to the first seat
-(`sc_seat_split_covers_the_court_exactly` — a lost cent is a statement fold that stops reconciling) ·
-a member + a non-member puts the WHOLE fee on the non-member and re-applying mints no second debt
-(`sc_member_plus_guest_bills_the_guest_in_full`) · two PAYG players split R75/R75 and the court is
-NOT confirmable until BOTH settle (`sc_two_payg_split_and_both_must_settle`) · an unfilled OPEN seat
-collapses onto the holder, closes the game, and **collapses only once however often the hourly sweep
-re-runs** (`sc_open_seat_collapses_onto_the_holder_at_cutoff`) · the first payment LOCKS the split, a
-replayed lock is a no-op, and an un-covered seat added after the lock is **refused (`SPLIT_LOCKED`)
-rather than priced at zero** (`sc_split_locks_on_first_payment`) · and with `seat_rule_enforced=false`
-a court booking behaves exactly as it always has, raising no seat orders at all
+**THE SEAT RULE** (`community/`, 2026-08-09/10 — see [COMMUNITY-ENGINE.md](COMMUNITY-ENGINE.md)) — every
+player not covered by a membership pays a SHARE of the court, so one membership can no longer cover a
+second player who never pays. A share is a **fixed fraction** of the court price (default 50%, rounded),
+NOT a division of the fee — so it never moves when someone else joins, leaves or turns out to be a member
+(`sc_a_seat_share_is_a_fixed_fraction_of_the_court`) · a member + a non-member puts one share on the
+non-member and re-applying mints no second debt (`sc_member_plus_guest_bills_the_guest_in_full`) · two
+PAYG players owe a share each and the court is NOT confirmable until BOTH settle
+(`sc_two_payg_split_and_both_must_settle`) · an unfilled OPEN seat collapses onto the holder for one
+share, closes the game, and **collapses only once however often the hourly sweep re-runs**
+(`sc_open_seat_collapses_onto_the_holder_at_cutoff`) · the quoted share is **frozen per game**, so a
+mid-flight change to the club's rate or a late joiner never re-prices anyone
+(`sc_the_quoted_share_is_frozen_for_the_life_of_the_game`) · and with `seat_rule_enforced=false` a court
+booking behaves exactly as it always has, raising no seat orders at all
 (`sc_seat_rule_off_changes_nothing`).
 
 **THE SEAT RULE, THROUGH THE LIVE BOOKING PATH** — `create_booking` seats the court and bills the

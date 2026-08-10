@@ -665,20 +665,29 @@ but nothing knew *who else was on the court*. One membership could therefore cov
 fourth player who never paid — two friends, one membership, half price, indefinitely. The entitlement caps
 (§4) limit *how much* a member books; they cannot express *who it was for*.
 
-> **A court booking has SEATS. Every seat is a covered member (free), a payer (owes a share), or OPEN.
-> The court's price for that duration is split equally among the seats that are NOT covered. An OPEN seat
-> unfilled at the cutoff COLLAPSES onto the booking holder as a charged seat.**
+> **A court booking has SEATS. Every seat is a covered member (free), a payer (owes A SHARE), or OPEN.
+> A SHARE IS A FIXED FRACTION OF THE COURT'S PRICE — `club.policy.seat_share_pct`, default 50%, rounded
+> — not a division of the fee among whoever happens to be playing. An OPEN seat unfilled at the cutoff
+> COLLAPSES onto the booking holder as one charged share.**
 
-The club banks **exactly one court fee** per court hour unless every player is a member. Membership
-decides **who** pays, never **whether** the court is paid for.
+Membership decides **who** pays, never **whether** the court is paid for. A fixed fraction (rather than
+a division) is what makes a quoted price **stable**: it does not move when another player joins, leaves
+or turns out to be a member.
 
-| On court (singles, R150/60min) | Member owes | Other(s) owe |
-|---|---|---|
-| member + member | R0 | R0 |
-| member + non-member | R0 | **R150** (the whole fee) |
-| non-member × 2 | — | **R75 + R75** |
-| member + 2 guests (doubles, 4 seats) | R0 | R75 + R75 |
-| member, spare seat unfilled at the cutoff | **R150** | — |
+At 50% two paying players add up to the court price. With more than two the club collects more than one
+court fee — deliberately. On the seeded list (R90/150/210/280 for 30/60/90/120), 50% rounded up to R10
+gives a share of **R50 / R80 / R110 / R140**.
+
+| On court (60 min, share R80) | Member owes | Other(s) owe | Club takes |
+|---|---|---|---|
+| member + member | R0 | R0 | R0 (membership) |
+| member + non-member | R0 | **R80** | R80 |
+| non-member × 2 | — | **R80 + R80** | R160 |
+| doubles, 1 member + 3 non-members | R0 | R80 × 3 | R240 |
+| member, spare seat unfilled at the cutoff | **R80** | — | R80 |
+
+⚠️ Rounding up costs a pair R10 — two payers settle R160 on a R150 court. 50% of a price ending in 0
+always ends in 0 or 5, so "round up to the nearest ten" is a small, intended price rise.
 
 - **Seats are `diary.booking_party` rows and a game IS a `diary.booking`** — no parallel object, so the
   GiST constraint, the diary grid, reschedule/cancel, the statement, Client-360 and month-end all apply
@@ -692,10 +701,10 @@ decides **who** pays, never **whether** the court is paid for.
 - **Confirmation:** the booking stays `held` while any seat that must PREPAY (resolved method `online`)
   is unpaid, and confirms when the last settles. A seat owed at the desk or on the monthly tab is a real
   debt on the statement and does **not** hold the court — the same rule a single at-court booking follows.
-- **The split LOCKS on the first payment.** After that, shares never move: nobody who has paid can be
-  re-billed, and an un-covered seat added later is **refused (`SPLIT_LOCKED`)**, never priced at zero.
-- **Rounding:** shares re-sum to the court fee **exactly**, remainder to the host (the organiser carries
-  the odd cent). A lost cent is a statement fold that stops reconciling.
+- **The quoted share is FROZEN per game** (`diary.booking.seat_share_minor`). Changing the club's share
+  %, its rounding rule or a court's price never re-prices a game already sold, and a late joiner pays
+  exactly what the people already in it paid.
+- **Rounding** is applied to the share once, after the percentage — never to the court price itself.
 - **Bring a friend:** an invited guest's free week **is the existing 7-day trial** (§4) — granted once,
   never to someone who has ever held a subscription, so a second invite is worthless and the ~880 imported
   Wix members can never be trialed. When it lapses they are PAYG and the seat rule bills them.

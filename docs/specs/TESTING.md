@@ -350,8 +350,10 @@ once, ever, and only to a genuinely new account).
 
 - [ ] **Owner → Setup → Community & games.** Both switches read OFF. Turn on **Community features** only.
       Check the "Right now" band renders (open games · invites out · players findable · seats unpaid).
-- [ ] Read the **Seats per format** card. A doubles game splits the fee **four** ways. If that isn't how
-      you want doubles priced, **stop here** — everything below still works, it just prices differently.
+- [ ] Read **What one player pays**. At the default 50% rounded up to R10 a share is **R50 / R80 / R110 /
+      R140** for 30/60/90/120. Two payers settle **R160** on a R150 court (rounding), and doubles with four
+      non-members pays **four** shares. If that isn't your intended pricing, change the % or rounding here
+      before going on.
 - [ ] Turn on **Charge for every seat**. (In real life: tell the members first.)
 
 **The member journey**
@@ -379,14 +381,14 @@ once, ever, and only to a genuinely new account).
 
 - [ ] **Guest pays.** Expire the trial (Owner → People → the guest → membership) or use a second
       non-member who was never invited. Book **member + that non-member**:
-      → the **non-member owes the whole R150**, the member owes **R0**, and the court reads **HELD**
-      until they pay. The member must NOT be sent to a checkout for someone else's debt.
-- [ ] **Two non-members.** Book with two PAYG players → **R75 + R75**. Pay ONE seat →
+      → the **non-member owes one share (R80 on a 60-min court)**, the member owes **R0**, and the court
+      reads **HELD** until they pay. The member must NOT be sent to a checkout for someone else's debt.
+- [ ] **Two non-members.** Book with two PAYG players → **R80 + R80** (R160 on a R150 court). Pay ONE seat →
       the court is **still held** (this is the trap). Pay the second → it **confirms**.
 - [ ] **The spare seat collapses.** Book a singles game, leave the seat open, then have the owner set
       Setup → Community → *Spare seat closes* to a value that puts the cutoff in the past. Wait for the
       hourly sweep (or run it by hand). → the member gets **"Nobody took the spare seat"** naming the
-      amount, and is billed **R150**. Re-run the sweep: they must **NOT** be billed twice.
+      amount, and is billed **one share (R80)**. Re-run the sweep: they must **NOT** be billed twice.
 - [ ] **Cancel a game with an unpaid guest** → nobody is left owing anything.
 - [ ] **Owner → Games & invitations → Games.** The **owed** column is the "is anyone about to play on a
       court nobody paid for?" read. Confirm it matches what you just created.

@@ -27,33 +27,52 @@ Account for seats and the leak closes; publish the unaccounted seats and you hav
 ## The rule
 
 > **THE SEAT RULE.** A court booking has SEATS. Every seat is held by a covered member (free), a payer
-> (owes a share), or is OPEN. **The court's price for that duration is split equally among the seats
-> that are not covered.** An OPEN seat unfilled at the cutoff **collapses** onto the booking holder as
-> a charged seat.
+> (owes **a share**), or is OPEN. **A SHARE IS A FIXED FRACTION OF THE COURT'S PRICE** — `seat_share_pct`,
+> default **50%**, rounded — **not a division of the fee among however many happen to be playing.** An
+> OPEN seat unfilled at the cutoff **collapses** onto the booking holder as one charged share.
 
-The club banks **exactly one court fee** per court hour unless every player is a member. Membership
-decides *who* pays, never *whether* the court is paid for.
+**Why a fixed fraction and not a split** (owner decision, 2026-08-10). The price a player is quoted has
+to survive somebody else joining, leaving, or turning out to be a member. A divided fee does not: your
+share moves under you. Needing it not to is what forced a lock, a re-price and a refusal into the first
+design — **all three are gone**. It is also one sentence: *"you pay half the court."*
 
-| On court (singles, R150/60min) | Member owes | Other(s) owe |
+At 50%, **two paying players add up to the court price**. With MORE than two payers the club collects
+more than one court fee — deliberately: four people use a court more than two do.
+
+**The club's real prices** (R90 / R150 / R210 / R280 for 30/60/90/120), at 50% rounded up to R10:
+
+| Court | Raw 50% | Share charged |
 |---|---|---|
-| member + member | R0 | R0 |
-| member + non-member | R0 | **R150** |
-| non-member × 2 | — | **R75 + R75** |
-| member + 2 guests (doubles) | R0 | R75 + R75 |
-| member, seat unfilled at cutoff | **R150** | — |
+| 30 min R90 | R45 | **R50** |
+| 60 min R150 | R75 | **R80** |
+| 90 min R210 | R105 | **R110** |
+| 120 min R280 | R140 | **R140** |
 
-**Split lock.** Shares are recomputed on every seat change **while no seat has been paid**. The first
-successful payment sets `diary.booking.split_locked_at`; after that shares never move, so nobody who
-has paid can be re-billed and nobody rides free off someone else's payment. Only *covered* members may
-take the remaining seats after a lock (they owe nothing, so no split changes).
+| On court (60 min, share R80) | Member owes | Other(s) owe | Club takes |
+|---|---|---|---|
+| member + member | R0 | R0 | R0 (membership) |
+| member + non-member | R0 | **R80** | R80 |
+| non-member × 2 | — | **R80 + R80** | R160 |
+| doubles, 1 member + 3 non-members | R0 | R80 × 3 | R240 |
+| member, spare seat unfilled at cutoff | **R80** | — | R80 |
+
+⚠️ **Rounding up costs a pair R10.** Two payers settle R160 on a R150 court, not R150 — because 50% of a
+price ending in 0 always ends in 0 or 5, so "round up to the nearest ten" is a small, intended price
+rise wherever it lands on a 5. Only the 120-min share (R140) is already exact.
+
+**The quote is frozen per game.** The first time a game's seats are priced, the share is written to
+`diary.booking.seat_share_minor`. A later change to `seat_share_pct`, to the rounding rule, or to the
+court's own price therefore **cannot re-price a game that is already sold** — and a LATE joiner pays
+exactly what the people already in it paid. That is why there is no longer anything to refuse.
 
 **Confirmation.** The booking stays `held` while any seat whose resolved method is `online` is unpaid,
 and confirms when the last settles — the existing single-order online-hold widened to N orders. A seat
 settling at the desk or on the tab is a real debt on the statement and does **not** hold the court.
 
-**Rounding.** `split_minor` divides in integer minor units and gives the remainder to the first seat,
-so shares re-sum to the court fee **exactly**. A lost cent is a statement fold that stops
-reconciling, which is why it is the first scenario owed (see Verification).
+**Configuration** (Admin → Setup → Community & games): `seat_share_pct` (0–100, default 50) ·
+`seat_rounding` (`none` / `up_5` / `up_10` / `nearest_5` / `nearest_10`, default `up_10`). The screen
+shows the resulting **rands** for each of the club's own court durations — "50%" is not an amount, and
+an owner should not have to do percentages in their head to discover they just set R110.
 
 ---
 
@@ -64,10 +83,10 @@ reconciling, which is why it is the first scenario owed (see Verification).
 | Function | Does |
 |---|---|
 | `policy(session, club_id)` | the club's switches; no policy row → all OFF (a missing config must never start charging members) |
-| `split_minor(total, n)` | the exact split; remainder to the first seat |
+| `share_minor(court_price, pct, rounding)` | **what ONE player pays** — a fixed fraction of the court, rounded. No seat count in the call, by design |
 | `seat_plan(session, …)` | **pure read** — resolves coverage + shares for a booking without writing, so the booking flow, the sweep and the UI all price a game identically (`shown == charged`) |
-| `apply_seat_orders(…)` | one `billing."order"` per un-covered seat; idempotent; re-prices an unpaid seat when the split moves |
-| `lock_split(…)` | freezes the split on first payment; idempotent against a replayed webhook |
+| `apply_seat_orders(…)` | one `billing."order"` per un-covered seat; idempotent; freezes the game's quoted share on first run |
+| `lock_split(…)` | stamps `split_locked_at` on first payment (an audit marker + it stops coverage being re-resolved after money moves); the SHARE is frozen separately, on the booking, at first pricing |
 | `all_prepaid_seats_settled(…)` | the gate the booking's confirmation hangs on |
 | `collapse_open_seats(…)` | at the cutoff, an unfilled seat becomes the holder's to pay for |
 
@@ -210,7 +229,7 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
 read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
 the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
-(`courtflow-dev`) at booking 552 / billing 702 / statement 64, with `python -m db` twice a clean
+(`courtflow-dev`) at booking 555 / billing 702 / statement 64, with `python -m db` twice a clean
 no-op including `community.schema`.
 
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart
@@ -218,9 +237,9 @@ The baseline is quoted in ONE place on purpose — repeating the numbers here is
 
 ### Written and green (`test_booking_scenarios`, +69 checks)
 
-*The money core, exercised directly:* `sc_seat_split_covers_the_court_exactly` ·
+*The money core, exercised directly:* `sc_a_seat_share_is_a_fixed_fraction_of_the_court` ·
 `sc_member_plus_guest_bills_the_guest_in_full` · `sc_two_payg_split_and_both_must_settle` ·
-`sc_open_seat_collapses_onto_the_holder_at_cutoff` · `sc_split_locks_on_first_payment` ·
+`sc_open_seat_collapses_onto_the_holder_at_cutoff` · `sc_the_quoted_share_is_frozen_for_the_life_of_the_game` ·
 `sc_seat_rule_off_changes_nothing`.
 
 *Through the live booking path:* `sc_seat_rule_bills_through_create_booking` ·

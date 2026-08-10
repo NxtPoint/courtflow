@@ -1171,10 +1171,10 @@
     var note = st.playFormat === "practice"
       ? "You'll be charged for the court."
       : (open > 0
-        ? "Members play on their membership. Anyone who isn't a member shares the court fee. "
-          + "If the spare seat isn't taken by a few hours before you play, it's added to your bill."
-        : "Members play on their membership. Anyone who isn't a member is billed their share "
-          + "separately — the court is confirmed once everyone has paid.");
+        ? "Members play on their membership. Anyone who isn't a member pays a share of the court. "
+          + "If the spare seat isn't taken by a few hours before you play, that share is added to your bill."
+        : "Members play on their membership. Anyone who isn't a member pays their own share — "
+          + "the court is confirmed once everyone has paid.");
     sec.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:8px", text: note }));
     return sec;
   }
