@@ -443,12 +443,33 @@ the booker's.
   → collapse, each game in its own SAVEPOINT, fails the job loudly. Not a `render.yaml` cron.
 - **Frontend:** `Widgets.Game` + `Widgets.GameList` (the ONE render); client `#/play` (feed, filtered by
   intent + **around my level** by default), `#/play/profile` (the 5-question level quiz, preferences and
-  the **opt-in**), `#/play/players`, `#/game/<id>`, a Home card; the booking flow's **"Who's playing?"**
+  the **opt-in**), `#/play/players`, `#/game/<id>`; the booking flow's **"Who's playing?"**
   step sets seats AND `play_intent`; `join.html` on the never-sleeps web. Inviting reuses
   `CRMUI.addLessonPlayerModal`; paying a seat reuses `Pay.startYocoCheckout` — **no second payment path**.
-- **`play_intent` (social/practice/competitive) is a SEPARATE axis from `play_format`** — the latter is a
-  MONEY field (it sets the seat count), so conflating them would mean "I just want a relaxed hit" could
-  only be said by changing how many people share the fee.
+- **The client Home is TWO BLOCKS, and they are two MODES, not two menus** — **Book a session**
+  (court/lesson/class/ball machine: *synchronous*, done in ninety seconds, but every option depends on a
+  friend, a coach on shift or a scheduled class) and **Need someone to play with?** (*asynchronous*,
+  depends only on the members). FIND is the only one with no staffing dependency, so it is the only one
+  that can fill a Sunday. BOOK leads while this is tested; the order is ONE CONSTANT
+  (`PLAY_BLOCK_FIRST` in `client.js`). **THE SEAM** = an **"Open to the club"** button on a member's own
+  upcoming court booking, so a friend dropping out on Thursday doesn't strand a court booked on Monday.
+- **`play_intent` is a SEPARATE axis from `play_format`** — the latter is a MONEY field (it sets the seat
+  count), so conflating them would mean "I just want a relaxed hit" could only be said by changing how
+  many people share the fee. The ladder is **hit → friendly match → competitive** (stored
+  `practice`/`social`/`competitive`), **REQUIRED only when the game is OPEN** (a named friend needs no
+  forced tap; ~1,100 strangers do), enforced in `booking.js` and deliberately NOT server-side — it is
+  advisory metadata, not money. **ONE vocabulary: `window.CFIntent` in `crm_ui.js`** (not `game.js` —
+  `booking.js` asks in all three SPAs, `game.js` loads only in the client one); `.word()` returns `""`
+  for an unset intent so it reads as ABSENT, never as "social".
+- **THREE SURFACES HAVE ENGINE BUT NO UI** (audited 2026-08-10): `result/confirm`, `play-again`,
+  `favourites`. Consequence: a reported score can never be confirmed, and **10 of the matcher's 100
+  points are permanently zero** (`matching.py` history term reads two tables nothing writes). Not the
+  silent-zero bug — the term is neutral across candidates — but a real limit.
+  [COMMUNITY-ENGINE.md](docs/specs/COMMUNITY-ENGINE.md).
+- **CARRIED OVER — no WRITE path has been exercised by a real second person.** Join, leave, chat, result
+  entry, the level-quiz save, invite acceptance and `join.html` are unverified end to end. The harnesses
+  call Python directly (never HTTP, never DOM), which is why five of this lane's bugs were findable ONLY
+  in a browser. **Green gates are not a claim about these paths.**
 - **Admin:** Setup → **Community & games** (the ONLY place the switches can be flipped) and **Games &
   invitations**. See "Still needs Tomo" for what must be configured before the money switch.
 - **Privacy:** no community read returns an email or a phone — the reason match chat exists. Discovery is

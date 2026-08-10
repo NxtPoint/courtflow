@@ -46,6 +46,23 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
       (`sc_seat_rule_off_changes_nothing`). Existing seat debts are real orders and stay — void them if
       you don't want them. Detail: [FEATURE-FLAGS.md](FEATURE-FLAGS.md) §A-bis · walkthrough:
       [TESTING.md](TESTING.md) §5b · design: [COMMUNITY-ENGINE.md](COMMUNITY-ENGINE.md).
+- [ ] ⭐ **COMMUNITY — prove the MONEY before switching the money on (carried over, 2026-08-10).** The
+      social half is live and being tested with real members; `seat_rule_enforced` is still OFF, and the
+      seat rule has been proved only by the harness, which never speaks HTTP and never renders DOM. The
+      order that matters: (a) two members join a game and **nobody is billed**; (b) a non-member joins
+      and **one share** appears as a real order on the client statement; (c) two PAYG seats — the court
+      stays `held` until BOTH settle; (d) an unfilled seat **collapses onto the holder** at the cutoff;
+      (e) a refund **restores the split**. Each must reconcile in all three reads it now touches — the
+      client statement, the Client-360 fold (`Billed − Discount − Written-off = Invoiced = Paid +
+      Outstanding`) and Money → Club earnings. **Two money scenarios are still owed** (a refund restoring
+      the split; a collapsed seat on a card-only court) and should be written BEFORE the switch.
+- [ ] **COMMUNITY — no WRITE path has been exercised by a real second person (carried over).** Join,
+      leave, chat, result entry, the level-quiz save, invite acceptance and `join.html`. Five of this
+      lane's bugs were findable only in a browser, so green gates say nothing here.
+- [ ] **COMMUNITY — three surfaces have an engine and no UI:** `result/confirm`, `play-again`,
+      `favourites`. A reported score can never be confirmed, and 10 of the matcher's 100 points are
+      permanently zero because its history term reads two tables nothing writes. Either wire the three
+      small screens or delete the surfaces — half-built is the worst of the three states.
 - [ ] **Google Ads scheduled CSV upload** — set `GOOGLE_ADS_FEED_USER`/`PASS`, then schedule the daily
       upload (Uploads → Schedules) pointed at `/feeds/google-ads/offline-conversions.csv`. The recorder half
       is already live. (`GOOGLE-ADS-PLAN.md`.)

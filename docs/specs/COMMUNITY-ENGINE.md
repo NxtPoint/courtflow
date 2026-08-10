@@ -219,8 +219,36 @@ tennis they wanted, or become findable **at all**. Now wired:
   "no games here" rather than "tell us your level", which is the wrong lesson on a first visit.
 - **`#/play/players` — Players for you.** The deterministic suggestions, with an empty state that sends
   you to set up your own profile rather than shrugging.
-- **A Home card**, above *Your sessions* on purpose — "I want to play and have nobody to play with" is
-  felt before you look at what you've already booked. Rendered only where `community_enabled`.
+- **A Home card**, rendered only where `community_enabled`.
+
+### The Home is TWO BLOCKS, because they are two MODES (2026-08-10, Tomo's cut)
+
+The first attempt nested "find a match" inside the booking menu as a fourth product. Tomo split it
+differently and better — not by product, but by **whether the member already has someone to play
+with**:
+
+| Block | Mode | Depends on |
+|---|---|---|
+| **Book a session** — court · lesson · class · ball machine | **Synchronous.** Pick a time, pay, done in ninety seconds | somebody ELSE being available: a friend who is free, a coach on shift, a class that is scheduled |
+| **Need someone to play with?** — the level quiz, or your level + the marketplace | **Asynchronous.** Post and wait, or browse and join; it may resolve tomorrow | nothing but the members |
+
+Mixing a "wait and see" action into a menu of "done in a minute" actions is what made the page feel
+muddled, and a nested version would have taxed the ~1,100 repeat bookers who already know what they
+want. **The commercial argument is the sharpest thing said about this feature:** BOOK cannot fill a
+Sunday, because there is no coach and no class to sell — but the courts are empty and the members are
+there. FIND is the only one of the two with no staffing dependency, so it is the only one that can put
+people on court at the times nothing else runs.
+
+**BOOK leads while this is being tested**, so nobody who already knows what they want is disturbed.
+The order is **ONE CONSTANT** — `PLAY_BLOCK_FIRST` in `client.js` — because Tomo intends to lead with
+FIND once it has earned the position. The block is headed with the need in the member's own words
+("Need someone to play with?"), never a product name.
+
+**THE SEAM between the blocks** — an **"Open to the club"** button on a member's own upcoming court
+bookings. Someone books a court with a friend on Monday and the friend drops out on Thursday; without
+this they hold a court they cannot use and the club gets an email. `set_visibility` already existed
+server-side — all that was missing was somewhere to press it. This is what stops choosing the BOOK path
+from becoming a support message.
 
 ### `play_intent` — what kind of tennis (NEW COLUMN)
 
@@ -235,6 +263,37 @@ the fastest way to stop using a feature like this. Set in the booking flow's "Wh
 shown on the game card and the game header, and filterable in the feed.
 Guarded by `sc_a_game_says_what_kind_of_tennis_it_is` and
 `sc_the_feed_defaults_to_games_around_my_level`.
+
+**The wording was wrong until 2026-08-10, and the axis is Tomo's** — *"some people want to go out and
+just hit, and not play a match. some want to play a match and never hit."* The original three options
+were `Social hit` / `Practice` / `Competitive`, of which the first TWO read as hitting: the only option
+that read as a **match** was "Competitive", so a member who wanted a relaxed game with a score had
+nothing honest to pick. The ladder now runs **hit → friendly match → competitive match**, with those
+two poles at the ends, a real middle, and every rung stating whether a score is kept — the single fact
+that decides whether two strangers had a good afternoon:
+
+| Stored key | Label | Hint |
+|---|---|---|
+| `practice` | **Just a hit** | Rally and drills, no score |
+| `social` | **A friendly match** | We play points, nothing serious |
+| `competitive` | **Competitive** | Proper sets, keep score |
+
+**Stored keys are unchanged** — this renamed only what a human reads.
+
+**REQUIRED, but only when the game is OPEN.** Booking with a named friend, the two of you already
+settled it between yourselves and a forced tap is pure friction; posting to ~1,100 strangers, a blank
+is the mismatch the field exists to prevent. Tomo's own first game was posted with no intent at all,
+which is how the gap was found. Enforced in `booking.js` (`needsIntent()`), **deliberately NOT
+server-side**: `play_intent` is advisory metadata, not money, and the raise-don't-guard rule belongs on
+the money paths.
+
+**ONE vocabulary: `window.CFIntent`** (`frontend/js/crm_ui.js`). It was copied into four files and had
+already drifted. It lives in `crm_ui.js` and **not** in `widgets/game.js` because `booking.js` asks the
+question in all THREE SPAs while `game.js` loads only in the client one. `CFIntent.word()` returns `""`
+for an unset intent so it reads as **absent, never as "social"** — a game posted before this change
+must not start claiming something its host never said. `CFIntent.format()` owns the OTHER axis for the
+same reason: the admin games list printed `play_format` raw, so an owner read *"practice"*, which on
+that axis means **on their own** (a seat count of one), not a hit with somebody.
 
 ### DARK MEANS DARK — one gate, not per-route
 
@@ -259,11 +318,35 @@ invented `.cf-chip-ok` / `.cf-chip-warn` when the design system already spelled 
 to stop, and here it was also *functional*: without the classes, "Paid" and "Awaiting payment" rendered
 identically.
 
+## Engine present, NO UI — three surfaces nothing can reach (audited 2026-08-10)
+
+These endpoints exist, are correct, and have **no caller anywhere in the frontend**. They are recorded
+here rather than deleted because each is one small screen away from working — but until that screen
+exists they must not be described as live, and this is the rot `audit_docs` structurally cannot see
+(it checks that a route is documented, not that anything invokes it).
+
+| Surface | Engine | Consequence today |
+|---|---|---|
+| `POST /games/<id>/result/confirm` | `results.confirm_result` | A reported score can never be confirmed — `community.match_result.confirmed_by_user_id` is always NULL |
+| `POST /games/<id>/play-again` | `results.play_again` | `community.play_again` is never written |
+| `GET`/`POST /favourites` | `results.add_favourite` | `community.favourite` is never written — "My Tennis Circle" has no UI at all |
+
+**The consequence worth knowing:** `matching.py:110` computes its **history** term from those last two
+tables, so **10 of the matcher's 100 points are permanently zero.** This is *not* the silent-zero bug
+from [GOTCHAS](GOTCHAS.md#reads-that-lie) — the term is neutral across every candidate, so it cannot
+skew a ranking, only fail to sharpen one. It is a real limit on match quality and nothing else.
+
 ## Still to build
 
 The two owed money scenarios below (a refund restoring the split; a collapsed seat on a card-only
 court). The coach and admin apps do not yet mount `Widgets.Game` — the widget is config-ready for them,
-nothing calls it. Phase 2 as listed above.
+nothing calls it. The three unreachable surfaces above. Phase 2 as listed above.
+
+**Not yet exercised by a real second person.** Every WRITE path is unverified end to end: join, leave,
+chat, result entry, the level quiz save, invite acceptance and `join.html`. The scenario harnesses call
+Python directly — they never speak HTTP and never render DOM — so five of this lane's bugs (CORS
+preflight, a detached node, `card()` argument order, the staff bounce, invented CSS classes) were
+findable **only** in a browser. Green gates are not a claim about these paths.
 
 **Done since:** the `booking.js` **"Who's playing?"** step — format (singles / doubles / on my own),
 named players, and a "let another member take the spare seat" tick. It appears ONLY where the club has

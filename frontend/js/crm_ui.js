@@ -30,8 +30,14 @@
     { key: "social",      label: "A friendly match", hint: "We play points, nothing serious" },
     { key: "competitive", label: "Competitive",      hint: "Proper sets, keep score" },
   ];
+  // The OTHER axis, in the same module for the same reason: the admin games list printed
+  // play_format raw, so an owner read "practice" — which on that axis means ON MY OWN, a seat count
+  // of one, not a hit with somebody. Two axes, one word, and the raw value was the misleading one.
+  var FORMAT_WORD = { singles: "Singles", doubles: "Doubles", practice: "On their own" };
+
   window.CFIntent = {
     OPTIONS: INTENT_OPTIONS,
+    format: function (key) { return FORMAT_WORD[key] || key || ""; },
     // The short form for a chip or a one-line summary. Unknown/NULL returns "" so callers can
     // filter(Boolean) — an intent that was never set must read as absent, never as "social".
     word: function (key) {

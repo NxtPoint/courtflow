@@ -204,7 +204,7 @@ def admin_games(session, *, club_id, days=14, limit=100):
     def _read():
         rows = session.execute(
             text("""
-                SELECT b.id, b.starts_at, b.ends_at, b.play_format, b.seats, b.visibility,
+                SELECT b.id, b.starts_at, b.ends_at, b.play_format, b.play_intent, b.seats, b.visibility,
                        b.status, b.open_until, b.split_locked_at,
                        r.name AS court_name, u.first_name AS host_name, u.surname AS host_surname,
                        (SELECT count(*) FROM diary.booking_party bp
@@ -234,7 +234,7 @@ def admin_games(session, *, club_id, days=14, limit=100):
                 "starts_at": r["starts_at"].isoformat() if r["starts_at"] else None,
                 "ends_at": r["ends_at"].isoformat() if r["ends_at"] else None,
                 "court_name": r["court_name"],
-                "play_format": r["play_format"],
+                "play_format": r["play_format"], "play_intent": r["play_intent"],
                 "visibility": r["visibility"],
                 "status": r["status"],
                 "seats_total": total,
@@ -305,7 +305,7 @@ def my_games(session, *, club_id, user_id, limit=20):
     def _read():
         rows = session.execute(
             text("""
-                SELECT b.id, b.starts_at, b.ends_at, b.play_format, b.status, b.visibility,
+                SELECT b.id, b.starts_at, b.ends_at, b.play_format, b.play_intent, b.status, b.visibility,
                        r.name AS court_name,
                        bp.seat_status, bp.share_minor, bp.covered,
                        o.status AS order_status
@@ -325,6 +325,7 @@ def my_games(session, *, club_id, user_id, limit=20):
                  "starts_at": r["starts_at"].isoformat() if r["starts_at"] else None,
                  "ends_at": r["ends_at"].isoformat() if r["ends_at"] else None,
                  "court_name": r["court_name"], "play_format": r["play_format"],
+                 "play_intent": r["play_intent"],
                  "status": r["status"], "visibility": r["visibility"],
                  "seat_status": r["seat_status"],
                  "covered": r["covered"],

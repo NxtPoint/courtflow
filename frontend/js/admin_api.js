@@ -2523,11 +2523,13 @@
           try { when = UI.fmtDate(g.starts_at) + " " + UI.fmtTime(g.starts_at); } catch (e) {}
           var bits = [g.court_name, g.host_name, g.seats_taken + "/" + g.seats_total + " seats"];
           if (g.open_seats > 0) bits.push(g.open_seats + " open");
+          if (window.CFIntent.word(g.play_intent)) bits.push(window.CFIntent.word(g.play_intent));
           // The number an owner actually scans for: is somebody about to play on an unpaid court?
           if (g.owed_minor > 0) bits.push("owed " + UI.money(g.owed_minor, "ZAR"));
           var row = el("div", { class: "cf-item cf-item-tap" }, [
             el("div", { class: "cf-item-main" }, [
-              el("div", { class: "cf-item-t", text: when + " · " + (g.play_format || "singles") }),
+              el("div", { class: "cf-item-t",
+                text: when + " · " + window.CFIntent.format(g.play_format || "singles") }),
               el("div", { class: "cf-item-s", text: bits.filter(Boolean).join(" · ") }),
             ]),
             el("span", { class: "cf-chip" + (g.owed_minor > 0 ? " held" : ""), text: g.status }),
