@@ -239,26 +239,8 @@
     // FIND A GAME — above "Your sessions" on purpose: the problem it solves ("I want to play and
     // have nobody to play with") is felt BEFORE you look at what you've already booked. Rendered only
     // where the club has switched the community on, so a club that hasn't sees nothing at all.
+    // Filled by loadPlayCard() AFTER set(wrap) — see the note there. Empty until then.
     wrap.appendChild(el("div", { id: "home-play" }));
-    (async function () {
-      var host = document.getElementById("home-play");
-      if (!host) return;
-      var cfg = null;
-      try { cfg = await window.TFAuth.apiJSON("/api/community/config"); } catch (e) { return; }
-      if (!cfg || !cfg.community_enabled || !host.isConnected) return;
-      var body = el("div", {}, [
-        el("p", { class: "cf-muted", style: "margin:0 0 10px",
-          text: "Post a game and let another member take the spare seat — or take someone else's." }),
-        el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap" }, [
-          el("button", { class: "cf-btn cf-btn-primary", text: "Find a game",
-            onclick: function () { go("#/play"); } }),
-          el("button", { class: "cf-btn", text: "Players for you",
-            onclick: function () { go("#/play/players"); } }),
-        ]),
-      ]);
-      UI.clear(host);
-      host.appendChild(card("Want to play?", body));
-    })();
 
     // Your sessions (Upcoming / Past) — what's next, right after choosing a service.
     wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your sessions" }), el("div", { id: "home-sessions" })]));
@@ -277,6 +259,31 @@
     paintSessions();
     loadHomeSummary(HBMONTH);
     loadWallets(cur);
+    loadPlayCard();
+  }
+
+  // FIND A GAME on Home. Called AFTER set(wrap), like every other async section here — that ordering
+  // is not a style choice, it is the whole reason this works: renderHome BUILDS `wrap` detached and
+  // only attaches it at set(wrap), so a document.getElementById() before that point finds nothing.
+  // The first cut looked the host up inline at the point the placeholder was appended, got null, and
+  // returned — so the card never rendered for anyone, whatever the club had switched on. A parse gate
+  // cannot see that; only opening the page can.
+  async function loadPlayCard() {
+    var host = document.getElementById("home-play"); if (!host) return;
+    var cfg = null;
+    try { cfg = await window.TFAuth.apiJSON("/api/community/config"); } catch (e) { return; }
+    if (!cfg || !cfg.community_enabled || !host.isConnected) return;
+    UI.clear(host);
+    host.appendChild(card("Want to play?", el("div", {}, [
+      el("p", { class: "cf-muted", style: "margin:0 0 10px",
+        text: "Post a game and let another member take the spare seat — or take someone else's." }),
+      el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap" }, [
+        el("button", { class: "cf-btn cf-btn-primary", text: "Find a game",
+          onclick: function () { go("#/play"); } }),
+        el("button", { class: "cf-btn", text: "Players for you",
+          onclick: function () { go("#/play/players"); } }),
+      ]),
+    ])));
   }
 
   // The month-navigable Billing + Activity summary (re-fetches on ‹ ›). Reuses HBMONTH.
