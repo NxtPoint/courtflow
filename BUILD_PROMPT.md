@@ -32,7 +32,7 @@ THERE IS NO BUILD PHASE AND NO PYTEST. The gates are:
      scenarios/scripts from SOURCE against the prose. Currently 0 misses; keep it there.
      RUN IT AT THE END OF ANY SESSION THAT ADDED A SURFACE.
   5. python -m scripts.test_all   — the JS parse gate, then three rollback-only scenario harnesses
-     Current green baseline: booking 521 / billing 693 / statement 64
+     Current green baseline: booking 521 / billing 696 / statement 64
 
   (Same numbering as CLAUDE.md's "Gates" section — they must not drift apart.)
 

@@ -838,22 +838,39 @@
   }
   // Record a club↔coach settlement (re-homed onto the coach P&L after the Settlement tab was retired).
   // A recorded payout nets the coach_ledger so the running balance reflects money actually moved.
+  // A PAYOUT MUST SAY WHICH MONTH IT SETTLES, and the button was pressed from a month's card.
+  // Without a period the ledger falls back to the day the cash moved, so July's commission paid on
+  // 2 August credits AUGUST: July keeps showing the full amount still due, the owner pays it again,
+  // and August carries a credit belonging to another month. Defaulting to the month on screen is
+  // the whole point — the figure being settled is the one printed directly above the button.
   function recordPayoutModal(pnl, then) {
     var cur = pnl.currency || clubCur();
     var bal = pnl.ledger_balance_minor || 0;
+    var due = (pnl.settlement && pnl.settlement.due_now_minor) || 0;
+    var period = pnl.month || "";
     var m = modal("Record payout · " + (pnl.name || "Coach"));
     m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 12px;font-size:.86rem", text:
       "Net balance: " + money(Math.abs(bal), cur) + (bal > 0 ? " owed to the coach" : (bal < 0 ? " owed by the coach" : " — settled")) +
-      ". Recording a payout posts a ledger entry so the balance reflects money that actually moved." }));
+      " across every month. Recording a payout posts a ledger entry so the balance reflects money that actually moved." }));
     var dir = el("select", { class: "cf-input" }, [["club_to_coach", "Pay the coach"], ["coach_to_club", "Collect from the coach"], ["offset", "Offset / adjustment"]].map(function (o) {
       return el("option", { value: o[0], text: o[1], selected: o[0] === (bal >= 0 ? "club_to_coach" : "coach_to_club") });
     }));
-    var amt = el("input", { class: "cf-input", type: "number", step: "0.01", value: (Math.abs(bal) / 100).toFixed(2) });
+    // Default the AMOUNT to the month's due-now, not the all-time balance: this button sits on the
+    // settlement block, which exists to compute exactly what to pay for the month being viewed.
+    var amt = el("input", { class: "cf-input", type: "number", step: "0.01",
+                            value: (Math.abs(due || bal) / 100).toFixed(2) });
+    var per = el("input", { class: "cf-input", type: "month", value: period });
     var meth = el("select", { class: "cf-input" }, [["eft", "EFT"], ["cash", "Cash"], ["offset", "Offset"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); }));
     var ref = el("input", { class: "cf-input", placeholder: "Bank / reference (optional)" });
     var note = el("input", { class: "cf-input", placeholder: "Note (optional)" });
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Direction" }), dir]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Amount" }), amt]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [
+      el("label", { text: "Settles which month" }), per,
+      el("div", { class: "cf-muted cf-tiny", style: "margin-top:4px", text:
+        "The month this money is FOR — not the day it moved. July's commission paid in August still "
+        + "settles July." }),
+    ]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Method" }), meth]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Reference" }), ref]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Note" }), note]));
@@ -862,7 +879,7 @@
       el("button", { class: "cf-btn cf-btn-primary", text: "Record payout", onclick: function () {
         var f = parseFloat(amt.value);
         if (isNaN(f) || f <= 0) { UI.toast("Enter a valid amount.", "warn"); return; }
-        window.AdminAPI.recordCoachPayout({ coach_user_id: pnl.coach_user_id, amount_minor: Math.round(f * 100), direction: dir.value, method: meth.value, reference: (ref.value.trim() || null), note: (note.value.trim() || null) })
+        window.AdminAPI.recordCoachPayout({ coach_user_id: pnl.coach_user_id, amount_minor: Math.round(f * 100), direction: dir.value, method: meth.value, reference: (ref.value.trim() || null), note: (note.value.trim() || null), period_label: (per.value || "").trim() || null })
           .then(function () { UI.toast("Payout recorded.", "info"); m.close(); (then || function () {})(); }, function (e) { UI.toast(UI.errMsg(e), "error"); });
       } }),
     ]));

@@ -4673,6 +4673,23 @@ def sc_coach_earnings_carries_the_settlement(s, fx):
     check("an UNLABELLED payout still lands by its date",
           again["ledger"]["payouts_minor"] == -10000, str(again["ledger"]["payouts_minor"]))
 
+    # AND THE SCREEN THAT RECORDS ONE MUST SUPPLY THE LABEL. Everything above passed for weeks while
+    # the engine was never given a period: the Record-payout modal didn't ask, so every real payout
+    # was unlabelled and fell back to the day the cash moved. An owner paid a coach R9,607 against
+    # July's "DUE TO THE COACH NOW", the credit landed in August, and July still read R9,607 due —
+    # one more click from paying it twice. A rule the engine honours but no caller exercises is not
+    # implemented, so assert the WRITE PATH here, next to the behaviour it feeds.
+    import pathlib
+    js = (pathlib.Path(__file__).resolve().parents[1]
+          / "frontend" / "js" / "admin_app.js").read_text(encoding="utf-8")
+    modal_src = js[js.index("function recordPayoutModal"):]
+    modal_src = modal_src[:modal_src.index("\n  function ", 1)]   # to the next top-level function
+    check("the Record-payout modal sends a period_label", "period_label:" in modal_src)
+    check("...defaulted to the MONTH being viewed, not today",
+          "pnl.month" in modal_src, "the month on the card must prefill it")
+    check("...and offers the month's due-now, not the all-time balance",
+          "due_now_minor" in modal_src, "prefilling the all-time balance over-pays a month")
+
 
 def sc_one_active_price_per_duration(s, fx):
     """A service may not carry two active prices for the same duration.

@@ -28,7 +28,7 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   real newlines inside a JS string: `admin_app.js` stopped parsing entirely and `/admin` hung on
   "Loading…" for 11 hours, reading as "cannot log in". Fails CLOSED if `node` is missing.
 - `test_booking_scenarios.py` · `test_billing_scenarios.py` · `test_statement_reconciliation.py`
-  — rollback-only scratch-DB harnesses (**booking 521 / billing 693 / statement 64**).
+  — rollback-only scratch-DB harnesses (**booking 521 / billing 696 / statement 64**).
 
 ## Load-bearing at runtime (KEEP — do not touch)
 - `seed_nextpoint.py` — re-seeds club #1 on every prod boot (`SEED_NEXTPOINT=1`, imported by `app.py`). Idempotent.
@@ -108,6 +108,15 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   via-a-wrapper / no-payment-row (an off-platform arrears collection) and prints anything left as
   UNEXPLAINED. `--coach <name|email> [--month YYYY-MM]`. Resolves the coach FIRST and uses THEIR
   club, never "the first club".
+- `tag_coach_payout.py` — **says which MONTH a recorded payout settles.** A payout is credited to
+  the month it is FOR (`billing.coach_payout.period_label`), not the day the cash moved; an
+  UNLABELLED one falls back to `occurred_at`, so July's commission paid on 2 August credits AUGUST
+  and July keeps showing the full amount still due — one click from paying a coach twice. The
+  Record-payout modal now asks for the month and prefills the card on screen; this is for the
+  payouts recorded before it did. Lists a coach's payouts flagging the unlabelled ones, then
+  `--id <payout> --period YYYY-MM [--commit]`. **Dry-run by default**; changes no amount and posts
+  no ledger entry, so `--period ""` puts it back exactly. Resolves the coach FIRST and uses THEIR
+  club, and scopes the UPDATE by club+coach as well as id.
 - `audit_zero_prices.py` — READ-ONLY: **prices that silently bill NOTHING.** `pricing.price_for`
   resolves the exact duration then tie-breaks on `amount_minor ASC`, so two active rows for one
   product+duration make the CHEAPER one authoritative, in silence — production ran a coach on
