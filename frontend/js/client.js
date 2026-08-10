@@ -229,7 +229,7 @@
 
     // BOOK — services FIRST so a member can pick one straight away (Court / Lesson / Class,
     // drawn glyphs, no emoji).
-    var qb = card([el("h2", { style: "margin:0 0 10px", text: "What would you like to do?" })]);
+    var qb = card([el("h2", { style: "margin:0 0 10px", text: "Book a session" })]);
     var tiles = el("div", { class: "cf-qb" });
     // ONE tile shape for every service: [icon] [name / grey sub-line], left-aligned. Court/Lesson/Class
     // and the featured equipment (ball machine) all read identically.
@@ -242,23 +242,6 @@
         ].filter(Boolean)),
       ]);
     }
-    // FIND A MATCH IS A PEER, NOT A FOOTNOTE. It sat in its own card below the booking menu, described
-    // in prose — so the four things a member can do read as three things plus an afterthought. It goes
-    // FIRST because it answers the question the others cannot: "I want to play and have nobody to play
-    // with." Only shown where the club offers it.
-    if (DATA.community && DATA.community.community_enabled) {
-      var lvl = DATA.player && DATA.player.level_num;
-      // The TILE is a destination; the BLOCK below is the pitch. The first cut had both saying
-      // "answer 5 quick questions", stacked one above the other — the same sentence twice, which
-      // reads as a mistake rather than as emphasis.
-      var hero = bookTile("match", "Find a match",
-        lvl ? ("Players at your level · " + levelLabel(lvl))
-            : "Open games and players at the club",
-        function () { go("#/play"); });
-      hero.className = "cf-qb-btn cf-qb-hero";
-      hero.appendChild(el("span", { class: "cf-qb-hero-cue", text: "Browse ›" }));
-      tiles.appendChild(hero);
-    }
     var TILE_SUB = { court: "Book a court", lesson: "With a coach", class: "Group session" };
     ["court", "lesson", "class"].forEach(function (k) {
       tiles.appendChild(bookTile(k, TYPE_LABEL[k], TILE_SUB[k], function () { go("#/book/" + k); }));
@@ -268,13 +251,27 @@
       var sub = "On a court" + (eq.amount_minor != null ? " · from " + UI.money(eq.amount_minor, cur) : "");
       tiles.appendChild(bookTile("court", eq.name, sub, function () { PENDING_EQUIP = eq.id; go("#/book/court"); }));
     });
-    qb.appendChild(tiles); wrap.appendChild(qb);
+    qb.appendChild(tiles);
 
-    // FIND A GAME — above "Your sessions" on purpose: the problem it solves ("I want to play and
-    // have nobody to play with") is felt BEFORE you look at what you've already booked. Rendered only
-    // where the club has switched the community on, so a club that hasn't sees nothing at all.
-    // Filled by loadPlayCard() AFTER set(wrap) — see the note there. Empty until then.
-    wrap.appendChild(el("div", { id: "home-play" }));
+    // ---- TWO BLOCKS, and the order is ONE CONSTANT ----------------------------------------------
+    //
+    // They are not two menus. They are two MODES, which is why merging them muddled the page:
+    //
+    //   BOOK (this block) — SYNCHRONOUS. Pick a time, pay, done in ninety seconds. But every option in
+    //                       it depends on somebody ELSE being available: a friend who is free, a coach
+    //                       on shift, a class that is scheduled.
+    //   FIND (home-play)  — ASYNCHRONOUS. Post and wait, or browse and join; it may resolve tomorrow.
+    //                       It depends on nothing but the members who want to play — which is exactly
+    //                       why it is the only one of the two that can fill a Sunday, when there is no
+    //                       coach, no class, and the courts sit empty anyway.
+    //
+    // BOOK leads while the feature is being tested, so the members who already know what they want are
+    // undisturbed. Flip this one constant to lead with FIND once it has earned the position — the
+    // owner's call, and deliberately a single line because it WILL be revisited.
+    var PLAY_BLOCK_FIRST = false;
+    var playHost = el("div", { id: "home-play" });   // filled by loadPlayCard() AFTER set(wrap)
+    if (PLAY_BLOCK_FIRST) { wrap.appendChild(playHost); wrap.appendChild(qb); }
+    else { wrap.appendChild(qb); wrap.appendChild(playHost); }
 
     // Your sessions (Upcoming / Past) — what's next, right after choosing a service.
     wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your sessions" }), el("div", { id: "home-sessions" })]));
@@ -325,10 +322,11 @@
     if (prof.level_num == null) {
       // THE ASSESSMENT, framed as the thing it buys them — not as a form.
       host.appendChild(card([
-        el("h2", { style: "margin:0 0 6px", text: "Find the right person to play" }),
+        el("h2", { style: "margin:0 0 6px", text: "Need someone to play with?" }),
         el("p", { class: "cf-muted", style: "margin:0 0 12px",
-          text: "Five quick questions about how you play, and we'll match you with members at your "
-              + "standard. Takes about a minute, and you can change it any time as you improve." }),
+          text: "The hard part of tennis isn't the court — it's finding someone at your level who's "
+              + "free when you are. Five quick questions and we'll match you. Takes a minute, and you "
+              + "can change it any time as you improve." }),
         el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap" }, [
           el("button", { class: "cf-btn cf-btn-primary", text: "Work out my level",
             onclick: function () { go("#/play/profile"); } }),
@@ -365,7 +363,7 @@
       el("button", { class: "cf-btn cf-btn-ghost", text: "Players for you",
         onclick: function () { go("#/play/players"); } }),
     ]));
-    host.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your tennis" }), body]));
+    host.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Need someone to play with?" }), body]));
   }
 
   // The month-navigable Billing + Activity summary (re-fetches on ‹ ›). Reuses HBMONTH.
@@ -1076,7 +1074,29 @@
       isGame && open > 0
         ? el("span", { class: "cf-chip ok", text: "Open game" })
         : statusChip(b.status),
-    ]);
+      openUpButton(b),
+    ].filter(Boolean));
+  }
+
+  // THE SEAM between the two blocks, and the thing that stops a wrong turn becoming a support message.
+  //
+  // Someone books a court with a friend (BOOK block), and on Thursday the friend drops out. Without
+  // this they are holding a court they cannot use and the club gets an email. `set_visibility` already
+  // exists server-side; all that was missing was somewhere to press it. Offered on the member's own
+  // upcoming COURT bookings that are not open yet — and only where the club offers the community.
+  function openUpButton(b) {
+    if (!DATA.community || !DATA.community.community_enabled) return null;
+    if (b.booking_type !== "court" || b.visibility === "open") return null;
+    if (new Date(b.starts_at) <= new Date()) return null;
+    var btn = el("button", { class: "cf-btn cf-btn-sm", text: "Open to the club" });
+    btn.addEventListener("click", function (ev) {
+      ev.stopPropagation();                       // the row itself drills through; this must not
+      window.API.setGameVisibility(b.id, true).then(function () {
+        UI.toast("Posted — another member can now take the spare seat.", "info");
+        renderHome();
+      }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+    });
+    return btn;
   }
   function act(fn, okMsg) { fn().then(function () { UI.toast(okMsg, "info"); route(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
 
