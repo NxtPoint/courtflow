@@ -248,12 +248,15 @@
     // with." Only shown where the club offers it.
     if (DATA.community && DATA.community.community_enabled) {
       var lvl = DATA.player && DATA.player.level_num;
+      // The TILE is a destination; the BLOCK below is the pitch. The first cut had both saying
+      // "answer 5 quick questions", stacked one above the other — the same sentence twice, which
+      // reads as a mistake rather than as emphasis.
       var hero = bookTile("match", "Find a match",
         lvl ? ("Players at your level · " + levelLabel(lvl))
-            : "Answer 5 quick questions and we'll match you by level",
+            : "Open games and players at the club",
         function () { go("#/play"); });
       hero.className = "cf-qb-btn cf-qb-hero";
-      hero.appendChild(el("span", { class: "cf-qb-hero-cue", text: lvl ? "Find a game ›" : "Get started ›" }));
+      hero.appendChild(el("span", { class: "cf-qb-hero-cue", text: "Browse ›" }));
       tiles.appendChild(hero);
     }
     var TILE_SUB = { court: "Book a court", lesson: "With a coach", class: "Group session" };
