@@ -531,8 +531,19 @@ def seat_a_new_booking(session, *, club_id, booking_id, holder_user_id, holder_o
     own member, which is the failure mode this whole module exists to avoid, pointing the other way.
 
     Returns {applied: True, holds_court: bool, …} so the caller can decide the booking's status."""
+    # TWO SWITCHES, TWO JOBS — and conflating them broke the headline promise of the whole design.
+    #
+    #   community_enabled  -> a booking can be SEATED and PUBLISHED. This is the social half: named
+    #                         players, an open seat, a game other members can find. No money.
+    #   seat_rule_enforced -> those seats additionally raise ORDERS. This is the money half.
+    #
+    # The first cut returned early unless seat_rule_enforced, so a club that switched ON only the
+    # community half got no seats, no visibility and therefore NO GAMES — the feed was empty by
+    # construction and there was no way to post one. That is the exact opposite of what the two
+    # switches are documented to buy ("give members Find a Game as a benefit BEFORE you change what
+    # anyone pays"), and it is what a real booking exposed on the first try.
     pol = policy(session, club_id)
-    if not pol["seat_rule_enforced"]:
+    if not (pol["community_enabled"] or pol["seat_rule_enforced"]):
         return None
 
     booking = _booking(session, club_id, booking_id)
@@ -576,12 +587,17 @@ def seat_a_new_booking(session, *, club_id, booking_id, holder_user_id, holder_o
     # duplicated. A 'practice' booking is a single seat and simply keeps the whole fee.
     existing = {str(s["user_id"]) for s in _seats(session, booking_id) if s.get("user_id")}
     if str(holder_user_id) not in existing:
+        # The holder's seat points at the booking's own order ONLY when seats are being billed — that
+        # link exists so apply_seat_orders can RE-PRICE that order down to their share. With the money
+        # rule off there is no share, and pointing the seat at the ordinary court fee would make the
+        # data claim a seat charge that does not exist: `order_id IS NULL` on a seat means "this seat
+        # has no debt of its own", which is exactly the truth here.
+        link = str(holder_order_id) if (holder_order_id and pol["seat_rule_enforced"]) else None
         session.execute(
             text("INSERT INTO diary.booking_party (booking_id, club_id, user_id, party_role, "
                  "       seat_status, order_id, joined_at) "
                  "VALUES (:b, :c, :u, 'host', 'confirmed', CAST(:o AS uuid), now())"),
-            {"b": str(booking_id), "c": str(club_id), "u": str(holder_user_id),
-             "o": str(holder_order_id) if holder_order_id else None})
+            {"b": str(booking_id), "c": str(club_id), "u": str(holder_user_id), "o": link})
         existing.add(str(holder_user_id))
 
     for uid in (extra_user_ids or ()):
@@ -594,9 +610,16 @@ def seat_a_new_booking(session, *, club_id, booking_id, holder_user_id, holder_o
                  "VALUES (:b, :c, :u, 'player', 'confirmed', now())"),
             {"b": str(booking_id), "c": str(club_id), "u": str(uid)})
 
+    # THE MONEY IS THE SECOND SWITCH. With only the community half on, the game is real — seats,
+    # an open seat, a feed entry, chat — and nobody is billed a share. A club runs it that way
+    # deliberately while it tells its members what is coming.
+    if not pol["seat_rule_enforced"]:
+        return {"applied": True, "billed": False, "holds_court": False, "seats": total_seats,
+                "pay_hours": pol["seat_pay_hours"], "orders": [], "charged": 0, "total_minor": 0}
+
     applied = apply_seat_orders(session, club_id=club_id, booking_id=booking_id, now=now)
     holds = not all_prepaid_seats_settled(session, club_id=club_id, booking_id=booking_id)
-    return {"applied": True, "holds_court": holds, "seats": total_seats,
+    return {"applied": True, "billed": True, "holds_court": holds, "seats": total_seats,
             "pay_hours": pol["seat_pay_hours"], **applied}
 
 

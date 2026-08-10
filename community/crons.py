@@ -84,6 +84,12 @@ def sweep_open_games(session, *, club_id, now=None, max_games=500):
     # 3) COLLAPSE open seats at the cutoff — the rule that stops a free second seat being given away
     # to nobody. Each game in its OWN savepoint: one unpriced court must not abort the whole sweep for
     # the club (the same per-client-transactional discipline the month-end sweep learned the hard way).
+    #
+    # ONLY WHEN THE MONEY RULE IS ON. A collapse RAISES A CHARGE, so a club running the community half
+    # alone — deliberately, while it tells its members what is coming — must never have a member
+    # quietly billed for an unfilled seat by a background job. The seat simply stays open.
+    if not pol["seat_rule_enforced"]:
+        return out
     for row in session.execute(
         text("SELECT id FROM diary.booking "
              " WHERE club_id = :c AND visibility = 'open' AND booking_type = 'court' "

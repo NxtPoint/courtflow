@@ -4170,12 +4170,71 @@ def sc_dark_means_dark_for_the_whole_lane(s, fx):
     check("once on, the lane answers", seats.policy(s, fx.club_id)["community_enabled"] is True)
 
 
+def sc_community_alone_makes_games_without_charging_anyone(s, fx):
+    """THE TWO SWITCHES DO TWO JOBS, and the whole design rests on being able to run the first without
+    the second: give members Find a Game as a BENEFIT before changing what anyone pays.
+
+    The first cut gated the seating write on seat_rule_enforced, so a club with only the community
+    half switched on got no seats, no visibility and therefore NO GAMES AT ALL — the feed was empty by
+    construction and there was no way to post one. A real booking exposed it on the first try: the
+    member paid for a court exactly as before and nothing about it was a game.
+
+    So: community ON alone must produce a REAL, findable game — and must not raise a single order."""
+    print("\n# community ON + money OFF = a real, findable game that charges nobody")
+    from community import games, repositories as repo
+    repo.save_settings(s, club_id=fx.club_id,
+                       fields={"community_enabled": True, "seat_rule_enforced": False})
+    host, other = fx.members[0], fx.members[1]
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=host, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="at_court",
+                         starts_at=utc_iso(at(fx, 14)), ends_at=utc_iso(at(fx, 15)),
+                         play_format="singles", visibility="open", play_intent="social")
+    check("the booking succeeds", r.get("ok"), str(r))
+    bid = r["booking"]["id"]
+
+    row = s.execute(text("SELECT visibility, seats, play_intent, open_until FROM diary.booking "
+                         " WHERE id = :b"), {"b": bid}).mappings().first()
+    check("it IS a game — seated, published, with an intent",
+          row["visibility"] == "open" and row["seats"] == 2 and row["play_intent"] == "social",
+          str(dict(row)))
+    check("…and it has a fill deadline", row["open_until"] is not None)
+    check("the host has a seat", len(_seats_of(s, bid)) >= 1, str(_seats_of(s, bid)))
+
+    check("it is FINDABLE by another member",
+          any(g["booking_id"] == str(bid)
+              for g in games.list_open_games(s, club_id=fx.club_id, user_id=other)))
+
+    # …and NOBODY is billed a share. The court itself is charged exactly as it always was.
+    check("NO seat order exists — nobody is charged a share", _seat_rows(s, bid) == [],
+          str(_seat_rows(s, bid)))
+    check("the booking is CONFIRMED, not held pending a payment nobody owes",
+          s.execute(text("SELECT status FROM diary.booking WHERE id=:b"),
+                    {"b": bid}).scalar() == "confirmed")
+
+    # The sweep must not quietly bill the holder for the unfilled seat either.
+    from community.crons import sweep_open_games
+    s.execute(text("UPDATE diary.booking SET open_until = now() - interval '1 hour' WHERE id=:b"),
+              {"b": bid})
+    out = sweep_open_games(s, club_id=fx.club_id)
+    check("the sweep collapses NOTHING while the money rule is off",
+          int(out.get("collapsed") or 0) == 0, str(out))
+    check("…so the holder is still charged nothing", _seat_rows(s, bid) == [], str(_seat_rows(s, bid)))
+
+
+def _seats_of(s, booking_id):
+    return [dict(r) for r in s.execute(
+        text("SELECT id, user_id, seat_status FROM diary.booking_party WHERE booking_id = :b"),
+        {"b": booking_id}).mappings().all()]
+
+
 SCENARIOS = [
     # THE SEAT RULE (community/) — the money core, pinned before create_booking learns about seats.
     sc_a_seat_share_is_a_fixed_fraction_of_the_court,
     sc_a_game_says_what_kind_of_tennis_it_is,
     sc_the_feed_defaults_to_games_around_my_level,
     sc_dark_means_dark_for_the_whole_lane,
+    sc_community_alone_makes_games_without_charging_anyone,
     sc_match_chat_is_private_to_the_players,
     sc_a_result_needs_someone_else_to_confirm_it,
     sc_matching_puts_the_right_level_first,

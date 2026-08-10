@@ -38,8 +38,11 @@ sweep. When you activate one, tick it and move the detail into the relevant spec
 | **AB1** | **Community / Find a Game** — open games, join/leave, invitations, match chat, results, player levels | `community_enabled` | **false** | **Admin → Setup → Community & games.** Members get the social surface; **nothing about anyone's bill changes.** Safe to switch on first, on its own. |
 | **AB2** | **THE SEAT RULE** — every player not covered by a membership pays a SHARE of the court (a fixed %, default 50) | `seat_rule_enforced` | **false** | Same screen, second switch. ⚠️ **This changes what members pay.** See the pre-flight below. |
 
-Two switches on purpose, and they are independent: a club can give members Find a Game as a *benefit*
-before it changes what anyone pays. `seat_rule_enforced=false` means the booking path behaves **exactly**
+Two switches on purpose, and they are independent — **AB1 alone gives a club real, findable games
+that charge nobody**: seated bookings, an open seat, the feed, invitations and chat, with the court
+billed exactly as it always was. AB2 is what makes those seats cost money. (The first cut gated the
+seating write on AB2, so AB1 alone produced no games at all — caught by a real booking. Guarded now
+by `sc_community_alone_makes_games_without_charging_anyone`.) `seat_rule_enforced=false` means the booking path behaves **exactly**
 as it did before the lane existed — that is the regression contract, and
 `sc_seat_rule_off_changes_nothing` asserts it.
 

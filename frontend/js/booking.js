@@ -927,7 +927,7 @@
     // A semi-private lesson uses the squad section above (billable partners), not the free-guest step.
     // The free-guest step is ALSO suppressed once the seat rule is on: an unbilled "guest" is exactly
     // the leak the seat rule closes, so offering both on one screen would contradict itself.
-    if (st.type !== "class" && !st.onBehalf && !isSemiPrivate() && !seatRuleOn()) {
+    if (st.type !== "class" && !st.onBehalf && !isSemiPrivate() && !seatStepOn()) {
       var gName = el("input", { class: "cf-input", placeholder: "Guest name", value: (st.guest && st.guest.name) || "" });
       var gEmail = el("input", { class: "cf-input", type: "email", placeholder: "Guest email (optional)", value: (st.guest && st.guest.email) || "" });
       st._gName = gName; st._gEmail = gEmail;
@@ -1093,9 +1093,17 @@
   //
   // Only offered when the club has actually switched the rule on (ctx.community.seat_rule_enforced).
   // Otherwise create_booking ignores seats entirely and collecting them would be a lie.
+  // TWO SWITCHES, TWO JOBS. `community_enabled` is what makes a court booking a GAME you can put a
+  // name or an open seat on; `seat_rule_enforced` is what makes those seats cost money. Gating the
+  // whole step on the money switch meant a club running only the community half could not post a game
+  // at all — the feed was empty by construction. Found by a real booking, on the first try.
+  function communityOn() {
+    return !!(ctx.community && ctx.community.community_enabled && st.type === "court");
+  }
   function seatRuleOn() {
     return !!(ctx.community && ctx.community.seat_rule_enforced && st.type === "court");
   }
+  function seatStepOn() { return communityOn() || seatRuleOn(); }
   function seatsForFormat(fmt) {
     var m = (ctx.community && ctx.community.seats_by_format) || { singles: 2, doubles: 4, practice: 1 };
     return m[fmt] || 2;
@@ -1115,7 +1123,7 @@
     };
   }
   function playersSection() {
-    if (!seatRuleOn()) return null;
+    if (!seatStepOn()) return null;
     if (!st.players) st.players = [];
     if (!st.playFormat) st.playFormat = "singles";
     var total = seatsForFormat(st.playFormat);
@@ -1181,20 +1189,35 @@
         cb.checked = st.openGame !== false;
         cb.addEventListener("change", function () { st.openGame = cb.checked; });
         openLbl.appendChild(cb);
-        openLbl.appendChild(el("span", { text: " Let another member take the spare seat" }));
+        openLbl.appendChild(el("span", { text: seatRuleOn()
+          ? " Let another member take the spare seat"
+          : " Post this as an open game other members can join" }));
         sec.appendChild(openLbl);
       }
     }
 
     // The honest sentence. A member who reads nothing else on this screen should still know that an
     // empty seat is theirs to pay for if nobody takes it.
-    var note = st.playFormat === "practice"
-      ? "You'll be charged for the court."
-      : (open > 0
-        ? "Members play on their membership. Anyone who isn't a member pays a share of the court. "
-          + "If the spare seat isn't taken by a few hours before you play, that share is added to your bill."
-        : "Members play on their membership. Anyone who isn't a member pays their own share — "
-          + "the court is confirmed once everyone has paid.");
+    // The note must match what will ACTUALLY happen. With the money rule off nobody is charged a
+    // share and no unfilled seat is ever billed, so promising either would be a lie the member finds
+    // out about later — which is the failure this sentence exists to prevent in the first place.
+    var note;
+    if (!seatRuleOn()) {
+      note = st.playFormat === "practice"
+        ? "You'll be charged for the court as usual."
+        : (open > 0
+          ? "You're booking the court as usual. Leaving a seat open lets another member join you — "
+            + "nobody is charged a share."
+          : "You're booking the court as usual. Whoever you add can see the game and message you here.");
+    } else {
+      note = st.playFormat === "practice"
+        ? "You'll be charged for the court."
+        : (open > 0
+          ? "Members play on their membership. Anyone who isn't a member pays a share of the court. "
+            + "If the spare seat isn't taken by a few hours before you play, that share is added to your bill."
+          : "Members play on their membership. Anyone who isn't a member pays their own share — "
+            + "the court is confirmed once everyone has paid.");
+    }
     sec.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:8px", text: note }));
     return sec;
   }
@@ -1275,7 +1298,7 @@
         // THE SEAT RULE: who's on the court, and whether the spare seat is offered to the club.
         // Sent only when the club has the rule ON — otherwise the server ignores it and collecting
         // it would have been a lie. Every named player gets their OWN bill if they aren't covered.
-        if (seatRuleOn()) {
+        if (seatStepOn()) {
           body.play_format = st.playFormat || "singles";
           if (st.playIntent) body.play_intent = st.playIntent;
           body.seats = seatsForFormat(body.play_format);
