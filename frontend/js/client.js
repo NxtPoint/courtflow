@@ -42,11 +42,20 @@
     if (!principal) return;
     // Staff live in their own consoles — the client app is for members/guests. Send a first-run
     // owner/coach to their onboarding first (the same gate portal.html used to run).
-    if (principal.role === "coach") {
+    //
+    // …UNLESS they are deliberately VIEWING AS A MEMBER (/app.html?as=<user_id>). That feature exists
+    // precisely so an owner can see a member's real screens, and this bounce fired first — so it sent
+    // the owner straight back to /admin and the feature could never work for the only role that has
+    // it. Reads are already confined to GET /api/me/* with as_user by auth_client.withViewAs, so
+    // staying here is read-only by construction, not by convention.
+    var VIEWING_AS = (function () {
+      try { return !!new URLSearchParams(location.search).get("as"); } catch (e) { return false; }
+    })();
+    if (!VIEWING_AS && principal.role === "coach") {
       try { var cob = await window.TFAuth.apiJSON("/api/coach/onboarding"); if (cob && !cob.completed) { location.href = "/coach-onboarding.html"; return; } } catch (e) {}
       location.href = "/coach"; return;
     }
-    if (principal.role === "club_admin" || principal.role === "platform_admin") {
+    if (!VIEWING_AS && (principal.role === "club_admin" || principal.role === "platform_admin")) {
       try { var aob = await window.TFAuth.apiJSON("/api/admin/onboarding"); if (aob && !aob.completed) { location.href = "/onboarding.html"; return; } } catch (e) {}
       location.href = "/admin"; return;
     }
