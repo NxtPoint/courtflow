@@ -196,6 +196,14 @@
     try { DATA.enrolments = (await window.API.myEnrolments()).enrolments || []; } catch (e) { DATA.enrolments = []; }
     // Featured equipment (e.g. the ball machine) → a Home hero tile that starts a court booking with it added.
     try { DATA.equipment = ((await window.TFAuth.apiJSON("/api/diary/equipment")).equipment || []).filter(function (e) { return e.feature_on_home && e.active !== false; }); } catch (e) { DATA.equipment = []; }
+    // Community config + the member's own player profile, loaded WITH everything else rather than
+    // patched in afterwards. Find a match is a peer of Court/Lesson/Class, so the tile row cannot be
+    // built until we know whether the club offers it and whether this member has a level yet.
+    try { DATA.community = await window.TFAuth.apiJSON("/api/community/config"); } catch (e) { DATA.community = null; }
+    DATA.player = null;
+    if (DATA.community && DATA.community.community_enabled) {
+      try { DATA.player = await window.API.playerProfile(); } catch (e) {}
+    }
     DATA.fin = fin; DATA.bookings = bookings;
     var plan = fin.plan || {}, cur = fin.currency || "ZAR";
     var wrap = el("div", {});
@@ -221,7 +229,7 @@
 
     // BOOK — services FIRST so a member can pick one straight away (Court / Lesson / Class,
     // drawn glyphs, no emoji).
-    var qb = card([el("h2", { style: "margin:0 0 10px", text: "Book a session" })]);
+    var qb = card([el("h2", { style: "margin:0 0 10px", text: "What would you like to do?" })]);
     var tiles = el("div", { class: "cf-qb" });
     // ONE tile shape for every service: [icon] [name / grey sub-line], left-aligned. Court/Lesson/Class
     // and the featured equipment (ball machine) all read identically.
@@ -233,6 +241,20 @@
           sub ? el("div", { class: "cf-qb-s", text: sub }) : null,
         ].filter(Boolean)),
       ]);
+    }
+    // FIND A MATCH IS A PEER, NOT A FOOTNOTE. It sat in its own card below the booking menu, described
+    // in prose — so the four things a member can do read as three things plus an afterthought. It goes
+    // FIRST because it answers the question the others cannot: "I want to play and have nobody to play
+    // with." Only shown where the club offers it.
+    if (DATA.community && DATA.community.community_enabled) {
+      var lvl = DATA.player && DATA.player.level_num;
+      var hero = bookTile("match", "Find a match",
+        lvl ? ("Players at your level · " + levelLabel(lvl))
+            : "Answer 5 quick questions and we'll match you by level",
+        function () { go("#/play"); });
+      hero.className = "cf-qb-btn cf-qb-hero";
+      hero.appendChild(el("span", { class: "cf-qb-hero-cue", text: lvl ? "Find a game ›" : "Get started ›" }));
+      tiles.appendChild(hero);
     }
     var TILE_SUB = { court: "Book a court", lesson: "With a coach", class: "Group session" };
     ["court", "lesson", "class"].forEach(function (k) {
@@ -271,28 +293,76 @@
     loadPlayCard();
   }
 
-  // FIND A GAME on Home. Called AFTER set(wrap), like every other async section here — that ordering
-  // is not a style choice, it is the whole reason this works: renderHome BUILDS `wrap` detached and
-  // only attaches it at set(wrap), so a document.getElementById() before that point finds nothing.
-  // The first cut looked the host up inline at the point the placeholder was appended, got null, and
-  // returned — so the card never rendered for anyone, whatever the club had switched on. A parse gate
-  // cannot see that; only opening the page can.
+  // FIND A MATCH on Home — a two-state block, because a member without a level and a member with one
+  // need completely different things from this screen.
+  //
+  // NO LEVEL YET  -> the only thing worth asking for is the assessment. Showing them a feed first is
+  //                 the wrong order: matching by level is the whole promise, and an unlevelled member
+  //                 browsing an unfiltered list is exactly the experience that makes people conclude
+  //                 the feature doesn't work.
+  // LEVEL SET     -> lead with the level (it is theirs, and it is why the matches are relevant), then
+  //                 the marketplace: take a game, post one, or see who suits you.
+  //
+  // Called AFTER set(wrap), like every other async section — renderHome builds `wrap` detached and
+  // only attaches it at set(wrap), so a getElementById before that finds nothing.
+  var LEVEL_WORD_HOME = ["", "Beginner", "Beginner+", "Recreational", "Intermediate", "Intermediate+",
+                         "Strong club", "Advanced", "Tournament", "High-performance", "Elite"];
+  function levelLabel(n) {
+    return n == null ? "Not set"
+      : (LEVEL_WORD_HOME[Math.round(n)] || "Level") + " · " + Number(n).toFixed(1);
+  }
+
   async function loadPlayCard() {
     var host = document.getElementById("home-play"); if (!host) return;
-    var cfg = null;
-    try { cfg = await window.TFAuth.apiJSON("/api/community/config"); } catch (e) { return; }
+    var cfg = DATA.community;
     if (!cfg || !cfg.community_enabled || !host.isConnected) return;
+    var prof = DATA.player || {};
     UI.clear(host);
-    host.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Want to play?" }), el("div", {}, [
-      el("p", { class: "cf-muted", style: "margin:0 0 10px",
-        text: "Post a game and let another member take the spare seat — or take someone else's." }),
-      el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap" }, [
-        el("button", { class: "cf-btn cf-btn-primary", text: "Find a game",
-          onclick: function () { go("#/play"); } }),
-        el("button", { class: "cf-btn", text: "Players for you",
-          onclick: function () { go("#/play/players"); } }),
-      ]),
-    ])]));
+
+    if (prof.level_num == null) {
+      // THE ASSESSMENT, framed as the thing it buys them — not as a form.
+      host.appendChild(card([
+        el("h2", { style: "margin:0 0 6px", text: "Find the right person to play" }),
+        el("p", { class: "cf-muted", style: "margin:0 0 12px",
+          text: "Five quick questions about how you play, and we'll match you with members at your "
+              + "standard. Takes about a minute, and you can change it any time as you improve." }),
+        el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap" }, [
+          el("button", { class: "cf-btn cf-btn-primary", text: "Work out my level",
+            onclick: function () { go("#/play/profile"); } }),
+          el("button", { class: "cf-btn cf-btn-ghost", text: "Just show me the games",
+            onclick: function () { go("#/play"); } }),
+        ]),
+      ]));
+      return;
+    }
+
+    // LEVEL SET — lead with it, then the marketplace.
+    var games = [];
+    try { games = (await window.API.openGames({ days: 14, near: 1.5 })).games || []; } catch (e) {}
+    var joinable = games.filter(function (g) { return !g.im_in; });
+    var body = el("div", {});
+    body.appendChild(el("div", { class: "cf-row", style: "gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px" }, [
+      el("span", { class: "cf-chip ok", text: levelLabel(prof.level_num) }),
+      prof.level_source === "coach" ? el("span", { class: "cf-muted cf-tiny", text: "set by your coach" })
+        : el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Update",
+            onclick: function () { go("#/play/profile"); } }),
+      !prof.visible_in_community
+        ? el("span", { class: "cf-chip held", text: "Not findable yet" }) : null,
+    ].filter(Boolean)));
+    body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 12px",
+      text: joinable.length
+        ? (joinable.length === 1 ? "There's 1 game near your level looking for a player."
+                                 : "There are " + joinable.length + " games near your level looking for players.")
+        : "No games near your level right now — post one and let someone come to you." }));
+    body.appendChild(el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap" }, [
+      el("button", { class: joinable.length ? "cf-btn cf-btn-primary" : "cf-btn",
+        text: "Find a match", onclick: function () { go("#/play"); } }),
+      el("button", { class: joinable.length ? "cf-btn" : "cf-btn cf-btn-primary",
+        text: "Post a match", onclick: function () { go("#/book/court"); } }),
+      el("button", { class: "cf-btn cf-btn-ghost", text: "Players for you",
+        onclick: function () { go("#/play/players"); } }),
+    ]));
+    host.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your tennis" }), body]));
   }
 
   // The month-navigable Billing + Activity summary (re-fetches on ‹ ›). Reuses HBMONTH.
@@ -322,6 +392,8 @@
       court: "<rect x='3' y='4' width='18' height='16' rx='2' stroke='var(--green)' stroke-width='2'/><path d='M12 4v16M3 12h18' stroke='var(--green)' stroke-width='2'/>",
       lesson: "<path d='M3 9l9-5 9 5-9 5-9-5z' stroke='var(--info)' stroke-width='2' stroke-linejoin='round'/><path d='M7 11v4c0 1.1 2.2 2 5 2s5-.9 5-2v-4' stroke='var(--info)' stroke-width='2'/>",
       class: "<circle cx='9' cy='8' r='3' stroke='var(--lime-700)' stroke-width='2'/><circle cx='17' cy='9' r='2.4' stroke='var(--lime-700)' stroke-width='2'/><path d='M3.5 19c.4-3 2.8-4.5 5.5-4.5S14.1 16 14.5 19M15 15.5c2.2.2 4 1.4 4.4 3.5' stroke='var(--lime-700)' stroke-width='2' stroke-linecap='round'/>",
+      // Two players either side of a net — a MATCH, deliberately not another court icon.
+      match: "<circle cx='6.5' cy='7' r='2.4' stroke='var(--green)' stroke-width='2'/><circle cx='17.5' cy='7' r='2.4' stroke='var(--green)' stroke-width='2'/><path d='M12 3v18' stroke='var(--green)' stroke-width='2' stroke-dasharray='2 2'/><path d='M2.5 20c.3-2.4 2-3.6 4-3.6s3.7 1.2 4 3.6M13.5 20c.3-2.4 2-3.6 4-3.6s3.7 1.2 4 3.6' stroke='var(--green)' stroke-width='2' stroke-linecap='round'/>",
     }[kind] || "";
     var box = el("span", { class: "cf-gtile " + kind });
     box.innerHTML = "<svg width='22' height='22' viewBox='0 0 24 24' fill='none'>" + svg + "</svg>";

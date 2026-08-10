@@ -752,3 +752,14 @@ p{margin:0 0 10px}
 .cf-chat-line{font-size:.88rem;line-height:1.45;color:var(--ink);word-break:break-word}
 .cf-chat-who{font-weight:700;color:var(--green-600)}
 .cf-chat-sys{color:var(--muted);font-style:italic;font-size:.82rem}
+
+/* Find a match — the HERO tile. It spans the row rather than sitting as one of five, because it
+   answers the question the other three cannot ("I want to play and have nobody to play with") and it
+   is the only one of them a member has never seen before. Same .cf-qb-btn component underneath: this
+   is a variant, not a second tile. */
+.cf-qb-btn.cf-qb-hero{grid-column:1 / -1;background:linear-gradient(135deg,var(--green-050),#fff);
+  border-color:var(--green);border-width:2px}
+.cf-qb-btn.cf-qb-hero .cf-qb-t{font-size:1.05rem}
+.cf-qb-hero-cue{margin-left:auto;background:var(--green);color:#fff;font:700 .78rem Inter;
+  padding:7px 14px;border-radius:var(--radius-pill);white-space:nowrap}
+@media(max-width:680px){.cf-qb-hero-cue{display:none}}
