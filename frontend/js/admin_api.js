@@ -453,6 +453,33 @@
       return A().apiJSON("/api/admin/refund-requests/" + enc(id) + "/decline",
         { method: "POST", body: body || {} });
     },
+
+    // ---- community: Find a Game + the seat rule (community/routes.py) -------
+    // GET -> {community_enabled, seat_rule_enforced, open_game_cutoff_hours, seat_pay_hours,
+    //         guest_trial_days, seats_by_format, open_games, live_invites, discoverable_players,
+    //         unpaid_seats_minor}
+    communitySettings: function () { return A().apiJSON("/api/community/admin/settings"); },
+    // PATCH — the ONE place the seat rule is switched on. Until this existed the flags could only be
+    // changed with SQL, which is how the entitlement caps ended up shipped-but-inert for weeks.
+    saveCommunitySettings: function (body) {
+      return A().apiJSON("/api/community/admin/settings", { method: "PATCH", body: body || {} });
+    },
+    // EVERY seated game, not just the ones with a seat free — plus what is still owed on each.
+    communityGames: function (days) {
+      return A().apiJSON("/api/community/admin/games" + (days ? "?days=" + enc(days) : ""));
+    },
+    communityInvites: function () { return A().apiJSON("/api/community/admin/invites"); },
+    revokeCommunityInvite: function (id) {
+      return A().apiJSON("/api/community/admin/invites/" + enc(id) + "/revoke",
+        { method: "POST", body: {} });
+    },
+    communityPlayers: function (q) {
+      return A().apiJSON("/api/community/admin/players" + (q ? "?q=" + enc(q) : ""));
+    },
+    setPlayerLevel: function (userId, level) {
+      return A().apiJSON("/api/community/admin/players/" + enc(userId) + "/level",
+        { method: "PATCH", body: { level_num: level } });
+    },
   };
 
   window.AdminAPI = AdminAPI;
@@ -2321,7 +2348,220 @@
     draw();
   }
 
+  // ---- Community & games (community/) ---------------------------------------
+  // The screen that turns the seat rule on — and the only one that can, since the two switches are
+  // otherwise SQL-only. It is deliberately blunt about what flipping seat_rule_enforced does to
+  // members' bills, because that is a change to what people pay and it should not be a surprise
+  // discovered at the desk.
+  function communityManage(host) {
+    init(); UI.clear(host);
+    var wrap = el("div", {});
+    host.appendChild(wrap);
+
+    function draw(cfg) {
+      UI.clear(wrap);
+
+      // --- the two switches ---
+      var c = el("div", { class: "cf-card" }, [
+        el("h3", { text: "Find a Game" }),
+        el("p", { class: "cf-muted", text: "Let members find each other, post open games and bring guests. Two switches, on purpose: you can give members the feature before you change what anyone pays." }),
+      ]);
+      function flag(key, label, hint, warn) {
+        var lbl = el("label", { class: "cf-row", style: "cursor:pointer;gap:10px;align-items:flex-start;margin-top:12px" });
+        var cb = el("input", { type: "checkbox" });
+        cb.checked = !!cfg[key];
+        cb.addEventListener("change", function () {
+          var body = {}; body[key] = cb.checked;
+          window.AdminAPI.saveCommunitySettings(body).then(function (r) {
+            UI.toast(label + (cb.checked ? " on" : " off"), "info"); draw(r);
+          }, function (e) { cb.checked = !cb.checked; UI.toast(UI.errMsg(e), "error"); });
+        });
+        lbl.appendChild(cb);
+        lbl.appendChild(el("div", {}, [
+          el("div", { text: label }),
+          el("div", { class: "cf-muted cf-tiny", text: hint }),
+          warn ? el("div", { class: "cf-tiny", style: "color:#8a5a00;margin-top:2px", text: warn }) : null,
+        ].filter(Boolean)));
+        c.appendChild(lbl);
+      }
+      flag("community_enabled", "Community features",
+        "Members can see open games, join them, invite friends and message each other.");
+      flag("seat_rule_enforced", "Charge for every seat",
+        "A court's fee is split between the players who aren't members. Members play on their membership; guests pay their share.",
+        "This changes what members pay. A member who books a court and doesn't fill the spare seat is charged for it. Tell your members before you switch it on.");
+      wrap.appendChild(c);
+
+      // --- what it's doing right now ---
+      var stats = el("div", { class: "cf-card" }, [el("h3", { text: "Right now" })]);
+      var g = el("div", { class: "cf-stats" });
+      [["Open games", cfg.open_games], ["Invites out", cfg.live_invites],
+       ["Players findable", cfg.discoverable_players],
+       ["Seats unpaid", UI.money(cfg.unpaid_seats_minor || 0, "ZAR")]].forEach(function (p) {
+        g.appendChild(el("div", { class: "cf-stat" }, [
+          el("div", { class: "cf-stat-v", text: String(p[1] == null ? "—" : p[1]) }),
+          el("div", { class: "cf-stat-k", text: p[0] }),
+        ]));
+      });
+      stats.appendChild(g);
+      wrap.appendChild(stats);
+
+      // --- timings ---
+      var t = el("div", { class: "cf-card" }, [
+        el("h3", { text: "Timings" }),
+        el("p", { class: "cf-muted", text: "How long a spare seat stays open, and how long someone has to pay for one." }),
+      ]);
+      function num(key, label, hint, suffix) {
+        var inp = el("input", { class: "cf-input", type: "number", min: "1", value: String(cfg[key] || "") });
+        inp.addEventListener("change", function () {
+          var body = {}; body[key] = parseInt(inp.value, 10);
+          window.AdminAPI.saveCommunitySettings(body).then(function (r) {
+            UI.toast("Saved", "info"); draw(r);
+          }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+        });
+        t.appendChild(el("div", { class: "cf-field", style: "margin-top:10px" }, [
+          el("label", { text: label + (suffix ? " (" + suffix + ")" : "") }), inp,
+          el("div", { class: "cf-muted cf-tiny", text: hint }),
+        ]));
+      }
+      num("open_game_cutoff_hours", "Spare seat closes", "Hours before the game. After this an unfilled seat is added to the booker's bill.", "hours");
+      num("seat_pay_hours", "Time to pay a seat", "How long a player has to pay before their seat is released.", "hours");
+      num("guest_trial_days", "Free week for an invited friend", "A guest invited by a member plays free for this many days, once, ever.", "days");
+      wrap.appendChild(t);
+
+      // --- the configuration trap, stated ---
+      // The entitlement caps shipped and sat inert for weeks because nobody set them. Say the quiet
+      // part on the screen rather than leaving the owner to assume doubles works.
+      var fmt = cfg.seats_by_format || {};
+      wrap.appendChild(el("div", { class: "cf-card" }, [
+        el("h3", { text: "Seats per format" }),
+        el("p", { class: "cf-muted", text: "How many players share a court fee. Singles " + (fmt.singles || 2)
+          + ", doubles " + (fmt.doubles || 4) + ", on your own " + (fmt.practice || 1) + "." }),
+        el("p", { class: "cf-muted cf-tiny", text: "A doubles game splits the court fee four ways, so two members plus two guests means each guest pays a quarter. If that isn't how you want doubles priced, don't switch the seat rule on yet." }),
+      ]));
+    }
+
+    wrap.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+    window.AdminAPI.communitySettings().then(draw, function (e) {
+      UI.clear(wrap); wrap.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) }));
+    });
+  }
+
+  // ---- Games & invites (the owner's operational view) ------------------------
+  function communityGames(host) {
+    init(); UI.clear(host);
+    var tabs = el("div", { class: "cf-row", style: "gap:8px;margin-bottom:12px" });
+    var body = el("div", {});
+    host.appendChild(tabs); host.appendChild(body);
+    var active = "games";
+    [["games", "Games"], ["invites", "Invites"], ["players", "Players & levels"]].forEach(function (t) {
+      var b = el("button", { class: "cf-btn cf-btn-sm", text: t[1] });
+      b.addEventListener("click", function () { active = t[0]; paint(); });
+      tabs.appendChild(b);
+    });
+
+    function paint() {
+      Array.prototype.forEach.call(tabs.children, function (b, i) {
+        b.className = "cf-btn cf-btn-sm" + (["games", "invites", "players"][i] === active ? " cf-btn-primary" : "");
+      });
+      UI.clear(body);
+      body.appendChild(el("div", { class: "cf-loading", text: "Loading…" }));
+      if (active === "games") return drawGames();
+      if (active === "invites") return drawInvites();
+      return drawPlayers();
+    }
+
+    function drawGames() {
+      window.AdminAPI.communityGames(14).then(function (r) {
+        UI.clear(body);
+        var rows = r.games || [];
+        if (!rows.length) { body.appendChild(el("div", { class: "cf-empty", text: "No seated games in the next 14 days." })); return; }
+        var list = el("div", { class: "cf-list" });
+        rows.forEach(function (g) {
+          var when = "";
+          try { when = UI.fmtDate(g.starts_at) + " " + UI.fmtTime(g.starts_at); } catch (e) {}
+          var bits = [g.court_name, g.host_name, g.seats_taken + "/" + g.seats_total + " seats"];
+          if (g.open_seats > 0) bits.push(g.open_seats + " open");
+          // The number an owner actually scans for: is somebody about to play on an unpaid court?
+          if (g.owed_minor > 0) bits.push("owed " + UI.money(g.owed_minor, "ZAR"));
+          var row = el("div", { class: "cf-item cf-item-tap" }, [
+            el("div", { class: "cf-item-main" }, [
+              el("div", { class: "cf-item-t", text: when + " · " + (g.play_format || "singles") }),
+              el("div", { class: "cf-item-s", text: bits.filter(Boolean).join(" · ") }),
+            ]),
+            el("span", { class: "cf-chip" + (g.owed_minor > 0 ? " cf-chip-warn" : ""), text: g.status }),
+          ]);
+          row.addEventListener("click", function () { location.hash = "#/event/" + g.booking_id; });
+          list.appendChild(row);
+        });
+        body.appendChild(list);
+      }, function (e) { UI.clear(body); body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+
+    function drawInvites() {
+      window.AdminAPI.communityInvites().then(function (r) {
+        UI.clear(body);
+        var rows = r.invites || [];
+        if (!rows.length) { body.appendChild(el("div", { class: "cf-empty", text: "No invitations yet." })); return; }
+        var list = el("div", { class: "cf-list" });
+        rows.forEach(function (iv) {
+          // "My friend says they never got their free week" is otherwise unanswerable without SQL.
+          var sub = ["from " + iv.invited_by, iv.status,
+                     iv.trial_granted ? "free week granted" : ""].filter(Boolean).join(" · ");
+          var acts = [];
+          if (iv.status === "sent") {
+            var rev = el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Revoke" });
+            rev.addEventListener("click", function () {
+              window.AdminAPI.revokeCommunityInvite(iv.id).then(function () {
+                UI.toast("Invitation revoked", "info"); paint();
+              }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+            });
+            acts.push(rev);
+          }
+          list.appendChild(el("div", { class: "cf-item" }, [
+            el("div", { class: "cf-item-main" }, [
+              el("div", { class: "cf-item-t", text: iv.email }),
+              el("div", { class: "cf-item-s", text: sub }),
+            ]),
+            el("span", { class: "cf-spacer" }),
+          ].concat(acts)));
+        });
+        body.appendChild(list);
+      }, function (e) { UI.clear(body); body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+
+    function drawPlayers() {
+      window.AdminAPI.communityPlayers().then(function (r) {
+        UI.clear(body);
+        body.appendChild(el("p", { class: "cf-muted", text: "A level is self-declared until a coach corrects it. Being matched far above or below your standard is what makes people stop using this, so a wrong level is worth fixing." }));
+        var rows = r.players || [];
+        if (!rows.length) { body.appendChild(el("div", { class: "cf-empty", text: "No player profiles yet." })); return; }
+        var list = el("div", { class: "cf-list" });
+        rows.forEach(function (p) {
+          var inp = el("input", { class: "cf-input", type: "number", step: "0.1", min: "1", max: "10",
+            style: "max-width:90px", value: p.level == null ? "" : String(p.level) });
+          inp.addEventListener("change", function () {
+            window.AdminAPI.setPlayerLevel(p.user_id, parseFloat(inp.value)).then(function () {
+              UI.toast("Level saved", "info"); paint();
+            }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+          });
+          list.appendChild(el("div", { class: "cf-item" }, [
+            el("div", { class: "cf-item-main" }, [
+              el("div", { class: "cf-item-t", text: p.name }),
+              el("div", { class: "cf-item-s", text: (p.level_source ? "set by " + p.level_source : "not set")
+                + (p.visible ? " · findable" : " · not findable") }),
+            ]),
+            el("span", { class: "cf-spacer" }), inp,
+          ]));
+        });
+        body.appendChild(list);
+      }, function (e) { UI.clear(body); body.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); });
+    }
+
+    paint();
+  }
+
   window.AdminUI = {
+    communityManage: communityManage, communityGames: communityGames,
     clubProfile: clubProfile, billingDetails: billingDetails, promotions: promotions, hours: hours, courts: courts, courtsManage: courtsManage,
     coachManage: coachManage,
     services: services, coaches: coaches, membershipPlans: membershipPlans,

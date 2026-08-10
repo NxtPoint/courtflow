@@ -405,6 +405,127 @@ def accept_invite():
 
 
 # ---------------------------------------------------------------------------
+# ADMIN — the owner's surfaces
+# ---------------------------------------------------------------------------
+# Gated on the SAME capabilities the rest of the console uses (iam.permissions.can), and club_id
+# always comes from the principal. These live in the community lane rather than admin/routes.py so
+# the lane stays self-contained — the same call the insights lane makes.
+
+def _admin(p, action="manage_policy"):
+    from iam.permissions import can
+    return can(p, action, {"club_id": p.club_id})
+
+
+@community_bp.get("/admin/settings")
+def admin_settings():
+    p = _principal()
+    if not p:
+        return jsonify(error="unauthorized"), 401
+    if not _admin(p):
+        return jsonify(error="forbidden"), 403
+    from community import repositories as repo
+    with session_scope() as s:
+        return jsonify(repo.settings(s, club_id=p.club_id)), 200
+
+
+@community_bp.patch("/admin/settings")
+def admin_save_settings():
+    """The ONE place the seat rule is switched on.
+
+    Until this existed the two flags could only be changed with SQL, which is exactly how the
+    entitlement caps ended up shipped-but-inert for weeks — the code was right and nobody could
+    reach it."""
+    p = _principal()
+    if not p:
+        return jsonify(error="unauthorized"), 401
+    if not _admin(p):
+        return jsonify(error="forbidden"), 403
+    from community import repositories as repo
+    with session_scope() as s:
+        out = repo.save_settings(s, club_id=p.club_id, fields=_body())
+    return jsonify(out), 200
+
+
+@community_bp.get("/admin/games")
+def admin_games():
+    p = _principal()
+    if not p:
+        return jsonify(error="unauthorized"), 401
+    if not _admin(p, "view_master_diary"):
+        return jsonify(error="forbidden"), 403
+    from community import repositories as repo
+    with session_scope() as s:
+        out = repo.admin_games(s, club_id=p.club_id, days=int(request.args.get("days") or 14))
+    return jsonify(games=out, count=len(out)), 200
+
+
+@community_bp.get("/admin/invites")
+def admin_invites():
+    p = _principal()
+    if not p:
+        return jsonify(error="unauthorized"), 401
+    if not _admin(p, "view_master_diary"):
+        return jsonify(error="forbidden"), 403
+    from community import repositories as repo
+    with session_scope() as s:
+        out = repo.admin_invites(s, club_id=p.club_id)
+    return jsonify(invites=out, count=len(out)), 200
+
+
+@community_bp.post("/admin/invites/<invite_id>/revoke")
+def admin_revoke_invite(invite_id):
+    p = _principal()
+    if not p:
+        return jsonify(error="unauthorized"), 401
+    if not _admin(p):
+        return jsonify(error="forbidden"), 403
+    from community import invites
+    with session_scope() as s:
+        out = invites.revoke_invite(s, club_id=p.club_id, invite_id=invite_id,
+                                    actor_user_id=p.user_id)
+    return jsonify(out), 200
+
+
+@community_bp.get("/admin/players")
+def admin_players():
+    p = _principal()
+    if not p:
+        return jsonify(error="unauthorized"), 401
+    if not (_admin(p, "view_master_diary") or p.role == "coach"):
+        return jsonify(error="forbidden"), 403
+    from community import repositories as repo
+    with session_scope() as s:
+        out = repo.admin_players(s, club_id=p.club_id, q=request.args.get("q") or None)
+    return jsonify(players=out, count=len(out)), 200
+
+
+@community_bp.patch("/admin/players/<user_id>/level")
+def admin_set_level(user_id):
+    """A coach or owner corrects a player's level.
+
+    COACHES MAY DO THIS, deliberately: the person who has actually seen someone play is the one who
+    can fix a self-rating, and 'everybody is advanced' is the failure mode that kills the matching.
+    It is recorded with level_source='coach' + who set it, so a self-rating and an assessment are
+    never confused."""
+    p = _principal()
+    if not p:
+        return jsonify(error="unauthorized"), 401
+    if not (_admin(p, "view_master_diary") or p.role == "coach"):
+        return jsonify(error="forbidden"), 403
+    try:
+        level = float(_body().get("level_num"))
+    except (TypeError, ValueError):
+        return jsonify(error="BAD_LEVEL", message="give a level between 1 and 10"), 422
+    if not (1.0 <= level <= 10.0):
+        return jsonify(error="BAD_LEVEL", message="give a level between 1 and 10"), 422
+    from community import repositories as repo
+    with session_scope() as s:
+        out = repo.set_level_as_staff(s, club_id=p.club_id, user_id=user_id,
+                                      level_num=round(level, 1), set_by_user_id=p.user_id)
+    return jsonify(out), 200
+
+
+# ---------------------------------------------------------------------------
 # the sweep (OPS_KEY-guarded, fired by .github/workflows/open-games.yml)
 # ---------------------------------------------------------------------------
 

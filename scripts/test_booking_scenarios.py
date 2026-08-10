@@ -3792,9 +3792,70 @@ def sc_a_crafted_game_cannot_cheapen_or_outlive_its_own_bill(s, fx):
           S.seat_plan(s, club_id=fx.club_id, booking_id=bid)["open_count"] > 0)
 
 
+def sc_the_seat_rule_can_be_switched_on_without_sql(s, fx):
+    """The owner has to be able to turn this on, see what it is doing, and correct a wrong level —
+    without a database client.
+
+    This is not a nicety. The entitlement caps (max_covered_per_day / max_covered_minutes) shipped
+    correct and then sat INERT for weeks because the only way to set them was SQL, and everyone
+    assumed a shipped feature was a working one. A money rule with no switch is a money rule nobody
+    turns on."""
+    print("\n# the owner can switch the seat rule on, see it working, and fix a level — no SQL")
+    from community import repositories as repo, seats as S
+    m, other = fx.members[0], fx.members[1]
+
+    cfg = repo.settings(s, club_id=fx.club_id)
+    check("it reads OFF to begin with", cfg["seat_rule_enforced"] is False, str(cfg))
+
+    cfg = repo.save_settings(s, club_id=fx.club_id,
+                             fields={"community_enabled": True, "seat_rule_enforced": True,
+                                     "open_game_cutoff_hours": 6, "seat_pay_hours": 48})
+    check("switching it on sticks", cfg["seat_rule_enforced"] is True, str(cfg))
+    check("…and the money core sees the SAME switch",
+          S.policy(s, fx.club_id)["seat_rule_enforced"] is True)
+    check("the timings save too", cfg["open_game_cutoff_hours"] == 6 and cfg["seat_pay_hours"] == 48,
+          str(cfg))
+    check("an absurd timing is clamped, not stored",
+          repo.save_settings(s, club_id=fx.club_id,
+                             fields={"seat_pay_hours": 99999})["seat_pay_hours"] == 720)
+
+    # The operational read the owner actually scans: is anyone about to play on an unpaid court?
+    _membership_for_court(s, fx, m)
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="membership_covered",
+                         starts_at=utc_iso(at(fx, 15)), ends_at=utc_iso(at(fx, 16)),
+                         extra_clients=[{"user_id": str(other)}], play_format="singles")
+    check("the game was made", r.get("ok"), str(r))
+    games = repo.admin_games(s, club_id=fx.club_id)
+    mine = [g for g in games if g["booking_id"] == str(r["booking"]["id"])]
+    check("the owner's games list shows it", len(mine) == 1, str(games))
+    check("…with the money still owed on it, which is the number they scan for",
+          mine and mine[0]["owed_minor"] == 15000, str(mine))
+
+    cfg2 = repo.settings(s, club_id=fx.club_id)
+    check("the dashboard counts the unpaid seat too", cfg2["unpaid_seats_minor"] == 15000, str(cfg2))
+
+    # A coach correcting a self-rating — the fix for "everybody is advanced".
+    repo.upsert_player_profile(s, club_id=fx.club_id, user_id=other,
+                               fields={"level_num": 9.0, "visible_in_community": True})
+    check("a self-declared level is recorded as SELF",
+          repo.player_profile(s, club_id=fx.club_id, user_id=other)["level_source"] == "self")
+    repo.set_level_as_staff(s, club_id=fx.club_id, user_id=other, level_num=5.0,
+                            set_by_user_id=fx.coach_uid)
+    prof = repo.player_profile(s, club_id=fx.club_id, user_id=other)
+    check("a coach's correction overwrites it", prof["level_num"] == 5.0, str(prof))
+    check("…and is recorded as an ASSESSMENT, not a self-rating",
+          prof["level_source"] == "coach", str(prof))
+    check("the players list shows both the level and who set it",
+          any(p["user_id"] == str(other) and p["level"] == 5.0 and p["level_source"] == "coach"
+              for p in repo.admin_players(s, club_id=fx.club_id)))
+
+
 SCENARIOS = [
     # THE SEAT RULE (community/) — the money core, pinned before create_booking learns about seats.
     sc_seat_split_covers_the_court_exactly,
+    sc_the_seat_rule_can_be_switched_on_without_sql,
     sc_a_crafted_game_cannot_cheapen_or_outlive_its_own_bill,
     sc_invited_friend_is_trialed_once_only,
     sc_joining_an_open_game_bills_the_new_seat,

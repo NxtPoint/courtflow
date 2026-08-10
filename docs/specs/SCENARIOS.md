@@ -11,13 +11,13 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 508 / billing 693 / statement 64** (72 / 95 / 12 `sc_*` functions).
+  **booking 521 / billing 693 / statement 64** (73 / 95 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
 ---
 
-## `test_booking_scenarios` — the diary (72 scenarios)
+## `test_booking_scenarios` — the diary (73 scenarios)
 
 Double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
 **court→service allocation** (per-service courts + pricing), **classes reserve N courts** (held +
@@ -86,6 +86,8 @@ cancel (`sc_leaving_a_game_frees_the_seat_and_the_debt`) · the hourly sweep col
 exactly once and raises no second charge (`sc_open_game_sweep_collapses_and_is_idempotent`) · and
 **no community read carries an email**, a member is not discoverable until they opt in, and the viewer
 is shown nobody's amount but their own (`sc_community_reads_never_leak_contact_details`).
+
+**FIND A GAME — the owner's side** — the seat rule can be switched on, its timings saved (and an absurd one clamped), the games list shows what is still owed, the dashboard counts the unpaid seats, and a coach's level correction overwrites a self-rating and is recorded as an ASSESSMENT rather than a self-declaration (`sc_the_seat_rule_can_be_switched_on_without_sql` — a money rule with no switch is a money rule nobody turns on, which is how the entitlement caps sat inert for weeks).
 
 ---
 

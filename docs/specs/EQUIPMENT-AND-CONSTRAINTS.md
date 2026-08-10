@@ -3,7 +3,7 @@
 Status: **SHIPPED + LIVE on `master` / prod (merged 2026-07-12).** All four capabilities shipped reuse-first
 on the existing engines. Every value is owner-configured data (white-label); every new row is `club_id`-scoped;
 all boot DDL is idempotent (`python -m db` twice = no-op). Gate baseline at merge: **booking 180 / billing 311
-/ statement 47**; current **booking 508 / billing 693 / statement 64**.
+/ statement 47**; current **booking 521 / billing 693 / statement 64**.
 Commits: peak `9703ee2` · membership+trial `08c9820` · equipment `db24db9` (spec `36450d6`).
 
 > ## ⚠ SUPERSEDED IN FOUR PLACES (2026-07-27/29) — read this first

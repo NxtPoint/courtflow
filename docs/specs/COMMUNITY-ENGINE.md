@@ -162,6 +162,29 @@ its four events (`game_opened`, `game_seat_taken`, `game_full`, `game_seat_relea
 to the audit**. They are in `contracts/events.md` because they were added by hand — nothing would have
 caught it if they weren't. Any lane emitting via a helper has the same blind spot.
 
+## Admin surfaces (built 2026-08-10)
+
+Two sections under **Admin → Setup**, plus seven `/api/community/admin/*` endpoints gated on the
+existing capabilities (`manage_policy` to change anything, `view_master_diary` to read; a **coach**
+may also correct a level).
+
+- **Setup → Community & games** — the two switches, the timings (`open_game_cutoff_hours`,
+  `seat_pay_hours`, `guest_trial_days`), and a live "Right now" band (open games · invites out ·
+  players findable · **seats unpaid**). **This is the only place the seat rule can be switched on.**
+  Before it existed the flags were SQL-only — which is *precisely* how the entitlement caps shipped
+  correct and then sat inert for weeks, because everyone assumed a shipped feature was a working one.
+  The seat-rule toggle carries an explicit warning that it changes what members pay, and the
+  seats-per-format card states the doubles denominator rather than leaving the owner to discover it.
+- **Setup → Games & invitations** — three tabs. *Games*: every seated game in the next 14 days with
+  seats taken/open and **what is still owed**, which is the number an owner actually scans for ("is
+  anyone about to play on a court nobody paid for?"); a row opens the existing `#/event/<id>` record.
+  *Invites*: the invite log with whether the free week was granted — the answer to "my friend says
+  they never got their free week", otherwise unanswerable without SQL — and Revoke.
+  *Players & levels*: correct a level; a self-rating and a coach's assessment are never confused
+  (`level_source`).
+
+Guarded by `sc_the_seat_rule_can_be_switched_on_without_sql`.
+
 ## Still to build
 
 Admin surfacing of open games, invites and level overrides. The two owed money scenarios below
@@ -187,7 +210,7 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
 read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
 the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
-(`courtflow-dev`) at booking 508 / billing 693 / statement 64, with `python -m db` twice a clean
+(`courtflow-dev`) at booking 521 / billing 693 / statement 64, with `python -m db` twice a clean
 no-op including `community.schema`.
 
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart

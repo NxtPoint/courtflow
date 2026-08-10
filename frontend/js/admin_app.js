@@ -1782,6 +1782,13 @@
       mount: function (h) { UI.clear(h); window.AdminUI.coachManage(h); } },
     { key: "promotions", label: "Promotions & offers", desc: "Run a special with a promo code — e.g. 20% off memberships",
       mount: function (h) { UI.clear(h); window.AdminUI.promotions(h); } },
+    // Find a Game + the seat rule. The ONLY place the two switches can be flipped — before this
+    // screen existed they were SQL-only, which is exactly how the entitlement caps ended up
+    // shipped-but-inert for weeks (docs/specs/COMMUNITY-ENGINE.md).
+    { key: "community", label: "Community & games", desc: "Find a Game, guest fees, invitations & player levels",
+      mount: function (h) { UI.clear(h); window.AdminUI.communityManage(h); } },
+    { key: "games", label: "Games & invitations", desc: "Who's playing, what's unpaid, who's been invited",
+      mount: function (h) { UI.clear(h); window.AdminUI.communityGames(h); } },
   ];
   // Owner creates a court SERVICE (a club-owned court-hire tier, e.g. Hardcourt vs Clay). Each is a
   // billing.product(kind=court_booking) with its own price; courts are then ALLOCATED to it under
