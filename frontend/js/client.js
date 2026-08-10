@@ -973,14 +973,34 @@
     set(wrap);
   }
 
+  var INTENT_WORD = { social: "Social hit", practice: "Practice", competitive: "Competitive" };
+
   function bookingRow(b) {
-    return el("div", { class: "cf-item cf-item-tap", onclick: function () { go("#/booking/" + b.id); } }, [
+    // A GAME reads as a game. Before this, a member who had just published an open game saw a row
+    // identical to every other court booking — no badge, no seat count, and tapping it opened the
+    // plain booking record rather than the game. Nothing on the screen reflected the thing they had
+    // just done, which is why posting one "felt like a normal booking".
+    var isGame = b.visibility === "open" || (b.seats > 1 && b.seats_taken != null);
+    var open = isGame ? Math.max(0, (b.seats || 0) - (b.seats_taken || 0)) : 0;
+    var sub = UI.fmtDate(b.starts_at) + " · " + timeRange(b);
+    if (isGame) {
+      var bits = [];
+      if (b.play_intent) bits.push(INTENT_WORD[b.play_intent] || b.play_intent);
+      bits.push(open > 0 ? (open + (open === 1 ? " seat open" : " seats open")) : "Full");
+      sub += " · " + bits.join(" · ");
+    }
+    return el("div", { class: "cf-item cf-item-tap", onclick: function () {
+      // An open game drills to the GAME (who's in, chat), not the bare booking record.
+      go(isGame ? "#/game/" + b.id : "#/booking/" + b.id);
+    } }, [
       el("span", { class: "cf-chip " + b.booking_type, text: typeLabel(b.booking_type) }),
       el("div", { class: "cf-item-main" }, [
         el("div", { class: "cf-item-t", text: (b.court_name || b.resource_name || typeLabel(b.booking_type)) }),
-        el("div", { class: "cf-item-s", text: UI.fmtDate(b.starts_at) + " · " + timeRange(b) }),
+        el("div", { class: "cf-item-s", text: sub }),
       ]),
-      statusChip(b.status),
+      isGame && open > 0
+        ? el("span", { class: "cf-chip ok", text: "Open game" })
+        : statusChip(b.status),
     ]);
   }
   function act(fn, okMsg) { fn().then(function () { UI.toast(okMsg, "info"); route(); }, function (e) { UI.toast(UI.errMsg(e), "error"); }); }

@@ -1916,7 +1916,16 @@ def list_bookings(session, *, club_id, role, user_id, date_from=None, date_to=No
              # runs the lesson; the client is their own client.
              "       NULLIF(TRIM(COALESCE(ub.first_name,'') || ' ' || COALESCE(ub.surname,'')),'') "
              "         AS booked_by_name, "
-             "       ub.email AS booked_by_email "
+             "       ub.email AS booked_by_email, "
+             # A GAME (community/) is a court booking with seats — so the member's own list can
+             # SAY it is one. Without these a posted game rendered identically to any other court
+             # booking, which is why the member who had just published one could not tell that
+             # anything had happened. Cheap columns on a row we were already reading.
+             "       b.visibility, b.play_format, b.play_intent, b.seats, "
+             "       (SELECT count(*) FROM diary.booking_party bp "
+             "         WHERE bp.booking_id = b.id "
+             "           AND bp.seat_status IN ('invited','held','confirmed','collapsed')) "
+             "         AS seats_taken "
              "FROM diary.booking b "
              "LEFT JOIN diary.resource r ON r.id = b.resource_id "
              'LEFT JOIN iam."user" ub ON ub.id = b.booked_by_user_id '

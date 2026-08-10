@@ -1423,6 +1423,21 @@
       else { title = "You're enrolled!"; msg = "A confirmation email is on its way."; }
     } else if (stt === "held") { title = "Booking held"; msg = "We're holding your slot until payment completes."; }
     else { title = "You're booked!"; msg = "A confirmation email is on its way."; }
+    // POSTING A GAME IS A DIFFERENT ACT FROM BOOKING A COURT, and the screen has to say so. The first
+    // cut ended on the ordinary "You're booked!", so a member who had just published an open game to
+    // the whole club got no acknowledgement that anything had happened — it "felt like a normal
+    // booking", because on that screen it was indistinguishable from one.
+    if (kind !== "class" && st.playFormat && st.playFormat !== "practice"
+        && st.openGame !== false && seatStepOn()) {
+      var seatsTotal = seatsForFormat(st.playFormat);
+      var openSeats = Math.max(0, seatsTotal - ((st.players || []).length + 1));
+      if (openSeats > 0 && stt !== "held") {
+        title = "Your game is posted";
+        msg = "Court booked, and " + (openSeats === 1 ? "a seat is" : openSeats + " seats are")
+            + " open for another member to take. You'll be notified when someone joins — "
+            + "you can message them here once they do.";
+      }
+    }
     if (st.onBehalf) {
       title = "Booked for " + (st.onBehalf.name || st.onBehalf.email || "your client");
       msg = "They've been notified. Collect payment at court, from their pack, or on their account.";
