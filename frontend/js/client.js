@@ -274,7 +274,7 @@
     try { cfg = await window.TFAuth.apiJSON("/api/community/config"); } catch (e) { return; }
     if (!cfg || !cfg.community_enabled || !host.isConnected) return;
     UI.clear(host);
-    host.appendChild(card("Want to play?", el("div", {}, [
+    host.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Want to play?" }), el("div", {}, [
       el("p", { class: "cf-muted", style: "margin:0 0 10px",
         text: "Post a game and let another member take the spare seat — or take someone else's." }),
       el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap" }, [
@@ -283,7 +283,7 @@
         el("button", { class: "cf-btn", text: "Players for you",
           onclick: function () { go("#/play/players"); } }),
       ]),
-    ])));
+    ])]));
   }
 
   // The month-navigable Billing + Activity summary (re-fetches on ‹ ›). Reuses HBMONTH.
@@ -412,7 +412,7 @@
       }
     }
     paintLevel();
-    wrap.appendChild(card("Your level", lvlBox));
+    wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your level" }), lvlBox]));
 
     // 2) WHAT KIND OF TENNIS + WHEN. Both feed the matching score.
     function chips(title, hint, keyName, opts) {
@@ -432,7 +432,7 @@
         row.appendChild(b);
       });
       box.appendChild(row);
-      return card(title, box);
+      return card([el("h2", { style: "margin:0 0 8px", text: title }), box]);
     }
     wrap.appendChild(chips("What are you looking for?",
       "This is what most people get wrong for each other — turning up for a relaxed hit against someone playing a practice match spoils it for both of you.",
@@ -464,7 +464,7 @@
       });
     });
     tBox.appendChild(grid);
-    wrap.appendChild(card("When do you play?", tBox));
+    wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "When do you play?" }), tBox]));
 
     // 4) THE OPT-IN — last, once they can see what it means.
     var vBox = el("div", {});
@@ -484,7 +484,7 @@
         text: "They'll see your first name and your level — never your email or phone. You can turn this off whenever you like." }),
     ]));
     vBox.appendChild(vLbl);
-    wrap.appendChild(card("Being findable", vBox));
+    wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Being findable" }), vBox]));
 
     function renderProfileInto() { renderPlayerProfile(); }
     set(wrap);

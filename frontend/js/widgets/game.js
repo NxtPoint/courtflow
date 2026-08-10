@@ -114,7 +114,7 @@
         input, el("button", { class: "cf-btn cf-btn-sm", text: "Send", onclick: send })
       ]));
     }
-    return card("Chat", box);
+    return card([el("h2", { style: "margin:0 0 8px", text: "Chat" }), box]);
   }
 
   var api = null;
@@ -149,7 +149,7 @@
       var seats = el("div", { class: "cf-list" });
       (game.seats || []).forEach(function (s) { seats.appendChild(seatRow(s, cfg)); });
       for (var i = 0; i < (game.open_seats || 0); i++) seats.appendChild(openSeatRow(cfg, game));
-      host.appendChild(card("Who's playing", seats));
+      host.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Who's playing" }), seats]));
 
       var acts = [];
       if (game.can && game.can.leave && cfg.actions && cfg.actions.leave) {

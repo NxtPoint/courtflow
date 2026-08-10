@@ -19,6 +19,7 @@
 # Deliberately NOT a linter: no style rules, no config, no dependency beyond node itself. It
 # answers exactly one question — will the browser be able to load this file at all?
 
+import re
 import shutil
 import subprocess
 import sys
@@ -39,6 +40,58 @@ def check(name, cond, detail=""):
 def _node():
     """Path to node, or None. Fails CLOSED in main() — a gate that cannot verify must not pass."""
     return shutil.which("node")
+
+
+# ---------------------------------------------------------------------------
+# Shared-helper SHAPE check — the bug `node --check` cannot see
+# ---------------------------------------------------------------------------
+# A file can parse perfectly and still be dead on arrival because a shared helper was called with the
+# wrong ARGUMENT SHAPE. Not hypothetical: `UI.card(children, extra)` takes CHILDREN first and has no
+# title parameter, but it reads like `card(title, body)` — so seven calls were written as
+# `card("Who's playing", seats)`. Every one threw `children.forEach is not a function` the moment it
+# ran (el() does `(children || []).forEach(...)`, and a string has no forEach), which killed the Home
+# card, the entire player-profile screen and the game detail screen.
+#
+# node --check passed all seven. So did 572 backend scenarios. The only thing that found them was
+# opening the page — so the cheapest honest fix is a tripwire on the exact mistake.
+#
+# Keep this list SHORT. It is not a linter; it is a memory of a specific bug. Add an entry only for a
+# helper whose first argument is a node-or-array AND which reads like it takes a title.
+_SHAPE_TRAPS = [
+    (
+        "UI.card",
+        # card("…"  or  card('…'  — a string literal in the children position.
+        re.compile(r"""(?<![\w.])card\(\s*["']"""),
+        'card(children, extra) takes CHILDREN first — there is no title argument. '
+        'Use: card([el("h2", { style: "margin:0 0 8px", text: "Title" }), body])',
+    ),
+]
+
+
+# A file that declares its OWN helper of the same name is not calling the shared one, and its
+# signature is its own business. `service_editor.js` defines `function card(title, hint)` — which
+# genuinely does take a title — so a naive regex flagged four perfectly correct calls. A check that
+# cries wolf is a check people learn to skip, which is worse than not having it.
+_LOCAL_DECL = re.compile(r"function\s+%s\s*\(|(?:var|let|const)\s+%s\s*=\s*function")
+
+
+def check_helper_shapes(files):
+    """Flag calls to a SHARED UI helper with an argument shape that throws at runtime."""
+    bad = []
+    for f in files:
+        src = f.read_text(encoding="utf-8", errors="ignore")
+        for name, rx, why in _SHAPE_TRAPS:
+            short = name.split(".")[-1]
+            if re.search(_LOCAL_DECL.pattern % (short, short), src):
+                continue                      # this file has its own — not our business
+            for lineno, line in enumerate(src.splitlines(), 1):
+                s = line.strip()
+                if s.startswith("//") or s.startswith("*"):
+                    continue
+                if rx.search(line):
+                    bad.append((f"{f.relative_to(ROOT)}".replace("\\", "/") + f":{lineno}",
+                                name, why))
+    return bad
 
 
 def main():
@@ -71,6 +124,8 @@ def main():
             detail = f"{err.strip()} ({loc.split(':')[-1]})" if loc else err.strip()
         check(str(f.relative_to(ROOT)).replace("\\", "/"), ok, detail)
 
+    shape_bad = check_helper_shapes(files)
+
     total = len(_RESULTS)
     passed = sum(1 for _, ok, _ in _RESULTS if ok)
     print(f"\n{passed}/{total} frontend JS files parse")
@@ -80,7 +135,17 @@ def main():
         for n, ok, d in _RESULTS:
             if not ok:
                 print(f"  - {n}  {d}")
-    return 0 if passed == total else 1
+    if shape_bad:
+        print(f"\n{len(shape_bad)} call(s) to a shared helper with the WRONG ARGUMENT SHAPE.")
+        print("These PARSE and then throw the moment the code runs — which is precisely why this")
+        print("check sits beside `node --check` instead of trusting it:")
+        seen = set()
+        for where, name, why in shape_bad:
+            print(f"  - {where}  {name}")
+            if name not in seen:
+                print(f"      {why}")
+                seen.add(name)
+    return 0 if (passed == total and not shape_bad) else 1
 
 
 if __name__ == "__main__":
