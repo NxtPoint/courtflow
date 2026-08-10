@@ -1149,24 +1149,43 @@
     });
     sec.appendChild(fmtRow);
 
-    // WHAT KIND OF TENNIS — deliberately its own question, because singles/doubles above is a
-    // SEAT COUNT (it sets how the court fee splits) and has nothing to say about whether you
-    // want a relaxed hit or a match. Turning up to the wrong one of those spoils a session as
-    // surely as playing someone three levels above you.
+    // HIT OR MATCH — its own question, because singles/doubles above is a SEAT COUNT (it sets how
+    // the court fee splits) and says nothing about what the players actually want. Tomo put it
+    // plainly: "some people want to go out and just hit, and not play a match. some want to play a
+    // match and never hit." Turning up to the wrong one of those spoils a session as surely as
+    // playing someone three levels above you, and it is the one thing a stranger cannot guess.
+    //
+    // The ladder runs hit -> friendly match -> competitive match, so the two poles Tomo named sit at
+    // the ends and the middle is a real option rather than a shrug. (Note the collision: playFormat
+    // 'practice' means ON MY OWN, a seat count of one; playIntent 'practice' means a hit with
+    // somebody. Different axes, same word, and only the first one is about money.)
     if (st.playFormat !== "practice") {
       sec.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:4px 0 4px",
-        text: "What are you after?" }));
-      var intentRow = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin-bottom:8px" });
-      [["social", "A social hit"], ["practice", "Practice"], ["competitive", "Competitive"]]
-        .forEach(function (o) {
-          var b = el("button", { type: "button", text: o[1],
-            class: "cf-btn cf-btn-sm" + (st.playIntent === o[0] ? " cf-btn-primary" : "") });
-          b.addEventListener("click", function () {
-            st.playIntent = st.playIntent === o[0] ? null : o[0]; renderConfirm();
-          });
-          intentRow.appendChild(b);
+        text: "What kind of tennis?" }));
+      var intentRow = el("div", { style: "display:flex;flex-direction:column;gap:6px;margin-bottom:8px" });
+      window.CFIntent.OPTIONS.forEach(function (o) {
+        var on = st.playIntent === o.key;
+        var b = el("button", { type: "button",
+          class: "cf-btn cf-btn-sm" + (on ? " cf-btn-primary" : ""),
+          style: "text-align:left;justify-content:flex-start" }, [
+          el("span", { text: o.label }),
+          el("span", { class: on ? "cf-tiny" : "cf-muted cf-tiny", style: "margin-left:8px",
+            text: o.hint }),
+        ]);
+        b.addEventListener("click", function () {
+          st.playIntent = on ? null : o.key; renderConfirm();
         });
+        intentRow.appendChild(b);
+      });
       sec.appendChild(intentRow);
+      // REQUIRED only when the game goes out to STRANGERS. Booking with a named friend, the two of
+      // you already settled this between yourselves and a forced tap is pure friction; posting an
+      // open game, leaving it blank is exactly the mismatch this field exists to prevent — and it
+      // is why Tomo's own first game showed no intent at all.
+      if (needsIntent()) {
+        sec.appendChild(el("p", { class: "cf-tiny", style: "margin:0 0 8px;color:#946017",
+          text: "Pick one so members know what they're joining." }));
+      }
     }
 
     if (st.playFormat !== "practice") {
@@ -1230,7 +1249,18 @@
   }
 
   // ---- submit ----------------------------------------------------------------
+  // An OPEN game with no stated intent is the one blank that strands a stranger. Private bookings
+  // are untouched — this asks nothing of the member who already knows who they are playing.
+  function needsIntent() {
+    return seatStepOn() && st.type === "court" && st.playFormat !== "practice"
+        && st.openGame !== false && !st.playIntent;
+  }
+
   async function submit(btn) {
+    if (needsIntent()) {
+      UI.toast("Choose a hit or a match first — it's what members filter on.", "warn");
+      return;
+    }
     captureGuest();
     btn.disabled = true; btn.textContent = "Booking…";
     try {

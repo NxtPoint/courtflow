@@ -12,6 +12,36 @@
   var UI = window.UI, el = function () { return UI.el.apply(UI, arguments); };
   function money(m, cur) { return UI.money(m, cur || "ZAR"); }
 
+  // ---- CFIntent: hit or match, in ONE place -----------------------------------
+  // The vocabulary was duplicated in four files and had already drifted into nonsense: "Social hit"
+  // and "Practice" both read as hitting, so the only option that read as a MATCH was "Competitive"
+  // — and a member who just wanted a relaxed game had nothing honest to pick. Tomo's split is the
+  // real one: some want to hit and never play a match, some want a match and never just hit.
+  //
+  // So the ladder runs HIT -> FRIENDLY MATCH -> COMPETITIVE MATCH: the two poles at the ends, a
+  // genuine middle, and every rung says whether a score is being kept — the single fact that
+  // decides whether two strangers had a good afternoon.
+  //
+  // It lives here, not in widgets/game.js, because booking.js asks the question in all THREE SPAs
+  // and game.js only loads in the client one. The stored keys are untouched (the DB CHECK is
+  // social/practice/competitive) — this renames only what a human reads.
+  var INTENT_OPTIONS = [
+    { key: "practice",    label: "Just a hit",       hint: "Rally and drills, no score" },
+    { key: "social",      label: "A friendly match", hint: "We play points, nothing serious" },
+    { key: "competitive", label: "Competitive",      hint: "Proper sets, keep score" },
+  ];
+  window.CFIntent = {
+    OPTIONS: INTENT_OPTIONS,
+    // The short form for a chip or a one-line summary. Unknown/NULL returns "" so callers can
+    // filter(Boolean) — an intent that was never set must read as absent, never as "social".
+    word: function (key) {
+      for (var i = 0; i < INTENT_OPTIONS.length; i++) {
+        if (INTENT_OPTIONS[i].key === key) return INTENT_OPTIONS[i].label;
+      }
+      return "";
+    },
+  };
+
   // ---- KPI strip --------------------------------------------------------------
   // items: [{value, label}] — value already formatted (string/number).
   function stats(items) {

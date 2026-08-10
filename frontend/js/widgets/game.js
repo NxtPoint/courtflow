@@ -27,7 +27,7 @@
   // What kind of tennis this is — a SEPARATE axis from singles/doubles (which is a seat
   // count, i.e. a money field). Mismatched intent spoils a session as reliably as a
   // mismatched level, so it is shown on the card, not buried in the chat.
-  var INTENT = { social: "Social hit", practice: "Practice", competitive: "Competitive" };
+  var INTENT = window.CFIntent;      // ONE vocabulary, defined in crm_ui.js — never a local copy
 
   function seatChip(seat) {
     // The vocabulary a player actually needs: am I paid for, or do I owe? "covered" is deliberately
@@ -132,7 +132,7 @@
       } catch (e) { when = ""; }
 
       var title = (game.play_format === "doubles" ? "Doubles" : "Singles") + " game";
-      if (game.play_intent) title = (INTENT[game.play_intent] || title) + " · " + title.toLowerCase();
+      if (INTENT.word(game.play_intent)) title = INTENT.word(game.play_intent) + " · " + title.toLowerCase();
       host.appendChild(window.UI.pageHeader
         ? window.UI.pageHeader(title, when)
         : el("h2", { text: title }));
@@ -202,7 +202,7 @@
         when = window.UI.fmtDate(g.starts_at) + " · " + window.UI.fmtTime(g.starts_at);
       } catch (e) { when = ""; }
       var bits = [g.court_name, g.play_format === "doubles" ? "Doubles" : "Singles"];
-      if (g.play_intent) bits.push(INTENT[g.play_intent] || g.play_intent);
+      if (INTENT.word(g.play_intent)) bits.push(INTENT.word(g.play_intent));
       if (g.host_level) bits.push("Level " + g.host_level);
       var n = el("button", { class: "cf-item cf-item-tap", style: "width:100%;text-align:left;cursor:pointer;border:1px solid var(--border);background:var(--surface)" }, [
         el("div", { class: "cf-item-main" }, [

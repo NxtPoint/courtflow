@@ -668,12 +668,11 @@
     bar.appendChild(chip("Around my level", !!PLAY_FILTER.near, function () {
       PLAY_FILTER.near = PLAY_FILTER.near ? null : 1.5; renderFindAGame();
     }));
-    [["social", "Social hit"], ["practice", "Practice"], ["competitive", "Competitive"]]
-      .forEach(function (o) {
-        bar.appendChild(chip(o[1], PLAY_FILTER.intent === o[0], function () {
-          PLAY_FILTER.intent = PLAY_FILTER.intent === o[0] ? null : o[0]; renderFindAGame();
-        }));
-      });
+    window.CFIntent.OPTIONS.forEach(function (o) {
+      bar.appendChild(chip(o.label, PLAY_FILTER.intent === o.key, function () {
+        PLAY_FILTER.intent = PLAY_FILTER.intent === o.key ? null : o.key; renderFindAGame();
+      }));
+    });
     wrap.appendChild(bar);
 
     var host = el("div", {});
@@ -1046,7 +1045,7 @@
     set(wrap);
   }
 
-  var INTENT_WORD = { social: "Social hit", practice: "Practice", competitive: "Competitive" };
+  var INTENT_WORD = window.CFIntent;   // ONE vocabulary, defined in crm_ui.js
 
   function bookingRow(b) {
     // A GAME reads as a game. Before this, a member who had just published an open game saw a row
@@ -1058,7 +1057,7 @@
     var sub = UI.fmtDate(b.starts_at) + " · " + timeRange(b);
     if (isGame) {
       var bits = [];
-      if (b.play_intent) bits.push(INTENT_WORD[b.play_intent] || b.play_intent);
+      if (INTENT_WORD.word(b.play_intent)) bits.push(INTENT_WORD.word(b.play_intent));
       bits.push(open > 0 ? (open + (open === 1 ? " seat open" : " seats open")) : "Full");
       sub += " · " + bits.join(" · ");
     }
