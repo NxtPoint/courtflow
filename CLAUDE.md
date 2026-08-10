@@ -43,11 +43,11 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 555 / billing 702 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 567 / billing 702 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (77/95/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (79/95/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **Update the "Current green baseline" line above and nothing else**, so
    the numbers can't drift apart (`scripts.audit_docs` fails any doc that claims a DIFFERENT current
@@ -441,9 +441,14 @@ the booker's.
   worthless and an imported Wix member can never be trialed.
 - **Cron:** `.github/workflows/open-games.yml` (hourly) → `POST /api/cron/open-games` — remind → release
   → collapse, each game in its own SAVEPOINT, fails the job loudly. Not a `render.yaml` cron.
-- **Frontend:** `Widgets.Game` + `Widgets.GameList` (the ONE render), client `#/play` + `#/game/<id>`,
-  the booking flow's **"Who's playing?"** step, and `join.html` on the never-sleeps web. Inviting reuses
+- **Frontend:** `Widgets.Game` + `Widgets.GameList` (the ONE render); client `#/play` (feed, filtered by
+  intent + **around my level** by default), `#/play/profile` (the 5-question level quiz, preferences and
+  the **opt-in**), `#/play/players`, `#/game/<id>`, a Home card; the booking flow's **"Who's playing?"**
+  step sets seats AND `play_intent`; `join.html` on the never-sleeps web. Inviting reuses
   `CRMUI.addLessonPlayerModal`; paying a seat reuses `Pay.startYocoCheckout` — **no second payment path**.
+- **`play_intent` (social/practice/competitive) is a SEPARATE axis from `play_format`** — the latter is a
+  MONEY field (it sets the seat count), so conflating them would mean "I just want a relaxed hit" could
+  only be said by changing how many people share the fee.
 - **Admin:** Setup → **Community & games** (the ONLY place the switches can be flipped) and **Games &
   invitations**. See "Still needs Tomo" for what must be configured before the money switch.
 - **Privacy:** no community read returns an email or a phone — the reason match chat exists. Discovery is

@@ -204,10 +204,43 @@ may also correct a level).
 
 Guarded by `sc_the_seat_rule_can_be_switched_on_without_sql`.
 
+## The discovery layer (built 2026-08-10 — the front end that was missing)
+
+The engine shipped a day before the screens did, which is the "built but not wired" trap
+[FEATURE-FLAGS.md](FEATURE-FLAGS.md) §B is a list of: a member could not set a level, say what kind of
+tennis they wanted, or become findable **at all**. Now wired:
+
+- **`#/play/profile` — Your tennis profile.** The 5-question level quiz (answers about what you *do*,
+  never "how would you rate yourself?"), what you're after, singles/doubles, a day-part grid for when
+  you play, and the **opt-in last** — after you can see what you'd be sharing. A coach-set level is
+  shown as such and is not self-editable.
+- **`#/play` — the feed, now filtered.** Defaults to **games around my level** (`near=1.5`) plus intent
+  chips. Crucially it **degrades to everything** for a member with no level yet: an empty feed reads as
+  "no games here" rather than "tell us your level", which is the wrong lesson on a first visit.
+- **`#/play/players` — Players for you.** The deterministic suggestions, with an empty state that sends
+  you to set up your own profile rather than shrugging.
+- **A Home card**, above *Your sessions* on purpose — "I want to play and have nobody to play with" is
+  felt before you look at what you've already booked. Rendered only where `community_enabled`.
+
+### `play_intent` — what kind of tennis (NEW COLUMN)
+
+`diary.booking.play_intent` — `social` / `practice` / `competitive`. **A separate axis from
+`play_format`**, and it has to be: `play_format` (singles/doubles) is a **money** field that sets the
+seat count, so conflating them would mean *"I just want a relaxed hit"* could only be said by changing
+how many people share the court fee.
+
+It is arguably the most useful thing a member can say. Mismatched intent spoils a session as reliably
+as mismatched level — turning up for a friendly hit against someone grinding out a practice match is
+the fastest way to stop using a feature like this. Set in the booking flow's "Who's playing?" step,
+shown on the game card and the game header, and filterable in the feed.
+Guarded by `sc_a_game_says_what_kind_of_tennis_it_is` and
+`sc_the_feed_defaults_to_games_around_my_level`.
+
 ## Still to build
 
-Admin surfacing of open games, invites and level overrides. The two owed money scenarios below
-(a refund restoring the split; a collapsed seat on a card-only court). Phase 2 as listed above.
+The two owed money scenarios below (a refund restoring the split; a collapsed seat on a card-only
+court). The coach and admin apps do not yet mount `Widgets.Game` — the widget is config-ready for them,
+nothing calls it. Phase 2 as listed above.
 
 **Done since:** the `booking.js` **"Who's playing?"** step — format (singles / doubles / on my own),
 named players, and a "let another member take the spare seat" tick. It appears ONLY where the club has
@@ -229,7 +262,7 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
 read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
 the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
-(`courtflow-dev`) at booking 555 / billing 702 / statement 64, with `python -m db` twice a clean
+(`courtflow-dev`) at booking 567 / billing 702 / statement 64, with `python -m db` twice a clean
 no-op including `community.schema`.
 
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart

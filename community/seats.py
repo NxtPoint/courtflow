@@ -1,16 +1,23 @@
 # community/seats.py — THE SEAT RULE. The only place the money split lives.
 #
-#   A court booking has SEATS. Every seat is held by a covered member (free), a payer (owes a share),
-#   or is OPEN. The court's price for that duration is SPLIT EQUALLY among the seats that are not
-#   covered. An OPEN seat unfilled at the cutoff COLLAPSES onto the booking holder as a charged seat.
+#   A court booking has SEATS. Every seat is held by a covered member (free), a payer (owes A SHARE),
+#   or is OPEN. A SHARE IS A FIXED FRACTION OF THE COURT'S PRICE (club.policy.seat_share_pct, default
+#   50%, rounded) — NOT a division of the fee among whoever happens to be playing. An OPEN seat
+#   unfilled at the cutoff COLLAPSES onto the booking holder as one charged share.
 #
-# The club therefore banks exactly one court fee for every court hour unless every player on it is a
-# member. Membership decides WHO pays, never WHETHER the court is paid for:
+# Membership decides WHO pays, never WHETHER the court is paid for. On a 60-min R150 court at the
+# default 50% rounded up to R10, a share is R80:
 #
-#   member + member       -> R0                     both covered
-#   member + non-member   -> R150 on the non-member  (the whole fee — the member's seat is covered)
-#   non-member x2         -> R75 + R75               both must settle before the court confirms
-#   member, seat unfilled -> R150 on the member      at the cutoff (nobody to share with)
+#   member + member       -> R0            both covered
+#   member + non-member   -> R80           on the non-member; the member's own seat is covered
+#   non-member x2         -> R80 + R80     both must settle before the court confirms
+#   member, seat unfilled -> R80           at the cutoff, to the holder
+#
+# WHY A FIXED FRACTION AND NOT A SPLIT (owner decision, 2026-08-10). The price a player is QUOTED has
+# to survive somebody else joining, leaving, or turning out to be a member. A divided fee does not —
+# your share moves under you — and needing it not to is what forced a lock, a re-price and a refusal
+# into the first design. All three are gone. At 50% two payers still add up to the court price; with
+# MORE than two the club takes more than one court fee, deliberately.
 #
 # WHY THIS MODULE RAISES INSTEAD OF GUARDING
 # Every read in analytics/ and insights/ is _guard-wrapped so a panel degrades to empty instead of
@@ -156,7 +163,7 @@ def _booking(session, club_id, booking_id):
     row = session.execute(
         text("SELECT id, club_id, booking_type, resource_id, product_id, starts_at, ends_at, "
              "       status, settlement_mode, booked_by_user_id, visibility, play_format, seats, "
-             "       open_until, split_locked_at, seat_share_minor "
+             "       open_until, split_locked_at, seat_share_minor, play_intent "
              "FROM diary.booking WHERE club_id = :c AND id = :b"),
         {"c": str(club_id), "b": str(booking_id)},
     ).mappings().first()
@@ -508,7 +515,7 @@ def all_prepaid_seats_settled(session, *, club_id, booking_id):
 
 def seat_a_new_booking(session, *, club_id, booking_id, holder_user_id, holder_order_id=None,
                        extra_user_ids=(), play_format=None, seats=None, visibility="private",
-                       open_until=None, now=None):
+                       open_until=None, play_intent=None, now=None):
     """THE ONE ENTRY POINT the diary calls. Turn a freshly-created court booking into a seated game
     and bill its seats. Returns None when the club has not enabled the rule — the caller then behaves
     exactly as it always has.
@@ -556,10 +563,13 @@ def seat_a_new_booking(session, *, club_id, booking_id, holder_user_id, holder_o
         open_until = club_cutoff if open_until is None else min(open_until, club_cutoff)
     else:
         open_until = None
+    if play_intent not in (None, "social", "practice", "competitive"):
+        play_intent = None          # an unknown intent is no intent, never a stored surprise
     session.execute(
         text("UPDATE diary.booking SET play_format = :f, seats = :n, visibility = :v, "
-             "       open_until = :ou, updated_at = now() WHERE club_id = :c AND id = :b"),
-        {"f": fmt, "n": total_seats, "v": visibility, "ou": open_until,
+             "       open_until = :ou, play_intent = COALESCE(:pi, play_intent), "
+             "       updated_at = now() WHERE club_id = :c AND id = :b"),
+        {"f": fmt, "n": total_seats, "v": visibility, "ou": open_until, "pi": play_intent,
          "c": str(club_id), "b": str(booking_id)})
 
     # The holder's own seat. Linked to the booking's existing order so it is RE-PRICED, never

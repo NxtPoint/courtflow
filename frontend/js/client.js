@@ -141,7 +141,11 @@
     if (top === "activity") return renderRecord();   // "Full activity ›" now opens the ONE Client-360 record
     if (top === "invoices") return renderInvoices();  // the member's issued invoices (view/download PDF)
     if (top === "txn") return renderTxn(parts[1]);    // a purchase (pack/membership/invoice) transaction record
-    if (top === "play") return renderFindAGame();     // Find a Game — the open-games feed
+    if (top === "play") {                             // Find a Game
+      if (parts[1] === "profile") return renderPlayerProfile();   // level + preferences + opt-in
+      if (parts[1] === "players") return renderFindAPlayer();     // suggested opponents
+      return renderFindAGame();                                   // the open-games feed
+    }
     if (top === "game") return renderGame(parts[1]);  // one game: seats, money, chat
     if (top === "analysis") return renderAnalysis();  // embedded Ten-Fifty5 match analysis / technique
     if (top === "plan") return renderPlan(parts[1]);
@@ -231,6 +235,30 @@
       tiles.appendChild(bookTile("court", eq.name, sub, function () { PENDING_EQUIP = eq.id; go("#/book/court"); }));
     });
     qb.appendChild(tiles); wrap.appendChild(qb);
+
+    // FIND A GAME — above "Your sessions" on purpose: the problem it solves ("I want to play and
+    // have nobody to play with") is felt BEFORE you look at what you've already booked. Rendered only
+    // where the club has switched the community on, so a club that hasn't sees nothing at all.
+    wrap.appendChild(el("div", { id: "home-play" }));
+    (async function () {
+      var host = document.getElementById("home-play");
+      if (!host) return;
+      var cfg = null;
+      try { cfg = await window.TFAuth.apiJSON("/api/community/config"); } catch (e) { return; }
+      if (!cfg || !cfg.community_enabled || !host.isConnected) return;
+      var body = el("div", {}, [
+        el("p", { class: "cf-muted", style: "margin:0 0 10px",
+          text: "Post a game and let another member take the spare seat — or take someone else's." }),
+        el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap" }, [
+          el("button", { class: "cf-btn cf-btn-primary", text: "Find a game",
+            onclick: function () { go("#/play"); } }),
+          el("button", { class: "cf-btn", text: "Players for you",
+            onclick: function () { go("#/play/players"); } }),
+        ]),
+      ]);
+      UI.clear(host);
+      host.appendChild(card("Want to play?", body));
+    })();
 
     // Your sessions (Upcoming / Past) — what's next, right after choosing a service.
     wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your sessions" }), el("div", { id: "home-sessions" })]));
@@ -333,18 +361,250 @@
       el("span", { class: "cf-ai-soon", text: "Coming soon" }));
   }
 
+  // ---- PLAYER PROFILE (the gate on everything else in Find a Game) ---------
+  // Nothing in the discovery half is reachable without this screen: a member cannot set a level, say
+  // what kind of tennis they want, or become findable at all. The engine existed for a day before
+  // this did, which is exactly the "built but not wired" trap FEATURE-FLAGS.md §B is a list of.
+  //
+  // DISCOVERY IS OPT-IN and the toggle is the LAST thing on the page, after they can see what they'd
+  // be sharing. Being findable by a thousand strangers is a choice, not a side effect of filling in a
+  // form.
+  var LEVEL_WORDS = ["", "Beginner", "Beginner+", "Recreational", "Intermediate", "Intermediate+",
+                     "Strong club", "Advanced", "Tournament", "High-performance", "Elite"];
+  function levelWord(n) {
+    if (n == null) return "Not set";
+    return (LEVEL_WORDS[Math.round(n)] || "") + " (" + Number(n).toFixed(1) + ")";
+  }
+
+  async function renderPlayerProfile() {
+    loading();
+    var prof = {};
+    try { prof = await window.API.playerProfile(); } catch (e) {}
+    var wrap = el("div", {});
+    wrap.appendChild(pageHeader("Your tennis profile", "Find a game", "#/play"));
+
+    // 1) LEVEL — the single biggest determinant of whether this works for anyone.
+    var lvlBox = el("div", {});
+    function paintLevel() {
+      UI.clear(lvlBox);
+      lvlBox.appendChild(el("div", { class: "cf-row", style: "align-items:center;gap:10px" }, [
+        el("div", { class: "cf-stat-v", text: levelWord(prof.level_num) }),
+        prof.level_source === "coach"
+          ? el("span", { class: "cf-chip cf-chip-ok", text: "set by your coach" }) : null,
+      ].filter(Boolean)));
+      lvlBox.appendChild(el("p", { class: "cf-muted cf-tiny",
+        text: prof.level_source === "coach"
+          ? "A coach has assessed your level. Ask them if you think it needs changing."
+          : "Five quick questions. It only decides who you get matched with — nobody else sees how you answered." }));
+      if (prof.level_source !== "coach") {
+        lvlBox.appendChild(el("button", {
+          class: "cf-btn cf-btn-primary cf-btn-sm", style: "margin-top:8px",
+          text: prof.level_num == null ? "Work out my level" : "Redo the questions",
+          onclick: openQuiz,
+        }));
+      }
+    }
+    paintLevel();
+    wrap.appendChild(card("Your level", lvlBox));
+
+    // 2) WHAT KIND OF TENNIS + WHEN. Both feed the matching score.
+    function chips(title, hint, keyName, opts) {
+      var box = el("div", {});
+      box.appendChild(el("p", { class: "cf-muted cf-tiny", text: hint }));
+      var row = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin-top:6px" });
+      opts.forEach(function (o) {
+        var b = el("button", {
+          type: "button", text: o[1],
+          class: "cf-btn cf-btn-sm" + (prof[keyName] === o[0] ? " cf-btn-primary" : ""),
+        });
+        b.addEventListener("click", function () {
+          var patch = {}; patch[keyName] = o[0];
+          window.API.savePlayerProfile(patch).then(function (r) { prof = r; renderProfileInto(); },
+            function (e) { UI.toast(UI.errMsg(e), "error"); });
+        });
+        row.appendChild(b);
+      });
+      box.appendChild(row);
+      return card(title, box);
+    }
+    wrap.appendChild(chips("What are you looking for?",
+      "This is what most people get wrong for each other — turning up for a relaxed hit against someone playing a practice match spoils it for both of you.",
+      "prefers_play", [["social", "A social hit"], ["practice", "Practice"], ["competitive", "Competitive"]]));
+    wrap.appendChild(chips("Singles or doubles?", "We'll show you more of what you pick.",
+      "prefers_format", [["singles", "Singles"], ["doubles", "Doubles"], ["both", "Either"]]));
+
+    // 3) WHEN — a simple day-part grid; it is the second-heaviest term in the match score.
+    var times = (prof.prefers_times || []).slice();
+    var tBox = el("div", {});
+    tBox.appendChild(el("p", { class: "cf-muted cf-tiny", text: "Tap the times you usually play." }));
+    var grid = el("div", { class: "cf-row", style: "gap:6px;flex-wrap:wrap;margin-top:6px" });
+    [["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"],
+     ["sat", "Sat"], ["sun", "Sun"]].forEach(function (d) {
+      [["am", "am"], ["pm", "pm"]].forEach(function (part) {
+        var keyName = d[0] + "_" + part[0];
+        var b = el("button", {
+          type: "button", text: d[1] + " " + part[1],
+          class: "cf-btn cf-btn-sm" + (times.indexOf(keyName) >= 0 ? " cf-btn-primary" : ""),
+        });
+        b.addEventListener("click", function () {
+          var i = times.indexOf(keyName);
+          if (i >= 0) times.splice(i, 1); else times.push(keyName);
+          window.API.savePlayerProfile({ prefers_times: times }).then(function (r) {
+            prof = r; renderProfileInto();
+          }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+        });
+        grid.appendChild(b);
+      });
+    });
+    tBox.appendChild(grid);
+    wrap.appendChild(card("When do you play?", tBox));
+
+    // 4) THE OPT-IN — last, once they can see what it means.
+    var vBox = el("div", {});
+    var vLbl = el("label", { class: "cf-row", style: "cursor:pointer;gap:10px;align-items:flex-start" });
+    var vCb = el("input", { type: "checkbox" });
+    vCb.checked = !!prof.visible_in_community;
+    vCb.addEventListener("change", function () {
+      window.API.savePlayerProfile({ visible_in_community: vCb.checked }).then(function (r) {
+        prof = r;
+        UI.toast(vCb.checked ? "Other members can find you now." : "You're hidden again.", "info");
+      }, function (e) { vCb.checked = !vCb.checked; UI.toast(UI.errMsg(e), "error"); });
+    });
+    vLbl.appendChild(vCb);
+    vLbl.appendChild(el("div", {}, [
+      el("div", { text: "Let other members find me" }),
+      el("div", { class: "cf-muted cf-tiny",
+        text: "They'll see your first name and your level — never your email or phone. You can turn this off whenever you like." }),
+    ]));
+    vBox.appendChild(vLbl);
+    wrap.appendChild(card("Being findable", vBox));
+
+    function renderProfileInto() { renderPlayerProfile(); }
+    set(wrap);
+
+    async function openQuiz() {
+      var qs = [];
+      try { qs = (await window.API.levelQuestions()).questions || []; } catch (e) {
+        UI.toast(UI.errMsg(e), "error"); return;
+      }
+      var m = UI.modal("Work out your level");
+      var answers = {};
+      m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 12px;font-size:.85rem",
+        text: "Answer honestly — it decides who you're matched with, and being put against the wrong standard is the fastest way to stop enjoying this." }));
+      qs.forEach(function (q) {
+        var f = el("div", { class: "cf-field" }, [el("label", { text: q.q })]);
+        var row = el("div", { class: "cf-row", style: "gap:6px;flex-wrap:wrap" });
+        (q.options || []).forEach(function (o) {
+          var b = el("button", { type: "button", class: "cf-btn cf-btn-sm", text: o[0] });
+          b.addEventListener("click", function () {
+            answers[q.key] = o[1];
+            Array.prototype.forEach.call(row.children, function (x) { x.className = "cf-btn cf-btn-sm"; });
+            b.className = "cf-btn cf-btn-sm cf-btn-primary";
+          });
+          row.appendChild(b);
+        });
+        f.appendChild(row);
+        m.body.appendChild(f);
+      });
+      var go2 = el("button", { class: "cf-btn cf-btn-primary", text: "Set my level" });
+      go2.addEventListener("click", function () {
+        if (Object.keys(answers).length < qs.length) { UI.toast("Answer all five first.", "warn"); return; }
+        window.API.submitLevelAnswers(answers).then(function (r) {
+          m.close();
+          UI.toast("You're a " + levelWord(r.level_num) + ".", "info");
+          renderPlayerProfile();
+        }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+      });
+      m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" },
+        [el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), go2]));
+    }
+  }
+
+  // ---- FIND A PLAYER -------------------------------------------------------
+  async function renderFindAPlayer() {
+    loading();
+    var wrap = el("div", {});
+    wrap.appendChild(pageHeader("Players for you", "Find a game", "#/play"));
+    var list = el("div", { class: "cf-list" });
+    wrap.appendChild(list);
+    set(wrap);
+    var players = [];
+    try { players = (await window.API.suggestedPlayers({ limit: 12 })).players || []; } catch (e) {}
+    UI.clear(list);
+    if (!players.length) {
+      list.appendChild(el("div", { class: "cf-empty" }, [
+        el("div", { text: "Nobody to suggest yet." }),
+        el("div", { class: "cf-muted cf-tiny", style: "margin-top:6px",
+          text: "Members appear here once they've set a level and chosen to be findable." }),
+        el("button", { class: "cf-btn cf-btn-primary", style: "margin-top:10px",
+          text: "Set up your own profile", onclick: function () { go("#/play/profile"); } }),
+      ]));
+      return;
+    }
+    players.forEach(function (p2) {
+      list.appendChild(el("div", { class: "cf-item" }, [
+        el("div", { class: "cf-item-main" }, [
+          el("div", { class: "cf-item-t", text: p2.name + (p2.is_favourite ? " ★" : "") }),
+          el("div", { class: "cf-item-s", text: [levelWord(p2.level),
+            p2.prefers_play, p2.prefers_format].filter(Boolean).join(" · ") }),
+        ]),
+        el("span", { class: "cf-chip", text: p2.match_pct + "% match" }),
+      ]));
+    });
+    wrap.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin-top:10px",
+      text: "Post a game and they'll see it — that's how you invite someone without swapping numbers." }));
+  }
+
   // ---- FIND A GAME ---------------------------------------------------------
   // Both screens are the SHARED widgets (Widgets.GameList / Widgets.Game) — the client app supplies
   // only the data adapter, the actions map and the routing. A second render of a game anywhere else
   // in the three apps is a bug (the GOLDEN RULE).
+  // The feed defaults to games AROUND MY LEVEL (near=1.5) rather than everything. Being repeatedly
+  // shown games far above or below your standard is the single most reliable way to make someone stop
+  // opening this screen — but "show me everything" stays one tap away, because a small club can be
+  // thin at any given level and an empty feed is worse than a mismatched one.
+  var PLAY_FILTER = { near: 1.5, intent: null };
+
   function renderFindAGame() {
     var wrap = el("div", {});
     wrap.appendChild(pageHeader("Find a game", "Home", "#/"));
+
+    var bar = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin-bottom:12px" });
+    function chip(label, isOn, onTap) {
+      var b = el("button", { type: "button", text: label,
+        class: "cf-btn cf-btn-sm" + (isOn ? " cf-btn-primary" : "") });
+      b.addEventListener("click", onTap);
+      return b;
+    }
+    bar.appendChild(chip("Around my level", !!PLAY_FILTER.near, function () {
+      PLAY_FILTER.near = PLAY_FILTER.near ? null : 1.5; renderFindAGame();
+    }));
+    [["social", "Social hit"], ["practice", "Practice"], ["competitive", "Competitive"]]
+      .forEach(function (o) {
+        bar.appendChild(chip(o[1], PLAY_FILTER.intent === o[0], function () {
+          PLAY_FILTER.intent = PLAY_FILTER.intent === o[0] ? null : o[0]; renderFindAGame();
+        }));
+      });
+    wrap.appendChild(bar);
+
     var host = el("div", {});
     wrap.appendChild(host);
+    wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;margin-top:14px;flex-wrap:wrap" }, [
+      el("button", { class: "cf-btn cf-btn-sm", text: "Players for you",
+        onclick: function () { go("#/play/players"); } }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "Your tennis profile",
+        onclick: function () { go("#/play/profile"); } }),
+    ]));
     set(wrap);
     window.Widgets.GameList.mount(host, {
-      data: { list: function () { return window.API.openGames({ days: 14 }); } },
+      data: {
+        list: function () {
+          var q = { days: 14 };
+          if (PLAY_FILTER.near) q.near = PLAY_FILTER.near;
+          if (PLAY_FILTER.intent) q.intent = PLAY_FILTER.intent;
+          return window.API.openGames(q);
+        },
+      },
       actions: { create: { run: function () { go("#/book/court"); } } },
       onNavigate: function (n) { if (n.kind === "game") go("#/game/" + n.id); },
     });

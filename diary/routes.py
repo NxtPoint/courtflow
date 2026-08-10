@@ -414,6 +414,7 @@ def create_booking():
             # charge past the game and never be billed. The server computes it from the club's
             # open_game_cutoff_hours.
             play_format=b.get("play_format"),
+            play_intent=b.get("play_intent"),   # social | practice | competitive (validated in seats)
             seats=b.get("seats"),
             visibility=("open" if b.get("visibility") == "open" else "private"),
             open_until=None,

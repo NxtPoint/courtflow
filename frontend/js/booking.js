@@ -1141,6 +1141,26 @@
     });
     sec.appendChild(fmtRow);
 
+    // WHAT KIND OF TENNIS — deliberately its own question, because singles/doubles above is a
+    // SEAT COUNT (it sets how the court fee splits) and has nothing to say about whether you
+    // want a relaxed hit or a match. Turning up to the wrong one of those spoils a session as
+    // surely as playing someone three levels above you.
+    if (st.playFormat !== "practice") {
+      sec.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:4px 0 4px",
+        text: "What are you after?" }));
+      var intentRow = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin-bottom:8px" });
+      [["social", "A social hit"], ["practice", "Practice"], ["competitive", "Competitive"]]
+        .forEach(function (o) {
+          var b = el("button", { type: "button", text: o[1],
+            class: "cf-btn cf-btn-sm" + (st.playIntent === o[0] ? " cf-btn-primary" : "") });
+          b.addEventListener("click", function () {
+            st.playIntent = st.playIntent === o[0] ? null : o[0]; renderConfirm();
+          });
+          intentRow.appendChild(b);
+        });
+      sec.appendChild(intentRow);
+    }
+
     if (st.playFormat !== "practice") {
       var list = el("div", { class: "cf-list" });
       st.players.forEach(function (item, i) {
@@ -1257,6 +1277,7 @@
         // it would have been a lie. Every named player gets their OWN bill if they aren't covered.
         if (seatRuleOn()) {
           body.play_format = st.playFormat || "singles";
+          if (st.playIntent) body.play_intent = st.playIntent;
           body.seats = seatsForFormat(body.play_format);
           if (st.players && st.players.length) {
             var mates = st.players.map(function (x) { return x.payload; }).filter(Boolean);

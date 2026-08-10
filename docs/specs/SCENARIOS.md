@@ -11,13 +11,13 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 555 / billing 702 / statement 64** (77 / 95 / 12 `sc_*` functions).
+  **booking 567 / billing 702 / statement 64** (79 / 95 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
 ---
 
-## `test_booking_scenarios` — the diary (77 scenarios)
+## `test_booking_scenarios` — the diary (79 scenarios)
 
 Double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
 **court→service allocation** (per-service courts + pricing), **classes reserve N courts** (held +
@@ -87,6 +87,15 @@ cancel (`sc_leaving_a_game_frees_the_seat_and_the_debt`) · the hourly sweep col
 exactly once and raises no second charge (`sc_open_game_sweep_collapses_and_is_idempotent`) · and
 **no community read carries an email**, a member is not discoverable until they opt in, and the viewer
 is shown nobody's amount but their own (`sc_community_reads_never_leak_contact_details`).
+
+**FIND A GAME — intent and level** — a game carries `play_intent` (social / practice / competitive),
+which is a SEPARATE axis from `play_format`: the latter is a money field that sets the seat count, so
+conflating them would mean "I just want a relaxed hit" could only be said by changing how many people
+share the fee. Filtering the feed to social returns the social game and not the competitive one, and an
+unknown intent is discarded rather than stored (`sc_a_game_says_what_kind_of_tennis_it_is`) · the feed
+DEFAULTS to games around the caller's own level but **degrades to everything** for a member who has not
+set one — an empty feed reads as "no games here" rather than "tell us your level"
+(`sc_the_feed_defaults_to_games_around_my_level`).
 
 **FIND A GAME — chat, results, matching and the sweep** — match chat is readable and postable ONLY by
 the players in that game, a stranger is refused both, and the join is recorded as a system line on the

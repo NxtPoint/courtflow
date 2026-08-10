@@ -43,6 +43,17 @@ _DDL = [
     "CHECK (play_format IN ('singles','doubles','practice'));",
     "ALTER TABLE diary.booking ADD COLUMN IF NOT EXISTS seats int;",
 
+    # WHAT KIND OF TENNIS. Deliberately a SEPARATE AXIS from play_format, and the distinction matters:
+    # play_format is a MONEY field (it sets the seat count), while this is what the players actually
+    # want out of the session. Conflating them would mean "I want a relaxed hit" could only be said by
+    # changing how many people share the court fee, which is nonsense.
+    #
+    # It is also the single most useful thing a member can say. Mismatched INTENT ruins a session as
+    # reliably as mismatched level — turning up for a friendly hit against someone grinding out a
+    # practice match is the fastest way to stop using a feature like this.
+    "ALTER TABLE diary.booking ADD COLUMN IF NOT EXISTS play_intent text "
+    "CHECK (play_intent IN ('social','practice','competitive'));",
+
     # The fill deadline. NULL = not an open game. After this instant an unfilled seat COLLAPSES onto
     # the booking holder (community.seats.collapse_open_seats) — the member still gets their court,
     # they just don't get a free second seat they never filled.

@@ -45,16 +45,34 @@ def default_open_until(session, club_id, starts_at):
 # ---------------------------------------------------------------------------
 
 def list_open_games(session, *, club_id, user_id=None, days=14, level_band=None, play_format=None,
-                    now=None):
+                    play_intent=None, near_my_level=None, now=None):
     """The Find-a-Game feed: upcoming games with a seat still open.
+
+    THREE FILTERS, and the two that matter are LEVEL and INTENT. People stop using a feature like this
+    when they are repeatedly matched far above or below their standard — or when they turn up for a
+    friendly hit against someone grinding out a practice match. Intent ruins a session as reliably as
+    level does, which is why it is a first-class field on the game rather than a note in the chat.
+
+    `near_my_level` (a +/- band, e.g. 1.5) resolves the caller's OWN level and shows games around it.
+    It is the sane default for browsing, and it degrades to "show everything" for a member who has not
+    set a level yet — never to an empty feed, which would read as "no games" rather than "tell us your
+    level".
 
     PRIVACY: returns first names and levels only. No email, no phone — which is precisely why match
     chat exists. A game the caller is already in is flagged rather than hidden, so "my games" and
     "games I could join" come off ONE read."""
+    if near_my_level and not level_band and user_id:
+        mine = session.execute(
+            text("SELECT level_num FROM iam.player_profile WHERE club_id = :c AND user_id = :u"),
+            {"c": str(club_id), "u": str(user_id)},
+        ).scalar()
+        if mine is not None:
+            band = float(near_my_level)
+            level_band = (float(mine) - band, float(mine) + band)
     now = now or datetime.now(timezone.utc)
     rows = session.execute(
         text("""
-            SELECT b.id, b.starts_at, b.ends_at, b.play_format, b.seats, b.open_until,
+            SELECT b.id, b.starts_at, b.ends_at, b.play_format, b.play_intent, b.seats, b.open_until,
                    b.split_locked_at, b.booked_by_user_id,
                    r.name AS court_name,
                    h.first_name AS host_name,
@@ -77,11 +95,13 @@ def list_open_games(session, *, club_id, user_id=None, days=14, level_band=None,
                AND b.starts_at > :now
                AND b.starts_at < :until
                AND (CAST(:fmt AS text) IS NULL OR b.play_format = :fmt)
+               AND (CAST(:intent AS text) IS NULL OR b.play_intent = :intent)
              ORDER BY b.starts_at
              LIMIT 100
         """),
         {"c": str(club_id), "me": str(user_id) if user_id else None, "now": now,
-         "until": now + timedelta(days=int(days or 14)), "fmt": play_format},
+         "until": now + timedelta(days=int(days or 14)), "fmt": play_format,
+         "intent": play_intent},
     ).mappings().all()
 
     out = []
@@ -100,6 +120,7 @@ def list_open_games(session, *, club_id, user_id=None, days=14, level_band=None,
             "ends_at": r["ends_at"].isoformat() if r["ends_at"] else None,
             "court_name": r["court_name"],
             "play_format": r["play_format"],
+            "play_intent": r["play_intent"],
             "seats_total": seats_total,
             "open_seats": open_seats,
             "host_name": r["host_name"],
@@ -151,6 +172,7 @@ def game_detail(session, *, club_id, booking_id, viewer_user_id=None):
         "ends_at": booking["ends_at"].isoformat() if booking["ends_at"] else None,
         "status": booking["status"],
         "play_format": booking.get("play_format"),
+        "play_intent": booking.get("play_intent"),
         "visibility": booking.get("visibility"),
         "seats_total": plan["seats_total"],
         "open_seats": plan["open_count"],

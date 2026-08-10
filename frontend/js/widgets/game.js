@@ -24,6 +24,11 @@
   // exists to stop.
   var el = window.UI.el, card = window.UI.card, money = window.UI.money;
 
+  // What kind of tennis this is — a SEPARATE axis from singles/doubles (which is a seat
+  // count, i.e. a money field). Mismatched intent spoils a session as reliably as a
+  // mismatched level, so it is shown on the card, not buried in the chat.
+  var INTENT = { social: "Social hit", practice: "Practice", competitive: "Competitive" };
+
   function seatChip(seat) {
     // The vocabulary a player actually needs: am I paid for, or do I owe? "covered" is deliberately
     // worded as a benefit ("Included") rather than as jargon.
@@ -126,9 +131,11 @@
           + "–" + window.UI.fmtTime(game.ends_at);
       } catch (e) { when = ""; }
 
+      var title = (game.play_format === "doubles" ? "Doubles" : "Singles") + " game";
+      if (game.play_intent) title = (INTENT[game.play_intent] || title) + " · " + title.toLowerCase();
       host.appendChild(window.UI.pageHeader
-        ? window.UI.pageHeader((game.play_format === "doubles" ? "Doubles" : "Singles") + " game", when)
-        : el("h2", { text: "Game" }));
+        ? window.UI.pageHeader(title, when)
+        : el("h2", { text: title }));
 
       // The state banner: a held game is the one thing a player must understand at a glance, because
       // the court is not theirs until everybody has paid.
@@ -195,6 +202,7 @@
         when = window.UI.fmtDate(g.starts_at) + " · " + window.UI.fmtTime(g.starts_at);
       } catch (e) { when = ""; }
       var bits = [g.court_name, g.play_format === "doubles" ? "Doubles" : "Singles"];
+      if (g.play_intent) bits.push(INTENT[g.play_intent] || g.play_intent);
       if (g.host_level) bits.push("Level " + g.host_level);
       var n = el("button", { class: "cf-item cf-item-click", style: "width:100%;text-align:left" }, [
         el("div", { class: "cf-item-main" }, [

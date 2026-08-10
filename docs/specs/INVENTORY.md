@@ -383,7 +383,10 @@ coach BCC only on his own lesson/class. (`send_booking_confirmation` is legacy; 
     `diary.booking` with `visibility='open'` and open seats, and a **seat is a `diary.booking_party`
     row**. A parallel game object would have forked the GiST no-double-book constraint, the diary
     grid, reschedule/cancel, the unified statement, Client-360 and month-end.
-  - *New columns on `diary.booking`:* `visibility private|open`, `play_format singles|doubles|practice`,
+  - *New columns on `diary.booking`:* `visibility private|open`, `play_format singles|doubles|practice`
+    (a MONEY field — it sets the seat count), **`play_intent social|practice|competitive`** (what kind
+    of tennis — a deliberately SEPARATE axis), `seat_share_minor` (the share this game was QUOTED,
+    frozen at first pricing so a later price change can't re-price a sold game),
     `seats`, `open_until` (the fill deadline), `split_locked_at` (set by the FIRST seat payment —
     after it, shares never move, so nobody who paid can be re-billed).
   - *New columns on `diary.booking_party` (the party row BECOMES the seat):* `seat_status
@@ -649,7 +652,7 @@ dashboard (`sync:false`).
   No DB, no env, ~1s. A JS file that doesn't parse is dead in the browser entirely.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 555 / billing 702 / statement 64** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 567 / billing 702 / statement 64** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
   on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +

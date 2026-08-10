@@ -4045,9 +4045,101 @@ def sc_the_sweep_reminds_then_releases_an_unpaid_seat(s, fx):
           any(str(x["user_id"]) == str(p1) for x in _seat_rows(s, bid)), str(_seat_rows(s, bid)))
 
 
+def sc_a_game_says_what_kind_of_tennis_it_is(s, fx):
+    """INTENT IS A SEPARATE AXIS FROM SEAT COUNT, and it has to be, because they answer different
+    questions. `play_format` (singles/doubles) decides how many seats share the court fee — it is a
+    MONEY field. `play_intent` (social/practice/competitive) is what the players actually want out of
+    the session.
+
+    Conflating them would mean "I just want a relaxed hit" could only be said by changing how many
+    people pay, which is nonsense — and mismatched intent spoils a session as reliably as a mismatched
+    level does. Turning up for a friendly hit against someone grinding out a practice match is the
+    fastest way to stop using a feature like this."""
+    print("\n# a game carries its INTENT, filterable, and separate from the seat count")
+    from community import games
+    _enable_seat_rule(s, fx)
+    host = fx.members[0]
+    _membership_for_court(s, fx, host)
+
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=host, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="membership_covered",
+                         starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 14)),
+                         play_format="singles", visibility="open", play_intent="social")
+    check("a social singles game is created", r.get("ok"), str(r))
+    bid = r["booking"]["id"]
+    check("the intent is stored on the booking",
+          s.execute(text("SELECT play_intent FROM diary.booking WHERE id=:b"),
+                    {"b": bid}).scalar() == "social")
+    check("…and the SEAT COUNT is untouched by it — they are different questions",
+          s.execute(text("SELECT seats FROM diary.booking WHERE id=:b"), {"b": bid}).scalar() == 2)
+
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=host, role="member",
+                          booking_type="court", resource_id=fx.courts[1],
+                          settlement_mode="membership_covered",
+                          starts_at=utc_iso(at(fx, 15)), ends_at=utc_iso(at(fx, 16)),
+                          play_format="singles", visibility="open", play_intent="competitive")
+    other = fx.members[1]
+    feed = games.list_open_games(s, club_id=fx.club_id, user_id=other)
+    check("both games are in the unfiltered feed", len(
+        [g for g in feed if g["booking_id"] in (str(bid), str(r2["booking"]["id"]))]) == 2, str(feed))
+    check("the feed carries the intent so a card can show it",
+          all(g.get("play_intent") for g in feed if g["booking_id"] == str(bid)), str(feed))
+
+    social = games.list_open_games(s, club_id=fx.club_id, user_id=other, play_intent="social")
+    check("filtering to SOCIAL returns the social game",
+          any(g["booking_id"] == str(bid) for g in social), str(social))
+    check("…and NOT the competitive one — 'just a hit' is now sayable",
+          not any(g["booking_id"] == str(r2["booking"]["id"]) for g in social), str(social))
+
+    check("an unknown intent is discarded, never stored",
+          B.create_booking(s, club_id=fx.club_id, booked_by_user_id=host, role="member",
+                           booking_type="court", resource_id=fx.courts[0],
+                           settlement_mode="membership_covered",
+                           starts_at=utc_iso(at(fx, 19)), ends_at=utc_iso(at(fx, 20)),
+                           play_format="singles", play_intent="ANNIHILATION").get("ok"))
+
+
+def sc_the_feed_defaults_to_games_around_my_level(s, fx):
+    """Being repeatedly shown games far above or below your standard is the single most reliable way
+    to make someone stop opening this screen. So the feed's DEFAULT is a band around the caller's own
+    level — but it must degrade to EVERYTHING for a member who hasn't set one, because an empty feed
+    reads as "no games here" rather than "tell us your level", and that is the wrong lesson to teach
+    on a first visit."""
+    print("\n# the feed defaults to games around MY level — and shows everything if I have none")
+    from community import games, repositories as repo
+    _enable_seat_rule(s, fx)
+    me, peer, faraway = fx.members[0], fx.members[1], fx.members[2]
+    _membership_for_court(s, fx, peer)
+    _membership_for_court(s, fx, faraway)
+    repo.upsert_player_profile(s, club_id=fx.club_id, user_id=peer,
+                               fields={"level_num": 5.0, "visible_in_community": True})
+    repo.upsert_player_profile(s, club_id=fx.club_id, user_id=faraway,
+                               fields={"level_num": 9.0, "visible_in_community": True})
+    near = _open_game(s, fx, peer, hour=9)["booking"]["id"]
+    far = _open_game(s, fx, faraway, hour=10, court=1)["booking"]["id"]
+
+    # I have NO level yet.
+    all_games = games.list_open_games(s, club_id=fx.club_id, user_id=me, near_my_level=1.5)
+    ids = [g["booking_id"] for g in all_games]
+    check("with no level of my own I see EVERYTHING, not an empty screen",
+          str(near) in ids and str(far) in ids, str(ids))
+
+    repo.upsert_player_profile(s, club_id=fx.club_id, user_id=me, fields={"level_num": 5.2})
+    banded = games.list_open_games(s, club_id=fx.club_id, user_id=me, near_my_level=1.5)
+    bids = [g["booking_id"] for g in banded]
+    check("once I have a level, a game near it is shown", str(near) in bids, str(bids))
+    check("…and one three levels away is not", str(far) not in bids, str(bids))
+    wide = games.list_open_games(s, club_id=fx.club_id, user_id=me)
+    check("'show everything' is still one call away — the band is a default, not a cage",
+          str(far) in [g["booking_id"] for g in wide], str(wide))
+
+
 SCENARIOS = [
     # THE SEAT RULE (community/) — the money core, pinned before create_booking learns about seats.
     sc_a_seat_share_is_a_fixed_fraction_of_the_court,
+    sc_a_game_says_what_kind_of_tennis_it_is,
+    sc_the_feed_defaults_to_games_around_my_level,
     sc_match_chat_is_private_to_the_players,
     sc_a_result_needs_someone_else_to_confirm_it,
     sc_matching_puts_the_right_level_first,

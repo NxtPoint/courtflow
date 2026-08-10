@@ -101,11 +101,17 @@ def list_games():
     band = None
     if request.args.get("level_min") and request.args.get("level_max"):
         band = (request.args["level_min"], request.args["level_max"])
+    # `near=1.5` is the browsing default the UI sends: games around MY level. A member who hasn't set
+    # a level sees everything rather than nothing — an empty feed reads as "no games", not "tell us
+    # your level", and that is the wrong lesson to teach on someone's first visit.
+    near = request.args.get("near")
     with session_scope() as s:
         out = games.list_open_games(s, club_id=p.club_id, user_id=p.user_id,
                                     days=int(request.args.get("days") or 14),
                                     level_band=band,
-                                    play_format=request.args.get("format") or None)
+                                    near_my_level=float(near) if near else None,
+                                    play_format=request.args.get("format") or None,
+                                    play_intent=request.args.get("intent") or None)
     return jsonify(games=out, count=len(out)), 200
 
 

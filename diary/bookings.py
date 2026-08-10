@@ -628,7 +628,8 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                    notes=None, recurrence_id=None, hold_minutes=HOLD_MINUTES_DEFAULT,
                    booked_for_user_id=None, propose=False, product_id=None, addons=None,
                    allow_past=False, now=None, extra_clients=None,
-                   seats=None, play_format=None, visibility="private", open_until=None):
+                   seats=None, play_format=None, visibility="private", open_until=None,
+                   play_intent=None):
     """Create a court/lesson/class booking, concurrency-safe (docs/03 §4).
 
     For a lesson, pass court_resource_id to auto-hold a court in the SAME transaction (two
@@ -1132,7 +1133,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                 extra_user_ids=[(ec.get("user_id") if isinstance(ec, dict) else ec)
                                 for ec in (extra_clients or [])],
                 play_format=play_format, seats=seats, visibility=visibility,
-                open_until=open_until, now=now)
+                open_until=open_until, play_intent=play_intent, now=now)
         except _SeatError as e:
             # A seat that cannot be priced or paid for must fail the BOOKING, not be waved through
             # unbilled. The savepoint above already committed the rows, so the caller's session_scope

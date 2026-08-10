@@ -395,12 +395,19 @@ once, ever, and only to a genuinely new account).
 - [ ] **Statement check.** Every seat charge appears on the right person's statement, and Money → Club
       earnings still reconciles (seat orders are new rows in all of those reads).
 
-**Levels & matching**
+**Levels, intent & matching**
 
-- [ ] Member → profile → answer the 5 level questions; tick **findable**. Confirm you are NOT discoverable
-      until you tick it.
-- [ ] Owner/**coach** → Setup → Games & invitations → **Players & levels** → correct a level. It reads
-      "set by coach" afterwards, not "self".
+- [ ] Member Home → the **"Want to play?"** card appears (only when `community_enabled`). Tap **Find a game**.
+- [ ] → **Your tennis profile** → *Work out my level* → answer the 5 questions → you get a level with a
+      word ("Intermediate (4.7)"). Set what you're after, singles/doubles, and tap a few day-parts.
+- [ ] **Leave "Let other members find me" OFF** and check **Players for you** does not list you for
+      another account. Then tick it and confirm you appear. Discovery is opt-in, not a side effect.
+- [ ] Post a game with **"A social hit"** and another with **"Competitive"**. On Find a game, the intent
+      shows on each card; tapping **Social hit** filters to the first and hides the second.
+- [ ] Tap **Around my level** off and on — with it on you should stop seeing games far from your level;
+      with no level set at all you should see **everything** (not an empty screen).
+- [ ] Owner/**coach** → Setup → Games & invitations → **Players & levels** → correct a level. The member's
+      profile then reads "set by your coach" and the quiz button is gone.
 - [ ] Confirm a **junior / child account never appears** in Find a Game.
 
 **Turning it back off**
