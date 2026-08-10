@@ -313,7 +313,7 @@ own `session_scope()` per client**, stopping at `max_seconds` (default 90, under
 returning `{ok, complete, remaining, failed, elapsed_seconds}` for the caller to loop. It accrues coach
 arrears + rent, then consolidates each owing client's open orders into ONE numbered statement invoice +
 pay-link email (`invoice_issued`; else a plain `statement_ready`), idempotent per `(club,user,period)` via
-`billing.month_end_notice`. Fired by `.github/workflows/month-end.yml` on the 25th, which loops until
+`billing.month_end_notice`. Fired by `.github/workflows/month-end.yml` on the 1st, which loops until
 `complete` and FAILS THE JOB on any non-200 / `ok:false`.
 
 **Also live, and previously missing from this list:** `GET/POST /api/feedback` (token-guarded NPS to
@@ -649,7 +649,7 @@ dashboard (`sync:false`).
   No DB, no env, ~1s. A JS file that doesn't parse is dead in the browser entirely.
 - Schema idempotency: `python -m db` **twice** → second run a no-op.
 - Integration: throwaway `postgres:16` + `python -m scripts.seed_nextpoint`; scenario harnesses
-  `python -m scripts.test_all` → **booking 521 / billing 696 / statement 64** (`test_booking_scenarios` /
+  `python -m scripts.test_all` → **booking 521 / billing 702 / statement 64** (`test_booking_scenarios` /
   `test_billing_scenarios` / **`test_statement_reconciliation`** — no double-count, pay-all-once, partial
   settle, void/write-off, arrears↔orders lockstep, plus coach/per-service two-tier pricing, class rate-card,
   on-behalf pack draw, cancel-fee/paid-resize & covered-reschedule guards, plus **`sc_wallet_adjust`** +

@@ -89,13 +89,45 @@ def check_tables(docs):
     return "DB tables", len(tables), sorted(t for t in tables if t not in docs)
 
 
+def _live_widgets():
+    names = set()
+    for f in _tracked("frontend/js/widgets/*.js"):
+        names |= set(re.findall(r"window\.Widgets\.(\w+)\s*=",
+                                f.read_text(encoding="utf-8", errors="ignore")))
+    return names
+
+
 def check_widgets(docs):
     """A shared widget missing from FRONTEND-STANDARDISATION is how a fork gets built."""
     fe = _read([ROOT / "docs/specs/FRONTEND-STANDARDISATION.md"])
-    names = set()
-    for f in _tracked("frontend/js/widgets/*.js"):
-        names |= set(re.findall(r"window\.Widgets\.(\w+)\s*=", f.read_text(encoding="utf-8", errors="ignore")))
+    names = _live_widgets()
     return "Shared widgets (vs the GOLDEN RULE doc)", len(names), sorted(n for n in names if n not in fe)
+
+
+def check_dead_widgets(docs):
+    """Docs must not describe a widget that no longer exists — the OTHER direction.
+
+    check_widgets only asks "is every live widget documented?", so a doc naming a DELETED one sailed
+    through: `Widgets.CoachStatement` was merged into `Widgets.Earnings` on 2026-08-09 and two specs
+    still said the coach statement was "rendered by the ONE shared `Widgets.CoachStatement`". That
+    is the worse failure of the two — a missing widget makes a doc incomplete, a phantom one sends
+    the next session looking for a file that is not there, or worse, rebuilding it.
+
+    A retirement note is legitimate and must not be flagged, so a mention is only a miss when the
+    same line does not say it is gone.
+    """
+    live = _live_widgets()
+    gone = {}
+    for p in _tracked(*DOC_GLOBS):
+        for line in _paragraphs(p.read_text(encoding="utf-8", errors="ignore")):
+            low = line.lower()
+            if any(w in low for w in ("retired", "merged into", "deleted", "removed", "was ",
+                                      "until 20", "renamed")):
+                continue
+            for n in set(re.findall(r"Widgets\.(\w+)", line)):
+                if n not in live:
+                    gone.setdefault(f"{n} (in {p.relative_to(ROOT)})", True)
+    return "Widgets NAMED in docs but absent from code", len(live), sorted(gone)
 
 
 def check_events(docs):
@@ -175,27 +207,50 @@ def check_doc_links(docs_paths):
     return "Internal doc links", n, sorted(set(bad))
 
 
+def _paragraphs(text_body):
+    """Yield each markdown block as ONE logical line, soft wraps joined.
+
+    This check used to read the file line by line, and a baseline that happened to wrap —
+
+        > Gate baseline: **`python -m scripts.test_all` -> booking 504 /
+        > billing 696 / statement 64** (2026-07-29).
+
+    matched nothing at all, because the regex needs both numbers on one line. OUTSTANDING.md
+    carried a stale `booking 504` that way for weeks while the gate reported agreement, which is
+    worse than not checking: a green audit is read as "the docs agree" and this one couldn't see
+    the disagreement. Editors wrap prose; the checker has to read prose the way it is written.
+    """
+    block = []
+    for raw in text_body.splitlines():
+        line = re.sub(r"^\s*>\s?", "", raw).rstrip()          # blockquote marker is not content
+        if line.strip():
+            block.append(line.strip())
+        elif block:
+            yield " ".join(block)
+            block = []
+    if block:
+        yield " ".join(block)
+
+
 def check_baselines(docs_paths):
     """Every doc claiming the CURRENT gate baseline must agree with the others.
 
     Dated history ("Gated green at the time: 43/142/35") is legitimate and must NOT be flagged, so
-    only lines that assert the present are considered."""
+    only claims that assert the present are considered."""
     claims = {}
     for p in docs_paths:
-        for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
-            m = re.search(r"booking (\d+) ?/ ?billing (\d+) ?/ ?statement (\d+)", line)
-            if not m:
-                continue
-            low = line.lower()
-            if any(w in low for w in ("at the time", "was ", "previously", "baseline at merge",
-                                      "new gate baseline", "gated green:", "-> booking")):
-                continue
-            if any(w in low for w in ("current", "baseline:", "harnesses (")):
-                claims.setdefault(m.group(1, 2, 3), []).append(str(p.relative_to(ROOT)))
+        for line in _paragraphs(p.read_text(encoding="utf-8", errors="ignore")):
+            for m in re.finditer(r"booking (\d+) ?/ ?billing (\d+) ?/ ?statement (\d+)", line):
+                low = line.lower()
+                if any(w in low for w in ("at the time", "was ", "previously", "baseline at merge",
+                                          "new gate baseline", "gated green:", "-> booking")):
+                    continue
+                if any(w in low for w in ("current", "baseline:", "harnesses (")):
+                    claims.setdefault(m.group(1, 2, 3), []).append(str(p.relative_to(ROOT)))
     misses = []
     if len(claims) > 1:
         for k, where in claims.items():
-            misses.append(f"{'/'.join(k)} claimed 'current' in {', '.join(where)}")
+            misses.append(f"{'/'.join(k)} claimed 'current' in {', '.join(sorted(set(where)))}")
     return "Current-gate-baseline agreement", len(claims), misses
 
 
@@ -207,7 +262,8 @@ def main(argv):
 
     print(f"DOC AUDIT — {len(doc_paths)} docs vs the codebase   (read-only)\n")
     results = [
-        check_routes(docs), check_tables(docs), check_widgets(docs), check_events(docs),
+        check_routes(docs), check_tables(docs), check_widgets(docs), check_dead_widgets(docs),
+        check_events(docs),
         check_scenarios(docs), check_scenario_counts(docs), check_scripts(docs),
         check_undocumented_scripts(docs),
         check_doc_links(doc_paths), check_baselines(doc_paths),

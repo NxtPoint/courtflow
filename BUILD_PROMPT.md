@@ -32,7 +32,7 @@ THERE IS NO BUILD PHASE AND NO PYTEST. The gates are:
      scenarios/scripts from SOURCE against the prose. Currently 0 misses; keep it there.
      RUN IT AT THE END OF ANY SESSION THAT ADDED A SURFACE.
   5. python -m scripts.test_all   — the JS parse gate, then three rollback-only scenario harnesses
-     Current green baseline: booking 521 / billing 696 / statement 64
+     Current green baseline: booking 521 / billing 702 / statement 64
 
   (Same numbering as CLAUDE.md's "Gates" section — they must not drift apart.)
 
@@ -80,7 +80,7 @@ LIVE screens — every bug found on 2026-07-31 was invisible in the code and obv
 ## Section 2 — where things stand (2026-08-02)
 
 **Live and working.** Booking (court / lesson / class / semi-private), the three purchasing models,
-Yoco payments + refunds, invoicing, the commission engine, month-end on the 25th, transactional
+Yoco payments + refunds, invoicing, the commission engine, month-end on the 1st, transactional
 email via SES, the marketing site + blog, GA4/Ads with an offline-conversion loop, and the
 Ten-Fifty5 match-analysis embed.
 
@@ -136,7 +136,7 @@ from, newest first. **Everything below is open unless marked done.**
 
 **Config Tomo has already done** (do not re-raise): membership caps 1 booking / 90 minutes · all three
 payment methods enabled · peak window set · equipment payment options · company + bank details ·
-`OPS_KEY` so month-end fires on the 25th.
+`OPS_KEY` so month-end fires on the 1st.
 
 ---
 

@@ -794,6 +794,32 @@ def patch_price(session, *, club_id, price_id, audience=None, amount_minor=None,
     uplift) distinctly from leaving it unchanged (omit the arg)."""
     if status is not None and status not in ("active", "dormant", "retired"):
         return None
+    # THE SAME RULE ON THE EDIT PATH. `create_price` refuses a second active row for a duration, but
+    # this walked straight around it two ways: re-activate a retired 60min row beside the live one
+    # (`status`), or move a 90min row onto 60 (`duration_minutes`). Either way `price_for` tie-breaks
+    # on `amount_minor ASC` and the cheaper row silently becomes the price — the R12,680-billed-at-R0
+    # failure, reachable through the editor's own "Remove"/re-add loop. A guard on creation only is
+    # not a guard; it is a speed bump on one of the two doors.
+    cur = session.execute(
+        text("SELECT product_id, duration_minutes, status, active FROM billing.price "
+             " WHERE club_id = :c AND id = :p"),
+        {"c": club_id, "p": price_id},
+    ).mappings().first()
+    if not cur:
+        return None
+    new_dur = duration_minutes if duration_minutes is not None else cur["duration_minutes"]
+    new_active = ((status == "active") if status is not None
+                  else (bool(active) if active is not None else bool(cur["active"])))
+    if new_active and new_dur is not None:
+        clash = session.execute(
+            text("SELECT amount_minor FROM billing.price "
+                 " WHERE club_id = :c AND product_id = :prod AND active "
+                 "   AND duration_minutes = :d AND id <> :p LIMIT 1"),
+            {"c": club_id, "prod": cur["product_id"], "d": new_dur, "p": price_id},
+        ).scalar()
+        if clash is not None:
+            return {"error": "DURATION_ALREADY_PRICED", "duration_minutes": new_dur,
+                    "existing_amount_minor": int(clash or 0)}
     res = session.execute(
         text("""
             UPDATE billing.price SET

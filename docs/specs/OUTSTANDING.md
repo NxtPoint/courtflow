@@ -7,8 +7,8 @@ switches, unwired endpoints) live in their own doc: **[FEATURE-FLAGS.md](FEATURE
 > **▶ NO CURRENT BUILD PHASE.** The platform is **LIVE on `https://nextpointtennis.com`** and
 > feature-complete for launch. What remains is (A) config owed by Tomo, (B) code backlog, (C) owner
 > decisions, (D) hardening, and (E) two large well-specced roadmaps (Admin Phase 2 + CRM Missions).
-> **Nothing below is launch-blocking.** Gate baseline: **`python -m scripts.test_all` → booking 504 /
-> billing 696 / statement 64** (2026-07-29).
+> **Nothing below is launch-blocking.** Gate baseline: see **CLAUDE.md**, which is the single place
+> the current numbers are written (`scripts.audit_docs` fails any doc that claims a different one).
 >
 > **Klaviyo, 2026-07-22 — `membership_started` never fired** (wired to a gateway branch nothing produces);
 > **fixed in code + backfill RUN on prod** (12 members corrected, no emails sent). `KLAVIYO-MASTER-PLAN.md`
@@ -30,7 +30,9 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
 
 **P1**
 - [x] ~~**`OPS_KEY` GitHub repository secret**~~ — **DONE 2026-07-18.** Set; `.github/workflows/month-end.yml`
-      now fires `POST /api/cron/month-end` on the **25th** (moved off the 1st — the club billing day).
+      fires `POST /api/cron/month-end`. **Moved to the 1st on 2026-08-08**, billing the month just
+      ENDED: on the 25th every invoice was issued with days of the month still to run, so the client
+      saw one number on the invoice and a larger one online days later, and no month could be closed.
 - [ ] **Google Ads scheduled CSV upload** — set `GOOGLE_ADS_FEED_USER`/`PASS`, then schedule the daily
       upload (Uploads → Schedules) pointed at `/feeds/google-ads/offline-conversions.csv`. The recorder half
       is already live. (`GOOGLE-ADS-PLAN.md`.)
@@ -83,15 +85,46 @@ the refund, lesson and class lifecycles. All scenario-guarded, each verified by 
       recurs: `price_for` resolves the exact duration then tie-breaks on **`amount_minor ASC`**, so two
       price rows for one duration are never both offered — **the cheaper one always wins, silently**.
       This was DATA, not code, which is why no gate caught it and only looking at the live screen did.
-- [ ] **CODE GUARD so it cannot recur (OURS — still open).** The service editor should refuse, or at
-      minimum loudly warn on, a **R0 variation on a paid service**, and should surface **duplicate
-      durations** on one product. Two rows for the same length is always a mistake, and the cheaper
-      one always wins in silence. The data is fixed; nothing stops it being re-entered tomorrow.
+- [x] ~~**CODE GUARD so it cannot recur.**~~ **DONE 2026-08-09/10, both doors.** `create_price`
+      refuses a second ACTIVE price for a duration (`DURATION_ALREADY_PRICED`, 409 with the existing
+      amount named) — and, from the 10th, so does `patch_price`, which had walked straight around it
+      two ways: **move** a 90-min row onto 60, or **re-activate** a removed 60 beside the live one.
+      Both land in the identical end state the guard exists to prevent. A guard on creation only was
+      a speed bump on one of two doors, and the editor's own Remove/re-add loop was the other.
+      Guarded by `sc_one_active_price_per_duration` (both paths, plus "retiring can never clash").
+      **The residual R0 case is deliberately NOT refused:** with duplicates impossible, a R0 row can
+      only be the ONLY price for that duration — i.e. visible on the rate card and sometimes correct
+      (a free intro session). `scripts/audit_zero_prices.py` reports those monthly instead.
 - [ ] **ROOT-CAUSE `admin_home`'s failing block.** Home reported `refund_requests_error` while the
       Refund-requests SECTION worked — a query in `admin_home` was aborting the transaction and every
       later block returned its own zero (so the People counts 0/0/0 were probably false too). Each
       block is now savepointed **and logs its own name**, so the next deploy names the culprit in the
       Render logs. **Check the logs and fix the actual query.** The symptom is gone; the cause is not.
+### OPEN AS OF 2026-08-10 — from the invoicing/settlement re-engineering
+
+- [ ] **JP and Tshepo have NO rent figure on file.** Both are believed to be rent coaches (they pay
+      rent and bill their own clients), but with `rent_minor` unset the month-end sweep has **never
+      accrued rent from either** — the club has been carrying them for free. Set it on Setup →
+      Coaches → the coach, or audit every coach's model in one table with
+      `python -m scripts.set_coach_billing_model` (no args, read-only).
+- [ ] **Label the remaining unlabelled coach payouts.** A payout credits the month it SETTLES
+      (`coach_payout.period_label`); an unlabelled one falls back to the day the cash moved, so
+      July's commission paid in August credits **August** and July still reads as owing — one click
+      from paying a coach twice. The Record-payout modal now asks (prefilled from the month on the
+      card), so this is only for payouts recorded before 2026-08-10. Audit and fix per coach:
+      `python -m scripts.tag_coach_payout --coach "<name>"` lists them and flags the unlabelled.
+      **Allon is done** (both his are on 2026-07).
+- [ ] **Check Allon's June and August.** July settles to R0 once both payouts are labelled, but his
+      all-time balance was R13,800 against R9,607 of July — the remainder is other months and was
+      never examined.
+- [ ] **Two duplicate "Tomo" coach accounts** showed in the coach list. Harmless today (neither
+      carries money), but they will confuse any per-coach report. Merge or deactivate one.
+- [ ] **A coach's P&L shows nothing for work already BOOKED but not yet delivered.** "Owed" counts
+      delivered-and-unpaid only, so a coach with a full diary next month reads as having no pipeline.
+      Not a bug — the settlement rule is deliberate (§D7, commission only on money COLLECTED) — but a
+      projected line off future confirmed bookings would answer the question coaches actually ask.
+      Wants a decision on where it sits before it is built: it must never be mistaken for money owed.
+
 - [ ] **51 members show as ON TRIAL** (People → Trial). The trial gives free courts, so verify these
       are genuine new signups and not mis-granted: `python -m scripts.audit_trials` (read-only;
       `--cancel-flagged` reverts wrong ones to PAYG).
@@ -102,9 +135,21 @@ the refund, lesson and class lifecycles. All scenario-guarded, each verified by 
       sorts and reads by email. Cosmetic, but it makes the roster hard to use.
 - [ ] **FINISH THE PAGE-BY-PAGE REVIEW.** Covered 2026-07-31: Home · Refund requests · Coach statement
       (summary + a coach) · Club earnings · People · Setup (menu, club profile, memberships, services).
-      **Not yet reviewed: Diary · Overview · the rest of Setup · the whole coach app · the whole client
-      app · mobile widths.** Six real bugs came out of the screens that WERE reviewed, every one of
-      them invisible in the code — so the remainder is worth doing properly, with the console open.
+      Covered 2026-08-08/10: **Club earnings / the coach P&L** (collapsed with Coach statement into ONE
+      card) · the **transaction record** (Un-receipt added) · the **client account** (now month-by-month)
+      · the **Record-payout modal**. **Not yet reviewed: Diary · Overview · the rest of Setup · the
+      whole coach app · the rest of the client app · mobile widths.**
+      **This is the highest-yield activity in the backlog and the evidence is now overwhelming:** every
+      bug it has found was invisible in the code and passing its own tests — a `try/except: return 0`
+      reporting zeros, a coach's cash called "banked" while he held it, a R0 price beside a R600 one,
+      and a payout modal that never sent the month it settled. Do it with the console open, against
+      live data, one screen at a time.
+- [ ] **Bring the MONTH ROWS into the admin People record.** The member's own account now reads month
+      by month (billed / invoiced / paid / outstanding per month, each month payable on its own), but
+      People → a client still shows the flat invoice list. Two renderings of one capability is exactly
+      what the golden rule forbids; the month view should be the shared widget with admin adding staff
+      actions. **View as member** (People → a client → the button) closes the gap for now by showing
+      the member's real screen, but it is a workaround, not the fix.
 
 - [ ] **Klaviyo console work** (3 items, all in the Klaviyo UI, no code — full detail in
       `KLAVIYO-MASTER-PLAN.md` §7e/§8):
@@ -132,9 +177,16 @@ the refund, lesson and class lifecycles. All scenario-guarded, each verified by 
       is per court, so a swap changes the price at an unchanged time. Both directions are pinned
       (into peak charges more, out of peak charges less), plus two regressions: a duration change still
       re-prices, and a **settled** order still never does. Guarded by `sc_peak_survives_a_reschedule`.
-- [ ] **3 abandoned-checkout orders** were held back by `void_orphaned_orders.py`'s 7-day age floor on
-      2026-07-23 (created 18-22 July). Cosmetic only — Yoco confirmed all unpaid. Re-run the script whenever;
-      they will clear once past 7 days.
+- [x] ~~**3 abandoned-checkout orders** held back by `void_orphaned_orders.py`'s 7-day age floor.~~
+      **CLOSED 2026-08-09 — the class is gone, not just those three.** Lazy expiry was driven by
+      expired BOOKING rows, and a pack or membership has no booking, so nothing ever swept them:
+      they sat `awaiting_payment` for ever and were reported as outstanding. **R43,960 of July's
+      "outstanding" was this**, and none of it collectable — a pack is granted ON PAYMENT, so an
+      unpaid cluster is a failed sale, not a receivable. They now expire by themselves, voided as
+      `abandoned_purchase` (which `order_void_is_recoverable` treats like a lapsed hold, so Yoco's
+      72h retries and the 100-day reconcile can still settle a late payment). Duplicate Buy clicks
+      that CREATED most of them are refused separately (`reusable_pending_purchase`, 120-min reuse
+      window). `sc_abandoned_purchases_expire_by_themselves` · `sc_buy_click_never_mints_a_duplicate_debt`.
 
 **P2**
 - [ ] **Ten-Fifty5 embed → all members** — clear `TF5_EMBED_ALLOW_EMAILS` (currently one test email; others

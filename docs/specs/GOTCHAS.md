@@ -843,8 +843,9 @@ now agree — `_wallet_coach_for_order` is the third fallback.
 ### THE COACH STATEMENT is the coach-side of a client invoice
 
 **THE COACH STATEMENT is the coach-side of a client invoice** (`billing.commission.coach_settlement`
-+ `coach_sessions_by_day`, rendered by the ONE shared `Widgets.CoachStatement`; admin and coach
-differ by config only). Three blocks on TWO DELIBERATE DATE BASES: **sessions** by client by day
++ `coach_sessions_by_day`, rendered by the ONE shared `Widgets.Earnings`; admin and coach
+differ by config only — it had its own `Widgets.CoachStatement` until 2026-08-09, and a separate card
+that did not add up to the P&L above it is what made the page unreadable). Three blocks on TWO DELIBERATE DATE BASES: **sessions** by client by day
 (bounded on the SESSION's date — "what did I teach"), **custody** (paid to club / collected by
 coach / outstanding), and the **settlement** — total collected × commission = owed to the club,
 minus what the club already holds, = net (bounded on when the money ARRIVED, per §D7). A lesson
@@ -853,6 +854,32 @@ The net equals the `coach_ledger` movement **by construction**, and `reconciles`
 every render — a mismatch shows a WARNING BANNER rather than a number nobody can check. Admin:
 Money → Coach statement = summary + a coach dropdown (ONE coach at a time). Guarded by
 `sc_coach_settlement_statement`.
+
+### A PAYOUT MUST SAY WHICH MONTH IT SETTLES — AND THE SCREEN THAT RECORDS ONE MUST ASK (2026-08-10)
+
+A payout is credited to the month it **settles** (`billing.coach_payout.period_label`), not the day
+the cash moved. July's commission is routinely paid in the first days of August, and dating it by
+the cash left July permanently unsettled while August carried a credit belonging to another month —
+so no month could ever be closed and every conversation ran across two. An **unlabelled** payout
+falls back to `occurred_at`, deliberately, so nothing recorded before the rule existed moves.
+
+**This is the opposite basis from the commission side, and that is not an inconsistency:**
+commission is earned when the money ARRIVES (§D7 — the club never fronts a coach), while a payout is
+a settlement OF a stated month. The screen says which is which.
+
+**The part that actually bit.** All of the above was correct, and pinned both ways by
+`sc_coach_earnings_carries_the_settlement`, for weeks — while `recordPayoutModal` never sent a
+period. So **every real payout was unlabelled**: an owner read "DUE TO THE COACH NOW R9,607" on
+Allon's JULY card, pressed Record payout, paid it, and July still said R9,607 due. One more click
+and the coach is paid twice. **A rule the engine honours but no caller exercises is not
+implemented** — which is why the scenario now asserts the WRITE PATH (that the modal sends
+`period_label`, defaults it from `pnl.month`, and offers `due_now_minor`) next to the behaviour it
+feeds. The same modal also prefilled the AMOUNT from the ALL-TIME ledger balance while sitting
+directly under the month's due-now, which is the all-time-vs-month trap that had already cost a
+five-figure misread and moved that button onto the settlement block in the first place.
+
+Retag anything recorded earlier with `python -m scripts.tag_coach_payout` (lists a coach's payouts,
+flags the unlabelled, dry-run by default; changes no amount and posts no ledger entry).
 
 
 ---

@@ -366,7 +366,7 @@ Render auto-deploys `master` (push → both services rebuild). Both web services
 so a blueprint sync can't wipe them (`SEED_NEXTPOINT=1` boot seed, `SES_REGION=eu-north-1`); secrets are
 `sync:false`. No paid Render crons (hence lazy expiry + on-read accrual + the reconcile sweep for missed
 webhooks). Scheduled work rides **GitHub Actions** instead: `.github/workflows/month-end.yml` fires the
-**month-end sweep** `POST /api/cron/month-end` (OPS-guarded) **on the 25th** (the club's billing day) — it
+**month-end sweep** `POST /api/cron/month-end` (OPS-guarded) **on the 1st** (billing the month just ENDED) — it
 accrues arrears + court rent, then for each client with an OPEN balance consolidates their open orders into
 ONE numbered statement invoice + pay-link email (a client who owes nothing gets NO email), and is
 **idempotent per (club, user, month)** (a re-run is a no-op).

@@ -4,6 +4,13 @@ Categorised in the 2026-07-12 close-out (refreshed 2026-07-26). Nothing here is 
 **spent one-offs** (their job is done for club #1) kept for provenance + future-tenant reuse. Run any with
 `python -m scripts.<name>`.
 
+> **Where these RUN, and the rules for writing a new one:
+> [`docs/specs/DATA-ACCESS.md`](../docs/specs/DATA-ACCESS.md).** Short version: the local sandbox
+> proves code and holds almost no transactional data; anything about real money runs in the
+> **`courtflow-api` Render shell**, which executes the **deployed** code — so a new script must be
+> **committed and pushed** before it exists in production. Dry-run by default, `--commit` to write.
+> Never ask for the production `DATABASE_URL`; ask for the script to be run.
+
 ## Operational playbook — when a query comes in (post-launch, month-end running)
 All read-only unless noted; all take `DATABASE_URL` from the Render shell env (or a gitignored `.env.local`).
 
@@ -12,7 +19,7 @@ All read-only unless noted; all take `DATABASE_URL` from the Render shell env (o
 | "I got a 'pay online' email but no invoice/PDF" | `resend_invoice.py <email>` | re-sends their real invoice (no new number) |
 | "I paid but my booking/class shows unpaid" | `diagnose_bookings.py` | look at the S1 section; a stranded class seat → `settle_stranded_class_seats.py --settle` |
 | "I paid online but nothing happened" (missed webhook) | `POST /api/cron/reconcile-payments {"hours": 1200}` | recovers + activates; idempotent |
-| "before the 25th — who gets billed?" | `preview_month_end.py` | shows the invoice list + money it will skip and why |
+| "before the 1st — who gets billed?" | `preview_month_end.py` | shows the invoice list + money it will skip and why |
 | "a class shows the wrong name / no price in the Diary" | `reconcile_class_names.py` | `--commit` / `--link-orphans` if it flags a fix (shouldn't recur — DB trigger) |
 | "is coach X being paid correctly?" | `reconcile_coach_commission.py [YYYY-MM]` | should read CLEAN; lists any paid coaching with no split |
 | "why isn't coach X's pack on his earnings?" | `diagnose_coach_packs.py <name> [YYYY-MM]` | shows where each pack lands |
@@ -28,7 +35,7 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   real newlines inside a JS string: `admin_app.js` stopped parsing entirely and `/admin` hung on
   "Loading…" for 11 hours, reading as "cannot log in". Fails CLOSED if `node` is missing.
 - `test_booking_scenarios.py` · `test_billing_scenarios.py` · `test_statement_reconciliation.py`
-  — rollback-only scratch-DB harnesses (**booking 521 / billing 696 / statement 64**).
+  — rollback-only scratch-DB harnesses (**booking 521 / billing 702 / statement 64**).
 
 ## Load-bearing at runtime (KEEP — do not touch)
 - `seed_nextpoint.py` — re-seeds club #1 on every prod boot (`SEED_NEXTPOINT=1`, imported by `app.py`). Idempotent.
@@ -52,7 +59,7 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   when they got the bare month-end reminder instead. Looks up the invoice already covering their open
   debt and re-delivers it SYNCHRONOUSLY (no daemon thread) - no new number, nothing billed twice.
 - `preview_month_end.py` — READ-ONLY dry run of the month-end sweep: who gets invoiced on the
-  25th and for how much, PLUS the money it will skip and why (abandoned checkouts, debt hidden
+  1st and for how much, PLUS the money it will skip and why (abandoned checkouts, debt hidden
   behind a live 'Pay all' wrapper, unattributed orders). Run it before every billing day — a
   bare R0 from a hand-written query can't tell "all settled" from "looking at the wrong club".
 - `month_position.py` — READ-ONLY: **where a MONTH actually stands** — billed / discount /
@@ -81,7 +88,10 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   --model rent [--rent-minor N] --commit` sets one. Dry-run by default. **Deliberately explicit
   rather than inferred from a 0% commission rate:** `commission.resolve_rate` returns 0 when NO rule
   exists, so "0%" and "not configured yet" are the same value — inferring would silently stop
-  billing every unconfigured coach's clients. This script IS the admin surface; there is no toggle.
+  billing every unconfigured coach's clients.
+  **SUPERSEDED for day-to-day use (2026-08-09):** the model is now a field on the **coach editor**
+  (Setup → Coaches → a coach), which is where an owner looks. Keep the script as the read-only
+  audit — no args lists EVERY coach and their model in one table, which the per-coach editor cannot.
 - `void_client_charges.py` — **cancel every still-owed charge for ONE client, in one action.**
   Dry-run by default; `--commit` writes. `--who <email|name>` (ambiguity is refused, never guessed),
   `--period YYYY-MM` scopes to a delivery month, `--reason` is recorded on `void_reason`,
@@ -99,6 +109,10 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   name (real money moved: refund it) and any payment that granted a pack or membership (revoking a
   wallet someone may have drawn from is a person's call). `--order <id> [--reason] [--commit]`,
   dry-run by default.
+  **SUPERSEDED for day-to-day use (2026-08-09):** the same action is now the **Un-receipt** button on
+  the transaction record, beside Receipt and Refund, on all four mounts of `Widgets.TransactionDetail`
+  — same repo call, same refusals. Keep the script for a bulk or scripted correction, and for the
+  case where the record won't load.
 - `reconcile_coach_cash.py` — READ-ONLY: **ties a coach's commission splits back to the CASH that
   produced them**, following `commission_split.payment_id` to the payment and the ORDER it was
   recorded against. Answers the "these two numbers should match and don't" question that

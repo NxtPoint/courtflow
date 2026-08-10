@@ -36,11 +36,14 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    shared widgets, emitted events, scenarios and scripts from SOURCE and reports what the docs haven't
    caught up with (plus broken internal links + disagreeing gate baselines). **Currently 0 misses —
    keep it there.** It would have caught, on the day: an approval lifecycle documented as LIVE in six
-   files two days after deletion; `Widgets.CoachStatement` missing from the golden-rule register; and
-   13 live events absent from `contracts/events.md`. `--strict` exits 1 for a pre-merge gate.
+   files two days after deletion; the since-retired `Widgets.CoachStatement` missing from the
+   golden-rule register; and 13 live events absent from `contracts/events.md`. It also runs both
+   directions now — a doc naming a widget that no longer exists is the WORSE rot, because it sends
+   the next session hunting a file that isn't there (or rebuilding it), and the code→doc check by
+   construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 521 / billing 696 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 521 / billing 702 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -59,6 +62,16 @@ them. Extensions `btree_gist` + `pgcrypto` are created by `python -m db`; the ro
 `CREATE EXTENSION`. There is no `.env.example` — export it in your shell, or drop it in a gitignored
 `.env.local` (the only script that reads that file is `scripts/verify_live.py`, which is read-only
 against REAL Render Postgres and never prints the URL).
+**The sandbox ALREADY EXISTS on this box and must not be deleted** — docker `courtflow-dev` on
+`localhost:55432`, and `DATABASE_URL` is already exported in the shell. **Check `env` before saying
+there is no database.** It holds the ~887 imported users but almost no bookings or orders, so it
+proves CODE and answers nothing about the club's money.
+**Money questions are settled on LIVE data, and the production URL never leaves Render** — you write
+a dry-run-default script into `scripts/`, push it (Render deploys `master`, and the shell runs the
+DEPLOYED code), and Tomo runs it in the **`courtflow-api` → Shell** tab where `DATABASE_URL` is
+already in the environment. **Do not ask for the production `DATABASE_URL`** — it has been declined,
+correctly. The full loop, and the rules a script that runs there must obey, are in
+**[`docs/specs/DATA-ACCESS.md`](docs/specs/DATA-ACCESS.md)**.
 **This is a Windows/PowerShell box.** Bash-isms in the examples below (`$(git ls-files …)`) need the
 PowerShell form `(git ls-files '*.py')`; the Bash tool is available for POSIX scripts when you want it.
 **Commits are conventional-commits whose subject carries the WHY, not the what** — the house style is
@@ -620,6 +633,7 @@ looks like a harmless simplification until you read what it cost.
 - THE COLLECTED FIGURE MUST SAY WHAT IT WAS (2026-07-30) — `sc_settlement_says_what_the_money_was`
 - A PACK SALE RESOLVES ITS COACH FROM THE WALLET (2026-07-30)
 - THE COACH STATEMENT is the coach-side of a client invoice — `sc_coach_settlement_statement`
+- A PAYOUT MUST SAY WHICH MONTH IT SETTLES, and the screen that records one must ASK (2026-08-10) — the engine honoured `period_label` for weeks while the modal never sent it, so every real payout credited the month the cash moved — `sc_coach_earnings_carries_the_settlement`
 
 **Reads that lie** — [GOTCHAS.md#reads-that-lie](docs/specs/GOTCHAS.md#reads-that-lie)
 - A SILENT ZERO IS A BUG, AND `try/except: return 0` IS NOT A GUARD (2026-07-31)

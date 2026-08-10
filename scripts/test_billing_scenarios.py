@@ -4715,6 +4715,35 @@ def sc_one_active_price_per_duration(s, fx):
                            amount_minor=55000, duration_minutes=60)
     check("a SECOND active price for 60min is refused",
           isinstance(dupe, dict) and dupe.get("error") == "DURATION_ALREADY_PRICED", str(dupe))
+
+    # AND THE EDIT PATH, which walked straight around the guard for as long as it existed. Both
+    # doors reach the identical end state — two active rows for one length, cheaper silently wins —
+    # so refusing only at creation was a speed bump, not a guard.
+    ninety = AR.create_price(s, club_id=fx.club_id, product_id=str(prod),
+                             amount_minor=90000, duration_minutes=90)
+    check("a 90min price is fine beside the 60", ninety and not ninety.get("error"), str(ninety))
+    moved = AR.patch_price(s, club_id=fx.club_id, price_id=str(ninety["id"]),
+                           duration_minutes=60)
+    check("MOVING the 90min row onto 60 is refused too",
+          isinstance(moved, dict) and moved.get("error") == "DURATION_ALREADY_PRICED", str(moved))
+    check("...and the row is untouched by the refusal",
+          AR._get_price(s, club_id=fx.club_id,
+                        price_id=str(ninety["id"]))["duration_minutes"] == 90)
+
+    # The editor's Remove/re-add loop is the other door: retire the 60, add a new 60, then try to
+    # bring the old one back. Retiring is always allowed — it cannot create a clash.
+    AR.patch_price(s, club_id=fx.club_id, price_id=str(first["id"]), status="retired")
+    replacement = AR.create_price(s, club_id=fx.club_id, product_id=str(prod),
+                                  amount_minor=65000, duration_minutes=60)
+    check("a replacement 60min price is allowed once the old one is retired",
+          replacement and not replacement.get("error"), str(replacement))
+    revived = AR.patch_price(s, club_id=fx.club_id, price_id=str(first["id"]), status="active")
+    check("RE-ACTIVATING the retired 60min beside it is refused",
+          isinstance(revived, dict) and revived.get("error") == "DURATION_ALREADY_PRICED",
+          str(revived))
+    check("...and retiring is still always allowed (it can never clash)",
+          not (AR.patch_price(s, club_id=fx.club_id, price_id=str(replacement["id"]),
+                              status="retired") or {}).get("error"))
     check("...and it says what already prices that duration",
           dupe.get("existing_amount_minor") == 70000, str(dupe))
     n = s.execute(text("SELECT count(*) FROM billing.price WHERE product_id=:p AND active"),

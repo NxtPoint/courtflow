@@ -316,7 +316,9 @@ operating guide; **this folder is the detail.**
 > commission − what the club already holds = net). It sits on TWO deliberate date bases and says so on
 > the page — sessions by when they were TAUGHT, settlement by when the money ARRIVED (§D7) — and its net
 > equals the `coach_ledger` movement **by construction**, asserted on every render with a warning banner
-> when it fails. ONE shared `Widgets.CoachStatement`; admin and coach differ by config only.
+> when it fails. ONE shared widget; admin and coach differ by config only. (That widget was
+> `Widgets.CoachStatement` until 2026-08-09, when it was **merged into `Widgets.Earnings`** — two
+> money cards that did not add up to each other is what made the page unreadable.)
 > **Then we opened the live site, and six bugs fell out that were invisible in the code.**
 > **(1) Admin Home was silently zeroing itself** — `try/except: return 0` is not a guard in Postgres: the
 > failing statement ABORTS the transaction, so every later block returned its own zero. The People
@@ -372,6 +374,11 @@ operating guide; **this folder is the detail.**
    and consciously-deferred pieces. *"What's left."*
 4b. **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** — every capability that is **built but currently dark**
    (env-gated / unwired / commented-out) and exactly how to switch it on. *"What we can turn on."*
+4c. **[DATA-ACCESS.md](DATA-ACCESS.md)** — **the sandbox vs production split, and how to ask a question
+   of real data.** The local docker DB proves CODE and holds almost no transactional rows; every money
+   question is answered by a dry-run-default script run in the **`courtflow-api` Render shell**, where
+   `DATABASE_URL` never leaves Render. **Read this before writing anything that touches real money —
+   and never ask for the production `DATABASE_URL`.** *"Which database, and how do I reach it."*
 5. **[TESTING.md](TESTING.md)** — the **end-to-end test plan** (3 profiles, role-by-role, with expected
    results). *"How to verify it all."*
 5b. **[SCENARIOS.md](SCENARIOS.md)** — the **coverage catalogue** of the three scratch-DB harnesses:

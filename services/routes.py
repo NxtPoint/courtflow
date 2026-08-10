@@ -259,10 +259,20 @@ def patch_variation(product_id, price_id):
         if "peak_amount_minor" in b:
             _pv = b.get("peak_amount_minor")
             _peak_kw["peak_amount_minor"] = (int(_pv) if _pv not in (None, "") else None)
-        admin_repo.patch_price(s, club_id=p.club_id, price_id=price_id,
-                               amount_minor=b.get("amount_minor"),
-                               duration_minutes=b.get("duration_minutes"), status=b.get("status"),
-                               **_peak_kw)
+        done = admin_repo.patch_price(s, club_id=p.club_id, price_id=price_id,
+                                      amount_minor=b.get("amount_minor"),
+                                      duration_minutes=b.get("duration_minutes"),
+                                      status=b.get("status"), **_peak_kw)
+        # Same refusal as adding one — moving a variation onto a priced duration, or re-activating a
+        # removed row beside the live one, lands in exactly the same place: two active prices for one
+        # length, cheaper wins, in silence. Swallowing the refusal here would be worse than not
+        # having it, because the editor would report success and change nothing.
+        if isinstance(done, dict) and done.get("error"):
+            return jsonify(dict(done, message=(
+                "This service already has a price for "
+                + str(done.get("duration_minutes")) + " minutes. Edit that one, or remove it first "
+                "— two prices for the same length means the cheaper one is charged."
+            ))), 409
         out = repo.get_service(s, club_id=p.club_id, product_id=product_id)
     return jsonify(service=out), 200
 

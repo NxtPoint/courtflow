@@ -27,7 +27,7 @@ sweep. When you activate one, tick it and move the detail into the relevant spec
 - **`EMAIL_INVOICE_PDF_ENABLED` — ✅ ON / LIVE (verified 2026-07-18).** Issued invoices now email with the PDF
   **attached** (previously the email only linked the in-portal PDF). Unblocked by the SES key gaining
   `AmazonSESFullAccess` (`ses:*`, i.e. `ses:SendRawEmail`) — the SAME unlock that clears A6.
-- **`OPS_KEY` GitHub Actions secret — ✅ SET.** The month-end statement sweep now **fires live on the 25th**
+- **`OPS_KEY` GitHub Actions secret — ✅ SET.** The month-end statement sweep now **fires live on the 1st**
   of each month (`.github/workflows/month-end.yml`, `POST /api/cron/month-end`); it previously no-op'd without
   the secret.
 

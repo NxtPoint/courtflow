@@ -222,7 +222,7 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   club → **per-coach P&L** (`sales − discount − write-off = net`, `net = received + owed`, commission
   **−coach / +club** realised on received + projected on owed) → **by client → transaction → the shared
   record**. The coach **Money** tab is the SAME widget, coach-scoped to their own P&L (config, no fork). 🔭
-- **Month-end sweep** — `POST /api/cron/month-end` (fired by `.github/workflows/month-end.yml` **on the 25th
+- **Month-end sweep** — `POST /api/cron/month-end` (fired by `.github/workflows/month-end.yml` **on the 1st
   of each month**, the billing day) accrues **arrears + rent** and **emails every client with an open
   balance** — **idempotent per month**. The `OPS_KEY` GitHub Actions secret is now set, so it fires live. 🌐
 - *(Deferred: scheduled per-day rent accrual — see OUTSTANDING.)*

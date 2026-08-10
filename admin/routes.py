@@ -521,6 +521,11 @@ def patch_price(price_id):
         )
     if price is None:
         return jsonify(error="NOT_FOUND"), 404
+    # A refused duplicate is an ERROR, not a price. Returning it under `price=` with a 200 would
+    # hand the caller {"error": ...} where it expects a row and report success for a write that
+    # never happened.
+    if isinstance(price, dict) and price.get("error"):
+        return jsonify(price), 409
     return jsonify(price=price), 200
 
 

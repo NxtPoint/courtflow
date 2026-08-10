@@ -613,8 +613,11 @@ actually received** — and this needs no monthly commission run, because there 
 - **Club↔coach settlement (`coach_payout`).** The running `coach_ledger` balance (**+ = club owes coach,
   − = coach owes club**) is the single authoritative **net-owed** figure, and is settled by a recorded
   **`coach_payout`** in **either direction** — **append-only + idempotent** (never mutated, no double-pay).
-- **Month-end sweep (the 25th — the club's billing day).** A **GitHub Action** fires the sweep on the
-  **25th** of each month (was the 1st): it **accrues arrears + rent**, then for each client with an OPEN
+- **Month-end sweep (the 1st — billing the month just ENDED).** A **GitHub Action** fires the sweep on the
+  **1st** of each month. It ran on the **25th** until 2026-08-08, which meant every invoice was issued with
+  days of the month still to come: the client paid one number, then saw a larger one online days later, the
+  invoice never balanced, and **no month could ever be closed**. Billing a month once it has ENDED is what
+  makes the document final. It **accrues arrears + rent**, then for each client with an OPEN
   balance > 0 **consolidates their open orders into ONE numbered statement invoice + pay-link email** (else a
   plain balance reminder); a client who owes **nothing gets NO email**. **Idempotent per (club, user, YYYY-MM)**
   (a re-run never re-issues/re-notifies) — no always-on cron.
