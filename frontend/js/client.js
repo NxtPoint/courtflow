@@ -390,7 +390,7 @@
       lvlBox.appendChild(el("div", { class: "cf-row", style: "align-items:center;gap:10px" }, [
         el("div", { class: "cf-stat-v", text: levelWord(prof.level_num) }),
         prof.level_source === "coach"
-          ? el("span", { class: "cf-chip cf-chip-ok", text: "set by your coach" }) : null,
+          ? el("span", { class: "cf-chip ok", text: "set by your coach" }) : null,
       ].filter(Boolean)));
       lvlBox.appendChild(el("p", { class: "cf-muted cf-tiny",
         text: prof.level_source === "coach"

@@ -723,3 +723,32 @@ p{margin:0 0 10px}
 .cf-ai-cta:hover{filter:brightness(1.06)}
 .cf-ai-soon{margin-top:16px;display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border-radius:var(--radius-pill);
   background:rgba(255,255,255,.14);color:#fff;font-weight:600;font-size:.82rem}
+
+/* ============ Find a Game (community/) ============================================
+   Three genuinely-new components. Everything else in the feature reuses the existing
+   vocabulary (.cf-item / .cf-chip.ok / .cf-chip.held / .cf-stat / .cf-btn) rather than
+   inventing a second spelling of it — a duplicate chip class is exactly the drift the
+   GOLDEN RULE exists to stop. */
+
+/* The held-court banner. A game whose seats aren't all paid is HELD, not confirmed, and
+   that is the one thing a player must understand at a glance — so it gets the warning
+   tokens, not a muted paragraph they'll scroll past. */
+.cf-banner{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline;border-radius:var(--radius-sm);
+  padding:12px 16px;margin-bottom:14px;font-size:.9rem;line-height:1.45;
+  border:1px solid var(--border);background:var(--canvas);color:var(--ink)}
+.cf-banner-warn{border-color:var(--warning);background:var(--warning-bg);color:#7a4d10}
+
+/* The open seat. Dashed on purpose: it reads as an invitation with something missing,
+   not as a row that failed to load. It is the product — the whole feature is "there is a
+   spare seat here" — so it must not look like an empty state. */
+.cf-item-dashed{border-style:dashed;border-color:var(--green);background:var(--green-050)}
+.cf-item-dashed .cf-item-t{color:var(--green-600)}
+
+/* Match chat. Deliberately plain — it exists so two players can agree the details without
+   swapping phone numbers, not to compete with WhatsApp. System lines (joins, leaves) are
+   dimmed and italic so the timeline reads differently from what people actually said. */
+.cf-chat{max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--canvas);padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.cf-chat-line{font-size:.88rem;line-height:1.45;color:var(--ink);word-break:break-word}
+.cf-chat-who{font-weight:700;color:var(--green-600)}
+.cf-chat-sys{color:var(--muted);font-style:italic;font-size:.82rem}

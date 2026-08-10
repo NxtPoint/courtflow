@@ -1176,7 +1176,7 @@
         sec.appendChild(el("button", { class: "cf-btn cf-btn-sm", type: "button", style: "margin-top:8px",
           text: "+ Add a player",
           onclick: function () { window.CRMUI.addLessonPlayerModal(playersPickerConfig()); } }));
-        var openLbl = el("label", { class: "cf-check", style: "display:block;margin-top:10px" });
+        var openLbl = el("label", { class: "cf-row", style: "gap:8px;align-items:center;cursor:pointer;margin-top:10px" });
         var cb = el("input", { type: "checkbox" });
         cb.checked = st.openGame !== false;
         cb.addEventListener("change", function () { st.openGame = cb.checked; });

@@ -2530,7 +2530,7 @@
               el("div", { class: "cf-item-t", text: when + " · " + (g.play_format || "singles") }),
               el("div", { class: "cf-item-s", text: bits.filter(Boolean).join(" · ") }),
             ]),
-            el("span", { class: "cf-chip" + (g.owed_minor > 0 ? " cf-chip-warn" : ""), text: g.status }),
+            el("span", { class: "cf-chip" + (g.owed_minor > 0 ? " held" : ""), text: g.status }),
           ]);
           row.addEventListener("click", function () { location.hash = "#/event/" + g.booking_id; });
           list.appendChild(row);

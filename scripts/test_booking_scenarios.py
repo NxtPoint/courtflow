@@ -4135,11 +4135,47 @@ def sc_the_feed_defaults_to_games_around_my_level(s, fx):
           str(far) in [g["booking_id"] for g in wide], str(wide))
 
 
+def sc_dark_means_dark_for_the_whole_lane(s, fx):
+    """A club that has not switched the community on must get NOTHING — not an empty version of it.
+
+    The flag used to be checked one action at a time: join and set_visibility asked, the feed, the
+    profile, chat, results and matching did not. So a member could reach the screens by typing the URL
+    and find a working-but-empty feature, which is worse than an absent one because it looks BROKEN
+    rather than unbuilt. The gate now lives in one `before_request`, so a new endpoint is covered by
+    default and has to opt out on purpose."""
+    print("\n# with the community OFF the lane refuses everything — except the switch itself")
+    from community import games, seats
+    # The scratch club's policy row exists with both switches at their defaults.
+    pol = seats.policy(s, fx.club_id)
+    check("the club starts with the community OFF", pol["community_enabled"] is False, str(pol))
+
+    host = fx.members[0]
+    _membership_for_court(s, fx, host)
+    try:
+        games.join_game(s, club_id=fx.club_id, booking_id=fx.courts[0], user_id=host)
+        check("joining is refused while the lane is dark", False, "no GameError")
+    except games.GameError as e:
+        check("joining is refused while the lane is dark (COMMUNITY_DISABLED)",
+              e.code == "COMMUNITY_DISABLED", e.code)
+
+    # …and the OWNER can still reach the switch, which is the one thing that must never be gated —
+    # gating it would make the feature unreachable by design.
+    from community import repositories as repo
+    cfg = repo.settings(s, club_id=fx.club_id)
+    check("the owner can still READ the settings with it off", cfg is not None and
+          cfg["community_enabled"] is False, str(cfg))
+    cfg = repo.save_settings(s, club_id=fx.club_id, fields={"community_enabled": True})
+    check("…and still WRITE them — the switch is never behind its own flag",
+          cfg["community_enabled"] is True, str(cfg))
+    check("once on, the lane answers", seats.policy(s, fx.club_id)["community_enabled"] is True)
+
+
 SCENARIOS = [
     # THE SEAT RULE (community/) — the money core, pinned before create_booking learns about seats.
     sc_a_seat_share_is_a_fixed_fraction_of_the_court,
     sc_a_game_says_what_kind_of_tennis_it_is,
     sc_the_feed_defaults_to_games_around_my_level,
+    sc_dark_means_dark_for_the_whole_lane,
     sc_match_chat_is_private_to_the_players,
     sc_a_result_needs_someone_else_to_confirm_it,
     sc_matching_puts_the_right_level_first,

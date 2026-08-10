@@ -67,6 +67,38 @@ def _staff(p):
     return p.role in ("coach", "club_admin", "platform_admin")
 
 
+# Routes that must work even when the club has the community switched OFF. Everything else in this
+# blueprint is refused, in ONE place, below.
+#
+# `/config` is how the UI asks whether to show anything at all, and `/admin/` is how the owner turns
+# the feature on — gating either would make the switch unreachable, which is its own class of bug.
+_ALWAYS_OPEN = ("/api/community/config", "/api/community/admin")
+
+
+@community_bp.before_request
+def _require_community_enabled():
+    """DARK MEANS DARK. Individual actions used to check the flag one at a time — join and
+    set_visibility did, the feed, the profile, chat, results and matching did not. So a member of a
+    club that had never switched the feature on could still reach `#/play` by typing the URL, set a
+    level, and browse an empty feed: a half-present feature, which is worse than an absent one because
+    it looks broken rather than unbuilt.
+
+    Doing it here means a route cannot forget. New endpoints are covered by default and have to opt
+    OUT explicitly, which is the right direction for a gate."""
+    path = request.path or ""
+    if any(path.startswith(prefix) for prefix in _ALWAYS_OPEN):
+        return None
+    p = _principal()
+    if not p:
+        return jsonify(error="unauthorized"), 401
+    from community import seats
+    with session_scope() as s:
+        if not seats.policy(s, p.club_id)["community_enabled"]:
+            return jsonify(error="COMMUNITY_DISABLED",
+                           message="Find a Game isn't switched on for this club"), 403
+    return None
+
+
 # ---------------------------------------------------------------------------
 # discovery + games
 # ---------------------------------------------------------------------------

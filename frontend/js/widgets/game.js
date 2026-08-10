@@ -32,10 +32,10 @@
   function seatChip(seat) {
     // The vocabulary a player actually needs: am I paid for, or do I owe? "covered" is deliberately
     // worded as a benefit ("Included") rather than as jargon.
-    if (seat.covered) return { text: "Included", tone: "ok" };
-    if (seat.seat_status === "collapsed") return { text: "Unfilled seat", tone: "warn" };
+    if (seat.covered) return { text: "Included", tone: "ok" };          // .cf-chip.ok  (existing)
+    if (seat.seat_status === "collapsed") return { text: "Unfilled seat", tone: "held" };
     if (seat.paid === true) return { text: "Paid", tone: "ok" };
-    if (seat.paid === false) return { text: "Awaiting payment", tone: "warn" };
+    if (seat.paid === false) return { text: "Awaiting payment", tone: "held" };
     return { text: "", tone: "" };
   }
 
@@ -46,7 +46,7 @@
     if (seat.role === "host") sub.push("booked the court");
     if (seat.is_me && seat.amount_minor) sub.push("you owe " + money(seat.amount_minor));
     var right = [];
-    if (chip.text) right.push(el("span", { class: "cf-chip cf-chip-" + (chip.tone || ""), text: chip.text }));
+    if (chip.text) right.push(el("span", { class: "cf-chip " + (chip.tone || ""), text: chip.text }));
     if (seat.is_me && seat.paid === false && cfg.actions && cfg.actions.pay) {
       right.push(el("button", {
         class: "cf-btn cf-btn-primary cf-btn-sm", text: "Pay " + money(seat.amount_minor),
@@ -170,7 +170,7 @@
           onclick: function () { cfg.onNavigate({ kind: "booking", id: game.booking_id }); }
         }));
       }
-      if (acts.length) host.appendChild(el("div", { class: "cf-row cf-actions", style: "gap:8px" }, acts));
+      if (acts.length) host.appendChild(el("div", { class: "cf-row", style: "gap:8px;margin-top:12px;flex-wrap:wrap" }, acts));
 
       host.appendChild(chatBlock(cfg, game, msgs));
     }
@@ -204,13 +204,13 @@
       var bits = [g.court_name, g.play_format === "doubles" ? "Doubles" : "Singles"];
       if (g.play_intent) bits.push(INTENT[g.play_intent] || g.play_intent);
       if (g.host_level) bits.push("Level " + g.host_level);
-      var n = el("button", { class: "cf-item cf-item-click", style: "width:100%;text-align:left" }, [
+      var n = el("button", { class: "cf-item cf-item-tap", style: "width:100%;text-align:left;cursor:pointer;border:1px solid var(--border);background:var(--surface)" }, [
         el("div", { class: "cf-item-main" }, [
           el("div", { class: "cf-item-t", text: when + " · " + (g.host_name || "A member") }),
           el("div", { class: "cf-item-s", text: bits.filter(Boolean).join(" · ") })
         ]),
         el("span", {
-          class: "cf-chip " + (g.im_in ? "cf-chip-ok" : ""),
+          class: "cf-chip " + (g.im_in ? "ok" : ""),
           text: g.im_in ? "You're in" : (g.open_seats + (g.open_seats === 1 ? " seat" : " seats"))
         })
       ]);

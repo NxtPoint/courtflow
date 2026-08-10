@@ -236,6 +236,29 @@ shown on the game card and the game header, and filterable in the feed.
 Guarded by `sc_a_game_says_what_kind_of_tennis_it_is` and
 `sc_the_feed_defaults_to_games_around_my_level`.
 
+### DARK MEANS DARK — one gate, not per-route
+
+`community_bp` has a `before_request` that refuses the whole lane with `COMMUNITY_DISABLED` unless the
+club has `community_enabled`. Two deliberate exemptions: **`/config`** (how the UI asks whether to show
+anything) and **`/admin/*`** (how the owner turns it on — gating the switch behind its own flag would
+make the feature unreachable).
+
+It used to be checked one action at a time: `join_game` and `set_visibility` asked, the feed, profile,
+chat, results and matching did not. A member of a club that had never switched it on could type `#/play`
+and find a working-but-empty feature — worse than an absent one, because it looks *broken* rather than
+unbuilt. In one place, a new endpoint is covered by default and has to opt out on purpose.
+Guarded by `sc_dark_means_dark_for_the_whole_lane`.
+
+### Styling
+
+Three new components in `frontend/app/app.css` — `.cf-banner`/`.cf-banner-warn` (the held-court
+notice), `.cf-item-dashed` (the open seat: dashed so it reads as an invitation, not as a row that
+failed to load) and `.cf-chat`. **Everything else reuses the existing vocabulary.** The first cut had
+invented `.cf-chip-ok` / `.cf-chip-warn` when the design system already spelled those `.cf-chip.ok` /
+`.cf-chip.held` — a second spelling of an existing chip is precisely the drift the GOLDEN RULE exists
+to stop, and here it was also *functional*: without the classes, "Paid" and "Awaiting payment" rendered
+identically.
+
 ## Still to build
 
 The two owed money scenarios below (a refund restoring the split; a collapsed seat on a card-only
@@ -262,7 +285,7 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
 read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
 the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
-(`courtflow-dev`) at booking 567 / billing 702 / statement 64, with `python -m db` twice a clean
+(`courtflow-dev`) at booking 572 / billing 702 / statement 64, with `python -m db` twice a clean
 no-op including `community.schema`.
 
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart
