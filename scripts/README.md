@@ -55,6 +55,9 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   class type's link status; `--commit` applies the SAFE fixes (sync a drifted name, pin an
   unambiguous unlinked resource). Ambiguous cases (linked to a terminated product with a live
   alternative) are reported for a human, never guessed.
+- `community_status.py` - READ-ONLY: why is Find a Game not showing? Checks the community boot DDL
+  actually ran, prints the per-club flags (community_enabled / seat_rule_enforced / share / timings)
+  and what content exists. Run in the courtflow-api Render shell (docs/specs/DATA-ACCESS.md).
 - `resend_invoice.py <email>` - re-send a client's EXISTING statement invoice email (PDF + pay-link)
   when they got the bare month-end reminder instead. Looks up the invoice already covering their open
   debt and re-delivers it SYNCHRONOUSLY (no daemon thread) - no new number, nothing billed twice.
