@@ -987,3 +987,123 @@ a file that no browser could load passed every check and shipped. Closed by
 `test_all`). It is guarded by the gate itself rather than an `sc_…` scenario, and was verified in **both**
 directions — 34/34 clean, and exit 1 naming the file and line when the original string is reintroduced. A
 gate proven only in the passing direction proves nothing.
+
+---
+
+## The seat rule (community/)
+
+These eight were all found by WRITING THE SCENARIOS, before a single club saw any of them. Not one was
+visible in review, and every one of them was in code I would have described as finished. They are
+grouped here because they share a shape: each is a place where a money decision quietly defaulted
+instead of being made.
+
+Full design: [COMMUNITY-ENGINE.md](COMMUNITY-ENGINE.md).
+
+### A COLLAPSED SEAT STILL OCCUPIES ITS SEAT (2026-08-09)
+
+`collapse_open_seats` re-bills an unfilled seat to the booking holder at the cutoff. The seat states
+that counted as OCCUPYING a seat were `invited`/`held`/`confirmed` — `collapsed` was not among them.
+
+So `seat_plan` recomputed `open_count` from the live seats, saw the *same* empty seat again, and
+collapsed it again. The sweep runs **hourly**: a member booking a court on Tuesday for Saturday would
+have been charged R150 roughly fifty times, each one a real order on their statement.
+
+`collapsed` is now in `_LIVE_SEAT` — and deliberately **not** in `_HOLDING_SEAT`, which is a different
+question. A collapsed seat is a DEBT; it is not a reason to lazy-expire the member's court out from
+under them hours before they play, which is what including it in the holding set would have done.
+Guarded by `sc_open_seat_collapses_onto_the_holder_at_cutoff`.
+
+### `int(None or 0)` HANDED A LATE JOINER A FREE COURT (2026-08-09)
+
+Once any seat is paid the split LOCKS, so shares can never be recomputed — otherwise a third player
+arriving would re-price a seat somebody had already paid for. The locked branch read each seat's frozen
+share back out of the database:
+
+```python
+e["share_minor"] = int(e["seat"].get("share_minor") or 0)   # WRONG
+```
+
+A seat that joined *after* the lock has no frozen share at all. `None or 0` → **0** → a free court, off
+the back of another player's payment. This is the silent zero that
+[§ Reads that lie](#reads-that-lie) is about, in the one module whose header says it refuses to do that.
+
+The fix was not to pick a number. A guessed share bills someone an amount nobody quoted them; zero gives
+the court away. The read now reports the seat as **unpriced** and `apply_seat_orders` **raises
+`SPLIT_LOCKED`**, which pushes the product decision (close the game, or allow a free joiner once the fee
+is banked) into the join path where it is a decision rather than a fallthrough.
+Guarded by `sc_split_locks_on_first_payment`.
+
+### THE HOLDER'S SEAT COULD NOT SAY WHY IT HAD BEEN CHARGED (2026-08-09)
+
+`covered` is the audit answer to "why was this seat free, or not?" long after the member's tier has
+changed. It was written on the branch that CREATES a seat order but not on the branch that RE-PRICES an
+existing one — and the holder's seat rides the booking's own order, so it took the re-price branch every
+time. The one seat in the game that could not explain itself was the club's own member's.
+
+The money was right; the record was not. A NULL is not an answer.
+Guarded by `sc_an_expired_membership_is_an_uncovered_seat`.
+
+### THE "STABLE" SEAT ORDER WAS SORTING BY RANDOM UUID (2026-08-09)
+
+The rounding remainder has to land somewhere deterministic, or re-pricing a split moves a cent between
+two people's orders for no reason either of them can see. `_seats` sorted by `created_at, id` and the
+docstring said "STABLE" — which was true and useless.
+
+**`now()` is transaction-stable in Postgres.** Every seat inserted by one `create_booking` call shares a
+timestamp *to the microsecond*, so the tie always fell through to `gen_random_uuid()`. Stable per row (a
+uuid does not change), arbitrary between people: the odd cent landed on whoever's random id sorted first.
+
+It surfaced because a scenario started passing and failing on a coin toss. The host now sorts first, so
+the organiser carries the odd cent — the one answer that needs no explanation. The same trap is why that
+scenario now pays a **named** seat rather than "the first one".
+
+### RE-PRICING A SEAT NEARLY ATE THE EQUIPMENT HIRE (2026-08-09)
+
+The holder's seat rides the booking's own order. On a court with equipment, that order also carries the
+equipment lines. `_resync_seat_order` updated **every** line on the order to the seat share — which would
+have silently rewritten a R250 ball-machine line to R75 and lost the hire fee, on an order that still
+looked perfectly well-formed.
+
+It now re-prices only the court line and **recomputes the order total from its lines** rather than
+assuming it. Recomputing is also what keeps the order honest if a line is ever added later.
+
+### A GAME COULD PUSH ITS OWN DEADLINE PAST THE GAME (2026-08-10)
+
+`open_until` is the instant an unfilled seat becomes the holder's to pay for. The first cut computed it
+only when the caller passed nothing:
+
+```python
+if visibility == "open" and open_until is None:   # WRONG — a supplied value sails through
+```
+
+A caller could therefore set a deadline *after* the game started, and the sweep would never reach it: a
+court held open, free, forever. The route passing `None` was the only reason it was not reachable over
+HTTP — and `create_booking` is a public function, so the money core has to hold this on its own.
+
+Now **clamped**, not defaulted: a caller may bring the deadline forward (a shorter window is their
+business), never past the club's cutoff. `seats` is clamped the same way — a crafted `99` would divide
+one court fee into unpayable slivers. Both guarded by
+`sc_a_crafted_game_cannot_cheapen_or_outlive_its_own_bill`.
+
+### A MONEY RULE WITH NO SWITCH IS A MONEY RULE NOBODY TURNS ON (2026-08-10)
+
+The seat rule shipped behind two `club.policy` flags with no UI, on the assumption that a flag is easy
+to flip. **This platform has already made that mistake**: the entitlement caps
+(`max_covered_per_day` / `max_covered_minutes`) shipped correct and then sat INERT for weeks, because the
+only way to set them was SQL and everyone assumed a shipped feature was a working one.
+
+Admin → Setup → **Community & games** is now the only place either switch can be changed, and it states
+out loud that flipping the money one changes what members pay. Its seats-per-format card says the doubles
+denominator explicitly, because "two members plus two guests means each guest pays a quarter" is exactly
+the kind of thing an owner should not discover from a complaint.
+Guarded by `sc_the_seat_rule_can_be_switched_on_without_sql`.
+
+### `audit_docs` CANNOT SEE AN EVENT EMITTED THROUGH A HELPER (2026-08-09)
+
+The docs gate finds emitted events with `emit\(\s*["'](\w+)["']` — a **literal** first argument.
+`community/games.py` emits through `_emit(session, event, …)`, so its four events (`game_opened`,
+`game_seat_taken`, `game_full`, `game_seat_released`) are invisible to it.
+
+They are in `contracts/events.md` because they were added by hand. **Nothing would have caught it if they
+weren't** — and the gate would have reported a confident green. Any lane that emits via a helper has the
+same blind spot; if you add one, add the contract row yourself and do not wait to be told.

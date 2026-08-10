@@ -22,11 +22,12 @@ Postgres, AWS SES/S3, Klaviyo, provider-agnostic payments).
 | Track | State |
 |---|---|
 | **Platform** | ✅ **LIVE in production**, feature-complete for launch. **No current build phase** — what remains is config + backlog. |
-| **Verification gates** | `python -m scripts.test_all` → current baseline: **booking 521 / billing 702 / statement 64** (rollback-only scratch-DB harnesses; there is no pytest suite). |
+| **Verification gates** | `python -m scripts.test_all` → current baseline: **booking 552 / billing 702 / statement 64** (rollback-only scratch-DB harnesses; there is no pytest suite). |
 | **SEO migration** | ✅ Wix→Render cutover executed 2026-07-05 — 48-rule 301 map live, canonical→apex, prod Clerk + Google login. |
 | **Measurement** | GA4 + Google Ads live; gclid capture → `core.acquisition`; the Google Ads offline-conversion CSV feed is built (still needs its scheduled upload configured). |
 | **Transactional email** | ✅ LIVE via SES (interim: rides the Ten-Fifty5 AWS account). Invoice PDFs attach. |
 | **Marketing email** | ⏸ Dark until `KLAVIYO_API_KEY` is set — the event feed already emits, so it lights up on the key alone. |
+| **Community** | ⚠️ **BUILT, DARK.** Find a Game + the seat rule (a court fee splits between the players not covered by a membership). Two `club.policy` switches, both off. See [`docs/specs/COMMUNITY-ENGINE.md`](docs/specs/COMMUNITY-ENGINE.md). |
 | **What's left** | **[`docs/specs/OUTSTANDING.md`](docs/specs/OUTSTANDING.md)** — config owed by Tomo, code backlog, owner decisions, hardening, and two specced roadmaps. Nothing is launch-blocking. |
 
 ---
@@ -78,6 +79,7 @@ Operational one-offs (audits, backfills, imports, live verification) are indexed
 | `client360/` | The ONE cross-lane read-model every client view is a view off. |
 | `admin/` `coach/` `me/` `services/` `insights/` | Role APIs + the unified service editor + the admin insight read-layer. |
 | `marketing_crm/` `offline_conversions/` | Event feed → notifications (in-app + SES), consent, feedback/re-permission, Klaviyo sync, Google Ads offline conversions. |
+| `community/` | **Find a Game + the seat rule** — who is on a court and who pays for them. Ships dark behind two `club.policy` switches. |
 | `analytics/` | Read-only guarded aggregations + the first-party beacon. |
 | `frontend/` | Three role SPAs (client / coach / admin) on **one** shared widget layer. |
 | `crons/` `.github/workflows/` | Recurring jobs — **all of them fire from GitHub Actions**, not Render crons. |

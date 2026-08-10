@@ -31,6 +31,39 @@ sweep. When you activate one, tick it and move the detail into the relevant spec
   of each month (`.github/workflows/month-end.yml`, `POST /api/cron/month-end`); it previously no-op'd without
   the secret.
 
+## A-bis. DB-flag gated — the switches live in `club.policy`, not the env
+
+| # | Feature | Gate (`club.policy`) | Default | Turn on |
+|---|---------|----------------------|---------|---------|
+| **AB1** | **Community / Find a Game** — open games, join/leave, invitations, match chat, results, player levels | `community_enabled` | **false** | **Admin → Setup → Community & games.** Members get the social surface; **nothing about anyone's bill changes.** Safe to switch on first, on its own. |
+| **AB2** | **THE SEAT RULE** — a court's fee is split among the seats not covered by a membership | `seat_rule_enforced` | **false** | Same screen, second switch. ⚠️ **This changes what members pay.** See the pre-flight below. |
+
+Two switches on purpose, and they are independent: a club can give members Find a Game as a *benefit*
+before it changes what anyone pays. `seat_rule_enforced=false` means the booking path behaves **exactly**
+as it did before the lane existed — that is the regression contract, and
+`sc_seat_rule_off_changes_nothing` asserts it.
+
+Timings on the same screen (all `club.policy`, sensible defaults, clamped 1–720):
+`open_game_cutoff_hours` (12) · `seat_pay_hours` (24) · `guest_trial_days` (7).
+
+**Pre-flight before AB2 — this one is not just a flag.** It is the only switch on this page that
+changes what a member is charged:
+
+1. **Check the doubles denominator.** A doubles game splits the court fee **four** ways, so two members
+   plus two guests means each guest pays a quarter. The Setup screen states this; if it is not how you
+   want doubles priced, do not switch it on yet.
+2. **Tell the members first.** They lose a free ride they have had for years. The Open Game framing
+   ("bring anyone — they pay their share") is the message, and it lands far better before the first bill
+   than after it.
+3. **Then flip it.** Watch Setup → Games & invitations → *Games* for the **owed** column, which is the
+   "is anyone about to play on a court nobody paid for?" read.
+
+*Why this section exists at all:* the entitlement caps shipped correct and sat **inert for weeks**
+because the only way to set them was SQL. A money rule with no switch is a money rule nobody turns on —
+see [GOTCHAS.md § The seat rule](GOTCHAS.md#the-seat-rule-community).
+
+---
+
 ## B. Built but not wired to any UI (needs a small front-end or a scheduler)
 
 - **B1 — CRM "cockpit" analytics lane** (`/api/admin/cockpit/*`, `marketing_crm/backoffice/blueprint.py`,

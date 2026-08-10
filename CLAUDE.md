@@ -43,11 +43,11 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 521 / billing 702 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 552 / billing 702 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (73/95/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (77/95/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **Update the "Current green baseline" line above and nothing else**, so
    the numbers can't drift apart (`scripts.audit_docs` fails any doc that claims a DIFFERENT current
@@ -117,7 +117,7 @@ re-run or a doubled schedule is safe. When adding a recurring job, add a workflo
 
 **Capacity-sweep needs no job at all** — abandoned holds are released by lazy expiry (see Gotchas).
 
-**One Postgres DB, five schemas** (idempotent boot DDL, no migration framework; `db.py` runs `BOOT_MODULES`):
+**One Postgres DB, six schemas** (idempotent boot DDL, no migration framework; `db.py` runs `BOOT_MODULES`):
 - `club.*` — tenants/config/branding/location/policies
 - `iam.*` — user↔Clerk, membership, coach_profile, dependents, coach_invite
 - `diary.*` — resources, availability, booking, class_session, enrolment, waitlist, recurrence (**the heart**);
@@ -127,6 +127,10 @@ re-run or a doubled schedule is safe. When adding a recurring job, add a workflo
   `commission_split`/`coach_ledger`/`coach_arrears`), **`coach_payout`** (recorded club↔coach settlements —
   nets the ledger) + **`month_end_notice`** (month-end-sweep idempotency)
 - `core.*` — account/user/person, usage_event, consent, nps (ported from Ten-Fifty5 `core_db`)
+- `community.*` — player_invite, message (match chat), match_result, play_again (the PRIVATE
+  would-play-again signal), favourite. **A GAME IS A BOOKING** — there is deliberately no
+  `community.game` table; an open game is a `diary.booking` with `visibility='open'` and a seat is a
+  `diary.booking_party` row (see the Community section below)
 
 **Decoupling interfaces** (why the lanes stay independent): the **schema** is the contract between diary,
 billing, and CRM; `contracts/events.md` is the producer→consumer **event contract** (diary/billing `emit()`
@@ -146,6 +150,7 @@ Touch only your lane; coordinate on shared interface files (`contracts/events.md
 | **Client 360** | `client360/` | The ONE cross-lane read-model — `get_client_360(scope, coach_user_id, month)` composes existing lane readers into a single client payload (identity/memberships/packages/statement/payments/bookings/refunds/coaching/activity + `month_events` + the reconciling `statement_fold` + `can{}`; booking rows carry service + pay-status + their own head's amount). Read-only, reuse-first. **`scope='coach'` is a STRICT SERVER-SIDE filter** (the coach fork was retired — coach = a filter, not a fork): it returns ONLY the coach's own events + own coaching fold + own packages + coaching; membership/card-payments/full-statement/dependents/refunds/PII/activity are OMITTED server-side (never sent to a coach's browser). **Each block runs in a SAVEPOINT (`_guard`→`begin_nested`), NEVER a bare `session.rollback()`** — the composer runs inside the caller's `session_scope`, so a full rollback would discard the caller's writes. `admin.get_person` delegates here; coach `/clients/<id>/360` + client `/me/360` call it. **The single source of truth every client view is a view off**, and the money everywhere is the ONE reconciling fold: **Billed − Discount − Written-off = Invoiced = Paid + Outstanding** (`CRMUI.statementFold`/`moneySummary`, coach + admin + client all reconcile). |
 | **Admin** | `admin/`, `services/`, `insights/` | Owner write APIs + onboarding, per-service commission editor, financial cockpit, person-360, the insights composer, **general order discount + pack-wallet adjust/expire**. |
 | **Coach / Client** | `coach/`, `me/` | Coach self-service (onboarding, clients-360, statement, cockpit; reschedule/cancel own lessons + move own class sessions) + client self-service (profile, dependents, statement, refund requests). |
+| **Community** | `community/` | **Find a Game + THE SEAT RULE** — who is on a court, and who pays for them. `seats.py` is the money core (the ONE place the split lives); `games.py` open/join/leave; `invites.py` bring-a-friend + the free week; `matching.py`/`chat.py`/`results.py`; `crons.py` the sweep. `/api/community/*`. **Ships DARK** behind two `club.policy` flags. |
 | **Analytics** | `analytics/` | Read-only guarded aggregations → `/api/analytics/*` (the standalone `/overview.html`); first-party beacon in `beacon.py`. |
 | **Frontend** | `frontend/` | Three role SPAs on one widget layer (below). |
 | **Marketing/SEO** | `frontend/marketing/`, `frontend/_shared/`, `build_blog.py`, `migration/`, `marketing_digest/` | Host-switched public site, blog, sitemap, Wix→Render migration scripts, cross-brand organic-growth digest (below). |
@@ -393,6 +398,53 @@ view off the ONE composer**. `CRMUI.activityBlock / spendBlock / weekChart` = ON
 Home modules AND the Client 360 rollup. The client Home is Book(services) → Your sessions → Match-analysis →
 a month-navigable Billing+Activity summary → Plan; **no emoji** (drawn line-glyphs).
 
+## Community — Find a Game + THE SEAT RULE (built 2026-08-09/10, ships DARK)
+Full spec: **[`docs/specs/COMMUNITY-ENGINE.md`](docs/specs/COMMUNITY-ENGINE.md)**.
+
+**Why it exists — two problems that are one.** A membership makes court bookings free, but nothing knew
+WHO ELSE was on the court, so one membership could cover a second player who never paid (two friends,
+one membership, half price, indefinitely). Separately, ~1,100 members often have nobody to play with and
+courts sit empty. **An unpaid second player and an empty seat are the same object** — a seat nobody has
+accounted for. Account for seats and the leak closes; publish the unaccounted seats and you have Find a
+Game. That is why this is one lane and not two.
+
+> **THE SEAT RULE.** A court booking has SEATS. Every seat is a covered member (free), a payer (owes a
+> share), or OPEN. **The court's price is split equally among the seats that are NOT covered.** An OPEN
+> seat unfilled at the cutoff **collapses** onto the booking holder as a charged seat.
+
+The club banks **exactly one court fee** per court hour unless every player is a member — membership
+decides WHO pays, never WHETHER the court is paid for. member+member R0 · member+guest puts the whole
+fee on the guest · two PAYG split it and **the court confirms only when both settle** · a seat nobody
+took becomes the booker's.
+
+- **`community/seats.py` is the ONE place the split lives, and it RAISES rather than guards.** Every
+  `analytics/`+`insights/` read is `_guard`-wrapped so a panel degrades to empty; that is right for a
+  dashboard and wrong here — a seat whose share silently computes to R0 is a court given away free that
+  nobody would ever see. Money paths raise `SeatError`; only display reads swallow.
+- **It invents no coverage logic and no pricing.** Coverage delegates entirely to
+  `diary.entitlement.court_covered`, and the price resolves exactly as `_create_order_guarded` resolves
+  it (same product, duration, club-local instant so PEAK applies, same resource). Anything else would
+  split a number the booking flow never quoted.
+- **A GAME IS A BOOKING.** No parallel game object — it would have forked the GiST constraint, the diary
+  grid, reschedule/cancel, the unified statement, Client-360 and month-end.
+- **One debt = one order still holds.** Seats raise real `billing."order"` rows through the existing
+  interface, so they reach the statement, Client-360, month-end and Club earnings with no extra work.
+- **The split LOCKS on the first payment** (`diary.booking.split_locked_at`). After that shares never
+  move; an un-covered seat added later is **refused (`SPLIT_LOCKED`), never priced at zero**.
+- **The free week for an invited friend IS the existing 7-day trial** — no second free-play mechanism.
+  `grant_signup_trial` already refuses anyone who has EVER held a subscription, so a second invite is
+  worthless and an imported Wix member can never be trialed.
+- **Cron:** `.github/workflows/open-games.yml` (hourly) → `POST /api/cron/open-games` — remind → release
+  → collapse, each game in its own SAVEPOINT, fails the job loudly. Not a `render.yaml` cron.
+- **Frontend:** `Widgets.Game` + `Widgets.GameList` (the ONE render), client `#/play` + `#/game/<id>`,
+  the booking flow's **"Who's playing?"** step, and `join.html` on the never-sleeps web. Inviting reuses
+  `CRMUI.addLessonPlayerModal`; paying a seat reuses `Pay.startYocoCheckout` — **no second payment path**.
+- **Admin:** Setup → **Community & games** (the ONLY place the switches can be flipped) and **Games &
+  invitations**. See "Still needs Tomo" for what must be configured before the money switch.
+- **Privacy:** no community read returns an email or a phone — the reason match chat exists. Discovery is
+  **opt-in** (`iam.player_profile.visible_in_community`, default false) and **juniors are excluded
+  entirely**; `play_again` is never rendered.
+
 ## First-party analytics + the admin Overview tab
 `analytics/` is a read-only, platform-owner dashboard (`/overview.html`, rolling `?days=`) built on **guarded**
 aggregations (a missing/empty table → empty panel, never a 500). The admin console's **native Overview tab**
@@ -634,6 +686,18 @@ looks like a harmless simplification until you read what it cost.
 - A PACK SALE RESOLVES ITS COACH FROM THE WALLET (2026-07-30)
 - THE COACH STATEMENT is the coach-side of a client invoice — `sc_coach_settlement_statement`
 - A PAYOUT MUST SAY WHICH MONTH IT SETTLES, and the screen that records one must ASK (2026-08-10) — the engine honoured `period_label` for weeks while the modal never sent it, so every real payout credited the month the cash moved — `sc_coach_earnings_carries_the_settlement`
+
+**The seat rule (community/)** — [GOTCHAS.md#the-seat-rule-community](docs/specs/GOTCHAS.md#the-seat-rule-community)
+*All eight were found by WRITING THE SCENARIOS, in code that looked finished. Each is a place where a
+money decision quietly defaulted instead of being made.*
+- A COLLAPSED SEAT STILL OCCUPIES ITS SEAT — else the hourly sweep re-bills the holder every run — `sc_open_seat_collapses_onto_the_holder_at_cutoff`
+- `int(None or 0)` HANDED A LATE JOINER A FREE COURT — a post-lock seat is REFUSED (`SPLIT_LOCKED`), never priced at zero — `sc_split_locks_on_first_payment`
+- THE HOLDER'S SEAT COULD NOT SAY WHY IT HAD BEEN CHARGED (`covered` left NULL on the re-price branch) — `sc_an_expired_membership_is_an_uncovered_seat`
+- THE "STABLE" SEAT ORDER WAS SORTING BY RANDOM UUID — **`now()` is transaction-stable in Postgres**; the host sorts first so the organiser carries the odd cent
+- RE-PRICING A SEAT NEARLY ATE THE EQUIPMENT HIRE — re-price the court line only, then recompute the order total from its lines
+- A GAME COULD PUSH ITS OWN DEADLINE PAST THE GAME — `open_until`/`seats` are CLAMPED, not defaulted — `sc_a_crafted_game_cannot_cheapen_or_outlive_its_own_bill`
+- A MONEY RULE WITH NO SWITCH IS A MONEY RULE NOBODY TURNS ON (the entitlement caps sat inert for weeks) — `sc_the_seat_rule_can_be_switched_on_without_sql`
+- `audit_docs` CANNOT SEE AN EVENT EMITTED THROUGH A HELPER — four community events are invisible to the gate and were added to the contract by hand
 
 **Reads that lie** — [GOTCHAS.md#reads-that-lie](docs/specs/GOTCHAS.md#reads-that-lie)
 - A SILENT ZERO IS A BUG, AND `try/except: return 0` IS NOT A GUARD (2026-07-31)

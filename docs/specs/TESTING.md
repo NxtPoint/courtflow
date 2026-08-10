@@ -340,6 +340,74 @@ not the client Home.
 
 ---
 
+## 5b. Community / Find a Game + the seat rule (2026-08-09/10 — DARK until switched on)
+
+Design: [COMMUNITY-ENGINE.md](COMMUNITY-ENGINE.md). Needs **3 accounts**: an owner, a MEMBER with an
+active membership, and a NON-MEMBER (a fresh email that has never existed here — the free week is granted
+once, ever, and only to a genuinely new account).
+
+**Switch it on in this order — the second one changes what members pay.**
+
+- [ ] **Owner → Setup → Community & games.** Both switches read OFF. Turn on **Community features** only.
+      Check the "Right now" band renders (open games · invites out · players findable · seats unpaid).
+- [ ] Read the **Seats per format** card. A doubles game splits the fee **four** ways. If that isn't how
+      you want doubles priced, **stop here** — everything below still works, it just prices differently.
+- [ ] Turn on **Charge for every seat**. (In real life: tell the members first.)
+
+**The member journey**
+
+- [ ] **Member → Book a court.** A **"Who's playing?"** step appears (singles / doubles / on my own).
+      Confirm the old free-guest name/email box is **gone** — an unbilled guest is the leak this closes.
+- [ ] Book **singles**, add nobody, leave "let another member take the spare seat" ticked.
+      → the booking confirms; the member owes **R0** (covered).
+- [ ] **Member → Find a game** (`#/play`). The game is listed with **1 seat open**. Check no email address
+      appears anywhere on the card.
+- [ ] **Invite by email** (the non-member). They get "You're invited to play at NextPoint" naming the free week.
+
+**The guest journey — the important one**
+
+- [ ] Open the emailed link. `/join.html` shows the inviter's **first name**, the time, and the offer.
+      It must NOT show the invitee's own email or the other players' details.
+- [ ] Sign up. → seat taken, **free week granted**, "Court time is included until <date>".
+- [ ] **Owner → Setup → Games & invitations → Invites.** The row reads `accepted` + **free week granted**.
+      (This is the screen that answers "my friend says they never got their free week".)
+- [ ] The guest's seat shows **Included** — they are covered by the trial, so **nobody owes anything**. ✅
+- [ ] **Chat** on the game from both sides. Then sign in as a THIRD member and confirm the game/chat
+      refuses them (`NOT_IN_GAME`).
+
+**The money — do these deliberately**
+
+- [ ] **Guest pays.** Expire the trial (Owner → People → the guest → membership) or use a second
+      non-member who was never invited. Book **member + that non-member**:
+      → the **non-member owes the whole R150**, the member owes **R0**, and the court reads **HELD**
+      until they pay. The member must NOT be sent to a checkout for someone else's debt.
+- [ ] **Two non-members.** Book with two PAYG players → **R75 + R75**. Pay ONE seat →
+      the court is **still held** (this is the trap). Pay the second → it **confirms**.
+- [ ] **The spare seat collapses.** Book a singles game, leave the seat open, then have the owner set
+      Setup → Community → *Spare seat closes* to a value that puts the cutoff in the past. Wait for the
+      hourly sweep (or run it by hand). → the member gets **"Nobody took the spare seat"** naming the
+      amount, and is billed **R150**. Re-run the sweep: they must **NOT** be billed twice.
+- [ ] **Cancel a game with an unpaid guest** → nobody is left owing anything.
+- [ ] **Owner → Games & invitations → Games.** The **owed** column is the "is anyone about to play on a
+      court nobody paid for?" read. Confirm it matches what you just created.
+- [ ] **Statement check.** Every seat charge appears on the right person's statement, and Money → Club
+      earnings still reconciles (seat orders are new rows in all of those reads).
+
+**Levels & matching**
+
+- [ ] Member → profile → answer the 5 level questions; tick **findable**. Confirm you are NOT discoverable
+      until you tick it.
+- [ ] Owner/**coach** → Setup → Games & invitations → **Players & levels** → correct a level. It reads
+      "set by coach" afterwards, not "self".
+- [ ] Confirm a **junior / child account never appears** in Find a Game.
+
+**Turning it back off**
+
+- [ ] Flip **Charge for every seat** off → the next court booking behaves exactly as it always did.
+      (Existing seat debts stay — they are real orders; void them if you don't want them.)
+
+---
+
 ## 6. Known limitations during testing (do NOT log these as bugs)
 - **Email is LIVE** (interim SES via the Ten-Fifty5 AWS account) → confirmations/invites/statements now
   **send** (from the club's From-name + Reply-To) *and* land in-app. The coach invite link is also shown in

@@ -311,6 +311,41 @@ Each role has its own mobile-first SPA on ONE design system (`frontend/app/app.c
   setup is `SES-SETUP.md`. Plus **Klaviyo** lifecycle/marketing — same feed, dark until keyed. 🌐
 - **Consent** capture; no minor PII in marketing payloads. 🔭
 
+## 9b. Community — Find a Game + the seat rule ⚠️ **BUILT, SHIPS DARK**
+
+Two `club.policy` switches, both default false: `community_enabled` (the social surface) and
+`seat_rule_enforced` (the money rule). Design: [COMMUNITY-ENGINE.md](COMMUNITY-ENGINE.md); switch-on
+pre-flight: [FEATURE-FLAGS.md](FEATURE-FLAGS.md) §A-bis.
+
+- ✅ **The seat rule** — a court's fee is split equally among the players NOT covered by a membership, so
+  the club banks exactly one court fee per hour unless everyone is a member. member+member R0 ·
+  member+guest puts the whole fee on the guest · two PAYG split it. Closes the "two friends share one
+  membership" leak the entitlement caps could never express.
+- ✅ **Confirm-on-full-payment** — a court with two paying players raises two orders and stays HELD until
+  **both** settle; a seat owed at the desk is a statement debt and doesn't hold the court.
+- ✅ **The split locks on first payment** — nobody who has paid is ever re-billed; a later un-covered
+  joiner is refused rather than given a free seat.
+- ✅ **Open games** — publish a booking's spare seat to the club; browse, join, leave. An unfilled seat
+  **collapses onto the booker** at the cutoff (and they are told, with the amount).
+- ✅ **Bring a friend** — invite by email → a signed no-login landing page → sign-up → **the existing
+  7-day free week**, granted once ever, never to anyone with subscription history.
+- ✅ **Match chat** — players-only, so no phone numbers are ever exchanged (and no community read returns
+  one). System lines record joins/leaves as a timeline.
+- ✅ **Results** — played / cancelled / **no-show**, reported by one player and **confirmed by another**;
+  plus a **private** "would you play them again" that is never rendered and only weights matching.
+- ✅ **Player profile + levels** — NextPoint Level 1–10 from a 5-question quiz about what you *do*; a
+  coach or owner can override, recorded as an assessment rather than a self-rating.
+- ✅ **Matching** — a deterministic, explicable score (level 50 / availability 20 / format 12 / play-type
+  8 / history 10). Level dominates because mismatched games are what make people stop using this.
+- ✅ **Discovery is opt-in**, and **juniors are excluded entirely**.
+- ✅ **Admin** — Setup → *Community & games* (the only place the switches live) and *Games & invitations*
+  (games with what's owed · the invite log incl. whether the free week was granted · levels).
+- ✅ **The sweep** — hourly GitHub Action: remind unpaid seats → release them at the deadline → collapse
+  unfilled ones. Idempotent; fails the job loudly.
+- ⏳ **Not built:** dynamic ratings from results, a reliability score, Flex leagues, groups, doubles
+  matchmaking, Smart Match. **Never:** a social feed.
+- 🧪 Backed by **17 scenarios** in `test_booking_scenarios` — see [SCENARIOS.md](SCENARIOS.md).
+
 ## 10. Business Overview analytics
 - Owner dashboard: visits / unique / new-vs-returning, traffic sources, top pages, **by-country /
   device / time-on-site**, customers, bookings, revenue, settlement mix, NPS. 🔭

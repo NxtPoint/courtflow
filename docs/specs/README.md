@@ -411,6 +411,10 @@ operating guide; **this folder is the detail.**
     `SES_AWS_*` creds + `eu-north-1` + `SES_SENDER=noreply@ten-fifty5.com`). This doc is the long-term
     proper CourtFlow setup (verify `courtflow.app` / `nextpointtennis.com` DKIM once the CourtFlow AWS
     account is back). *"Email: live now, the clean setup later."*
+8b. **[COMMUNITY-ENGINE.md](COMMUNITY-ENGINE.md)** — **Find a Game + THE SEAT RULE** (built
+   2026-08-09/10, ships DARK). Why an unpaid second player and an empty seat are the same object;
+   the split, the lock, the collapse; invites and the free week; the eight bugs the scenarios caught.
+   *"Who is on the court, and who pays for them."*
 
 ## The build-era spec docs (design intent, still useful)
 - [01-commission-and-coaching-decisions.md](01-commission-and-coaching-decisions.md) — the owner's

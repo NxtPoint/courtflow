@@ -654,6 +654,52 @@ Full spec: [UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md).
   so the coach's commission base moves with the discount. A **PAID** order rejects with `NOT_OPEN` — reducing a
   paid charge is a **refund** (the separate path), not a discount.
 
+## 6b. THE SEAT RULE — who is on the court, and who pays for them (`community/`, DARK by default)
+
+Full design + war stories: **[COMMUNITY-ENGINE.md](COMMUNITY-ENGINE.md)**, [GOTCHAS.md § The seat
+rule](GOTCHAS.md#the-seat-rule-community). Gated by `club.policy.seat_rule_enforced` (default **false**);
+with it off the booking path behaves exactly as §2/§3 describe.
+
+**The problem it closes.** A membership makes court bookings free (`settlement_mode='membership_covered'`),
+but nothing knew *who else was on the court*. One membership could therefore cover a second, third or
+fourth player who never paid — two friends, one membership, half price, indefinitely. The entitlement caps
+(§4) limit *how much* a member books; they cannot express *who it was for*.
+
+> **A court booking has SEATS. Every seat is a covered member (free), a payer (owes a share), or OPEN.
+> The court's price for that duration is split equally among the seats that are NOT covered. An OPEN seat
+> unfilled at the cutoff COLLAPSES onto the booking holder as a charged seat.**
+
+The club banks **exactly one court fee** per court hour unless every player is a member. Membership
+decides **who** pays, never **whether** the court is paid for.
+
+| On court (singles, R150/60min) | Member owes | Other(s) owe |
+|---|---|---|
+| member + member | R0 | R0 |
+| member + non-member | R0 | **R150** (the whole fee) |
+| non-member × 2 | — | **R75 + R75** |
+| member + 2 guests (doubles, 4 seats) | R0 | R75 + R75 |
+| member, spare seat unfilled at the cutoff | **R150** | — |
+
+- **Seats are `diary.booking_party` rows and a game IS a `diary.booking`** — no parallel object, so the
+  GiST constraint, the diary grid, reschedule/cancel, the statement, Client-360 and month-end all apply
+  unchanged.
+- **One debt = one order still holds.** Each un-covered seat raises its OWN `billing."order"`, exactly as
+  a semi-private lesson bills per head. Cancel voids every seat's debt.
+- **Coverage is not re-implemented** — every seat asks `diary.entitlement.court_covered`, so membership
+  windows, court-service eligibility, duration and daily caps all reach seats automatically. A member
+  whose term has lapsed **by the date of the game** is simply an un-covered seat and pays like anyone else.
+  One member also cannot be the free second player in two simultaneous games.
+- **Confirmation:** the booking stays `held` while any seat that must PREPAY (resolved method `online`)
+  is unpaid, and confirms when the last settles. A seat owed at the desk or on the monthly tab is a real
+  debt on the statement and does **not** hold the court — the same rule a single at-court booking follows.
+- **The split LOCKS on the first payment.** After that, shares never move: nobody who has paid can be
+  re-billed, and an un-covered seat added later is **refused (`SPLIT_LOCKED`)**, never priced at zero.
+- **Rounding:** shares re-sum to the court fee **exactly**, remainder to the host (the organiser carries
+  the odd cent). A lost cent is a statement fold that stops reconciling.
+- **Bring a friend:** an invited guest's free week **is the existing 7-day trial** (§4) — granted once,
+  never to someone who has ever held a subscription, so a second invite is worthless and the ~880 imported
+  Wix members can never be trialed. When it lapses they are PAYG and the seat rule bills them.
+
 ## 7. Self-service per role
 - **Client (the client SPA `app.html`/`client.js`; the old `/account.html` was deleted and 302s here):** edit profile/demographics (**email
   read-only = identity**); manage **children/dependents**; **Financials** + the **unified statement**

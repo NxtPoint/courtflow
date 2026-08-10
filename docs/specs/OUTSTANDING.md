@@ -33,6 +33,18 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
       fires `POST /api/cron/month-end`. **Moved to the 1st on 2026-08-08**, billing the month just
       ENDED: on the 25th every invoice was issued with days of the month still to run, so the client
       saw one number on the invoice and a larger one online days later, and no month could be closed.
+- [ ] ⭐ **COMMUNITY / FIND A GAME — switch it on (2 flags, in order).** The whole lane is built, tested
+      and DARK. Admin → Setup → **Community & games**:
+      1. **Community features** first, on its own — members get Find a Game, open games, invitations and
+         match chat. **Nobody's bill changes.** Zero-risk, and it is the half members will love.
+      2. Check **Seats per format**: doubles splits the court fee FOUR ways, so two members + two guests
+         means each guest pays a quarter. If that is not your intended doubles pricing, do not go on.
+      3. **Tell the members** — the second switch changes what they pay.
+      4. **Charge for every seat**. Then watch Setup → Games & invitations → *Games* → the **owed** column.
+      Rollback is the same switch: flipping it off restores the previous booking behaviour exactly
+      (`sc_seat_rule_off_changes_nothing`). Existing seat debts are real orders and stay — void them if
+      you don't want them. Detail: [FEATURE-FLAGS.md](FEATURE-FLAGS.md) §A-bis · walkthrough:
+      [TESTING.md](TESTING.md) §5b · design: [COMMUNITY-ENGINE.md](COMMUNITY-ENGINE.md).
 - [ ] **Google Ads scheduled CSV upload** — set `GOOGLE_ADS_FEED_USER`/`PASS`, then schedule the daily
       upload (Uploads → Schedules) pointed at `/feeds/google-ads/offline-conversions.csv`. The recorder half
       is already live. (`GOOGLE-ADS-PLAN.md`.)

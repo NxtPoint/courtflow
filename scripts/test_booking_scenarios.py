@@ -3852,9 +3852,187 @@ def sc_the_seat_rule_can_be_switched_on_without_sql(s, fx):
               for p in repo.admin_players(s, club_id=fx.club_id)))
 
 
+def sc_match_chat_is_private_to_the_players(s, fx):
+    """Match chat exists so nobody has to swap a phone number — which is the whole reason every
+    community read can stay free of contact details. That promise is only worth anything if the chat
+    itself is closed: a stranger who can read it gets the details the API refused to give them."""
+    print("\n# match chat is readable and postable ONLY by the players in the game")
+    from community import chat, games
+    _enable_seat_rule(s, fx)
+    host, joiner, stranger = fx.members[0], fx.members[1], fx.members[2]
+    _membership_for_court(s, fx, host)
+    bid = _open_game(s, fx, host, hour=11)["booking"]["id"]
+
+    check("the host is in their own game", chat.is_in_game(s, booking_id=bid, user_id=host) is True)
+    check("a stranger is not", chat.is_in_game(s, booking_id=bid, user_id=stranger) is False)
+    try:
+        chat.post_message(s, club_id=fx.club_id, booking_id=bid, user_id=stranger, body="hello")
+        check("a stranger cannot post", False, "no ChatError")
+    except chat.ChatError as e:
+        check("a stranger cannot post (NOT_IN_GAME)", e.code == "NOT_IN_GAME", e.code)
+    try:
+        chat.list_messages(s, club_id=fx.club_id, booking_id=bid, user_id=stranger)
+        check("…nor read", False, "no ChatError")
+    except chat.ChatError as e:
+        check("…nor read it (NOT_IN_GAME)", e.code == "NOT_IN_GAME", e.code)
+
+    games.join_game(s, club_id=fx.club_id, booking_id=bid, user_id=joiner)
+    check("joining the game earns the right to post",
+          chat.post_message(s, club_id=fx.club_id, booking_id=bid, user_id=joiner,
+                            body="on my way").get("ok") is True)
+    msgs = chat.list_messages(s, club_id=fx.club_id, booking_id=bid, user_id=host)
+    check("the host can read it", any(m["body"] == "on my way" for m in msgs), str(msgs))
+    check("…and the join is on the timeline as a system line",
+          any(m["system"] and "joined" in m["body"] for m in msgs), str(msgs))
+    check("an empty message is refused, not stored",
+          _raises(chat.ChatError, chat.post_message, s, club_id=fx.club_id, booking_id=bid,
+                  user_id=host, body="   ") == "EMPTY_MESSAGE")
+    check("staff can read it without being in the game (support)",
+          isinstance(chat.list_messages(s, club_id=fx.club_id, booking_id=bid,
+                                        user_id=stranger, staff=True), list))
+
+
+def _raises(exc_type, fn, *a, **kw):
+    """Call fn and return the .code of the expected error, or a marker. Keeps the assertions above
+    readable when the point is WHICH refusal happened."""
+    try:
+        fn(*a, **kw)
+        return "NO_ERROR"
+    except exc_type as e:
+        return getattr(e, "code", "ERROR")
+
+
+def sc_a_result_needs_someone_else_to_confirm_it(s, fx):
+    """A result reported by one player is a CLAIM. Confirmation has to come from somebody else, or
+    it is the same claim twice — and an unconfirmed claim must never be treated as evidence, because
+    the whole point of recording results is to eventually calibrate people's levels from them."""
+    print("\n# a result is a claim until the OTHER player confirms it")
+    from community import games, results
+    _enable_seat_rule(s, fx)
+    host, joiner, stranger = fx.members[0], fx.members[1], fx.members[2]
+    _membership_for_court(s, fx, host)
+    bid = _open_game(s, fx, host, hour=13)["booking"]["id"]
+    games.join_game(s, club_id=fx.club_id, booking_id=bid, user_id=joiner)
+
+    check("someone who didn't play can't record a result",
+          _raises(results.ResultError, results.record_result, s, club_id=fx.club_id,
+                  booking_id=bid, user_id=stranger, outcome="played") == "NOT_IN_GAME")
+    check("a made-up outcome is refused",
+          _raises(results.ResultError, results.record_result, s, club_id=fx.club_id,
+                  booking_id=bid, user_id=host, outcome="thrashed") == "BAD_OUTCOME")
+    out = results.record_result(s, club_id=fx.club_id, booking_id=bid, user_id=host,
+                                outcome="played", winner_user_id=host, score_text="6-4 6-3")
+    check("the player who was there can record it", out.get("ok") and out["confirmed"] is False, str(out))
+    check("…and cannot confirm their OWN claim (the trap)",
+          _raises(results.ResultError, results.confirm_result, s, club_id=fx.club_id,
+                  booking_id=bid, user_id=host) == "CANNOT_SELF_CONFIRM")
+    check("the other player can", results.confirm_result(
+        s, club_id=fx.club_id, booking_id=bid, user_id=joiner)["confirmed"] is True)
+
+    # A re-report is a NEW claim, so the old confirmation must fall away — otherwise one player
+    # confirms a scoreline and the other quietly rewrites it afterwards.
+    results.record_result(s, club_id=fx.club_id, booking_id=bid, user_id=joiner,
+                          outcome="played", winner_user_id=joiner, score_text="7-5 6-4")
+    still = s.execute(text("SELECT confirmed_at, score_text FROM community.match_result "
+                           " WHERE booking_id = :b"), {"b": bid}).mappings().first()
+    check("re-reporting WITHDRAWS the previous confirmation", still["confirmed_at"] is None, str(dict(still)))
+    check("…and there is still exactly ONE result row, not a pile of claims",
+          s.execute(text("SELECT count(*) FROM community.match_result WHERE booking_id=:b"),
+                    {"b": bid}).scalar() == 1)
+
+    # The private signal. It is never rendered anywhere — it only weights matching.
+    results.play_again(s, club_id=fx.club_id, booking_id=bid, rater_user_id=host,
+                       subject_user_id=joiner, again=False)
+    results.play_again(s, club_id=fx.club_id, booking_id=bid, rater_user_id=host,
+                       subject_user_id=joiner, again=True)     # changed their mind
+    check("would-play-again is one row per pair, not a stack",
+          s.execute(text("SELECT count(*) FROM community.play_again WHERE booking_id=:b"),
+                    {"b": bid}).scalar() == 1)
+    check("you can't rate yourself",
+          _raises(results.ResultError, results.play_again, s, club_id=fx.club_id, booking_id=bid,
+                  rater_user_id=host, subject_user_id=host, again=True) == "CANNOT_RATE_SELF")
+
+
+def sc_matching_puts_the_right_level_first(s, fx):
+    """The single biggest determinant of whether this feature works. People stop using these products
+    when they are repeatedly matched far above or below their standard, so level dominates the score —
+    and a player they have said they would rather not play again is DROPPED, not merely ranked down."""
+    print("\n# matching is deterministic and level-led, and honours the private signal")
+    from community import matching, repositories as repo
+    me = fx.members[0]
+    close, far = fx.members[1], fx.members[2]
+    repo.upsert_player_profile(s, club_id=fx.club_id, user_id=me,
+                               fields={"level_num": 5.0, "prefers_times": ["mon_pm"],
+                                       "visible_in_community": True})
+    repo.upsert_player_profile(s, club_id=fx.club_id, user_id=close,
+                               fields={"level_num": 5.2, "prefers_times": ["mon_pm"],
+                                       "visible_in_community": True})
+    repo.upsert_player_profile(s, club_id=fx.club_id, user_id=far,
+                               fields={"level_num": 9.0, "prefers_times": ["sat_am"],
+                                       "visible_in_community": True})
+
+    out = matching.suggest_players(s, club_id=fx.club_id, user_id=me)
+    ids = [p["user_id"] for p in out]
+    check("both opted-in players are offered", str(close) in ids and str(far) in ids, str(out))
+    check("the CLOSE level ranks above the far one", ids.index(str(close)) < ids.index(str(far)),
+          str(out))
+    check("…and scores higher", out[ids.index(str(close))]["match_pct"]
+          > out[ids.index(str(far))]["match_pct"], str(out))
+    check("the score is deterministic — the same call twice gives the same answer",
+          [p["match_pct"] for p in matching.suggest_players(s, club_id=fx.club_id, user_id=me)]
+          == [p["match_pct"] for p in out], str(out))
+
+    # The five-question quiz: answers about what you DO, mapped onto the 1–10 scale.
+    lo = matching.level_from_answers({q["key"]: 0 for q in matching.ONBOARDING_QUESTIONS})
+    hi = matching.level_from_answers({q["key"]: 3 for q in matching.ONBOARDING_QUESTIONS})
+    check("the quiz floors at 1.0 and tops out below Elite", lo == 1.0 and 8.5 <= hi <= 9.5,
+          f"{lo} .. {hi}")
+    check("no answers means no level, not a guess of zero",
+          matching.level_from_answers({}) is None)
+
+
+def sc_the_sweep_reminds_then_releases_an_unpaid_seat(s, fx):
+    """The other two thirds of the hourly job. Collapse is already pinned; this is the REMIND and
+    RELEASE half — a seat somebody accepted and never paid for must not sit on a court all week, and
+    the person must be nudged while they can still act."""
+    print("\n# the sweep nudges an unpaid seat, then releases it when the window passes")
+    from community.crons import sweep_open_games
+    _enable_seat_rule(s, fx)
+    p1, p2 = fx.members[0], fx.members[1]
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=p1, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="online",
+                         starts_at=utc_iso(at(fx, 17)), ends_at=utc_iso(at(fx, 18)),
+                         extra_clients=[{"user_id": str(p2)}], play_format="singles")
+    bid = r["booking"]["id"]
+    check("two unpaid online seats", len(_seat_rows(s, bid)) == 2, str(_seat_rows(s, bid)))
+
+    out = sweep_open_games(s, club_id=fx.club_id)
+    check("the sweep nudges the unpaid seats", int(out.get("reminded") or 0) >= 1, str(out))
+    again = sweep_open_games(s, club_id=fx.club_id)
+    check("…once each, however often it runs (deduped on reminder_log)",
+          int(again.get("reminded") or 0) == 0, str(again))
+    check("nothing is released while the window is still open",
+          int(out.get("released") or 0) == 0 and int(again.get("released") or 0) == 0, str(again))
+
+    # The pay-by window lapses.
+    s.execute(text("UPDATE diary.booking SET held_until = now() - interval '1 minute' WHERE id=:b"),
+              {"b": bid})
+    third = sweep_open_games(s, club_id=fx.club_id)
+    check("the unpaid GUEST seat is released", int(third.get("released") or 0) >= 1, str(third))
+    left = [x for x in _seat_rows(s, bid) if str(x["user_id"]) == str(p2)]
+    check("…and its debt no longer stands against them", left == [], str(_seat_rows(s, bid)))
+    check("the HOST's seat is never released by the sweep — that would cancel their own booking",
+          any(str(x["user_id"]) == str(p1) for x in _seat_rows(s, bid)), str(_seat_rows(s, bid)))
+
+
 SCENARIOS = [
     # THE SEAT RULE (community/) — the money core, pinned before create_booking learns about seats.
     sc_seat_split_covers_the_court_exactly,
+    sc_match_chat_is_private_to_the_players,
+    sc_a_result_needs_someone_else_to_confirm_it,
+    sc_matching_puts_the_right_level_first,
+    sc_the_sweep_reminds_then_releases_an_unpaid_seat,
     sc_the_seat_rule_can_be_switched_on_without_sql,
     sc_a_crafted_game_cannot_cheapen_or_outlive_its_own_bill,
     sc_invited_friend_is_trialed_once_only,

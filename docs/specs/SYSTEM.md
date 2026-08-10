@@ -94,10 +94,11 @@ taught to **also** trust NextPoint's issuer (**multi-issuer federation**); **ema
 identity key (Ten-Fifty5 auto-provisions the member by email). The NextPoint side only *relays* the token —
 the verifier change lives in the Ten-Fifty5 repo (`auth_v2/verifier.py`). Full write-up: root `CLAUDE.md`.
 
-## The five schemas (idempotent boot DDL — NO migration framework)
+## The six schemas (idempotent boot DDL — NO migration framework)
 `club` (tenants/branding/location/policy) · `iam` (identity/membership/coach/dependents) · `diary`
-(the booking engine) · `billing` (orders/ledger + the commercial engines) · `core` (ported 1050
-account/usage_event/consent/nps + notifications). *(The Business Overview analytics are read-only
+(the booking engine) · `billing` (orders/ledger + the commercial engines) · `core` (ported Ten-Fifty5
+account/usage_event/consent/nps + notifications) · **`community`** (Find a Game: invites, match chat,
+results, the private would-play-again signal, favourites — 2026-08-09). *(The Business Overview analytics are read-only
 views over `core.usage_event` — no separate schema.)*
 `db.py` runs each registered module's `init()` on boot; **`python -m db` twice must be a no-op** — that's
 the schema gate. Extensions: `btree_gist` (the no-double-book EXCLUDE constraint), `pgcrypto` (UUIDs).

@@ -163,6 +163,22 @@ membership**). All own-scope (gated by `view_own_ledger`). Looks correct.
 Note every admin write currently collapses to a **single threshold (`club_admin`)** — that's the knob a
 staff-role split would turn.
 
+**Community / Find a Game (`community/routes.py`, 2026-08-09/10)** — the whole lane is dark until
+`club.policy.community_enabled`; the money half additionally needs `seat_rule_enforced`.
+
+| Surface | Allowed |
+|---|---|
+| **See open games, join, leave, chat, record a result** (`/api/community/games/*`) | **any member** of the club. Chat is the tighter one: `chat.is_in_game` — only the players in THAT game may read or post. A stranger gets `NOT_IN_GAME` on both, which is what makes "no community read returns a phone number" worth anything. |
+| **Invite someone into a seat** (`POST /api/community/games/<id>/invite`) | a **player already in that game**, or staff. Otherwise anyone could fill a stranger's court with people they've never met. |
+| **Redeem an invite** (`POST /api/community/invites/accept`) | **signed-in only, deliberately** — the friend signs up, which is what makes them a CRM record, makes the free week grantable, and makes their seat billable to a person. `GET /api/community/invites/<token>` is the ONE public read (the signed token IS the authorization; it returns the club, the inviter's FIRST NAME and the time — never the invitee's email). |
+| **Leave a game** | any player **except the host** (`HOST_CANNOT_LEAVE` — that is a cancel, which already refunds and voids every seat), and **not once your seat is paid** (`SEAT_ALREADY_PAID` — that is a refund decision, not self-service). |
+| **Be discoverable** (`suggest_players`) | **opt-in only** — `iam.player_profile.visible_in_community`, default false. **Juniors are excluded entirely** (guardian-mediated junior play needs its own consent design). |
+| **Switch the rule on / edit timings** (`PATCH /api/community/admin/settings`) | **`manage_policy`** → club_admin+. The ONLY place either flag can be changed. |
+| **See all games / invites / players** (`GET /api/community/admin/*`) | **`view_master_diary`** → club_admin+ (players list also open to `coach`). |
+| **Revoke an invitation** | **`manage_policy`** → club_admin+. |
+| **Correct a player's LEVEL** (`PATCH /api/community/admin/players/<id>/level`) | **club_admin OR coach** — deliberately wider than the other admin writes. The person who has actually seen someone play is the one who can fix a self-rating, and "everybody is advanced" is the failure mode that kills the matching. Recorded with `level_source='coach'` + who set it, so an assessment and a self-rating are never confused. |
+| **The sweep** (`POST /api/cron/open-games`) | **`OPS_KEY` header only** — no principal, server-to-server, same as every other cron. |
+
 **Recent (2026-07) staff/config permission facts (not `can()` actions — enforced at the route/repo):**
 - **Search members** (`GET /api/diary/members/search`, `GET /api/coach/members/search`) — **staff only**
   (coach / club_admin / platform_admin). A member/guest never gets the member-lookup picker.
