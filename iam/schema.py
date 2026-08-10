@@ -100,6 +100,36 @@ _DDL = [
     f"CREATE INDEX IF NOT EXISTS ix_player_profile_guardian "
     f"ON {SCHEMA}.player_profile (guardian_user_id);",
 
+    # ONE PLAYER, ONE PROFILE — the constraint that was missing, and the duplicate rows it let in.
+    #
+    # Found 2026-08-10 by Tomo: "when I click find a match it shows 5 versions, it repeats allot".
+    # Five copies of every game, because community/repositories.py wrote
+    #     INSERT INTO iam.player_profile (club_id, user_id) VALUES (...) ON CONFLICT DO NOTHING
+    # with NO conflict target and NO unique constraint to conflict on. A bare ON CONFLICT DO NOTHING
+    # LOOKS idempotent — it is the shape you write when you mean upsert — but the only unique thing
+    # on this table was the primary key, and that is a fresh gen_random_uuid() on every insert. So it
+    # could never conflict: every profile save appended another row. Then the feed's
+    # LEFT JOIN iam.player_profile fanned out and multiplied every game by the row count. Same cause
+    # for duplicate rows in "Players for you" and in admin -> Players & levels.
+    #
+    # The DELETE is a one-time repair that is idempotent by construction (after it runs there are no
+    # duplicates left, so it deletes nothing on the second boot — the `python -m db` twice gate).
+    # It is safe because the writer's UPDATE has always been `WHERE club_id AND user_id`, i.e. it
+    # updated EVERY duplicate, so the copies hold identical values and keeping any one loses nothing.
+    # Ordering is still explicit rather than arbitrary: keep the most recently updated row, then the
+    # lowest id, so the same row survives no matter which node boots first. Nothing anywhere
+    # references player_profile.id, so no FK can be orphaned by this.
+    f"""
+    DELETE FROM {SCHEMA}.player_profile p
+     WHERE p.id <> (
+       SELECT q.id FROM {SCHEMA}.player_profile q
+        WHERE q.club_id = p.club_id AND q.user_id = p.user_id
+        ORDER BY q.updated_at DESC NULLS LAST, q.id
+        LIMIT 1);
+    """,
+    f"CREATE UNIQUE INDEX IF NOT EXISTS ux_player_profile_club_user "
+    f"ON {SCHEMA}.player_profile (club_id, user_id);",
+
     # --- iam.user : self-service demographics (client "My Account" spec §2.2 — option A:
     # ADD COLUMN on iam.user, 1:1 with the human, cross-club). Email stays the identity key
     # (read-only in the UI). Idempotent — safe on every boot.

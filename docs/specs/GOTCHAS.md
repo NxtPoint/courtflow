@@ -1113,6 +1113,46 @@ weren't** — and the gate would have reported a confident green. Any lane that 
 same blind spot; if you add one, add the contract row yourself and do not wait to be told.
 
 
+### A BARE `ON CONFLICT DO NOTHING` IS NOT AN UPSERT — IT IS AN INSERT (2026-08-10)
+
+Tomo, on the live feed: *"when I click find a match it shows 5 versions, it repeats allot man."* Five
+copies of every open game. He had saved his player profile five times.
+
+`community.repositories.upsert_player_profile` ensured a row with
+
+```sql
+INSERT INTO iam.player_profile (club_id, user_id) VALUES (:c, :u) ON CONFLICT DO NOTHING
+```
+
+and `iam.player_profile` had **no unique constraint on `(club_id, user_id)`** — only two plain,
+non-unique indexes. With no conflict target and nothing unique to conflict on but the primary key —
+which is a fresh `gen_random_uuid()` on every insert — **the statement can never conflict.** It is a
+plain INSERT wearing the costume of an upsert, and it appended a row on every single save.
+
+`list_open_games` then `LEFT JOIN`s `iam.player_profile` to show the host's level, so the join fanned
+out and multiplied **every game in the feed** by the caller's profile-row count. The same join is in
+`matching.suggest_players` and in admin → *Players & levels*, so those duplicated too — one cause,
+three broken screens.
+
+**Why nothing caught it.** There is no error anywhere in the chain: the INSERT succeeds, the UPDATE
+(`WHERE club_id AND user_id`) faithfully updates *every* duplicate so they never disagree, and the JOIN
+is valid SQL. `python -m db` twice stayed a clean no-op because the DDL never changed. And the harness
+saved a profile exactly **once** per scenario, so the fan-out needed a *second* save to exist at all —
+it was invisible to every gate and visible immediately to anyone who used the feature twice.
+
+**The rule.** A bare `ON CONFLICT DO NOTHING` is only an upsert if a unique constraint exists to
+conflict on. **Name the conflict target** (`ON CONFLICT (club_id, user_id) DO NOTHING`) — then a missing
+constraint is a loud error at the first write instead of silent duplication months later. And when a
+table means *one row per X*, say so in the DDL: `ux_player_profile_club_user` now does.
+
+The repair lives in `iam/schema.py` beside the index: a `DELETE` keeping the most recently updated row
+per `(club_id, user_id)`, idempotent by construction (after it runs there is nothing left to delete, so
+the twice-gate stays clean) and safe because the writer always updated every duplicate, so the copies
+held identical values. Nothing references `player_profile.id`, so no FK could be orphaned.
+
+Guarded by `sc_a_game_appears_once_however_often_you_save_your_profile`.
+
+
 ### AN EXPLICIT SELECT THAT OMITS A COLUMN IS A SILENT DEFAULT (2026-08-10)
 
 `diary.booking` gained `seat_share_minor` — the share a game was quoted, frozen so a later price change

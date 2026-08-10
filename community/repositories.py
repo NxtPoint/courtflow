@@ -64,8 +64,11 @@ def upsert_player_profile(session, *, club_id, user_id, fields, source="self",
     how everybody becomes advanced, and that is the failure mode that kills the matching."""
     fields = {k: v for k, v in (fields or {}).items() if k in _ALLOWED}
     session.execute(
+        # NAME THE CONFLICT TARGET. A bare ON CONFLICT DO NOTHING has nothing to conflict on but the
+        # primary key — a fresh uuid every time — so it inserted a new row on every save and the feed
+        # showed one copy of every game per row (ux_player_profile_club_user in iam/schema.py).
         text("INSERT INTO iam.player_profile (club_id, user_id) VALUES (:c, :u) "
-             "ON CONFLICT DO NOTHING"),
+             "ON CONFLICT (club_id, user_id) DO NOTHING"),
         {"c": str(club_id), "u": str(user_id)})
     if fields:
         sets, params = [], {"c": str(club_id), "u": str(user_id)}

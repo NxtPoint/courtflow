@@ -4170,6 +4170,62 @@ def sc_dark_means_dark_for_the_whole_lane(s, fx):
     check("once on, the lane answers", seats.policy(s, fx.club_id)["community_enabled"] is True)
 
 
+def sc_a_game_appears_once_however_often_you_save_your_profile(s, fx):
+    """ONE PLAYER, ONE PROFILE — and therefore one row per game in the feed.
+
+    Tomo, looking at the live feed: "when I click find a match it shows 5 versions, it repeats allot
+    man." Five copies of every game, one per time he had saved his player profile.
+
+    `upsert_player_profile` wrote `INSERT ... ON CONFLICT DO NOTHING` with NO conflict target, and
+    `iam.player_profile` had no unique constraint on (club_id, user_id) — only plain indexes. A bare
+    ON CONFLICT DO NOTHING looks idempotent, which is exactly why it survived review: it is the shape
+    you write when you mean upsert. But the only unique thing on the table was the primary key, and
+    that is a fresh gen_random_uuid() every time, so it could never conflict. Every save appended a
+    row, and `list_open_games`'s LEFT JOIN onto player_profile then multiplied every game by the row
+    count.
+
+    Worth stating why no gate caught it: nothing here is an ERROR. The INSERT succeeds, the UPDATE
+    (WHERE club_id AND user_id) faithfully updates every duplicate so they never disagree, the JOIN
+    is valid SQL, and the harness only ever saved a profile ONCE per scenario — so the fan-out needed
+    a second save to appear at all. It was visible only to somebody using the thing twice.
+
+    This asserts the invariant on both sides: the row count after repeated saves, and the feed."""
+    from community import games, matching, repositories as repo
+    repo.save_settings(s, club_id=fx.club_id,
+                       fields={"community_enabled": True, "seat_rule_enforced": False})
+    host, other = fx.members[0], fx.members[1]
+
+    # Save the host's profile several times over, exactly as a member fiddling with their level does.
+    for lvl in (3.0, 4.0, 4.5):
+        repo.upsert_player_profile(s, club_id=fx.club_id, user_id=host,
+                                   fields={"level_num": lvl}, source="self")
+    n = s.execute(text("SELECT count(*) FROM iam.player_profile "
+                       " WHERE club_id = :c AND user_id = :u"),
+                  {"c": str(fx.club_id), "u": str(host)}).scalar()
+    check("three saves leave ONE profile row, not three", int(n) == 1, "rows=%s" % n)
+    check("and it holds the LAST level saved",
+          float(repo.player_profile(s, club_id=fx.club_id, user_id=host)["level_num"]) == 4.5)
+
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=host, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="at_court",
+                         starts_at=utc_iso(at(fx, 16)), ends_at=utc_iso(at(fx, 17)),
+                         play_format="singles", visibility="open", play_intent="social")
+    check("the game is created", r.get("ok"), str(r))
+    bid = str(r["booking"]["id"])
+
+    feed = games.list_open_games(s, club_id=fx.club_id, user_id=other)
+    hits = [g for g in feed if g["booking_id"] == bid]
+    check("the game appears EXACTLY ONCE in the feed", len(hits) == 1,
+          "%d copies: %s" % (len(hits), [g["booking_id"] for g in feed]))
+
+    # The same fan-out hit "Players for you" and admin -> Players & levels, off the same join.
+    seen = [p for p in matching.suggest_players(s, club_id=fx.club_id, user_id=other)
+            if str(p.get("user_id")) == str(host)]
+    check("and the host appears at most once in the player suggestions", len(seen) <= 1,
+          str(seen))
+
+
 def sc_community_alone_makes_games_without_charging_anyone(s, fx):
     """THE TWO SWITCHES DO TWO JOBS, and the whole design rests on being able to run the first without
     the second: give members Find a Game as a BENEFIT before changing what anyone pays.
@@ -4285,6 +4341,7 @@ SCENARIOS = [
     sc_the_feed_defaults_to_games_around_my_level,
     sc_dark_means_dark_for_the_whole_lane,
     sc_community_alone_makes_games_without_charging_anyone,
+    sc_a_game_appears_once_however_often_you_save_your_profile,
     sc_you_cannot_take_a_seat_in_two_places_at_once,
     sc_match_chat_is_private_to_the_players,
     sc_a_result_needs_someone_else_to_confirm_it,
