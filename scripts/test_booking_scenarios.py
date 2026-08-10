@@ -4222,6 +4222,56 @@ def sc_community_alone_makes_games_without_charging_anyone(s, fx):
     check("…so the holder is still charged nothing", _seat_rows(s, bid) == [], str(_seat_rows(s, bid)))
 
 
+def sc_you_cannot_take_a_seat_in_two_places_at_once(s, fx):
+    """ONE PERSON, ONE PLACE — the diary's oldest rule, applied to seats.
+
+    A seat is a booking_party row, not a resource booking, so the GiST exclusion constraint has
+    nothing to say about it. Joining therefore bypassed the commitment check entirely: a player could
+    hold seats in two games at the same hour, and a COACH could take a social game at 13:00 while the
+    club's diary had him teaching a lesson at 13:00. That is the exact hole `_coach_commitment_at` was
+    written to close for bookings (sc_one_coach_one_place_at_a_time), reopened by a different door.
+
+    Both are REFUSALS, not downgrades. Elsewhere this platform prefers "don't block, just don't cover"
+    — a member's second concurrent court is PAYG rather than refused — but that is about what a thing
+    COSTS. This is about being in two places at once, which no price makes possible."""
+    print("\n# a player can't hold two seats at one time, and a coach can't join while teaching")
+    from community import games, repositories as repo
+    repo.save_settings(s, club_id=fx.club_id, fields={"community_enabled": True})
+    host_a, host_b, player = fx.members[0], fx.members[1], fx.members[2]
+
+    a = _open_game(s, fx, host_a, hour=10, court=0)["booking"]["id"]
+    b = _open_game(s, fx, host_b, hour=10, court=1)["booking"]["id"]   # SAME hour, other court
+    check("two games exist at the same time", a and b)
+
+    check("the player joins the first", games.join_game(
+        s, club_id=fx.club_id, booking_id=a, user_id=player).get("ok") is True)
+    try:
+        games.join_game(s, club_id=fx.club_id, booking_id=b, user_id=player)
+        check("…and is REFUSED the overlapping one", False, "no GameError")
+    except games.GameError as e:
+        check("…and is REFUSED the overlapping one (ALREADY_PLAYING_THEN)",
+              e.code == "ALREADY_PLAYING_THEN", e.code)
+
+    # A COACH with a lesson on the books cannot take a seat at that hour either.
+    lesson = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.members[0], role="member",
+                              booking_type="lesson", resource_id=fx.coach_res,
+                              coach_user_id=fx.coach_uid, settlement_mode="at_court",
+                              starts_at=utc_iso(at(fx, 12)), ends_at=utc_iso(at(fx, 13)))
+    check("the coach has a lesson at 12:00", lesson.get("ok"), str(lesson))
+    c = _open_game(s, fx, host_b, hour=12, court=1)["booking"]["id"]
+    try:
+        games.join_game(s, club_id=fx.club_id, booking_id=c, user_id=fx.coach_uid)
+        check("the coach is REFUSED a game while teaching", False, "no GameError")
+    except games.GameError as e:
+        check("the coach is REFUSED a game while teaching (COACH_IS_WORKING)",
+              e.code == "COACH_IS_WORKING", e.code)
+
+    # …but he is perfectly welcome at an hour he is free.
+    d = _open_game(s, fx, host_b, hour=16, court=1)["booking"]["id"]
+    check("…and CAN join at an hour he isn't working", games.join_game(
+        s, club_id=fx.club_id, booking_id=d, user_id=fx.coach_uid).get("ok") is True)
+
+
 def _seats_of(s, booking_id):
     return [dict(r) for r in s.execute(
         text("SELECT id, user_id, seat_status FROM diary.booking_party WHERE booking_id = :b"),
@@ -4235,6 +4285,7 @@ SCENARIOS = [
     sc_the_feed_defaults_to_games_around_my_level,
     sc_dark_means_dark_for_the_whole_lane,
     sc_community_alone_makes_games_without_charging_anyone,
+    sc_you_cannot_take_a_seat_in_two_places_at_once,
     sc_match_chat_is_private_to_the_players,
     sc_a_result_needs_someone_else_to_confirm_it,
     sc_matching_puts_the_right_level_first,

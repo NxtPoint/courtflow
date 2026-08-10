@@ -215,6 +215,38 @@ def join_game(session, *, club_id, booking_id, user_id, now=None):
     if already:
         raise GameError("ALREADY_IN_GAME", "you're already in that game")
 
+    # ONE PERSON, ONE PLACE — the rule the diary has always held, applied to seats.
+    #
+    # A seat is a diary.booking_party row, not a resource booking, so the GiST exclusion constraint
+    # has nothing to say about it: without this, a player could hold seats in two games at the same
+    # hour, and a COACH could take a social game at 13:00 while contracted to teach a lesson at 13:00.
+    # That is exactly the hole _coach_commitment_at was written to close for bookings
+    # (sc_one_coach_one_place_at_a_time); joining bypassed it entirely.
+    #
+    # Both are REFUSALS rather than downgrades. Elsewhere the platform prefers "don't block, just
+    # don't cover" — a member's second concurrent court is PAYG rather than refused — but that is about
+    # what something COSTS. This is about being in two places at once, which no price makes possible.
+    from diary.bookings import _coach_commitment_at, _is_coach
+    if _is_coach(session, club_id, user_id):
+        busy = _coach_commitment_at(session, club_id, user_id,
+                                    booking["starts_at"], booking["ends_at"])
+        if busy:
+            raise GameError("COACH_IS_WORKING",
+                            "you're coaching at that time — the club's diary has you booked")
+    clash = session.execute(
+        text("SELECT 1 FROM diary.booking_party bp "
+             "  JOIN diary.booking b ON b.id = bp.booking_id "
+             " WHERE bp.club_id = :c AND bp.user_id = :u AND b.id <> :b "
+             "   AND bp.seat_status IN ('invited','held','confirmed') "
+             "   AND b.status IN ('held','confirmed') "
+             "   AND b.ends_at > :s AND b.starts_at < :e LIMIT 1"),
+        {"c": str(club_id), "u": str(user_id), "b": str(booking_id),
+         "s": booking["starts_at"], "e": booking["ends_at"]},
+    ).first()
+    if clash:
+        raise GameError("ALREADY_PLAYING_THEN",
+                        "you're already in another game at that time")
+
     party_id = session.execute(
         text("INSERT INTO diary.booking_party (booking_id, club_id, user_id, party_role, "
              "       seat_status, joined_at) "
