@@ -85,6 +85,14 @@ def _require_community_enabled():
 
     Doing it here means a route cannot forget. New endpoints are covered by default and have to opt
     OUT explicitly, which is the right direction for a gate."""
+    # NEVER ANSWER A CORS PREFLIGHT. A browser sends OPTIONS *without* the Authorization header, so
+    # _principal() is None and this gate replied 401 — at which point the browser refuses to send the
+    # real request and the whole lane reads as "Failed to fetch" in the console. It broke every
+    # community screen the day it was added, while the scenario harness stayed green because it calls
+    # these modules in Python and never speaks HTTP. Let flask-cors have the preflight; the real
+    # request that follows is still gated below.
+    if request.method == "OPTIONS":
+        return None
     path = request.path or ""
     if any(path.startswith(prefix) for prefix in _ALWAYS_OPEN):
         return None
