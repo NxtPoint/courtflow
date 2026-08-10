@@ -102,11 +102,19 @@ the refund, lesson and class lifecycles. All scenario-guarded, each verified by 
       Render logs. **Check the logs and fix the actual query.** The symptom is gone; the cause is not.
 ### OPEN AS OF 2026-08-10 — from the invoicing/settlement re-engineering
 
-- [ ] **JP and Tshepo have NO rent figure on file.** Both are believed to be rent coaches (they pay
-      rent and bill their own clients), but with `rent_minor` unset the month-end sweep has **never
-      accrued rent from either** — the club has been carrying them for free. Set it on Setup →
-      Coaches → the coach, or audit every coach's model in one table with
-      `python -m scripts.set_coach_billing_model` (no args, read-only).
+- [x] ~~**JP, Tshepo and Wonder have NO rent figure on file.**~~ **NOT A GAP — Tomo's decision,
+      2026-08-10: all three are FREE for now.** No rent, nothing owed to the club. Left here so the
+      next session doesn't "fix" it: an unset `rent_minor` on these three is deliberate, and the
+      month-end sweep accruing nothing from them is correct.
+- [ ] **But confirm WHICH free they are — it decides who bills their clients.** "Free" settles what
+      the coach owes the club; it does not say whether the CLUB raises the client's charge:
+      **`commission` + no rule** → the club bills the client and keeps 0% (the coach is paid through
+      the club). **`rent` + R0** → the coach bills their own clients directly, and a lesson they book
+      against themselves raises **no club charge at all**.
+      Getting this backwards is the Ross/Terkaa story: four rent coaches on the commission model
+      accumulated **R68,000 of phantom "outstanding"** against clients the club was never going to
+      bill. Both settings are "free"; only one is right per coach.
+      Check all three in one read-only table: `python -m scripts.set_coach_billing_model` (no args).
 - [ ] **Label the remaining unlabelled coach payouts.** A payout credits the month it SETTLES
       (`coach_payout.period_label`); an unlabelled one falls back to the day the cash moved, so
       July's commission paid in August credits **August** and July still reads as owing — one click

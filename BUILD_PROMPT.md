@@ -69,10 +69,21 @@ HOW WE WORK — these are not style preferences, they are what has kept the mone
     change DNS. Never touch the Ten-Fifty5 repo/DB at C:\dev\webhook-server except the one
     documented embed exception.
 
+  * TWO DATABASES, AND THEY ANSWER DIFFERENT QUESTIONS — read docs/specs/DATA-ACCESS.md.
+    The LOCAL sandbox already exists (docker courtflow-dev on 55432; DATABASE_URL is already
+    in the shell — check `env` before saying there is no DB) and all the gates run on it. But
+    it holds almost no bookings or orders, so it proves CODE and answers nothing about the
+    club's money. Live questions go through the courtflow-api RENDER SHELL, where DATABASE_URL
+    never leaves Render: write a dry-run-default script into scripts/, PUSH it (the shell runs
+    the DEPLOYED code), and Tomo runs it. DO NOT ASK FOR THE PRODUCTION DATABASE_URL — it has
+    been declined, correctly, and asking for a script to be run works just as well.
+
 THE IRON RULE: every domain row is club_id-scoped. Never query domain data without it.
 
-Ask Tomo what he wants to work on. If he asks for a review rather than a change, look at the
-LIVE screens — every bug found on 2026-07-31 was invisible in the code and obvious on screen.
+YOUR FIRST JOB, unless Tomo says otherwise: THE PAGE-BY-PAGE FRONT-END WALKTHROUGH — see
+Section 2b, which lists the screens still to cover and the five questions to ask on each.
+Ten real bugs have come out of looking at live screens and EVERY ONE was invisible in the
+code and passing its own tests. Do not go hunting the backlog for a code task instead.
 ```
 
 ---
@@ -98,20 +109,54 @@ they sound ("collected", "banked", "paid to the club" have each been wrong at le
 
 ---
 
-## Section 2b — PICK UP HERE (as at 2026-08-08)
+## Section 2b — PICK UP HERE (as at 2026-08-10)
 
-`docs/specs/OUTSTANDING.md` is the full backlog; this is the short list a fresh session should start
-from, newest first. **Everything below is open unless marked done.**
+> ### ▶ THE NEXT SESSION'S JOB IS THE PAGE-BY-PAGE ADMIN WALKTHROUGH. START THERE.
+>
+> Tomo asked for this explicitly at the 2026-08-10 close-out. Do not open the backlog looking for
+> something else to do; this IS the work. Everything else in this section is a distant second.
 
-1. **FINISH THE PAGE-BY-PAGE FRONT-END REVIEW.** Half done. Reviewed 2026-07-31: Home · Refund
-   requests · Coach statement (summary + one coach) · Club earnings · People · Setup (menu, club
-   profile, memberships, services). **NOT reviewed: Diary · Overview · the rest of Setup · the entire
-   coach app · the entire client app · mobile widths.**
-   **Six real bugs came out of the half that WAS reviewed, and every one was invisible in the code** —
-   silent zeros, a warning banner crying wolf, a breakdown that didn't add up, a headline calling
-   coach-held money "banked", one label used twice with two different figures, and a price row that
-   billed nothing. Do it with the browser open and the console open on each screen; it is the
-   highest-yield work available.
+**Why this, and not a code task.** Ten real bugs have now come out of *looking at live screens*, and
+**every single one was invisible in the code and passing its own tests**: `try/except: return 0`
+silently reporting zeros (three separate times), a reconcile banner crying wolf, a headline calling
+coach-held money "banked" when one coach held R15,950, a 60-min R0.00 price beside a R600 one billing
+nothing, a settlement breakdown that didn't add up to the total above it, and a Record-payout modal
+that never sent the month it settled — so an owner paid a coach R9,607 against a July figure that
+then still read R9,607. Reading the code finds none of these. Opening the page finds them in minutes.
+
+### How to run it
+
+1. **Ask Tomo to drive**, or ask for screenshots — he has the live console open and this is his club's
+   real money. Go one screen at a time and *wait* for the screenshot before theorising.
+2. **On every screen ask the same five questions:**
+   - Does the top **reconcile to the bottom** — do the parts sum to the total?
+   - Is any figure **zero that shouldn't be**? A silent zero is a bug (see GOTCHAS "Reads that lie"),
+     and a guarded read returns the empty default rather than an error, so it never announces itself.
+   - Does every **label say exactly what the number is**? "Collected", "banked", "paid" and "due" have
+     each been wrong at least once, and a broader-than-true label is indistinguishable from a
+     correct one until someone acts on it.
+   - Is one figure the **MONTH** and another **ALL TIME**, side by side, unlabelled? That trap has
+     cost a five-figure misread already.
+   - Does every **button send what the screen is showing**? The payout modal is the cautionary tale —
+     the engine's rule was right and pinned by scenarios for weeks, but no caller exercised it.
+     **A rule the engine honours but no caller exercises is not implemented.**
+3. **Open the browser console on each screen.** A JS file that doesn't parse is dead in its ENTIRETY
+   and presents as a broken login, not as an error.
+4. **Fix forward, and guard it** — a scenario per bug, asserting the WRITE PATH where a screen writes.
+
+### Coverage so far — the remaining list IS the task
+
+- **Reviewed 2026-07-31:** Home · Refund requests · Coach statement · Club earnings · People ·
+  Setup (menu, club profile, memberships, services).
+- **Reviewed 2026-08-08/10:** Club earnings / the coach P&L (merged into ONE card) · the transaction
+  record (Un-receipt added) · the client account (now month-by-month) · the Record-payout modal.
+- **NOT REVIEWED — start here:** **Diary** · **Overview** · the rest of **Setup** · the **entire coach
+  app** · the rest of the **client app** · **mobile widths**.
+
+Use **People → a client → "View as member"** (`/app.html?as=<user_id>`, read-only) to see a member's
+real screens without a second account — built 2026-08-09 exactly for this review.
+
+### Then, in order
 
 2. **Root-cause `admin_home`'s failing block.** A query in `admin_home` was aborting the transaction
    so every later block returned zero (People counts read 0/0/0; the refund check errored, which is
@@ -119,24 +164,32 @@ from, newest first. **Everything below is open unless marked done.**
    cause is named in the Render logs — `grep "admin_home:"`. **The symptom is fixed; the cause is
    not.**
 
-3. **A CODE GUARD against R0 / duplicate-duration price rows.** A coach had 60 min R0.00 next to
-   60 min R600.00 and every 60-minute lesson billed nothing; `price_for` tie-breaks `amount_minor ASC`
-   so the free row always won. Tomo removed the bad row on 2026-08-08 — nothing stops it being
-   re-entered tomorrow.
-
-4. **Audit the 51 members showing as on TRIAL** (People → Trial). The trial gives free courts:
+3. **Audit the 51 members showing as on TRIAL** (People → Trial). The trial gives free courts:
    `python -m scripts.audit_trials` (read-only; `--cancel-flagged` reverts wrong grants to PAYG).
 
-5. **Confirm the PEAK PRICES exist.** The peak WINDOW is live (Mon–Thu 17:00–19:00) but peak only
+4. **Confirm the PEAK PRICES exist.** The peak WINDOW is live (Mon–Thu 17:00–19:00) but peak only
    charges more where a `peak_amount_minor` per duration is set on the court service. Window without
    amounts is inert.
+
+5. **Bring the MONTH ROWS into the admin People record.** The member's own account now reads month by
+   month; People → a client still shows the flat invoice list. Two renderings of one capability is
+   what the golden rule forbids.
 
 6. **~1,000 Wix imports render as raw email addresses** in People (no first/last name), so the roster
    sorts and reads by email. Cosmetic, but it makes the list hard to use.
 
 **Config Tomo has already done** (do not re-raise): membership caps 1 booking / 90 minutes · all three
 payment methods enabled · peak window set · equipment payment options · company + bank details ·
-`OPS_KEY` so month-end fires on the 1st.
+`OPS_KEY` so month-end fires on the 1st · the R0/duplicate-duration price row (and the code guard now
+refuses it on **both** the create and edit paths).
+
+**Deliberate, do not "fix"** (2026-08-10): **JP, Tshepo and Wonder pay nothing** — no rent, nothing
+owed to the club. An unset `rent_minor` on those three is the decision, not an oversight. The one
+open question is *which* free they are, because it decides **who bills their clients**: `commission`
++ no rule means the club bills and keeps 0%; `rent` + R0 means the coach bills their own clients and
+their self-booked lessons raise no club charge. Getting that backwards is how four rent coaches
+accumulated **R68,000 of phantom "outstanding"**. Read all three with
+`python -m scripts.set_coach_billing_model` (no args, read-only).
 
 ---
 
@@ -176,16 +229,24 @@ python -m scripts.test_all
 gunicorn wsgi:app            # API
 python web_wsgi.py           # web/portal, DB-less, PORT=5060
 
-# read-only diagnostics, safe against production (full index: scripts/README.md)
-python -m scripts.verify_live
+# read-only diagnostics — RUN THESE IN THE courtflow-api RENDER SHELL, not locally: the local
+# sandbox has almost no transactional data, so it answers these with a confident, irrelevant zero.
+# (full index: scripts/README.md · the why: docs/specs/DATA-ACCESS.md)
+python -m scripts.month_position 2026-07 --chase --dupes   # where a MONTH actually stands
+python -m scripts.set_coach_billing_model                  # every coach: commission vs rent
+python -m scripts.tag_coach_payout --coach "<name>"        # which month each payout settles
+python -m scripts.reconcile_coach_commission               # should read CLEAN
 python -m scripts.diagnose_coach_statement --coach <name> --detail
-python -m scripts.diagnose_refund --client <name>
 python -m scripts.audit_trials
-python -m scripts.reconcile_coach_commission
+python -m scripts.audit_zero_prices
+python -m scripts.verify_live
 ```
 
 Remediation scripts are **dry-run by default**; `--commit` writes, they append corrections rather
 than rewriting history, and they are idempotent on a fixed `ref_id`.
+
+**A new script must be committed and PUSHED before it exists in production** — the Render shell runs
+the deployed code, and forgetting this reads as "the script isn't there".
 
 ---
 
