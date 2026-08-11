@@ -2478,7 +2478,12 @@
         el("h3", { text: "Seats per format" }),
         el("p", { class: "cf-muted", text: "How many players share a court fee. Singles " + (fmt.singles || 2)
           + ", doubles " + (fmt.doubles || 4) + ", on your own " + (fmt.practice || 1) + "." }),
-        el("p", { class: "cf-muted cf-tiny", text: "A doubles game splits the court fee four ways, so two members plus two guests means each guest pays a quarter. If that isn't how you want doubles priced, don't switch the seat rule on yet." }),
+        // STALE COPY, CORRECTED 2026-08-11. This still described the ORIGINAL split model — one court
+        // fee divided among the un-covered players — which Tomo replaced with a FIXED share months
+        // ago. It told an owner a doubles guest pays "a quarter" (R37.50 on a R150 court) when the
+        // engine charges them a full share (R80), and it contradicted the paragraph directly above
+        // it. Wrong by more than double, on the one screen where the money gets switched on.
+        el("p", { class: "cf-muted cf-tiny", text: "Doubles does NOT divide the fee four ways — a share is a fixed slice of the court, so every player who isn't covered pays the SAME share as they would in singles. Two members plus two guests means each guest pays a full share, and the club collects more than one court fee. That is deliberate: four people use a court more than two." }),
       ]));
     }
 
