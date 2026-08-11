@@ -368,7 +368,7 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
 read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
 the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
-(`courtflow-dev`) at booking 601 / billing 702 / statement 64, with `python -m db` twice a clean
+(`courtflow-dev`) at booking 601 / billing 718 / statement 64, with `python -m db` twice a clean
 no-op including `community.schema`.
 
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart
@@ -420,9 +420,27 @@ fine" category:
 an invited friend is trialed once and never twice, and never a Wix import · a junior never appears in
 discovery.
 
-*Money* (`test_billing_scenarios`) — each seat is one debt and one order, and a cancel voids every
-seat order · a refund restores the split · a collapsed seat respects its court service's own
-`payment_modes` and can never become an unpayable at-court debt on a card-only court.
+*Money* — **the two owed scenarios were written 2026-08-11** and live in `test_billing_scenarios`
+alongside a third: `sc_a_seat_debt_reaches_the_statement_and_the_fold_reconciles` ·
+`sc_refunding_a_seat_restores_the_split` · `sc_a_collapsed_seat_respects_the_courts_payment_modes`.
+Before them the word "seat" appeared in that harness exactly twice, incidentally: every seat
+scenario lived in the DIARY harness, which proves the split ARITHMETIC and says nothing about
+whether the money then reconciles anywhere a human looks. Still owed there: each seat is one debt
+and one order, and a cancel voids every seat order.
+
+**Three things that harness caught, none of which were engine bugs — they were the TEST being wrong
+about the domain, which is its own kind of finding:**
+
+- **`billing.product.payment_modes` is a CSV `text` column, not `text[]`.** Passing a Python list
+  stores something that matches no mode, so the court silently keeps whatever terms it had — and
+  the card-only assertion passed *by accident*. A scenario that passes for the wrong reason is
+  worse than one that fails.
+- **A seat billed ONLINE sits at `awaiting_payment`, which the statement fold EXCLUDES on purpose**
+  — an abandoned checkout is not a debt, and counting it would put money on a client's statement
+  nobody ever agreed to owe. To assert a seat debt reaches the statement it has to be a real owed
+  debt (at-court / monthly).
+- **The fold's identity carries a REFUNDED term**, and the short form everybody quotes omits it.
+  See below.
 
 These names are deliberately left out of backticks until they exist: `scripts.audit_docs` treats a
 named `sc_…` as a claim that it is already guarded, and that check is the whole reason this doc can

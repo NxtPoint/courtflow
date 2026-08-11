@@ -5258,7 +5258,225 @@ def sc_buy_click_never_mints_a_duplicate_debt(s, fx):
     check("membership: ONE placeholder subscription", subs == 1, f"{subs} subscriptions")
 
 
+# ---------------------------------------------------------------------------
+# SEAT MONEY — the community seat rule, seen from the BILLING side.
+#
+# The seat rule's whole claim is that it invents no debt store: a seat raises a real
+# billing."order" through the existing interface, and therefore reaches the client statement,
+# Client-360, month-end and Club earnings "with no extra work". That claim had never been asserted
+# from this harness — before 2026-08-11 the word "seat" appeared here twice, incidentally. Every
+# seat scenario lived in the DIARY harness, which proves the split ARITHMETIC and says nothing
+# about whether the money then reconciles anywhere a human actually looks.
+# ---------------------------------------------------------------------------
+
+def _seat_club_on(s, fx, *, pct=50, rounding="up_10"):
+    from community import repositories as crepo
+    crepo.save_settings(s, club_id=fx.club_id,
+                        fields={"community_enabled": True, "seat_rule_enforced": True,
+                                "seat_share_pct": pct, "seat_rounding": rounding})
+
+
+def _member_is_covered(s, fx):
+    """Give the fixture member a live membership.
+
+    Without this their OWN seat is un-covered and billed a share as well — correct behaviour (two
+    PAYG players pay a share each) but not what these scenarios are about. They are about a MEMBER
+    plus a guest: the member covered, the whole charge on the guest. That is the leak the seat rule
+    exists to close, and it is only visible when the member really is covered."""
+    s.execute(text("INSERT INTO billing.membership_subscription (club_id, user_id, status, provider, "
+                   "current_period_end) VALUES (:c,:u,'active','manual', CURRENT_DATE + 30)"),
+              {"c": fx.club_id, "u": fx.member})
+
+
+def _court_is_desk_paid(s, fx):
+    """Put the court on desk terms for a seat scenario.
+
+    A seat billed ONLINE sits at `awaiting_payment`, which the statement fold EXCLUDES on purpose —
+    an abandoned checkout is not a debt, and counting it would put money on a client's statement
+    that nobody ever agreed to owe. To assert that a seat debt REACHES the statement it has to be a
+    real owed debt, which is the at-court/monthly path."""
+    # CSV text, not text[] — a list here stores something that matches no mode, and the court
+    # quietly stays on whatever it had.
+    s.execute(text("UPDATE billing.product SET payment_modes = :m WHERE id = :p"),
+              {"m": "at_court", "p": str(fx.court_product)})
+
+
+def _game_with_a_guest(s, fx, guest, *, hour=9, settlement="at_court"):
+    """A member's court booking, opened as a game, with `guest` in the second seat and the seat
+    money applied. Returns the booking id."""
+    from community import seats as CS
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode=settlement,
+                         starts_at=iso(at(fx, hour)), ends_at=iso(at(fx, hour + 1)),
+                         seats=2, play_format="singles", visibility="open")
+    if not r.get("ok"):
+        raise AssertionError("fixture booking failed: %s" % (r,))
+    bid = r["booking"]["id"]
+    s.execute(text("INSERT INTO diary.booking_party (booking_id, club_id, user_id, party_role, "
+                   "       seat_status, joined_at) VALUES (:b,:c,:u,'player','held',now())"),
+              {"b": str(bid), "c": str(fx.club_id), "u": str(guest)})
+    CS.apply_seat_orders(s, club_id=fx.club_id, booking_id=bid)
+    return bid
+
+
+def _seat_orders(s, bid):
+    return [dict(r) for r in s.execute(
+        text('SELECT bp.user_id, o.user_id AS order_user_id, bp.share_minor, bp.covered, '
+             '       o.id AS order_id, o.amount_minor, o.settlement_mode, o.status '
+             '  FROM diary.booking_party bp '
+             '  JOIN billing."order" o ON o.id = bp.order_id WHERE bp.booking_id = :b'),
+        {"b": str(bid)}).mappings().all()]
+
+
+def _reconciles(f):
+    """The ONE identity every money screen in the platform agrees on:
+
+        Billed - Discount - Written-off = Invoiced = Paid + Outstanding + Refunded
+
+    The REFUNDED term is easy to leave off and this assertion originally did, which made a correct
+    fold look broken the moment money went back: a fully refunded order reports billed 8000,
+    invoiced 8000, paid 0, outstanding 0 — because status 'refunded' is deliberately in NEITHER the
+    paid nor the outstanding bucket. `CRMUI.statementFold` has always known this; it computes
+    `reversed = billed - paid - owe` and prints "... refunded or written off this month" precisely
+    so the reader is not left with a puzzle. Assert what the platform actually reconciles on, or a
+    scenario becomes an argument for "fixing" code that is right."""
+    return (int(f["billed_minor"]) - int(f["discount_minor"]) - int(f["written_off_minor"])
+            == int(f["invoiced_minor"])
+            and int(f["invoiced_minor"]) == int(f["paid_minor"]) + int(f["outstanding_minor"])
+                                            + int(f["refunded_minor"]))
+
+
+def sc_a_seat_debt_reaches_the_statement_and_the_fold_reconciles(s, fx):
+    """A SEAT IS A DEBT LIKE ANY OTHER — and the fold it lands in still balances.
+
+    This is the load-bearing claim of the whole seat rule: seats raise real orders through the
+    existing interface, so they appear on the client statement and in Client-360 with no new code.
+    A claim that has never been asserted is a hope. It is asserted here against the ONE identity
+    every money screen reconciles on:
+
+        Billed - Discount - Written-off = Invoiced = Paid + Outstanding
+
+    If a seat order ever lands outside that identity the client's own statement stops adding up and
+    the admin cockpit quietly disagrees with it — a failure that looks like a rounding argument
+    until somebody reconciles a month by hand."""
+    print("\n# a guest's seat is a real debt: it reaches the statement and the 360 fold balances")
+    from client360.repositories import _statement_fold
+    _seat_club_on(s, fx)
+    _member_is_covered(s, fx)
+    _court_is_desk_paid(s, fx)
+    guest = _mk_user(s, "seat_guest@bill.test", "Guesty")
+
+    bid = _game_with_a_guest(s, fx, guest, hour=9)
+    rows = _seat_orders(s, bid)
+    charged = [r for r in rows if not r["covered"]]
+    check("exactly ONE seat is charged — the member's own is covered by their membership",
+          len(charged) == 1, str(rows))
+    check("...for ONE SHARE - R80 (50% of R150, rounded up to R10)",
+          bool(charged) and int(charged[0]["amount_minor"]) == 8000, str(rows))
+    # Assert the ORDER's owner, not the SEAT's. The seat is the guest's by construction, so
+    # comparing bp.user_id proves nothing; who the debt BELONGS TO is o.user_id, and that is the
+    # whole question — a share billed to the member who booked would recreate the very leak.
+    check("...and the DEBT belongs to the guest, not to the member who booked",
+          bool(charged) and str(charged[0]["order_user_id"]) == str(guest), str(rows))
+
+    fold = _statement_fold(s, club_id=fx.club_id, user_id=guest)
+    check("the seat is BILLED on the guest's own statement",
+          int(fold["billed_minor"]) == 8000, str(fold))
+    check("...and it is OUTSTANDING, not silently settled",
+          int(fold["outstanding_minor"]) == 8000, str(fold))
+    check("THE FOLD RECONCILES: billed - discount - written off = invoiced = paid + outstanding",
+          _reconciles(fold), str(fold))
+
+
+def sc_refunding_a_seat_restores_the_split(s, fx):
+    """A REFUNDED SEAT MUST NOT LEAVE A PHANTOM PAYER — one of the two scenarios this lane has owed
+    since it was built.
+
+    A seat paid and then refunded is, commercially, a seat nobody has paid for. If the refund leaves
+    the ORDER looking paid, the client's statement claims money they no longer hold and the club's
+    collected figure counts cash it has given back. Both are silent, and both are the kind of thing
+    only discovered when a month is reconciled by hand."""
+    print("\n# refunding a seat: the money goes back and the statement follows it")
+    from client360.repositories import _statement_fold
+    _seat_club_on(s, fx)
+    _member_is_covered(s, fx)
+    _court_is_desk_paid(s, fx)
+    guest = _mk_user(s, "seat_refund@bill.test", "Refundy")
+
+    bid = _game_with_a_guest(s, fx, guest, hour=11)
+    charged = [r for r in _seat_orders(s, bid) if not r["covered"]]
+    check("the guest owes one share",
+          len(charged) == 1 and int(charged[0]["amount_minor"]) == 8000, str(charged))
+    oid = charged[0]["order_id"]
+
+    # An at-court seat is settled at the desk — the same path a club actually uses, and the one
+    # every gateway funnels through.
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=oid, amount_minor=8000,
+                          provider="cash", provider_payment_id="RCPT-SEAT-1", user_id=guest)
+    check("the seat is PAID", _order(s, oid)["status"] == "paid", str(_order(s, oid)))
+    paid_fold = _statement_fold(s, club_id=fx.club_id, user_id=guest)
+    check("...and the guest's statement shows it paid with nothing outstanding",
+          int(paid_fold["paid_minor"]) == 8000 and int(paid_fold["outstanding_minor"]) == 0,
+          str(paid_fold))
+
+    apply_payment_event(NormalizedPaymentEvent(
+        provider="cash", kind="refunded", order_ref=str(oid),
+        provider_payment_id="rf_seat_1", amount_minor=8000, currency="ZAR",
+        status="succeeded", direction="refund", club_id=str(fx.club_id),
+        user_id=str(guest)), session=s)
+
+    after = _order(s, oid)
+    check("the order is no longer PAID once the money went back",
+          after["status"] != "paid", str(after))
+    fold = _statement_fold(s, club_id=fx.club_id, user_id=guest)
+    check("THE FOLD STILL RECONCILES after the refund (the refunded term carries it)",
+          _reconciles(fold), str(fold))
+    check("...and the money shows as REFUNDED, not quietly dropped",
+          int(fold["refunded_minor"]) == 8000, str(fold))
+    check("...and the statement does not still claim the refunded money as paid",
+          int(fold["paid_minor"]) == 0, str(fold))
+
+
+def sc_a_collapsed_seat_respects_the_courts_payment_modes(s, fx):
+    """A CARD-ONLY COURT CANNOT COLLAPSE INTO AN UNPAYABLE DEBT — the second owed scenario.
+
+    At the cutoff an unfilled seat becomes the booker's to pay for. That charge has to be payable BY
+    THE RULES OF THE SERVICE IT BELONGS TO: on a court sold online-only, raising an `at_court` debt
+    creates money the club has no way to collect and the member has no way to settle. It would sit
+    on the statement forever, and it is exactly the shape `billing.bundles.allowed_purchase_modes`
+    was written to prevent for packs.
+
+    Deliberately strict about which mode is FORBIDDEN and loose about which is chosen: the club may
+    reasonably decide the collapse is online, or refuse it outright, but it may never be a desk debt
+    on a service that has no desk."""
+    print("\n# a collapsed seat on a card-only court is never an unpayable at-court debt")
+    from community import seats as CS
+    _seat_club_on(s, fx)
+    s.execute(text("UPDATE billing.product SET payment_modes = :m WHERE id = :p"),
+              {"m": "online", "p": str(fx.court_product)})
+
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="online",
+                         starts_at=iso(at(fx, 13)), ends_at=iso(at(fx, 14)),
+                         seats=2, play_format="singles", visibility="open")
+    check("the game is created on a card-only court", r.get("ok"), str(r))
+    bid = r["booking"]["id"]
+
+    res = CS.collapse_open_seats(s, club_id=fx.club_id, booking_id=bid,
+                                 now=at(fx, 13) - timedelta(minutes=30))
+    modes = [str(x["settlement_mode"]) for x in _seat_orders(s, bid)]
+    check("no collapsed seat is billed AT COURT on a card-only service",
+          "at_court" not in modes, "collapse=%s modes=%s" % (res, modes))
+    check("...so nothing was raised that the member has no way to settle",
+          all(m in ("online", "membership_covered") for m in modes), "modes=%s" % (modes,))
+
+
 SCENARIOS = [
+    sc_a_seat_debt_reaches_the_statement_and_the_fold_reconciles,
+    sc_refunding_a_seat_restores_the_split,
+    sc_a_collapsed_seat_respects_the_courts_payment_modes,
     sc_view_as_a_member_is_read_only,
     sc_the_client_account_reads_month_by_month,
     sc_a_desk_payment_recorded_in_error_can_be_undone,
