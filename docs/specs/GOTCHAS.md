@@ -1113,6 +1113,51 @@ weren't** — and the gate would have reported a confident green. Any lane that 
 same blind spot; if you add one, add the contract row yourself and do not wait to be told.
 
 
+### A MONEY GATE THE CALLER HAS TO REMEMBER IS A GATE IN THE WRONG PLACE (2026-08-11)
+
+NextPoint ran with **Community features ON and "Charge for every seat" OFF** — the state the admin
+screen sells as *"you can give members the feature before you change what anyone pays."* Tshepo took
+a seat in Tomo's game. The club dashboard then read **Seats unpaid R110.00**: a real
+`billing."order"` row, a 90-minute share, in a club that had not switched charging on.
+
+`apply_seat_orders` — the function that raises the debt — never checked `seat_rule_enforced`. It was
+**the caller's job**, and of four callers exactly one did it:
+
+| Caller | Gated? |
+|---|---|
+| `seats.seat_a_new_booking` | yes |
+| `crons.sweep_open_games` | yes |
+| `games.join_game` | **no** |
+| `games.set_visibility` | **no** |
+| `invites.accept_invite` | **no** |
+
+Three of four forgot, which is the definition of a rule in the wrong place. The gate now lives
+**inside `apply_seat_orders`**, so no caller can forget it and no new caller can reintroduce it —
+the same reasoning that put the split itself in exactly one module.
+
+**The no-op is not "do nothing".** With charging off, `_settle_seats_without_money` promotes the
+seat out of `held` (that status means *awaiting payment*, and there is no payment to await, so a
+member would otherwise stare at a court that never looks confirmed) and deliberately does NOT:
+
+- **freeze the quote** — `seat_share_minor` exists so a price change cannot re-price a game already
+  SOLD. Nothing is sold, and writing it would pin a share nobody was quoted as the price that
+  applies if the club later switches charging on;
+- **set `covered = true`** — covered means *a membership paid for this seat*, the field that answers
+  "why was this free?" months later. These seats are free because charging is off. Recording the
+  wrong reason is how an audit trail starts lying.
+
+Note the symmetry with the bug one day earlier, where the community switch alone produced no games
+because the SEATING was gated on the money switch. Same seam, opposite direction: seating must
+follow **either** switch, billing must follow **only** the money one. Getting one right does not get
+the other right.
+
+Existing debts are cleaned up by `scripts/fix_unbilled_seats.py` (dry-run default) — it voids
+through `void_order` rather than deleting, touches only UNPAID seat orders in clubs currently not
+charging, and leaves every player their place in the game.
+
+Guarded by `sc_joining_a_game_bills_nobody_while_the_money_switch_is_off`.
+
+
 ### A BARE `ON CONFLICT DO NOTHING` IS NOT AN UPSERT — IT IS AN INSERT (2026-08-10)
 
 Tomo, on the live feed: *"when I click find a match it shows 5 versions, it repeats allot man."* Five

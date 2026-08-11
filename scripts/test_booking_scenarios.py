@@ -3221,6 +3221,20 @@ def _seat(s, fx, booking_id, user_id=None, *, seat_status="confirmed", role="pla
     ).scalar_one()
 
 
+def _charging_on(s, fx):
+    """Switch the club's seat rule ON, immediately before a money call.
+
+    Two things this encodes. First, a scenario that asserts seat MONEY has to run in a club that
+    charges for seats — the gate now lives inside `apply_seat_orders` (it was the caller's job until
+    2026-08-11, and three of the four callers forgot, which is how a member got billed with charging
+    switched off). Second, it is called just before the money, never at the top of the scenario:
+    `community_enabled` set before `create_booking` makes the booking seat ITSELF, which then doubles
+    up with the explicit `_seat()` rows these scenarios build by hand."""
+    from community import repositories as crepo
+    crepo.save_settings(s, club_id=fx.club_id,
+                        fields={"community_enabled": True, "seat_rule_enforced": True})
+
+
 def _as_game(s, booking_id, *, seats=2, play_format="singles", visibility="private"):
     s.execute(
         text("UPDATE diary.booking SET seats = :n, play_format = :f, visibility = :v WHERE id = :b"),
@@ -3302,6 +3316,7 @@ def sc_member_plus_guest_bills_the_guest_in_full(s, fx):
     covered = [row for row in plan["rows"] if row["covered"]]
     check("exactly ONE seat is covered (the member's)", len(covered) == 1, str(plan["rows"]))
 
+    _charging_on(s, fx)      # see the helper: set HERE, never before the booking
     res = S.apply_seat_orders(s, club_id=fx.club_id, booking_id=bid)
     check("exactly one seat is charged", res["charged"] == 1, str(res))
     check("…and it carries ONE SHARE — R80 (50% of R150, rounded up)", res["total_minor"] == 8000, str(res))
@@ -3313,6 +3328,7 @@ def sc_member_plus_guest_bills_the_guest_in_full(s, fx):
           rows and rows[0]["covered"] is False, str(rows))
 
     # Re-running must not mint a second debt for the same seat — the sweep re-runs hourly.
+    _charging_on(s, fx)      # see the helper: set HERE, never before the booking
     again = S.apply_seat_orders(s, club_id=fx.club_id, booking_id=bid)
     check("re-applying is idempotent (no second debt for the same seat)",
           again["charged"] == 1 and len(_seat_rows(s, bid)) == 1, str(_seat_rows(s, bid)))
@@ -3335,6 +3351,7 @@ def sc_two_payg_split_and_both_must_settle(s, fx):
     _seat(s, fx, bid, p1, role="host")
     _seat(s, fx, bid, p2)
 
+    _charging_on(s, fx)      # see the helper: set HERE, never before the booking
     S.apply_seat_orders(s, club_id=fx.club_id, booking_id=bid)
     rows = _seat_rows(s, bid)
     check("both seats are charged", len(rows) == 2, str(rows))
@@ -3434,6 +3451,7 @@ def sc_the_quoted_share_is_frozen_for_the_life_of_the_game(s, fx):
     s.execute(text("UPDATE club.policy SET seat_share_pct = 80 WHERE club_id = :c"),
               {"c": fx.club_id})
     _seat(s, fx, bid, p3)                       # …and a third player joins
+    _charging_on(s, fx)      # see the helper: set HERE, never before the booking
     S.apply_seat_orders(s, club_id=fx.club_id, booking_id=bid)
     rows = _seat_rows(s, bid)
     check("the PAID seat is untouched",
@@ -4170,6 +4188,64 @@ def sc_dark_means_dark_for_the_whole_lane(s, fx):
     check("once on, the lane answers", seats.policy(s, fx.club_id)["community_enabled"] is True)
 
 
+def sc_joining_a_game_bills_nobody_while_the_money_switch_is_off(s, fx):
+    """THE MONEY SWITCH GATES EVERY SEAT PATH, not just the one that creates a booking.
+
+    Found live 2026-08-11, and it is the exact failure the two-switch design promises cannot happen.
+    Tomo had "Community features" ON and "Charge for every seat" OFF — the state the admin screen
+    describes as "you can give members the feature before you change what anyone pays". Tshepo took
+    a seat in his game, and the club dashboard then read **Seats unpaid R110.00**: a real
+    billing."order" row, for a 90-minute share, in a club that had not switched charging on.
+
+    The gate lived in the CALLERS. `seat_a_new_booking` had it and the cron had it; `join_game`,
+    `set_visibility` and invite-accept did not — three of four callers forgot, which is what a rule
+    in the wrong place looks like. It is now inside `apply_seat_orders`, so no caller can forget it
+    and no NEW caller can reintroduce it.
+
+    The complement of sc_community_alone_makes_games_without_charging_anyone: that one proved the
+    community switch alone still MAKES a game; this proves the money switch alone decides whether
+    anyone PAYS for a seat in it — including a seat taken later, by someone else, through a
+    different code path."""
+    from community import games, repositories as repo
+    repo.save_settings(s, club_id=fx.club_id,
+                       fields={"community_enabled": True, "seat_rule_enforced": False})
+    host, joiner = fx.members[0], fx.members[1]
+
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=host, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="at_court",
+                         starts_at=utc_iso(at(fx, 18)), ends_at=utc_iso(at(fx, 19)),
+                         play_format="singles", visibility="open", play_intent="social")
+    check("the game is created", r.get("ok"), str(r))
+    bid = str(r["booking"]["id"])
+    check("no seat is billed at creation", _seat_rows(s, bid) == [], str(_seat_rows(s, bid)))
+
+    j = games.join_game(s, club_id=fx.club_id, booking_id=bid, user_id=joiner)
+    check("the join succeeds", j.get("ok"), str(j))
+
+    # THE ASSERTION THE LIVE BUG WOULD HAVE FAILED.
+    check("joining bills NOBODY while charging is off", _seat_rows(s, bid) == [],
+          "seat orders raised: %s" % (_seat_rows(s, bid),))
+    owed = s.execute(text('SELECT COALESCE(SUM(o.amount_minor),0) FROM diary.booking_party bp '
+                          '  JOIN billing."order" o ON o.id = bp.order_id '
+                          " WHERE bp.booking_id = :b"), {"b": bid}).scalar()
+    check("…and no seat carries an order at all", int(owed or 0) == 0, "owed=%s" % owed)
+
+    seats = _seats_of(s, bid)
+    check("both seats are taken", len(seats) == 2, str(seats))
+    # 'held' means awaiting payment. There is no payment to await, so a seat left held would show a
+    # member a court that never looks confirmed.
+    check("the joiner's seat is CONFIRMED, not left awaiting a payment that will never come",
+          all(x["seat_status"] == "confirmed" for x in seats), str(seats))
+    # `covered` means "a membership paid for this". These are free because charging is OFF — a
+    # different reason, and recording the wrong one makes the audit trail lie.
+    check("no seat claims to have been covered by a membership",
+          all(x["covered"] in (None, False) for x in seats), str(seats))
+    row = s.execute(text("SELECT seat_share_minor FROM diary.booking WHERE id = :b"),
+                    {"b": bid}).mappings().first()
+    check("and no quote is frozen — nothing was sold", row["seat_share_minor"] is None, str(dict(row)))
+
+
 def sc_a_game_appears_once_however_often_you_save_your_profile(s, fx):
     """ONE PLAYER, ONE PROFILE — and therefore one row per game in the feed.
 
@@ -4330,7 +4406,8 @@ def sc_you_cannot_take_a_seat_in_two_places_at_once(s, fx):
 
 def _seats_of(s, booking_id):
     return [dict(r) for r in s.execute(
-        text("SELECT id, user_id, seat_status FROM diary.booking_party WHERE booking_id = :b"),
+        text("SELECT id, user_id, seat_status, covered, share_minor, order_id "
+             "  FROM diary.booking_party WHERE booking_id = :b"),
         {"b": booking_id}).mappings().all()]
 
 
@@ -4342,6 +4419,7 @@ SCENARIOS = [
     sc_dark_means_dark_for_the_whole_lane,
     sc_community_alone_makes_games_without_charging_anyone,
     sc_a_game_appears_once_however_often_you_save_your_profile,
+    sc_joining_a_game_bills_nobody_while_the_money_switch_is_off,
     sc_you_cannot_take_a_seat_in_two_places_at_once,
     sc_match_chat_is_private_to_the_players,
     sc_a_result_needs_someone_else_to_confirm_it,

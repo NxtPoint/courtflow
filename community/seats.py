@@ -371,9 +371,20 @@ def apply_seat_orders(session, *, club_id, booking_id, now=None):
     Client-360, in the month-end consolidation and in Money -> Club earnings. A parallel 'seat charge'
     store would have had to be taught to every one of those.
 
+    THE MONEY SWITCH IS CHECKED HERE, NOT BY THE CALLER. It used to be the caller's job, and of the
+    four callers exactly ONE remembered — so with `seat_rule_enforced` OFF, a member joining a game
+    was still billed a share. Tomo found it live: "Charge for every seat" unchecked, and the club
+    dashboard reading "Seats unpaid R110.00" after Tshepo took a seat. A rule that every caller must
+    remember is a rule in the wrong place; this is the same reasoning that put the split itself in
+    exactly one module.
+
     Returns {orders: [...], covered: n, charged: n, total_minor: n}."""
     from billing.orders import create_order_for_booking
     from diary.bookings import _bill_owner
+
+    pol = policy(session, club_id=club_id)
+    if not pol["seat_rule_enforced"]:
+        return _settle_seats_without_money(session, club_id=club_id, booking_id=booking_id)
 
     plan = seat_plan(session, club_id=club_id, booking_id=booking_id)
     booking = plan["booking"]
@@ -621,6 +632,32 @@ def seat_a_new_booking(session, *, club_id, booking_id, holder_user_id, holder_o
     holds = not all_prepaid_seats_settled(session, club_id=club_id, booking_id=booking_id)
     return {"applied": True, "billed": True, "holds_court": holds, "seats": total_seats,
             "pay_hours": pol["seat_pay_hours"], **applied}
+
+
+def _settle_seats_without_money(session, *, club_id, booking_id):
+    """The community half on, the money half off: seats are real, and NOBODY is billed.
+
+    Three things are deliberately NOT done here.
+
+    The quote is NOT frozen. `seat_share_minor` exists so a price change cannot re-price a game
+    already SOLD — nothing is sold here, and writing it would pin a share no one was ever quoted,
+    which would then be the price if the club later switched the money on.
+
+    `covered` is NOT set true. Covered means "a membership paid for this seat", and it is the field
+    that answers "why was this free?" months later. These seats are free because the club has not
+    turned charging on — a different reason, and recording the wrong one is how an audit trail starts
+    lying. NULL is the truth.
+
+    And no order is linked. `order_id IS NULL` is what "no money changed hands" looks like.
+
+    A seat IS promoted out of 'held' though: 'held' means awaiting payment, and there is no payment
+    to await, so leaving it there would show a member a court that never looks confirmed."""
+    session.execute(
+        text("UPDATE diary.booking_party SET seat_status = 'confirmed' "
+             " WHERE booking_id = :b AND club_id = :c "
+             "   AND seat_status IN ('invited','held')"),
+        {"b": str(booking_id), "c": str(club_id)})
+    return {"orders": [], "covered": 0, "charged": 0, "total_minor": 0, "billed": False}
 
 
 def collapse_open_seats(session, *, club_id, booking_id, now=None):

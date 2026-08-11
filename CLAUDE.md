@@ -43,11 +43,11 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 592 / billing 702 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 601 / billing 702 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (83/95/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (84/95/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **Update the "Current green baseline" line above and nothing else**, so
    the numbers can't drift apart (`scripts.audit_docs` fails any doc that claims a DIFFERENT current
@@ -728,6 +728,10 @@ money decision quietly defaulted instead of being made.*
 - RE-PRICING A SEAT NEARLY ATE THE EQUIPMENT HIRE — re-price the court line only, then recompute the order total from its lines
 - A GAME COULD PUSH ITS OWN DEADLINE PAST THE GAME — `open_until`/`seats` are CLAMPED, not defaulted — `sc_a_crafted_game_cannot_cheapen_or_outlive_its_own_bill`
 - A MONEY RULE WITH NO SWITCH IS A MONEY RULE NOBODY TURNS ON (the entitlement caps sat inert for weeks) — `sc_the_seat_rule_can_be_switched_on_without_sql`
+- A MONEY GATE THE CALLER HAS TO REMEMBER IS A GATE IN THE WRONG PLACE — `apply_seat_orders` left the
+  `seat_rule_enforced` check to its callers and 3 of 4 forgot, so a member was billed a share with
+  charging switched OFF (found live). The gate is now INSIDE it —
+  `sc_joining_a_game_bills_nobody_while_the_money_switch_is_off`
 - A BARE `ON CONFLICT DO NOTHING` IS NOT AN UPSERT — with nothing unique to conflict on it is a plain
   INSERT, so every profile save appended a row and a LEFT JOIN fanned the feed out into 5 copies of
   every game — `sc_a_game_appears_once_however_often_you_save_your_profile`
