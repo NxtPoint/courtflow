@@ -318,29 +318,51 @@ invented `.cf-chip-ok` / `.cf-chip-warn` when the design system already spelled 
 to stop, and here it was also *functional*: without the classes, "Paid" and "Awaiting payment" rendered
 identically.
 
-## Engine present, NO UI — three surfaces nothing can reach (audited 2026-08-10)
+## Engine present, NO UI — RESOLVED 2026-08-12 (audited 2026-08-10)
 
-These endpoints exist, are correct, and have **no caller anywhere in the frontend**. They are recorded
-here rather than deleted because each is one small screen away from working — but until that screen
-exists they must not be described as live, and this is the rot `audit_docs` structurally cannot see
-(it checks that a route is documented, not that anything invokes it).
+Three endpoints existed, were correct, and had **no caller anywhere in the frontend** — the rot
+`audit_docs` structurally cannot see (it checks that a route is documented, not that anything invokes
+it). Half-built is the worst of the three states, so each was either wired or removed. **The decision
+was not "which is most work" but "which one is load-bearing":**
 
-| Surface | Engine | Consequence today |
+| Surface | Verdict | Why |
 |---|---|---|
-| `POST /games/<id>/result/confirm` | `results.confirm_result` | A reported score can never be confirmed — `community.match_result.confirmed_by_user_id` is always NULL |
-| `POST /games/<id>/play-again` | `results.play_again` | `community.play_again` is never written |
-| `GET`/`POST /favourites` | `results.add_favourite` | `community.favourite` is never written — "My Tennis Circle" has no UI at all |
+| `POST /games/<id>/result/confirm` | **WIRED** | A score nobody can confirm is a claim forever; confirmation is what makes the record evidence |
+| `POST /games/<id>/play-again` | **WIRED** | It is not a scoring nicety — it is the **"don't match me with them again" filter** (below) |
+| `GET`/`POST /favourites` | **DELETED** | Never had a screen, no caller ever, table empty in every environment |
 
-**The consequence worth knowing:** `matching.py:110` computes its **history** term from those last two
-tables, so **10 of the matcher's 100 points are permanently zero.** This is *not* the silent-zero bug
-from [GOTCHAS](GOTCHAS.md#reads-that-lie) — the term is neutral across every candidate, so it cannot
-skew a ranking, only fail to sharpen one. It is a real limit on match quality and nothing else.
+**`play-again` nearly got deleted, and that would have been the mistake.** Read as "10 of the
+matcher's 100 points", it looks like a rounding error. But `matching.py` also uses it to **DROP** a
+candidate the viewer has thumbed down, not merely rank them lower — so it is the only way a member
+can avoid being repeatedly matched with someone they would rather not play. In a discovery feature
+aimed at ~1,100 members that is a social-safety valve, not a scoring term. It got the UI instead,
+folded into the result screen because that is the moment a player actually knows the answer.
+
+**What was built:**
+- `game_detail` now returns `result` (with `reported_by_me` + `confirmed`), the viewer's own `rate[]`,
+  and `can.record_result` / `can.confirm_result`.
+- **Whether the game is over is the CLUB's clock.** The widget used to compare
+  `new Date(game.ends_at) < new Date()`, so a wrong phone clock — or simply travelling — could offer
+  "Enter the result" mid-match or withhold it afterwards. The gate is server-side now.
+- `Widgets.Game` renders the result card, the entry modal (outcome → winner → score, "no winner" first
+  and default because most club tennis is a hit, not a match) and the confirm button. The reporter is
+  never offered Confirm on their own claim, mirroring `confirm_result`'s own guard.
+- **`rate[]` is filtered to the viewer's OWN answers.** Guarded on a **doubles** game deliberately: in
+  a two-player game the subject uniquely identifies the rater, so dropping the filter is completely
+  unobservable and a two-player assertion passes for the wrong reason. With three players there is a
+  pair the viewer is not part of, and that is where the leak shows.
+- `matching.py`'s history term now rests on the surviving signal alone (two good games = full credit);
+  the weights still sum to 100. The boot DDL carries an idempotent
+  `DROP TABLE IF EXISTS community.favourite` so the orphan doesn't survive in an already-booted DB.
+
+Guarded by `sc_the_result_screen_offers_only_what_the_server_allows`.
 
 ## Still to build
 
-The two owed money scenarios below (a refund restoring the split; a collapsed seat on a card-only
-court). The coach and admin apps do not yet mount `Widgets.Game` — the widget is config-ready for them,
-nothing calls it. The three unreachable surfaces above. Phase 2 as listed above.
+The coach and admin apps do not yet mount `Widgets.Game` — the widget is config-ready for them,
+nothing calls it. Phase 2 as listed above. **And the one that matters most: no WRITE path in this lane
+has been exercised by a real second person in a browser** — the newly-wired result and would-play-again
+screens join that list. They are scenario-covered server-side and have never been clicked.
 
 **Not yet exercised by a real second person.** Every WRITE path is unverified end to end: join, leave,
 chat, result entry, the level quiz save, invite acceptance and `join.html`. The scenario harnesses call
@@ -368,7 +390,7 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
 read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
 the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
-(`courtflow-dev`) at booking 601 / billing 718 / statement 64, with `python -m db` twice a clean
+(`courtflow-dev`) at booking 619 / billing 718 / statement 64, with `python -m db` twice a clean
 no-op including `community.schema`.
 
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart

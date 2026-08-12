@@ -633,7 +633,7 @@
     players.forEach(function (p2) {
       list.appendChild(el("div", { class: "cf-item" }, [
         el("div", { class: "cf-item-main" }, [
-          el("div", { class: "cf-item-t", text: p2.name + (p2.is_favourite ? " ★" : "") }),
+          el("div", { class: "cf-item-t", text: p2.name }),
           el("div", { class: "cf-item-s", text: [levelWord(p2.level),
             p2.prefers_play, p2.prefers_format].filter(Boolean).join(" · ") }),
         ]),
@@ -731,6 +731,20 @@
         // A seat's own share is paid through the SAME Yoco seam every other online order uses —
         // there is no second payment path for community money.
         pay: { run: function (seat) { window.Pay.startYocoCheckout(seat.order_id); } },
+        // The widget owns the result form and hands back the finished body; the app only posts it.
+        result: { run: function (g, body) { return window.API.recordGameResult(g.booking_id, body); } },
+        confirmResult: {
+          run: function (g) {
+            act(function () { return window.API.confirmGameResult(g.booking_id); }, "Result confirmed.");
+          }
+        },
+        // PRIVATE — no toast, no confirmation. Announcing it would tell the room something only the
+        // rater is meant to know, and the button state is feedback enough.
+        playAgain: {
+          run: function (g, userId, again) {
+            return window.API.ratePlayAgain(g.booking_id, userId, again);
+          }
+        },
       },
       onNavigate: function (n) { if (n.kind === "booking") go("#/booking/" + n.id); },
     });

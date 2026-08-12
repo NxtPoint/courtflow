@@ -10,8 +10,9 @@
 // cfg for Game:
 //   cfg.data.get(id)        -> Promise<game>          (GET /api/community/games/<id>)
 //   cfg.data.chat(id)       -> Promise<{messages}>    (GET .../chat)
-//   cfg.actions             -> { join, leave, invite, post, result, playAgain } — a button appears
-//                              only when the payload's can{} allows it AND the app wired a handler
+//   cfg.actions             -> { join, leave, invite, post, pay, result, confirmResult, playAgain }
+//                              — a button appears only when the payload's can{} allows it AND the app
+//                              wired a handler. result.run(game, body) takes the whole result body.
 //   cfg.onNavigate          -> fn({kind, id})
 //   cfg.me                  -> the viewer's user_id (for "you")
 //
@@ -88,6 +89,173 @@
     ]);
   }
 
+  // ---- the result ----------------------------------------------------------
+  // What happened, and the other player agreeing it happened. An unconfirmed result is a CLAIM, not
+  // evidence (results.py), so the render says which it is rather than showing a bare scoreline that
+  // reads as settled fact.
+  var OUTCOMES = [
+    { key: "played", label: "We played" },
+    { key: "cancelled", label: "Called off" },
+    { key: "no_show", label: "Someone didn't turn up" }
+  ];
+
+  function outcomeWord(o) {
+    for (var i = 0; i < OUTCOMES.length; i++) if (OUTCOMES[i].key === o) return OUTCOMES[i].label;
+    return o || "";
+  }
+
+  function resultModal(cfg, game) {
+    var m = window.UI.modal("Enter the result", {});
+    var chosen = (game.result && game.result.outcome) || "played";
+    var winner = (game.result && game.result.winner_user_id) || "";
+
+    var outRow = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap" });
+    var btns = {};
+    function paint() {
+      OUTCOMES.forEach(function (o) {
+        btns[o.key].className = "cf-btn cf-btn-sm" + (chosen === o.key ? " cf-btn-primary" : "");
+      });
+      // A winner and a score only make sense for a game that was actually played.
+      playedBox.style.display = (chosen === "played") ? "" : "none";
+    }
+    OUTCOMES.forEach(function (o) {
+      var b = el("button", { type: "button", class: "cf-btn cf-btn-sm", text: o.label });
+      b.addEventListener("click", function () { chosen = o.key; paint(); });
+      btns[o.key] = b;
+      outRow.appendChild(b);
+    });
+
+    var who = el("select", { class: "cf-select" });
+    // "No winner" is FIRST and is the default: most club tennis is a hit, not a match, and forcing a
+    // winner would either produce junk data or stop people filing a result at all.
+    who.appendChild(el("option", { value: "", text: "No winner — just a hit" }));
+    (game.seats || []).forEach(function (s) {
+      if (!s.user_id) return;
+      who.appendChild(el("option", {
+        value: s.user_id, text: s.is_me ? "You" : (s.name || "Player"),
+        selected: String(winner) === String(s.user_id) ? "selected" : null
+      }));
+    });
+    var score = el("input", {
+      class: "cf-input", placeholder: "6-4 6-3 (optional)",
+      value: (game.result && game.result.score_text) || ""
+    });
+    var playedBox = el("div", {}, [
+      el("div", { class: "cf-field" }, [el("label", { text: "Winner" }), who]),
+      el("div", { class: "cf-field" }, [el("label", { text: "Score" }), score])
+    ]);
+
+    m.body.appendChild(el("p", {
+      class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
+      text: game.result && game.result.confirmed
+        ? "This result was already agreed. Changing it withdraws that agreement and the other player is asked again."
+        : "Whoever else played can confirm it. Until they do it's recorded as unconfirmed."
+    }));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "What happened" }), outRow]));
+    m.body.appendChild(playedBox);
+    paint();
+
+    var save = el("button", { class: "cf-btn cf-btn-primary", text: "Save result" });
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" }, [
+      el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), save
+    ]));
+    save.addEventListener("click", function () {
+      save.disabled = true;
+      Promise.resolve(cfg.actions.result.run(game, {
+        outcome: chosen,
+        winner_user_id: (chosen === "played" && who.value) ? who.value : null,
+        score_text: (chosen === "played" && score.value.trim()) ? score.value.trim() : null
+      })).then(function () { m.close(); api.refresh(); },
+        function (e) { save.disabled = false; window.UI.toast(window.UI.errMsg(e), "error"); });
+    });
+  }
+
+  function resultBlock(cfg, game) {
+    var r = game.result;
+    var kids = [el("h2", { style: "margin:0 0 8px", text: "Result" })];
+    if (!r) {
+      kids.push(el("div", { class: "cf-empty", text: "No result recorded yet." }));
+    } else {
+      var line = outcomeWord(r.outcome);
+      if (r.outcome === "played") {
+        var wname = "";
+        (game.seats || []).forEach(function (s) {
+          if (r.winner_user_id && String(s.user_id) === String(r.winner_user_id)) {
+            wname = s.is_me ? "You" : (s.name || "");
+          }
+        });
+        if (wname) line += " · " + wname + " won";
+        if (r.score_text) line += " · " + r.score_text;
+      }
+      kids.push(el("div", { class: "cf-item" }, [
+        el("div", { class: "cf-item-main" }, [
+          el("div", { class: "cf-item-t", text: line }),
+          el("div", {
+            class: "cf-item-s",
+            text: r.confirmed ? "Agreed by both players"
+              : (r.reported_by_me ? "Waiting for the other player to confirm"
+                : "Reported by the other player — not confirmed yet")
+          })
+        ]),
+        el("span", {
+          class: "cf-chip " + (r.confirmed ? "ok" : "held"),
+          text: r.confirmed ? "Confirmed" : "Unconfirmed"
+        })
+      ]));
+    }
+    var acts = [];
+    if (game.can && game.can.confirm_result && cfg.actions && cfg.actions.confirmResult) {
+      acts.push(el("button", {
+        class: "cf-btn cf-btn-primary cf-btn-sm", text: "That's right — confirm",
+        onclick: function () { cfg.actions.confirmResult.run(game); }
+      }));
+    }
+    if (game.can && game.can.record_result && cfg.actions && cfg.actions.result) {
+      acts.push(el("button", {
+        class: "cf-btn cf-btn-sm", text: r ? "Change the result" : "Enter the result",
+        onclick: function () { resultModal(cfg, game); }
+      }));
+    }
+    if (acts.length) kids.push(el("div", { class: "cf-row", style: "gap:8px;margin-top:10px;flex-wrap:wrap" }, acts));
+    return card(kids);
+  }
+
+  // ---- would you play them again? ------------------------------------------
+  // PRIVATE. The answer is never shown to its subject, never aggregated into a public score and
+  // never rendered anywhere but here, on the rater's own screen. It exists only to weight matching —
+  // which is exactly why people answer it honestly, and why the copy says so out loud.
+  function rateBlock(cfg, game) {
+    if (!(game.rate || []).length || !cfg.actions || !cfg.actions.playAgain) return null;
+    var list = el("div", { class: "cf-list" });
+    (game.rate || []).forEach(function (p) {
+      var yes = el("button", { type: "button", class: "cf-btn cf-btn-sm", text: "Yes" });
+      var no = el("button", { type: "button", class: "cf-btn cf-btn-sm", text: "Rather not" });
+      function paint(v) {
+        yes.className = "cf-btn cf-btn-sm" + (v === true ? " cf-btn-primary" : "");
+        no.className = "cf-btn cf-btn-sm" + (v === false ? " cf-btn-danger" : "");
+      }
+      paint(p.again === true ? true : (p.again === false ? false : null));
+      function send(v) {
+        paint(v);
+        Promise.resolve(cfg.actions.playAgain.run(game, p.user_id, v)).then(
+          function () { p.again = v; },
+          function (e) { paint(p.again); window.UI.toast(window.UI.errMsg(e), "error"); });
+      }
+      yes.addEventListener("click", function () { send(true); });
+      no.addEventListener("click", function () { send(false); });
+      list.appendChild(el("div", { class: "cf-item" }, [
+        el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: p.name || "Player" })]),
+        el("div", { class: "cf-row", style: "gap:6px" }, [yes, no])
+      ]));
+    });
+    return card([
+      el("h2", { style: "margin:0 0 4px", text: "Would you play them again?" }),
+      el("p", { class: "cf-muted cf-tiny", style: "margin:0 0 8px",
+        text: "Only you ever see this. It's never shown to them — it just helps us suggest better games." }),
+      list
+    ]);
+  }
+
   function chatBlock(cfg, game, msgs) {
     var list = el("div", { class: "cf-chat" });
     (msgs || []).forEach(function (m) {
@@ -158,12 +326,6 @@
           onclick: function () { cfg.actions.leave.run(game); }
         }));
       }
-      if (cfg.actions && cfg.actions.result && new Date(game.ends_at) < new Date()) {
-        acts.push(el("button", {
-          class: "cf-btn cf-btn-primary", text: "Enter the result",
-          onclick: function () { cfg.actions.result.run(game); }
-        }));
-      }
       if (cfg.onNavigate) {
         acts.push(el("button", {
           class: "cf-btn cf-btn-ghost", text: "Booking details",
@@ -171,6 +333,14 @@
         }));
       }
       if (acts.length) host.appendChild(el("div", { class: "cf-row", style: "gap:8px;margin-top:12px;flex-wrap:wrap" }, acts));
+
+      // The result only exists once the game is over — the server decides that (can.record_result),
+      // not the browser, whose clock is whatever the member's phone says.
+      if (game.result || (game.can && game.can.record_result)) {
+        host.appendChild(resultBlock(cfg, game));
+      }
+      var rate = rateBlock(cfg, game);
+      if (rate) host.appendChild(rate);
 
       host.appendChild(chatBlock(cfg, game, msgs));
     }

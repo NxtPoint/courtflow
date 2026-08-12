@@ -14,8 +14,9 @@
 # already IS a seat — it has user_id (nullable, for a guest), party_role, guest_name/guest_email,
 # price_id and attended. This file gives it the money columns it was missing.
 #
-# Only the genuinely NEW domain gets community.* tables: invites, chat, results, the private
-# would-play-again signal, and favourites. None of those has an existing home.
+# Only the genuinely NEW domain gets community.* tables: invites, chat, results and the private
+# would-play-again signal. None of those has an existing home. (favourites was here too until
+# 2026-08-12 — see section 9 for why it went.)
 #
 # init() is safe on every boot and twice in a row.
 
@@ -302,21 +303,18 @@ _DDL = [
     f"ON {SCHEMA}.play_again (club_id, subject_user_id);",
 
     # ------------------------------------------------------------------ #
-    # 9) community.favourite — "My Tennis Circle".
+    # 9) community.favourite — DELETED 2026-08-12.
     # ------------------------------------------------------------------ #
-    # The organic outcome of the whole feature: after a few games you stop searching and just ask the
-    # four people you actually enjoy playing. That is the retention loop, and it costs one table.
-    f"""
-    CREATE TABLE IF NOT EXISTS {SCHEMA}.favourite (
-        id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        club_id           uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
-        user_id           uuid NOT NULL REFERENCES iam.user(id) ON DELETE CASCADE,
-        favourite_user_id uuid NOT NULL REFERENCES iam.user(id) ON DELETE CASCADE,
-        created_at        timestamptz NOT NULL DEFAULT now()
-    );
-    """,
-    f"CREATE UNIQUE INDEX IF NOT EXISTS uq_favourite_once "
-    f"ON {SCHEMA}.favourite (club_id, user_id, favourite_user_id);",
+    # "My Tennis Circle" was built engine-first and never given a screen: no route was ever called by
+    # any client, and the table was empty in every environment. Half-built is the worst of the three
+    # states — it reads as a feature in the schema, costs a JOIN in matching, and does nothing — so
+    # it was removed rather than left to look load-bearing. The would-play-again signal (8) SURVIVED
+    # the same audit because it is the "don't match me with them again" filter, and that one got its
+    # UI instead.
+    #
+    # The DROP stays in the boot DDL deliberately: it is idempotent, and removing only the CREATE
+    # would leave the orphan table behind in every database that already booted once.
+    f"DROP TABLE IF EXISTS {SCHEMA}.favourite;",
 ]
 
 

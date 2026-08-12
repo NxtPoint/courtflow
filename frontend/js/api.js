@@ -264,6 +264,16 @@
       return A().apiJSON("/api/community/games/" + encodeURIComponent(id) + "/result",
         { method: "POST", body: body || {} });
     },
+    confirmGameResult: function (id) {
+      return A().apiJSON("/api/community/games/" + encodeURIComponent(id) + "/result/confirm",
+        { method: "POST", body: {} });
+    },
+    // The PRIVATE would-play-again signal. Nothing reads this back except matching — there is
+    // deliberately no "who rated me" endpoint to pair with it.
+    ratePlayAgain: function (id, userId, again) {
+      return A().apiJSON("/api/community/games/" + encodeURIComponent(id) + "/play-again",
+        { method: "POST", body: { user_id: userId, again: !!again } });
+    },
     suggestedPlayers: function (opts) { return A().apiJSON("/api/community/players" + qs(opts)); },
     playerProfile: function () { return A().apiJSON("/api/community/profile"); },
     savePlayerProfile: function (body) {

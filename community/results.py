@@ -120,38 +120,6 @@ def play_again(session, *, club_id, booking_id, rater_user_id, subject_user_id, 
     return {"ok": True}
 
 
-def add_favourite(session, *, club_id, user_id, favourite_user_id, on=True):
-    """"My Tennis Circle" — the organic end state of the whole feature. After a few games you stop
-    searching and just ask the four people you enjoy playing."""
-    if str(user_id) == str(favourite_user_id):
-        raise ResultError("CANNOT_FAVOURITE_SELF")
-    if on:
-        session.execute(
-            text("INSERT INTO community.favourite (club_id, user_id, favourite_user_id) "
-                 "VALUES (:c, :u, :f) ON CONFLICT (club_id, user_id, favourite_user_id) DO NOTHING"),
-            {"c": str(club_id), "u": str(user_id), "f": str(favourite_user_id)})
-    else:
-        session.execute(
-            text("DELETE FROM community.favourite WHERE club_id = :c AND user_id = :u "
-                 "  AND favourite_user_id = :f"),
-            {"c": str(club_id), "u": str(user_id), "f": str(favourite_user_id)})
-    return {"ok": True, "favourite": bool(on)}
-
-
-def list_favourites(session, *, club_id, user_id):
-    rows = session.execute(
-        text('SELECT f.favourite_user_id, u.first_name, pp.level_num '
-             "FROM community.favourite f "
-             ' JOIN iam."user" u ON u.id = f.favourite_user_id '
-             " LEFT JOIN iam.player_profile pp ON pp.user_id = f.favourite_user_id "
-             "        AND pp.club_id = f.club_id "
-             " WHERE f.club_id = :c AND f.user_id = :u ORDER BY u.first_name"),
-        {"c": str(club_id), "u": str(user_id)},
-    ).mappings().all()
-    return [{"user_id": str(r["favourite_user_id"]), "name": r["first_name"],
-             "level": float(r["level_num"]) if r["level_num"] is not None else None} for r in rows]
-
-
 def reliability(session, *, club_id, user_id):
     """Attendance, shown POSITIVELY or not at all.
 

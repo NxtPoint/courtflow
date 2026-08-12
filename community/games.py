@@ -166,6 +166,46 @@ def game_detail(session, *, club_id, booking_id, viewer_user_id=None):
             "amount_minor": (row["share_minor"] if mine else None),
             "order_id": (str(s["order_id"]) if (mine and s.get("order_id")) else None),
         })
+    # A result can only be recorded once the game is OVER — the button must not exist mid-match.
+    # `ends_at` is the club's own clock, so the gate is computed here rather than trusted from a
+    # browser whose time zone is whatever the member's phone says.
+    over = bool(booking["ends_at"]) and session.execute(
+        text("SELECT :e < now()"), {"e": booking["ends_at"]}).scalar()
+    im_in = any(x["is_me"] for x in seats)
+
+    result = session.execute(
+        text("SELECT outcome, winner_user_id, score_text, reported_by_user_id, "
+             "       confirmed_by_user_id, confirmed_at "
+             "  FROM community.match_result WHERE club_id = :c AND booking_id = :b"),
+        {"c": str(club_id), "b": str(booking_id)},
+    ).mappings().first()
+    res = None
+    if result:
+        res = {
+            "outcome": result["outcome"],
+            "winner_user_id": str(result["winner_user_id"]) if result["winner_user_id"] else None,
+            "score_text": result["score_text"],
+            "reported_by_user_id": str(result["reported_by_user_id"]),
+            "reported_by_me": bool(viewer_user_id
+                                   and str(result["reported_by_user_id"]) == str(viewer_user_id)),
+            "confirmed": bool(result["confirmed_at"]),
+        }
+
+    # The would-play-again row. PRIVATE: this returns the viewer's OWN answers and nobody else's —
+    # never a count, never who rated whom. Surfacing it is precisely what would stop people
+    # answering honestly and turn it into the reputation system results.py refuses to build.
+    rate = []
+    if over and im_in and viewer_user_id:
+        mine = {str(r["subject_user_id"]): r["again"] for r in session.execute(
+            text("SELECT subject_user_id, again FROM community.play_again "
+                 " WHERE booking_id = :b AND rater_user_id = CAST(:u AS uuid)"),
+            {"b": str(booking_id), "u": str(viewer_user_id)},
+        ).mappings().all()}
+        for x in seats:
+            if x["user_id"] and not x["is_me"] and x["seat_status"] in ("held", "confirmed", "collapsed"):
+                rate.append({"user_id": x["user_id"], "name": x["name"],
+                             "again": mine.get(x["user_id"])})
+
     return {
         "booking_id": str(booking["id"]),
         "starts_at": booking["starts_at"].isoformat() if booking["starts_at"] else None,
@@ -179,10 +219,17 @@ def game_detail(session, *, club_id, booking_id, viewer_user_id=None):
         "court_price_minor": plan["court_price_minor"],
         "locked": plan["locked"],
         "seats": seats,
+        "result": res,
+        "rate": rate,
         "can": {
             "join": plan["open_count"] > 0 and not any(x["is_me"] for x in seats),
             "leave": any(x["is_me"] and x["role"] != "host" for x in seats),
             "invite": plan["open_count"] > 0,
+            "record_result": bool(over and im_in),
+            # Mirrors confirm_result's own guard: someone else has to agree, so the reporter never
+            # sees a Confirm button on their own claim.
+            "confirm_result": bool(over and im_in and res and not res["reported_by_me"]
+                                   and not res["confirmed"]),
         },
     }
 

@@ -77,10 +77,7 @@ def suggest_players(session, *, club_id, user_id, limit=12):
                        AND pa.subject_user_id = pp.user_id AND pa.again = true) AS liked,
                    (SELECT count(*) FROM community.play_again pa
                      WHERE pa.club_id = pp.club_id AND pa.rater_user_id = CAST(:me AS uuid)
-                       AND pa.subject_user_id = pp.user_id AND pa.again = false) AS disliked,
-                   (SELECT count(*) FROM community.favourite f
-                     WHERE f.club_id = pp.club_id AND f.user_id = CAST(:me AS uuid)
-                       AND f.favourite_user_id = pp.user_id) AS favourite
+                       AND pa.subject_user_id = pp.user_id AND pa.again = false) AS disliked
               FROM iam.player_profile pp
               JOIN iam."user" u ON u.id = pp.user_id
              WHERE pp.club_id = :c
@@ -107,7 +104,10 @@ def suggest_players(session, *, club_id, user_id, limit=12):
                  + W_AVAILABILITY * _overlap_score(me.get("prefers_times"), r["prefers_times"])
                  + W_FORMAT * _format_score(me.get("prefers_format"), r["prefers_format"])
                  + W_PLAY_TYPE * _play_score(me.get("prefers_play"), r["prefers_play"]))
-        history = min(1.0, (int(r["liked"] or 0) + 2 * int(r["favourite"] or 0)) / 3.0)
+        # Two good games with someone is full history credit. The favourite table used to carry
+        # double weight here; it was deleted 2026-08-12 (built engine-first, never given a screen,
+        # empty everywhere), so history now rests entirely on the signal that DOES have a UI.
+        history = min(1.0, int(r["liked"] or 0) / 2.0)
         score += W_HISTORY * history
         out.append({
             "user_id": str(r["user_id"]),
@@ -115,7 +115,6 @@ def suggest_players(session, *, club_id, user_id, limit=12):
             "level": float(r["level_num"]) if r["level_num"] is not None else None,
             "prefers_format": r["prefers_format"],
             "prefers_play": r["prefers_play"],
-            "is_favourite": bool(r["favourite"]),
             "match_pct": int(round(max(0.0, min(100.0, score)))),
         })
     out.sort(key=lambda x: (-x["match_pct"], x["name"] or ""))

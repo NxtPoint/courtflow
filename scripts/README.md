@@ -35,7 +35,7 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   real newlines inside a JS string: `admin_app.js` stopped parsing entirely and `/admin` hung on
   "Loading…" for 11 hours, reading as "cannot log in". Fails CLOSED if `node` is missing.
 - `test_booking_scenarios.py` · `test_billing_scenarios.py` · `test_statement_reconciliation.py`
-  — rollback-only scratch-DB harnesses (**booking 601 / billing 718 / statement 64**).
+  — rollback-only scratch-DB harnesses (**booking 619 / billing 718 / statement 64**).
 
 ## Load-bearing at runtime (KEEP — do not touch)
 - `seed_nextpoint.py` — re-seeds club #1 on every prod boot (`SEED_NEXTPOINT=1`, imported by `app.py`). Idempotent.

@@ -3990,6 +3990,103 @@ def sc_a_result_needs_someone_else_to_confirm_it(s, fx):
                   rater_user_id=host, subject_user_id=host, again=True) == "CANNOT_RATE_SELF")
 
 
+def sc_the_result_screen_offers_only_what_the_server_allows(s, fx):
+    """The result UI is driven ENTIRELY by game_detail's can{} and the viewer's own rate[] — never by
+    the browser working it out.
+
+    Two things it would be easy to get wrong, and both are money-free but trust-critical:
+
+    1. WHETHER THE GAME IS OVER IS THE CLUB'S CLOCK, NOT THE PHONE'S. The old widget compared
+       `new Date(game.ends_at) < new Date()`, so a member whose phone clock was wrong (or who simply
+       changed their time zone while travelling) could be offered "Enter the result" mid-match, or
+       denied it afterwards. The gate moved server-side.
+
+    2. THE WOULD-PLAY-AGAIN SIGNAL IS PRIVATE, AND A READ KEYED ON THE BOOKING ALONE LEAKS IT. The
+       rate[] block has to be filtered by rater_user_id = the viewer. Get that wrong and the payload
+       cheerfully tells a player that the person they just played would rather not play them again —
+       which is exactly the reputation system results.py refuses to build, delivered by accident."""
+    print("\n# the result screen is driven by the server's can{}, and rate[] is PRIVATE")
+    from community import games, results
+    _enable_seat_rule(s, fx)
+    host, joiner = fx.members[0], fx.members[1]
+    _membership_for_court(s, fx, host)
+    bid = _open_game(s, fx, host, hour=15)["booking"]["id"]
+    games.join_game(s, club_id=fx.club_id, booking_id=bid, user_id=joiner)
+
+    # --- while the game is still in the future -------------------------------
+    d = games.game_detail(s, club_id=fx.club_id, booking_id=bid, viewer_user_id=host)
+    check("a game that hasn't happened yet offers NO result button", d["can"]["record_result"] is False)
+    check("…and carries no result", d["result"] is None)
+    check("…and asks nobody to rate anybody", d["rate"] == [], str(d["rate"]))
+
+    # --- move it into the past (the club's clock, not the caller's) ----------
+    s.execute(text("UPDATE diary.booking SET starts_at = now() - interval '2 hours', "
+                   "       ends_at = now() - interval '1 hour' WHERE id = :b"), {"b": bid})
+
+    d = games.game_detail(s, club_id=fx.club_id, booking_id=bid, viewer_user_id=host)
+    check("once it's over, a player who was there may record it", d["can"]["record_result"] is True)
+    check("…but there is nothing to confirm yet", d["can"]["confirm_result"] is False)
+    check("…and the rate list now names the OTHER player, unanswered",
+          [(r["user_id"], r["again"]) for r in d["rate"]] == [(str(joiner), None)], str(d["rate"]))
+
+    results.record_result(s, club_id=fx.club_id, booking_id=bid, user_id=host,
+                          outcome="played", winner_user_id=host, score_text="6-2 6-1")
+
+    mine = games.game_detail(s, club_id=fx.club_id, booking_id=bid, viewer_user_id=host)
+    check("the reporter sees their own claim", mine["result"]["reported_by_me"] is True)
+    check("…marked unconfirmed", mine["result"]["confirmed"] is False)
+    check("…and is NOT offered a Confirm button on it (the trap)",
+          mine["can"]["confirm_result"] is False)
+
+    theirs = games.game_detail(s, club_id=fx.club_id, booking_id=bid, viewer_user_id=joiner)
+    check("the other player IS offered one", theirs["can"]["confirm_result"] is True)
+    check("…and is told it wasn't their claim", theirs["result"]["reported_by_me"] is False)
+
+    results.confirm_result(s, club_id=fx.club_id, booking_id=bid, user_id=joiner)
+    after = games.game_detail(s, club_id=fx.club_id, booking_id=bid, viewer_user_id=joiner)
+    check("once agreed it reads as confirmed", after["result"]["confirmed"] is True)
+    check("…and nobody is asked to confirm it twice", after["can"]["confirm_result"] is False)
+
+    # --- THE PRIVACY TRAP ----------------------------------------------------
+    # This has to be a DOUBLES game, and that is the whole point. In a two-player game the subject
+    # uniquely identifies the rater, so dropping the `rater_user_id = viewer` filter is completely
+    # unobservable — a two-player assertion here passes for the wrong reason and guards nothing.
+    # With three players there is a pair the viewer is NOT part of, and that is where the leak shows.
+    results.play_again(s, club_id=fx.club_id, booking_id=bid, rater_user_id=host,
+                       subject_user_id=joiner, again=False)
+    h = games.game_detail(s, club_id=fx.club_id, booking_id=bid, viewer_user_id=host)
+    check("the rater sees their OWN answer back",
+          [(r["user_id"], r["again"]) for r in h["rate"]] == [(str(joiner), False)], str(h["rate"]))
+
+    third = fx.members[2]
+    # A DIFFERENT court and a different past window — the first game is already parked in
+    # now()-2h..now()-1h, and the GiST no-overlap constraint applies to backdated rows too.
+    dbl = _open_game(s, fx, host, hour=17, seats=4, court=1)["booking"]["id"]
+    games.join_game(s, club_id=fx.club_id, booking_id=dbl, user_id=joiner)
+    games.join_game(s, club_id=fx.club_id, booking_id=dbl, user_id=third)
+    s.execute(text("UPDATE diary.booking SET starts_at = now() - interval '5 hours', "
+                   "       ends_at = now() - interval '4 hours' WHERE id = :b"), {"b": dbl})
+    # The host privately says they'd rather not play `third` again. `joiner` was in the same game
+    # but is no party to that opinion.
+    results.play_again(s, club_id=fx.club_id, booking_id=dbl, rater_user_id=host,
+                       subject_user_id=third, again=False)
+
+    seen = games.game_detail(s, club_id=fx.club_id, booking_id=dbl, viewer_user_id=joiner)
+    answers = dict((r["user_id"], r["again"]) for r in seen["rate"])
+    check("a third player is asked about BOTH of the others", sorted(answers) == sorted([str(host), str(third)]),
+          str(answers))
+    check("THE HOST'S PRIVATE VERDICT ON A THIRD PLAYER DOES NOT LEAK (the trap)",
+          answers.get(str(third)) is None, str(answers))
+    check("…nor does anything else the viewer didn't say themselves",
+          all(v is None for v in answers.values()), str(answers))
+    # And the rater still sees their own, in the same game, so the filter isn't just blanking it.
+    own = dict((r["user_id"], r["again"]) for r in
+               games.game_detail(s, club_id=fx.club_id, booking_id=dbl,
+                                 viewer_user_id=host)["rate"])
+    check("…while the host still sees the verdict they actually gave",
+          own.get(str(third)) is False, str(own))
+
+
 def sc_matching_puts_the_right_level_first(s, fx):
     """The single biggest determinant of whether this feature works. People stop using these products
     when they are repeatedly matched far above or below their standard, so level dominates the score —
@@ -4423,6 +4520,7 @@ SCENARIOS = [
     sc_you_cannot_take_a_seat_in_two_places_at_once,
     sc_match_chat_is_private_to_the_players,
     sc_a_result_needs_someone_else_to_confirm_it,
+    sc_the_result_screen_offers_only_what_the_server_allows,
     sc_matching_puts_the_right_level_first,
     sc_the_sweep_reminds_then_releases_an_unpaid_seat,
     sc_the_seat_rule_can_be_switched_on_without_sql,

@@ -43,15 +43,17 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 601 / billing 718 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 619 / billing 718 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (84/98/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (85/98/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
-   don't commit the narrowing. **Update the "Current green baseline" line above and nothing else**, so
-   the numbers can't drift apart (`scripts.audit_docs` fails any doc that claims a DIFFERENT current
-   baseline). **What each harness actually covers is catalogued in
+   don't commit the narrowing. **When the numbers move, run `python -m scripts.audit_docs` and update
+   EVERY doc it names** — the baseline is repeated in ~7 files and the gate fails unless they all
+   agree. (This line used to say "update the line above and nothing else", which is wrong and cost a
+   session: the audit reports `Current-gate-baseline agreement` across all of them, so the one-line
+   edit just moves the disagreement.) **What each harness actually covers is catalogued in
    [`docs/specs/SCENARIOS.md`](docs/specs/SCENARIOS.md)** — read it when you need to know whether a
    rule is already guarded; you don't need it to run the gate.
 
@@ -413,9 +415,16 @@ refusal from the design.
 **Everything else about this lane — the money worked examples, the schema, the frontend routes, the
 `play_intent` axis, the two-block Home, the admin surfaces and the privacy rules — is in
 [`COMMUNITY-ENGINE.md`](docs/specs/COMMUNITY-ENGINE.md).** Two things you must know before touching it:
-- **THREE SURFACES HAVE ENGINE BUT NO UI** (audited 2026-08-10): `result/confirm`, `play-again`,
-  `favourites` — so a reported score can never be confirmed, and 10 of the matcher's 100 points are
-  permanently zero. A real limit, not the silent-zero bug.
+- **THE RESULT SCREEN IS DRIVEN BY THE SERVER'S `can{}`, AND `rate[]` IS PRIVATE** (wired 2026-08-12,
+  closing the three engine-but-no-UI surfaces). Whether a game is over is the CLUB's clock, not the
+  browser's — the old widget compared `new Date(game.ends_at) < new Date()`, so a wrong phone clock
+  offered "Enter the result" mid-match. **`play-again` survived the audit because it is the "don't
+  match me with them again" FILTER** (`matching.py` DROPS a thumbed-down player, it does not merely
+  rank them down), and it is folded into the same screen. `rate[]` returns ONLY the viewer's own
+  answers — proved on a DOUBLES game, because with two players the subject uniquely identifies the
+  rater and the assertion passes for the wrong reason. **`favourites` was DELETED** (never had a UI,
+  no caller, empty everywhere; the boot DDL carries an idempotent DROP so the orphan doesn't survive).
+  `sc_the_result_screen_offers_only_what_the_server_allows`
 - **NO WRITE PATH HAS BEEN EXERCISED BY A REAL SECOND PERSON.** Join, leave, chat, result entry, the
   level-quiz save, invite acceptance and `join.html` are unverified end to end. The harnesses call Python
   directly (never HTTP, never DOM), which is why five of this lane's bugs were findable ONLY in a browser.

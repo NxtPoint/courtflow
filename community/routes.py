@@ -21,8 +21,6 @@
 #   PATCH /api/community/profile                -> edit it (incl. the visibility opt-in)
 #   GET   /api/community/onboarding             -> the 5 level questions
 #   POST  /api/community/onboarding             -> answers -> a starting NextPoint Level
-#   GET   /api/community/favourites             -> "My Tennis Circle"
-#   POST  /api/community/favourites             -> add/remove
 #   GET   /api/community/invites/<token>        -> PUBLIC: what this invite is (no PII)
 #   POST  /api/community/invites/accept         -> redeem it (signed-in) -> seat + free week
 #   POST  /api/cron/open-games                  -> OPS_KEY-guarded sweep
@@ -323,7 +321,7 @@ def rate(booking_id):
 
 
 # ---------------------------------------------------------------------------
-# players, profile, favourites
+# players, profile
 # ---------------------------------------------------------------------------
 
 @community_bp.get("/players")
@@ -385,33 +383,6 @@ def onboarding_submit():
     with session_scope() as s:
         out = repo.upsert_player_profile(s, club_id=p.club_id, user_id=p.user_id,
                                          fields={"level_num": level}, source="onboarding")
-    return jsonify(out), 200
-
-
-@community_bp.get("/favourites")
-def favourites():
-    p = _principal()
-    if not p:
-        return jsonify(error="unauthorized"), 401
-    from community import results
-    with session_scope() as s:
-        return jsonify(players=results.list_favourites(s, club_id=p.club_id, user_id=p.user_id)), 200
-
-
-@community_bp.post("/favourites")
-def set_favourite():
-    p = _principal()
-    if not p:
-        return jsonify(error="unauthorized"), 401
-    from community import results
-    b = _body()
-    with session_scope() as s:
-        try:
-            out = results.add_favourite(s, club_id=p.club_id, user_id=p.user_id,
-                                        favourite_user_id=b.get("user_id"),
-                                        on=bool(b.get("on", True)))
-        except results.ResultError as e:
-            return _err(e)
     return jsonify(out), 200
 
 

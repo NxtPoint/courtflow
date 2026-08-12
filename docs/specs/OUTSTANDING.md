@@ -54,15 +54,35 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
       stays `held` until BOTH settle; (d) an unfilled seat **collapses onto the holder** at the cutoff;
       (e) a refund **restores the split**. Each must reconcile in all three reads it now touches — the
       client statement, the Client-360 fold (`Billed − Discount − Written-off = Invoiced = Paid +
-      Outstanding`) and Money → Club earnings. **Two money scenarios are still owed** (a refund restoring
-      the split; a collapsed seat on a card-only court) and should be written BEFORE the switch.
+      Outstanding`) and Money → Club earnings. ~~**Two money scenarios are still owed**~~ ✅ **BOTH
+      EXIST (verified 2026-08-12)** — `sc_refunding_a_seat_restores_the_split` and
+      `sc_a_collapsed_seat_respects_the_courts_payment_modes`. This item is now purely the
+      REAL-BROWSER walkthrough (a)–(e); the harness half is done, so nothing here blocks the switch
+      except doing it with actual members.
 - [ ] **COMMUNITY — no WRITE path has been exercised by a real second person (carried over).** Join,
       leave, chat, result entry, the level-quiz save, invite acceptance and `join.html`. Five of this
-      lane's bugs were findable only in a browser, so green gates say nothing here.
-- [ ] **COMMUNITY — three surfaces have an engine and no UI:** `result/confirm`, `play-again`,
-      `favourites`. A reported score can never be confirmed, and 10 of the matcher's 100 points are
-      permanently zero because its history term reads two tables nothing writes. Either wire the three
-      small screens or delete the surfaces — half-built is the worst of the three states.
+      lane's bugs were findable only in a browser, so green gates say nothing here. **This is the
+      single biggest untested surface in the platform** — and the newly-wired result/confirm and
+      would-play-again screens join it (they are scenario-covered server-side, never clicked).
+- [x] ~~**COMMUNITY — three surfaces have an engine and no UI**~~ ✅ **RESOLVED 2026-08-12.**
+      - **`result/confirm` — WIRED.** `game_detail` now returns the result plus `can.record_result` /
+        `can.confirm_result`, and `Widgets.Game` renders the result card, the entry modal and the
+        "that's right — confirm" button. **Whether the game is over is now the CLUB's clock**: the old
+        widget compared `new Date(game.ends_at) < new Date()`, so a wrong phone clock or a change of
+        time zone could offer the button mid-match. Guarded by
+        `sc_the_result_screen_offers_only_what_the_server_allows`.
+      - **`play-again` — WIRED (and it was never really about the 10 points).** It is the
+        **"don't match me with them again" filter**: `matching.py` DROPS a player the viewer has
+        thumbed down, rather than merely ranking them lower. Deleting it would have removed the only
+        way a member can avoid someone, so it got the UI instead — folded into the same result screen,
+        because that is the moment you know the answer. Still PRIVATE: `rate[]` is filtered to the
+        viewer's OWN answers, proved on a DOUBLES game (in a 2-player game the subject uniquely
+        identifies the rater, so a 2-player assertion passes for the wrong reason and guards nothing).
+      - **`favourites` — DELETED.** Built engine-first, never given a screen, no client ever called
+        either route, and the table was empty in every environment. The boot DDL now carries an
+        idempotent `DROP TABLE IF EXISTS community.favourite` so the orphan does not survive in
+        databases that already booted. `matching.py`'s history term rests on the surviving signal
+        (two good games = full credit); the weights still sum to 100.
 - [ ] **Google Ads scheduled CSV upload** — set `GOOGLE_ADS_FEED_USER`/`PASS`, then schedule the daily
       upload (Uploads → Schedules) pointed at `/feeds/google-ads/offline-conversions.csv`. The recorder half
       is already live. (`GOOGLE-ADS-PLAN.md`.)
