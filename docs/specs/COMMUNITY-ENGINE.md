@@ -363,12 +363,38 @@ folded into the result screen because that is the moment a player actually knows
 
 Guarded by `sc_the_result_screen_offers_only_what_the_server_allows`.
 
+## Who mounts `Widgets.Game` — admin YES, coach deliberately NO (2026-08-12)
+
+**Admin mounts it** at `#/game/<id>`, reached from Setup → Games & invitations (the list now drills
+to the game, not straight to the booking record). The owner's question is not a player's: a player
+asks "who else is coming?", the owner asks **"is somebody about to walk onto a court nobody has paid
+for?"**. The list answered that with an `owed` column; the booking record could not answer it at the
+detail level, because `Widgets.TransactionDetail` renders `players` as a bare name list — it can say a
+court is owed R80 but never WHICH seat owes it or who is covered by a membership. Config differences,
+no fork: `me: null` (nothing renders as "You"), **no** join/leave/invite/pay/result/playAgain (the
+owner is not in the game, so `can.*` is false and wiring them would only render buttons that 403), and
+**no `post` handler, so chat is READ-ONLY**.
+
+**The coach app deliberately does NOT mount it, and the reason is privacy, not scope.** A game is a
+members' court booking: a coach has no role in it, earns no commission from it (court revenue is
+100% club), and it never appears on their P&L. But the deciding factor is that `Widgets.Game` renders
+**match chat**, and `community/routes.py::_staff` counts **`"coach"`** as staff for chat reads. Mounting
+the widget in the coach app would therefore turn an API-level capability nobody exercises into a screen
+every coach browses — publishing the private conversations of members who chose chat precisely so they
+would not have to swap phone numbers. That is a direct contradiction of this lane's own privacy rule
+(*no community read returns an email or a phone*).
+
+> ⚠️ **OPEN QUESTION, worth deciding separately: should a COACH be `_staff` for chat at all?** The
+> capability was written for **support** (`sc_..._chat` asserts "staff can read it without being in
+> the game"), which is an owner/admin mandate. A coach has no support role over a members' private
+> game. Narrowing `_staff` to `club_admin`/`platform_admin` for the chat read looks right, but it is a
+> behaviour change on a live switch and was left for the owner to call.
+
 ## Still to build
 
-The coach and admin apps do not yet mount `Widgets.Game` — the widget is config-ready for them,
-nothing calls it. Phase 2 as listed above. **And the one that matters most: no WRITE path in this lane
-has been exercised by a real second person in a browser** — the newly-wired result and would-play-again
-screens join that list. They are scenario-covered server-side and have never been clicked.
+Phase 2 as listed above. **And the one that matters most: no WRITE path in this lane has been
+exercised by a real second person in a browser** — the newly-wired result and would-play-again screens
+join that list. They are scenario-covered server-side and have never been clicked.
 
 **Not yet exercised by a real second person.** Every WRITE path is unverified end to end: join, leave,
 chat, result entry, the level quiz save, invite acceptance and `join.html`. The scenario harnesses call

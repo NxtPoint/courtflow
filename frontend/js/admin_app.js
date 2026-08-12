@@ -82,7 +82,8 @@
     var parts = (location.hash || "").replace(/^#\/?/, "").split("/").filter(Boolean);
     var top = parts[0] || "home";
     setActive(TOP.indexOf(top) >= 0 ? top :
-      (top === "person" ? "people" : (top === "event" ? "diary" : (top === "service" ? "setup" : ""))));
+      (top === "person" ? "people" : (top === "event" || top === "game" ? "diary"
+        : (top === "service" ? "setup" : ""))));
     window.scrollTo(0, 0);
     if (top === "home") return renderHome();
     if (top === "people") return renderPeople();
@@ -92,6 +93,7 @@
     if (top === "overview" || top === "insights") return renderOverview(parts[1]);
     if (top === "person") return renderPerson(parts[1]);
     if (top === "event") return renderEvent(parts[1]);
+    if (top === "game") return renderGame(parts[1]);
     if (top === "txn") return renderTxn(parts[1]);
     if (top === "roster") return renderRoster(parts[1]);
     if (top === "class") return renderClassEvent(parts[1]);
@@ -1494,6 +1496,40 @@
   // The ONE shared transaction detail (Widgets.TransactionDetail). Admin wires the god-view action
   // handlers; the widget renders. The modals below (timeModal/deskPay/refund/reassign) are the admin
   // action UIs those handlers open. (FRONTEND-STANDARDISATION Wave 2.)
+  // A game, for the OWNER. The SAME Widgets.Game the client app renders (the golden rule) — the
+  // difference is config, not a second view.
+  //
+  // The owner's question is not a player's. A player asks "who else is coming?"; the owner asks
+  // "is somebody about to walk onto a court nobody has paid for?" — and Games & invitations answers
+  // that at the LIST level (an `owed` column) while the booking record could not answer it at the
+  // DETAIL level: Widgets.TransactionDetail renders `players` as a bare name list, so it can tell you
+  // a court is owed R80 but never WHICH seat owes it or who is covered by a membership.
+  //
+  // DELIBERATELY NOT WIRED: join / leave / invite / pay / result / playAgain. The owner is not in the
+  // game — the server refuses all of them anyway (`can.*` is false because `im_in` is false), so
+  // wiring them would only render buttons that 403. And `post` is omitted so **chat is READ-ONLY**:
+  // reading a members' conversation for support is a defensible staff power, joining it uninvited is
+  // not, and the widget already hides its composer when no `post` handler is supplied.
+  function renderGame(id) {
+    var wrap = el("div", {});
+    wrap.appendChild(backBar("Games & invitations", "#/setup/games"));
+    var host = el("div", {});
+    wrap.appendChild(host);
+    set(wrap);
+    window.Widgets.Game.mount(host, {
+      id: id,
+      me: null,                     // the owner is not a player — nothing should render as "You"
+      data: {
+        get: function (gid) { return window.API.game(gid); },
+        chat: function (gid) { return window.API.gameChat(gid); },
+      },
+      actions: {},
+      // The money, receipts, refunds and audit log all stay on the booking record — this widget
+      // deliberately does not duplicate them.
+      onNavigate: function (n) { if (n.kind === "booking") go("#/event/" + n.id); },
+    });
+  }
+
   function renderEvent(id) {
     var host = el("div", {});
     set(host);

@@ -2539,7 +2539,10 @@
             ]),
             el("span", { class: "cf-chip" + (g.owed_minor > 0 ? " held" : ""), text: g.status }),
           ]);
-          row.addEventListener("click", function () { location.hash = "#/event/" + g.booking_id; });
+          // → the GAME view (who is on the court, which seat owes, the chat), not straight to the
+          // booking record. The record answers "what was charged"; only the game answers "who by".
+          // The game view carries a "Booking details" button through to #/event/<id>.
+          row.addEventListener("click", function () { location.hash = "#/game/" + g.booking_id; });
           list.appendChild(row);
         });
         body.appendChild(list);
