@@ -114,6 +114,7 @@ re-run or a doubled schedule is safe. When adding a recurring job, add a workflo
 | `reconcile-payments.yml` | hourly, 07:00–22:00 SAST | `yoco_billing.reconcile.reconcile_pending` — recovers payments whose webhook never arrived (Render Free sleeps, so CLAUDE.md calls reconcile "the common path"). The handler shipped at launch but **nothing ever called it** until 2026-07-22 |
 | `reconcile-deep.yml` | weekly, Sun 07:40 SAST | the SAFETY NET behind the hourly sweep — `reconcile_pending` defaults to **`hours=72`** and the hourly job passes nothing, so an order that slips past 3 days **ages out and is never checked again**. Sweeps `hours=2400` (100 days) so nothing can hide unverified |
 | `marketing-digest.yml` | daily 07:00 SAST | cross-brand GA4/GSC organic report + the `core.web_daily` ingest push (see the analytics section) |
+| `open-games.yml` | hourly, 07:00–22:00 SAST | `community.crons` remind → release → **collapse** (see the Community section). The ONE recurring job that lane needs: everything else in the diary is released by LAZY EXPIRY, but a seat collapse moves money and sends email, so it can't wait for someone to open a page. Loops until `complete` and **fails the job loudly** |
 
 **Capacity-sweep needs no job at all** — abandoned holds are released by lazy expiry (see Gotchas).
 
@@ -585,8 +586,12 @@ member by email on the first authenticated hit.
 - **Seed club #1:** `python -m scripts.seed_nextpoint` · **provision a tenant:** `python -m scripts.provision_club`
 - **Operational scripts index:** `scripts/README.md` — the audit/backfill/import/verify one-offs
   (`audit_trials.py`, `backfill_pack_products.py`, `import_wix.py`, `verify_live.py`, …) with when-to-run notes.
-- **Fire a cron by hand:** `python -m crons.trigger <reminders|capacity-sweep|monthly-invoice|membership-refill>`
-  (needs `CRON_API_BASE` + `OPS_KEY`).
+- **Fire a cron by hand:** `python -m crons.trigger <reminders|capacity-sweep|membership-refill>` (needs
+  `CRON_API_BASE` + `OPS_KEY`). **`JOB_ROUTES` in `crons/trigger.py` is the authoritative list, and it is
+  NOT the list of scheduled jobs** — `monthly-invoice` was retired with the account_ledger tab, and the
+  jobs that actually run (month-end, reconcile-*, open-games, analytics-ingest) POST to `/api/cron/<job>`
+  from GitHub Actions and were never added to the trigger. To fire one of those by hand, `curl -X POST`
+  with `X-Ops-Key`, or use the workflow's `workflow_dispatch`.
 - **Rebuild blog/SEO:** `python build_blog.py`
 - **Verify against REAL Render Postgres (read-only, safe):** `python -m scripts.verify_live` (reads
   `DATABASE_URL` from a gitignored `.env.local`, never printed).
