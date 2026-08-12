@@ -358,6 +358,32 @@ operating guide; **this folder is the detail.**
 > re-offers the member's own unpaid online order instead. Guarded by
 > `sc_buy_click_never_mints_a_duplicate_debt`.
 
+> **2026-08-12 — the three engine-but-no-UI community surfaces, resolved: booking 619 / billing 718 /
+> statement 64.** Half-built is the worst of the three states, so each was wired or removed — but the
+> decision was not "which is least work", it was **"which one is load-bearing"**.
+> **`play-again` nearly got deleted and that would have been the mistake.** Documented as "10 of the
+> matcher's 100 points", it reads like a rounding error; `matching.py` also uses it to **DROP** a
+> candidate the viewer has thumbed down rather than merely rank them lower, making it the only way a
+> member can avoid being repeatedly matched with someone they would rather not play. In a discovery
+> feature aimed at ~1,100 people that is a social-safety valve, not a scoring term. **Wired**, folded
+> into the result screen (the moment a player knows the answer). **`result/confirm` wired** —
+> `game_detail` returns the result + `can.record_result`/`can.confirm_result`, and **whether the game
+> is over is now the CLUB's clock**: the widget compared `new Date(ends_at) < new Date()`, so a wrong
+> phone clock or a change of time zone could offer "Enter the result" mid-match. **`favourites`
+> DELETED** (no screen, no caller, empty everywhere; idempotent `DROP` in the boot DDL so the orphan
+> can't survive an already-booted DB). `rate[]` is filtered to the viewer's OWN answers, proved on a
+> **doubles** game — with two players the subject uniquely identifies the rater, so the first version
+> of that test passed for the wrong reason and guarded nothing; removing the filter was verified to
+> fail it. `sc_the_result_screen_offers_only_what_the_server_allows`.
+> **Also corrected two docs that were lying:** `OUTSTANDING.md` claimed two seat money scenarios were
+> "still owed" before the Community switch — both already existed, so that flag was less blocked than
+> the backlog implied; and `CLAUDE.md`'s "update the baseline line and nothing else" was wrong (the
+> audit checks agreement across ~7 files, so a one-line edit just moves the disagreement).
+> **First real-member use, same week:** Tomo + Tshepo opened a game in the live app and it worked. That
+> is the FIRST browser-exercised write path in this lane — every other write (join, leave, chat, result
+> entry, the level-quiz save, invite acceptance, `join.html`) is still unproven outside the harness,
+> and the two screens added on 2026-08-12 join that list. `seat_rule_enforced` remains OFF.
+
 ## Read in this order
 0. **[GOTCHAS.md](GOTCHAS.md)** — the **war stories behind the rules**: 45 bugs that reached production
    (or came within a merge of it), each with the reasoning and the `sc_…` scenario that pins it. Moved

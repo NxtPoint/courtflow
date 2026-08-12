@@ -59,11 +59,17 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
       `sc_a_collapsed_seat_respects_the_courts_payment_modes`. This item is now purely the
       REAL-BROWSER walkthrough (a)–(e); the harness half is done, so nothing here blocks the switch
       except doing it with actual members.
-- [ ] **COMMUNITY — no WRITE path has been exercised by a real second person (carried over).** Join,
-      leave, chat, result entry, the level-quiz save, invite acceptance and `join.html`. Five of this
-      lane's bugs were findable only in a browser, so green gates say nothing here. **This is the
-      single biggest untested surface in the platform** — and the newly-wired result/confirm and
-      would-play-again screens join it (they are scenario-covered server-side, never clicked).
+- [ ] **COMMUNITY — the WRITE paths, in a real browser, with a real second person.** Five of this
+      lane's bugs were findable only that way, so green gates say nothing here. **This is the single
+      biggest untested surface in the platform.**
+      - [x] **Open a game** — ✅ done 2026-08-11 (Tomo + Tshepo, live app, worked first time). The
+            first browser-exercised write in this lane.
+      - [ ] **Join** a game as the second player · **leave** it again · **chat** · **invite** a
+            non-member and accept via `join.html` · save the **level quiz**.
+      - [ ] **Enter a result, and have the other player confirm it** (wired 2026-08-12, never clicked)
+            — check the reporter is NOT offered a Confirm button on their own claim.
+      - [ ] **Would-you-play-again** (wired 2026-08-12, never clicked) — check the answer is never
+            visible to its subject, in a **doubles** game where a third player is also rated.
 - [x] ~~**COMMUNITY — three surfaces have an engine and no UI**~~ ✅ **RESOLVED 2026-08-12.**
       - **`result/confirm` — WIRED.** `game_detail` now returns the result plus `can.record_result` /
         `can.confirm_result`, and `Widgets.Game` renders the result card, the entry modal and the
