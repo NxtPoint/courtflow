@@ -4087,6 +4087,63 @@ def sc_the_result_screen_offers_only_what_the_server_allows(s, fx):
           own.get(str(third)) is False, str(own))
 
 
+def sc_the_community_emails_say_the_thing_that_matters(s, fx):
+    """The five community notifications, rendered against the payloads the lane ACTUALLY emits.
+
+    These templates are pure functions with no DB, so nothing else exercises them — which is exactly
+    the shape CLAUDE.md warns about for the confirmation-email block: assembled by hand, only ever
+    run in production, and a renamed payload key blanks them SILENTLY rather than raising.
+
+    The one that must never regress is `game_seat_collapsed`. It is the email that explains a charge
+    the member did not choose — their spare seat went unfilled, so the court time became theirs. A
+    charge that arrives with no explanation is a support ticket and a trust problem, which is the
+    whole reason `_emit_collapsed` exists. If the amount ever stops rendering, the email still sends,
+    still reads as a complete sentence, and quietly stops doing its job.
+
+    Also pinned: the two events deliberately NOT wired to email. `game_opened` is promotion, not a
+    receipt, and `game_result_recorded` would email everyone every time a scoreline is typed."""
+    print("\n# the community emails render, and the collapsed-seat one STATES THE AMOUNT")
+    from marketing_crm import notifications as N
+
+    for ev in ("player_invited", "game_seat_taken", "game_seat_unpaid_reminder",
+               "game_seat_collapsed", "game_full"):
+        check(f"{ev} is wired to a notification", ev in N.KIND_MAP)
+    for ev in ("game_opened", "game_result_recorded"):
+        check(f"{ev} is deliberately NOT emailed (noise, not a receipt)", ev not in N.KIND_MAP)
+
+    # The EXACT payload community.crons._emit_collapsed sends — note it carries no currency_code,
+    # so this also pins that the money helper still defaults to ZAR rather than dropping the symbol.
+    collapsed = {"club_id": str(fx.club_id), "email": "someone@scratch.test",
+                 "user_id": str(fx.members[0]), "ref_type": "booking", "ref_id": "x",
+                 "amount_minor": 15000, "starts_at": "2026-08-12T10:00:00+00:00"}
+    title, body, link = N.KIND_MAP["game_seat_collapsed"](collapsed)
+    check("the collapsed-seat email has a subject", bool(title), repr(title))
+    check("…NAMES THE AMOUNT the member is about to be charged (the trap)",
+          "150.00" in (body or ""), repr(body))
+    check("…with the currency symbol, even though the emit sends no currency_code",
+          "R150.00" in (body or ""), repr(body))
+    check("…says the court is still theirs, so it doesn't read as a cancellation",
+          "still booked" in (body or "").lower(), repr(body))
+    check("…and links into the app", bool(link), repr(link))
+
+    # A missing amount must not silently render a sentence that looks fine.
+    _t, body_noamt, _l = N.KIND_MAP["game_seat_collapsed"](dict(collapsed, amount_minor=None))
+    check("with no amount it degrades to a readable sentence rather than 'RNone'",
+          "None" not in (body_noamt or ""), repr(body_noamt))
+
+    # The rest just have to render — a template raising would lose the notification entirely
+    # (deliver() catches it and falls back to a title-cased event name, which helps nobody).
+    for ev in ("player_invited", "game_seat_taken", "game_seat_unpaid_reminder", "game_full"):
+        t, b, _ = N.KIND_MAP[ev]({"club_id": str(fx.club_id), "email": "a@b.test",
+                                  "user_id": str(fx.members[0]), "ref_type": "booking",
+                                  "ref_id": "x", "url": "https://example.test/join"})
+        check(f"{ev} renders a subject and a body", bool(t) and bool(b), f"{t!r} / {b!r}")
+
+    check("the unpaid-seat nudge explains WHY the court isn't confirmed yet",
+          "every player has paid" in N.KIND_MAP["game_seat_unpaid_reminder"]({})[1].lower(),
+          N.KIND_MAP["game_seat_unpaid_reminder"]({})[1])
+
+
 def sc_matching_puts_the_right_level_first(s, fx):
     """The single biggest determinant of whether this feature works. People stop using these products
     when they are repeatedly matched far above or below their standard, so level dominates the score —
@@ -4521,6 +4578,7 @@ SCENARIOS = [
     sc_match_chat_is_private_to_the_players,
     sc_a_result_needs_someone_else_to_confirm_it,
     sc_the_result_screen_offers_only_what_the_server_allows,
+    sc_the_community_emails_say_the_thing_that_matters,
     sc_matching_puts_the_right_level_first,
     sc_the_sweep_reminds_then_releases_an_unpaid_seat,
     sc_the_seat_rule_can_be_switched_on_without_sql,

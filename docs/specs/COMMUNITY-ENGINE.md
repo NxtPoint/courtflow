@@ -1,8 +1,13 @@
 # COMMUNITY ENGINE — Find a Game + the seat-accounting money rule
 
-**Status: IN BUILD (started 2026-08-09). Ships DARK** — `club.policy.community_enabled` and
-`club.policy.seat_rule_enforced` both default `false`, so nothing below changes behaviour until a
-club turns it on. Lane: **`community/`**.
+**Status (2026-08-12): the SOCIAL half is LIVE at NextPoint; the MONEY half is still OFF.** Both
+switches (`club.policy.community_enabled`, `club.policy.seat_rule_enforced`) still default `false`, so
+nothing changes for any other club until it opts in — but at NextPoint **`community_enabled` is ON**
+(Tomo + Tshepo opened a real game on 2026-08-11) and **`seat_rule_enforced` is OFF**, so no seat has
+ever raised a real charge. Lane: **`community/`**.
+
+> **Both switches live in Admin → Setup → Community & games — they are `club.policy` rows, NOT Render
+> env vars.** Worth stating because that is where they were looked for first.
 
 ---
 
@@ -117,8 +122,9 @@ See [INVENTORY.md](INVENTORY.md) for the full column list. The shape:
   A parallel game object would have forked the GiST constraint, the diary grid, reschedule/cancel, the
   unified statement, Client-360 and month-end.
 - `community.*` holds only genuinely new domain: `player_invite`, `message` (match chat),
-  `match_result`, `play_again` (the **private** would-play-again signal — never rendered, matching
-  input only), `favourite`.
+  `match_result`, `play_again` (the **private** would-play-again signal — shown only to the member who
+  gave it, never to its subject; matching input). `favourite` was **deleted 2026-08-12** — see
+  "Engine present, NO UI" below.
 
 ---
 
@@ -390,7 +396,7 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
 read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
 the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
-(`courtflow-dev`) at booking 619 / billing 718 / statement 64, with `python -m db` twice a clean
+(`courtflow-dev`) at booking 637 / billing 718 / statement 64, with `python -m db` twice a clean
 no-op including `community.schema`.
 
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart

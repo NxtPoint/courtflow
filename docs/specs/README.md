@@ -358,7 +358,7 @@ operating guide; **this folder is the detail.**
 > re-offers the member's own unpaid online order instead. Guarded by
 > `sc_buy_click_never_mints_a_duplicate_debt`.
 
-> **2026-08-12 — the three engine-but-no-UI community surfaces, resolved: booking 619 / billing 718 /
+> **2026-08-12 — the three engine-but-no-UI community surfaces, resolved: booking 637 / billing 718 /
 > statement 64.** Half-built is the worst of the three states, so each was wired or removed — but the
 > decision was not "which is least work", it was **"which one is load-bearing"**.
 > **`play-again` nearly got deleted and that would have been the mistake.** Documented as "10 of the
@@ -379,6 +379,18 @@ operating guide; **this folder is the detail.**
 > "still owed" before the Community switch — both already existed, so that flag was less blocked than
 > the backlog implied; and `CLAUDE.md`'s "update the baseline line and nothing else" was wrong (the
 > audit checks agreement across ~7 files, so a one-line edit just moves the disagreement).
+> **A once-over of the whole lane found the emails were the untested half.** All five community
+> notifications (`player_invited`, `game_seat_taken`, `game_seat_unpaid_reminder`,
+> `game_seat_collapsed`, `game_full`) were correctly built and wired through `emit()` →
+> `notifications.deliver_for_event` → in-app inbox + SES — and had **zero** test coverage, the exact
+> shape `CLAUDE.md` warns about for the confirmation block (pure hand-assembled templates, only ever
+> run in production, a renamed payload key blanks them SILENTLY). `sc_the_community_emails_say_the_thing_that_matters`
+> now renders each against the payload the lane really emits. The one that matters is
+> **`game_seat_collapsed`** — the email that explains a charge the member did not choose — so it is
+> pinned to NAME THE AMOUNT, keep the currency symbol (the emit sends no `currency_code`, so it relies
+> on `_money` defaulting to ZAR), say the court is still theirs, and degrade to a readable sentence
+> rather than "RNone" if the amount ever goes missing. The two deliberately-unemailed events
+> (`game_opened`, `game_result_recorded`) are pinned as absent so nobody "helpfully" adds them.
 > **First real-member use, same week:** Tomo + Tshepo opened a game in the live app and it worked. That
 > is the FIRST browser-exercised write path in this lane — every other write (join, leave, chat, result
 > entry, the level-quiz save, invite acceptance, `join.html`) is still unproven outside the harness,

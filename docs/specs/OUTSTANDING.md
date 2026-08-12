@@ -89,9 +89,13 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
         idempotent `DROP TABLE IF EXISTS community.favourite` so the orphan does not survive in
         databases that already booted. `matching.py`'s history term rests on the surviving signal
         (two good games = full credit); the weights still sum to 100.
-- [ ] **Google Ads scheduled CSV upload** — set `GOOGLE_ADS_FEED_USER`/`PASS`, then schedule the daily
-      upload (Uploads → Schedules) pointed at `/feeds/google-ads/offline-conversions.csv`. The recorder half
-      is already live. (`GOOGLE-ADS-PLAN.md`.)
+- [ ] **Google Ads scheduled CSV upload — ONLY the Google-side schedule is left.** ~~set
+      `GOOGLE_ADS_FEED_USER`/`PASS`~~ ✅ **the env is SET and the feed is ARMED** (verified live
+      2026-08-12: `GET https://courtflow-api.onrender.com/feeds/google-ads/offline-conversions.csv`
+      returns **401**, i.e. waiting for Google's Basic auth — it would 404 if still dark). Remaining:
+      Google Ads → Goals → Conversions → **Uploads → Schedules → New schedule**, Source **HTTPS**,
+      that URL, Auth **HTTP Basic**, Frequency **Daily**. Note the feed lives on the **api** host —
+      `nextpointtennis.com` 404s it, which is correct, not a fault. (`GOOGLE-ADS-PLAN.md`.)
 - [ ] **Complete Google advertiser verification** (in progress). (`GOOGLE-ADS-PLAN.md`.)
 
 **CARRY-OVER as of 2026-07-26 — the ONLY things known to be open.** The first real month-end ran on the
