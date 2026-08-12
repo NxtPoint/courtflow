@@ -384,11 +384,29 @@ every coach browses — publishing the private conversations of members who chos
 would not have to swap phone numbers. That is a direct contradiction of this lane's own privacy rule
 (*no community read returns an email or a phone*).
 
-> ⚠️ **OPEN QUESTION, worth deciding separately: should a COACH be `_staff` for chat at all?** The
-> capability was written for **support** (`sc_..._chat` asserts "staff can read it without being in
-> the game"), which is an owner/admin mandate. A coach has no support role over a members' private
-> game. Narrowing `_staff` to `club_admin`/`platform_admin` for the chat read looks right, but it is a
-> behaviour change on a live switch and was left for the owner to call.
+### ✅ RESOLVED — coaches are out of this lane entirely (owner's call, 2026-08-12)
+
+The audit above surfaced the question; the owner's answer was that coaches should not be involved at
+all. **Three dormant grants were removed**, and the pattern in every case was the same: a permission
+that no coach UI ever called, so nothing exercised it and nobody would have noticed it — until the
+day a screen was mounted and it became a real exposure.
+
+| Grant | Was | Now |
+|---|---|---|
+| Read any game's private match chat | `_staff` included `"coach"` | `club_admin` / `platform_admin` only |
+| Invite a stranger into any game's seat | same `_staff` tuple | same |
+| List every player + overwrite their level | `_admin(…) or p.role == "coach"` on `/admin/players` + `/admin/players/<id>/level` | `_admin(…)` alone |
+
+Chat **posting** was never affected — `chat.post_message` has always required `is_in_game` regardless
+of role — and **a coach who is genuinely playing still qualifies as a player**, because every caller
+falls through to `is_in_game`. The rule takes nothing from a coach who actually booked a seat.
+
+The level-assessment argument was a good one and is worth keeping in mind: a coach who has watched
+someone play is a better judge than a five-question self-quiz, and "everybody is advanced" is the
+failure mode that kills matching. **If it returns, it should return as a real coach-facing screen —
+not as an unused permission nobody remembers granting.**
+
+Guarded by the coach-staff block in `sc_match_chat_is_private_to_the_players`.
 
 ## Still to build
 
@@ -422,7 +440,7 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
 read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
 the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
-(`courtflow-dev`) at booking 637 / billing 718 / statement 64, with `python -m db` twice a clean
+(`courtflow-dev`) at booking 645 / billing 718 / statement 64, with `python -m db` twice a clean
 no-op including `community.schema`.
 
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart

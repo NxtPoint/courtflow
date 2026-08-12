@@ -62,7 +62,25 @@ def _err(e, status=422):
 
 
 def _staff(p):
-    return p.role in ("coach", "club_admin", "platform_admin")
+    """SUPPORT, and support is an OWNER mandate — a coach is NOT staff here (owner's call, 2026-08-12).
+
+    This gates the two powers that reach into a game the caller is not in: reading its private match
+    chat, and inviting a stranger into one of its seats. Both are defensible for whoever answers the
+    club's support queue and neither is defensible for a coach, who has no role in a members' court
+    booking, earns nothing from it, and never sees it on their P&L.
+
+    `"coach"` used to be in this tuple, which meant every coach could read the private conversations
+    of members who use chat PRECISELY so they don't have to swap phone numbers — the lane's own rule
+    is that no community read returns an email or a phone. It also meant a coach could put a stranger
+    into somebody else's game. Neither was ever surfaced in the coach app, so nothing exercised it;
+    it would have become a real exposure the moment anyone mounted Widgets.Game there, which is why
+    the coach app deliberately does not (COMMUNITY-ENGINE.md).
+
+    A coach who is ACTUALLY PLAYING in a game still passes — every caller here falls through to
+    `chat.is_in_game`, so they qualify as a player, which is what they are in that moment. Posting was
+    never affected: `chat.post_message` has always required is_in_game regardless of role.
+    """
+    return p.role in ("club_admin", "platform_admin")
 
 
 # Routes that must work even when the club has the community switched OFF. Everything else in this
@@ -508,7 +526,13 @@ def admin_players():
     p = _principal()
     if not p:
         return jsonify(error="unauthorized"), 401
-    if not (_admin(p, "view_master_diary") or p.role == "coach"):
+    # Owner-only (2026-08-12). `or p.role == "coach"` was here on the reasoning that a coach who has
+    # actually seen someone play is a better judge of their level than a five-question self-quiz —
+    # which is TRUE, and may well earn a coach-facing screen one day. But no coach UI ever called it,
+    # so in practice it was another dormant staff power over a members-only feature, and the owner's
+    # call is that coaches are not involved in this lane at all. If it comes back, it comes back
+    # deliberately and with a screen, not as an unused grant nobody remembers.
+    if not _admin(p, "view_master_diary"):
         return jsonify(error="forbidden"), 403
     from community import repositories as repo
     with session_scope() as s:
@@ -518,16 +542,22 @@ def admin_players():
 
 @community_bp.patch("/admin/players/<user_id>/level")
 def admin_set_level(user_id):
-    """A coach or owner corrects a player's level.
+    """The OWNER corrects a player's level.
 
-    COACHES MAY DO THIS, deliberately: the person who has actually seen someone play is the one who
-    can fix a self-rating, and 'everybody is advanced' is the failure mode that kills the matching.
-    It is recorded with level_source='coach' + who set it, so a self-rating and an assessment are
-    never confused."""
+    Recorded with level_source + who set it, so a self-rating and an assessment are never confused —
+    'everybody is advanced' is the failure mode that kills the matching, and a corrected level is the
+    fix for it.
+
+    COACHES USED TO BE ALLOWED HERE, on the good reasoning that the person who has actually seen
+    someone play can fix a self-rating. It was removed 2026-08-12: no coach UI ever called it, so it
+    was a dormant staff grant over a members-only feature, and the owner's call is that coaches are
+    not involved in this lane at all (see `_staff` for the same decision on chat + invites). The
+    argument for a coach assessment is still a good one — if it returns it should return as a real
+    coach-facing screen, not as an unused permission."""
     p = _principal()
     if not p:
         return jsonify(error="unauthorized"), 401
-    if not (_admin(p, "view_master_diary") or p.role == "coach"):
+    if not _admin(p, "view_master_diary"):
         return jsonify(error="forbidden"), 403
     try:
         level = float(_body().get("level_num"))

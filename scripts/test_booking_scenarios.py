@@ -3928,6 +3928,48 @@ def sc_match_chat_is_private_to_the_players(s, fx):
           isinstance(chat.list_messages(s, club_id=fx.club_id, booking_id=bid,
                                         user_id=stranger, staff=True), list))
 
+    # WHO COUNTS AS STAFF IS THE WHOLE QUESTION (owner's call, 2026-08-12). `staff=True` is a support
+    # power — reading a conversation between members who use chat precisely so they never have to
+    # swap phone numbers — and support is an OWNER mandate. A coach has no role in a members' court
+    # booking, earns nothing from it and never sees it on their P&L, yet `_staff` used to include
+    # them: every coach could read any game's chat AND invite a stranger into any game's seat.
+    # Nothing surfaced it (the coach app does not mount Widgets.Game, deliberately), so it sat unused
+    # — which is exactly how it would have shipped as a real exposure the day someone mounted it.
+    from community import routes as _croutes
+
+    class _P:
+        def __init__(self, role):
+            self.role = role
+    check("a COACH is not staff here — no reading members' private chat",
+          _croutes._staff(_P("coach")) is False)
+    check("…and therefore cannot invite a stranger into someone else's game either",
+          _croutes._staff(_P("coach")) is False)
+    check("the owner still can (support is an owner mandate)",
+          _croutes._staff(_P("club_admin")) is True)
+    check("so can the platform admin", _croutes._staff(_P("platform_admin")) is True)
+    check("a plain member is not staff", _croutes._staff(_P("member")) is False)
+    # A coach who is genuinely PLAYING is a player in that moment, and every caller falls through to
+    # is_in_game — so this rule takes nothing away from a coach who actually booked a seat.
+    check("a coach who is actually in the game still qualifies as a player",
+          chat.is_in_game(s, booking_id=bid, user_id=joiner) is True)
+
+    # The lane's OTHER dormant coach grant, removed the same day: listing every player in the club and
+    # overwriting their level. The reasoning for it was sound (a coach who has watched someone play
+    # beats a five-question self-quiz) but no coach UI ever called it, so it was a standing permission
+    # over a members-only feature with nothing exercising it. Pinned as owner-only: if a coach
+    # assessment returns it should return as a real screen, not as a grant nobody remembers.
+    # Those two routes now gate on `_admin(p, "view_master_diary")` ALONE, so the permission table is
+    # what refuses a coach — assert on the real decision rather than on the route text.
+    from iam.permissions import can
+
+    class _CP:
+        def __init__(self, role):
+            self.role, self.club_id = role, fx.club_id
+    check("the permission a coach lost is genuinely denied to them",
+          can(_CP("coach"), "view_master_diary", {"club_id": fx.club_id}) is False)
+    check("…and genuinely granted to the owner",
+          can(_CP("club_admin"), "view_master_diary", {"club_id": fx.club_id}) is True)
+
 
 def _raises(exc_type, fn, *a, **kw):
     """Call fn and return the .code of the expected error, or a marker. Keeps the assertions above
