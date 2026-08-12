@@ -338,8 +338,9 @@
     }
 
     // LEVEL SET — lead with it, then the marketplace.
-    var games = [];
-    try { games = (await window.API.openGames({ days: 14, near: 1.5 })).games || []; } catch (e) {}
+    var games = [], gamesFailed = false;
+    try { games = (await window.API.openGames({ days: 14, near: 1.5 })).games || []; }
+    catch (e) { gamesFailed = true; }
     var joinable = games.filter(function (g) { return !g.im_in; });
     var body = el("div", {});
     body.appendChild(el("div", { class: "cf-row", style: "gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px" }, [
@@ -347,14 +348,22 @@
       prof.level_source === "coach" ? el("span", { class: "cf-muted cf-tiny", text: "set by your coach" })
         : el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Update",
             onclick: function () { go("#/play/profile"); } }),
+      // "Not findable yet" was a dead end: the state that stops the whole feature working for this
+      // member, shown as a grey chip with nothing to tap. It is the single most valuable action on
+      // the screen, so it is now the way IN to the setting rather than a label about it.
       !prof.visible_in_community
-        ? el("span", { class: "cf-chip held", text: "Not findable yet" }) : null,
+        ? el("button", { class: "cf-btn cf-btn-sm", text: "Not findable yet — turn on",
+            onclick: function () { go("#/play/profile"); } }) : null,
     ].filter(Boolean)));
     body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 12px",
-      text: joinable.length
-        ? (joinable.length === 1 ? "There's 1 game near your level looking for a player."
-                                 : "There are " + joinable.length + " games near your level looking for players.")
-        : "No games near your level right now — post one and let someone come to you." }));
+      // A failed read must never render as "no games" — that is a confident lie, and the member
+      // acts on it by not looking again (GOTCHAS § Reads that lie).
+      text: gamesFailed
+        ? "We couldn't check for games just now — pull down to refresh, or try Find a match."
+        : (joinable.length
+            ? (joinable.length === 1 ? "There's 1 game near your level looking for a player."
+                                     : "There are " + joinable.length + " games near your level looking for players.")
+            : "No games near your level right now — post one and let someone come to you.") }));
     body.appendChild(el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap" }, [
       el("button", { class: joinable.length ? "cf-btn cf-btn-primary" : "cf-btn",
         text: "Find a match", onclick: function () { go("#/play"); } }),
@@ -468,7 +477,24 @@
   async function renderPlayerProfile() {
     loading();
     var prof = {};
-    try { prof = await window.API.playerProfile(); } catch (e) {}
+    // A failed load must NOT fall through to an empty profile. This screen carries the discovery
+    // opt-in, and `{}` renders that checkbox UNCHECKED — so a member who IS findable would be shown
+    // "off", which is a lie about their own privacy setting and one they might then act on.
+    try { prof = await window.API.playerProfile(); }
+    catch (e) {
+      var errWrap = el("div", {});
+      errWrap.appendChild(pageHeader("Your tennis profile", "Find a game", "#/play"));
+      errWrap.appendChild(card([
+        el("div", { class: "cf-empty" }, [
+          el("div", { text: "We couldn't load your profile." }),
+          el("div", { class: "cf-muted cf-tiny", style: "margin-top:6px", text: UI.errMsg(e) }),
+          el("button", { class: "cf-btn cf-btn-sm", style: "margin-top:10px", text: "Try again",
+            onclick: function () { renderPlayerProfile(); } }),
+        ]),
+      ]));
+      set(errWrap);
+      return;
+    }
     var wrap = el("div", {});
     wrap.appendChild(pageHeader("Your tennis profile", "Find a game", "#/play"));
 
@@ -497,30 +523,51 @@
     wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your level" }), lvlBox]));
 
     // 2) WHAT KIND OF TENNIS + WHEN. Both feed the matching score.
+    // Saving must NOT rebuild the page. renderPlayerProfile() opens with loading(), so re-entering it
+    // on every tap flashed the whole screen to "Loading…" and threw the member back to the top — with
+    // 14 day-part buttons below, choosing four times meant four full-page flashes and four scrolls
+    // back down. The opt-in checkbox further down already had this right: repaint locally, revert on
+    // failure. These controls now do the same.
     function chips(title, hint, keyName, opts) {
       var box = el("div", {});
       box.appendChild(el("p", { class: "cf-muted cf-tiny", text: hint }));
       var row = el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin-top:6px" });
+      var btns = [];
+      function paint() {
+        btns.forEach(function (x) {
+          x.b.className = "cf-btn cf-btn-sm" + (prof[keyName] === x.key ? " cf-btn-primary" : "");
+        });
+      }
       opts.forEach(function (o) {
-        var b = el("button", {
-          type: "button", text: o[1],
-          class: "cf-btn cf-btn-sm" + (prof[keyName] === o[0] ? " cf-btn-primary" : ""),
-        });
+        var b = el("button", { type: "button", text: o.label });
         b.addEventListener("click", function () {
-          var patch = {}; patch[keyName] = o[0];
-          window.API.savePlayerProfile(patch).then(function (r) { prof = r; renderProfileInto(); },
-            function (e) { UI.toast(UI.errMsg(e), "error"); });
+          var prev = prof[keyName];
+          prof[keyName] = o.key;
+          paint();                                   // optimistic — the tap feels instant
+          var patch = {}; patch[keyName] = o.key;
+          window.API.savePlayerProfile(patch).then(
+            function (r) { prof = r; paint(); },
+            function (e) { prof[keyName] = prev; paint(); UI.toast(UI.errMsg(e), "error"); });
         });
+        btns.push({ b: b, key: o.key });
         row.appendChild(b);
       });
+      paint();
       box.appendChild(row);
       return card([el("h2", { style: "margin:0 0 8px", text: title }), box]);
     }
+    // ONE vocabulary — window.CFIntent (crm_ui.js). These chips used to hard-code their own labels
+    // ("A social hit" / "Practice"), which is the precise drift CFIntent was created to kill: both
+    // read as hitting, so the only option that read as a MATCH was "Competitive". A member set
+    // "Practice" here and then saw "Just a hit" on the game card for the same stored value.
     wrap.appendChild(chips("What are you looking for?",
       "This is what most people get wrong for each other — turning up for a relaxed hit against someone playing a practice match spoils it for both of you.",
-      "prefers_play", [["social", "A social hit"], ["practice", "Practice"], ["competitive", "Competitive"]]));
+      "prefers_play", window.CFIntent.OPTIONS.map(function (o) {
+        return { key: o.key, label: o.label };
+      })));
     wrap.appendChild(chips("Singles or doubles?", "We'll show you more of what you pick.",
-      "prefers_format", [["singles", "Singles"], ["doubles", "Doubles"], ["both", "Either"]]));
+      "prefers_format", [{ key: "singles", label: "Singles" }, { key: "doubles", label: "Doubles" },
+                         { key: "both", label: "Either" }]));
 
     // 3) WHEN — a simple day-part grid; it is the second-heaviest term in the match score.
     var times = (prof.prefers_times || []).slice();
@@ -536,11 +583,19 @@
           class: "cf-btn cf-btn-sm" + (times.indexOf(keyName) >= 0 ? " cf-btn-primary" : ""),
         });
         b.addEventListener("click", function () {
+          // Local toggle first — this grid has 14 buttons and a member picking four of them was
+          // getting four full-page reloads. Revert the button if the save is refused.
           var i = times.indexOf(keyName);
-          if (i >= 0) times.splice(i, 1); else times.push(keyName);
-          window.API.savePlayerProfile({ prefers_times: times }).then(function (r) {
-            prof = r; renderProfileInto();
-          }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+          var added = i < 0;
+          if (added) times.push(keyName); else times.splice(i, 1);
+          b.className = "cf-btn cf-btn-sm" + (added ? " cf-btn-primary" : "");
+          window.API.savePlayerProfile({ prefers_times: times }).then(function (r) { prof = r; },
+            function (e) {
+              var j = times.indexOf(keyName);
+              if (added && j >= 0) times.splice(j, 1); else if (!added) times.push(keyName);
+              b.className = "cf-btn cf-btn-sm" + (added ? "" : " cf-btn-primary");
+              UI.toast(UI.errMsg(e), "error");
+            });
         });
         grid.appendChild(b);
       });
@@ -568,7 +623,6 @@
     vBox.appendChild(vLbl);
     wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Being findable" }), vBox]));
 
-    function renderProfileInto() { renderPlayerProfile(); }
     set(wrap);
 
     async function openQuiz() {
@@ -617,9 +671,21 @@
     var list = el("div", { class: "cf-list" });
     wrap.appendChild(list);
     set(wrap);
-    var players = [];
-    try { players = (await window.API.suggestedPlayers({ limit: 12 })).players || []; } catch (e) {}
+    // A failed read must not render as "nobody is here". Swallowing it told the member the club was
+    // empty when the request had actually failed — GOTCHAS § Reads that lie.
+    var players = [], loadErr = null;
+    try { players = (await window.API.suggestedPlayers({ limit: 12 })).players || []; }
+    catch (e) { loadErr = e; }
     UI.clear(list);
+    if (loadErr) {
+      list.appendChild(el("div", { class: "cf-empty" }, [
+        el("div", { text: "We couldn't load suggestions just now." }),
+        el("div", { class: "cf-muted cf-tiny", style: "margin-top:6px", text: UI.errMsg(loadErr) }),
+        el("button", { class: "cf-btn cf-btn-sm", style: "margin-top:10px", text: "Try again",
+          onclick: function () { renderFindAPlayer(); } }),
+      ]));
+      return;
+    }
     if (!players.length) {
       list.appendChild(el("div", { class: "cf-empty" }, [
         el("div", { text: "Nobody to suggest yet." }),
@@ -634,8 +700,12 @@
       list.appendChild(el("div", { class: "cf-item" }, [
         el("div", { class: "cf-item-main" }, [
           el("div", { class: "cf-item-t", text: p2.name }),
+          // Through CFIntent, not raw. These printed the stored values straight out of the DB, so a
+          // member read "social · both" — and worse, "practice" on the FORMAT axis means on their
+          // own, a seat count of one, not a hit with somebody (crm_ui.js FORMAT_WORD).
           el("div", { class: "cf-item-s", text: [levelWord(p2.level),
-            p2.prefers_play, p2.prefers_format].filter(Boolean).join(" · ") }),
+            window.CFIntent.word(p2.prefers_play),
+            window.CFIntent.format(p2.prefers_format)].filter(Boolean).join(" · ") }),
         ]),
         el("span", { class: "cf-chip", text: p2.match_pct + "% match" }),
       ]));
