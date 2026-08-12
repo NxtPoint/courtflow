@@ -56,6 +56,12 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    rule is already guarded; you don't need it to run the gate.
 
 ## Local setup (what every gate except the JS one needs)
+**RUN THE GATES THROUGH `.venv\Scripts\python.exe`, NOT bare `python`.** Prod pins **3.12.3**
+(`.python-version` + `PYTHON_VERSION` on both Render services) and the repo venv is **3.12.10**, but
+bare `python` on this box is **3.14** — and 3.14 has the requirements installed globally, so a gate run
+against it passes cheerfully while proving the wrong interpreter. That is exactly how the drift went
+unnoticed until 2026-08-12. Either activate the venv (`.\.venv\Scripts\Activate.ps1`) or call it by
+path. `py -3.12` also works; `py --list` shows what is installed.
 `pip install -r requirements.txt` (Python 3.12), then **`DATABASE_URL` pointed at a LOCAL sandbox
 Postgres — never production.** The harnesses roll back, but they roll back on whatever DB you give
 them. Extensions `btree_gist` + `pgcrypto` are created by `python -m db`; the role needs rights to
