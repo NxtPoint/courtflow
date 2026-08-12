@@ -689,12 +689,26 @@
     if (!players.length) {
       list.appendChild(el("div", { class: "cf-empty" }, [
         el("div", { text: "Nobody to suggest yet." }),
+        // Accurate: the discovery query filters on visible_in_community ONLY (matching.py). A level
+        // is not required to appear — this used to say it was, which sent members off to do the quiz
+        // to fix a problem the quiz does not fix.
         el("div", { class: "cf-muted cf-tiny", style: "margin-top:6px",
-          text: "Members appear here once they've set a level and chosen to be findable." }),
+          text: "Members appear here once they've chosen to be findable." }),
         el("button", { class: "cf-btn cf-btn-primary", style: "margin-top:10px",
           text: "Set up your own profile", onclick: function () { go("#/play/profile"); } }),
       ]));
       return;
+    }
+    // Level is HALF the match score, so with no level of your own every candidate scores the same
+    // neutral 0.5 on it (matching.py::_level_score) and the percentages below are mostly noise —
+    // which is how a member with no level gets shown a High-performance player as their best match.
+    // Say so rather than presenting a confident number built on a blank.
+    if (!(DATA.player && DATA.player.level_num != null)) {
+      wrap.insertBefore(el("div", { class: "cf-banner cf-banner-warn" }, [
+        el("span", { text: "We don't know your level yet, so these are rough. " }),
+        el("button", { class: "cf-btn cf-btn-sm", text: "Work out my level",
+          onclick: function () { go("#/play/profile"); } }),
+      ]), list);
     }
     players.forEach(function (p2) {
       list.appendChild(el("div", { class: "cf-item" }, [
@@ -735,15 +749,30 @@
       b.addEventListener("click", onTap);
       return b;
     }
-    bar.appendChild(chip("Around my level", !!PLAY_FILTER.near, function () {
-      PLAY_FILTER.near = PLAY_FILTER.near ? null : 1.5; renderFindAGame();
-    }));
+    // "Around my level" only means something once the member HAS a level: the server ignores the
+    // band otherwise (list_open_games: `if mine is not None`). It used to render ON by default
+    // regardless, so a member with no level was shown a lit-up filter that did nothing — the feed
+    // was unfiltered while the screen insisted it was narrowed to them. Offer the fix instead.
+    var haveLevel = !!(DATA.player && DATA.player.level_num != null);
+    if (haveLevel) {
+      bar.appendChild(chip("Around my level", !!PLAY_FILTER.near, function () {
+        PLAY_FILTER.near = PLAY_FILTER.near ? null : 1.5; renderFindAGame();
+      }));
+    }
     window.CFIntent.OPTIONS.forEach(function (o) {
       bar.appendChild(chip(o.label, PLAY_FILTER.intent === o.key, function () {
         PLAY_FILTER.intent = PLAY_FILTER.intent === o.key ? null : o.key; renderFindAGame();
       }));
     });
     wrap.appendChild(bar);
+    if (!haveLevel) {
+      wrap.appendChild(el("div", { class: "cf-muted cf-tiny", style: "margin:-6px 0 12px" }, [
+        el("span", { text: "Showing every game. " }),
+        el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Set your level",
+          onclick: function () { go("#/play/profile"); } }),
+        el("span", { text: " and we'll show the ones near it." }),
+      ]));
+    }
 
     var host = el("div", {});
     wrap.appendChild(host);

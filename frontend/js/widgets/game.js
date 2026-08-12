@@ -299,11 +299,18 @@
           + "–" + window.UI.fmtTime(game.ends_at);
       } catch (e) { when = ""; }
 
-      var title = (game.play_format === "doubles" ? "Doubles" : "Singles") + " game";
-      if (INTENT.word(game.play_intent)) title = INTENT.word(game.play_intent) + " · " + title.toLowerCase();
-      host.appendChild(window.UI.pageHeader
-        ? window.UI.pageHeader(title, when)
-        : el("h2", { text: title }));
+      // WHEN THE GAME IS is the most important fact on this screen, so it is rendered as information.
+      // It used to be passed as UI.pageHeader's SECOND argument — which is the BACK-LINK LABEL — so
+      // the date came out as "‹ Sat, 15 Aug · 14:00–15:30" with a chevron, and tapping the date
+      // navigated the member away from the game (history.back()). The host app already supplies the
+      // real back header, so this widget must not render a second one.
+      var title = INTENT.word(game.play_intent)
+        ? INTENT.word(game.play_intent) + " · " + INTENT.format(game.play_format || "singles")
+        : INTENT.format(game.play_format || "singles") + " game";
+      host.appendChild(el("div", { style: "margin:0 0 12px" }, [
+        el("h1", { class: "cf-ph-title", style: "margin:0", text: title }),
+        when ? el("div", { class: "cf-muted", style: "margin-top:2px", text: when }) : null,
+      ].filter(Boolean)));
 
       // The state banner: a held game is the one thing a player must understand at a glance, because
       // the court is not theirs until everybody has paid.

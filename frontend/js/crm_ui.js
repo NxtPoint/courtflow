@@ -33,7 +33,12 @@
   // The OTHER axis, in the same module for the same reason: the admin games list printed
   // play_format raw, so an owner read "practice" — which on that axis means ON MY OWN, a seat count
   // of one, not a hit with somebody. Two axes, one word, and the raw value was the misleading one.
-  var FORMAT_WORD = { singles: "Singles", doubles: "Doubles", practice: "On their own" };
+  // `both` is what the profile screen's "Either" saves, and it was MISSING here — so the players
+  // list fell through to the raw value and rendered a lowercase "both" beside a capitalised
+  // "Singles" (seen live 2026-08-12). The fallthrough is deliberate for genuinely unknown keys, and
+  // that is exactly why a known-but-unmapped one hides in it.
+  var FORMAT_WORD = { singles: "Singles", doubles: "Doubles", both: "Singles or doubles",
+                      practice: "On their own" };
 
   window.CFIntent = {
     OPTIONS: INTENT_OPTIONS,
