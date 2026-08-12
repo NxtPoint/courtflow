@@ -25,6 +25,11 @@
   (predictable traffic while conversions accrue; revert once ~15–30 conversions land — see below).
 - Code (already shipped): `cfConversion('booking')` on the booking success screen; `cfConversion('start_free_week')`
   site-wide on any `/login#/sign-up` (or `a[data-conv]`) CTA click. Both no-op until the env below is set.
+- **The two client-side helpers are NOT interchangeable.** `window.cfConversion(name)` maps a semantic event
+  → the **Ads** conversion `send_to` (looked up in the `GOOGLE_ADS_CONVERSIONS` env JSON); `window.cfTrack`
+  fires the **GA4** event. Both are injected by `web_app._google_tag_head` and stay dark until
+  `GA4_MEASUREMENT_ID` / `GOOGLE_ADS_ID` are set. Firing `cfTrack` where a conversion is meant records the
+  event in GA4 and reports **nothing to Ads**, so bidding never learns from it.
 
 ## ✅ FINAL STATE (2026-07-11) — what's live + the ONE remaining user step
 **Env set on `courtflow-web` (done):** `GA4_MEASUREMENT_ID=G-EKQP47P8M9`, `GOOGLE_ADS_ID=AW-17077631191`,
@@ -32,10 +37,18 @@
 **Env for the offline-conversion feed (courtflow-api):** `GOOGLE_ADS_FEED_USER` / `GOOGLE_ADS_FEED_PASS` (set).
 
 **Live in the account:** web tag firing · 2 primary web conversions (start_free_week, booking) · **`Offline
-purchase`** conversion action (Purchase, Primary, value-based ZAR, count Every — name MUST match code) ·
+purchase`** conversion action (Purchase, Primary, value-based ZAR, count Every) ·
 bidding = Maximize Clicks R15 cap · GA4↔Ads linked (auto-tagging + Personalized Advertising ON) · GA4↔Search
 Console (`nextpointtennis.com` domain property) linked · remarketing audience "High-intent visitors
 (booking/pricing)" (90-day) · 6 clean sitelinks (all → live `nextpointtennis.com` paths).
+
+> **THE CONVERSION ACTION MUST STAY NAMED EXACTLY `Offline purchase`.** The name is the join key between
+> the account and `offline_conversions/recorder.py`'s `CONVERSION_MAP` — that map is the ONLY per-repo glue
+> in an otherwise byte-identical shared package. Rename it in the Google Ads UI (or "tidy" it to something
+> like "Offline Purchase") and the scheduled upload keeps succeeding while importing **nothing**: rows
+> arrive naming a conversion action that no longer exists. There is no error state that says so — the loop
+> just goes quiet, which is indistinguishable from "no gclid'd purchases yet". Change the name only by
+> changing `CONVERSION_MAP` in the same commit.
 
 **⭐ THE ONE REMAINING USER STEP — the scheduled CSV upload** (needs the feed password, so Tomo does it):
 Google Ads → Goals → Conversions → **Uploads → Schedules → New schedule** → Source **HTTPS**, URL

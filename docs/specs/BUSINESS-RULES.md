@@ -50,7 +50,9 @@ a membership tier's lifecycle derives from its term plans' status.
   (`Widgets.TransactionDetail`, offered only while the lesson is semi-private and below its cap). The player
   picker is staff-only (`GET /api/diary/members/search` → `iam.search_members_with_dependents`, members + a
   parent's kids as their own rows); a non-staff caller may add only club members + their OWN kids, staff any
-  in-club member/child. **Cancel voids EVERY order on the booking**, not just the primary's.
+  in-club member/child — enforced by **`_addable_player_uid`** in the route, which validates EACH extra player
+  so a booker can never attach an arbitrary account or another family's child. The picker itself is the shared
+  `CRMUI.addLessonPlayerModal`, serving BOTH the add-later modal and the upfront booking-flow squad step. **Cancel voids EVERY order on the booking**, not just the primary's.
 - **Classes:** owner/coach create class types + schedule **recurring or one-off** sessions; capacity +
   **waitlist** (auto-promote the next person on a cancellation); rosters + attendance; shown on the
   master diary. A class **reserves N real courts** (court-blocking `booking_type='class'` rows under the
@@ -613,6 +615,10 @@ actually received** — and this needs no monthly commission run, because there 
 - **Club↔coach settlement (`coach_payout`).** The running `coach_ledger` balance (**+ = club owes coach,
   − = coach owes club**) is the single authoritative **net-owed** figure, and is settled by a recorded
   **`coach_payout`** in **either direction** — **append-only + idempotent** (never mutated, no double-pay).
+  Code: `billing.commission.record_coach_payout` (both directions + offset, idempotent on `ref_id=payout.id`)
+  writes it; `billing.commission.settlement_overview` is the read that surfaces the balance in the coach P&L
+  and the roll-up's "Coach payouts due". The **Record payout** button on the coach P&L card is the ONE place
+  a payout is entered, and it MUST send `period_label` — see the payout gotcha in `GOTCHAS.md`.
 - **Month-end sweep (the 1st — billing the month just ENDED).** A **GitHub Action** fires the sweep on the
   **1st** of each month. It ran on the **25th** until 2026-08-08, which meant every invoice was issued with
   days of the month still to come: the client paid one number, then saw a larger one online days later, the

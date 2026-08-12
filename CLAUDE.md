@@ -210,31 +210,18 @@ returning `_created=True` (a fresh INSERT); a returning login or a seeded/import
 clerk_id/email, `_created=False`) is NEVER trialed, so the ~880 Wix imports stay PAYG. Audit/cleanup:
 `scripts/audit_trials.py`. Bundles are unit/minute-based (a pack covers any length). The Wix-era
 "member R0" court tier is GONE.
-**Court SERVICES:** courts can belong to distinct court services (e.g. "Hardcourt Hire" vs "Clay Hire"),
-each `billing.product(kind='court_booking')` with its own price + allocated courts via
-`diary.resource.product_id` (NULL → the club's single default court product; single-service clubs
-unchanged). Pricing/availability/booking are court-service-aware (`diary.pricing.court_service_for_resource`).
-**Per-service PACKS:** a pack (`billing.bundle_plan`) + wallet carry `product_id` = the SPECIFIC service
-it belongs to; `match_wallet` is product-aware + backward-compatible (legacy NULL-product = coach+kind
-match). **Packs are created/edited ONLY under a service** (the service editor → `/api/services/<id>/packages`);
-the standalone "Session packs" section + `AdminUI.bundlePlans` + the coach-onboarding packs step + the
-admin/coach bundle-plan write routes were DELETED (GET `/api/admin/bundle-plans` kept for offline
-issue-pack). Backfill existing packs onto their service with `scripts/backfill_pack_products.py`.
-**SEMI-PRIVATE (squad) lessons:** a lesson SERVICE can carry >1 client on one slot via
-`billing.product.max_clients` (int, default 1; set in the service editor's "Semi-private (squad)" card,
-lessons only, 1–12). Billing is **PER HEAD** — each client gets their OWN owed order at the service price,
-never merged. `create_booking(extra_clients=[…])` inserts each as a `diary.booking_party` (role `partner`)
-+ a separate order linked via `order_line.booking_id` (booking.order_id stays the PRIMARY's). Each head is
-billed to whoever **PAYS**: the player if a member, else their **GUARDIAN** (`_bill_owner` →
-`iam.guardian_user_id_for`) — so a parent's two kids raise two orders BOTH owned by the parent (spend rolls
-up to the payer, activity to the player). **Add a player LATER** (squad confirmations land late):
-`diary.bookings.add_lesson_partner` + `POST /api/diary/bookings/<id>/add-player`, same edit gate as reschedule,
-surfaced on the shared `Widgets.TransactionDetail`. `_addable_player_uid` (route) validates each extra player:
-**a non-staff booker may add only club members + their OWN kids**, never an arbitrary account or another
-family's child; staff add any in-club member/child. The picker is `GET /api/diary/members/search` (staff-only)
-→ `iam.search_members_with_dependents`, rendered by the shared `CRMUI.addLessonPlayerModal` which serves BOTH
-the add-later modal and the upfront booking-flow squad step.
-**Cancel voids EVERY order on the booking** (primary + per-head partners), so no partner is left owing.
+**Court SERVICES** — courts can belong to distinct court services ("Hardcourt Hire" vs "Clay Hire"), each a
+`billing.product(kind='court_booking')` with its own price + allocated courts via `diary.resource.product_id`
+(NULL → the club's default court product). Pricing/availability/booking are court-service-aware.
+**Per-service PACKS** — a pack + wallet carry `product_id` = the SPECIFIC service; `match_wallet` is
+product-aware and backward-compatible (legacy NULL-product = coach+kind match). **Packs are created/edited
+ONLY under a service** — the standalone section and every other write path were DELETED.
+**SEMI-PRIVATE (squad) lessons bill PER HEAD** (`billing.product.max_clients`) — each client gets their OWN
+owed order at the service price, **never merged**, and each head bills whoever **PAYS**: the player if a
+member, else their **GUARDIAN** (so a parent's two kids raise two orders both owned by the parent — spend
+rolls up to the payer, activity to the player). **Cancel voids EVERY order on the booking** (primary + every
+partner), so no partner is left owing. Mechanics, the add-later path and the `_addable_player_uid` guard that
+stops a booker attaching another family's child: [BUSINESS-RULES.md § 2](docs/specs/BUSINESS-RULES.md).
 
 **Three purchasing models:** PAYG (per-duration) · membership (term plans) · tokens/bundles (prepaid packs,
 atomic draw-down + idempotent credit-back). Memberships & packs are also purchasable **offline**
@@ -366,48 +353,34 @@ page shows ONE reconciled "Your statement", grouped by category with tick-to-par
 coach `coach_arrears` kept in **lockstep** with orders so commission accrues exactly once. Design:
 `docs/specs/UNIFIED-STATEMENT.md`.
 
-**The Money tab = ONE `Widgets.Earnings` (`frontend/js/widgets/earnings.js`) — a club-vs-coach P&L across
-admin + coach, config-only (no fork).** **CLUB earnings = the DIRECT services it runs** (court/membership/pack,
-100% club) **+ the COMMISSION taken from each coach**; drill coach → client → transaction → the shared record.
-The coach app renders the SAME widget as the coach's OWN P&L ("You keep" wording — never other coaches or the
-club roll-up). All of it off the ONE `_earnings_cte` (per-order coach attribution — lesson/class/pack → that
-coach, court/membership → NULL = club) via `admin.repositories.revenue_club_overview` / `revenue_coach_pnl` /
-`earnings_clients` / `earnings_transactions`. **Commission accrues to the coach on EVERY collection method**
-(Yoco / invoice paylink / cash-EFT desk / 'pay-all' statement) through the ONE payment core — no method
-short-changes a coach (monthly guard: `python -m scripts.reconcile_coach_commission`). Screen-by-screen
-breakdown: [BUSINESS-RULES.md § 6](docs/specs/BUSINESS-RULES.md).
+**The Money tab = ONE `Widgets.Earnings` — a club-vs-coach P&L across admin + coach, config-only (no fork).**
+**CLUB earnings = the DIRECT services it runs** (court/membership/pack, 100% club) **+ the COMMISSION taken
+from each coach**; the coach app renders the SAME widget as that coach's OWN P&L ("You keep" — never other
+coaches or the club roll-up). All of it rides the ONE `_earnings_cte`, whose per-order coach attribution
+(lesson/class/pack → that coach, court/membership → NULL = club) is what makes every drill reconcile.
+**Commission accrues to the coach on EVERY collection method** (Yoco / invoice paylink / cash-EFT desk /
+'pay-all' statement) through the ONE payment core — no method short-changes a coach (monthly guard:
+`python -m scripts.reconcile_coach_commission`). Screens, the readers and the coach ledger/payout rules:
+[BUSINESS-RULES.md § 6](docs/specs/BUSINESS-RULES.md).
 
-**Club↔coach settlement.** The coach's running `coach_ledger` balance surfaces in the coach P&L + the roll-up's
-"Coach payouts due" (`billing.commission.settlement_overview`); a recorded **`coach_payout`**
-(`record_coach_payout`, both directions + offset, idempotent on `ref_id=payout.id`) nets it, actioned from the
-**Record payout** button on the coach P&L card. **Month-end sweep** (`billing.commission.run_month_end` →
-`POST /api/cron/month-end`, `OPS_KEY`-guarded): accrues coach arrears + rent, then consolidates each client's
-open orders into ONE numbered statement invoice + pay-link email (a client who owes nothing gets NO email),
-idempotent per `(club,user,period)` via `billing.month_end_notice`. **The sweep is PER-CLIENT-TRANSACTIONAL,
-TIME-BOXED and RESUMABLE** — the CRON ROUTE runs `month_end_client` in its own `session_scope()` per client and
-stops at `max_seconds` (default 90, under gunicorn's 120s reaper) for the caller to loop; `run_month_end` is the
-single-transaction form (one club, harness only). Fired by **`.github/workflows/month-end.yml`** on the **1st**
-(billing the month just ended); it loops until `complete` and **FAILS THE JOB LOUDLY**. Why one big transaction
-is not an option (gapless numbers + emails that don't roll back):
+**The month-end sweep is PER-CLIENT-TRANSACTIONAL, TIME-BOXED and RESUMABLE.** The CRON ROUTE runs
+`month_end_client` in its own `session_scope()` per client and stops at `max_seconds` (default 90, under
+gunicorn's 120s reaper) for the caller to loop; `run_month_end` is the single-transaction form (one club,
+harness only). Why one big transaction is not an option — gapless numbers + emails that don't roll back:
 **[UNIFIED-STATEMENT.md § As-built](docs/specs/UNIFIED-STATEMENT.md#the-month-end-sweep-is-per-client-transactional-time-boxed-and-resumable)**.
 
-**Client month-at-a-glance + the ONE month-aware 360.** `billing.me.activity_summary(month)` →
-`GET /api/me/activity-summary`: sessions PLAYED + minutes + spend-by-service + billed/paid/outstanding + weekly
-buckets. `get_client_360` takes `month=` and adds the per-service breakdown — the **month → client → service →
-transaction** coach drill; the parallel `coach.get_client` reader was retired, so **every coach client view is a
-view off the ONE composer**. `CRMUI.activityBlock / spendBlock / weekChart` = ONE shared renderer for the client
-Home modules AND the Client 360 rollup. The client Home is Book(services) → Your sessions → Match-analysis →
-a month-navigable Billing+Activity summary → Plan; **no emoji** (drawn line-glyphs).
+**Every client view is a view off the ONE month-aware composer.** `get_client_360(…, month=)` adds the
+per-service breakdown that powers the **month → client → service → transaction** coach drill; the parallel
+`coach.get_client` reader was retired. `CRMUI.activityBlock / spendBlock / weekChart` = ONE shared renderer
+for the client Home modules AND the Client 360 rollup. Client Home: **no emoji** (drawn line-glyphs).
 
 ## Community — Find a Game + THE SEAT RULE (built 2026-08-09/10, ships DARK)
 Full spec: **[`docs/specs/COMMUNITY-ENGINE.md`](docs/specs/COMMUNITY-ENGINE.md)**.
 
 **Why it exists — two problems that are one.** A membership makes court bookings free, but nothing knew
-WHO ELSE was on the court, so one membership could cover a second player who never paid (two friends,
-one membership, half price, indefinitely). Separately, ~1,100 members often have nobody to play with and
-courts sit empty. **An unpaid second player and an empty seat are the same object** — a seat nobody has
-accounted for. Account for seats and the leak closes; publish the unaccounted seats and you have Find a
-Game. That is why this is one lane and not two.
+WHO ELSE was on the court, so one membership could cover a second player who never paid. Separately,
+~1,100 members often have nobody to play with and courts sit empty. **An unpaid second player and an
+empty seat are the same object** — a seat nobody has accounted for. That is why this is one lane, not two.
 
 > **THE SEAT RULE.** A court booking has SEATS. Every seat is a covered member (free), a payer (owes
 > **a share**), or OPEN. **A SHARE IS A FIXED FRACTION OF THE COURT PRICE** (`seat_share_pct`, default
@@ -415,67 +388,32 @@ Game. That is why this is one lane and not two.
 > at the cutoff **collapses** onto the booking holder as one charged share.
 
 A fixed fraction, not a split, because **the price a player is quoted has to survive somebody else
-joining, leaving or turning out to be a member.** That one property removed a lock, a re-price and a
-refusal from the design. At 50% two payers add up to the court price; with more than two the club
-takes more than one court fee, deliberately. On the club's own list (R90/150/210/280, 50% rounded up to
-R10) a share is **R50 / R80 / R110 / R140**. member+member R0 · member+guest = one share on the guest ·
-two PAYG = a share each and **the court confirms only when both settle** · a seat nobody took becomes
-the booker's.
+joining, leaving or turning out to be a member** — that one property removed a lock, a re-price and a
+refusal from the design.
 
-- **`community/seats.py` is the ONE place the split lives, and it RAISES rather than guards.** Every
-  `analytics/`+`insights/` read is `_guard`-wrapped so a panel degrades to empty; that is right for a
-  dashboard and wrong here — a seat whose share silently computes to R0 is a court given away free that
-  nobody would ever see. Money paths raise `SeatError`; only display reads swallow.
-- **It invents no coverage logic and no pricing.** Coverage delegates entirely to
-  `diary.entitlement.court_covered`, and the price resolves exactly as `_create_order_guarded` resolves
-  it (same product, duration, club-local instant so PEAK applies, same resource). Anything else would
-  split a number the booking flow never quoted.
-- **A GAME IS A BOOKING.** No parallel game object — it would have forked the GiST constraint, the diary
-  grid, reschedule/cancel, the unified statement, Client-360 and month-end.
-- **One debt = one order still holds.** Seats raise real `billing."order"` rows through the existing
-  interface, so they reach the statement, Client-360, month-end and Club earnings with no extra work.
-- **The quoted share is FROZEN per game** (`diary.booking.seat_share_minor`, written at first pricing).
-  A later change to the club's `seat_share_pct`, its rounding rule, or the court's price cannot re-price
-  a game already sold, and a late joiner pays exactly what everyone else in it paid.
+**The five invariants — change none of them without reading the spec:**
+- **`community/seats.py` is the ONE place the split lives, and it RAISES rather than guards** — a seat
+  whose share silently computes to R0 is a court given away free that nobody would ever see. Money paths
+  raise `SeatError`; only display reads swallow.
+- **It invents no coverage logic and no pricing** — coverage delegates to `diary.entitlement.court_covered`,
+  price resolves exactly as `_create_order_guarded` resolves it. Anything else splits a number the booking
+  flow never quoted.
+- **A GAME IS A BOOKING**, and **one debt = one order still holds** — no parallel game object, no second
+  debt store, so seats reach the statement, Client-360, month-end and Club earnings for free.
+- **The quoted share is FROZEN per game** (`diary.booking.seat_share_minor`) — a later change to
+  `seat_share_pct`, the rounding rule or the court price cannot re-price a game already sold.
 - **The free week for an invited friend IS the existing 7-day trial** — no second free-play mechanism.
-  `grant_signup_trial` already refuses anyone who has EVER held a subscription, so a second invite is
-  worthless and an imported Wix member can never be trialed.
-- **Cron:** `.github/workflows/open-games.yml` (hourly) → `POST /api/cron/open-games` — remind → release
-  → collapse, each game in its own SAVEPOINT, fails the job loudly. Not a `render.yaml` cron.
-- **Frontend:** `Widgets.Game` + `Widgets.GameList` (the ONE render); client `#/play` (feed, filtered by
-  intent + **around my level** by default), `#/play/profile` (the 5-question level quiz, preferences and
-  the **opt-in**), `#/play/players`, `#/game/<id>`; the booking flow's **"Who's playing?"**
-  step sets seats AND `play_intent`; `join.html` on the never-sleeps web. Inviting reuses
-  `CRMUI.addLessonPlayerModal`; paying a seat reuses `Pay.startYocoCheckout` — **no second payment path**.
-- **The client Home is TWO BLOCKS, and they are two MODES, not two menus** — **Book a session**
-  (court/lesson/class/ball machine: *synchronous*, done in ninety seconds, but every option depends on a
-  friend, a coach on shift or a scheduled class) and **Need someone to play with?** (*asynchronous*,
-  depends only on the members). FIND is the only one with no staffing dependency, so it is the only one
-  that can fill a Sunday. BOOK leads while this is tested; the order is ONE CONSTANT
-  (`PLAY_BLOCK_FIRST` in `client.js`). **THE SEAM** = an **"Open to the club"** button on a member's own
-  upcoming court booking, so a friend dropping out on Thursday doesn't strand a court booked on Monday.
-- **`play_intent` is a SEPARATE axis from `play_format`** — the latter is a MONEY field (it sets the seat
-  count), so conflating them would mean "I just want a relaxed hit" could only be said by changing how
-  many people share the fee. The ladder is **hit → friendly match → competitive** (stored
-  `practice`/`social`/`competitive`), **REQUIRED only when the game is OPEN** (a named friend needs no
-  forced tap; ~1,100 strangers do), enforced in `booking.js` and deliberately NOT server-side — it is
-  advisory metadata, not money. **ONE vocabulary: `window.CFIntent` in `crm_ui.js`** (not `game.js` —
-  `booking.js` asks in all three SPAs, `game.js` loads only in the client one); `.word()` returns `""`
-  for an unset intent so it reads as ABSENT, never as "social".
+
+**Everything else about this lane — the money worked examples, the schema, the frontend routes, the
+`play_intent` axis, the two-block Home, the admin surfaces and the privacy rules — is in
+[`COMMUNITY-ENGINE.md`](docs/specs/COMMUNITY-ENGINE.md).** Two things you must know before touching it:
 - **THREE SURFACES HAVE ENGINE BUT NO UI** (audited 2026-08-10): `result/confirm`, `play-again`,
-  `favourites`. Consequence: a reported score can never be confirmed, and **10 of the matcher's 100
-  points are permanently zero** (`matching.py` history term reads two tables nothing writes). Not the
-  silent-zero bug — the term is neutral across candidates — but a real limit.
-  [COMMUNITY-ENGINE.md](docs/specs/COMMUNITY-ENGINE.md).
-- **CARRIED OVER — no WRITE path has been exercised by a real second person.** Join, leave, chat, result
-  entry, the level-quiz save, invite acceptance and `join.html` are unverified end to end. The harnesses
-  call Python directly (never HTTP, never DOM), which is why five of this lane's bugs were findable ONLY
-  in a browser. **Green gates are not a claim about these paths.**
-- **Admin:** Setup → **Community & games** (the ONLY place the switches can be flipped) and **Games &
-  invitations**. See "Still needs Tomo" for what must be configured before the money switch.
-- **Privacy:** no community read returns an email or a phone — the reason match chat exists. Discovery is
-  **opt-in** (`iam.player_profile.visible_in_community`, default false) and **juniors are excluded
-  entirely**; `play_again` is never rendered.
+  `favourites` — so a reported score can never be confirmed, and 10 of the matcher's 100 points are
+  permanently zero. A real limit, not the silent-zero bug.
+- **NO WRITE PATH HAS BEEN EXERCISED BY A REAL SECOND PERSON.** Join, leave, chat, result entry, the
+  level-quiz save, invite acceptance and `join.html` are unverified end to end. The harnesses call Python
+  directly (never HTTP, never DOM), which is why five of this lane's bugs were findable ONLY in a browser.
+  **Green gates are not a claim about these paths.**
 
 ## First-party analytics + the admin Overview tab
 `analytics/` is a read-only, platform-owner dashboard (`/overview.html`, rolling `?days=`) built on **guarded**
@@ -504,54 +442,25 @@ snapshot store, `core/schema.py`) → `insights.web_metrics` renders it. **No Go
 Render.** Consequence: if the Acquisition panel goes stale, suspect the Action or the ingest, not the app —
 and never "fix" it by adding a Google API client to the API service.
 
-## Growth & acquisition measurement (Google Ads / GA4 / gclid) — LIVE
-Know which ad clicks become paying members, and feed that back to Google so bidding chases buyers, not clickers.
-- **Google tag (GA4 + Ads)** injected by `web_app._google_tag_head` — dark until `GA4_MEASUREMENT_ID` /
-  `GOOGLE_ADS_ID` set. `window.cfConversion(name)` maps a semantic event → the Ads conversion `send_to`
-  (`GOOGLE_ADS_CONVERSIONS` env JSON); `cfTrack` fires GA4. Sign-up CTAs + booking-complete fire client-side.
-- **gclid capture** (`frontend/js/attribution.js`, injected on every served page): records the FIRST
-  gclid/gbraid/wbraid/utm on landing → flushes once via `TFAuth` to `POST /api/me/acquisition` after sign-in →
-  `core.repositories.acquisition.record_acquisition` persists onto `core.acquisition` (FIRST-TOUCH WINS).
-  Populated the previously-dark `core.acquisition.gclid`.
-- **Offline conversions** (`offline_conversions/` — a SHARED, PORTABLE package kept **byte-identical** with the
-  Ten-Fifty5 repo, like the analytics engine): when a gclid'd buyer PAYS, the `emit()` funnel's 4th forward
-  (`recorder.record_from_emit`, event `payment_succeeded`) ledgers a `core.offline_conversion` row; the feed
-  `GET /feeds/google-ads/offline-conversions.csv` (HTTP Basic auth via `GOOGLE_ADS_FEED_USER`/`PASS`, **dark/404
-  until set**) serves it to Google Ads' scheduled upload. **NO developer token / manager account needed** — the
-  API Center is manager-only, which is exactly why we use the CSV-upload route. The Google Ads conversion action
-  MUST stay named exactly **`Offline purchase`** (matches `recorder.CONVERSION_MAP`); the only per-repo glue is
-  that map. `schema.py` owns `core.offline_conversion` (in `db.BOOT_MODULES`); registered in `app.py`.
-- **Account (NextPoint Tennis Centre, `AW-17077631191`)**: 2 primary web conversions (start_free_week, booking)
-  + `Offline purchase` (Purchase, value-based ZAR); GA4↔Ads linked (auto-tagging + Personalized Advertising on);
-  GA4↔Search Console linked; a "High-intent visitors (booking/pricing)" remarketing audience. Full runbook +
-  final state: `docs/specs/GOOGLE-ADS-PLAN.md`. Bidding: Maximize Clicks R15 cap → revert to Max Conversions
-  after ~15–30 conversions accrue.
-
-## Cross-brand marketing measurement — the daily digest (GitHub Actions, keyless)
-A **CI-only** report covers organic growth **across BOTH brands** (NextPoint + Ten-Fifty5). It lives in
-`.github/workflows/marketing-digest.yml` + `marketing_digest/`, rides the free-Actions keep-warm pattern, and
-touches NO app code — so `frontend/marketing/` and `marketing/` (the untracked ad-ops notes) are separate.
-- **`marketing-digest.yml`** (07:00 SAST daily) runs `marketing_digest/digest.py`: a per-brand GA4 (7d) +
-  Search Console (28d) organic-growth report — active users, sessions, top pages/queries, and **striking-distance
-  queries** (avg position 8–20 = what to write next). Auth is **KEYLESS Workload Identity Federation** (org policy
-  blocks SA key downloads) → the `marketing-engine@marketing-engine-502809` SA reads whatever GA4/GSC properties
-  it's been **granted in the consoles** — coverage is grant-controlled, **add a brand = add a `BRANDS` row +
-  grant the SA, no other code**. Output commits to `marketing_digest/reports/` (the frequent `chore(marketing):
-  daily digest` commits) + emails each brand its own slice via the OPS-guarded API (`OPS_KEY` unset → digest
-  still runs, skips email).
-- **Tag-breakage monitoring = the digest itself** (a GitHub-Actions `marketing-canary.yml` tripwire was tried
-  and **DELETED 2026-07-18**: both sites + their Render origins sit behind Cloudflare, which blocks GitHub's CI
-  IPs, so it could never verify the live tag from Actions — only false-fails). If a tag ever goes dark, that
-  brand's GA4 traffic flatlines to zero in the morning digest — a louder, more reliable alarm. (The blank-tag-ID
-  blueprint-sync gotcha that caused the original week-long blackout is guarded by committing the IDs INLINE in
-  `render.yaml`, never blank — see the render.yaml marketing-tag comments.)
-- **Repo model (where marketing work lives):** the ENGINE (digest + keyless WIF access) lives HERE and
-  covers BOTH brands; each brand's SITE + blog CONTENT lives in ITS repo — NextPoint here (`frontend/blog/_posts/`,
-  images `/img/`), **Ten-Fifty5 in its own repo** (`frontend/blog/_posts/`, images `/blog/images/`, published via
-  its own `build_blog.py`, commit `CLAUDE_CODE=1`; weekly coworker SEO-scan→post workflow). Full spec:
-  **`docs/specs/MARKETING-ENGINE.md`**. NextPoint also has a Google Business Profile playbook (physical club →
-  local map pack). Ten-Fifty5 is **Render-only for users** (Clerk auth + PayPal, no Wix) but retains dormant,
-  DB-coupled Wix scaffolding — a decommission is scoped (DO NOT rush) in the Ten-Fifty5 repo's `docs/DE-WIX-DECOMMISSION.md`.
+## Growth, acquisition & cross-brand marketing — LIVE
+**Neither of these touches platform code, and both are specced in full elsewhere** — the Google Ads /
+gclid loop in **[`GOOGLE-ADS-PLAN.md`](docs/specs/GOOGLE-ADS-PLAN.md)**, the cross-brand digest in
+**[`MARKETING-ENGINE.md`](docs/specs/MARKETING-ENGINE.md)**. What a session working in this repo must know:
+- **The acquisition loop is: tag → gclid → paid order → CSV back to Google.** `web_app._google_tag_head`
+  injects GA4+Ads (dark until `GA4_MEASUREMENT_ID`/`GOOGLE_ADS_ID`); `frontend/js/attribution.js` records
+  the FIRST gclid/utm on landing and flushes it to `POST /api/me/acquisition` after sign-in (**FIRST-TOUCH
+  WINS**); when that buyer PAYS, the `emit()` funnel's 4th forward ledgers a `core.offline_conversion` row,
+  served at `GET /feeds/google-ads/offline-conversions.csv` (Basic auth, **dark/404 until the env is set**).
+- **`offline_conversions/` is kept BYTE-IDENTICAL with the Ten-Fifty5 repo** (like the analytics engine) —
+  the only per-repo glue is `recorder.CONVERSION_MAP`. Don't "improve" the package in one repo alone.
+- **The digest is CI-only and KEYLESS** (`marketing-digest.yml` + `marketing_digest/`) — org policy blocks
+  service-account key downloads, so Workload Identity Federation is not a preference. **Add a brand = add a
+  `BRANDS` row + grant the SA in the consoles, no other code.** Coverage is grant-controlled, not code-controlled.
+- **The digest IS the tag-breakage alarm.** A `marketing-canary.yml` tripwire was tried and DELETED
+  2026-07-18 — both sites sit behind Cloudflare, which blocks GitHub's CI IPs, so it could only ever
+  false-fail. A dark tag instead flatlines that brand's GA4 traffic to zero in the morning digest.
+- **The ENGINE lives here and covers BOTH brands; each brand's SITE + blog CONTENT lives in ITS repo.**
+  NextPoint here (`frontend/blog/_posts/`); Ten-Fifty5 in its own repo — commit there with `CLAUDE_CODE=1`.
 
 ## Ten-Fifty5 embed — match analysis inside the members area (LIVE, private test)
 A logged-in member opens **Ten-Fifty5** (AI match analysis / technique — the Ten-Fifty5 product; web at
