@@ -358,7 +358,7 @@ operating guide; **this folder is the detail.**
 > re-offers the member's own unpaid online order instead. Guarded by
 > `sc_buy_click_never_mints_a_duplicate_debt`.
 
-> **2026-08-12 — the three engine-but-no-UI community surfaces, resolved: booking 645 / billing 718 /
+> **2026-08-12 — the three engine-but-no-UI community surfaces, resolved: booking 645 / billing 721 /
 > statement 64.** Half-built is the worst of the three states, so each was wired or removed — but the
 > decision was not "which is least work", it was **"which one is load-bearing"**.
 > **`play-again` nearly got deleted and that would have been the mistake.** Documented as "10 of the

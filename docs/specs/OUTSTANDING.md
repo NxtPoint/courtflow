@@ -62,10 +62,15 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
 - [ ] **COMMUNITY — the WRITE paths, in a real browser, with a real second person.** Five of this
       lane's bugs were findable only that way, so green gates say nothing here. **This is the single
       biggest untested surface in the platform.**
-      - [x] **Open a game** — ✅ done 2026-08-11 (Tomo + Tshepo, live app, worked first time). The
-            first browser-exercised write in this lane.
-      - [ ] **Join** a game as the second player · **leave** it again · **chat** · **invite** a
-            non-member and accept via `join.html` · save the **level quiz**.
+      - [x] **Open a game** — ✅ 2026-08-11 (Tomo + Tshepo, live app, worked first time). The first
+            browser-exercised write in this lane.
+      - [x] **Join** — ✅ observed live 2026-08-12 on game `56155e65`: Tshepo holds a seat and the
+            timeline carries the system "joined the game" line.
+      - [x] **Chat** — ✅ observed live on the same game, both directions ("Ready to hit!" /
+            "Good stuff glad to meet you…"). Join + chat are no longer unproven.
+      - [ ] **Leave** a game again · **invite** a non-member and accept via `join.html` · save the
+            **level quiz** (Tomo's own profile still shows **level: Not set**, so the quiz write has
+            never actually completed).
       - [ ] **Enter a result, and have the other player confirm it** (wired 2026-08-12, never clicked)
             — check the reporter is NOT offered a Confirm button on their own claim.
       - [ ] **Would-you-play-again** (wired 2026-08-12, never clicked) — check the answer is never

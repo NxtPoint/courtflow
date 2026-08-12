@@ -274,6 +274,11 @@ def activity_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]
                  "  COALESCE(EXTRACT(EPOCH FROM (ends_at - starts_at)) / 60, 0) AS mins "
                  "FROM diary.booking WHERE club_id = :c AND booked_by_user_id = :u "
                  "  AND status IN ('confirmed','completed') "
+                 # PLAYED means PLAYED. Without this a CONFIRMED booking later this month counted as
+                 # a session already played: on 12 Aug the client home reported "1 session · 1h 30m
+                 # on court" for a game that was not until the 15th (seen live 2026-08-12). The month
+                 # filter alone cannot express it, because a future booking is still in this month.
+                 "  AND starts_at < now() "
                  "  AND ((booking_type = 'lesson') OR (booking_type = 'court' AND coach_user_id IS NULL)) "
                  "  AND to_char(starts_at,'YYYY-MM') = :ym"),
             {"c": str(club_id), "u": str(user_id), "ym": ym},
@@ -287,6 +292,7 @@ def activity_summary(session, *, club_id, user_id, month=None) -> Dict[str, Any]
                  "  COALESCE(EXTRACT(EPOCH FROM (cs.ends_at - cs.starts_at)) / 60, 0) AS mins "
                  "FROM diary.enrolment e JOIN diary.class_session cs ON cs.id = e.class_session_id "
                  "WHERE e.club_id = :c AND e.user_id = :u AND e.status = 'enrolled' "
+                 "  AND cs.starts_at < now() "          # same rule for an enrolled class session
                  "  AND to_char(cs.starts_at,'YYYY-MM') = :ym"),
             {"c": str(club_id), "u": str(user_id), "ym": ym},
         ).mappings().all():

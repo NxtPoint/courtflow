@@ -2415,7 +2415,6 @@ def sc_activity_summary(s, fx):
     # (COALESCE(b.starts_at, o.created_at)), and the fixture's test day is 3 days out — so asking for
     # today's month silently measured an empty August/July on the last three days of any month and
     # reported it as a regression. Date-dependent assertions must derive their date from the fixture.
-    ym = fx.target.strftime("%Y-%m")
     # A PAID online lesson (played + paid) and an OWED at-court court booking (played + outstanding).
     r1 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
                           booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
@@ -2424,9 +2423,22 @@ def sc_activity_summary(s, fx):
         provider="yoco", kind="charge_succeeded", order_ref=r1["booking"]["order_id"],
         provider_payment_id="p_as_1", amount_minor=40000, currency="ZAR", status="succeeded",
         direction="charge", club_id=str(fx.club_id), user_id=str(fx.member)), session=s)
-    B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
-                     booking_type="court", resource_id=fx.courts[0],
-                     starts_at=iso(at(fx, 11)), ends_at=iso(at(fx, 12)), settlement_mode="at_court")
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          starts_at=iso(at(fx, 11)), ends_at=iso(at(fx, 12)), settlement_mode="at_court")
+    # PLAYED MEANS PLAYED, so both have to be moved into the PAST to count. The fixture's test day is
+    # 3 days OUT, which is precisely how this scenario used to pass while the bug was live: it was
+    # asserting that two FUTURE bookings counted as sessions already played. On 2026-08-12 the real
+    # client home said "1 session · 1h 30m on court" for a game that was not until the 15th.
+    s.execute(text("UPDATE diary.booking SET starts_at = now() - interval '4 hours', "
+                   "       ends_at = now() - interval '3 hours' WHERE id = :b"),
+              {"b": r1["booking"]["id"]})
+    s.execute(text("UPDATE diary.booking SET starts_at = now() - interval '3 hours', "
+                   "       ends_at = now() - interval '2 hours' WHERE id = :b"),
+              {"b": r2["booking"]["id"]})
+    # Derive the month from the row itself so a run in the first hours of a month can't drift.
+    ym = s.execute(text("SELECT to_char(starts_at,'YYYY-MM') FROM diary.booking WHERE id = :b"),
+                   {"b": r1["booking"]["id"]}).scalar()
     a = ME.activity_summary(s, club_id=fx.club_id, user_id=fx.member, month=ym)
     check("counts 1 lesson + 1 court played", a["counts"]["lesson"] == 1 and a["counts"]["court"] == 1,
           str(a["counts"]))
@@ -2439,6 +2451,20 @@ def sc_activity_summary(s, fx):
     check("by_week buckets the sessions for the chart",
           bool(a["by_week"]) and sum(w["lesson"] + w["court"] + w["class"] for w in a["by_week"]) == 2,
           str(a["by_week"]))
+
+    # THE TRAP: a booking still to come, in the SAME month, must not be reported as played. The month
+    # filter alone cannot express this — a future booking is still in this month — so a confirmed
+    # court on the 15th showed up on the 12th as time already spent on court.
+    B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                     booking_type="court", resource_id=fx.courts[1],
+                     starts_at=iso(at(fx, 14)), ends_at=iso(at(fx, 16)), settlement_mode="at_court")
+    b = ME.activity_summary(s, club_id=fx.club_id, user_id=fx.member, month=ym)
+    check("a CONFIRMED booking still in the future is NOT a session played",
+          b["counts"]["court"] == a["counts"]["court"], str(b["counts"]))
+    check("…and its minutes are not counted as time on court either",
+          b["minutes"] == a["minutes"], f'{b["minutes"]} vs {a["minutes"]}')
+    check("…while it IS still billed, so the money half is unaffected",
+          b["billed_minor"] >= a["billed_minor"], f'{b["billed_minor"]} vs {a["billed_minor"]}')
 
 
 def sc_admin_invoice(s, fx):

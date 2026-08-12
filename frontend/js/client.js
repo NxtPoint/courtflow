@@ -319,7 +319,18 @@
     var prof = DATA.player || {};
     UI.clear(host);
 
-    if (prof.level_num == null) {
+    // Load the games BEFORE deciding what to say. The cold-start pitch used to be chosen on
+    // `level_num == null` alone, so a member who had already opened a game, had someone join it and
+    // was chatting to them was still told "the hard part is finding someone — five quick questions
+    // and we'll match you" (seen live 2026-08-12). Someone already playing is not a cold start; the
+    // level is a gap to fill, not a reason to re-pitch the feature.
+    var games = [], gamesFailed = false;
+    try { games = (await window.API.openGames({ days: 14, near: 1.5 })).games || []; }
+    catch (e) { gamesFailed = true; }
+    var joinable = games.filter(function (g) { return !g.im_in; });
+    var mine = games.filter(function (g) { return g.im_in; });
+
+    if (prof.level_num == null && !mine.length) {
       // THE ASSESSMENT, framed as the thing it buys them — not as a form.
       host.appendChild(card([
         el("h2", { style: "margin:0 0 6px", text: "Need someone to play with?" }),
@@ -336,17 +347,15 @@
       ]));
       return;
     }
-
-    // LEVEL SET — lead with it, then the marketplace.
-    var games = [], gamesFailed = false;
-    try { games = (await window.API.openGames({ days: 14, near: 1.5 })).games || []; }
-    catch (e) { gamesFailed = true; }
-    var joinable = games.filter(function (g) { return !g.im_in; });
     var body = el("div", {});
     body.appendChild(el("div", { class: "cf-row", style: "gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px" }, [
-      el("span", { class: "cf-chip ok", text: levelLabel(prof.level_num) }),
+      // A member reaching this block WITHOUT a level is already playing (see above), so the chip has
+      // to read as a gap to fill rather than a green tick over "Not set".
+      el("span", { class: "cf-chip" + (prof.level_num == null ? " held" : " ok"),
+        text: levelLabel(prof.level_num) }),
       prof.level_source === "coach" ? el("span", { class: "cf-muted cf-tiny", text: "set by your coach" })
-        : el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "Update",
+        : el("button", { class: "cf-btn cf-btn-sm" + (prof.level_num == null ? "" : " cf-btn-ghost"),
+            text: prof.level_num == null ? "Work out my level" : "Update",
             onclick: function () { go("#/play/profile"); } }),
       // "Not findable yet" was a dead end: the state that stops the whole feature working for this
       // member, shown as a grey chip with nothing to tap. It is the single most valuable action on
