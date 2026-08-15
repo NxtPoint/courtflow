@@ -213,7 +213,7 @@ def _footer(site):
     <p>Court booking, coaching and classes. Book a court, a lesson with a named coach, or join Cardio Tennis and junior squads.</p></div>
   <div class="cf-footer-col"><h5>Book</h5><ul>
     <li><a href="/book/court">Book a court</a></li><li><a href="/coaches">Book a lesson</a></li>
-    <li><a href="/programs/cardio-tennis">Cardio Tennis</a></li><li><a href="/free-lesson">Free lesson</a></li></ul></div>
+    <li><a href="/programs/cardio-tennis">Cardio Tennis</a></li><li><a href="/login#/sign-up">Free week</a></li></ul></div>
   <div class="cf-footer-col"><h5>Club</h5><ul>
     <li><a href="/pricing">Pricing</a></li><li><a href="/blog">Blog</a></li>
     <li><a href="/contact">Contact</a></li><li><a href="mailto:{site.email}">{site.email}</a></li></ul></div>
@@ -225,8 +225,8 @@ def _footer(site):
 def _cta_band(site):
     return f"""<div class="cta-band">
   <h3>Ready to play?</h3>
-  <p>Book a court, a lesson with a named coach, or claim a free lesson at {_html.escape(site.name)}.</p>
-  <a class="cf-btn" href="/free-lesson">Claim a free lesson</a>
+  <p>Book a court, a lesson with a named coach, or start a free week of court bookings at {_html.escape(site.name)}.</p>
+  <a class="cf-btn" href="/login#/sign-up">Start your free week</a>
 </div>"""
 
 

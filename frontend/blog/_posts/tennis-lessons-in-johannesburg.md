@@ -15,11 +15,11 @@ We coach every age and level, seven days a week, on eight courts including **Gau
 2. Pick your **coach** and see their live availability.
 3. Choose a time and confirm — pay online, at the court, or on a monthly account.
 
-New to NextPoint? [Claim your **free first lesson**](/free-lesson) — no commitment, just come and play.
+New to NextPoint? [Start a **free week**](/login#/sign-up) — 7 days of free court bookings, no commitment. Lessons and classes are pay-as-you-go.
 
 ## Learn from ATP-level coaches
 
-Our coaching team is led by **Neville Godwin — the 2017 ATP Coach of the Year** — alongside **Ross Nemeth** and the full NextPoint team. That's professional-tour coaching experience, available to club players, juniors and complete beginners right here in Johannesburg. [Meet the coaches](/coaches).
+Our coaching team brings professional-tour experience — including an ATP Coach of the Year — to club players, juniors and complete beginners right here in Johannesburg. [Meet the coaches](/coaches).
 
 ## A lesson for every player
 
@@ -31,9 +31,9 @@ Our coaching team is led by **Neville Godwin — the 2017 ATP Coach of the Year*
 
 Beginners are genuinely welcome — rackets are provided, and every coach is used to starting players from zero.
 
-## Your first lesson is free
+## Try the club for a week, free
 
-There's no better way to see if we're the right fit. [Book your free first lesson](/free-lesson), meet your coach, and hit some balls — then decide. Most people book their next one on the way out.
+There's no better way to see if we're the right fit. [Start a free week](/login#/sign-up) — 7 days of court bookings on us, so you can play, look around and meet a coach before you commit to anything. Lessons and classes stay pay-as-you-go, with no membership required.
 
 ## Where to find us
 
@@ -58,6 +58,6 @@ Killarney Country Club, Houghton, Johannesburg — near Rosebank and Parktown.
 
 ## Ready to play?
 
-[**Book your free first lesson →**](/free-lesson)
+[**Book a lesson →**](/book) · [**or start a free week of court bookings →**](/login#/sign-up)
 
 Killarney Country Club, Houghton · ATP-level coaching · All ages and levels.

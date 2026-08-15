@@ -38,6 +38,6 @@ The clay court carries a small premium over the hard courts — it's a scarce, s
 
 ## New to clay? Start with a lesson
 
-If you've never played on clay, an hour with one of our coaches will fast-track you. Pick a named coach such as Neville Godwin or Ross Nemeth, see their availability, and book a lesson on the clay itself. You can even [claim a free lesson](/free-lesson) to try it first.
+If you've never played on clay, an hour with one of our coaches will fast-track you. Pick your coach, see their live availability, and book a lesson on the clay itself. If you'd rather try the club first, [a free week](/login#/sign-up) gives you 7 days of court bookings at no cost.
 
 Ready to feel the difference? [Book the clay court](/book/court) at NextPoint Tennis, Killarney Country Club, Houghton.
