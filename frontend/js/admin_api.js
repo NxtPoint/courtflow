@@ -2386,9 +2386,19 @@
       }
       flag("community_enabled", "Community features",
         "Members can see open games, join them, invite friends and message each other.");
+      // The copy has to match the Book-a-court rule (2026-08-15), because this is the screen an owner
+      // reads immediately before telling their members what is about to change. The previous wording
+      // ("each player pays a share", "a member who books a court and doesn't fill the spare seat is
+      // charged for it") described the OPEN-game rule as if it applied to every booking — it does
+      // not, and an owner acting on it would have warned their members about a charge that never
+      // arrives and missed the one that does.
       flag("seat_rule_enforced", "Charge for every seat",
-        "Each player pays a share of the court. Members play on their membership; anyone who isn't a member pays their share.",
-        "This changes what members pay. A member who books a court and doesn't fill the spare seat is charged for it. Tell your members before you switch it on.");
+        "Applies to OPEN games — a court shared with whoever answers. Everyone playing pays a share; "
+        + "members play on their membership. Booking a court privately is unchanged: the booker pays "
+        + "the normal court price, and a guest pays a share only when the booker is a member.",
+        "This changes what members pay. In an OPEN game a spare seat nobody takes is added to the "
+        + "booker's bill. A privately booked court is never held or cancelled because a guest hasn't "
+        + "paid — collect that at the desk. Tell your members before you switch it on.");
       wrap.appendChild(c);
 
       // --- what one player pays ---
@@ -2396,7 +2406,7 @@
       // club's own durations rather than leaving the owner to do percentages in their head.
       var sh = el("div", { class: "cf-card" }, [
         el("h3", { text: "What one player pays" }),
-        el("p", { class: "cf-muted", text: "A share is a fixed slice of the court price — it does NOT change when someone else joins, leaves, or turns out to be a member. At 50%, two paying players add up to the court price." }),
+        el("p", { class: "cf-muted", text: "What one player pays in an OPEN game. A share is a fixed slice of the court price — it does NOT change when someone else joins, leaves, or turns out to be a member. At 50%, two paying players add up to the court price. A privately booked court is charged at its normal price instead." }),
       ]);
       var pct = el("input", { class: "cf-input", type: "number", min: "0", max: "100",
         style: "max-width:110px", value: String(cfg.seat_share_pct == null ? 50 : cfg.seat_share_pct) });
@@ -2584,7 +2594,9 @@
     function drawPlayers() {
       window.AdminAPI.communityPlayers().then(function (r) {
         UI.clear(body);
-        body.appendChild(el("p", { class: "cf-muted", text: "A level is self-declared until a coach corrects it. Being matched far above or below your standard is what makes people stop using this, so a wrong level is worth fixing." }));
+        // NOT "until a coach corrects it" — coaches were taken out of this lane entirely on
+        // 2026-08-12 (owner's decision), so that sentence promised a correction nobody could make.
+        body.appendChild(el("p", { class: "cf-muted", text: "A level is self-declared from the five questions until you correct it here. Being matched far above or below your standard is what makes people stop using this, so a wrong level is worth fixing." }));
         var rows = r.players || [];
         if (!rows.length) { body.appendChild(el("div", { class: "cf-empty", text: "No player profiles yet." })); return; }
         var list = el("div", { class: "cf-list" });
@@ -2598,7 +2610,9 @@
           });
           list.appendChild(el("div", { class: "cf-item" }, [
             el("div", { class: "cf-item-main" }, [
-              el("div", { class: "cf-item-t", text: p.name }),
+              // A member with no first name rendered as a bare "—", which reads as a broken row
+              // rather than as missing data (seen live 2026-08-15).
+              el("div", { class: "cf-item-t", text: p.name || "(no name on the account)" }),
               el("div", { class: "cf-item-s", text: (p.level_source ? "set by " + p.level_source : "not set")
                 + (p.visible ? " · findable" : " · not findable") }),
             ]),
