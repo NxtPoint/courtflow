@@ -108,9 +108,17 @@ striking-distance queries. Aim to ship a website page AND its matching GBP post 
   anything. **Default to proposing NextPoint content, not Ten-Fifty5 content** — Ten-Fifty5 already has
   Cowork feeding it weekly, so this skill's marginal value is almost entirely on the NextPoint side.
   Count both `frontend/blog/_posts/` directories each run and report the ratio.
-- **③ Cowork weekly output — publish + DE-DUPE (Ten-Fifty5).** A scheduled Claude **Cowork** task writes a
-  researched blog + SEO report + infographic each week: blog `.../local-agent-mode-sessions/.../outputs/blog-*.md`
-  + `weekly-seo-report-*.md`; infographic in `C:\Users\tomos\OneDrive\Documentos\blog\`. When one exists:
+- **③ Cowork weekly output — RETIRED 2026-08-15. Do not go looking for it.** A scheduled Claude **Cowork**
+  task used to write a researched blog + SEO report + infographic each week. **Tomo cancelled that routine**
+  because it generated more work than it saved: it could see neither the repo (so it re-briefed published
+  topics — twice) nor the GSC data (so it picked topics blind), and its SEO report fabricated its findings
+  three runs out of three. **Ten-Fifty5 content is now written HERE, in Phase 5①, off the real
+  striking-distance queries — same as NextPoint.** No output folder will exist; if none does, that is
+  expected, not a failure.
+  **The de-dupe discipline below still applies to anything you write yourself** — it is the general rule for
+  this blog, not a Cowork-specific one. Keep reading it. Should a leftover draft ever surface: blog
+  `.../local-agent-mode-sessions/.../outputs/blog-*.md` + `weekly-seo-report-*.md`; infographic in
+  `C:\Users\tomos\OneDrive\Documentos\blog\`. When one exists:
   **BEFORE publishing, `ls frontend/blog/_posts/` and check for an existing post on the same topic.**
   **COMPARE TOPICS, NOT SLUGS — the slugs will not match.** On 2026-08-15 the draft
   `tennis-analytics-for-juniors-and-parents` was the same post as the live
