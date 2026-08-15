@@ -901,7 +901,8 @@ def _plan_row(row):
 _MEMBERSHIP_PLAN_COLS = (
     "p.id AS price_id, p.label, p.amount_minor, p.term_months, p.currency_code, p.active, p.status, "
     "p.membership_tier, p.access_days, p.access_start_min, p.access_end_min, p.payment_modes, "
-    "p.max_covered_minutes, p.max_covered_per_day, p.max_courts_per_day, p.is_trial, p.trial_days")
+    "p.max_covered_minutes, p.max_covered_per_day, p.max_courts_per_day, p.is_trial, p.trial_days, "
+    "p.covers_peak")
 
 
 _PAY_MODES = ("online", "at_court", "monthly_account")
@@ -960,6 +961,67 @@ def _membership_product_id(session, *, club_id, create_if_missing=False):
     ).scalar_one()
 
 
+def list_peak_windows(session, *, club_id, resource_id=None):
+    """The peak windows for ONE scope — a court, or the CLUB default when resource_id is None.
+
+    Returns [] for a scope that has none, which is exactly what sends diary.pricing back to the
+    legacy single columns. So an empty list from here does NOT mean "no peak"; it means "this scope
+    has not been moved onto windows yet". Only the resolver decides what actually applies."""
+    return [dict(r) for r in session.execute(
+        text("SELECT id, days, start_min, end_min FROM diary.peak_window "
+             " WHERE club_id = :c AND resource_id IS NOT DISTINCT FROM CAST(:r AS uuid) "
+             " ORDER BY start_min NULLS FIRST, id"),
+        {"c": str(club_id), "r": str(resource_id) if resource_id else None},
+    ).mappings().all()]
+
+
+def list_peak_windows_by_resource(session, *, club_id):
+    """Every COURT-scoped peak window for a club, grouped {resource_id: [window, ...]}. One query for
+    the whole courts screen — the alternative is a query per court, on the one screen that always
+    renders all of them. Club-level rows (resource_id NULL) are deliberately excluded; ask for those
+    with list_peak_windows(resource_id=None)."""
+    out = {}
+    for r in session.execute(
+        text("SELECT id, resource_id, days, start_min, end_min FROM diary.peak_window "
+             " WHERE club_id = :c AND resource_id IS NOT NULL "
+             " ORDER BY start_min NULLS FIRST, id"),
+        {"c": str(club_id)},
+    ).mappings().all():
+        out.setdefault(str(r["resource_id"]), []).append(
+            {"id": r["id"], "days": r["days"], "start_min": r["start_min"], "end_min": r["end_min"]})
+    return out
+
+
+def set_peak_windows(session, *, club_id, resource_id=None, windows):
+    """REPLACE a scope's peak windows. `windows` = [{days:[1..7]|None, start_min, end_min}].
+
+    Delete-then-insert rather than a diff: a peak window has no identity a user would recognise —
+    it is just a rule — so there is nothing to preserve across an edit, and a diff would only add a
+    way for the stored set to drift from what the screen showed.
+
+    Passing [] CLEARS the scope. For a court that is meaningful on its own (with peak_override it
+    means never-peak); for the club it means "fall back to the legacy columns", which is why the
+    caller must also clear those if it wants the club to have no peak at all."""
+    session.execute(
+        text("DELETE FROM diary.peak_window "
+             " WHERE club_id = :c AND resource_id IS NOT DISTINCT FROM CAST(:r AS uuid)"),
+        {"c": str(club_id), "r": str(resource_id) if resource_id else None})
+    for w in (windows or []):
+        if w is None:
+            continue
+        start, end = w.get("start_min"), w.get("end_min")
+        if start is None or end is None or int(end) <= int(start):
+            # A window with no times, or one that ends before it starts, charges nothing and would
+            # sit in the list looking configured. Refuse it here rather than store a no-op.
+            continue
+        session.execute(
+            text("INSERT INTO diary.peak_window (club_id, resource_id, days, start_min, end_min) "
+                 "VALUES (:c, CAST(:r AS uuid), :d, :a, :b)"),
+            {"c": str(club_id), "r": str(resource_id) if resource_id else None,
+             "d": _days_csv(w.get("days")), "a": int(start), "b": int(end)})
+    return list_peak_windows(session, club_id=club_id, resource_id=resource_id)
+
+
 def _days_csv(days):
     """Normalize an access_days value (list[int], CSV str, or None) to a clean CSV of ISO weekdays
     ('1'..'7'), or None for 'all days'. An empty/full set -> None (unconstrained)."""
@@ -976,7 +1038,7 @@ def _days_csv(days):
 def create_membership_plan(session, *, club_id, label, amount_minor, term_months, tier=None,
                            access_days=None, access_start_min=None, access_end_min=None,
                            payment_modes=None, max_covered_minutes=None, max_covered_per_day=None,
-                           max_courts_per_day=None, is_trial=None, trial_days=None):
+                           max_courts_per_day=None, is_trial=None, trial_days=None, covers_peak=None):
     """Add a term plan = a billing.price (term_months, unit='per_month', audience='member') on the
     club's membership product (creating the product if missing). `tier` is the optional grouping name
     (Student/Family/…) the wizard drills (tier → term). Optional access window (Phase 5) time-boxes a
@@ -987,16 +1049,18 @@ def create_membership_plan(session, *, club_id, label, amount_minor, term_months
         text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
              "currency_code, unit, term_months, label, membership_tier, active, "
              "access_days, access_start_min, access_end_min, payment_modes, "
-             "max_covered_minutes, max_covered_per_day, max_courts_per_day, is_trial, trial_days) "
+             "max_covered_minutes, max_covered_per_day, max_courts_per_day, is_trial, trial_days, "
+             "covers_peak) "
              "VALUES (:c, :prod, 'member', :amt, :cur, 'per_month', :tm, :lbl, :tier, true, "
-             ":days, :smin, :emin, :modes, :mcm, :mcpd, :mctd, :trial, :tdays) RETURNING id"),
+             ":days, :smin, :emin, :modes, :mcm, :mcpd, :mctd, :trial, :tdays, "
+             "COALESCE(:cpk, true)) RETURNING id"),
         {"c": club_id, "prod": prod_id, "amt": int(amount_minor),
          "cur": _club_currency(session, club_id=club_id), "tm": int(term_months),
          "lbl": (label or "").strip() or None, "tier": (tier or "").strip() or None,
          "days": _days_csv(access_days), "smin": access_start_min, "emin": access_end_min,
          "modes": _modes_csv(payment_modes),
          "mcm": max_covered_minutes, "mcpd": max_covered_per_day, "mctd": max_courts_per_day,
-         "trial": bool(is_trial), "tdays": trial_days},
+         "trial": bool(is_trial), "tdays": trial_days, "cpk": covers_peak},
     ).scalar_one()
     if is_trial:
         _make_sole_trial(session, club_id=club_id, price_id=pid)
@@ -1031,13 +1095,15 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
                           access_days=None, access_start_min=None, access_end_min=None,
                           set_window=False, set_modes=False, payment_modes=None,
                           set_limits=False, max_covered_minutes=None, max_covered_per_day=None,
-                          max_courts_per_day=None, set_trial=False, is_trial=None, trial_days=None):
+                          max_courts_per_day=None, set_trial=False, is_trial=None, trial_days=None,
+                          set_covers_peak=False, covers_peak=None):
     """COALESCE partial update of a term plan. Scoped to the club + the membership product so a
     booking price can't be reshaped into a plan here. `label`='' clears to NULL (derive default).
     `status` (active|dormant|retired) keeps the `active` boolean in sync. `set_window=True` writes
     the access window. `set_modes=True` writes the tier's payment preference (None = inherit).
     `set_limits=True` writes the silent anti-abuse caps (None clears a cap). `set_trial=True` writes the
-    signup-trial flag + days (making this the sole trial tier when is_trial)."""
+    signup-trial flag + days (making this the sole trial tier when is_trial). `set_covers_peak=True`
+    writes whether the tier is free at peak (default true = it is)."""
     if status is not None and status not in ("active", "dormant", "retired"):
         return None
     lbl = label.strip() if isinstance(label, str) else None
@@ -1060,6 +1126,10 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
                 max_courts_per_day  = CASE WHEN :set_lim THEN :mctd ELSE p.max_courts_per_day END,
                 is_trial     = CASE WHEN :set_trial THEN :trial ELSE p.is_trial END,
                 trial_days   = CASE WHEN :set_trial THEN :tdays ELSE p.trial_days END,
+                -- Its own flag, not folded into set_limits: "free except at peak" is a coverage
+                -- rule, and a partial patch that only touches the caps must not silently start
+                -- giving a peak-excluded tier its peak hours back.
+                covers_peak  = CASE WHEN :set_cpk THEN COALESCE(:cpk, true) ELSE p.covers_peak END,
                 updated_at   = now()
             FROM billing.product pr
             WHERE p.product_id = pr.id AND pr.club_id = :c AND pr.kind = 'membership'
@@ -1076,7 +1146,8 @@ def patch_membership_plan(session, *, club_id, price_id, label=None, amount_mino
          "set_modes": bool(set_modes), "modes": _modes_csv(payment_modes),
          "set_lim": bool(set_limits), "mcm": max_covered_minutes,
          "mcpd": max_covered_per_day, "mctd": max_courts_per_day,
-         "set_trial": bool(set_trial), "trial": bool(is_trial), "tdays": trial_days},
+         "set_trial": bool(set_trial), "trial": bool(is_trial), "tdays": trial_days,
+         "set_cpk": bool(set_covers_peak), "cpk": covers_peak},
     ).mappings().first()
     if not res:
         return None

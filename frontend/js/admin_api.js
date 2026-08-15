@@ -871,8 +871,21 @@
     function peakSummary(c) {
       if (!c.peak_override) return "";
       function t(x) { return ("0" + Math.floor(x / 60)).slice(-2) + ":" + ("0" + (x % 60)).slice(-2); }
+      var DAY = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      function one(days, a, b) {
+        var d = (days != null && days !== "")
+          ? String(days).split(",").map(function (x) { return DAY[parseInt(x, 10)] || ""; }).filter(Boolean).join("/")
+          : "";
+        return (d ? d + " " : "") + t(a) + "–" + t(b);
+      }
+      // Windows first; a court still on the legacy column falls back to it, exactly as the resolver
+      // does — the row must say what is actually in force, not what the newer table happens to hold.
+      var ws = (c.peak_windows || []).filter(function (w) { return w.start_min != null && w.end_min != null; });
+      if (ws.length) {
+        return "peak " + ws.map(function (w) { return one(w.days, w.start_min, w.end_min); }).join(" · ");
+      }
       if (c.peak_start_min == null || c.peak_end_min == null) return "no peak";
-      return "peak " + t(c.peak_start_min) + "–" + t(c.peak_end_min);
+      return "peak " + one(c.peak_days, c.peak_start_min, c.peak_end_min);
     }
 
     function courtRow(c) {
@@ -922,9 +935,22 @@
                 // PER-COURT peak. override=false inherits the club window; override=true means THIS
                 // court's window is the answer — and an EMPTY one marks it never-peak.
                 peakOverride: !!c.peak_override,
-                peakDays: (c.peak_days != null && c.peak_days !== "")
-                  ? String(c.peak_days).split(",").map(function (x) { return x.trim(); }).filter(Boolean) : null,
-                peakStart: c.peak_start_min, peakEnd: c.peak_end_min };
+                // Windows come from diary.peak_window. A court that has NONE but still carries the
+                // old single-column window is shown that window as its first row — the resolver
+                // falls back to it, so the screen must show what is actually in force, and saving
+                // then moves the court onto rows without the owner having to notice the migration.
+                peakWindows: (function () {
+                  var ws = (c.peak_windows || []).map(function (w) {
+                    return { days: (w.days != null && w.days !== "")
+                               ? String(w.days).split(",").map(function (x) { return x.trim(); }).filter(Boolean) : null,
+                             start: w.start_min, end: w.end_min };
+                  });
+                  if (ws.length) return ws;
+                  if (c.peak_start_min == null && c.peak_end_min == null) return [];
+                  return [{ days: (c.peak_days != null && c.peak_days !== "")
+                              ? String(c.peak_days).split(",").map(function (x) { return x.trim(); }).filter(Boolean) : null,
+                            start: c.peak_start_min, end: c.peak_end_min }];
+                })() };
       WEEKDAYS.forEach(function (lbl, wd) {
         var h = existing[wd];
         m.rows.push({ wd: wd, label: lbl, open: hasAny ? !!h : (wd < 6), start: h ? (h.start_time || "").slice(0, 5) : "07:00",
@@ -1045,27 +1071,50 @@
             c2.appendChild(el("div", { class: "cf-muted cf-tiny", style: "margin-top:6px", text: "Currently follows the club-wide peak hours (Setup → Club profile & payments)." }));
             return c2;
           }
-          var sel = {};
-          var chips = el("div", { class: "cf-row", style: "gap:4px;flex-wrap:wrap;margin-top:8px" });
-          DOW.forEach(function (o) {
-            var on = m.peakDays ? m.peakDays.indexOf(o[0]) >= 0 : false;
-            sel[o[0]] = on;
-            var b = el("button", { class: "cf-day" + (on ? " on" : ""), text: o[1], type: "button" });
-            b.addEventListener("click", function () {
-              sel[o[0]] = !sel[o[0]]; b.className = "cf-day" + (sel[o[0]] ? " on" : "");
-              m.peakDays = DOW.filter(function (x) { return sel[x[0]]; }).map(function (x) { return x[0]; });
+          // N WINDOWS, not one. A real club's peak is not a single rule: NextPoint's is weekday
+          // EVENINGS (Mon–Thu 17:00–19:00) AND Saturday MORNING (08:00–10:00). With one row an owner
+          // had to pick which half of their peak to charge for, and the screen looked correctly
+          // configured while doing it.
+          var rows = el("div", { style: "margin-top:8px" });
+          function windowRow(w, idx) {
+            var sel = {};
+            var chips = el("div", { class: "cf-row", style: "gap:4px;flex-wrap:wrap" });
+            DOW.forEach(function (o) {
+              var on = w.days ? w.days.indexOf(o[0]) >= 0 : false;
+              sel[o[0]] = on;
+              var b = el("button", { class: "cf-day" + (on ? " on" : ""), text: o[1], type: "button" });
+              b.addEventListener("click", function () {
+                sel[o[0]] = !sel[o[0]]; b.className = "cf-day" + (sel[o[0]] ? " on" : "");
+                w.days = DOW.filter(function (x) { return sel[x[0]]; }).map(function (x) { return x[0]; });
+              });
+              chips.appendChild(b);
             });
-            chips.appendChild(b);
+            var pf = el("input", { class: "cf-input", type: "time", value: m2t(w.start), style: "max-width:110px" });
+            var pt = el("input", { class: "cf-input", type: "time", value: m2t(w.end), style: "max-width:110px" });
+            pf.addEventListener("input", function () { w.start = t2m(pf.value); });
+            pt.addEventListener("input", function () { w.end = t2m(pt.value); });
+            var rm = el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", type: "button", text: "Remove" });
+            rm.addEventListener("click", function () {
+              m.peakWindows.splice(idx, 1); render();
+            });
+            return el("div", { class: "cf-row", style: "gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px" }, [
+              el("span", { class: "cf-muted cf-tiny", text: "Peak on:" }), chips,
+              el("span", { class: "cf-muted cf-tiny", text: "from" }), pf,
+              el("span", { class: "cf-muted cf-tiny", text: "to" }), pt, rm,
+            ]);
+          }
+          (m.peakWindows || []).forEach(function (w, i) { rows.appendChild(windowRow(w, i)); });
+          if (!(m.peakWindows || []).length) {
+            rows.appendChild(el("div", { class: "cf-muted cf-tiny", text: "No peak hours on this court — it always charges the base price." }));
+          }
+          c2.appendChild(rows);
+          var add = el("button", { class: "cf-btn cf-btn-sm", type: "button", style: "margin-top:8px",
+            text: "+ Add peak window" });
+          add.addEventListener("click", function () {
+            m.peakWindows = (m.peakWindows || []).concat([{ days: null, start: null, end: null }]);
+            render();
           });
-          var pf = el("input", { class: "cf-input", type: "time", value: m2t(m.peakStart), style: "max-width:110px" });
-          var pt = el("input", { class: "cf-input", type: "time", value: m2t(m.peakEnd), style: "max-width:110px" });
-          pf.addEventListener("input", function () { m.peakStart = t2m(pf.value); });
-          pt.addEventListener("input", function () { m.peakEnd = t2m(pt.value); });
-          c2.appendChild(el("div", { class: "cf-row", style: "gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px" }, [
-            el("span", { class: "cf-muted cf-tiny", text: "Peak on:" }), chips,
-            el("span", { class: "cf-muted cf-tiny", text: "from" }), pf,
-            el("span", { class: "cf-muted cf-tiny", text: "to" }), pt,
-          ]));
+          c2.appendChild(add);
           c2.appendChild(el("div", { class: "cf-muted cf-tiny", style: "margin-top:8px", text:
             (m.peakDays && m.peakDays.length && m.peakStart != null && m.peakEnd != null)
               ? "This court charges peak on the days and hours above."
@@ -1095,11 +1144,19 @@
         var name = (m.name || "").trim(); if (!name) { UI.toast("Name the court.", "warn"); return; }
         btn.disabled = true; btn.textContent = "Saving…";
         try {
+          // peak_windows is the source of truth now. The legacy single columns are CLEARED on every
+          // save so a court can never end up with both — the resolver prefers rows and would ignore
+          // the columns, and a stale column left behind is a value that looks live and isn't.
+          var wins = (m.peakOverride ? (m.peakWindows || []) : [])
+            .filter(function (w) { return w.start != null && w.end != null && w.end > w.start; })
+            .map(function (w) {
+              return { days: (w.days && w.days.length && w.days.length < 7) ? w.days.map(Number) : null,
+                       start_min: w.start, end_min: w.end };
+            });
           var body = { name: name, surface: m.surface, product_id: m.product_id || null,
             peak_override: !!m.peakOverride,
-            peak_days: m.peakOverride ? (m.peakDays && m.peakDays.length === 7 ? null : (m.peakDays || []).map(Number)) : null,
-            peak_start_min: m.peakOverride ? m.peakStart : null,
-            peak_end_min: m.peakOverride ? m.peakEnd : null };
+            peak_windows: wins,
+            peak_days: null, peak_start_min: null, peak_end_min: null };
           await window.AdminAPI.patchResource(c.id, body);
           var week = m.rows.map(function (r) { return { weekday: r.wd, open: r.open, start_time: r.start || "07:00", end_time: r.end || "21:00", slot_minutes: r.slot || 60 }; });
           await window.AdminAPI.putHours({ scope: c.id, week: week });
@@ -1798,6 +1855,9 @@
         // Silent anti-abuse caps (null = no cap) + the signup-trial config.
         limits: { minutes: (g && g.plans[0]) ? g.plans[0].max_covered_minutes : null, perDay: (g && g.plans[0]) ? g.plans[0].max_covered_per_day : null, courtsDay: (g && g.plans[0]) ? g.plans[0].max_courts_per_day : null },
         trial: { on: !!(g && g.plans[0] && g.plans[0].is_trial), days: (g && g.plans[0] && g.plans[0].trial_days != null) ? g.plans[0].trial_days : null },
+        // Free at peak? Defaults TRUE for a tier that predates the flag and for a brand-new one, so
+        // adding this never silently started charging anybody.
+        coversPeak: (g && g.plans[0] && g.plans[0].covers_peak === false) ? false : true,
         clubMethods: [],
       };
       // Need the club's enabled methods for the payment-options checkboxes; fetch then render.
@@ -1821,6 +1881,7 @@
         host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Details" }), field("Membership name", nameI)]));
         host.appendChild(accessCard());
         host.appendChild(limitsCard());
+        host.appendChild(peakCoverCard());
         host.appendChild(trialCard());
         host.appendChild(paymentCard());
         host.appendChild(termsCard());
@@ -1855,6 +1916,23 @@
         cb.addEventListener("change", function () { m.trial.on = cb.checked; if (cb.checked && m.trial.days == null) m.trial.days = 7; daysWrap.style.display = cb.checked ? "" : "none"; });
         c.appendChild(el("label", { class: "cf-row", style: "gap:10px;align-items:center;cursor:pointer;margin-top:6px" }, [cb, el("span", { style: "font-weight:600", text: "This tier is the signup trial" })]));
         c.appendChild(daysWrap);
+        return c;
+      }
+
+      // "Free except at peak" — the rule that stops a free week being a free PRIME-TIME week.
+      //
+      // Deliberately NOT expressed as an access window. Doing that means writing the INVERSE of peak
+      // ("everything except Mon–Thu 17:00–19:00 and Sat 08:00–10:00") into a second place, per tier,
+      // by hand — and it goes wrong the first time peak moves, silently, because the only symptom is
+      // members quietly playing free at peak again. This says what it means, and coverage reads
+      // whatever peak is configured on the court being booked.
+      function peakCoverCard() {
+        var c = el("div", { class: "cf-card" }, [el("h3", { text: "Peak hours" }),
+          el("p", { class: "cf-muted cf-tiny", text: "Whether this membership makes PEAK courts free too. Untick it and peak is simply charged at the normal rate — members are never blocked, and off-peak stays free. Peak hours themselves are set per court under Setup → Courts." })]);
+        var cb = el("input", { type: "checkbox" }); cb.style.width = "auto"; cb.checked = m.coversPeak !== false;
+        cb.addEventListener("change", function () { m.coversPeak = cb.checked; });
+        c.appendChild(el("label", { class: "cf-row", style: "gap:10px;align-items:center;cursor:pointer;margin-top:6px" },
+          [cb, el("span", { style: "font-weight:600", text: "Peak courts are free on this membership" })]));
         return c;
       }
 
@@ -1904,8 +1982,8 @@
           for (var i = 0; i < m.terms.length; i++) {
             var t = m.terms[i]; if (!t.term_months) continue;
             var caps = { max_covered_minutes: m.limits.minutes, max_covered_per_day: m.limits.perDay, max_courts_per_day: m.limits.courtsDay };
-            if (t.price_id) await window.AdminAPI.patchMembershipPlan(t.price_id, Object.assign({ tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, set_window: true, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end, set_modes: true, payment_modes: m.modes, set_limits: true, set_trial: true, is_trial: !!m.trial.on, trial_days: m.trial.days }, caps));
-            else await window.AdminAPI.createMembershipPlan(Object.assign({ tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end, payment_modes: m.modes, is_trial: !!m.trial.on, trial_days: m.trial.days }, caps));
+            if (t.price_id) await window.AdminAPI.patchMembershipPlan(t.price_id, Object.assign({ tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, set_window: true, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end, set_modes: true, payment_modes: m.modes, set_limits: true, set_trial: true, is_trial: !!m.trial.on, trial_days: m.trial.days, covers_peak: m.coversPeak !== false }, caps));
+            else await window.AdminAPI.createMembershipPlan(Object.assign({ tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end, payment_modes: m.modes, is_trial: !!m.trial.on, trial_days: m.trial.days, covers_peak: m.coversPeak !== false }, caps));
           }
           for (var d = 0; d < m.del.length; d++) await window.AdminAPI.deleteMembershipPlan(m.del[d]);
           UI.toast("Saved.", "info"); membershipServices(host);

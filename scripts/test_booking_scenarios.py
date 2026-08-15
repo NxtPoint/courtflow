@@ -2877,6 +2877,69 @@ def sc_peak_hours_can_differ_per_court(s, fx):
     check("inheriting court at 17:00 is CHARGED peak R250", charged(inherit, 17) == 25000)
 
 
+def sc_the_peak_editor_writes_what_the_resolver_reads(s, fx):
+    """The WRITE path. The resolver was proved first, but a screen that saves into the wrong shape
+    leaves it reading an empty set and quietly charging nobody peak — and there is no error anywhere,
+    because "no windows" is a legitimate state (it is how clay is marked never-peak).
+
+    So this asserts the round trip through the repository the admin screen actually calls, including
+    the two edits that are easy to get wrong: REPLACING a set (not appending to it) and CLEARING one."""
+    print("\n# The peak editor's writes are what in_peak_window then reads back")
+    from admin import repositories as AR
+    from diary import pricing as P
+    court = fx.courts[0]
+
+    AR.set_peak_windows(s, club_id=fx.club_id, resource_id=None, windows=[
+        {"days": [1, 2, 3, 4], "start_min": 1020, "end_min": 1140},
+        {"days": [6], "start_min": 480, "end_min": 600},
+    ])
+    P.clear_peak_cache(s)
+    got = AR.list_peak_windows(s, club_id=fx.club_id, resource_id=None)
+    check("both club windows are stored", len(got) == 2, str(got))
+    check("…days are normalised to a CSV of ISO weekdays",
+          sorted(x["days"] for x in got) == ["1,2,3,4", "6"], str(got))
+
+    def peak_on(iso_dow, hour):
+        base = at(fx, hour)
+        return P.in_peak_window(s, club_id=fx.club_id, resource_id=court,
+                                local_dt=base + timedelta(days=(iso_dow - base.isoweekday()) % 7))
+
+    check("a court inheriting the club reads BOTH of them back", peak_on(2, 18) and peak_on(6, 9))
+
+    # REPLACE, not append — saving the screen a second time must not double the windows.
+    AR.set_peak_windows(s, club_id=fx.club_id, resource_id=None, windows=[
+        {"days": [1, 2, 3, 4], "start_min": 1020, "end_min": 1140},
+    ])
+    P.clear_peak_cache(s)
+    check("saving again REPLACES the set rather than appending to it",
+          len(AR.list_peak_windows(s, club_id=fx.club_id, resource_id=None)) == 1)
+    check("…so the removed Saturday window really is gone", peak_on(6, 9) is False)
+
+    # A window with no times, or one that ends before it starts, charges nothing — refuse it rather
+    # than store a row that sits in the list looking configured.
+    AR.set_peak_windows(s, club_id=fx.club_id, resource_id=None, windows=[
+        {"days": None, "start_min": None, "end_min": None},
+        {"days": None, "start_min": 1140, "end_min": 1020},
+        {"days": [1, 2, 3, 4], "start_min": 1020, "end_min": 1140},
+    ])
+    check("a timeless window and a backwards one are both refused, the real one kept",
+          len(AR.list_peak_windows(s, club_id=fx.club_id, resource_id=None)) == 1)
+
+    # Per-court rows beat the club's, and clearing them returns the court to inheriting.
+    s.execute(text("UPDATE diary.resource SET peak_override = true WHERE id = :r"), {"r": court})
+    AR.set_peak_windows(s, club_id=fx.club_id, resource_id=court,
+                        windows=[{"days": None, "start_min": 420, "end_min": 540}])
+    P.clear_peak_cache(s)
+    check("a court's OWN windows win over the club's", peak_on(2, 7) is True and peak_on(2, 18) is False)
+    check("…and the club's rows are untouched by a court edit",
+          len(AR.list_peak_windows(s, club_id=fx.club_id, resource_id=None)) == 1)
+
+    AR.set_peak_windows(s, club_id=fx.club_id, resource_id=court, windows=[])
+    P.clear_peak_cache(s)
+    check("clearing a court's windows while it still OVERRIDES makes it never-peak — not inherit",
+          peak_on(2, 7) is False and peak_on(2, 18) is False)
+
+
 def sc_a_tier_can_be_free_except_at_peak(s, fx):
     """The free-week problem: trialists were booking prime-time courts for nothing.
 
@@ -5022,6 +5085,7 @@ SCENARIOS = [
     sc_paying_is_the_acceptance,
     sc_peak_hours_can_differ_per_court,
     sc_peak_can_have_more_than_one_window,
+    sc_the_peak_editor_writes_what_the_resolver_reads,
     sc_a_tier_can_be_free_except_at_peak,
     sc_peak_survives_a_reschedule,
     sc_trial_obeys_the_same_court_rules_as_a_membership,

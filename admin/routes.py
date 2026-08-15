@@ -231,6 +231,13 @@ def patch_policy():
             allow_monthly_account=b.get("allow_monthly_account"),
             allow_online_payment=b.get("allow_online_payment"),
         )
+        # The CLUB's peak windows (what every court inherits unless it overrides). Same partial-patch
+        # rule as everything above: replaced only when the key is actually sent.
+        if "peak_windows" in b:
+            repo.set_peak_windows(s, club_id=p.club_id, resource_id=None,
+                                  windows=b.get("peak_windows") or [])
+        policy = dict(policy or {})
+        policy["peak_windows"] = repo.list_peak_windows(s, club_id=p.club_id, resource_id=None)
     return jsonify(policy=policy), 200
 
 
@@ -341,8 +348,14 @@ def get_resources():
     if err:
         return err
     with session_scope() as s:
-        rows = repo.list_resources(s, club_id=p.club_id)
-    return jsonify(resources=rows, count=len(rows)), 200
+        rows = [dict(r) for r in repo.list_resources(s, club_id=p.club_id)]
+        # Peak windows, attached per court. Read in ONE query and grouped here rather than a query
+        # per court — this list is the courts screen and a club can have a dozen of them.
+        wins = repo.list_peak_windows_by_resource(s, club_id=p.club_id)
+        for r in rows:
+            r["peak_windows"] = wins.get(str(r.get("id")), [])
+        club_windows = repo.list_peak_windows(s, club_id=p.club_id, resource_id=None)
+    return jsonify(resources=rows, count=len(rows), club_peak_windows=club_windows), 200
 
 
 @admin_bp.post("/resources")
@@ -382,8 +395,16 @@ def patch_resource(resource_id):
             peak_override=b.get("peak_override"), peak_days=b.get("peak_days"),
             peak_start_min=b.get("peak_start_min"), peak_end_min=b.get("peak_end_min")
         )
-    if res is None:
-        return jsonify(error="NOT_FOUND"), 404
+        if res is None:
+            return jsonify(error="NOT_FOUND"), 404
+        # peak_windows REPLACES this court's windows. Sent only when the screen is managing them, so
+        # a client that knows nothing about windows (or a PATCH that only renames the court) leaves
+        # them alone — the legacy single-window fields above still work exactly as before.
+        if "peak_windows" in b:
+            repo.set_peak_windows(s, club_id=p.club_id, resource_id=resource_id,
+                                  windows=b.get("peak_windows") or [])
+        res = dict(res)
+        res["peak_windows"] = repo.list_peak_windows(s, club_id=p.club_id, resource_id=resource_id)
     return jsonify(resource=res), 200
 
 
@@ -577,7 +598,8 @@ def post_membership_plan():
             max_covered_minutes=b.get("max_covered_minutes"),
             max_covered_per_day=b.get("max_covered_per_day"),
             max_courts_per_day=b.get("max_courts_per_day"),
-            is_trial=b.get("is_trial"), trial_days=b.get("trial_days"))
+            is_trial=b.get("is_trial"), trial_days=b.get("trial_days"),
+            covers_peak=b.get("covers_peak"))
     return jsonify(plan=plan), 201
 
 
@@ -600,7 +622,8 @@ def patch_membership_plan(price_id):
             max_covered_per_day=b.get("max_covered_per_day"),
             max_courts_per_day=b.get("max_courts_per_day"),
             set_trial=bool(b.get("set_trial")), is_trial=b.get("is_trial"),
-            trial_days=b.get("trial_days"))
+            trial_days=b.get("trial_days"),
+            set_covers_peak=("covers_peak" in b), covers_peak=b.get("covers_peak"))
     if plan is None:
         return jsonify(error="NOT_FOUND"), 404
     return jsonify(plan=plan), 200
