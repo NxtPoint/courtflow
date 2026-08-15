@@ -82,11 +82,20 @@ Full account asset library (via the Ads API), not just the "19 images" one view 
 | Sitelink | → path on nextpointtennis.com |
 |---|---|
 | Start Your Free Week | `/login#/sign-up` |
-| Free First Lesson | `/free-lesson` |
+| ~~Free First Lesson~~ **REMOVED 2026-08-15 — DO NOT RE-ADD** | ~~`/free-lesson`~~ |
 | Book a Court | `/book` |
 | Our Coaches | `/coaches` |
 | High Performance | `/programs/high-performance` |
 | Pricing & Membership | `/pricing` |
+
+> **⚠ THE CLUB DOES NOT OFFER A FREE LESSON, AND NEVER HAS.** The offer is a **free week of COURT
+> bookings** (`/login#/sign-up`); coaching and classes are pay-as-you-go. A "Free First Lesson" sitelink
+> advertises something that does not exist — the visitor finds out at the desk, which is the worst place
+> to discover it, and it buys clicks from people who want a product we do not sell. Same rule as
+> [KLAVIYO-MASTER-PLAN.md](KLAVIYO-MASTER-PLAN.md) ("never promise free lessons or free coaching"). The
+> `/free-lesson` route still exists and 301s to `/login#/sign-up`, so old inbound links stay alive — that
+> redirect is NOT a reason to advertise the phrase. **Check the live account for this sitelink and any
+> ad copy carrying the same promise.**
 
 **Cyborg PMax:** leave PAUSED, do NOT delete — it holds the 59 images + 5 videos + learning history for a
 future *tracked* PMax. Deleting throws away paid creative.
