@@ -389,6 +389,37 @@ def apply_seat_orders(session, *, club_id, booking_id, now=None):
     plan = seat_plan(session, club_id=club_id, booking_id=booking_id)
     booking = plan["booking"]
 
+    # ---------------------------------------------------------------------- #
+    # THE BOOK-A-COURT RULE (owner's decision, 2026-08-15)
+    # ---------------------------------------------------------------------- #
+    # A share is what you pay to SHARE a court you found somebody else for. It is not what a court
+    # costs. So the rule divides on `visibility`, which already records exactly that distinction:
+    #
+    #   visibility = 'open'    -> Find a Game. The court is being shared between members who found
+    #                            each other through the feed. Everybody pays a share. UNCHANGED.
+    #   visibility = 'private' -> Book a court. Somebody is BUYING a court and naming who is coming.
+    #                            The court has a price and the booker pays it.
+    #
+    # Why the booker must not be re-priced down to a share here: it hands every PAYG booker a reason
+    # to book "singles", say a friend is coming, and take the court at half price — leaving the club
+    # to police whether the second person ever arrived. A court fee is not negotiable by who you name.
+    #
+    # And once the booker HAS paid the full fee their guest owes nothing: the seat rule exists to make
+    # sure a court is paid for ONCE, and it has been. The leak it was built to close is the
+    # MEMBERSHIP-COVERED booker whose guest rides free — that case still bills the guest, because
+    # there the court has been paid for by nobody.
+    #
+    #   private + holder COVERED (member)   -> guest pays a share  (the original leak, still shut)
+    #   private + holder NOT covered (PAYG) -> no seat owes anything (the booking's own order already
+    #                                         carries the whole court fee)
+    private = (booking.get("visibility") != "open")
+    holder_covered = None
+    for _e in plan["rows"]:
+        if (_e["seat"].get("party_role") or "") == "host":
+            holder_covered = bool(_e["covered"])
+            break
+    court_already_paid = bool(private and holder_covered is False)
+
     # FREEZE THE QUOTE. The first time a game is priced, the share it was quoted is written onto the
     # booking — so a later change to the club's seat_share_pct, its rounding rule, or the court's own
     # price can never re-price a game that is already sold, and a late joiner pays exactly what the
@@ -412,6 +443,20 @@ def apply_seat_orders(session, *, club_id, booking_id, now=None):
                 text("UPDATE diary.booking_party SET covered = true, share_minor = NULL, "
                      "       seat_status = CASE WHEN seat_status = 'invited' THEN 'confirmed' "
                      "                          ELSE seat_status END "
+                     "WHERE id = :id"),
+                {"id": str(seat["id"])})
+            continue
+
+        if court_already_paid:
+            # The booking's OWN order carries the full court fee, so no seat has a debt of its own —
+            # not the holder's and not their guest's. Recorded explicitly rather than left to price
+            # to zero: this module's standing rule is that a seat silently computing to R0 is a court
+            # given away that nobody would ever see. `covered` stays FALSE because no membership paid
+            # for this seat, and `order_id IS NULL` is what "no debt of its own" looks like.
+            session.execute(
+                text("UPDATE diary.booking_party SET covered = false, share_minor = 0, "
+                     "       seat_status = CASE WHEN seat_status IN ('invited','held') "
+                     "                          THEN 'confirmed' ELSE seat_status END "
                      "WHERE id = :id"),
                 {"id": str(seat["id"])})
             continue
@@ -603,7 +648,14 @@ def seat_a_new_booking(session, *, club_id, booking_id, holder_user_id, holder_o
         # rule off there is no share, and pointing the seat at the ordinary court fee would make the
         # data claim a seat charge that does not exist: `order_id IS NULL` on a seat means "this seat
         # has no debt of its own", which is exactly the truth here.
-        link = str(holder_order_id) if (holder_order_id and pol["seat_rule_enforced"]) else None
+        #
+        # AND ONLY ON AN OPEN GAME (2026-08-15). On a private Book-a-court the holder pays the court's
+        # normal price, so their order must NOT be re-priced down to a share — see the Book-a-court
+        # rule in apply_seat_orders. Not linking it is what protects it: _resync_seat_order only ever
+        # touches an order a seat points at.
+        link = (str(holder_order_id)
+                if (holder_order_id and pol["seat_rule_enforced"] and visibility == "open")
+                else None)
         session.execute(
             text("INSERT INTO diary.booking_party (booking_id, club_id, user_id, party_role, "
                  "       seat_status, order_id, joined_at) "
@@ -629,7 +681,17 @@ def seat_a_new_booking(session, *, club_id, booking_id, holder_user_id, holder_o
                 "pay_hours": pol["seat_pay_hours"], "orders": [], "charged": 0, "total_minor": 0}
 
     applied = apply_seat_orders(session, club_id=club_id, booking_id=booking_id, now=now)
-    holds = not all_prepaid_seats_settled(session, club_id=club_id, booking_id=booking_id)
+    # AN UNPAID GUEST NEVER COSTS THE BOOKER THEIR COURT (owner's decision, 2026-08-15).
+    #
+    # Holding the court until every online seat settles is right for Find a Game: strangers who found
+    # each other should not be able to take a court on someone else's payment. It is wrong for Book a
+    # court. There the member has booked their own court and invited someone — and `held` means
+    # release_expired_holds CANCELS the whole booking once seat_pay_hours (default 24) passes, so a
+    # guest who simply hasn't got round to paying loses the member the court. The club would rather
+    # take that money at the desk. The debt is unaffected either way: it stays a real order on the
+    # guest's statement.
+    holds = (visibility == "open"
+             and not all_prepaid_seats_settled(session, club_id=club_id, booking_id=booking_id))
     return {"applied": True, "billed": True, "holds_court": holds, "seats": total_seats,
             "pay_hours": pol["seat_pay_hours"], **applied}
 

@@ -3245,10 +3245,21 @@ def _seat_rows(s, booking_id):
     """Every seat that carries an order, with what it owes. Read through booking_party.order_id (NOT
     order_line.booking_id) so the booking's OWN order isn't mistaken for a seat's."""
     return [dict(r) for r in s.execute(
-        text('SELECT bp.user_id, bp.share_minor, bp.covered, bp.seat_status, '
+        text('SELECT bp.user_id, bp.order_id, bp.share_minor, bp.covered, bp.seat_status, '
              '       o.amount_minor, o.settlement_mode, o.status '
              'FROM diary.booking_party bp JOIN billing."order" o ON o.id = bp.order_id '
              'WHERE bp.booking_id = :b ORDER BY bp.created_at, bp.id'),
+        {"b": booking_id}).mappings().all()]
+
+
+def _all_seats(s, booking_id):
+    """EVERY seat, whether or not it owes anything — the shape needed since the Book-a-court rule
+    (2026-08-15). `_seat_rows` inner-joins the order, so a seat with no debt of its own is invisible
+    to it: a membership-covered holder, or a guest whose booker already paid the whole court. Those
+    seats are exactly the ones the new rule is about, so assertions on them need this instead."""
+    return [dict(r) for r in s.execute(
+        text("SELECT user_id, order_id, share_minor, covered, seat_status, party_role "
+             "FROM diary.booking_party WHERE booking_id = :b ORDER BY created_at, id"),
         {"b": booking_id}).mappings().all()]
 
 
@@ -3347,7 +3358,10 @@ def sc_two_payg_split_and_both_must_settle(s, fx):
                          starts_at=utc_iso(at(fx, 12)), ends_at=utc_iso(at(fx, 13)))
     check("the booking is made", r.get("ok"), str(r))
     bid = r["booking"]["id"]
-    _as_game(s, bid, seats=2)
+    # OPEN, because splitting a court between two PAYG players IS Find a Game. On a private
+    # Book-a-court the booker pays the whole fee instead and their guest owes nothing — the owner's
+    # rule of 2026-08-15, pinned by sc_a_payg_booker_pays_the_whole_court_not_a_share.
+    _as_game(s, bid, seats=2, visibility="open")
     _seat(s, fx, bid, p1, role="host")
     _seat(s, fx, bid, p2)
 
@@ -3434,7 +3448,9 @@ def sc_the_quoted_share_is_frozen_for_the_life_of_the_game(s, fx):
                          settlement_mode="at_court",
                          starts_at=utc_iso(at(fx, 16)), ends_at=utc_iso(at(fx, 17)),
                          extra_clients=[{"user_id": str(p2)}],
-                         play_format="doubles", seats=4)
+                         # OPEN: freezing a quoted share is a Find-a-Game property. A private
+                         # Book-a-court has no share to freeze — the booker pays the court's price.
+                         play_format="doubles", seats=4, visibility="open")
     bid = r["booking"]["id"]
     check("two un-covered seats each owe ONE SHARE — R80, not half of R150",
           sorted(x["amount_minor"] for x in _seat_rows(s, bid)) == [8000, 8000],
@@ -3463,12 +3479,13 @@ def sc_the_quoted_share_is_frozen_for_the_life_of_the_game(s, fx):
     check("a doubles game with three payers collects MORE than one court fee — deliberately",
           sum(x["amount_minor"] for x in rows) == 24000, str(rows))
 
-    # A NEW game, made after the change, DOES get the new rate.
+    # A NEW game, made after the change, DOES get the new rate. OPEN, like the one above — a share is
+    # only ever quoted on a game the club is being invited into.
     r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=p2, role="member",
                           booking_type="court", resource_id=fx.courts[0],
                           settlement_mode="at_court",
                           starts_at=utc_iso(at(fx, 19)), ends_at=utc_iso(at(fx, 20)),
-                          play_format="singles")
+                          play_format="singles", visibility="open")
     check("…while a game booked AFTER the change is priced at the new 80% (R120)",
           any(x["amount_minor"] == 12000 for x in _seat_rows(s, r2["booking"]["id"])),
           str(_seat_rows(s, r2["booking"]["id"])))
@@ -3526,21 +3543,178 @@ def sc_seat_rule_bills_through_create_booking(s, fx):
     guest_rows = [x for x in rows if str(x["user_id"]) == str(guest)]
     check("the guest owes ONE SHARE — R80",
           len(guest_rows) == 1 and guest_rows[0]["amount_minor"] == 8000, str(rows))
-    holder = [x for x in rows if str(x["user_id"]) == str(m)]
-    check("the member's own order stays R0 — not billed a share as well",
-          len(holder) == 1 and holder[0]["amount_minor"] == 0, str(rows))
+    # Read through _all_seats: since the Book-a-court rule the holder's seat no longer rides the
+    # booking's own order on a private court, so it carries NO order id and _seat_rows (which
+    # inner-joins one) cannot see it. That is the correct shape — a covered seat has no debt — and it
+    # is stronger than before, because previously the member's seat pointed at a R0 order that existed
+    # only so it could be re-priced.
+    holder = [x for x in _all_seats(s, bid) if str(x["user_id"]) == str(m)]
+    check("the member owes nothing — no seat debt of their own",
+          len(holder) == 1 and not holder[0]["order_id"], str(holder))
     check("…and the member's seat is recorded as covered", holder and holder[0]["covered"] is True,
-          str(rows))
-    check("the court is HELD until the guest pays (not confirmed)",
-          r["booking"]["status"] == "held" and r.get("awaiting_seats") is True, str(r))
+          str(holder))
+    # AN UNPAID GUEST MUST NOT COST THE MEMBER THEIR COURT (owner's decision, 2026-08-15). This used
+    # to assert the opposite — that the court stayed HELD until the guest paid — and `held` is not a
+    # gentle state: release_expired_holds CANCELS the booking once seat_pay_hours passes. A guest who
+    # hadn't got round to paying by tomorrow lost the member the court they had booked. The club takes
+    # that money at the desk instead. The guest's debt is untouched by this; it is still a real order.
+    check("the court is CONFIRMED even though the guest hasn't paid",
+          r["booking"]["status"] == "confirmed", str(r))
+    check("…and the guest still owes it — the debt is not forgiven, just not blocking",
+          guest_rows and guest_rows[0]["amount_minor"] == 8000, str(rows))
     check("…and the member is NOT sent to a checkout for someone else's debt",
           r.get("requires_payment") is not True, str(r))
 
 
+def sc_a_payg_booker_pays_the_whole_court_not_a_share(s, fx):
+    """THE BOOK-A-COURT RULE (owner's decision, 2026-08-15). A share is what you pay to SHARE a court
+    you found somebody else for. It is not what a court costs.
+
+    Before this, `seat_a_new_booking` linked the holder's seat to the booking's own order so
+    apply_seat_orders could re-price it DOWN to a share — which meant a PAYG member booking a 60-min
+    court dropped from R150 to R80 the moment the money switch went on. That hands every PAYG booker
+    a reason to book "singles", say a friend is coming, and take the court at half price, leaving the
+    club to police whether the second person ever arrived. A court fee is not negotiable by who you
+    name."""
+    print("\n# Book a court: a PAYG booker pays the WHOLE court fee, never a share")
+    _enable_seat_rule(s, fx)
+    payg = fx.members[1]                       # deliberately on no plan
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=payg, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="at_court", play_format="singles",
+                         starts_at=utc_iso(at(fx, 8)), ends_at=utc_iso(at(fx, 9)))
+    check("the booking is made", r.get("ok"), str(r))
+    bid = r["booking"]["id"]
+    total = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id = :o'),
+                      {"o": r["booking"]["order_id"]}).scalar()
+    check("the booker is charged the FULL 60-min court fee (R150), not a R80 share",
+          total == 15000, str(total))
+    rows = _seat_rows(s, bid)
+    check("…and no SECOND debt was raised beside it",
+          [x for x in rows if x["amount_minor"] and x["order_id"] != r["booking"]["order_id"]] == [],
+          str(rows))
+
+    # The same booker, same court, but PUBLISHED to the club — that IS Find a Game, and there a share
+    # is the product. Publishing must never be the cheaper option, which is what makes the rule safe:
+    # their own seat is a share, and an unfilled seat collapses back onto them for a second one.
+    r2 = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=payg, role="member",
+                          booking_type="court", resource_id=fx.courts[1],
+                          settlement_mode="at_court", play_format="singles", visibility="open",
+                          starts_at=utc_iso(at(fx, 8)), ends_at=utc_iso(at(fx, 9)))
+    open_total = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id = :o'),
+                           {"o": r2["booking"]["order_id"]}).scalar()
+    check("publishing the spare seat DOES price the booker at a share (R80) — Find a Game is a "
+          "different product", open_total == 8000, str(open_total))
+
+
+def sc_a_guest_is_free_once_the_court_itself_is_paid_for(s, fx):
+    """The seat rule exists to make sure a court gets paid for ONCE.
+
+    A membership-covered booker pays nothing, so their guest is the only person who can pay for that
+    court — bill them, or the original leak is open again (two friends, one membership, half price,
+    indefinitely). A PAYG booker has ALREADY paid the whole court, so billing their guest as well
+    would collect R230 for a R150 court and be impossible to explain at the desk.
+
+    Same flow, same widget, same seat rows. The only thing that decides it is whether the court has
+    been paid for yet."""
+    print("\n# Book a court: the guest pays only when the court isn't already paid for")
+    _enable_seat_rule(s, fx)
+    member, payg, guest1, guest2 = fx.members[0], fx.members[1], fx.members[2], fx.members[2]
+    _membership_for_court(s, fx, member)
+
+    # 1) MEMBER + guest -> the court is paid for by NOBODY, so the guest owes a share. The leak.
+    rm = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=member, role="member",
+                          booking_type="court", resource_id=fx.courts[0],
+                          settlement_mode="membership_covered", play_format="singles",
+                          starts_at=utc_iso(at(fx, 16)), ends_at=utc_iso(at(fx, 17)),
+                          extra_clients=[{"user_id": str(guest1)}])
+    rows_m = _seat_rows(s, rm["booking"]["id"])
+    g = [x for x in rows_m if str(x["user_id"]) == str(guest1)]
+    h = [x for x in _all_seats(s, rm["booking"]["id"]) if str(x["user_id"]) == str(member)]
+    check("a MEMBER's guest owes one share — the leak stays shut",
+          len(g) == 1 and g[0]["amount_minor"] == 8000, str(rows_m))
+    check("…and the member themselves owes nothing", h and not h[0]["order_id"], str(h))
+    check("…and their seat says WHY it was free (covered by the membership)",
+          h and h[0]["covered"] is True, str(h))
+
+    # 2) PAYG + guest -> the booker already paid the whole court, so the guest owes nothing.
+    rp = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=payg, role="member",
+                          booking_type="court", resource_id=fx.courts[1],
+                          settlement_mode="at_court", play_format="singles",
+                          starts_at=utc_iso(at(fx, 16)), ends_at=utc_iso(at(fx, 17)),
+                          extra_clients=[{"user_id": str(guest2)}])
+    booker_total = s.execute(text('SELECT amount_minor FROM billing."order" WHERE id = :o'),
+                             {"o": rp["booking"]["order_id"]}).scalar()
+    rows_p = _seat_rows(s, rp["booking"]["id"])
+    check("the PAYG booker still pays the whole court (R150)", booker_total == 15000, str(booker_total))
+    check("…and their guest is charged NOTHING — the court is already paid for",
+          all((x["amount_minor"] or 0) == 0 for x in rows_p if str(x["user_id"]) == str(guest2)),
+          str(rows_p))
+    check("…so the club collects R150 for the court, not R230",
+          booker_total + sum(x["amount_minor"] or 0 for x in rows_p) == 15000, str(rows_p))
+    all_p = _all_seats(s, rp["booking"]["id"])
+    guest_seat = [x for x in all_p if str(x["user_id"]) == str(guest2)]
+    check("…and the free guest seat does NOT claim a membership covered it (the audit trail)",
+          guest_seat and guest_seat[0]["covered"] is False, str(all_p))
+    check("…nor is it left holding a phantom order id",
+          guest_seat and not guest_seat[0]["order_id"], str(all_p))
+
+
+def sc_a_private_court_never_lapses_because_a_guest_did_not_pay(s, fx):
+    """`held` is not a gentle state. release_expired_holds CANCELS a held booking once held_until
+    passes, so holding a court until an invited guest pays means a guest who is merely slow costs the
+    member the court they booked — and the club would far rather take that money at the desk.
+
+    Find a Game keeps the hold (see `sc_seat_rule_holds_the_court_until_every_seat_settles`): there,
+    strangers should not get a court on somebody else's payment. This is the private counterpart."""
+    print("\n# Book a court: an unpaid guest never costs the member their court")
+    _enable_seat_rule(s, fx)
+    member, guest = fx.members[0], fx.members[1]
+    _membership_for_court(s, fx, member)
+    # membership_covered, so the BOOKER's own order is R0 and settled. The only thing outstanding is
+    # the guest's seat — which is the whole point. (Booking this `online` would hold the court for the
+    # ordinary checkout reason and prove nothing about seats.)
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=member, role="member",
+                         booking_type="court", resource_id=fx.courts[0],
+                         settlement_mode="membership_covered", play_format="singles",
+                         starts_at=utc_iso(at(fx, 12)), ends_at=utc_iso(at(fx, 13)),
+                         extra_clients=[{"user_id": str(guest)}])
+    bid = r["booking"]["id"]
+    check("the court is CONFIRMED, not held, even with the guest's seat unpaid",
+          r["booking"]["status"] == "confirmed", str(r))
+    check("…and carries no expiry that could cancel it",
+          s.execute(text("SELECT held_until IS NULL FROM diary.booking WHERE id=:b"),
+                    {"b": bid}).scalar() is True)
+
+    # THE TRAP: the debt must survive. "Don't block the court" is not "don't charge for the seat" —
+    # the club is collecting at the desk, so the order has to still be there to collect.
+    rows = _seat_rows(s, bid)
+    g = [x for x in rows if str(x["user_id"]) == str(guest)]
+    check("the guest's debt is STILL a real order (collected at the desk, not forgiven)",
+          len(g) == 1 and g[0]["amount_minor"] == 8000 and bool(g[0]["order_id"]), str(rows))
+    st = s.execute(text('SELECT status FROM billing."order" WHERE id = :o'),
+                   {"o": g[0]["order_id"]}).scalar()
+    check("…and it is open/awaiting, not voided away with the hold",
+          st in ("open", "awaiting_payment"), str(st))
+
+    # And the lazy sweep that cancels abandoned holds must leave this booking entirely alone.
+    B.release_expired_holds(s, fx.club_id, now=at(fx, 12) + timedelta(hours=48))
+    check("the hold sweep 48h later does NOT cancel it (the whole point)",
+          s.execute(text("SELECT status FROM diary.booking WHERE id=:b"),
+                    {"b": bid}).scalar() == "confirmed")
+
+
 def sc_seat_rule_holds_the_court_until_every_seat_settles(s, fx):
     """The billing→diary contract, widened from one order to N. A paid seat must not confirm the
-    court out from under a seat that has not paid."""
-    print("\n# a paid seat does NOT confirm a court whose other seat is still unpaid")
+    court out from under a seat that has not paid.
+
+    THIS IS A FIND-A-GAME RULE, AND ONLY A FIND-A-GAME RULE (owner's decision, 2026-08-15). It is
+    right when strangers found each other through the feed: nobody should get a court on somebody
+    else's payment. It is wrong on a private Book-a-court, where holding the court means CANCELLING a
+    member's own booking because the guest they invited was slow to pay — so this scenario books an
+    OPEN game, which is the shape the rule now applies to. The private counterpart is
+    `sc_a_private_court_never_lapses_because_a_guest_did_not_pay`."""
+    print("\n# a paid seat does NOT confirm an OPEN game whose other seat is still unpaid")
     from billing.events import _confirm_held_bookings
     _enable_seat_rule(s, fx)
     p1, p2 = fx.members[1], fx.members[2]        # neither is a member of any plan
@@ -3548,7 +3722,8 @@ def sc_seat_rule_holds_the_court_until_every_seat_settles(s, fx):
                          booking_type="court", resource_id=fx.courts[0],
                          settlement_mode="online",
                          starts_at=utc_iso(at(fx, 13)), ends_at=utc_iso(at(fx, 14)),
-                         extra_clients=[{"user_id": str(p2)}], play_format="singles")
+                         extra_clients=[{"user_id": str(p2)}], play_format="singles",
+                         visibility="open")
     check("the booking is made and HELD (both seats owe online)",
           r.get("ok") and r["booking"]["status"] == "held", str(r))
     bid = r["booking"]["id"]
@@ -3593,7 +3768,10 @@ def sc_cancelling_a_game_voids_every_seat_debt(s, fx):
                          booking_type="court", resource_id=fx.courts[1],
                          settlement_mode="at_court",
                          starts_at=utc_iso(at(fx, 15)), ends_at=utc_iso(at(fx, 16)),
-                         extra_clients=[{"user_id": str(p2)}], play_format="singles")
+                         # OPEN so there ARE two seat debts to void — on a private court with a PAYG
+                         # booker the only debt is the booking's own order.
+                         extra_clients=[{"user_id": str(p2)}], play_format="singles",
+                         visibility="open")
     bid = r["booking"]["id"]
     check("two seat debts exist before the cancel", len(_seat_rows(s, bid)) == 2)
     B.cancel_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=p1, role="member")
@@ -3614,7 +3792,13 @@ def sc_an_expired_membership_is_an_uncovered_seat(s, fx):
                          booking_type="court", resource_id=fx.courts[0],
                          settlement_mode="membership_covered",
                          starts_at=utc_iso(at(fx, 17)), ends_at=utc_iso(at(fx, 18)),
-                         extra_clients=[{"user_id": str(other)}], play_format="singles")
+                         # OPEN so the shares are actually quoted: this scenario is about COVERAGE
+                         # resolution (an expired membership covers nobody), and shares only exist on
+                         # a game the club was invited into. The private equivalent still charges the
+                         # lapsed member — via the booking's own order, at the FULL court fee, which
+                         # sc_a_payg_booker_pays_the_whole_court_not_a_share pins.
+                         extra_clients=[{"user_id": str(other)}], play_format="singles",
+                         visibility="open")
     check("the booking still succeeds — entitlement downgrades, it never blocks", r.get("ok"), str(r))
     rows = _seat_rows(s, r["booking"]["id"])
     check("BOTH seats are un-covered", all(x["covered"] is False for x in rows), str(rows))
@@ -4236,7 +4420,10 @@ def sc_the_sweep_reminds_then_releases_an_unpaid_seat(s, fx):
                          booking_type="court", resource_id=fx.courts[0],
                          settlement_mode="online",
                          starts_at=utc_iso(at(fx, 17)), ends_at=utc_iso(at(fx, 18)),
-                         extra_clients=[{"user_id": str(p2)}], play_format="singles")
+                         # OPEN — and it always had to be: the sweep selects `visibility = 'open'`,
+                         # so a private booking was never reachable by it in the first place.
+                         extra_clients=[{"user_id": str(p2)}], play_format="singles",
+                         visibility="open")
     bid = r["booking"]["id"]
     check("two unpaid online seats", len(_seat_rows(s, bid)) == 2, str(_seat_rows(s, bid)))
 
@@ -4631,6 +4818,9 @@ SCENARIOS = [
     sc_open_game_sweep_collapses_and_is_idempotent,
     sc_community_reads_never_leak_contact_details,
     sc_seat_rule_bills_through_create_booking,
+    sc_a_payg_booker_pays_the_whole_court_not_a_share,
+    sc_a_guest_is_free_once_the_court_itself_is_paid_for,
+    sc_a_private_court_never_lapses_because_a_guest_did_not_pay,
     sc_seat_rule_holds_the_court_until_every_seat_settles,
     sc_cancelling_a_game_voids_every_seat_debt,
     sc_an_expired_membership_is_an_uncovered_seat,

@@ -1,6 +1,6 @@
 # COMMUNITY ENGINE — Find a Game + the seat-accounting money rule
 
-**Status (2026-08-12): the SOCIAL half is LIVE at NextPoint; the MONEY half is still OFF.** Both
+**Status (2026-08-15): the SOCIAL half is LIVE at NextPoint; the MONEY half is still OFF.** Both
 switches (`club.policy.community_enabled`, `club.policy.seat_rule_enforced`) still default `false`, so
 nothing changes for any other club until it opts in — but at NextPoint **`community_enabled` is ON**
 (Tomo + Tshepo opened a real game on 2026-08-11) and **`seat_rule_enforced` is OFF**, so no seat has
@@ -53,13 +53,61 @@ more than one court fee — deliberately: four people use a court more than two 
 | 90 min R210 | R105 | **R110** |
 | 120 min R280 | R140 | **R140** |
 
-| On court (60 min, share R80) | Member owes | Other(s) owe | Club takes |
+### A SHARE IS FOR SHARING — Book a court is priced differently (owner's decision, 2026-08-15)
+
+**A share is what you pay to SHARE a court you found somebody else for. It is not what a court
+costs.** So the rule divides on `visibility`, which already records exactly that distinction — and
+which the booking flow already sets, so no new flag was needed:
+
+| | `visibility` | The rule |
+|---|---|---|
+| **Find a Game** — the spare seat is published to the club | `open` | everyone pays a **share**; unfilled seats collapse; the court holds until every online seat settles |
+| **Book a court** — someone buys a court and names who's coming | `private` | the booker pays the **court's normal price**; a guest pays a share **only if the court isn't otherwise paid for**; nothing ever holds the court |
+
+**Why the booker must not be re-priced down to a share here.** The first cut linked the holder's seat
+to the booking's own order so it could be re-priced — which dropped a PAYG booker from R150 to R80 the
+moment the money switch went on. That hands every PAYG booker a reason to book "singles", say a friend
+is coming, and take the court at half price, leaving the club to police whether the second person ever
+arrived. **A court fee is not negotiable by who you name.**
+
+**And why the guest is then free.** The seat rule exists to make sure a court gets paid for ONCE. A
+PAYG booker has already done that, so billing their guest too would collect R230 for a R150 court. The
+leak this engine was built to close is the **membership-covered** booker whose guest rides free — and
+that case still bills the guest, because there the court has been paid for by nobody.
+
+**Publishing is never the cheaper option**, which is what makes the split safe from gaming: a PAYG who
+opens their spare seat pays a share (R80), and if nobody takes it the unfilled seat collapses back onto
+them for a second one — R160 on a R150 court.
+
+**Find a Game** (60 min, share R80):
+
+| On court | Member owes | Other(s) owe | Club takes |
 |---|---|---|---|
 | member + member | R0 | R0 | R0 (membership) |
 | member + non-member | R0 | **R80** | R80 |
 | non-member × 2 | — | **R80 + R80** | R160 |
 | doubles, 1 member + 3 non-members | R0 | R80 × 3 | R240 |
 | member, spare seat unfilled at cutoff | **R80** | — | R80 |
+
+**Book a court** (60 min court R150):
+
+| Booking | Booker owes | Guest owes | Club takes |
+|---|---|---|---|
+| member + guest | R0 (covered) | **R80** | R80 — *the original leak, still shut* |
+| PAYG + guest | **R150** (whole court) | R0 | R150 — *not R230* |
+| PAYG alone | **R150** | — | R150 |
+
+**An unpaid guest never costs the booker their court.** `held` is not a gentle state —
+`release_expired_holds` CANCELS a held booking once `held_until` passes, so holding a private court
+until the guest paid meant a guest who was merely slow lost the member the court they had booked. The
+club takes that money at the desk instead; the guest's debt is untouched and stays a real order on
+their statement. Find a Game keeps the hold, where strangers should not get a court on somebody else's
+payment.
+
+Guarded by `sc_a_payg_booker_pays_the_whole_court_not_a_share` ·
+`sc_a_guest_is_free_once_the_court_itself_is_paid_for` ·
+`sc_a_private_court_never_lapses_because_a_guest_did_not_pay`, with
+`sc_seat_rule_holds_the_court_until_every_seat_settles` pinning the Find-a-Game side.
 
 ⚠️ **Rounding up costs a pair R10.** Two payers settle R160 on a R150 court, not R150 — because 50% of a
 price ending in 0 always ends in 0 or 5, so "round up to the nearest ten" is a small, intended price
@@ -70,9 +118,12 @@ rise wherever it lands on a 5. Only the 120-min share (R140) is already exact.
 court's own price therefore **cannot re-price a game that is already sold** — and a LATE joiner pays
 exactly what the people already in it paid. That is why there is no longer anything to refuse.
 
-**Confirmation.** The booking stays `held` while any seat whose resolved method is `online` is unpaid,
-and confirms when the last settles — the existing single-order online-hold widened to N orders. A seat
-settling at the desk or on the tab is a real debt on the statement and does **not** hold the court.
+**Confirmation — ON AN OPEN GAME ONLY** (narrowed 2026-08-15, see the Book-a-court rule above). An
+`open` game stays `held` while any seat whose resolved method is `online` is unpaid, and confirms when
+the last settles — the existing single-order online-hold widened to N orders. A **private** court never
+holds: an unpaid guest is collected at the desk rather than by cancelling the member's booking. In both
+cases a seat settling at the desk or on the tab is a real debt on the statement and does **not** hold
+the court.
 
 **Configuration** (Admin → Setup → Community & games): `seat_share_pct` (0–100, default 50) ·
 `seat_rounding` (`none` / `up_5` / `up_10` / `nearest_5` / `nearest_10`, default `up_10`). The screen
@@ -440,7 +491,7 @@ club, and the problem worth solving is the one WhatsApp doesn't ("who around my 
 **The regression contract:** with `seat_rule_enforced=false`, `python -m scripts.test_all` must still
 read the current green baseline in [`CLAUDE.md` § Gates](../../CLAUDE.md) unchanged. Any drift means
 the rule leaked into the default path. **Verified green 2026-08-09** against the local sandbox
-(`courtflow-dev`) at booking 645 / billing 721 / statement 64, with `python -m db` twice a clean
+(`courtflow-dev`) at booking 663 / billing 721 / statement 64, with `python -m db` twice a clean
 no-op including `community.schema`.
 
 The baseline is quoted in ONE place on purpose — repeating the numbers here is how they drift apart

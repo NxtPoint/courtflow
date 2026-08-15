@@ -43,11 +43,11 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 645 / billing 721 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 663 / billing 721 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (86/98/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (89/98/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **When the numbers move, run `python -m scripts.audit_docs` and update
    EVERY doc it names** — the baseline is repeated in ~7 files and the gate fails unless they all
@@ -398,6 +398,18 @@ empty seat are the same object** — a seat nobody has accounted for. That is wh
 A fixed fraction, not a split, because **the price a player is quoted has to survive somebody else
 joining, leaving or turning out to be a member** — that one property removed a lock, a re-price and a
 refusal from the design.
+
+> **A SHARE IS FOR SHARING — `visibility` decides which rule applies (2026-08-15).** `open` (the
+> spare seat is published to the club) = Find a Game: everyone pays a share, unfilled seats collapse,
+> the court holds until every online seat settles. `private` (Book a court — someone buys a court and
+> names who's coming) = **the booker pays the court's NORMAL PRICE**, a guest pays a share **only if
+> the court isn't otherwise paid for** (i.e. only behind a membership-covered booker), and **nothing
+> ever holds the court** — an unpaid guest is collected at the desk, never by cancelling a member's
+> booking. Re-pricing a PAYG booker down to a share would have let anyone book "singles", claim a
+> friend was coming and take the court at half price. Publishing is never cheaper (own share +
+> collapsed spare = R160 on a R150 court), so the split can't be gamed.
+> `sc_a_payg_booker_pays_the_whole_court_not_a_share` · `sc_a_guest_is_free_once_the_court_itself_is_paid_for`
+> · `sc_a_private_court_never_lapses_because_a_guest_did_not_pay`
 
 **The five invariants — change none of them without reading the spec:**
 - **`community/seats.py` is the ONE place the split lives, and it RAISES rather than guards** — a seat
