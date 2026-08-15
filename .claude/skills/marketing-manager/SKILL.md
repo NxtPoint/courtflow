@@ -35,7 +35,12 @@ never ship a post as image-less without saying so.
 - **Adspirer** (Google Ads) — router `mcp__claude_ai_Adspirer__google_ads(action="execute", tool_name=…)`;
   key tools: `get_campaign_performance`, `get_campaign_targeting`, `analyze_wasted_spend`,
   `analyze_search_terms`, `update_bid_strategy`, `update_campaign` (budget), `add_negative_keywords`.
-  **FREE plan = 15 calls/month, resets ~the 20th — be economical (batch reads; `search_tools`/`get_tool_schema` are free).**
+  **FREE plan = 15 calls/month, resets ~the 20th — be economical (batch reads).**
+  **⚠ `get_tool_schema` and `search_tools` are NOT free — they bill like any other call** (the skill claimed
+  they were until 2026-08-15, when a schema lookup ate the LAST remaining call and the approved negative-keyword
+  write then failed outright). **Budget the writes FIRST.** If ≤2 calls remain, do not spend one on discovery —
+  either call the tool with known-good arguments, or hand the user the Google Ads UI steps instead (a
+  negative-keyword list pastes in manually in ~2 minutes and costs no quota at all).
 - **Daily digest reports** — `marketing_digest/reports/latest.md` + dated files (both brands, GA4+GSC). `git pull` first.
 - **Ahrefs** — the connector API is "Insufficient plan"; use the **free Ahrefs Webmaster Tools** (Site Audit,
   Keyword Generator) in the web UI + the free DR endpoint (needs a free API key from 1 Aug 2026).
