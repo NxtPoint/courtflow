@@ -428,28 +428,71 @@ def _row_to_window(row):
     }
 
 
-def _peak_window(session, club_id, resource_id=None):
-    """The PEAK court-pricing window that applies to a court: its OWN when it overrides, else the
-    club's. {days:[int]|None, start_min, end_min}, or None for no peak pricing. Cached per
+def _stored_windows(session, club_id, resource_id):
+    """The diary.peak_window rows for ONE scope (a court, or the club default when resource_id is
+    None). [] when the scope has none — which is what sends the caller to the legacy columns."""
+    rows = session.execute(
+        text("SELECT days, start_min, end_min FROM diary.peak_window "
+             " WHERE club_id = :c AND resource_id IS NOT DISTINCT FROM CAST(:r AS uuid)"),
+        {"c": str(club_id), "r": str(resource_id) if resource_id else None},
+    ).mappings().all()
+    out = []
+    for r in rows:
+        w = _row_to_window({"peak_days": r["days"], "peak_start_min": r["start_min"],
+                            "peak_end_min": r["end_min"]})
+        if w:
+            out.append(w)
+    return out
+
+
+def clear_peak_cache(session):
+    """Drop the per-session peak-window cache.
+
+    Exists so nothing outside this module has to know the cache's attribute name. The scenario
+    harness used to `delattr(s, "_cf_peak_window")` by hand, and when the cache became
+    `_cf_peak_windows` (plural) that silently stopped clearing anything: every peak assertion then
+    read a stale EMPTY cache and peak pricing looked switched off across nine checks. A private name
+    duplicated in a caller is a name that will drift."""
+    for attr in ("_cf_peak_windows", "_cf_peak_window"):
+        try:
+            delattr(session, attr)
+        except Exception:
+            pass
+
+
+def _peak_windows(session, club_id, resource_id=None):
+    """EVERY peak window that applies to a court: its OWN when it overrides, else the club's.
+    A LIST of {days:[int]|None, start_min, end_min} — empty for no peak pricing. Cached per
     (session, club, resource) so per-slot availability pricing never re-queries.
 
-    RESOLUTION — `diary.resource.peak_override` decides, and both answers matter:
-      · override FALSE (every court until an owner says otherwise) -> the club window. Unchanged.
-      · override TRUE  -> this court's own window IS the answer, INCLUDING when it is empty, which
-                          is how a club with peak hours marks a court as never-peak. A nullable
-                          window alone could only ever add peak, never remove it.
-    Guarded -> the club window (a bad court read must not silently drop peak pricing everywhere)."""
-    cache = getattr(session, "_cf_peak_window", None)
+    A LIST because one window cannot describe a real club's peak. NextPoint's is Mon–Thu 17:00–19:00
+    AND Sat 08:00–10:00: two time ranges on two day sets. With a single window an owner had to pick
+    which half of their peak to charge for, and the screen looked correctly configured while
+    under-charging three evenings a week and over-charging Saturday mornings.
+
+    RESOLUTION — `diary.resource.peak_override` still decides, and both answers still matter:
+      · override FALSE (every court until an owner says otherwise) -> the club's windows. Unchanged.
+      · override TRUE  -> this court's own windows ARE the answer, INCLUDING when there are none,
+                          which is how a club with peak hours marks a court as never-peak (clay here).
+                          A nullable window alone could only ever add peak, never remove it.
+
+    LEGACY FALLBACK, per scope: a scope with no diary.peak_window rows falls back to its old single
+    columns. There is no migration framework in this repo, so every club keeps exactly the peak it
+    has until somebody edits it on the new screen — and a scope that HAS rows ignores its old columns
+    entirely, so the two can never both apply and disagree.
+
+    Guarded -> the club's windows (a bad court read must not silently drop peak pricing everywhere)."""
+    cache = getattr(session, "_cf_peak_windows", None)
     if cache is None:
         cache = {}
         try:
-            session._cf_peak_window = cache
+            session._cf_peak_windows = cache
         except Exception:
             pass
     key = (str(club_id), str(resource_id) if resource_id else "")
     if key in cache:
         return cache[key]
-    win = None
+    wins = []
     try:
         if resource_id:
             r = session.execute(
@@ -458,31 +501,46 @@ def _peak_window(session, club_id, resource_id=None):
                 {"c": str(club_id), "r": str(resource_id)},
             ).mappings().first()
             if r and r["peak_override"]:
-                win = _row_to_window(r)          # may be None = this court is never peak
-                cache[key] = win
-                return win
-        row = session.execute(
-            text("SELECT peak_days, peak_start_min, peak_end_min FROM club.policy WHERE club_id = :c"),
-            {"c": str(club_id)},
-        ).mappings().first()
-        win = _row_to_window(row)
+                wins = _stored_windows(session, club_id, resource_id)
+                if not wins:
+                    legacy = _row_to_window(r)   # may be None = this court is never peak
+                    wins = [legacy] if legacy else []
+                cache[key] = wins
+                return wins
+        wins = _stored_windows(session, club_id, None)
+        if not wins:
+            row = session.execute(
+                text("SELECT peak_days, peak_start_min, peak_end_min FROM club.policy "
+                     " WHERE club_id = :c"),
+                {"c": str(club_id)},
+            ).mappings().first()
+            legacy = _row_to_window(row)
+            wins = [legacy] if legacy else []
     except Exception:
-        win = None
-    cache[key] = win
-    return win
+        wins = []
+    cache[key] = wins
+    return wins
+
+
+def _peak_window(session, club_id, resource_id=None):
+    """BACK-COMPAT: the FIRST applicable peak window, or None. Kept because callers outside pricing
+    read a single window. Anything deciding whether a moment is peak must use in_peak_window, which
+    considers them all — a club with two windows would otherwise be charged on only the first."""
+    wins = _peak_windows(session, club_id, resource_id)
+    return wins[0] if wins else None
 
 
 def in_peak_window(session, *, club_id, local_dt, resource_id=None):
-    """True if local_dt (a CLUB-LOCAL datetime) falls inside the peak window that applies to this
+    """True if local_dt (a CLUB-LOCAL datetime) falls inside ANY peak window that applies to this
     court — its own when it overrides, else the club's. Reuses any_window_covers' day/time semantics
     (ISO weekday, minutes-from-midnight, end exclusive). Guarded -> False."""
-    win = _peak_window(session, club_id, resource_id)
-    if not win or local_dt is None:
+    wins = _peak_windows(session, club_id, resource_id)
+    if not wins or local_dt is None:
         return False
-    return any_window_covers([win], local_dt)
+    return any_window_covers(wins, local_dt)
 
 
-def membership_covers(session, *, club_id, user_id, starts_at):
+def membership_covers(session, *, club_id, user_id, starts_at, resource_id=None):
     """True if an ACTIVE membership covers a COURT booking that STARTS at `starts_at` — i.e. the
     member's plan is still running ON THE DAY OF THE BOOKING AND the booking falls inside that
     plan's access window (Phase 5). A plan with NO window (trial/unconstrained) covers any time of
@@ -534,11 +592,21 @@ def membership_covers(session, *, club_id, user_id, starts_at):
                        OR CAST(:dow AS text) = ANY(string_to_array(p.access_days, ',')))
                       AND (p.access_start_min IS NULL OR :mod >= p.access_start_min)
                       AND (p.access_end_min   IS NULL OR :mod <  p.access_end_min)
+                      -- A tier flagged "not covered at peak" simply does not qualify at peak. It is
+                      -- evaluated per SUBSCRIPTION, not after the fact, so a member holding both an
+                      -- off-peak trial and a real anytime membership is still covered by the latter.
+                      AND (p.covers_peak OR NOT :is_peak)
                     )
                   )
                 LIMIT 1
             """),
-            {"c": club_id, "u": user_id, "dow": iso_dow, "mod": min_of_day, "on_date": on_date},
+            {"c": club_id, "u": user_id, "dow": iso_dow, "mod": min_of_day, "on_date": on_date,
+             # Peak is PER COURT, so it is resolved for the court being booked when the caller knows
+             # it. Without a resource we fall back to the club's own windows rather than assuming
+             # off-peak — assuming off-peak would hand a peak-excluded tier a free peak court on any
+             # path that happens not to pass the court through.
+             "is_peak": in_peak_window(session, club_id=club_id, local_dt=local,
+                                       resource_id=resource_id)},
         ).first()
         return row is not None
     except Exception:

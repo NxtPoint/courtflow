@@ -209,8 +209,12 @@ def court_covered(session, *, club_id, user_id, starts_at, ends_at, resource_id,
     try:
         if not user_id or starts_at is None:
             return False
-        # 1) window coverage (active membership + inside its access window) — the existing rule.
-        if not _pricing.membership_covers(session, club_id=club_id, user_id=user_id, starts_at=starts_at):
+        # 1) window coverage (active membership + inside its access window) — the existing rule, plus
+        # the tier's covers_peak. The COURT is passed because peak is per court: a tier that is not
+        # covered at peak must be judged against the peak window of the court actually being booked,
+        # not the club default, or clay (which has no peak here) would wrongly read as peak.
+        if not _pricing.membership_covers(session, club_id=club_id, user_id=user_id,
+                                          starts_at=starts_at, resource_id=resource_id):
             return False
         # 2) court-service eligibility (a clay court is never covered).
         if not service_members_covered(session, club_id=club_id, resource_id=resource_id):

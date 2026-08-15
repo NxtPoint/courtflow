@@ -75,6 +75,41 @@ _DDL = [
     f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS peak_start_min int;",
     f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS peak_end_min int;",
     f"ALTER TABLE {SCHEMA}.resource ADD COLUMN IF NOT EXISTS feature_on_home boolean NOT NULL DEFAULT false;",
+
+    # ------------------------------------------------------------------ #
+    # diary.peak_window — MORE THAN ONE peak window (2026-08-15)
+    # ------------------------------------------------------------------ #
+    # The columns above hold exactly ONE window: one set of days, one time range. That cannot express
+    # the shape a real club actually has — NextPoint's peak is weekday EVENINGS (Mon–Thu 17:00–19:00)
+    # and Saturday MORNING (08:00–10:00). Two different time ranges on two different day sets. With a
+    # single window an owner has to choose which half of their peak to charge for, and the config
+    # screen quietly looked correct while doing the wrong thing on three evenings a week.
+    #
+    # A TABLE, not more columns, because the number of windows is a property of the club's timetable
+    # and not of our schema — a second pair of columns would just move the ceiling from one to two.
+    #
+    # `resource_id NULL` = the CLUB-level default (what a court inherits); a row per court = that
+    # court's own. Which of the two applies is still decided by resource.peak_override, so the
+    # override semantics that already exist are untouched: false = inherit, true = this court's own
+    # answer INCLUDING an empty one (never peak).
+    #
+    # The legacy single-window columns are deliberately NOT dropped and NOT migrated. There is no
+    # migration framework here, and _peak_windows falls back to them whenever a scope has no rows —
+    # so every existing club keeps its current peak with no data change at all, and only a club that
+    # edits its peak on the new screen moves over.
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.peak_window (
+        id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        club_id     uuid NOT NULL REFERENCES club.club(id) ON DELETE CASCADE,
+        resource_id uuid REFERENCES {SCHEMA}.resource(id) ON DELETE CASCADE,
+        days        text,
+        start_min   int,
+        end_min     int,
+        created_at  timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_peak_window_scope "
+    f"ON {SCHEMA}.peak_window (club_id, resource_id);",
     # Widen resource.kind to accept 'equipment'. Idempotent drop+re-add of the auto-named CHECK.
     f"""
     DO $$

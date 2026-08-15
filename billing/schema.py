@@ -97,6 +97,20 @@ _DDL = [
     # trial inherits every entitlement cap above. NULL/false = not the trial tier.
     f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS trial_days int;",
     f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS is_trial boolean NOT NULL DEFAULT false;",
+    # COVERS_PEAK — "this tier is free EXCEPT at peak" (2026-08-15).
+    #
+    # The problem it solves: a club wants free-week trialists to stop taking prime-time courts for
+    # nothing, but still play free the rest of the week. That is expressible with the access window
+    # ONLY as the INVERSE of peak — which means hand-maintaining "everything except Mon–Thu 17:00–19:00
+    # and Sat 08:00–10:00" as a set of windows, in a second place, per tier. It would be wrong the
+    # first time peak moved and nobody would notice, because the failure is silent: members simply
+    # start playing free at peak again.
+    #
+    # So the tier says WHAT IT MEANS — not covered at peak — and coverage consults whatever peak is
+    # actually configured, per court, at the moment of the booking. Peak moves, this follows.
+    #
+    # DEFAULT TRUE = every existing tier keeps covering peak exactly as it does today.
+    f"ALTER TABLE {SCHEMA}.price ADD COLUMN IF NOT EXISTS covers_peak boolean NOT NULL DEFAULT true;",
     # Per-SERVICE payment preference: a CSV of allowed settlement modes this service offers
     # (subset of the club-enabled methods), e.g. 'online,at_court'. NULL = all club-enabled. The
     # single source of truth the unified service editor writes + the booking flow reads. Idempotent.

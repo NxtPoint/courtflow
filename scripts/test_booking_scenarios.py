@@ -1568,11 +1568,10 @@ def sc_peak_court_pricing(s, fx):
 
     def _drop_peak_cache():
         # The peak window is cached on the SHARED session; clear it so reads see the just-set window,
-        # and again at the end so the savepoint-rolled-back policy doesn't leak "peak on" into later scenarios.
-        try:
-            delattr(s, "_cf_peak_window")
-        except Exception:
-            pass
+        # and again at the end so the savepoint-rolled-back policy doesn't leak "peak on" into later
+        # scenarios. Through pricing.clear_peak_cache, NOT by delattr on a private name: this used to
+        # name the attribute itself, and when the cache went plural the clear silently became a no-op.
+        P.clear_peak_cache(s)
 
     _drop_peak_cache()
     try:
@@ -2830,6 +2829,10 @@ def sc_peak_hours_can_differ_per_court(s, fx):
                    "peak_start_min = 420, peak_end_min = 540 WHERE id = :r"), {"r": own})
     s.execute(text("UPDATE diary.resource SET peak_override = true, peak_days = NULL, "
                    "peak_start_min = NULL, peak_end_min = NULL WHERE id = :r"), {"r": never})
+    # Peak is cached per session, so a scenario that CHANGES peak config has to drop it or it reads
+    # whatever an earlier scenario resolved. This used to pass only because nothing had cached this
+    # club yet — an ordering dependency, not a guarantee.
+    P.clear_peak_cache(s)
 
     def peak_at(court, hour):
         return P.in_peak_window(s, club_id=fx.club_id, local_dt=at(fx, hour), resource_id=court)
@@ -2874,6 +2877,138 @@ def sc_peak_hours_can_differ_per_court(s, fx):
     check("inheriting court at 17:00 is CHARGED peak R250", charged(inherit, 17) == 25000)
 
 
+def sc_a_tier_can_be_free_except_at_peak(s, fx):
+    """The free-week problem: trialists were booking prime-time courts for nothing.
+
+    The club does NOT want to blank out prime time for them — just to charge for it. Expressing that
+    with the ACCESS WINDOW would mean hand-maintaining the INVERSE of peak ("everything except Mon–Thu
+    17:00–19:00 and Sat 08:00–10:00") in a second place, per tier. It would be wrong the first time
+    peak moved, and the failure is SILENT: trialists simply start playing free at peak again.
+
+    So the tier states what it means — `covers_peak = false` — and coverage consults whatever peak is
+    configured, for the COURT being booked, at the moment of the booking. Peak moves, this follows.
+
+    The court matters: peak is per court here, so a tier excluded at peak is still free on a court
+    that has no peak at all (clay, in this club)."""
+    print("\n# A membership tier can cover everything EXCEPT peak (the trial's prime-time rule)")
+    from diary import pricing as P
+    from diary import entitlement as E
+    from billing.membership import membership_product_id
+    peaky, never_peak = fx.courts[0], fx.courts[1]
+
+    # Club peak 17:00–19:00 every day; `never_peak` opts out entirely (this club's clay court).
+    s.execute(text("UPDATE club.policy SET peak_days = NULL, peak_start_min = 1020, "
+                   "peak_end_min = 1140 WHERE club_id = :c"), {"c": fx.club_id})
+    s.execute(text("UPDATE diary.resource SET peak_override = true, peak_days = NULL, "
+                   "peak_start_min = NULL, peak_end_min = NULL WHERE id = :r"), {"r": never_peak})
+    P.clear_peak_cache(s)
+
+    mprod = membership_product_id(s, club_id=fx.club_id, create_if_missing=True)
+    trial_user, anytime_user = fx.members[1], fx.members[2]
+
+    def _tier(name, covers_peak):
+        return s.execute(
+            text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                 "currency_code, unit, term_months, membership_tier, active, covers_peak) "
+                 "VALUES (:c,:p,'member',0,'ZAR','per_month',1,:t,true,:cp) RETURNING id"),
+            {"c": fx.club_id, "p": mprod, "t": name, "cp": covers_peak}).scalar()
+
+    def _subscribe(uid, price_id):
+        s.execute(text("INSERT INTO billing.membership_subscription (club_id, user_id, price_id, "
+                       "status, provider, current_period_end) "
+                       "VALUES (:c,:u,:pr,'active','trial',CURRENT_DATE+30)"),
+                  {"c": fx.club_id, "u": uid, "pr": price_id})
+
+    _subscribe(trial_user, _tier("Free Trial", False))
+    _subscribe(anytime_user, _tier("Anytime", True))
+
+    def covered(uid, court, hour):
+        # DATETIMES, not ISO strings: membership_covers calls .astimezone on starts_at, and the
+        # guard turns the resulting AttributeError into a bare False — so a string argument makes
+        # every assertion here "not covered" for a reason that has nothing to do with peak.
+        return E.court_covered(s, club_id=fx.club_id, user_id=uid, resource_id=court,
+                               starts_at=at(fx, hour), ends_at=at(fx, hour + 1))
+
+    check("the trial covers an OFF-peak court — the free week still works",
+          covered(trial_user, peaky, 10) is True)
+    check("…but NOT a peak one (the whole point)", covered(trial_user, peaky, 17) is False)
+    check("…so a peak court is simply PAYG for them, never blocked",
+          covered(trial_user, peaky, 18) is False)
+    check("the boundary is the window's: 19:00 is out of peak and covered again",
+          covered(trial_user, peaky, 19) is True)
+
+    # PER COURT. A tier excluded at peak is still free on a court with no peak window at all.
+    check("the trial IS still free at 17:00 on a court that has no peak (clay here)",
+          covered(trial_user, never_peak, 17) is True)
+
+    # And it is per SUBSCRIPTION, not a club-wide switch — a paying anytime member is unaffected.
+    check("a normal anytime membership still covers peak", covered(anytime_user, peaky, 17) is True)
+    check("…and off-peak too, obviously", covered(anytime_user, peaky, 10) is True)
+
+    # The default has to be "covers peak", or adding this column would silently have started
+    # charging every existing member at peak.
+    dflt = s.execute(text("SELECT covers_peak FROM billing.price WHERE club_id = :c "
+                          "  AND membership_tier = 'Anytime' LIMIT 1"), {"c": fx.club_id}).scalar()
+    check("covers_peak defaults TRUE, so no existing tier changed behaviour", dflt is True)
+
+
+def sc_peak_can_have_more_than_one_window(s, fx):
+    """A real club's peak is not one window. NextPoint's is weekday EVENINGS (Mon–Thu 17:00–19:00)
+    AND Saturday MORNING (08:00–10:00) — two different time ranges on two different day sets.
+
+    The single peak_days/peak_start_min/peak_end_min triple could hold only one of them, so the owner
+    had to choose which half of their peak to charge for. The screen looked correctly configured the
+    whole time: it showed "peak 17:00–19:00 · Mon…Sun", which under-charged nothing visibly and
+    over-charged Fri/Sat/Sun evenings while Saturday morning — their busiest — sold at off-peak.
+
+    The legacy columns are NOT migrated, so this also pins the fallback: a scope with no
+    diary.peak_window rows still resolves its old single window exactly as before."""
+    print("\n# Peak is a LIST of windows: Mon–Thu evenings AND Sat mornings, on one court")
+    from diary import pricing as P
+    court = fx.courts[0]
+
+    # LEGACY FIRST: the club's old single window still resolves while it has no rows of its own.
+    s.execute(text("UPDATE club.policy SET peak_days = NULL, peak_start_min = 1020, "
+                   "peak_end_min = 1140 WHERE club_id = :c"), {"c": fx.club_id})
+    P.clear_peak_cache(s)
+    check("a club with no peak_window rows still uses its legacy single window",
+          P.in_peak_window(s, club_id=fx.club_id, local_dt=at(fx, 17), resource_id=court) is True)
+
+    # NOW the real shape: Mon–Thu 17:00–19:00 AND Sat 08:00–10:00, as club-level defaults.
+    for days, a, b in (("1,2,3,4", 1020, 1140), ("6", 480, 600)):
+        s.execute(text("INSERT INTO diary.peak_window (club_id, resource_id, days, start_min, end_min) "
+                       "VALUES (:c, NULL, :d, :a, :b)"),
+                  {"c": fx.club_id, "d": days, "a": a, "b": b})
+    P.clear_peak_cache(s)
+
+    def peak_on(iso_dow, hour, minute=0):
+        """A club-local datetime on a KNOWN weekday — the fixture's test day can be any day, so a
+        day-of-week rule asserted against it would pass or fail on when the suite happens to run."""
+        base = at(fx, hour, minute)
+        return P.in_peak_window(s, club_id=fx.club_id, resource_id=court,
+                                local_dt=base + timedelta(days=(iso_dow - base.isoweekday()) % 7))
+
+    check("Tuesday 18:00 is peak (the weekday-evening window)", peak_on(2, 18) is True)
+    check("Thursday 17:00 is peak — the window is inclusive at the start", peak_on(4, 17) is True)
+    check("Saturday 09:00 is peak (the SECOND window — this is what could not be expressed)",
+          peak_on(6, 9) is True)
+    check("…and BOTH windows are live at once, not just the first one found",
+          peak_on(2, 18) is True and peak_on(6, 9) is True)
+    # The gaps matter as much as the hits — an over-charge is as wrong as an under-charge.
+    check("Friday 18:00 is NOT peak (it was, wrongly, when one window covered all seven days)",
+          peak_on(5, 18) is False)
+    check("Saturday 18:00 is NOT peak — Saturday's window is the MORNING one", peak_on(6, 18) is False)
+    check("Tuesday 09:00 is NOT peak — the morning window is Saturdays only", peak_on(2, 9) is False)
+    check("Thursday 19:00 is NOT peak — end is exclusive", peak_on(4, 19) is False)
+
+    # A COURT that overrides still wins, and its own rows beat the club's.
+    s.execute(text("UPDATE diary.resource SET peak_override = true, peak_days = NULL, "
+                   "peak_start_min = NULL, peak_end_min = NULL WHERE id = :r"), {"r": court})
+    P.clear_peak_cache(s)
+    check("a court that overrides with NO windows of its own is never peak — the club's two "
+          "windows do not leak back in", peak_on(2, 18) is False and peak_on(6, 9) is False)
+
+
 def sc_peak_survives_a_reschedule(s, fx):
     """A RESCHEDULE re-priced at the BASE amount, whatever the new time — so moving a booking INTO a
     peak window under-charged it, permanently and silently.
@@ -2906,6 +3041,10 @@ def sc_peak_survives_a_reschedule(s, fx):
               {"c": fx.club_id, "r": early, "wd": fx.target.weekday()})
     s.execute(text("UPDATE diary.resource SET peak_override = true, peak_days = NULL, "
                    "peak_start_min = 420, peak_end_min = 540 WHERE id = :r"), {"r": early})
+    # Same reason as the per-court scenario: peak is cached per session, so changing it here without
+    # dropping the cache reads whatever an earlier scenario resolved for this club.
+    from diary import pricing as _P
+    _P.clear_peak_cache(s)
 
     def book(court, hour, mins=60):
         st = at(fx, hour)
@@ -4882,6 +5021,8 @@ SCENARIOS = [
     sc_one_lesson_flow,
     sc_paying_is_the_acceptance,
     sc_peak_hours_can_differ_per_court,
+    sc_peak_can_have_more_than_one_window,
+    sc_a_tier_can_be_free_except_at_peak,
     sc_peak_survives_a_reschedule,
     sc_trial_obeys_the_same_court_rules_as_a_membership,
     sc_equipment_court_is_charged_and_both_are_booked_out,
