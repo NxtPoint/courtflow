@@ -210,7 +210,13 @@
 
     // Greeting — name, email, membership standing as a quiet chip (no emoji). Edit profile shortcut.
     var email = (DATA.profile && DATA.profile.email) || (principal && principal.email) || "";
-    var mLine = plan.is_trial ? ("7-day trial — " + (plan.trial_days_left || 0) + " days left · courts free")
+    // "courts free" was unconditional, which is true only of a trial tier with NO access window.
+    // The moment a club gives its trial one — e.g. to stop free-week users taking prime time — that
+    // line promises free courts the member is about to be charged for, on the first screen they see.
+    // membership_window_summary already says it properly ("Courts free weekdays 06:00–16:00").
+    var mLine = plan.is_trial
+      ? ("7-day trial — " + (plan.trial_days_left || 0) + " days left · "
+         + (plan.membership_window_summary || "courts free"))
       : plan.active ? ((plan.name || "Member") + (plan.current_period_end ? " · renews " + plan.current_period_end : ""))
         : "Pay as you go";
     wrap.appendChild(el("div", { class: "cf-greet", style: "padding:22px 24px;align-items:flex-start" }, [
