@@ -52,6 +52,20 @@ never ship a post as image-less without saying so.
   full-canvas designs with headers and footers, so a crop eats content; keep the source aspect (the existing
   heroes are a mix of 1536x1024 and 1600x900, so either is in-convention). Crop to 16:9 only for photos.
 - **Browser** — Ads console / GSC / GA4 if the Chrome extension is connected (often flaky — prefer Adspirer + digest).
+- **Images: you CANNOT generate them — Tomo does, in ChatGPT.** Your job is the *conversion* half of the
+  hero recipe (Pillow → WebP) on a picture that already exists in the library. Never promise a generated
+  image, and never ship a post image-less in silence: if the library has no match, say so and ask for one.
+  **Check first whether the hero is already wired** — on 2026-08-15 `parents.png` looked like an unused new
+  infographic but was simply the source of the already-live `junior-analytics.webp` (same 1536x1024, converted
+  two minutes later). Compare dimensions + mtimes before asking for anything.
+
+**⚠ Two Windows measurement traps that fake findings on this box.** Both bit on 2026-08-15 and both produce
+*false* punch-list items, which is worse than finding nothing:
+- **`grep -P` fails** ("supports only unibyte and UTF-8 locales"), returning empty — which reads as "NO META
+  DESCRIPTION" on a page that has one. **Parse HTML with Python, not `grep -P`.**
+- **Console is cp1252**, so a UTF-8 em-dash prints as `â€"` and looks like mojibake in the live site. Set
+  `PYTHONIOENCODING=utf-8` before concluding the source is broken.
+Rule: **before reporting any technical defect, confirm the tool measured it correctly.**
 
 ## The routine — run for BOTH brands (skip a phase if its data is unchanged)
 
@@ -87,10 +101,23 @@ striking-distance queries. Aim to ship a website page AND its matching GBP post 
   coworker SEO→post workflow — memory `ten-fifty5-weekly-seo-blog-workflow`). **A book/buy-intent query
   ("tennis lessons johannesburg", "book a court") wants a landing-style page with CTAs to `/book`
   `/free-lesson` — NOT a how-to article.**
+  **📉 THE CADENCE GAP IS THE STANDING NEXTPOINT FINDING — check it every session.** As of 2026-08-15
+  Ten-Fifty5 had **13 posts** and NextPoint **4**, and their organic curves match that ratio: Ten-Fifty5
+  users +30% / clicks +18% / position 8.9→8.4 in a week, NextPoint clicks −13% over the same stretch.
+  Ten-Fifty5's blog is the engine pulling its growth; NextPoint's four posts are not enough to move
+  anything. **Default to proposing NextPoint content, not Ten-Fifty5 content** — Ten-Fifty5 already has
+  Cowork feeding it weekly, so this skill's marginal value is almost entirely on the NextPoint side.
+  Count both `frontend/blog/_posts/` directories each run and report the ratio.
 - **③ Cowork weekly output — publish + DE-DUPE (Ten-Fifty5).** A scheduled Claude **Cowork** task writes a
   researched blog + SEO report + infographic each week: blog `.../local-agent-mode-sessions/.../outputs/blog-*.md`
   + `weekly-seo-report-*.md`; infographic in `C:\Users\tomos\OneDrive\Documentos\blog\`. When one exists:
-  **BEFORE publishing, `ls frontend/blog/_posts/` and check for an existing post on the same topic.** New topic →
+  **BEFORE publishing, `ls frontend/blog/_posts/` and check for an existing post on the same topic.**
+  **COMPARE TOPICS, NOT SLUGS — the slugs will not match.** On 2026-08-15 the draft
+  `tennis-analytics-for-juniors-and-parents` was the same post as the live
+  `tennis-analytics-for-junior-players` published **seven days earlier by this same weekly pipeline** —
+  same audience, same thesis, ~75% the same argument, and no slug collision to warn you. Read the titles and
+  descriptions of every existing post, not the filenames. **The pipeline re-briefs topics across weeks, so a
+  duplicate is the DEFAULT expectation, not the edge case.** New topic →
   publish (hero from the picture library, per the recipe above). **Duplicate topic → REFRESH the existing URL
   instead** (swap in the new infographic + bump the date + optionally enrich) — never create a competing page
   (keyword cannibalization). Cowork = the autonomous weekly research+writer; THIS skill = the publisher /
@@ -101,7 +128,14 @@ striking-distance queries. Aim to ship a website page AND its matching GBP post 
     take the stronger draft as the base and graft in whatever the other one uniquely adds — then say plainly
     why it's one page. Publishing both would cannibalize, and identical slugs silently overwrite at build time.
   - **⚠ VERIFY THE WEEKLY SEO REPORT'S ISSUES AGAINST THE LIVE SITE BEFORE ACTING — it has repeatedly invented
-    them** (2026-07-26 and again 2026-08-07). Its recurring failure is asserting a **"Wix template vs custom
+    them** (2026-07-26, 2026-08-07 and **again 2026-08-15 — 6 of its 7 findings were false**). On 2026-08-15 it
+    additionally invented a **`info@tenfifty5.com` email typo "appearing twice"** and labelled it *"Do this
+    first — it is losing enquiries"* (the live page has 0 occurrences of the typo and 8 of the correct
+    address); a **stale `/blog` index listing "only 7 articles" with "four orphaned posts"** (it links all 13);
+    and a **`/blog` "Start Free" CTA pointing at a raw `wixstudio.com` portal** (it points at `/login`; 0
+    wixstudio refs on the page). The ONE true finding was over-long meta descriptions on `/` and `/academies`.
+    **Its confidence is inversely related to its accuracy — the more urgent the framing, the more likely it is
+    invented.** Its recurring failure is asserting a **"Wix template vs custom
     template" split** for `/pricing` `/coaching` `/contact-us`, then deriving a whole action list from that
     fiction (missing meta descriptions, a contact-email typo, a raw `wixstudio.com` CTA, orphaned posts, absent
     JSON-LD). On 2026-08-07 **every single item was false** — all pages are on the one Render stack, all carry
@@ -130,6 +164,12 @@ per brand)** and a note of **what you auto-tuned this session**. That's the deli
 - **Be economical with Adspirer** (15 calls/month). Reuse the digest for organic data; don't re-pull what you have.
 - **Ten-Fifty5 repo** (`C:\dev\webhook-server`): only its `frontend/`, `marketing/`, blog + tag areas; commit with `CLAUDE_CODE=1`; never touch its product/DB code.
 - **Never touch DNS.** **Never bulk-remove the dormant Wix scaffolding** (see the Ten-Fifty5 `docs/DE-WIX-DECOMMISSION.md`).
+- **🔴 NEVER MARKET A FEATURE THAT IS SWITCHED OFF.** Before writing a post, a GBP update or an ad about any
+  NextPoint capability, **check its flag in the code, not the roadmap.** Community / "Find a Game" ships DARK
+  behind `club.policy.community_enabled` + `seat_rule_enforced`, **both defaulting `false`** — and per
+  CLAUDE.md no write path has been exercised by a real second person. Driving searchers to a dark feature
+  spends real attention on a dead end and burns the launch, which you only get once. Announce it the week it
+  is ON, with the flags flipped and one real end-to-end run behind you.
 - **Concurrency:** another agent may be in these repos — commit with **explicit file paths**, never `git add -A`.
 
 ## Efficiency (short on time?)
