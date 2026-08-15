@@ -17,7 +17,7 @@ not a data dump. Judge ad ROI by **cost-per-member (CPA)**, never the mis-tracke
 |---|---|---|
 | Kind | Physical tennis club (Killarney, JHB) | AI tennis-analysis SaaS |
 | Site | nextpointtennis.com | ten-fifty5.com |
-| Repo | `C:\dev\nextpoint` (courtflow) | `C:\dev\webhook-server` (1050 — commit with `CLAUDE_CODE=1`) |
+| Repo | `C:\dev\nextpoint` (courtflow) | `C:\dev\webhook-server` (Ten-Fifty5 — commit with `CLAUDE_CODE=1`) |
 | Render origin | courtflow-web.onrender.com | locker-room-26kd.onrender.com |
 | GA4 | `G-EKQP47P8M9` | `G-4167EPFS34` |
 | Google Ads | `AW-17077631191` · customer `7042753564` · campaign `23964238993` (NextPoint – Search – JHB) | **none (organic-only by choice)** |
@@ -78,7 +78,7 @@ striking-distance queries. Aim to ship a website page AND its matching GBP post 
   `frontend/blog/_posts/<slug>.md` (frontmatter `title/description/date/image:`; filename = the slug;
   description ≤ ~155 chars), optimize the hero to WebP ~16:9 with Pillow, run `python build_blog.py`, then
   commit the new `.md` + generated `.html` + `index.html` (explicit paths). **NextPoint → courtflow** (imgs
-  `/img/`); **Ten-Fifty5 → the 1050 repo with `CLAUDE_CODE=1`** (imgs `/blog/images/`; it also has a weekly
+  `/img/`); **Ten-Fifty5 → the Ten-Fifty5 repo with `CLAUDE_CODE=1`** (imgs `/blog/images/`; it also has a weekly
   coworker SEO→post workflow — memory `ten-fifty5-weekly-seo-blog-workflow`). **A book/buy-intent query
   ("tennis lessons johannesburg", "book a court") wants a landing-style page with CTAs to `/book`
   `/free-lesson` — NOT a how-to article.**
@@ -123,8 +123,8 @@ per brand)** and a note of **what you auto-tuned this session**. That's the deli
 ## Guardrails
 - **Approve before ANY spend change** (bidding, budget, pausing, new campaigns) — show the exact change first.
 - **Be economical with Adspirer** (15 calls/month). Reuse the digest for organic data; don't re-pull what you have.
-- **1050 repo** (Ten-Fifty5): only its `frontend/`, `marketing/`, blog + tag areas; commit with `CLAUDE_CODE=1`; never touch its product/DB code.
-- **Never touch DNS.** **Never bulk-remove the dormant Wix scaffolding** (see the 1050 `docs/DE-WIX-DECOMMISSION.md`).
+- **Ten-Fifty5 repo** (`C:\dev\webhook-server`): only its `frontend/`, `marketing/`, blog + tag areas; commit with `CLAUDE_CODE=1`; never touch its product/DB code.
+- **Never touch DNS.** **Never bulk-remove the dormant Wix scaffolding** (see the Ten-Fifty5 `docs/DE-WIX-DECOMMISSION.md`).
 - **Concurrency:** another agent may be in these repos — commit with **explicit file paths**, never `git add -A`.
 
 ## Efficiency (short on time?)
