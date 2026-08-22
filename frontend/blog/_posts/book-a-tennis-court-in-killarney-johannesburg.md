@@ -41,7 +41,7 @@ New to NextPoint? **Your first week is free** — a perfect way to try the court
 
 While you're here, NextPoint is also home to:
 
-- **Private lessons** with [ATP-level coaches](/coaches) — your first lesson is free.
+- **Private lessons** with [our coaching team](/coaches) — pay as you go, no membership needed.
 - **Group classes and cardio tennis** — a fun, social way to improve and stay fit.
 - **Junior and high-performance programmes** for kids and competitive players.
 

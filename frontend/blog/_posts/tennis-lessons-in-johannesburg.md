@@ -1,11 +1,11 @@
 ---
 title: Tennis Lessons in Johannesburg
-description: Book tennis lessons with ATP-level coaches at NextPoint Tennis, Killarney — private, junior, group and cardio, all ages and levels. Your first lesson is free.
+description: Book tennis lessons at NextPoint Tennis, Killarney — private, junior, group and cardio, all ages and levels. Pay as you go, no membership needed.
 date: 2026-07-26
 image: /img/feat-coaching.webp
 ---
 
-Looking for tennis lessons in Johannesburg? At **NextPoint Tennis** in Killarney, you can learn from **ATP-level coaches** — book online in under a minute, and **your first lesson is free**. Whether you've never held a racket or you're chasing a ranking, there's a lesson here for you.
+Looking for tennis lessons in Johannesburg? At **NextPoint Tennis** in Killarney, you can learn from **ATP-level coaches** — book online in under a minute and **pay as you go** — no membership required. Whether you've never held a racket or you're chasing a ranking, there's a lesson here for you.
 
 We coach every age and level, seven days a week, on eight courts including **Gauteng's only clay court** — at Killarney Country Club in Houghton, a short drive from Rosebank, Parktown, Saxonwold and Sandton.
 
@@ -42,7 +42,7 @@ NextPoint Tennis, **Killarney Country Club, Houghton, Johannesburg** — close t
 ## Frequently asked questions
 
 **Do you offer tennis lessons for beginners?**
-Yes — beginners are welcome and your first lesson is free. Rackets are provided.
+Yes — beginners are welcome, and rackets are provided.
 
 **Do you have tennis lessons for kids?**
 Yes — structured junior coaching from first racket to competitive juniors.
@@ -51,7 +51,7 @@ Yes — structured junior coaching from first racket to competitive juniors.
 Yes — pick your coach and time in seconds at [nextpointtennis.com](/book).
 
 **How much are tennis lessons?**
-You'll see live pricing when you book. Your first lesson is free, and prepaid packs work out cheaper if you play often. See [pricing](/pricing).
+You'll see live pricing when you book, and prepaid packs work out cheaper if you play often. See [pricing](/pricing).
 
 **Where are you located?**
 Killarney Country Club, Houghton, Johannesburg — near Rosebank and Parktown.

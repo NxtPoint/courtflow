@@ -80,7 +80,7 @@ Not publicly. Floodlit outdoor courts are the practical answer for evening and y
 Online, at [nextpointtennis.com](/book) — courts, lessons and classes, with live availability. [Step-by-step guide here](/post/book-a-tennis-court-in-killarney-johannesburg).
 
 **Do you offer tennis lessons?**
-Yes — private, junior, group and cardio, with ATP-level coaches. [More on lessons](/post/tennis-lessons-in-johannesburg). Your first lesson is free.
+Yes — private, junior, group and cardio, with ATP-level coaches. [More on lessons](/post/tennis-lessons-in-johannesburg). Lessons are pay-as-you-go.
 
 ## Ready to play?
 
