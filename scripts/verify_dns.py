@@ -29,6 +29,9 @@ from __future__ import annotations
 import argparse
 import re
 import json
+import random
+import socket
+import struct
 import subprocess
 import sys
 import urllib.request
@@ -97,27 +100,93 @@ def parse_zone(path: Path) -> list[tuple[str, str, str]]:
     return records
 
 
-def dnssec_ds_present(domain: str) -> bool | None:
-    """Is there a DS record for this domain at the TLD? None = couldn't tell.
+def _ds_at_registry(domain: str) -> bool | None:
+    """Ask a .com gTLD server for the DS directly. None = couldn't tell.
 
-    This is the one pre-flight whose failure is total rather than partial. A DS
-    record commits the parent zone to a specific set of signing keys. Point the
-    nameservers at Cloudflare while the DS still names the OLD provider's keys
-    and every validating resolver - Google, 1.1.1.1, most ISPs - stops
-    resolving the domain outright. Not slow, not degraded: SERVFAIL, for web
-    and mail alike, until the DS clears the TLD (up to 24-48h).
-
-    So it is checked before anything else and it blocks, rather than warns.
+    The registry is the only authority on whether the DS was actually removed;
+    a public resolver answers from cache and will keep saying "still there" for
+    hours after the registrar has done the work. Windows nslookup cannot query
+    type DS at all, so this builds the query by hand.
     """
+    tld = domain.rsplit(".", 1)[-1]
+    try:
+        server = socket.gethostbyname(f"f.gtld-servers.net" if tld == "com"
+                                      else f"a.gtld-servers.net")
+        tid = random.randint(0, 65535)
+        qname = b"".join(bytes([len(l)]) + l.encode() for l in domain.split(".")) + b"\x00"
+        pkt = struct.pack(">HHHHHH", tid, 0, 1, 0, 0, 0) + qname + struct.pack(">HH", 43, 1)
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(8)
+        sock.sendto(pkt, (server, 53))
+        data, _ = sock.recvfrom(4096)
+        sock.close()
+
+        counts = struct.unpack(">HH", data[6:10])
+        i = 12
+        while data[i]:
+            i += data[i] + 1
+        i += 5
+        for _ in range(counts[0] + counts[1]):
+            while True:
+                ln = data[i]
+                if ln & 0xC0 == 0xC0:
+                    i += 2
+                    break
+                if ln == 0:
+                    i += 1
+                    break
+                i += ln + 1
+            rtype, _cls, _ttl, rdlen = struct.unpack(">HHIH", data[i:i + 10])
+            i += 10 + rdlen
+            if rtype == 43:
+                return True
+        return False
+    except Exception:
+        return None
+
+
+def _ds_at_resolver(domain: str, host: str) -> bool | None:
     try:
         req = urllib.request.Request(
-            f"https://dns.google/resolve?name={domain}&type=DS",
+            f"https://{host}/{'resolve' if 'google' in host else 'dns-query'}"
+            f"?name={domain}&type=DS",
             headers={"accept": "application/dns-json"},
         )
         with urllib.request.urlopen(req, timeout=15) as r:
             return bool(json.load(r).get("Answer"))
     except Exception:
         return None
+
+
+def dnssec_blockers(domain: str) -> list[str]:
+    """Reasons it is not yet safe to change nameservers. Empty list = go.
+
+    This is the one pre-flight whose failure is total rather than partial. A DS
+    record commits the parent zone to a specific set of signing keys. Delegate
+    to a provider serving an unsigned zone while a DS is still in play and
+    every validating resolver - Google, 1.1.1.1, most ISPs - returns SERVFAIL
+    for the whole domain, web and mail together.
+
+    Two separate things have to be true, which is why this returns a list and
+    not a bool: the registry must have dropped the DS (proving the registrar
+    did the work), AND the public resolvers must have expired their cached
+    copy (a DS cached at .com's 24h TTL breaks users just as thoroughly as a
+    live one, and it is the half people forget).
+    """
+    blockers: list[str] = []
+
+    at_registry = _ds_at_registry(domain)
+    if at_registry is None:
+        blockers.append("could not reach the registry to check the DS - verify by hand")
+    elif at_registry:
+        blockers.append("the .com registry still publishes a DS - DNSSEC is not off yet")
+
+    for host, label in (("dns.google", "Google"), ("cloudflare-dns.com", "Cloudflare")):
+        if _ds_at_resolver(domain, host):
+            blockers.append(f"{label}'s resolver still has the old DS cached - wait for it to expire")
+
+    return blockers
 
 
 def _fqdn(name: str, domain: str) -> str:
@@ -179,19 +248,17 @@ def main() -> int:
         print(f"no zone file at {zone_path}", file=sys.stderr)
         return 2
 
-    ds = dnssec_ds_present(args.domain)
+    blockers = dnssec_blockers(args.domain)
     print()
-    if ds:
-        print(f"  DNSSEC: a DS record for {args.domain} is published at the TLD.")
-        print("  STOP - turn DNSSEC OFF at the registrar and wait for the DS to")
-        print("  clear before changing nameservers, or the domain goes SERVFAIL")
-        print("  everywhere: web and mail, until it expires from the TLD.")
+    if blockers:
+        print("  DNSSEC - NOT SAFE TO CHANGE NAMESERVERS YET:")
+        for b in blockers:
+            print(f"    - {b}")
+        print("  Flipping now returns SERVFAIL for the whole domain, web and")
+        print("  mail together, until every copy of the DS expires.")
         print()
         return 1
-    if ds is None:
-        print("  DNSSEC: could not check (no network?). Confirm by hand.")
-    else:
-        print("  DNSSEC: no DS at the TLD - safe to change nameservers.")
+    print("  DNSSEC: no DS at the registry or in resolver caches - safe to flip.")
 
     records = parse_zone(zone_path)
     target = args.ns or "public resolvers"
