@@ -1913,6 +1913,10 @@
         var daysI = input({ type: "number", min: 0, value: (m.trial.days != null ? m.trial.days : 7), style: "max-width:100px" });
         daysI.addEventListener("input", function () { var t = daysI.value.trim(); m.trial.days = (t === "" ? null : (parseInt(t, 10) || 0)); });
         daysWrap.appendChild(el("label", { text: "Trial length (days)" })); daysWrap.appendChild(daysI);
+        // Say it out loud: the TERM below is structural, not the trial's length. Without this the
+        // obvious move is to set the term to 0 months, which is not a saveable plan.
+        daysWrap.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:6px 0 0",
+          text: "This is the trial's length. The term months below are not used for a trial — it is never sold — but a plan still needs one, so leave it at 1." }));
         cb.addEventListener("change", function () { m.trial.on = cb.checked; if (cb.checked && m.trial.days == null) m.trial.days = 7; daysWrap.style.display = cb.checked ? "" : "none"; });
         c.appendChild(el("label", { class: "cf-row", style: "gap:10px;align-items:center;cursor:pointer;margin-top:6px" }, [cb, el("span", { style: "font-weight:600", text: "This tier is the signup trial" })]));
         c.appendChild(daysWrap);
@@ -1977,15 +1981,32 @@
         var name = (m.name || "").trim();
         if (!name) { UI.toast("Name the membership.", "warn"); return; }
         if (!m.terms.length) { UI.toast("Add at least one term.", "warn"); return; }
+        // A TERM WITH NO MONTHS USED TO BE SKIPPED SILENTLY, AND THE SAVE STILL SAID "Saved."
+        // Entering 0 months (reasonable for a free trial, whose length is the DAYS field below)
+        // meant `if (!t.term_months) continue` skipped every term, no request was sent at all, and
+        // the toast reported success. The tier then simply did not exist, with nothing to explain
+        // why. Refuse it here, name the reason, and never claim a save that did not happen.
+        var bad = m.terms.filter(function (t) { return !t.term_months || t.term_months < 1; });
+        if (bad.length) {
+          UI.toast(m.trial.on
+            ? "A trial tier still needs a term of at least 1 month — it is never sold, and the trial's length is the days field above."
+            : "Every term needs a length of at least 1 month.", "warn");
+          return;
+        }
         btn.disabled = true; btn.textContent = "Saving…";
         try {
+          var wrote = 0;
           for (var i = 0; i < m.terms.length; i++) {
-            var t = m.terms[i]; if (!t.term_months) continue;
+            var t = m.terms[i];
+            wrote++;
             var caps = { max_covered_minutes: m.limits.minutes, max_covered_per_day: m.limits.perDay, max_courts_per_day: m.limits.courtsDay };
             if (t.price_id) await window.AdminAPI.patchMembershipPlan(t.price_id, Object.assign({ tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, set_window: true, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end, set_modes: true, payment_modes: m.modes, set_limits: true, set_trial: true, is_trial: !!m.trial.on, trial_days: m.trial.days, covers_peak: m.coversPeak !== false }, caps));
             else await window.AdminAPI.createMembershipPlan(Object.assign({ tier: name, term_months: t.term_months, amount_minor: t.amount_minor || 0, access_days: m.win.days, access_start_min: m.win.start, access_end_min: m.win.end, payment_modes: m.modes, is_trial: !!m.trial.on, trial_days: m.trial.days, covers_peak: m.coversPeak !== false }, caps));
           }
           for (var d = 0; d < m.del.length; d++) await window.AdminAPI.deleteMembershipPlan(m.del[d]);
+          // Only claim a save that actually wrote something. "Saved." over a no-op is how a tier
+          // came back from the server not existing, with nothing on screen to explain it.
+          if (!wrote && !m.del.length) { UI.toast("Nothing to save.", "warn"); btn.disabled = false; btn.textContent = "Save & close"; return; }
           UI.toast("Saved.", "info"); membershipServices(host);
         } catch (e) { btn.disabled = false; btn.textContent = "Save & close"; UI.toast(UI.errMsg(e) || "Couldn't save.", "error"); }
       }

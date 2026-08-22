@@ -109,10 +109,26 @@ def _report_peak(s, text, cid):
     else:
         print("   (none - no club-wide peak)")
 
+    # A WINDOW WITHOUT A PEAK PRICE CHARGES NOTHING EXTRA. diary.pricing only applies peak when the
+    # matched price row HAS a peak_amount_minor:
+    #     is_peak = (at_local is not None and peak is not None and in_peak_window(...))
+    # So the window and the AMOUNT are two separate settings, on two separate screens (the court,
+    # and the court SERVICE under Setup -> Services). Reporting the window alone reads as "this
+    # court is charged peak" when it may be entirely inert — which is exactly the mistake this
+    # script exists to prevent, made by the script itself.
     courts = [dict(r) for r in s.execute(
-        text("SELECT id, name, peak_override, peak_days, peak_start_min, peak_end_min "
-             "FROM diary.resource WHERE club_id = :c AND kind = 'court' "
-             "  AND COALESCE(is_active, true) ORDER BY rank, name"),
+        text("SELECT r.id, r.name, r.peak_override, r.peak_days, r.peak_start_min, r.peak_end_min, "
+             "       pr.name AS service, "
+             "       (SELECT count(*) FROM billing.price p "
+             "         WHERE p.product_id = r.product_id AND p.active "
+             "           AND p.peak_amount_minor IS NOT NULL) AS peak_priced, "
+             "       (SELECT count(*) FROM billing.price p "
+             "         WHERE p.product_id = r.product_id AND p.active "
+             "           AND p.duration_minutes IS NOT NULL) AS durations "
+             "FROM diary.resource r "
+             "LEFT JOIN billing.product pr ON pr.id = r.product_id "
+             "WHERE r.club_id = :c AND r.kind = 'court' "
+             "  AND COALESCE(r.is_active, true) ORDER BY r.rank, r.name"),
         {"c": cid}).mappings()]
     by_res = {}
     for r in s.execute(
@@ -143,6 +159,18 @@ def _report_peak(s, text, cid):
         print("   %-26s %s" % ((c["name"] or "?"), src))
         for w in (wins or ["(no peak - always base price)"]):
             print("      %s" % w)
+        # The other half of the answer. Without it a window reads as a charge that may not exist.
+        svc = c["service"] or "(default court service)"
+        if wins and not int(c["peak_priced"] or 0):
+            print("      -> NOT CHARGED: service '%s' has no peak price on any duration, so the"
+                  % svc)
+            print("         base price applies and this window does nothing.")
+        elif wins:
+            print("      -> charged: '%s' has a peak price on %d of %d duration(s)"
+                  % (svc, int(c["peak_priced"] or 0), int(c["durations"] or 0)))
+        elif int(c["peak_priced"] or 0):
+            print("      -> service '%s' HAS peak prices, but no window ever matches this court."
+                  % svc)
 
 
 def _report_memberships(s, text, cid):
