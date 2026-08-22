@@ -5,7 +5,7 @@ date: 2026-07-26
 image: /img/feat-coaching.webp
 ---
 
-Looking for tennis lessons in Johannesburg? At **NextPoint Tennis** in Killarney, you can learn from **ATP-level coaches** — book online in under a minute and **pay as you go** — no membership required. Whether you've never held a racket or you're chasing a ranking, there's a lesson here for you.
+Looking for tennis lessons in Johannesburg? At **NextPoint Tennis** in Killarney, you can learn from **experienced coaches** — book online in under a minute and **pay as you go** — no membership required. Whether you've never held a racket or you're chasing a ranking, there's a lesson here for you.
 
 We coach every age and level, seven days a week, on eight courts including **Gauteng's only clay court** — at Killarney Country Club in Houghton, a short drive from Rosebank, Parktown, Saxonwold and Sandton.
 
@@ -17,9 +17,9 @@ We coach every age and level, seven days a week, on eight courts including **Gau
 
 New to NextPoint? [Start a **free week**](/login#/sign-up) — 7 days of free court bookings, no commitment. Lessons and classes are pay-as-you-go.
 
-## Learn from ATP-level coaches
+## Learn from experienced coaches
 
-Our coaching team brings professional-tour experience — including an ATP Coach of the Year — to club players, juniors and complete beginners right here in Johannesburg. [Meet the coaches](/coaches).
+Our coaching team has developed national junior champions, top ITF juniors and players who went on to US college scholarships — and coaches club players and complete beginners with the same care. [Meet the coaches](/coaches).
 
 ## A lesson for every player
 
@@ -60,4 +60,4 @@ Killarney Country Club, Houghton, Johannesburg — near Rosebank and Parktown.
 
 [**Book a lesson →**](/book) · [**or start a free week of court bookings →**](/login#/sign-up)
 
-Killarney Country Club, Houghton · ATP-level coaching · All ages and levels.
+Killarney Country Club, Houghton · Expert coaching · All ages and levels.

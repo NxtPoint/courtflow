@@ -19,13 +19,22 @@ $ORIGIN ten-fifty5.com.
 $TTL 3600
 
 ; --- APEX -------------------------------------------------------------------
-; DELIBERATELY OMITTED. The apex currently points at Wix (185.230.63.x) and is
-; the expired certificate. Add it in the Cloudflare UI only AFTER adding
-; ten-fifty5.com as a custom domain on the Render locker-room service, using
-; the exact value Render shows you (an A record, or a CNAME that Cloudflare
-; flattens). Do not guess it — a wrong apex here is a dead front door.
+; RESOLVED 2026-08-22 — the precondition this block described is now met.
+; ten-fifty5.com is a custom domain on the Render locker-room service, set to
+; redirect to www, and Render issued its certificate the same day (valid to
+; 2026-11-20). The value below is Render's, not a guess: it is what the
+; authoritative Wix nameservers now return, and what nextpointtennis.com's
+; working apex resolves to.
+;
+; The three Wix parking A records (185.230.63.x) that used to sit here were
+; serving a certificate that EXPIRED 2026-08-16, so for six days the bare
+; domain gave every visitor a browser security warning. They have been deleted
+; at Wix. Do not reinstate them, and do not leave this apex out of the
+; Cloudflare zone: without this line the bare domain simply stops existing at
+; cutover, which is the same outage wearing a different hat.
 ;
 ; Target behaviour: apex -> Render -> 301 to www, with a Render-issued cert.
+@                       1800 IN A     216.24.57.1
 
 ; --- WEB --------------------------------------------------------------------
 www                     3600 IN CNAME locker-room-26kd.onrender.com.

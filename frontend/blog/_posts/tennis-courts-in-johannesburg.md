@@ -53,7 +53,7 @@ If you end up playing every week, a **membership** works out cheaper and include
 
 You do not need to be able to rally to book a court, and you don't need a partner. Two easier entry points:
 
-- **A private lesson** with one of our [ATP-level coaches](/coaches) — your first one is free. An hour with a good coach will do more for your tennis than a month of hitting badly with a friend.
+- **A private lesson** with one of [our coaches](/coaches) — pay as you go, no membership needed. An hour with a good coach will do more for your tennis than a month of hitting badly with a friend.
 - **Cardio tennis and group classes** — social, fitness-first, and nobody is keeping score. It's the least intimidating way back into the sport.
 
 Junior and high-performance programmes run alongside these for kids and competitive players.
@@ -80,7 +80,7 @@ Not publicly. Floodlit outdoor courts are the practical answer for evening and y
 Online, at [nextpointtennis.com](/book) — courts, lessons and classes, with live availability. [Step-by-step guide here](/post/book-a-tennis-court-in-killarney-johannesburg).
 
 **Do you offer tennis lessons?**
-Yes — private, junior, group and cardio, with ATP-level coaches. [More on lessons](/post/tennis-lessons-in-johannesburg). Lessons are pay-as-you-go.
+Yes — private, junior, group and cardio, with experienced coaches. [More on lessons](/post/tennis-lessons-in-johannesburg). Lessons are pay-as-you-go.
 
 ## Ready to play?
 

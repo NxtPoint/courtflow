@@ -54,7 +54,7 @@ There is one properly free option that doesn't involve hunting for an unmaintain
 
 **Your first seven days of court bookings at NextPoint are free.** Create an account and court time is on us for a week — every surface, including [Gauteng's only public-bookable clay court](/post/how-to-book-a-clay-court-in-johannesburg). No commitment, no card required to start, and no obligation to continue afterwards.
 
-**And if you want to get better, add a lesson.** If you're returning after years away or starting from scratch, an hour with an [ATP-level coach](/coaches) is worth considerably more than an hour hitting badly against a wall.
+**And if you want to get better, add a lesson.** If you're returning after years away or starting from scratch, an hour with one of [our coaches](/coaches) is worth considerably more than an hour hitting badly against a wall.
 
 Between them, that is a full week of genuinely free tennis on courts that are floodlit, maintained and guaranteed to be there when you arrive — which is more free tennis than any public court in Johannesburg will reliably give you.
 
