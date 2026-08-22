@@ -1,7 +1,7 @@
 ---
 title: Book a Tennis Court in Killarney, Johannesburg
-description: Book a hard court or Gauteng's only clay court at NextPoint Tennis, Killarney Country Club — online in seconds, no membership needed. Floodlit, seven days a week.
-date: 2026-07-18
+description: Book a hard court or Gauteng's only clay court at NextPoint Tennis, Killarney Country Club — online in seconds, no membership needed. Floodlit, open daily.
+date: 2026-08-22
 image: /img/club-courts.webp
 ---
 
@@ -35,7 +35,7 @@ Every court is floodlit, so you can finish work, book a court, and play under li
 
 Courts are **pay-as-you-go** — book and play, no strings attached. If you play often, a **membership** works out better and includes a free trial week. You'll see the live price for your chosen time and surface right on the [booking page](/book) before you pay.
 
-New to NextPoint? **Your first week is free** — a perfect way to try the courts, a class, and the clay.
+New to NextPoint? **Your first week of court bookings is free** — a perfect way to try the hard courts and the clay. Lessons and classes are pay-as-you-go.
 
 ## More than just courts
 
@@ -58,6 +58,9 @@ Killarney Country Club, Houghton, Johannesburg — close to Rosebank, Parktown a
 
 **Are there public tennis courts near me in Johannesburg?**
 NextPoint's courts are open to the public to book — you don't need to be a club member. If you're in the northern suburbs of Johannesburg, we're one of the easiest courts to reserve online.
+
+**Is NextPoint the tennis at Killarney Country Club?**
+Yes — NextPoint Tennis is based at Killarney Country Club in Houghton, which you'll also see searched as "KCC tennis". The courts are open to the public to book online, so you don't need to be a country club member to play.
 
 **Do you have floodlights for evening tennis?**
 Yes — every court is floodlit, seven days a week.
