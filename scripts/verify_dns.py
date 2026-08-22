@@ -108,10 +108,18 @@ def _ds_at_registry(domain: str) -> bool | None:
     hours after the registrar has done the work. Windows nslookup cannot query
     type DS at all, so this builds the query by hand.
     """
-    tld = domain.rsplit(".", 1)[-1]
+    for letter in "abcdefgm":
+        got = _ds_from(domain, f"{letter}.gtld-servers.net")
+        if got is True:
+            return True          # any server still publishing it = not done
+        if got is False:
+            return False         # a definitive clear from an authoritative server
+    return None
+
+
+def _ds_from(domain: str, server_name: str) -> bool | None:
     try:
-        server = socket.gethostbyname(f"f.gtld-servers.net" if tld == "com"
-                                      else f"a.gtld-servers.net")
+        server = socket.gethostbyname(server_name)
         tid = random.randint(0, 65535)
         qname = b"".join(bytes([len(l)]) + l.encode() for l in domain.split(".")) + b"\x00"
         pkt = struct.pack(">HHHHHH", tid, 0, 1, 0, 0, 0) + qname + struct.pack(">HH", 43, 1)
@@ -159,6 +167,26 @@ def _ds_at_resolver(domain: str, host: str) -> bool | None:
         return None
 
 
+def _rdap_delegation_signed(domain: str) -> bool | None:
+    """The registry's own DNSSEC flag. None = couldn't tell.
+
+    Cleaner than reading the published zone: RDAP reflects the registry
+    database the moment the registrar submits the change, whereas the .com zone
+    the gTLD servers serve republishes on its own schedule. Checking both tells
+    the two apart - submitted-but-not-published vs not-submitted-at-all.
+    """
+    try:
+        req = urllib.request.Request(
+            f"https://rdap.verisign.com/com/v1/domain/{domain}",
+            headers={"accept": "application/rdap+json"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            sd = json.load(r).get("secureDNS")
+        return None if sd is None else bool(sd.get("delegationSigned"))
+    except Exception:
+        return None
+
+
 def dnssec_blockers(domain: str) -> list[str]:
     """Reasons it is not yet safe to change nameservers. Empty list = go.
 
@@ -176,15 +204,34 @@ def dnssec_blockers(domain: str) -> list[str]:
     """
     blockers: list[str] = []
 
+    signed = _rdap_delegation_signed(domain)
     at_registry = _ds_at_registry(domain)
-    if at_registry is None:
-        blockers.append("could not reach the registry to check the DS - verify by hand")
-    elif at_registry:
-        blockers.append("the .com registry still publishes a DS - DNSSEC is not off yet")
 
+    if signed or at_registry:
+        blockers.append("the registry still has DNSSEC on this domain - it is not off yet")
+        return blockers
+    if signed is None and at_registry is None:
+        blockers.append("could not reach the registry to check DNSSEC - verify by hand")
+        return blockers
+
+    # Registry is clear. The remaining question is whether resolvers have let go
+    # of their cached copy. Sample each twice: DoH is anycast, so consecutive
+    # queries land on different nodes with different cache state and a single
+    # "clear" proves nothing about the node your users will hit.
+    still_cached = []
     for host, label in (("dns.google", "Google"), ("cloudflare-dns.com", "Cloudflare")):
-        if _ds_at_resolver(domain, host):
-            blockers.append(f"{label}'s resolver still has the old DS cached - wait for it to expire")
+        if any(_ds_at_resolver(domain, host) for _ in range(2)):
+            still_cached.append(label)
+
+    if still_cached:
+        blockers.append(
+            f"registry is clear, but {' and '.join(still_cached)} still serve the "
+            f"old DS from cache - a cached DS SERVFAILs users exactly as hard"
+        )
+        blockers.append(
+            "wait ~24h from removal (the .com DS TTL); nodes expire at different "
+            "times, so intermittent 'clear' answers do not mean it is safe"
+        )
 
     return blockers
 
