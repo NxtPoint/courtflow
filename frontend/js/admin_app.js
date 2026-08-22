@@ -1985,44 +1985,87 @@
       el("h3", { text: "Peak court hours" }),
       el("p", { class: "cf-muted", text: "During these hours, court hire is charged the PEAK price you set per duration (Setup → Services → a court). Members covered by their plan stay free. Leave empty for no peak pricing." }),
     ]);
-    // peak is "on" when a window is set; peak_days=null means EVERY day (like the access window), so when
-    // peak is on with null days we must show ALL chips ticked — otherwise re-opening a daily peak looks
-    // blank and a blind re-save would switch it off.
-    var peakOn = (policy.peak_start_min != null || policy.peak_end_min != null);
-    var curDays = (policy.peak_days != null && policy.peak_days !== "") ? String(policy.peak_days).split(",").map(function (x) { return x.trim(); }).filter(Boolean) : null;
-    var sel = {};
-    var chips = el("div", { class: "cf-row", style: "gap:4px;flex-wrap:wrap;margin-top:6px" });
-    DOW.forEach(function (o) {
-      var on = curDays ? curDays.indexOf(o[0]) >= 0 : peakOn;   // null days + peak on = every day
-      sel[o[0]] = on;
-      // Reuse the membership Access-hours day style: .cf-day.on is a SOLID green pill (white text), so a
-      // selected day is unmistakable (the old cf-chip tint was too subtle to read).
-      var b = el("button", { class: "cf-day" + (on ? " on" : ""), text: o[1], type: "button" });
-      b.addEventListener("click", function () { sel[o[0]] = !sel[o[0]]; b.className = "cf-day" + (sel[o[0]] ? " on" : ""); });
-      chips.appendChild(b);
+    // N WINDOWS, matching the per-court editor. A club's peak is not one rule — NextPoint's is
+    // weekday EVENINGS plus Saturday MORNING — and with a single row an owner had to set every
+    // court individually to express it, which is also why a court added LATER silently inherited
+    // only half the peak.
+    //
+    // Seeded from the stored windows; a club still on the legacy single columns is shown that
+    // window as its first row, because the resolver falls back to it. The screen has to show what
+    // is in force, and saving then moves the club onto rows without the owner noticing a migration.
+    var wins = (policy.peak_windows || []).map(function (w) {
+      return { days: (w.days != null && w.days !== "") ? String(w.days).split(",").map(function (x) { return x.trim(); }).filter(Boolean) : null,
+               start: w.start_min, end: w.end_min };
     });
-    var pf = el("input", { type: "time", value: m2t(policy.peak_start_min), style: "max-width:110px" });
-    var pt = el("input", { type: "time", value: m2t(policy.peak_end_min), style: "max-width:110px" });
-    var save = el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Save peak hours", style: "margin-top:10px" });
+    if (!wins.length && (policy.peak_start_min != null || policy.peak_end_min != null)) {
+      wins = [{ days: (policy.peak_days != null && policy.peak_days !== "") ? String(policy.peak_days).split(",").map(function (x) { return x.trim(); }).filter(Boolean) : null,
+                start: policy.peak_start_min, end: policy.peak_end_min }];
+    }
+
+    var rowsBox = el("div", { style: "margin-top:8px" });
+    function draw() {
+      UI.clear(rowsBox);
+      wins.forEach(function (w, idx) {
+        var sel = {};
+        var chips = el("div", { class: "cf-row", style: "gap:4px;flex-wrap:wrap" });
+        DOW.forEach(function (o) {
+          // null days = EVERY day, so show all chips on rather than blank — a blind re-save of a
+          // blank row would otherwise switch the window off.
+          var on = w.days ? w.days.indexOf(o[0]) >= 0 : true;
+          sel[o[0]] = on;
+          // .cf-day.on is a SOLID green pill (white text) — the old cf-chip tint read as unselected.
+          var b = el("button", { class: "cf-day" + (on ? " on" : ""), text: o[1], type: "button" });
+          b.addEventListener("click", function () {
+            sel[o[0]] = !sel[o[0]]; b.className = "cf-day" + (sel[o[0]] ? " on" : "");
+            w.days = DOW.filter(function (x) { return sel[x[0]]; }).map(function (x) { return x[0]; });
+          });
+          chips.appendChild(b);
+        });
+        var pf = el("input", { type: "time", value: m2t(w.start), style: "max-width:110px" });
+        var pt = el("input", { type: "time", value: m2t(w.end), style: "max-width:110px" });
+        pf.addEventListener("input", function () { w.start = t2m(pf.value); });
+        pt.addEventListener("input", function () { w.end = t2m(pt.value); });
+        var rm = el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", type: "button", text: "Remove" });
+        rm.addEventListener("click", function () { wins.splice(idx, 1); draw(); });
+        rowsBox.appendChild(el("div", { class: "cf-row", style: "gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px" }, [
+          el("span", { class: "cf-muted cf-tiny", text: "Peak on:" }), chips,
+          el("span", { class: "cf-muted cf-tiny", text: "from" }), pf,
+          el("span", { class: "cf-muted cf-tiny", text: "to" }), pt, rm,
+        ]));
+      });
+      if (!wins.length) {
+        rowsBox.appendChild(el("div", { class: "cf-muted cf-tiny", text: "No club-wide peak hours — courts charge the base price unless a court sets its own." }));
+      }
+    }
+    draw();
+    c.appendChild(rowsBox);
+
+    var add = el("button", { class: "cf-btn cf-btn-sm", type: "button", style: "margin-top:8px", text: "+ Add peak window" });
+    add.addEventListener("click", function () { wins.push({ days: null, start: null, end: null }); draw(); });
+    c.appendChild(add);
+
+    var save = el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Save peak hours", style: "margin-top:10px;margin-left:8px" });
     save.addEventListener("click", async function () {
-      var days = DOW.filter(function (o) { return sel[o[0]]; }).map(function (o) { return parseInt(o[0], 10); });
-      var startMin = t2m(pf.value), endMin = t2m(pt.value);
-      // Incomplete = clear (peak off). "All 7 days" is sent as null (= every day) like the access window.
-      var body = (!days.length || startMin == null || endMin == null)
-        ? { peak_days: null, peak_start_min: null, peak_end_min: null }
-        : { peak_days: (days.length === 7 ? null : days), peak_start_min: startMin, peak_end_min: endMin };
+      var payload = wins
+        .filter(function (w) { return w.start != null && w.end != null && w.end > w.start; })
+        .map(function (w) {
+          return { days: (w.days && w.days.length && w.days.length < 7) ? w.days.map(Number) : null,
+                   start_min: w.start, end_min: w.end };
+        });
+      // The legacy columns are CLEARED on every save so the club can never hold both: the resolver
+      // prefers rows and would ignore the columns, and a leftover column is a value that looks live
+      // and is not.
+      var body = { peak_windows: payload, peak_days: null, peak_start_min: null, peak_end_min: null };
       save.disabled = true;
       try {
         await window.AdminAPI.patchPolicy(body);
-        policy.peak_days = body.peak_days; policy.peak_start_min = body.peak_start_min; policy.peak_end_min = body.peak_end_min;
-        UI.toast("Peak hours saved.", "info");
+        policy.peak_windows = payload.map(function (w) {
+          return { days: w.days ? w.days.join(",") : null, start_min: w.start_min, end_min: w.end_min };
+        });
+        policy.peak_days = null; policy.peak_start_min = null; policy.peak_end_min = null;
+        UI.toast(payload.length ? "Peak hours saved." : "Club-wide peak cleared.", "info");
       } catch (e) { UI.toast(UI.errMsg(e), "error"); } finally { save.disabled = false; }
     });
-    c.appendChild(el("div", { class: "cf-row", style: "gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px" }, [
-      el("span", { class: "cf-muted cf-tiny", text: "Peak on:" }), chips,
-      el("span", { class: "cf-muted cf-tiny", text: "from" }), pf,
-      el("span", { class: "cf-muted cf-tiny", text: "to" }), pt,
-    ]));
     c.appendChild(save);
     return c;
   }

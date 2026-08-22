@@ -76,7 +76,10 @@ def get_onboarding():
         club = repo.get_club(s, club_id=p.club_id)
         location = repo.get_primary_location(s, club_id=p.club_id)
         branding = repo.get_branding(s, club_id=p.club_id)
-        policy = repo.get_policy(s, club_id=p.club_id)
+        policy = dict(repo.get_policy(s, club_id=p.club_id) or {})
+        # The club's peak WINDOWS travel with the policy, so the settings screen loads what is
+        # actually in force rather than only the legacy single columns it used to read.
+        policy["peak_windows"] = repo.list_peak_windows(s, club_id=p.club_id, resource_id=None)
         steps, counts = repo.onboarding_counts_and_steps(s, club_id=p.club_id)
         hours = repo.hours_week(s, club_id=p.club_id)
     completed = bool(club and club.get("onboarding_completed"))
@@ -116,7 +119,10 @@ def get_club():
             club=repo.get_club(s, club_id=p.club_id),
             location=repo.get_primary_location(s, club_id=p.club_id),
             branding=repo.get_branding(s, club_id=p.club_id),
-            policy=repo.get_policy(s, club_id=p.club_id),
+            # Same shape as /onboarding: the policy carries its peak WINDOWS, so any screen reading
+            # it sees what is in force and not just the legacy single columns.
+            policy=dict(repo.get_policy(s, club_id=p.club_id) or {},
+                        peak_windows=repo.list_peak_windows(s, club_id=p.club_id, resource_id=None)),
         ), 200
 
 
