@@ -187,6 +187,38 @@ def _rdap_delegation_signed(domain: str) -> bool | None:
         return None
 
 
+def registrar_info(domain: str) -> dict | None:
+    """Who holds the registration, and is it locked. None = couldn't tell.
+
+    Printed on every run because during a transfer this is the state that
+    changes without warning, and the moment it flips is the moment the
+    nameservers need attention: a gaining registrar may apply its own empty
+    zone, and an empty zone is a dark domain.
+    """
+    try:
+        req = urllib.request.Request(
+            f"https://rdap.verisign.com/com/v1/domain/{domain}",
+            headers={"accept": "application/rdap+json"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            d = json.load(r)
+        name = None
+        for e in d.get("entities", []):
+            if "registrar" in e.get("roles", []):
+                for v in e.get("vcardArray", [[], []])[1]:
+                    if v[0] == "fn":
+                        name = v[3]
+        return {
+            "registrar": name or "unknown",
+            "status": ", ".join(d.get("status", [])) or "none",
+            "expires": next((e["eventDate"][:10] for e in d.get("events", [])
+                             if e.get("eventAction") == "expiration"), "?"),
+            "nameservers": [n.get("ldhName", "").lower() for n in d.get("nameservers", [])],
+        }
+    except Exception:
+        return None
+
+
 def dnssec_blockers(domain: str) -> list[str]:
     """Reasons it is not yet safe to change nameservers. Empty list = go.
 
@@ -299,6 +331,17 @@ def main() -> int:
     if not zone_path.exists():
         print(f"no zone file at {zone_path}", file=sys.stderr)
         return 2
+
+    reg = registrar_info(args.domain)
+    print()
+    if reg:
+        print(f"  registrar : {reg['registrar']}  (expires {reg['expires']})")
+        print(f"  status    : {reg['status']}")
+        print(f"  delegated : {', '.join(reg['nameservers']) or '(none)'}")
+        if not any("cloudflare" in n for n in reg["nameservers"]):
+            if not any("wixdns" in n for n in reg["nameservers"]):
+                print("  ^^ delegated to NEITHER Wix nor Cloudflare - check this NOW,")
+                print("     a registrar's own empty zone means a dark domain.")
 
     blockers = [] if args.records_only else dnssec_blockers(args.domain)
     print()
