@@ -157,12 +157,28 @@ def _report_memberships(s, text, cid):
              "WHERE pr.club_id = :c AND pr.kind = 'membership' AND p.term_months IS NOT NULL "
              "ORDER BY p.membership_tier, p.term_months"),
         {"c": cid}).mappings()]
-    seen = set()
+    # A TIER IS SEVERAL PRICES -- one per term (1 / 3 / 12 months) -- and this used to report the
+    # FIRST row it saw. A tier whose shortest term had been retired therefore read as "inactive"
+    # while the tier was plainly on sale, which is a false alarm in a report whose whole job is to
+    # be trusted over the screen. A tier is ACTIVE if ANY of its terms is, and the rules are read
+    # from an ACTIVE term when there is one.
+    groups = {}
+    order = []
     for p in plans:
         tier = p["membership_tier"] or p["label"] or "(unnamed)"
-        if tier in seen:
-            continue      # a tier is several prices (one per term); the rules live on all of them
-        seen.add(tier)
+        if tier not in groups:
+            groups[tier] = []
+            order.append(tier)
+        groups[tier].append(p)
+
+    for tier in order:
+        rows = groups[tier]
+        live = [r for r in rows if r["active"]]
+        p = (live or rows)[0]
+        state = ("ACTIVE" if live else "inactive")
+        terms = "%d term(s)" % len(rows)
+        if live and len(live) != len(rows):
+            terms += ", %d retired/dormant" % (len(rows) - len(live))
         free = ("any time"
                 if (p["access_days"] is None and p["access_start_min"] is None
                     and p["access_end_min"] is None)
@@ -171,14 +187,24 @@ def _report_memberships(s, text, cid):
             p["max_covered_minutes"] if p["max_covered_minutes"] is not None else "no cap",
             p["max_covered_per_day"] if p["max_covered_per_day"] is not None else "no cap",
             p["max_courts_per_day"] if p["max_courts_per_day"] is not None else "NO CAP")
-        print("   %-30s %s" % (tier, "ACTIVE" if p["active"] else "inactive"))
+        print("   %-30s %-8s (%s)" % (tier, state, terms))
         print("      free hours : %s" % free)
         print("      caps       : %s" % caps)
         print("      peak       : %s" % ("FREE at peak" if p["covers_peak"]
                                          else "CHARGED at peak"))
-        if p["is_trial"]:
+        # The rules live on every term, so a term that disagrees is a real inconsistency: the tier
+        # then behaves differently depending on which term the member happens to have bought.
+        odd = [r for r in rows if bool(r["covers_peak"]) != bool(p["covers_peak"])
+               or r["max_courts_per_day"] != p["max_courts_per_day"]
+               or r["access_start_min"] != p["access_start_min"]]
+        if odd:
+            print("      !! %d term(s) of this tier carry DIFFERENT rules - a member gets whichever"
+                  % len(odd))
+            print("         term they bought. Re-save the tier to write them all the same.")
+        if any(r["is_trial"] for r in rows):
+            t = [r for r in rows if r["is_trial"]][0]
             print("      TRIAL      : this tier is the signup trial, %s day(s)"
-                  % (p["trial_days"] if p["trial_days"] is not None else "?"))
+                  % (t["trial_days"] if t["trial_days"] is not None else "?"))
     return plans
 
 
