@@ -1,0 +1,53 @@
+; ============================================================================
+; nextpointtennis.com — TARGET zone for Cloudflare (Wix decommission, phase 2)
+;
+; This file IS the target state, not a copy of the Wix zone: the Wix-only
+; records (s1/s2/sel1._domainkey, sg, en, bio, www.bio, and the _dmarc CNAME)
+; are deliberately absent, and _dmarc is re-issued below as our own TXT.
+; bio/www.bio confirmed unused by Tomo 2026-08-22.
+;
+; Import:  Cloudflare -> the zone -> DNS -> Records -> Import and Export
+;          -> Import DNS records -> upload this file.
+; Then:    set every record to DNS only (grey cloud).
+;
+; Run phase 1 (ten-fifty5.com) first and prove it. NextPoint's transactional
+; mail sends from noreply@ten-fifty5.com, so its deliverability is validated
+; over there, not here.
+; ============================================================================
+
+$ORIGIN nextpointtennis.com.
+$TTL 3600
+
+; --- APEX + WEB -------------------------------------------------------------
+; Apex already points at Render, which is why this domain has no cert problem.
+; Copied verbatim from the live zone, TTL included.
+; Optional hardening after import: replace with a CNAME to
+; courtflow-web.onrender.com (Cloudflare flattens it) so a Render IP change
+; can't strand the apex. Not required.
+@                       1800 IN A     216.24.57.1
+www                     1800 IN CNAME courtflow-web.onrender.com.
+
+; --- CROSS-BRAND: DO NOT DELETE ---------------------------------------------
+; A NextPoint-branded host serving the TEN-FIFTY5 upload/ingester. Confirmed
+; live 2026-08-22 returning {"ok":true,"service":"NextPoint Upload/Ingester
+; v3 (S3-only)"}. It looks like a stale duplicate of courtflow-api and is not.
+api                     3600 IN CNAME sport-ai-api-call.onrender.com.
+
+; --- CLERK (login + Clerk's own outbound mail) ------------------------------
+; Note the instance id differs from ten-fifty5.com — separate Clerk app.
+clerk                   3600 IN CNAME frontend-api.clerk.services.
+accounts                3600 IN CNAME accounts.clerk.services.
+clkmail                 3600 IN CNAME mail.0jbxhs7cr2p2.clerk.services.
+clk._domainkey          3600 IN CNAME dkim1.0jbxhs7cr2p2.clerk.services.
+clk2._domainkey         3600 IN CNAME dkim2.0jbxhs7cr2p2.clerk.services.
+
+; --- MAIL -------------------------------------------------------------------
+@                       3600 IN MX 10 aspmx.l.google.com.
+
+; --- TXT --------------------------------------------------------------------
+; No SES DKIM here by design: this domain does not send transactional mail.
+@                       3600 IN TXT "v=spf1 include:_spf.google.com ~all"
+@                       3600 IN TXT "google-site-verification=b-gl3z87f0N2fkBl2IV6tzstWULGBNYcUJ0DRGjsWo8"
+
+; Replaces the Wix-hosted _dmarc CNAME. Same policy (p=none), reports to us.
+_dmarc                  3600 IN TXT "v=DMARC1; p=none; rua=mailto:info@nextpointtennis.com"

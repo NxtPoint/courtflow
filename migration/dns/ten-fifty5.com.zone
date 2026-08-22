@@ -1,0 +1,61 @@
+; ============================================================================
+; ten-fifty5.com — TARGET zone for Cloudflare (Wix decommission, phase 1)
+;
+; This file IS the target state, not a copy of the Wix zone: the Wix-only
+; records (s1/s2/sel1._domainkey, sg, en, and the _dmarc CNAME) are
+; deliberately absent, and _dmarc is re-issued below as our own TXT.
+;
+; Import:  Cloudflare -> the zone -> DNS -> Records -> Import and Export
+;          -> Import DNS records -> upload this file.
+; Then:    set every record to DNS only (grey cloud). Render fronts its own
+;          TLS; proxying on top of it is not wanted here.
+;
+; Values transcribed from the Wix panel 2026-08-22 and each confirmed to
+; resolve. Do not retype the DKIM tokens by hand — that is why this file
+; exists.
+; ============================================================================
+
+$ORIGIN ten-fifty5.com.
+$TTL 3600
+
+; --- APEX -------------------------------------------------------------------
+; DELIBERATELY OMITTED. The apex currently points at Wix (185.230.63.x) and is
+; the expired certificate. Add it in the Cloudflare UI only AFTER adding
+; ten-fifty5.com as a custom domain on the Render locker-room service, using
+; the exact value Render shows you (an A record, or a CNAME that Cloudflare
+; flattens). Do not guess it — a wrong apex here is a dead front door.
+;
+; Target behaviour: apex -> Render -> 301 to www, with a Render-issued cert.
+
+; --- WEB --------------------------------------------------------------------
+www                     3600 IN CNAME locker-room-26kd.onrender.com.
+
+; --- CLERK (login + Clerk's own outbound mail) ------------------------------
+clerk                   3600 IN CNAME frontend-api.clerk.services.
+accounts                3600 IN CNAME accounts.clerk.services.
+clkmail                 3600 IN CNAME mail.c608ch2ifwtk.clerk.services.
+clk._domainkey          3600 IN CNAME dkim1.c608ch2ifwtk.clerk.services.
+clk2._domainkey         3600 IN CNAME dkim2.c608ch2ifwtk.clerk.services.
+
+; --- AMAZON SES (transactional mail) ----------------------------------------
+; These three also carry NextPoint's booking confirmations, invoices and
+; receipts, which send from noreply@ten-fifty5.com. Losing one degrades
+; deliverability for BOTH brands, quietly.
+imwkcbcr2kzvwv3phgsf5ynvojuhucoh._domainkey 3600 IN CNAME imwkcbcr2kzvwv3phgsf5ynvojuhucoh.dkim.amazonses.com.
+r3o5cfok7zeldlj6hr7d3e4efsubk35p._domainkey 3600 IN CNAME r3o5cfok7zeldlj6hr7d3e4efsubk35p.dkim.amazonses.com.
+tirvfmypxsmpeziylont7wtg67tlwa4s._domainkey 3600 IN CNAME tirvfmypxsmpeziylont7wtg67tlwa4s.dkim.amazonses.com.
+
+; --- MAIL -------------------------------------------------------------------
+@                       3600 IN MX 10 aspmx.l.google.com.
+
+; --- TXT --------------------------------------------------------------------
+; SPF lists Google but not SES on purpose: SES sends with its own envelope
+; sender, so it passes SPF on Amazon's domain and aligns DMARC via the three
+; DKIM keys above. Do not "fix" this record.
+@                       3600 IN TXT "v=spf1 include:_spf.google.com ~all"
+@                       3600 IN TXT "google-site-verification=wozW81IucSQPndvD6GbrMA-MBYBLjCFQQAmAnXKqZ3k"
+@                       3600 IN TXT "MS=3C4E3C3BE41AD5031BEC6B43872D39B78385438F"
+@                       3600 IN TXT "klaviyo-site-verification=RTukzx"
+
+; Replaces the Wix-hosted _dmarc CNAME. Same policy (p=none), reports to us.
+_dmarc                  3600 IN TXT "v=DMARC1; p=none; rua=mailto:info@ten-fifty5.com"

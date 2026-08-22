@@ -43,6 +43,14 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
 
 ## Ongoing tools / diagnostics (KEEP — re-runnable)
 - `verify_live.py` — read-only check against the real Render Postgres (uses gitignored `.env.local`).
+- `verify_dns.py` - DNS-only, no DB, no env: checks a live zone against the target zone file in
+  `migration/dns/<domain>.zone`, record for record, and exits 1 on any mismatch. Run it TWICE per
+  domain during the Wix decommission - once against Cloudflare's assigned nameservers BEFORE the
+  flip (`--ns kate.ns.cloudflare.com`), while Wix is still authoritative and a miss is free, and
+  once against public resolvers after. MX, SPF, DMARC and every Clerk/SES DKIM record are marked
+  critical and fail loudly, because those are the ones whose loss is silent: mail keeps "working"
+  until someone notices it isn't. Shells out to `nslookup` on purpose - a migration tool that needs
+  `pip install` first is one that doesn't get run at the moment it's needed.
 - `diagnose_bookings.py` - READ-ONLY production diagnostic: confirmed-looking-but-unpaid bookings and
   class seats, expired holds never released, orphaned unpaid orders, settlement modes that a service
   does not offer (separating retroactive config changes from real candidates), and a double-charge
