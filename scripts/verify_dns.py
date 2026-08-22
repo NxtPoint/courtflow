@@ -288,6 +288,11 @@ def main() -> int:
     ap.add_argument("domain", help="e.g. ten-fifty5.com")
     ap.add_argument("--ns", help="nameserver to query (omit = public resolvers)")
     ap.add_argument("--zone", help="override zone file path")
+    ap.add_argument(
+        "--records-only", action="store_true",
+        help="check the records but skip the DNSSEC gate. For building a zone "
+             "while a DS is still clearing - it does NOT bless a nameserver change.",
+    )
     args = ap.parse_args()
 
     zone_path = Path(args.zone) if args.zone else ZONE_DIR / f"{args.domain}.zone"
@@ -295,8 +300,11 @@ def main() -> int:
         print(f"no zone file at {zone_path}", file=sys.stderr)
         return 2
 
-    blockers = dnssec_blockers(args.domain)
+    blockers = [] if args.records_only else dnssec_blockers(args.domain)
     print()
+    if args.records_only:
+        print("  DNSSEC: NOT CHECKED (--records-only). This run cannot tell you")
+        print("  it is safe to change nameservers.")
     if blockers:
         print("  DNSSEC - NOT SAFE TO CHANGE NAMESERVERS YET:")
         for b in blockers:
@@ -305,7 +313,8 @@ def main() -> int:
         print("  mail together, until every copy of the DS expires.")
         print()
         return 1
-    print("  DNSSEC: no DS at the registry or in resolver caches - safe to flip.")
+    if not args.records_only:
+        print("  DNSSEC: no DS at the registry or in resolver caches - safe to flip.")
 
     records = parse_zone(zone_path)
     target = args.ns or "public resolvers"
