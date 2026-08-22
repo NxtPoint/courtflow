@@ -28,8 +28,10 @@ from __future__ import annotations
 
 import argparse
 import re
+import json
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 ZONE_DIR = Path(__file__).resolve().parent.parent / "migration" / "dns"
@@ -95,6 +97,29 @@ def parse_zone(path: Path) -> list[tuple[str, str, str]]:
     return records
 
 
+def dnssec_ds_present(domain: str) -> bool | None:
+    """Is there a DS record for this domain at the TLD? None = couldn't tell.
+
+    This is the one pre-flight whose failure is total rather than partial. A DS
+    record commits the parent zone to a specific set of signing keys. Point the
+    nameservers at Cloudflare while the DS still names the OLD provider's keys
+    and every validating resolver - Google, 1.1.1.1, most ISPs - stops
+    resolving the domain outright. Not slow, not degraded: SERVFAIL, for web
+    and mail alike, until the DS clears the TLD (up to 24-48h).
+
+    So it is checked before anything else and it blocks, rather than warns.
+    """
+    try:
+        req = urllib.request.Request(
+            f"https://dns.google/resolve?name={domain}&type=DS",
+            headers={"accept": "application/dns-json"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return bool(json.load(r).get("Answer"))
+    except Exception:
+        return None
+
+
 def _fqdn(name: str, domain: str) -> str:
     return domain if name == "@" else f"{name}.{domain}"
 
@@ -153,6 +178,20 @@ def main() -> int:
     if not zone_path.exists():
         print(f"no zone file at {zone_path}", file=sys.stderr)
         return 2
+
+    ds = dnssec_ds_present(args.domain)
+    print()
+    if ds:
+        print(f"  DNSSEC: a DS record for {args.domain} is published at the TLD.")
+        print("  STOP - turn DNSSEC OFF at the registrar and wait for the DS to")
+        print("  clear before changing nameservers, or the domain goes SERVFAIL")
+        print("  everywhere: web and mail, until it expires from the TLD.")
+        print()
+        return 1
+    if ds is None:
+        print("  DNSSEC: could not check (no network?). Confirm by hand.")
+    else:
+        print("  DNSSEC: no DS at the TLD - safe to change nameservers.")
 
     records = parse_zone(zone_path)
     target = args.ns or "public resolvers"
