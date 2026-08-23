@@ -189,7 +189,10 @@ class Site:
     def __init__(self, b):
         self.name = b.name
         self.base = f"https://{b.domain}".rstrip("/") if b.domain else ""
-        self.og = b.og_image_url or f"{self.base}/og/og-default.png"
+        # NEVER default to a path we have not got: a 404 og:image kills the
+        # social card outright, where a missing tag merely falls back to text.
+        _og = b.og_image_url or b.logo_url or ""
+        self.og = (f"{self.base}{_og}" if _og.startswith("/") else _og)
         self.email = b.email
 
 
@@ -327,7 +330,7 @@ def render_index(posts, site):
 <meta property="og:title" content="{_html.escape(site.name)} Blog">
 <meta property="og:description" content="{_html.escape(_idx_desc)}">
 <meta property="og:url" content="{site.base}/blog">
-<meta property="og:image" content="{site.og}">
+{f'<meta property="og:image" content="{site.og}">' if site.og else ""}
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">{blog_ld}</script>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">

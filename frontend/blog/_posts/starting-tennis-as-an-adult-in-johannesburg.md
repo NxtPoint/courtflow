@@ -1,6 +1,6 @@
 ---
-title: "Starting Tennis as an Adult in Johannesburg: An Honest Guide"
-description: What actually stops adults taking up tennis, what a first session really looks like, what coaching costs in Joburg, and how to pick a club that welcomes beginners.
+title: Adult Beginner Tennis in Johannesburg
+description: What stops adults taking up tennis, what a first session looks like, what coaching costs in Joburg, and how to pick a club that welcomes beginners.
 date: 2026-08-15
 image: /img/beginner-adults.webp
 ---

@@ -1,5 +1,5 @@
 ---
-title: "Free Tennis Courts in Johannesburg: An Honest Answer"
+title: Free Tennis Courts in Johannesburg
 description: Are there free tennis courts in Johannesburg? An honest answer - where public courts are, what they're really like, and the cheapest ways to play.
 date: 2026-08-22
 image: /img/feat-courts.webp
