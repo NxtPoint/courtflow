@@ -10,7 +10,7 @@
 #
 # READ-ONLY. Every statement is a SELECT.
 #
-#     python -m scripts.verify_promotion "Member+30"
+#     python -m scripts.verify_promotion "Member_30"
 #
 # Codes are matched the way the engine matches them: case-insensitively, whitespace stripped
 # (billing/promotions.py uses lower(code) = lower(:code) on a .strip()'d input).
@@ -40,7 +40,7 @@ def _load_env():
 
 def main():
     ap = argparse.ArgumentParser(description="Print a promotion exactly as configured (read-only).")
-    ap.add_argument("code", help='the promo code, e.g. "Member+30"')
+    ap.add_argument("code", help='the promo code, e.g. "Member_30"')
     ap.add_argument("--club", default="NextPoint Tennis")
     args = ap.parse_args()
 
@@ -110,6 +110,18 @@ def main():
             problems.append(f"has NOT STARTED yet (opens {p['starts_at']})")
         if p["ends_at"] and p["ends_at"] < now:
             problems.append(f"has already EXPIRED ({p['ends_at']})")
+        if not p["ends_at"]:
+            # The one a passing check used to hide. An empty window is legitimate for an evergreen
+            # offer and CATASTROPHIC for a dated campaign: the email promises a deadline the billing
+            # engine will not enforce, so the code stays live for anyone who forwards or screenshots
+            # it, for ever. With max_redemptions also empty the exposure has no ceiling at all.
+            problems.append("NO END DATE — a deadline in your copy would be fiction; this code "
+                            "redeems for ever (set ends_at, and remember SAST is UTC+2: to close at "
+                            "23:59 on 1 Sept, store 2026-09-01T21:59:00Z, not T00:00)")
+        if not p["ends_at"] and p["max_redemptions"] is None:
+            problems.append("no end date AND no max_redemptions — the exposure is unbounded")
+        if not p["starts_at"]:
+            problems.append("no start date — it is redeemable RIGHT NOW, before any announcement")
         if p["kind"] in ("bonus_period", "bonus_units") and not p["bonus_qty"]:
             problems.append("bonus_qty is empty — the bonus grants NOTHING")
         if p["kind"] == "percent_off" and not p["percent_bps"]:
