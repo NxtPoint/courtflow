@@ -462,6 +462,10 @@ operating guide; **this folder is the detail.**
 8. **[UNIFIED-STATEMENT.md](UNIFIED-STATEMENT.md)** — the unified client-statement design + reconciliation
    plan (BUILT 2026-06-28): one debt = one `billing.order`, settled once; no double-count; the
    reconciliation harness that gates it. *"How the money reconciles."*
+8b. **[TRANSACTION-RECORD.md](TRANSACTION-RECORD.md)** — the design behind `Widgets.TransactionDetail`:
+    ONE place a transaction is ever seen, identical for client, coach and admin — summary, plain-English
+    chronological log, reconciles to billing, settle or reverse from inside it. **BUILT + LIVE**; the
+    reconciliation invariants still hold. *"The one event story."*
 9. **[FRONTEND-REDESIGN.md](FRONTEND-REDESIGN.md)** — the front-end simplification log + the **three
    role SPAs** (client/coach/admin) drill-through redesign. *"How the UI got simpler."*
 10. **[ADMIN-REDESIGN.md](ADMIN-REDESIGN.md)** — the owner/admin console SPA redesign (responsive,
