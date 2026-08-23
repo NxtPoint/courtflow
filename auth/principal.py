@@ -99,6 +99,26 @@ def _ops_principal(request) -> Optional[Principal]:
     return Principal(method="ops", role="platform_admin")
 
 
+def _marketing_opt_in_default(session, club_id) -> bool:
+    """Does this club start a NEW member opted IN to marketing? (club.policy.marketing_opt_in_default)
+
+    Defaults to FALSE on anything unexpected — no club row, no policy row, an older schema that
+    predates the column, or any error at all. A consent default is a legal posture, so the failure
+    mode has to be "we did not opt them in", never "we assumed we could mail them"."""
+    if not club_id:
+        return False
+    try:
+        from sqlalchemy import text as _text
+        return bool(session.execute(
+            _text("SELECT COALESCE(marketing_opt_in_default, false) "
+                  "FROM club.policy WHERE club_id = CAST(:c AS uuid)"),
+            {"c": str(club_id)},
+        ).scalar())
+    except Exception:
+        log.debug("marketing opt-in default unreadable; treating as opt-OUT", exc_info=False)
+        return False
+
+
 def _principal_from_claims(claims, request) -> Optional[Principal]:
     """Verified-token -> upsert iam.user -> load memberships -> resolve (club_id, role)."""
     uid = verifier.claim_uid(claims)
@@ -172,11 +192,26 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
             try:
                 from core.repositories.persons import link_person_for_user
                 sat_club = str(memberships[0]["club_id"]) if memberships else (host_club_id or None)
+                # MARKETING DEFAULT — set here, on the same `_created` gate as the trial above,
+                # because this is the one place that knows "brand-new human" AND "which club".
+                # Nothing on the signup form ever set marketing_opt_in and the column defaults
+                # false, so every self-signup landed opted-OUT having never been asked: 368 trials
+                # yielded ~38 reachable people while the opted-in majority were Wix imports
+                # carrying consent from Wix. The club's policy now decides.
+                #
+                # BOTH flags are set together on purpose. iam.user.marketing_opt_in is what
+                # Client-360 and the audit read; core.app_user.marketing_opt_in is the Klaviyo
+                # gate. They already disagree on live data (455 vs 505) precisely because they
+                # are written from different places — a new signup must never add to that.
+                _mkt = _marketing_opt_in_default(s, sat_club)
+                if _mkt:
+                    iam_repo.set_marketing_opt_in(s, user["id"], True)
                 link_person_for_user(
                     s,
                     iam_user_id=user["id"], club_id=sat_club, email=resolved_email,
                     first_name=user.get("first_name"), surname=user.get("surname"),
                     phone=user.get("phone"),
+                    marketing_opt_in=(True if _mkt else None),
                 )
             except Exception:
                 log.debug("core.person satellite link skipped (benign)", exc_info=False)

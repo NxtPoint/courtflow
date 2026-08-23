@@ -1930,8 +1930,41 @@
     c.appendChild(flag("allow_pay_at_court", "Pay at the club", "Settle at the front desk."));
     c.appendChild(flag("allow_monthly_account", "Monthly account", "Charges accrue on a tab, invoiced monthly."));
     host.appendChild(c);
+    host.appendChild(marketingConsentCard(policy));
     host.appendChild(peakHoursCard(policy));
     host.appendChild(membershipLimitsCard(policy));
+  }
+
+  // Whether a NEW member starts opted IN to marketing. This was SQL-only until now, which is the
+  // same mistake the entitlement caps and the seat rule both made: a switch nobody can reach is a
+  // switch nobody turns on. It matters more than it looks — nothing on the signup form ever set
+  // marketing_opt_in and the column defaults false, so every self-signup landed opted-OUT having
+  // never been asked (368 trials produced ~38 reachable people).
+  function marketingConsentCard(policy) {
+    var c = el("div", { class: "cf-card" }, [
+      el("h3", { text: "Marketing consent" }),
+      el("p", { class: "cf-muted", text: "What happens when someone creates an account. Existing members are not changed either way — this only sets the starting position for new signups." }),
+    ]);
+    var lbl = el("label", { class: "cf-row", style: "cursor:pointer;gap:10px;align-items:flex-start;margin-top:8px" });
+    var cb = el("input", { type: "checkbox" }); cb.checked = !!policy.marketing_opt_in_default; cb.style.width = "auto";
+    cb.addEventListener("change", async function () {
+      cb.disabled = true;
+      try {
+        await window.AdminAPI.patchPolicy({ marketing_opt_in_default: cb.checked });
+        policy.marketing_opt_in_default = cb.checked;
+        UI.toast("Saved.", "info");
+      } catch (e) { cb.checked = !cb.checked; UI.toast(UI.errMsg(e), "error"); }
+      finally { cb.disabled = false; }
+    });
+    lbl.appendChild(cb);
+    lbl.appendChild(el("div", {}, [
+      el("div", { style: "font-weight:600", text: "New members start opted in to club emails" }),
+      el("div", { class: "cf-muted", style: "font-size:.82rem", text: "They can unsubscribe at any time. Leave this off to require an explicit opt-in instead." }),
+    ]));
+    c.appendChild(lbl);
+    c.appendChild(el("p", { class: "cf-muted", style: "font-size:.8rem;margin-top:10px",
+      text: "If you switch this on, POPIA expects two things: the signup screen must say plainly that members will receive club updates and can opt out, and every marketing email must carry an unsubscribe link. Transactional email — bookings, receipts, reminders — is unaffected and always sends." }));
+    return c;
   }
 
   // Club-wide DEFAULT membership entitlement caps. Every membership inherits these — including the

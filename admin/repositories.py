@@ -227,14 +227,15 @@ def get_policy(session, *, club_id):
              "       allow_pay_at_court, allow_monthly_account, allow_online_payment, "
              "       peak_days, peak_start_min, peak_end_min, "
              "       default_max_covered_minutes, default_max_covered_per_day, "
-             "       default_max_courts_per_day, "
+             "       default_max_courts_per_day, marketing_opt_in_default, "
              "       created_at, updated_at "
              "FROM club.policy WHERE club_id = :c"),
         {"c": club_id},
     ).mappings().first())
 
 
-def patch_policy(session, *, club_id, booking_window_days=None, min_booking_minutes=None,
+def patch_policy(session, *, club_id, marketing_opt_in_default=None,
+                 booking_window_days=None, min_booking_minutes=None,
                  cancellation_cutoff_hours=None, no_show_fee_minor=None,
                  guest_requires_member=None, allow_pay_at_court=None,
                  allow_monthly_account=None, allow_online_payment=None,
@@ -265,6 +266,7 @@ def patch_policy(session, *, club_id, booking_window_days=None, min_booking_minu
                 allow_pay_at_court        = COALESCE(:allow_pay_at_court, allow_pay_at_court),
                 allow_monthly_account     = COALESCE(:allow_monthly_account, allow_monthly_account),
                 allow_online_payment      = COALESCE(:allow_online_payment, allow_online_payment),
+                marketing_opt_in_default  = COALESCE(:marketing_opt_in_default, marketing_opt_in_default),
                 peak_days                 = CASE WHEN :set_peak THEN :peak_days ELSE peak_days END,
                 peak_start_min            = CASE WHEN :set_peak THEN :peak_start_min ELSE peak_start_min END,
                 peak_end_min              = CASE WHEN :set_peak THEN :peak_end_min ELSE peak_end_min END,
@@ -282,6 +284,7 @@ def patch_policy(session, *, club_id, booking_window_days=None, min_booking_minu
          "allow_pay_at_court": allow_pay_at_court,
          "allow_monthly_account": allow_monthly_account,
          "allow_online_payment": allow_online_payment,
+         "marketing_opt_in_default": marketing_opt_in_default,
          "set_peak": set_peak,
          "peak_days": (None if peak_days is _UNSET else _days_csv(peak_days)),
          "peak_start_min": (None if peak_start_min is _UNSET else peak_start_min),

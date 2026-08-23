@@ -51,6 +51,9 @@ POLICY = dict(
     allow_pay_at_court=True,
     allow_monthly_account=True,
     allow_online_payment=False,
+    # New members start opted IN and must opt out. Without this every self-signup landed
+    # opted-out having never been asked: 368 trials produced ~38 reachable people.
+    marketing_opt_in_default=True,
 )
 LOCATION = dict(
     name="Killarney Country Club",

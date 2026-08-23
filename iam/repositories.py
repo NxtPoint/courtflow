@@ -89,6 +89,16 @@ def upsert_user_by_clerk_id(session, *, clerk_user_id, email=None, first_name=No
     return d
 
 
+def set_marketing_opt_in(session, user_id, value):
+    """Set iam.user.marketing_opt_in (the flag Client-360 and the audit read). The Klaviyo
+    gate is the SEPARATE core.app_user.marketing_opt_in — callers that want a member actually
+    mailable must set both, which is why auth.principal does them together."""
+    session.execute(
+        text("UPDATE iam.user SET marketing_opt_in = :v, updated_at = now() WHERE id = :id"),
+        {"v": bool(value), "id": user_id},
+    )
+
+
 def get_user_by_id(session, user_id):
     """Resolve an iam.user by id (UUID). Returns id, email, first_name, surname or None."""
     if not user_id:

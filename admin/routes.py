@@ -236,6 +236,7 @@ def patch_policy():
             allow_pay_at_court=b.get("allow_pay_at_court"),
             allow_monthly_account=b.get("allow_monthly_account"),
             allow_online_payment=b.get("allow_online_payment"),
+            marketing_opt_in_default=b.get("marketing_opt_in_default"),
         )
         # The CLUB's peak windows (what every court inherits unless it overrides). Same partial-patch
         # rule as everything above: replaced only when the key is actually sent.

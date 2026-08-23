@@ -113,6 +113,13 @@ _DDL = [
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS default_max_covered_per_day int;",
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS default_max_courts_per_day int;",
 
+    # Does a NEW member start opted IN to marketing (opt-OUT model) or OUT (opt-IN)?
+    # Defaults to FALSE so a new tenant never silently inherits another club's legal posture;
+    # NextPoint sets it true in seed_nextpoint. Under POPIA this is the "existing customer"
+    # soft opt-in, which REQUIRES a visible notice at signup and an unsubscribe in every send.
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS marketing_opt_in_default "
+    f"boolean NOT NULL DEFAULT false;",
+
     # --- club.billing_profile : the club's FINANCIAL IDENTITY for invoices/receipts ------
     # One row per club. Everything a professional invoice / statement letterhead needs that
     # isn't already on club.club (legal_name) or club.location (address) or club.branding
