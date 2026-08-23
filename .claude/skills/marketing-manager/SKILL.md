@@ -178,7 +178,30 @@ per brand)** and a note of **what you auto-tuned this session**. That's the deli
   CLAUDE.md no write path has been exercised by a real second person. Driving searchers to a dark feature
   spends real attention on a dead end and burns the launch, which you only get once. Announce it the week it
   is ON, with the flags flipped and one real end-to-end run behind you.
+- **🔴 NEVER PROMISE AN OFFER THE BILLING CODE WILL REFUSE.** Same failure as marketing a dark feature, but
+  it reaches the desk as an argument with a customer quoting our own page. **The NextPoint 7-day trial is
+  COURT-ONLY** (`provider='trial'`, auto-lapses to PAYG) — it does not cover lessons, classes, programmes or
+  squads. On 2026-08-22 the live site promised a **free first lesson in ten places** across four posts and
+  two CTA blocks, and there has never been such an offer. Two lessons from how that hid for so long:
+  **grep the promise, not the phrase** (nine read "first lesson is free", the tenth read "your first one is
+  free" and survived the sweep); and **a promise can be made by LAYOUT with no sentence to grep** — an
+  eyebrow reading "Free for 7 days" sitting directly above "Book your first lesson." makes the claim just as
+  loudly. Check the offer against the trial's actual scope before writing any copy, and re-read CTA blocks as
+  a visitor sees them, not as a string search.
+- **🔴 THE NEVILLE RULE — a credential is NAMED, never a plural.** Neville Godwin (2017 ATP Coach of the Year,
+  coach to Alexei Popyrin) is a **partner in the High Performance Program** and the owner is happy for his
+  credentials to be used — but **he takes no general lesson bookings.** So the line is not ATP-vs-no-ATP, it
+  is **named vs plural**: "Neville Godwin, coach to Alexei Popyrin" attributes the claim to a person and is
+  self-limiting; **"ATP-level coaches", plural and unattached, promises whoever takes your Tuesday lesson is
+  one** — and none of the bookable coaches is. Keep ATP claims on the High Performance Program, on `/programs`
+  and on his own bio (which states he is unavailable for general bookings); keep them off anything describing
+  what a booker gets. Do **not** write a page that drives lesson demand at him — one was published and pulled
+  the same day. `ATP-certified` is also wrong wherever it appears: Coach of the Year is an **award**, not a
+  certification, and the real credential is stronger anyway.
 - **Concurrency:** another agent may be in these repos — commit with **explicit file paths**, never `git add -A`.
+  This is not hypothetical: on 2026-08-22 a second agent held uncommitted edits across five Ten-Fifty5
+  marketing pages, and on 2026-08-23 pushed to `courtflow` mid-session (rebase, don't force). **Check
+  `git status` before editing a shared file** — work you did not write is probably deliberate.
 
 ## Efficiency (short on time?)
 Fast path = Phase 1 (health) → Phase 2 (SEO scorecard from the digest) → Phase 4 (Ads: CPA + scale decision) →
