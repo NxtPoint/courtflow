@@ -53,8 +53,15 @@ CRITICAL_PATTERNS = (
 def _is_critical(name: str, rtype: str) -> bool:
     if rtype in CRITICAL_TYPES:
         return True
-    if rtype == "TXT" and name == "@":
-        return True  # SPF lives here
+    if name == "@" and rtype in ("A", "CNAME", "TXT"):
+        # The apex is the front door, and SPF lives here too. A missing apex
+        # does not degrade the domain, it deletes it: the bare name stops
+        # resolving at all. Ten-Fifty5's apex was absent from its Cloudflare
+        # zone and this reported it as a non-critical miss, one line above the
+        # nameserver change that would have made it real.
+        return True
+    if name in ("www", "api"):
+        return True
     return any(p.search(name) for p in CRITICAL_PATTERNS)
 
 
