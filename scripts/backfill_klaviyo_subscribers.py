@@ -23,8 +23,9 @@
 # ⚠ CHECK THE LIST'S OPT-IN PROCESS FIRST. If the target Klaviyo list is DOUBLE opt-in, subscribing
 # via the API only sends a confirmation request — the person stays unmailable until they click it,
 # and you will have spent the one re-engagement email you had on a confirmation nobody expected.
-# "NextPoint Members" was double opt-in as of 2026-08-23. Switch it to single opt-in in the Klaviyo
-# UI (Lists → the list → Settings) BEFORE running with --commit.
+# "NextPoint Members" WAS double opt-in and was switched to SINGLE opt-in on 2026-08-23 (verified
+# via the API: opt_in_process = single_opt_in). If you point this at a different list, check that
+# list first — Klaviyo creates new lists as double opt-in by default.
 
 import argparse
 import io
@@ -119,19 +120,36 @@ def main():
         print("Aborted. Nothing was written.\n")
         return
 
-    from marketing_crm.crm_sync.sync import subscribe_member
-    ok = bad = 0
-    for e in emails:
-        try:
-            subscribe_member(e, club_id=cid)
-            ok += 1
-        except Exception as exc:                      # never let one address stop the batch
-            bad += 1
-            print(f"   !! {e}: {exc}")
-        if (ok + bad) % 50 == 0:
-            print(f"   ...{ok + bad}/{len(emails)}")
-    print(f"\nSubscribed {ok}, failed {bad}.")
-    print("Verify in Klaviyo: the list's profile_count should have moved by roughly that much.\n")
+    # NOT subscribe_member(): that is fire-and-forget and spawns a THREAD PER CALL. It is built for
+    # one invocation from a request handler, and looping it over hundreds of people would start
+    # hundreds of daemon threads, trip Klaviyo's rate limit, and let this process exit before they
+    # finished — subscribing an unpredictable subset while printing success. Use the synchronous
+    # bulk API underneath it instead: batches of 100, consent recorded as SUBSCRIBED, real return value.
+    from marketing_crm.crm_sync import klaviyo
+    from db import norm_email          # lives in db.py, not crm_sync (sync.py imports it from there too)
+
+    list_name = os.getenv("KLAVIYO_MARKETING_LIST", "NextPoint Members")
+    list_id = klaviyo.get_or_create_list(list_name)
+    if not list_id:
+        print(f"Could not resolve the Klaviyo list {list_name!r}. Nothing was written.")
+        sys.exit(1)
+    # get_or_create_list CREATES on a name miss, and a fresh list is DOUBLE opt-in — which would
+    # silently undo the whole point. Make the caller confirm the id it is about to write to.
+    print(f"\n  target list : {list_name!r}  (id {list_id})")
+    lst = klaviyo.get_list_meta(list_id) if hasattr(klaviyo, "get_list_meta") else None
+    if lst and lst.get("opt_in_process") == "double_opt_in":
+        print("  !! that list is DOUBLE opt-in — subscribing would only send confirmation requests.")
+        print("     Switch it to single opt-in first. Nothing was written.")
+        sys.exit(1)
+    if input(f"Type the list id ({list_id}) to confirm: ").strip() != str(list_id):
+        print("Aborted. Nothing was written.\n")
+        return
+
+    addrs = [norm_email(e) for e in emails]
+    ok = klaviyo.subscribe_emails(list_id, addrs)
+    print(f"\nSubmitted {len(addrs)} addresses in batches of 100 → {'ALL ACCEPTED' if ok else 'SOME BATCHES FAILED (see log)'}.")
+    print("Klaviyo processes these as a job, so the count moves over the next minute or two.")
+    print(f"Verify: the {list_name!r} profile_count should climb from 18 toward ~{len(addrs)}.\n")
 
 
 if __name__ == "__main__":
