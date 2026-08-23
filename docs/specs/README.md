@@ -396,6 +396,36 @@ operating guide; **this folder is the detail.**
 > entry, the level-quiz save, invite acceptance, `join.html`) is still unproven outside the harness,
 > and the two screens added on 2026-08-12 join that list. `seat_rule_enforced` remains OFF.
 
+> **2026-08-15/22 — the money rules the model could not express: booking 690 / billing 721 / statement 64.**
+> Three rules, all found by reading LIVE config and screens rather than code.
+> **(1) A SHARE IS FOR SHARING.** Every seat was priced the same way, so switching the money on would
+> have dropped a PAYG member booking a 60-min court from R150 to R80 — `seat_a_new_booking` linked the
+> holder's seat to the booking's own order precisely so it could be re-priced. That hands every PAYG
+> booker a reason to book "singles", claim a friend is coming, and take the court at half price. The
+> split is `visibility`, which the booking flow already set, so no new flag: `open` = Find a Game
+> (everyone pays a share, unfilled seats collapse, the court holds); `private` = Book a court (the
+> booker pays the court's normal price, a guest pays a share ONLY behind a membership-covered booker,
+> and nothing ever holds the court — an unpaid guest is collected at the desk rather than by
+> CANCELLING the member's booking, which is what `held` actually does at expiry).
+> **(2) PEAK IS A LIST.** One window could not express Mon–Thu evenings AND Saturday mornings, so the
+> owner had to choose which half of their peak to charge for — and the screen looked correctly
+> configured while over-charging Fri/Sat/Sun evenings and selling Saturday morning at off-peak.
+> `diary.peak_window` holds N per scope, nothing migrated (each scope falls back to its legacy
+> columns until edited), and both editors — per court and club-wide — now manage them.
+> **(3) A TIER CAN BE FREE EXCEPT AT PEAK** (`covers_peak`), which is how the free week stopped being
+> a free prime-time week. Not an access window: that means maintaining the inverse of peak by hand,
+> in a second place, and failing silently the first time peak moves.
+> **Four bugs found by looking rather than testing.** The switch-on screen still described the OLD
+> seat rule to the owner about to flip it. A membership term of 0 months was skipped silently and the
+> save still said "Saved.", so the trial tier the owner created simply did not exist. The client
+> screens flashed a full-page "Loading…" on every tap of a 14-button grid, printed raw DB values
+> (`social · both`), and rendered the game's DATE as a back button that navigated away when tapped.
+> And `scripts/audit_peak_and_trial.py` — written to answer "is this configured right?" — twice
+> reported confidently and wrongly: once calling a live tier "inactive" because one of its four terms
+> was retired, once reporting clay as charged peak when the clay service has no peak price at all.
+> Both were fixed; the second was the owner correcting the agent, and it is the sharpest reminder in
+> this log that a report is only worth what its blind spots allow.
+
 ## Read in this order
 0. **[GOTCHAS.md](GOTCHAS.md)** — the **war stories behind the rules**: 45 bugs that reached production
    (or came within a merge of it), each with the reasoning and the `sc_…` scenario that pins it. Moved

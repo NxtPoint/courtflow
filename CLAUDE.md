@@ -218,6 +218,15 @@ returning `_created=True` (a fresh INSERT); a returning login or a seeded/import
 clerk_id/email, `_created=False`) is NEVER trialed, so the ~880 Wix imports stay PAYG. Audit/cleanup:
 `scripts/audit_trials.py`. Bundles are unit/minute-based (a pack covers any length). The Wix-era
 "member R0" court tier is GONE.
+**A TIER CAN BE FREE *EXCEPT* AT PEAK** (`billing.price.covers_peak`, default true so nothing existing
+moved). This is how the free week stops being a free PRIME-TIME week. Deliberately NOT an access window:
+that would mean hand-maintaining the INVERSE of peak per tier, in a second place, wrong the first time
+peak moved — and silently, since the only symptom is members playing free at peak again. The tier states
+what it means and `court_covered` consults whatever peak is configured **on the court being booked**, so a
+peak-excluded tier is still free on a court with no peak (clay). `sc_a_tier_can_be_free_except_at_peak`.
+**The trial tier is NOT offered for sale** (`membership_plans` excludes it), so creating one does not
+clutter the members' buy list — a trial still needs a term of >= 1 month, which is structural, not its
+length; the length is `trial_days`.
 **Court SERVICES** — courts can belong to distinct court services ("Hardcourt Hire" vs "Clay Hire"), each a
 `billing.product(kind='court_booking')` with its own price + allocated courts via `diary.resource.product_id`
 (NULL → the club's default court product). Pricing/availability/booking are court-service-aware.
@@ -610,6 +619,19 @@ looks like a harmless simplification until you read what it cost.
 **Courts, peak hours & equipment** — [GOTCHAS.md#courts-peak-hours--equipment](docs/specs/GOTCHAS.md#courts-peak-hours--equipment)
 - THE COURT IS THE ONE PLACE TO SEE A COURT (2026-07-29)
 - PEAK HOURS ARE PER COURT (2026-07-29) — `sc_peak_hours_can_differ_per_court`
+- **PEAK IS A *LIST* OF WINDOWS, AND A WINDOW WITHOUT A PEAK *PRICE* CHARGES NOTHING** (2026-08-15/22).
+  One window could not express a real club's peak (NextPoint's is Mon–Thu 17:00–19:00 **and** Sat
+  mornings), so `diary.peak_window` holds N per scope — `resource_id NULL` = the club default a court
+  inherits, a row per court = its own; `resource.peak_override` still decides which, INCLUDING an
+  override with none (= never peak, which is how clay is marked). **Nothing migrated**: a scope with
+  no rows falls back to its legacy single columns, so read `_peak_windows`, never the columns direct.
+  And peak only APPLIES where the matched price row has a `peak_amount_minor` — window and amount are
+  two settings on two screens, so a window alone is inert. `sc_peak_can_have_more_than_one_window` ·
+  `sc_the_peak_editor_writes_what_the_resolver_reads` · audit with `scripts/audit_peak_and_trial.py`.
+- **THE PEAK CACHE'S NAME LIVES IN ONE PLACE** — `pricing.clear_peak_cache(session)`. The harness used
+  to `delattr` the private attribute by hand; renaming it silently made that a no-op and nine peak
+  assertions read a stale EMPTY cache, i.e. peak looked switched off. Any code changing peak config
+  mid-session must call it.
 - EQUIPMENT IS SCOPED TO A COURT SERVICE, AND THE COURT IS STILL CHARGED (2026-07-29) — `sc_equipment_court_is_charged_and_both_are_booked_out` · `sc_equipment_is_scoped_to_its_court_service`
 - EQUIPMENT IS A SERVICE AND PAYS LIKE ONE — `sc_equipment_follows_its_own_payment_rule`
 
