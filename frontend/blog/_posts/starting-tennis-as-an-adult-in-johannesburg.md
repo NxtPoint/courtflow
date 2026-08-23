@@ -88,4 +88,4 @@ Everything above is detail. The single thing that separates adults who play tenn
 
 Pick a group session, borrow a racquet, wear proper court shoes, and accept that the first twenty minutes will feel strange. By the end of the hour it will not. That is genuinely all there is to it.
 
-[See the programmes and start a free week →](https://nextpointtennis.com/programs)
+[See the programmes →](https://nextpointtennis.com/programs)
