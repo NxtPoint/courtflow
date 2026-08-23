@@ -59,7 +59,7 @@ Every club says beginners are welcome. Some mean it. A few things separate the t
 
 ## Where NextPoint fits
 
-We are at Killarney Country Club in Houghton, with eight courts — hard and clay — floodlit for evening play, and a coaching programme that runs from complete beginners through to the ATP-certified High Performance squad.
+We are at Killarney Country Club in Houghton, with eight courts — hard and clay — floodlit for evening play, and a coaching programme that runs from complete beginners through to the High Performance squad.
 
 For an adult starting out, the two relevant parts are the [group programmes](https://nextpointtennis.com/programs) — Cardio Tennis and social play are both genuinely beginner-friendly — and the fact that you can [see live court and coach availability and book online](https://nextpointtennis.com/book) rather than phoning and hoping. There is also a **free week** — create an account and court bookings are on us for 7 days, no commitment, with lessons and classes staying pay-as-you-go. It is the honest way to answer the question this whole article is really about: is this going to be awkward, or is it going to be fun?
 
