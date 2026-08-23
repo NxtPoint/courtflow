@@ -272,7 +272,48 @@ def _fqdn(name: str, domain: str) -> str:
     return domain if name == "@" else f"{name}.{domain}"
 
 
+_DOH_TYPE = {"A": 1, "CNAME": 5, "MX": 15, "TXT": 16}
+
+
+def _lookup_doh(host: str, rtype: str) -> list[str] | None:
+    """Public-resolver lookup over DoH. None = the query itself failed.
+
+    Preferred over nslookup whenever we are asking "the internet" rather than
+    one named server, because it returns structured JSON instead of console
+    text whose shape depends on the machine's own resolver. Scraping that text
+    once reported MX and every TXT as MISSING on a domain whose mail was
+    perfectly healthy - a false CRITICAL, mid-transfer, which is exactly when
+    someone would act on it.
+    """
+    try:
+        req = urllib.request.Request(
+            f"https://dns.google/resolve?name={host}&type={rtype}",
+            headers={"accept": "application/dns-json"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            payload = json.load(r)
+    except Exception:
+        return None
+    if payload.get("Status") not in (0, 3):      # 0 = ok, 3 = NXDOMAIN
+        return None
+    want = _DOH_TYPE.get(rtype)
+    out = []
+    for a in payload.get("Answer", []):
+        if a.get("type") != want:
+            continue
+        val = a.get("data", "").strip()
+        if rtype == "TXT":
+            val = "".join(re.findall(r'"(.*?)"', val)) or val.strip('"')
+        out.append(val)
+    return out
+
+
 def lookup(host: str, rtype: str, ns: str | None) -> list[str]:
+    if ns is None:
+        via_doh = _lookup_doh(host, rtype)
+        if via_doh is not None:
+            return via_doh
+        # fall through to nslookup only if DoH was unreachable
     cmd = ["nslookup", f"-type={rtype}", host]
     if ns:
         cmd.append(ns)
