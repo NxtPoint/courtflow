@@ -215,10 +215,25 @@ def subscribe_member(email, club_id=None, list_name=None):
 # rand exactly once. invoice_paid and membership_started fire for money ALSO seen by
 # payment_succeeded, and adding them would double-count revenue that only moved once.
 #
-# Refunds are excluded by construction: payment_refunded is not in this set, so a refund never
+# Refunds are excluded by construction: payment_refunded is not a conversion, so a refund never
 # registers as income. (The mirror of the cockpit bug in GOTCHAS.md, where a status filter dropped
 # refunds out of the revenue read — same money, opposite direction, same class of mistake.)
-_REVENUE_EVENTS = frozenset({"payment_succeeded"})
+#
+# WHICH events are money is NOT decided here. offline_conversions.recorder.CONVERSION_MAP already
+# answers that for the Google Ads loop, it names the value key for each, and it is byte-identical
+# across the CourtFlow and Ten-Fifty5 repos — it holds both products' money events, with the ones
+# that never fire in a given repo simply inert. Reading it means Klaviyo revenue and Google Ads
+# conversions can never drift apart, and adding a money event stays a ONE-line change in ONE file
+# that both systems then honour.
+def _revenue_map():
+    """{event_type: value_key} for events that represent income. Empty on any import problem —
+    no revenue reported beats revenue invented."""
+    try:
+        from offline_conversions.recorder import CONVERSION_MAP
+        return {k: (v or {}).get("value_key") for k, v in (CONVERSION_MAP or {}).items()}
+    except Exception:
+        log.debug("crm_sync: CONVERSION_MAP unavailable; $value mapping disabled")
+        return {}
 
 
 def _attach_revenue(event_type, props):
@@ -227,10 +242,11 @@ def _attach_revenue(event_type, props):
     Never raises and never guesses: a missing, unparseable or non-positive amount leaves the
     payload untouched, because a wrong revenue number is worse than no revenue number — it is
     believed, reported on, and acted upon."""
-    if event_type not in _REVENUE_EVENTS:
+    value_key = _revenue_map().get(event_type)
+    if not value_key:
         return props
     try:
-        minor = props.get("amount_minor")
+        minor = props.get(value_key)
         if minor is None:
             return props
         value = round(int(minor) / 100.0, 2)
@@ -241,7 +257,7 @@ def _attach_revenue(event_type, props):
         if cur:
             props.setdefault("$currency_code", str(cur).upper())
     except Exception:
-        log.debug("crm_sync: could not derive $value from %r", props.get("amount_minor"))
+        log.debug("crm_sync: could not derive $value from %r", props.get(value_key))
     return props
 
 
