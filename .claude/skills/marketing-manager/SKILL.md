@@ -163,9 +163,53 @@ striking-distance queries. Aim to ship a website page AND its matching GBP post 
 Check velocity; if slowing, resurface the review-request WhatsApp/email + the gated `/feedback` flow (routes
 4–5★ → the GBP link). Aim 40+ reviews.
 
+**Phase 6b · Klaviyo / lifecycle email — BOTH brands (~5 min).** The MCP connector gives direct API access;
+use it rather than the browser, which is how a previous session left things half-done and undetectable. Each
+brand has its own Klaviyo account — **`get_account_details` FIRST and confirm which one you are in** before
+any write. NextPoint = `TckWKM`, sender `info@nextpointtennis.com`. Both repos share the same
+`marketing_crm/crm_sync/` package, so a fix to one is nearly always portable to the other — **port it in the
+same session, per that repo's idiom, and say so in the report.**
+
+- **① Flow health — the compounding asset, and the one people forget.** A campaign converts once; a flow
+  runs for ever. `get_flows` and list every one with its status. **A flow in `draft` is work already paid for
+  and switched off** — NextPoint had 5 of 7 in draft for six weeks, including the one built to convert court
+  bookers into members. Report drafts as a finding every run until they ship or are deleted.
+- **② The duplicate-metric trap. Check this before trusting any flow or segment.** `get_metrics` and look for
+  two metrics with the SAME NAME from different integrations — an "API" one (your app) and one from
+  "Klaviyo MCP Server" or similar (test events a previous agent fired). A flow or segment bound to the wrong
+  copy **never fires and never errors**. Found live 2026-08-23: the "unconverted trial members" segment was
+  keyed to the MCP-server `membership_started`, so its "never bought a membership" clause was true for
+  everyone, including buyers — that send would have offered a joining discount to existing members.
+- **③ Segment sanity, every run.** Pull `profile_count` for each segment a campaign targets. **A segment can
+  quietly empty** — `B1 · Court bookers` read 0 because it required 2+ bookings from a subscribed profile and
+  almost nobody was subscribed. Cross-check the numbers add up (A + B should equal the parent) and treat any
+  segment at 0 as a blocker, not a curiosity. Note: a freshly created segment reports `profile_count: 0` with
+  `is_processing: true` for a few minutes — that is "not computed yet", NOT an empty segment.
+- **④ Consent ≠ subscription — the gap that makes everything else pointless.** Our DB's `marketing_opt_in`
+  and Klaviyo's subscribed state are different facts, and only `subscribe_member()` (the consent endpoint)
+  ever sets the second. Anyone opted in via import, admin edit or the signup default is invisible to Klaviyo.
+  NextPoint: 455 opted in, ~40 reachable, until `scripts/backfill_klaviyo_subscribers.py` ran. `sync_all()`
+  does NOT fix it (upserts profiles, never subscribes, ignores consent). Compare the two counts every run.
+- **⑤ Revenue.** Klaviyo reads money from `$value` in MAJOR units only. Both repos now map it in
+  `crm_sync/sync.py` from the shared `CONVERSION_MAP`. **If flow/campaign revenue reads zero while sales are
+  happening, suspect the mapping, not the campaign** — and check the money event actually carries its amount
+  (Ten-Fifty5's `credit_purchased` / `subscription_started` were count-only as of 2026-08-24).
+- **⑥ Propose ONE campaign, from behaviour rather than a calendar.** Profile traits now carry
+  `last_played_at`, `days_since_played`, `bookings_90d`, `has_upcoming_booking`, `lifetime_spend` — so a
+  segment is one clause, not three stacked metric conditions. Good seams: members whose `current_period_end`
+  falls in ~30 days; pack-holders with sessions left and no upcoming booking; clay-court regulars who have
+  never taken a lesson; parents before a school term; top-decile `lifetime_spend` who are still PAYG.
+- **⑦ Sending discipline, when a send is on the table.** Warm segment first, cold behind it — a first big
+  send to stale addresses damages the reputation that also carries booking confirmations, receipts and
+  invoices. Throttle a cold list (25%/hour). Define segments on a metric (`membership_started == 0`) rather
+  than a frozen list so converts drop out automatically. **Send yourself a test and check it on a phone
+  before arming anything**, and verify with `get_campaign` + `get_campaign_recipient_estimation` rather than
+  trusting a `queued` response — `"Queued without Recipients"` is a normal transient for a scheduled send,
+  but only the recipient estimate proves the audience is real.
+
 **Phase 7 · Scorecard + action list.** Output a tight per-brand scorecard — Measurement / Organic / Technical /
-Ads / Content / Reviews each as 🟢🟡🔴 with a one-line reason — then a **prioritized "do this week" list (top 3
-per brand)** and a note of **what you auto-tuned this session**. That's the deliverable.
+Ads / Content / Email / Reviews each as 🟢🟡🔴 with a one-line reason — then a **prioritized "do this week" list
+(top 3 per brand)** and a note of **what you auto-tuned this session**. That's the deliverable.
 
 ## Guardrails
 - **Approve before ANY spend change** (bidding, budget, pausing, new campaigns) — show the exact change first.
@@ -198,6 +242,12 @@ per brand)** and a note of **what you auto-tuned this session**. That's the deli
   what a booker gets. Do **not** write a page that drives lesson demand at him — one was published and pulled
   the same day. `ATP-certified` is also wrong wherever it appears: Coach of the Year is an **award**, not a
   certification, and the real credential is stronger anyway.
+- **🔵 WHAT WE BUILD FOR ONE BRAND, WE BUILD FOR BOTH.** Standing instruction from Tomo (2026-08-24): a
+  capability is not finished when it works for NextPoint. Both repos carry the same
+  `marketing_crm/crm_sync/` package and a byte-identical `offline_conversions/recorder.CONVERSION_MAP`,
+  so most CRM work ports directly — **port it in the SAME session and report both**, adapted to each
+  repo's idiom rather than copy-pasted (their `forward_event` signatures and money keys differ). Where a
+  port genuinely does not apply, say why instead of leaving it silently undone.
 - **Concurrency:** another agent may be in these repos — commit with **explicit file paths**, never `git add -A`.
   This is not hypothetical: on 2026-08-22 a second agent held uncommitted edits across five Ten-Fifty5
   marketing pages, and on 2026-08-23 pushed to `courtflow` mid-session (rebase, don't force). **Check
