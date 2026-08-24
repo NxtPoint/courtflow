@@ -15,6 +15,7 @@
 import logging
 import os
 import threading
+from datetime import datetime, timezone
 
 from sqlalchemy import select, text
 
@@ -66,6 +67,47 @@ def build_traits(session, email, club_id=None):
     except Exception:
         session.rollback()
         log.debug("build_traits: iam enrichment skipped for %s", email)
+
+    # BEHAVIOUR TRAITS — recency, frequency, money. Without these every segment has to be
+    # assembled out of raw metric counts, which is slow to build, slow for Klaviyo to compute and
+    # easy to get subtly wrong (the Spring Day segments each needed three stacked metric
+    # conditions to express "played recently and never joined"). As traits the same question is
+    # one clause. ONE query, all aggregates, so a forwarded event costs a single extra round trip.
+    #
+    # Guarded and rolled back on failure: a CRM enrichment must never be the reason a booking
+    # confirmation does not send.
+    try:
+        b = session.execute(text("""
+            WITH u AS (
+                SELECT id FROM iam.user WHERE lower(email) = :e ORDER BY created_at LIMIT 1
+            )
+            SELECT
+              (SELECT max(bk.starts_at) FROM diary.booking bk, u
+                WHERE bk.booked_by_user_id = u.id AND bk.starts_at <= now()
+                  AND bk.status <> 'cancelled')                                   AS last_played_at,
+              (SELECT count(*) FROM diary.booking bk, u
+                WHERE bk.booked_by_user_id = u.id AND bk.status <> 'cancelled'
+                  AND bk.starts_at > now() - interval '90 days')                  AS bookings_90d,
+              (SELECT count(*) FROM diary.booking bk, u
+                WHERE bk.booked_by_user_id = u.id AND bk.status <> 'cancelled'
+                  AND bk.starts_at > now())                                       AS bookings_upcoming,
+              (SELECT COALESCE(sum(o.amount_minor), 0) FROM billing."order" o, u
+                WHERE o.user_id = u.id AND o.status = 'paid')                     AS spend_minor
+        """), {"e": email}).mappings().first()
+        if b:
+            lp = b["last_played_at"]
+            traits["last_played_at"] = lp.isoformat() if lp else None
+            traits["days_since_played"] = (
+                int((datetime.now(timezone.utc) - lp).days) if lp else None)
+            traits["bookings_90d"] = int(b["bookings_90d"] or 0)
+            traits["has_upcoming_booking"] = bool(b["bookings_upcoming"])
+            # Major units, matching $value — so a "top spender" segment and a revenue report
+            # never disagree about what a rand is.
+            traits["lifetime_spend"] = round(int(b["spend_minor"] or 0) / 100.0, 2)
+    except Exception:
+        session.rollback()
+        log.debug("build_traits: behaviour enrichment skipped for %s", email)
+
     return traits
 
 
@@ -162,6 +204,47 @@ def subscribe_member(email, club_id=None, list_name=None):
         log.exception("subscribe_member: thread spawn failed")
 
 
+# ── revenue ────────────────────────────────────────────────────────────────
+# Klaviyo reads money from ONE special event property: "$value", in MAJOR units. Our events carry
+# `amount_minor` (cents), which Klaviyo cannot interpret as money at all — so campaign revenue,
+# lifetime value, churn probability and every predictive metric read ZERO however much the club
+# actually takes. The data was always there; it was in a key Klaviyo does not look at.
+#
+# ONE event carries it, deliberately. payment_succeeded is the money core — it fires for every
+# collection method (Yoco, cash, EFT, invoice pay-link, 'pay all' statement), so it counts each
+# rand exactly once. invoice_paid and membership_started fire for money ALSO seen by
+# payment_succeeded, and adding them would double-count revenue that only moved once.
+#
+# Refunds are excluded by construction: payment_refunded is not in this set, so a refund never
+# registers as income. (The mirror of the cockpit bug in GOTCHAS.md, where a status filter dropped
+# refunds out of the revenue read — same money, opposite direction, same class of mistake.)
+_REVENUE_EVENTS = frozenset({"payment_succeeded"})
+
+
+def _attach_revenue(event_type, props):
+    """Add Klaviyo's `$value` (major units) when an event genuinely represents income received.
+
+    Never raises and never guesses: a missing, unparseable or non-positive amount leaves the
+    payload untouched, because a wrong revenue number is worse than no revenue number — it is
+    believed, reported on, and acted upon."""
+    if event_type not in _REVENUE_EVENTS:
+        return props
+    try:
+        minor = props.get("amount_minor")
+        if minor is None:
+            return props
+        value = round(int(minor) / 100.0, 2)
+        if value <= 0:
+            return props
+        props["$value"] = value
+        cur = props.get("currency")
+        if cur:
+            props.setdefault("$currency_code", str(cur).upper())
+    except Exception:
+        log.debug("crm_sync: could not derive $value from %r", props.get("amount_minor"))
+    return props
+
+
 def forward_event(event_type, email, club_id=None, properties=None):
     """Forward a product event to Klaviyo (flow trigger). Enforces the send rule (docs/06 §4):
       - transactional events ALWAYS send (legitimate booking comms);
@@ -185,6 +268,7 @@ def forward_event(event_type, email, club_id=None, properties=None):
         props = dict(properties)
         if club_id is not None:
             props.setdefault("club", str(club_id))
+        props = _attach_revenue(event_type, props)
         # Keep the profile fresh + segmentable on first touch (FULL traits, not just club).
         try:
             with session_scope() as s:
