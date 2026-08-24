@@ -163,8 +163,13 @@ services:
         value: "https://www.ten-fifty5.com"
       # PRIVATE PROD TEST: the members-area embed is shown ONLY to these emails until we
       # launch to the whole community. Clear this value (empty) to enable it for ALL members.
+      # NOTE the TLD: South African domains are .co.za. This read "nedbank.com.za"
+      # from the day it was set, so the one account the private test existed for
+      # never matched and only ever saw the "Coming soon" teaser. The match is an
+      # exact lowercased string compare (client.js tf5Enabled), so a near-miss
+      # fails silently and looks exactly like the feature not being ready yet.
       - key: TF5_EMBED_ALLOW_EMAILS
-        value: "tomos@nedbank.com.za"
+        value: "tomos@nedbank.co.za,info@ten-fifty5.com"
       # Marketing hosts → these serve the public site at "/" (app stays at /portal).
       # Includes the onrender URL so the public site is viewable before DNS cutover;
       # the real domains are here too (also in branding.py registry) for go-live.
