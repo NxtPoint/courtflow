@@ -3135,11 +3135,23 @@ def admin_home(session, *, club_id):
         "coach_invites_pending": _scalar("SELECT COUNT(*) FROM iam.coach_invite "
                                          "WHERE club_id = :c AND status = 'pending'",
                                          label="coach_invites_pending"),
+        # PAID memberships only. This counted trials too, and because a trial is 7 days EVERY
+        # active one falls inside a 14-day window — so on 2026-08-25 the card read "62 memberships
+        # expiring" for a club with 14 paid memberships and 59 trials. The owner reads that as
+        # churn and goes looking for renewals that do not exist; the real number was 3.
+        # Trials lapsing is a different problem with a different fix, so it gets its own count.
         "memberships_expiring_14d": _scalar(
             "SELECT COUNT(*) FROM billing.membership_subscription WHERE club_id = :c "
-            "AND status = 'active' AND current_period_end IS NOT NULL "
+            "AND status = 'active' AND COALESCE(provider,'') <> 'trial' "
+            "AND current_period_end IS NOT NULL "
             "AND current_period_end <= now() + interval '14 days'",
             label="memberships_expiring_14d"),
+        "trials_ending_7d": _scalar(
+            "SELECT COUNT(*) FROM billing.membership_subscription WHERE club_id = :c "
+            "AND status = 'active' AND provider = 'trial' "
+            "AND current_period_end IS NOT NULL "
+            "AND current_period_end <= now() + interval '7 days'",
+            label="trials_ending_7d"),
     }
 
     # Approvals / decisions

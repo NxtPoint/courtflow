@@ -225,7 +225,8 @@
     var pBody = [statLine([
       { value: pe.new_signups_7d || 0, label: "New signups (7d)" },
       { value: pe.coach_invites_pending || 0, label: "Coach invites pending" },
-      { value: pe.memberships_expiring_14d || 0, label: "Memberships expiring" },
+      { value: pe.memberships_expiring_14d || 0, label: "Renewals due (14d)" },
+      { value: pe.trials_ending_7d || 0, label: "Trials ending (7d)" },
     ])];
     wrap.appendChild(focusCard({ title: "People needing attention", to: "#/people", cta: "View people ›", body: pBody }));
 
