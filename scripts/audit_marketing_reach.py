@@ -181,6 +181,43 @@ def main():
         _row("ex-trialist, no membership, quiet 90d", cold, reach, "(win-back tone)")
         _row("never trialled, no membership, played 90d", never, reach, "(pure PAYG upsell)")
 
+        # ---- G. the leak -----------------------------------------------
+        # Growth is coming from free trials, so the question that decides the whole marketing
+        # programme is whether a NEW member arrives marketable. Two things must be true: the club
+        # policy must say opt-IN by default, and signup must honour it. A per-month opt-in rate
+        # shows both at once - the rate should step UP sharply from the day the default was
+        # switched on, and a flat line means the switch was never flipped.
+        print("\nG. IS THE TAP OPEN?   (do NEW signups arrive marketable?)")
+        dflt = s.execute(text(
+            "SELECT COALESCE(marketing_opt_in_default, false) FROM club.policy WHERE club_id = :c"
+        ), {"c": cid}).scalar()
+        print(f"   club.policy.marketing_opt_in_default          : {bool(dflt)}")
+        if not dflt:
+            print("   !! OFF - every self-signup lands opted OUT, having never been asked.")
+            print("      Admin -> Setup -> Club profile & payments -> 'New members start opted in'.")
+        else:
+            print("   -> ON - new signups start opted in and can unsubscribe.")
+
+        print("\n   Signups per month, and how many arrived marketable:")
+        rows = s.execute(text("""
+            SELECT to_char(date_trunc('month', u.created_at), 'YYYY-MM') AS mon,
+                   count(*)                                              AS signups,
+                   count(*) FILTER (WHERE u.marketing_opt_in IS TRUE)    AS opted_in
+            FROM iam.user u
+            JOIN iam.membership m ON m.user_id = u.id AND m.club_id = :c
+            WHERE u.created_at > now() - interval '12 months'
+            GROUP BY 1 ORDER BY 1
+        """), {"c": cid}).fetchall()
+        print(f"      {'month':9}{'signups':>9}{'opted in':>10}{'rate':>8}")
+        for mon, n_, o_ in rows:
+            print(f"      {mon:9}{n_:>9}{o_:>10}{_pct(o_, n_):>8}")
+
+        print("\n   Of everyone who has EVER held a trial:")
+        tr_opt = _one(s, "SELECT count(DISTINCT ms.user_id) FROM billing.membership_subscription ms "
+                         "JOIN iam.user u ON u.id = ms.user_id "
+                         "WHERE ms.club_id=:c AND ms.provider='trial' AND u.marketing_opt_in IS TRUE", c=cid)
+        _row("trialists we may email", tr_opt, tr_ppl, "<-- the trial-grown audience")
+
         print("\n" + "=" * 78)
         print("Nothing was written. Numbers are per-person unless the label says otherwise.\n")
 
