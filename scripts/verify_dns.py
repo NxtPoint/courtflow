@@ -387,9 +387,16 @@ def main() -> int:
         print(f"  status    : {reg['status']}")
         print(f"  delegated : {', '.join(reg['nameservers']) or '(none)'}")
         if not any("cloudflare" in n for n in reg["nameservers"]):
-            if not any("wixdns" in n for n in reg["nameservers"]):
-                print("  ^^ delegated to NEITHER Wix nor Cloudflare - check this NOW,")
-                print("     a registrar's own empty zone means a dark domain.")
+            # Cloudflare is now the ONLY correct answer. This used to also accept
+            # wixdns as "fine, mid-migration"; both domains completed on 2026-08-24,
+            # so that allowance would now let a silent regression back to Wix pass
+            # as healthy. Anything that is not Cloudflare is wrong, including a
+            # registrar's own default nameservers over an empty zone - which is a
+            # dark domain, not a fallback.
+            print("  ^^ NOT delegated to Cloudflare - check this NOW. Since 2026-08-24")
+            print("     both domains should be on Cloudflare; anything else (a registrar")
+            print("     default, a reverted Wix delegation) means records are not being")
+            print("     served from the zone this script just verified.")
 
     blockers = [] if args.records_only else dnssec_blockers(args.domain)
     print()

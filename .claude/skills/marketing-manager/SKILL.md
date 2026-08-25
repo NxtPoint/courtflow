@@ -72,6 +72,12 @@ Rule: **before reporting any technical defect, confirm the tool measured it corr
 **Phase 1 · Measurement health (~1 min).** `curl` each site + its Render origin, grep for the tag (gtag loader
 + the GA4 id). Dark tag = **priority-1 alarm** (a blank tag ID in render.yaml re-clobbered by a blueprint sync —
 see MARKETING-ENGINE.md §1; the fix is committing the real ID inline). This is the retired canary's job.
+**Also check the APEX, not just `www`, and check the TLS EXPIRY, not just the status code** — on 2026-08-22
+`ten-fifty5.com`'s bare apex had been serving an expired certificate for six days (every visitor got a
+browser security warning) while `www` was perfectly healthy and every organic metric looked fine. It
+surfaced only because `curl` on the apex failed outright. One line catches it:
+`echo | openssl s_client -connect <host>:443 -servername <host> 2>/dev/null | openssl x509 -noout -dates`.
+Run it on apex AND www for both brands; anything inside ~14 days of `notAfter` is the finding.
 
 **Phase 2 · Organic / SEO scorecard (~2 min).** `git pull`; read `marketing_digest/reports/latest.md` and a
 report ~7 days older for movement. Per brand pull: GA4 traffic + trend, GSC clicks/impressions/avg-position +
@@ -101,8 +107,8 @@ striking-distance queries. Aim to ship a website page AND its matching GBP post 
   coworker SEO→post workflow — memory `ten-fifty5-weekly-seo-blog-workflow`). **A book/buy-intent query
   ("tennis lessons johannesburg", "book a court") wants a landing-style page with CTAs to `/book`
   `/free-lesson` — NOT a how-to article.**
-  **📉 THE CADENCE GAP IS THE STANDING NEXTPOINT FINDING — check it every session.** As of 2026-08-15
-  Ten-Fifty5 had **13 posts** and NextPoint **4**, and their organic curves match that ratio: Ten-Fifty5
+  **📉 THE CADENCE GAP IS THE STANDING NEXTPOINT FINDING — check it every session.** As of 2026-08-25
+  Ten-Fifty5 had **19 posts** and NextPoint **6** (was 13 vs 4 on 2026-08-15 - the gap is WIDENING), and their organic curves match that ratio: Ten-Fifty5
   users +30% / clicks +18% / position 8.9→8.4 in a week, NextPoint clicks −13% over the same stretch.
   Ten-Fifty5's blog is the engine pulling its growth; NextPoint's four posts are not enough to move
   anything. **Default to proposing NextPoint content, not Ten-Fifty5 content** — Ten-Fifty5 already has

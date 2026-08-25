@@ -93,6 +93,12 @@ PowerShell form `(git ls-files '*.py')`; the Bash tool is available for POSIX sc
 - Production is `https://nextpointtennis.com` (apex canonical, `www` 301→apex). The `courtflow-*.onrender.com`
   hosts remain as fallback. Prod Clerk auth + Google login; `AUTH_ENABLED=1`, `SEED_NEXTPOINT=1` (re-seeds
   club #1 on boot, idempotent). Platform admin = `info@nextpointtennis.com`. GA4 + Google Ads on the web service.
+- **DNS + registrar: Porkbun (registration) + Cloudflare (DNS), both domains, since 2026-08-24. Wix is
+  gone.** The split is deliberate — if the Cloudflare account is ever lost the domains repoint from Porkbun
+  in minutes. **Every record is DNS-only (grey cloud): proxying Clerk's records breaks login.** The zone is
+  version-controlled at **`migration/dns/<domain>.zone`** (BIND, imports straight into Cloudflare) and
+  `python -m scripts.verify_dns <domain>` gates any change. Wix could not do this at all — it forbids
+  external nameservers on domains it registers, which is why both had to be transferred out.
 - **Volatile infra values** (exact Clerk subdomains, DNS records, GA/Ads IDs, SES keys) live in
   `docs/specs/ENV-STATUS.md` — keep them there, not here, so they can rot independently of code.
 
@@ -540,12 +546,20 @@ member by email on the first authenticated hit.
 - **Rebuild blog/SEO:** `python build_blog.py`
 - **Verify against REAL Render Postgres (read-only, safe):** `python -m scripts.verify_live` (reads
   `DATABASE_URL` from a gitignored `.env.local`, never printed).
+- **Check DNS against the committed zone:** `python -m scripts.verify_dns <domain>` — records vs
+  `migration/dns/<domain>.zone`, plus DNSSEC and registrar/delegation state. **Run it LOCALLY** (no DB, no
+  env, no server; it has been attempted on the Render shell twice and cannot work there). Add `--ns <server>`
+  to ask a specific nameserver *before* a delegation change, `--records-only` to skip the DNSSEC gate while
+  building a zone.
 - **Wix→Render cutover (SUPERVISED — runbook `migration/CUTOVER_RUNBOOK.md`):** take-on scripts default to
   `--dry-run` (print counts, ROLLBACK), are idempotent, and only an explicit `--commit`/typed `YES` writes.
   Wrappers: `scripts/import_members.py`, `import_subscriptions.py` (matched to plans BY LABEL), `import_lessons.py`.
   The 301 redirect engine (`migration/redirects.py`) IS wired into `web_app` (`register_redirects(app)` at
   boot, before the catch-all) — it loads `migration/redirects.csv` (48-rule Wix→Render map, live since cutover).
-  **Never let an agent change DNS or flip the SEO cutover — Tomo does this.**
+  **Never let an agent change DNS or flip the SEO cutover — Tomo does this.** (The Wix→Render content
+  cutover completed 2026-07-05; Wix stopped hosting DNS and the registration on 2026-08-24. These scripts
+  and the redirect map are the surviving, still-load-bearing residue of that move — the redirects keep
+  ~68 old Wix URLs alive in search results and must not be deleted as "Wix leftovers".)
 
 ## Tech defaults (match Ten-Fifty5 so reuse is clean)
 - Python 3.12 + Flask + Gunicorn + Postgres. **DB access = SQLAlchemy Core** (`db.get_engine`/`text()`,
@@ -569,7 +583,11 @@ looks like a harmless simplification until you read what it cost.
 - **`api.nextpointtennis.com` is already live on the Ten-Fifty5 service** — do not break it. The new platform has its
   own API host; changing a Render custom domain can recreate a service. (The members-area **Ten-Fifty5 embed**
   now *deliberately* calls this API with federated NextPoint tokens — see the embed section.)
-- **Never let an agent change DNS.** The Wix→Render SEO cutover is supervised by Tomo.
+- **Never let an agent change DNS or a registrar.** Both domains now sit at **Porkbun (registrar) +
+  Cloudflare (DNS)** — Wix is gone entirely as of 2026-08-24. The zone source of truth is
+  `migration/dns/<domain>.zone` and `python -m scripts.verify_dns <domain>` checks it; propose the change,
+  let Tomo click it. Records are **DNS-only (grey cloud)** — proxying Clerk's records breaks login.
+  Full picture: [`docs/specs/ENV-STATUS.md`](docs/specs/ENV-STATUS.md#-domains-dns--registrar-wix-is-gone--2026-08-24).
 - **The booking API returns `{booking:{order_id,status}, checkout}`** — read `res.booking.order_id`, NOT
   `res.order_id` (that bug silently confirmed online bookings without redirecting).
 - **SQL `:param IS NULL` needs a CAST** (psycopg `AmbiguousParameter`): write `CAST(:df AS timestamptz) IS NULL`,
@@ -722,7 +740,10 @@ money decision quietly defaulted instead of being made.*
   The booking **`.ics`** attachment can be turned on the SAME way (`EMAIL_ICS_ENABLED=1`) — optional; the in-app
   "Add to calendar" download works regardless. Long-term CourtFlow-domain setup: `docs/specs/SES-SETUP.md`.
   Klaviyo marketing stays dark until `KLAVIYO_API_KEY`.
-- **DNS / SEO cutover** for `nextpointtennis.com` — supervised, never an agent.
+- **Cancel the Wix plan (~R10k)** — the LAST thing Wix is owed anything for. Both domains left Wix on
+  2026-08-23/24 (Porkbun + Cloudflare), so Wix holds no registration, no DNS and no record pointing at it;
+  cancelling cannot take either site down. Check the billing page for whether the site plan and any domain
+  line are billed separately before clicking.
 - **Done (config that WAS pending):** `OPS_KEY` GitHub Actions secret set → the monthly statement sweep
   (`.github/workflows/month-end.yml`) now fires on the **1st**, billing the month just ended, issuing each client's
   consolidated statement invoice + pay-link email; Admin → Setup → **Company & billing details** filled (bank

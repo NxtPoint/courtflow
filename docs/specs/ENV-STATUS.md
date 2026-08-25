@@ -54,7 +54,43 @@ Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ h
 
 ---
 
-## 🚀 GO-LIVE env changes (make these AT the DNS cutover — see GO-LIVE-STEPS.md)
+## 🌐 Domains, DNS & registrar (WIX IS GONE — 2026-08-24)
+
+Both brands left Wix entirely on 2026-08-23/24. Wix now holds **nothing**: not the
+registration, not the DNS, and no record anywhere points at `185.230.63.x`.
+
+| | Registrar | DNS | Expires |
+|---|---|---|---|
+| `nextpointtennis.com` | **Porkbun** | **Cloudflare** (`fattouche` + `miki.ns.cloudflare.com`) | 2027-09-23 |
+| `ten-fifty5.com` | **Porkbun** | **Cloudflare** (same pair) | 2028-10-21 |
+
+- **Cloudflare account: `tomo.stojakovic@gmail.com`** — deliberately NOT an address on
+  either hosted domain. The account controlling MX has to stay recoverable when MX is
+  broken.
+- **Every record is DNS-only (grey cloud).** Render terminates its own TLS, and
+  **proxying Clerk's records breaks Clerk.** Cloudflare will keep suggesting you
+  proxy; keep declining.
+- **Registrar and DNS are split on purpose.** If the Cloudflare account is ever lost,
+  the domains can be repointed from Porkbun in minutes. Moving registration to
+  Cloudflare would save ~$0.60/yr and recreate the single point of failure.
+- **Auto-renew is ON at Porkbun** for both. `nextpointtennis.com` came within 32 days
+  of expiry during this move; that cannot recur.
+- **DNSSEC is OFF** at both the registry and Porkbun. It was on at Wix, and a DS record
+  pointing at a departed provider's keys is the one failure that takes a domain fully
+  dark (SERVFAIL, web and mail, up to 48h). Re-enable only via Cloudflare, which
+  signs the zone and hands you a DS to paste at Porkbun.
+- **Zone source of truth: `migration/dns/<domain>.zone`** — BIND files Cloudflare
+  imports directly. Verify any change with `python -m scripts.verify_dns <domain>`
+  (records + DNSSEC + registrar/delegation; run it locally, it needs no server).
+- **`api.nextpointtennis.com` → `sport-ai-api-call.onrender.com`** is a NextPoint-branded
+  host serving the **Ten-Fifty5** ingester. It looks like a stale duplicate of
+  `courtflow-api` and is not. Never delete it.
+- **`ten-fifty5.com`'s three SES DKIM keys sign NextPoint's receipts too** — that zone is
+  load-bearing for BOTH brands.
+
+---
+
+## 🚀 GO-LIVE env changes (historical — done at the 2026-07-05 cutover; kept as the as-run record)
 Everything above is already set on the **dev/onrender** config. At cutover, change **exactly these**:
 - **`courtflow-web`**
   - `CLERK_PUBLISHABLE_KEY` → the **prod** `pk_live_…` (prod Clerk instance for `nextpointtennis.com`)
