@@ -24,7 +24,7 @@ still reads the scenario that guards any entry.
 - [Refunds & the Yoco gateway](#refunds--the-yoco-gateway) — 7 entries
 - [Invoicing & the month-end close](#invoicing--the-month-end-close) — 6 entries
 - [Money custody & the coach ledger](#money-custody--the-coach-ledger) — 7 entries
-- [Reads that lie](#reads-that-lie) — 2 entries
+- [Reads that lie](#reads-that-lie) — 4 entries
 - [Email & notifications](#email--notifications) — 1 entry
 - [Infrastructure & environment](#infrastructure--environment) — 2 entries
 
@@ -896,6 +896,46 @@ reason it was noticed — the Refund-requests SECTION was fine throughout becaus
 session. Use **`session.begin_nested()`** (a savepoint) and **log the block name**, NEVER a bare
 `session.rollback()` inside a composer that runs in the caller's `session_scope`. **This exact
 antipattern has now been found three times** — `client360`, `admin_home`, `coach_settlement`.
+
+### `marketing_opt_in` LIVES ON TWO COLUMNS AND ONLY ONE OF THEM SENDS (2026-08-25)
+
+`iam.user.marketing_opt_in` is what the admin screen and Client-360 show.
+**`core.app_user.marketing_opt_in` is the gate `marketing_crm/crm_sync` checks before it will mail
+anyone.** They are written from different places — the re-permission page writes the second and
+never the first — so on live data they read 459 vs 506 and **82 people were being mailed while the
+screen showed them opted OUT**. Neither column can say which is right; `core.consent` can, because
+it is the dated, per-person, withdrawable record: `granted 111 · withdrawn 0 · NONE 0` meant every
+one of the 82 had actively opted in and the SCREEN was the stale thing, not the send.
+
+Two rules fall out of it. **Any count that claims mailability must read the GATE**, never the
+screen — `audit_marketing_reach` sized every audience off `iam.user`, which was invisible while
+that column sat *below* the gate (it merely undercounted) and became a promise of 34 unreachable
+recipients the moment a reconcile pushed it *above*. And **a reconcile only ever writes the screen**:
+`scripts/reconcile_marketing_optin.py` moves `iam.user` to match `core.consent` and touches
+`core.app_user` never, because the other direction (34 people, `NONE 34`) is Wix-era import data
+with no consent record — flipping that would start mailing people on the strength of a flag copied
+out of a system we no longer run.
+
+### MEASURE A FIX FROM WHEN THE SWITCH WAS FLIPPED, NOT WHEN THE CODE SHIPPED (2026-08-25)
+
+The signup marketing-default code shipped 2026-08-23. The daily opt-in rate stayed flat. That looks
+exactly like a broken fix, and it was read as one **twice** — far enough to start rewriting the
+signup path. `club.policy.updated_at` said the toggle had actually been ticked at **12:25 UTC on
+the 25th**: every signup being judged predated it and was *supposed* to land opted out.
+
+A code-ship date says nothing about when a human turned the feature on, and a **monthly** rate
+cannot separate the two (August was half broken and half fixed and read ~10% either way, which is
+indistinguishable from "the switch did nothing"). `scripts/diagnose_signup_optin.py` therefore goes
+day by day, reports only signups at or after `updated_at`, and **refuses a verdict below ten of
+them**. Its first version compared lifetime totals and printed "Working." off two non-zero columns
+— 30 opt-ins out of 157 — which is worse than printing nothing.
+
+The reason it took six rounds to find: both consent-bearing `except` blocks in `auth/principal.py`
+reported at `log.debug(..., exc_info=False)`, and one was commented **"(benign)"**. It applies the
+club's marketing-consent default and links the Client-360 satellite; a silent failure there costs a
+marketable person per signup until someone notices a flat rate weeks later. Both now log at
+**warning with the traceback** and name what the member did not get. Same family as the silent zero
+above: a swallow that can hide a money or consent decision is not a guard.
 
 ### `billing.me.activity_summary` buckets EVERYTHING by the SESSION's month
 

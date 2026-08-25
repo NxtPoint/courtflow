@@ -161,7 +161,7 @@ Touch only your lane; coordinate on shared interface files (`contracts/events.md
 | **Foundation** | `app.py`, `wsgi.py`, `db.py`, `render.yaml`, `auth/`, `iam/`, `club/`, `core/`, `scripts/`, `crons/` | Boot/schema runner, Clerk JWKS + club-scoped `Principal`, seed/provision. |
 | **Diary** | `diary/` | Court/lesson/class lifecycle, GiST constraint, availability, classes, recurrence, book-on-behalf, `/api/diary/*`. |
 | **Billing** | `billing/`, `yoco_billing/` | orders/ledger, `apply_payment_event` (idempotent), membership/bundles/commission/refunds/statement engines, Yoco adapter, `/api/billing/*`. |
-| **CRM** | `core/`, `marketing_crm/`, `offline_conversions/` | `emit()`→`core.usage_event`, notifications (in-app inbox + transactional email), Klaviyo sync, consent. **Identity bridge** `core.repositories.persons.link_person_for_user` (iam.user ↔ `core.person.iam_user_id`, adopt-or-create by email; 911 backfilled) — feeds Client-360. **gclid capture** → `core.acquisition` + the **Google Ads offline-conversion feed** (`offline_conversions/`). Two **public, token-guarded** surfaces (no login — the SIGNED token IS the authorization and names the recipient + club, so club scope never comes from the body): `marketing_crm/feedback/` → `GET/POST /api/feedback` (the gated NPS→Google-review funnel; page `frontend/app/feedback.html`, writes `core.nps_response`, routes a happy score to the `g.page` review link and an unhappy one to a private form) and `marketing_crm/repermission/` → `GET/POST /api/subscribe` (re-permission opt-in for the non-consented members; records consent in OUR DB first, THEN fire-and-forget subscribes to Klaviyo). |
+| **CRM** | `core/`, `marketing_crm/`, `offline_conversions/` | `emit()`→`core.usage_event`, notifications (in-app inbox + transactional email), Klaviyo sync, consent. **Identity bridge** `core.repositories.persons.link_person_for_user` (iam.user ↔ `core.person.iam_user_id`, adopt-or-create by email; 911 backfilled). It also applies the club's **marketing-consent default** on a genuinely-new signup — and the flag that GATES sending is `core.app_user.marketing_opt_in`, never the `iam.user` one the admin screen shows. Feeds Client-360. **gclid capture** → `core.acquisition` + the **Google Ads offline-conversion feed** (`offline_conversions/`). Two **public, token-guarded** surfaces (no login — the SIGNED token IS the authorization and names the recipient + club, so club scope never comes from the body): `marketing_crm/feedback/` → `GET/POST /api/feedback` (the gated NPS→Google-review funnel; page `frontend/app/feedback.html`, writes `core.nps_response`, routes a happy score to the `g.page` review link and an unhappy one to a private form) and `marketing_crm/repermission/` → `GET/POST /api/subscribe` (re-permission opt-in for the non-consented members; records consent in OUR DB first, THEN fire-and-forget subscribes to Klaviyo). |
 | **Client 360** | `client360/` | The ONE cross-lane read-model — `get_client_360(scope, coach_user_id, month)` composes existing lane readers into a single client payload (identity/memberships/packages/statement/payments/bookings/refunds/coaching/activity + `month_events` + the reconciling `statement_fold` + `can{}`; booking rows carry service + pay-status + their own head's amount). Read-only, reuse-first. **`scope='coach'` is a STRICT SERVER-SIDE filter** (the coach fork was retired — coach = a filter, not a fork): it returns ONLY the coach's own events + own coaching fold + own packages + coaching; membership/card-payments/full-statement/dependents/refunds/PII/activity are OMITTED server-side (never sent to a coach's browser). **Each block runs in a SAVEPOINT (`_guard`→`begin_nested`), NEVER a bare `session.rollback()`** — the composer runs inside the caller's `session_scope`, so a full rollback would discard the caller's writes. `admin.get_person` delegates here; coach `/clients/<id>/360` + client `/me/360` call it. **The single source of truth every client view is a view off**, and the money everywhere is the ONE reconciling fold: **Billed − Discount − Written-off = Invoiced = Paid + Outstanding + Refunded**. **The refunded term is load-bearing and easy to drop** — status `refunded` sits in NEITHER the paid nor the outstanding bucket, so a fully refunded order reads `invoiced 8000 · paid 0 · outstanding 0` and looks broken to anyone asserting the short form (`CRMUI.statementFold` prints it as "… refunded or written off this month" for exactly that reason). Guarded by `sc_refunding_a_seat_restores_the_split` (`CRMUI.statementFold`/`moneySummary`, coach + admin + client all reconcile). |
 | **Admin** | `admin/`, `services/`, `insights/` | Owner write APIs + onboarding, per-service commission editor, financial cockpit, person-360, the insights composer, **general order discount + pack-wallet adjust/expire**. |
 | **Coach / Client** | `coach/`, `me/` | Coach self-service (onboarding, clients-360, statement, cockpit; reschedule/cancel own lessons + move own class sessions) + client self-service (profile, dependents, statement, refund requests). |
@@ -484,10 +484,10 @@ snapshot store, `core/schema.py`) → `insights.web_metrics` renders it. **No Go
 Render.** Consequence: if the Acquisition panel goes stale, suspect the Action or the ingest, not the app —
 and never "fix" it by adding a Google API client to the API service.
 
-## Growth, acquisition & cross-brand marketing — LIVE
-**Neither of these touches platform code, and both are specced in full elsewhere** — the Google Ads /
-gclid loop in **[`GOOGLE-ADS-PLAN.md`](docs/specs/GOOGLE-ADS-PLAN.md)**, the cross-brand digest in
-**[`MARKETING-ENGINE.md`](docs/specs/MARKETING-ENGINE.md)**. What a session working in this repo must know:
+## Growth & acquisition — LIVE
+**This does not touch platform code and is specced in full elsewhere** — the Google Ads / gclid loop
+in **[`GOOGLE-ADS-PLAN.md`](docs/specs/GOOGLE-ADS-PLAN.md)**, the digest in
+**[`MARKETING-ENGINE.md`](docs/specs/MARKETING-ENGINE.md)**. What a session here must know:
 - **The acquisition loop is: tag → gclid → paid order → CSV back to Google.** `web_app._google_tag_head`
   injects GA4+Ads (dark until `GA4_MEASUREMENT_ID`/`GOOGLE_ADS_ID`); `frontend/js/attribution.js` records
   the FIRST gclid/utm on landing and flushes it to `POST /api/me/acquisition` after sign-in (**FIRST-TOUCH
@@ -496,39 +496,36 @@ gclid loop in **[`GOOGLE-ADS-PLAN.md`](docs/specs/GOOGLE-ADS-PLAN.md)**, the cro
 - **`offline_conversions/` is kept BYTE-IDENTICAL with the Ten-Fifty5 repo** (like the analytics engine) —
   the only per-repo glue is `recorder.CONVERSION_MAP`. Don't "improve" the package in one repo alone.
 - **The digest is CI-only and KEYLESS** (`marketing-digest.yml` + `marketing_digest/`) — org policy blocks
-  service-account key downloads, so Workload Identity Federation is not a preference. **Add a brand = add a
-  `BRANDS` row + grant the SA in the consoles, no other code.** Coverage is grant-controlled, not code-controlled.
-- **The digest IS the tag-breakage alarm.** A `marketing-canary.yml` tripwire was tried and DELETED
-  2026-07-18 — both sites sit behind Cloudflare, which blocks GitHub's CI IPs, so it could only ever
-  false-fail. A dark tag instead flatlines that brand's GA4 traffic to zero in the morning digest.
-- **The ENGINE lives here and covers BOTH brands; each brand's SITE + blog CONTENT lives in ITS repo.**
-  NextPoint here (`frontend/blog/_posts/`); Ten-Fifty5 in its own repo — commit there with `CLAUDE_CODE=1`.
+  service-account key downloads, so Workload Identity Federation is not a preference. It is also **the
+  tag-breakage alarm**: a dark tag flatlines that site's GA4 traffic to zero in the morning digest. (A
+  `marketing-canary.yml` tripwire was tried and DELETED 2026-07-18 — Cloudflare blocks GitHub's CI IPs,
+  so it could only ever false-fail.) The engine covers both brands; **this repo's blog content is
+  `frontend/blog/_posts/`.**
+
+## Lifecycle email (Klaviyo) — LIVE
+**`KLAVIYO_API_KEY` is set; ~506 real members are subscribed and flows are sending.** State, the flow
+list and the operating scripts: **[KLAVIYO-MASTER-PLAN.md § 0 As-built](docs/specs/KLAVIYO-MASTER-PLAN.md)**.
+Two things that bite before anything else:
+- **The consent gate is `core.app_user.marketing_opt_in`, NOT `iam.user`.** The second is only what the
+  admin screen and Client-360 show; they are written from different places and they disagree. Any count
+  that claims mailability must read the gate, and `core.consent` is the tie-breaker (Gotchas).
+- **Never size an email audience from a headcount.** 1270 members → ~506 mailable. `python -m
+  scripts.audit_marketing_reach` (read-only, safe on the Render Shell) is the number that matters.
 
 ## Ten-Fifty5 embed — match analysis inside the members area (LIVE, private test)
-A logged-in member opens **Ten-Fifty5** (AI match analysis — the Ten-Fifty5 product; its Technique
-feature is PARKED pending SportAI's API, so nothing here may advertise it; web at
-`ten-fifty5.com`, API at `api.nextpointtennis.com`) **inside** the client SPA in an iframe, signed in with
-their OWN NextPoint Clerk token — **no second login**. The two products are **separate Clerk apps**
-(`clerk.nextpointtennis.com` vs `clerk.ten-fifty5.com`); the seam is a `postMessage` **token relay** (both
-repos' `auth_client.js` share the Wix-era lineage) + **issuer federation** on Ten-Fifty5's verifier (it now
-trusts BOTH issuers via `AUTH_ISSUERS`). **Email is the cross-system key** — Ten-Fifty5 auto-provisions the
-member by email on the first authenticated hit.
-- **NextPoint side:** `client.js` `#/analysis` route + `renderAnalysis()` (auto-fits the iframe height —
-  `innerHeight − frameTop − cf-main paddingBottom − 24`, re-fit on resize — so the OUTER page never scrolls) +
-  a Home card (**"Coming soon"** card for non-allowlisted); `auth_client.js` parent `serveChild` serves a token
-  ONLY to the allowlisted Ten-Fifty5 origin (`TF5_EMBED_ORIGINS`) and its status payload carries **`mode`** (the
-  TF5 child reads `status.mode`, NextPoint children read `status.authed`); `web_app.py` injects
-  `__TF5_EMBED_URL`/`__TF5_EMBED_ALLOW` + substitutes `__TF5_EMBED_ORIGINS__`.
-- **Gated to a PRIVATE prod test** via `TF5_EMBED_ALLOW_EMAILS` (courtflow-web). **Launch = clear that env**
-  (empty → all members). Marketing funnel: a public **"Match analysis"** CTA on `frontend/marketing/home.html`
-  → `ten-fifty5.com` (this is separate from the embed and stays live).
-- **The Ten-Fifty5 repo IS modified for this** (the ONE exception to "read-only reference" below): `auth_v2/verifier.py`
-  (multi-issuer allowlist), `frontend/auth_client.js` (trusted-parent guard + **multi-hop relay** — the portal
-  nests each page in a content iframe, so a middle frame proxies its grandchild's auth up to its own parent;
-  without this only the empty portal shell authed), `locker_room_app.py`, `render.yaml`. All additive +
-  flag-guarded; **commit code in that repo with `CLAUDE_CODE=1`** (its lane-guard hook blocks code commits
-  otherwise). Rollback = clear `AUTH_ISSUERS` (Ten-Fifty5) or `TF5_EMBED_URL` (NextPoint). Env values +
-  the Render-service-name map → `docs/specs/ENV-STATUS.md`.
+A logged-in member opens **Ten-Fifty5** (the AI match-analysis product, `ten-fifty5.com`) **inside** the
+client SPA in an iframe, signed in with their OWN NextPoint Clerk token — **no second login**. Two
+separate Clerk apps; the seam is a `postMessage` token relay in `auth_client.js` plus issuer federation
+on Ten-Fifty5's verifier. **Email is the cross-system key.**
+- **This repo's side:** `client.js` `#/analysis` + `renderAnalysis()`; a Home card (**"Coming soon"**
+  off-allowlist); `auth_client.js` `serveChild` (serves a token ONLY to `TF5_EMBED_ORIGINS`);
+  `web_app.py`'s `__TF5_EMBED_*` injection. Mechanism → [SYSTEM.md](docs/specs/SYSTEM.md); files + env →
+  [INVENTORY.md](docs/specs/INVENTORY.md); the gate + rollback → [FEATURE-FLAGS.md](docs/specs/FEATURE-FLAGS.md)
+  A4; values → [ENV-STATUS.md](docs/specs/ENV-STATUS.md).
+- **Gated to a PRIVATE prod test** via `TF5_EMBED_ALLOW_EMAILS` (courtflow-web); **launch = clear that env.**
+- **The Ten-Fifty5 repo IS modified for this** — the ONE exception to "read-only reference" below.
+  Additive + flag-guarded; **commit there with `CLAUDE_CODE=1`**. Its Technique feature is PARKED pending
+  SportAI's API, so nothing here may advertise it.
 
 ## Commands
 - **Run the API locally:** `gunicorn wsgi:app` (or `python -m app`) — needs `DATABASE_URL`.
@@ -562,20 +559,19 @@ member by email on the first authenticated hit.
   and the redirect map are the surviving, still-load-bearing residue of that move — the redirects keep
   ~68 old Wix URLs alive in search results and must not be deleted as "Wix leftovers".)
 
-## Tech defaults (match Ten-Fifty5 so reuse is clean)
+## Tech defaults
 - Python 3.12 + Flask + Gunicorn + Postgres. **DB access = SQLAlchemy Core** (`db.get_engine`/`text()`,
   explicit `session`; **repos never commit** — callers compose via `db.session_scope()`) over **psycopg 3**.
   **Idempotent boot DDL** (`ADD COLUMN IF NOT EXISTS`) — no Alembic. Extensions: `btree_gist` + `pgcrypto`.
 - Vanilla-JS SPAs (no heavy framework). The one dependency added for the diary UI is a calendar/ECharts seam
   (lazy-loaded).
-- **Reuse, don't import.** Copy patterns from the Ten-Fifty5 repo at `C:\dev\webhook-server` (**READ-ONLY
-  reference — never touch its repo/DB**). Do NOT bring over the ML/T5/GPU/video machinery. **ONE exception:**
-  the Ten-Fifty5 members-area embed (above) required careful, additive, flag-guarded changes to that repo's
-  auth (`auth_v2/verifier.py`, `frontend/auth_client.js`); commit there with `CLAUDE_CODE=1`. Its live DB
-  (`sportai-db`) is still off-limits.
+- **Reuse, don't import.** These defaults match the Ten-Fifty5 repo (`C:\dev\webhook-server`) so
+  patterns can be copied — it is a **READ-ONLY reference; never touch its repo or DB** (`sportai-db` is
+  off-limits). Do NOT bring over the ML/T5/GPU/video machinery. **ONE exception:** the members-area embed
+  above, which needed additive flag-guarded changes to that repo's auth; commit there with `CLAUDE_CODE=1`.
 
 ## Gotchas
-**The war stories live in [`docs/specs/GOTCHAS.md`](docs/specs/GOTCHAS.md) — 55 entries, moved out
+**The war stories live in [`docs/specs/GOTCHAS.md`](docs/specs/GOTCHAS.md) — 57 entries, moved out
 verbatim. Below is the INDEX: the rule, and the `sc_…` scenario that pins it.** Follow the link before
 you change the code an entry names — each one is a bug that reached production, and every one of them
 looks like a harmless simplification until you read what it cost.
@@ -722,6 +718,15 @@ money decision quietly defaulted instead of being made.*
 **Reads that lie** — [GOTCHAS.md#reads-that-lie](docs/specs/GOTCHAS.md#reads-that-lie)
 - A SILENT ZERO IS A BUG, AND `try/except: return 0` IS NOT A GUARD (2026-07-31)
 - `billing.me.activity_summary` buckets EVERYTHING by the SESSION's month
+- **`marketing_opt_in` LIVES ON TWO COLUMNS AND ONLY ONE OF THEM SENDS** (2026-08-25) — `iam.user`
+  is the SCREEN, **`core.app_user` is the GATE `crm_sync` checks**. Any count claiming mailability
+  reads the gate; `core.consent` is the tie-breaker when they disagree; a reconcile writes the
+  screen only (`scripts/reconcile_marketing_optin.py`).
+- **MEASURE A FIX FROM WHEN THE SWITCH WAS FLIPPED, NOT WHEN THE CODE SHIPPED** (2026-08-25) — a
+  ship date says nothing about when a human ticked the box, and a MONTHLY rate cannot separate the
+  two. `club.policy.updated_at` is the yardstick (`scripts/diagnose_signup_optin.py`). A swallow
+  that can hide a consent decision is not benign — both `auth/principal.py` consent blocks now log
+  at warning with the traceback.
 
 **Email & notifications** — [GOTCHAS.md#email--notifications](docs/specs/GOTCHAS.md#email--notifications)
 - Transactional email = ONE confirm+receipt per purchase — `sc_confirmation_email_block` · `sc_email_payment_status_not_racy`
@@ -740,7 +745,8 @@ money decision quietly defaulted instead of being made.*
   working** (`EMAIL_INVOICE_PDF_ENABLED=1`, verified 2026-07-18 — issued invoices email with the PDF attached).
   The booking **`.ics`** attachment can be turned on the SAME way (`EMAIL_ICS_ENABLED=1`) — optional; the in-app
   "Add to calendar" download works regardless. Long-term CourtFlow-domain setup: `docs/specs/SES-SETUP.md`.
-  Klaviyo marketing stays dark until `KLAVIYO_API_KEY`.
+  **Klaviyo marketing is LIVE** (`KLAVIYO_API_KEY` set 2026-08; ~506 subscribers, flows + campaigns
+  sending). Consent state and the audiences are audited by `scripts/audit_marketing_reach.py`.
 - **Cancel the Wix plan (~R10k)** — the LAST thing Wix is owed anything for. Both domains left Wix on
   2026-08-23/24 (Porkbun + Cloudflare), so Wix holds no registration, no DNS and no record pointing at it;
   cancelling cannot take either site down. Check the billing page for whether the site plan and any domain
@@ -767,8 +773,9 @@ into — brevity never means withholding those. Tables and short lists read well
   committed so a blueprint sync can't wipe them.
 - Payments are **provider-agnostic** (Yoco adapter first, behind a flag); the diary launches without mandatory
   online pay. **SES sends the transactional confirmations** (`marketing_crm/email/ses.py` — the original plan
-  was Klaviyo-sends-confirmations; as-built it is the other way round). Klaviyo is MARKETING-only, opt-in
-  only, still dark until `KLAVIYO_API_KEY` — and no minor PII goes in any payload.
+  was Klaviyo-sends-confirmations; as-built it is the other way round). Klaviyo is MARKETING-only and
+  **opt-in only** — no minor PII in any payload. It is now LIVE; the opt-in that gates it is
+  `core.app_user.marketing_opt_in`, NOT the `iam.user` flag the admin screen shows (Gotchas).
 
 ## Build history
 This file is present-state only. For the dated build history (the booking-flow audit sprint, Frankfurt

@@ -16,6 +16,44 @@ Google reviews — all without irritating anyone into unsubscribing.
 
 ---
 
+## 0. AS-BUILT — what is actually sending (2026-08-25)
+
+Everything below is LIVE against real members. The plan sections that follow are the design; this is
+the state. **Klaviyo is no longer dark** — `KLAVIYO_API_KEY` is set and the list *NextPoint Members*
+(`WLTpDN`, **single** opt-in) holds ~506 subscribers.
+
+**THE CONSENT GATE — read this before sizing any audience.** `marketing_opt_in` exists on BOTH
+`iam.user` (what the admin screen and Client-360 show) and **`core.app_user` (what `crm_sync` checks
+before it will mail anyone)**. They are written from different places and they disagree. Any count
+that claims mailability must read the **gate**; `core.consent` is the tie-breaker when the two
+differ. Full story: [GOTCHAS.md#reads-that-lie](GOTCHAS.md#reads-that-lie).
+
+| Script | What it answers |
+|---|---|
+| `scripts/audit_marketing_reach.py` | who we HAVE vs who we may EMAIL, trial conversion, ready-made segments, and a **daily** "are new signups arriving marketable" rate |
+| `scripts/diagnose_signup_optin.py` | why a new signup landed opted out — judged from `club.policy.updated_at`, never from a code-ship date |
+| `scripts/reconcile_marketing_optin.py` | aligns the SCREEN flag to `core.consent`; never writes the gate, never promotes anyone into the mailable set |
+| `scripts/backfill_klaviyo_subscribers.py` | subscribes people who already consented but were never pushed to Klaviyo (**excludes staff** — the first run subscribed every coach and admin) |
+| `scripts/verify_promotion.py` | prints a promo exactly as configured and flags the combinations that are inert |
+
+**Flows.**
+- **`Trial - Week 1 + Post-Expiry (Day 1 to 14)`** (`RkGxYG`) — LIVE. Day 1 *"Your free week starts
+  now"* · Day 5 *"Two days left"* · Day 8 *"That's a wrap"* · Day 11 · Day 14. Emails #4 (0.0%
+  clicks) and #5 (0.6%) are **paused, not deleted**. Rebuilt 2026-08-25: the flow previously began
+  on **Day 8**, so the entire free week was silent for all 386 trialists.
+- **`Member Preferences`** (`SS9m2w`) — LIVE, same `trial_started` trigger, moved from Day 1 to
+  **Day 3**. It collided with the new Day 1 email (Smart Sending would have silently dropped one),
+  and *"How's your first week going?"* made no sense one day in.
+- **`Welcome / Activation`** (`TddW6e`) — content corrected (an ATP claim, an "an an" typo, and an
+  unsupportable plural coaching claim removed) but **deliberately still DRAFT**: with the trial flow
+  now covering Day 1 it would put four emails into a new member's first four days.
+- Cross-sell, Court feedback, C1 post-lesson — still Draft.
+
+**The number none of this has fixed yet:** 386 trials → **5 paid memberships (1.3%)**; 361 (93.5%)
+did nothing at all after their trial ended. The rebuilt flow only helps people who trial from here.
+
+---
+
 ## 1. The audience — cohorts & the consent split
 
 Two independent axes: **consent** (can we market to them?) and **activation** (have they used the new app?).

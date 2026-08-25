@@ -13,7 +13,54 @@ and the dated log in [README.md](README.md). This file is the forward-looking ba
 
 ---
 
-## ⭐ NEXT SESSION — switch Find a Game's MONEY on, then market it
+## ⭐ NEXT SESSION (from 2026-08-26) — the Spring Day campaign + one opt-in verdict
+
+Two things, both small. Then the Community switch-on below is the next real piece of work.
+
+**1 · Did the opt-in default actually take? (5 minutes, decides whether anything else matters.)**
+
+```
+python -m scripts.diagnose_signup_optin
+```
+
+The toggle was ticked **2026-08-25 12:25 UTC**, so 2026-08-26 is the first day with a clean 24h of
+data. Read only the `SINCE THE TOGGLE WAS SET` block — everything above it predates the switch and
+was *supposed* to land opted out (that trap cost most of a session; see
+[GOTCHAS.md#reads-that-lie](GOTCHAS.md#reads-that-lie)).
+- **Near 100%** → the leak is closed. The low lifetime rate is history, not a bleed.
+- **Around 50% or lower** → suspect `memberships[0]["club_id"]` in `auth/principal.py`: there are
+  **two** club rows and *Template Club* has `marketing_opt_in_default = false`, so a user whose
+  earliest membership is that club resolves the wrong policy. The script prints both club rows for
+  exactly this comparison. `auth/principal.py` now logs these failures at **warning with a
+  traceback**, so the Render log will say so directly.
+
+**2 · Watch the campaigns land.** All armed, nothing to do unless a number is bad:
+
+| | When (SAST) | Audience | Watch for |
+|---|---|---|---|
+| C1 ex-trialists | 26 Aug 07:00 | 41 | opens; these are the warmest non-members |
+| B1 reactivation | 27 Aug 07:00, throttled 10%/hr | 428 | **bounce rate — stop it above 8%** (first big send to the backfilled list) |
+| A2 nudge (warm) | 29 Aug 07:00 | 38 | — |
+| A3 last day (warm) | 1 Sept 07:00 | 38 | — |
+| B2 last day | 1 Sept 07:00, throttled 25%/hr | 446 | excludes warm + on-trial so nobody gets two |
+
+A1 sent 25 Aug: 37 recipients, 47.2% open, 1 bounce, **0 complaints, 0 unsubscribes**.
+The promo is `Member_30` (membership + 1 bonus month, `bonus_period`), window closes
+**2026-09-02 00:00 UTC** — verify with `python -m scripts.verify_promotion "Member_30"` before
+quoting a deadline anywhere.
+
+**3 · Decisions parked for Tomo** — neither is urgent:
+- **Welcome / Activation flow (`TddW6e`) is content-clean but deliberately OFF.** Turning it on
+  puts four emails into a new member's first four days, and Welcome 1's job ("book your first
+  court") is now the trial flow's Day 1 email. Its real audience is people who join the list
+  *without* trialling, which the list-add trigger cannot distinguish without a filter.
+- **The 34 with no consent record** (`iam.user` says yes, no `core.consent` row, Wix-era import
+  data). They are correctly NOT being mailed. The clean route is the re-permission page, not a
+  backfill — `scripts/reconcile_marketing_optin.py` refuses to promote them on purpose.
+
+---
+
+## ⭐ THEN — switch Find a Game's MONEY on, then market it
 
 Everything for this is built, scenario-covered and configured. What is left is **clicking**, in this
 order. Do not reorder 2 and 3: the second switch changes what members pay.
@@ -58,7 +105,7 @@ See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of ea
 
 **P1**
 - [ ] ⭐ **COMMUNITY — the switch-on.** Fully specified at the top of this file under
-      **NEXT SESSION**; not repeated here. Detail: [FEATURE-FLAGS.md](FEATURE-FLAGS.md) §A-bis ·
+      **⭐ THEN** block above; not repeated here. Detail: [FEATURE-FLAGS.md](FEATURE-FLAGS.md) §A-bis ·
       walkthrough: [TESTING.md](TESTING.md) §5b · design: [COMMUNITY-ENGINE.md](COMMUNITY-ENGINE.md).
 - [ ] **Google Ads scheduled CSV upload — ONLY the Google-side schedule is left.** ~~set
       `GOOGLE_ADS_FEED_USER`/`PASS`~~ ✅ **the env is SET and the feed is ARMED** (verified live
@@ -197,7 +244,7 @@ the refund, lesson and class lifecycles. All scenario-guarded, each verified by 
 **P2**
 - [ ] **Ten-Fifty5 embed → all members** — clear `TF5_EMBED_ALLOW_EMAILS` (currently one test email; others
       see a "Coming soon" card). Depends on the TF5-side env staying set.
-- [ ] **`KLAVIYO_API_KEY`** → CRM lifecycle/marketing flows go live (event feed already emits). Then schedule
+- [x] ~~**`KLAVIYO_API_KEY`**~~ — **DONE 2026-08.** Marketing is LIVE. Then schedule
       the two manual cohort scripts (`scripts/klaviyo_reactivation.py`, `scripts/klaviyo_trial_cohort.py`).
 - [ ] **`S3_BUCKET` + AWS keys** → coach photo uploads (coaches paste a URL until then).
 - [ ] **SES follow-ups:** ~~SendRawEmail dependency~~ **RESOLVED 2026-07-18** — the sending key carries
