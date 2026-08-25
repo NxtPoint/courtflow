@@ -187,6 +187,44 @@
   function shiftM(ym, d) { var p = ym.split("-"); var dt = new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1 + d, 1); return dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0"); }
   function mLabel(ym) { var p = ym.split("-"); try { return new Date(p[0], parseInt(p[1], 10) - 1, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" }); } catch (e) { return ym; } }
 
+  // The membership case, made from the member's own record. Returns null when there is nothing
+  // honest to say — an active member (already sold), or a PAYG player with no court history
+  // (nagging someone who has not played is how a prompt becomes noise people learn to ignore).
+  function membershipBanner(plan, bookings) {
+    if (!plan || plan.active) return null;                       // already a member
+    var cutoff = UI.addDays(new Date(), -90), now = new Date();
+    var courts90 = (bookings || []).filter(function (b) {
+      if (b.booking_type !== "court" || b.status === "cancelled") return false;
+      var d = new Date(b.starts_at);
+      return d >= cutoff && d <= now;
+    }).length;
+
+    var head, sub;
+    if (plan.is_trial) {
+      // The sharpest moment there is: the free week is ending and they know what they would lose.
+      var left = plan.trial_days_left || 0;
+      head = left > 0
+        ? ("Your free week ends in " + left + (left === 1 ? " day" : " days"))
+        : "Your free week has ended";
+      sub = "Keep your court bookings free — see the membership options.";
+    } else if (courts90 >= 2) {
+      head = "You've booked " + courts90 + " courts in the last 90 days";
+      sub = "A membership includes your court bookings. See what it would cost you.";
+    } else {
+      return null;                                                // nothing earned to say yet
+    }
+
+    var box = el("div", { class: "cf-card", style: "margin:0 16px 14px;border-left:3px solid var(--green);display:flex;gap:14px;align-items:center;flex-wrap:wrap" }, [
+      el("div", { style: "flex:1;min-width:200px" }, [
+        el("div", { style: "font-weight:700;margin-bottom:2px", text: head }),
+        el("div", { class: "cf-muted", style: "font-size:.88rem", text: sub }),
+      ]),
+      el("button", { class: "cf-btn cf-btn-primary", text: "See membership",
+                     onclick: function () { go("#/plan"); } }),
+    ]);
+    return box;
+  }
+
   async function renderHome() {
     if (!HBMONTH) HBMONTH = curMonth();
     loading();
@@ -232,6 +270,17 @@
 
     // First-login nudge: gently prompt to complete a sparse profile.
     if (DATA.profile && !DATA.profile.phone && !nudgeDismissed()) wrap.appendChild(profileNudge());
+
+    // MEMBERSHIP PROMPT — the one place a non-member is asked, at the moment they came to book.
+    // Email reaches people who are not thinking about tennis; this reaches someone already here,
+    // already spending. It is shown ONLY to non-members, and only when their OWN behaviour makes
+    // the case (a trial about to lapse, or courts already being paid for one at a time).
+    //
+    // Deliberately EVERGREEN — no promo code, no deadline. A banner naming a specific offer is
+    // wrong the day that offer ends and nobody remembers to remove it; the Plan page carries
+    // whatever is currently running and stays correct on its own.
+    var mb = membershipBanner(plan, bookings);
+    if (mb) wrap.appendChild(mb);
 
     // BOOK — services FIRST so a member can pick one straight away (Court / Lesson / Class,
     // drawn glyphs, no emoji).
