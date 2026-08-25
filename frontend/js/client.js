@@ -187,6 +187,56 @@
   function shiftM(ym, d) { var p = ym.split("-"); var dt = new Date(parseInt(p[0], 10), parseInt(p[1], 10) - 1 + d, 1); return dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0"); }
   function mLabel(ym) { var p = ym.split("-"); try { return new Date(p[0], parseInt(p[1], 10) - 1, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" }); } catch (e) { return ym; } }
 
+  // THE MARKETING ASK — shown once, to anyone who has never been asked.
+  //
+  // WHY IT IS IN THE APP AND NOT AN EMAIL: we cannot email someone to ask permission to email
+  // them. 187 people signed up in August 2026 and 17 arrived marketable, because nothing in the
+  // signup path ever put the question. Those people open THIS screen to book a court, so this is
+  // the only place left to ask them.
+  //
+  // It is driven by the DB record, not a dismissed-flag in localStorage: we show it when
+  // consents.marketing_email is null (never asked) and it disappears for good once an answer —
+  // either answer — is recorded. So it cannot re-nag someone who already said no, and it cannot
+  // silently vanish because a browser cleared its storage.
+  //
+  // "No thanks" is a real, equal button and it WRITES a withdrawal. A consent prompt with only a
+  // yes is not consent, and under POPIA a boolean we cannot evidence is a weak position — 371 of
+  // the 457 opted-in flags on this club have no consent record behind them at all.
+  function consentAsk() {
+    var c = DATA.consent;
+    if (!c || !c.ok) return null;                                  // unknown state -> ask nothing
+    var answered = (c.consents || {})["marketing_email"];
+    if (answered) return null;                                     // already granted or withdrawn
+
+    var box = el("div", { class: "cf-card", style: "margin:0 16px 14px" });
+    function done(msg) {
+      UI.clear(box);
+      box.appendChild(el("div", { class: "cf-muted", style: "font-size:.9rem", text: msg }));
+      setTimeout(function () { if (box.parentNode) box.parentNode.removeChild(box); }, 2600);
+    }
+    function answer(grant) {
+      Array.prototype.forEach.call(box.querySelectorAll("button"), function (b) { b.disabled = true; });
+      window.TFAuth.apiJSON(grant ? "/api/consent/record" : "/api/consent/withdraw",
+                            { method: "POST", body: { consent_type: "marketing_email" } })
+        .then(function () {
+          if (DATA.consent && DATA.consent.consents) DATA.consent.consents["marketing_email"] = grant ? "granted" : "withdrawn";
+          done(grant ? "Thanks — we'll keep you posted." : "No problem. You won't get club updates.");
+        })
+        .catch(function (e) {
+          Array.prototype.forEach.call(box.querySelectorAll("button"), function (b) { b.disabled = false; });
+          UI.toast(UI.errMsg(e), "error");
+        });
+    }
+    box.appendChild(el("div", { style: "font-weight:700;margin-bottom:2px", text: "Want club updates?" }));
+    box.appendChild(el("div", { class: "cf-muted", style: "font-size:.88rem;margin-bottom:12px",
+      text: "Court specials, new classes and club events. Unsubscribe any time — this won't affect your booking confirmations." }));
+    box.appendChild(el("div", { class: "cf-row", style: "gap:10px;flex-wrap:wrap" }, [
+      el("button", { class: "cf-btn cf-btn-primary", text: "Yes please", onclick: function () { answer(true); } }),
+      el("button", { class: "cf-btn", text: "No thanks", onclick: function () { answer(false); } }),
+    ]));
+    return box;
+  }
+
   // The membership case, made from the member's own record. Returns null when there is nothing
   // honest to say — an active member (already sold), or a PAYG player with no court history
   // (nagging someone who has not played is how a prompt becomes noise people learn to ignore).
@@ -238,6 +288,9 @@
     // patched in afterwards. Find a match is a peer of Court/Lesson/Class, so the tile row cannot be
     // built until we know whether the club offers it and whether this member has a level yet.
     try { DATA.community = await window.TFAuth.apiJSON("/api/community/config"); } catch (e) { DATA.community = null; }
+    // Consent state — drives the one-time marketing ask below. Guarded: a CRM read must never be
+    // the reason Home fails to render.
+    try { DATA.consent = await window.TFAuth.apiJSON("/api/consent/state"); } catch (e) { DATA.consent = null; }
     DATA.player = null;
     if (DATA.community && DATA.community.community_enabled) {
       try { DATA.player = await window.API.playerProfile(); } catch (e) {}
@@ -279,6 +332,9 @@
     // Deliberately EVERGREEN — no promo code, no deadline. A banner naming a specific offer is
     // wrong the day that offer ends and nobody remembers to remove it; the Plan page carries
     // whatever is currently running and stays correct on its own.
+    var ca = consentAsk();
+    if (ca) wrap.appendChild(ca);
+
     var mb = membershipBanner(plan, bookings);
     if (mb) wrap.appendChild(mb);
 
