@@ -1,10 +1,17 @@
 # scripts/diagnose_signup_optin.py — why is a new signup still landing opted OUT?
 #
-# WHY THIS EXISTS: club.policy.marketing_opt_in_default has been TRUE since 2026-08-23 and the
-# code that reads it shipped the same day, yet the daily rate in `audit_marketing_reach` section G
-# never moved — 24 Aug: 8 signups, 0 opted in. Every part of that path works when called on its
-# own (the helper returns True, set_marketing_opt_in flips the row), so the failure is happening
-# on the live path and being HIDDEN: the whole block in auth/principal.py sits inside
+# WHY THIS EXISTS: the code that reads club.policy.marketing_opt_in_default shipped on
+# 2026-08-23, the policy now reads TRUE, and yet the daily rate in `audit_marketing_reach`
+# section G looks flat — 24 Aug: 8 signups, 0 opted in.
+#
+# THE FIRST QUESTION IS NOT "WHAT BROKE" — IT IS "WHEN WAS THE TOGGLE ACTUALLY FLIPPED". Code
+# shipping on the 23rd says nothing about when a human ticked the box, and every signup BEFORE
+# that tick was SUPPOSED to land opted out. Judging the fix against them makes a working fix look
+# broken, which is how you end up rewriting a signup path that was fine. So this reads
+# club.policy.updated_at and reports the rate only for signups after it.
+#
+# If the rate is still flat AFTER that timestamp, then the failure is on the live path and it is
+# being HIDDEN: the whole block in auth/principal.py sits inside
 #
 #     try: ... except Exception: log.debug("core.person satellite link skipped (benign)")
 #
@@ -55,6 +62,10 @@ def _load_env():
         sys.exit(2)
 
 
+def _pct(n, d):
+    return f"{(100.0 * n / d):5.1f}%" if d else "    -"
+
+
 def main():
     ap = argparse.ArgumentParser(description="Why do new signups land opted out? (read-only)")
     ap.add_argument("--club", default="NextPoint Tennis")
@@ -76,12 +87,21 @@ def main():
         print(f"\n{cname} — why are new signups landing opted OUT?   (READ-ONLY)")
         print("=" * 78)
 
-        pol = s.execute(text(
-            "SELECT COALESCE(marketing_opt_in_default,false) FROM club.policy WHERE club_id=:c"
-        ), {"c": cid}).scalar()
+        prow = s.execute(text(
+            "SELECT COALESCE(marketing_opt_in_default,false), updated_at "
+            "FROM club.policy WHERE club_id=:c"
+        ), {"c": cid}).first()
+        pol, pol_when = (prow[0], prow[1]) if prow else (False, None)
         print(f"  club.policy.marketing_opt_in_default : {bool(pol)}"
               + ("" if pol else "   <-- OFF; nothing below can work"))
         print(f"  club_id                              : {cid}")
+        # THE ONLY HONEST YARDSTICK. A signup that happened BEFORE the toggle was turned on was
+        # supposed to land opted out — counting it against the fix makes a working fix look broken.
+        # updated_at is an UPPER BOUND on when the flag was set (any later policy edit bumps it
+        # too), so treat it as "no earlier than", and if it moved for an unrelated reason the
+        # window below is simply too small, never too generous.
+        print(f"  club.policy last written             : {pol_when}"
+              "   <-- signups before this were SUPPOSED to opt out")
 
         # Every club.policy row, because the code reads the policy for the club it resolved from
         # the MEMBERSHIP — if this deployment somehow has more than one club row, or a policy row
@@ -130,28 +150,55 @@ def main():
               f"{tot[3]:>10}{tot[4]:>8}{tot[5]:>7}")
 
         # --- the verdict ------------------------------------------------
+        # Judge ONLY the signups that came after the toggle. The earlier version of this compared
+        # totals and printed "Working" off two non-zero columns, which was worse than printing
+        # nothing: 30 opt-ins out of 157 is not working, and the number that mattered (5 out of 29
+        # AFTER the flip) was buried inside it.
         n, oi, og, ha, hp, gt = tot
         print("\n" + "-" * 78)
-        if oi and og:
-            print("  Working. Both flags are being set on new signups.")
-        elif gt and not hp and not oi:
-            print("  BROKE BEFORE THE FLAG. Signups get a trial (so the `_created` gate fires) but")
-            print("  have NO core.person row and NO opt-in — auth/principal.py is throwing at step")
-            print("  1-3 of that try-block and log.debug is swallowing it. Raise the log level on")
-            print("  courtflow-api, sign up a throwaway account, and read the traceback.")
-        elif gt and hp and not oi:
-            print("  BLOCK RAN, FLAG DID NOT. The person satellite exists, so steps 1-3 and 5 ran;")
-            print("  _mkt came back FALSE. Compare the club_id list above with the membership the")
-            print("  signup resolves — the policy is being read for a club that has no row.")
-        elif not gt and not hp:
-            print("  THE GATE NEVER FIRED. No trial and no person satellite means `_created` was")
-            print("  False — these logins are matching an EXISTING iam.user by email, so they are")
-            print("  not new humans and the marketing default was never meant to apply to them.")
-        elif oi and not og:
-            print("  HALF DONE. iam.user is set but core.app_user (the Klaviyo gate) is not, so")
-            print("  they show as opted in on screen and still cannot be mailed.")
+        if not pol:
+            print("  The default is OFF. Nothing here can work until it is on.")
+        elif pol_when is None:
+            print("  No club.policy row — cannot tell when the toggle was set.")
         else:
-            print("  Mixed signal — read the columns above; the shapes are listed in this file's header.")
+            aft = s.execute(text("""
+                SELECT count(*)                                            AS signups,
+                       count(*) FILTER (WHERE u.marketing_opt_in IS TRUE)  AS optin_iam,
+                       count(*) FILTER (WHERE au.marketing_opt_in IS TRUE) AS optin_gate,
+                       count(*) FILTER (WHERE pr.id IS NOT NULL)           AS has_person
+                FROM iam.user u
+                JOIN iam.membership m ON m.user_id = u.id AND m.club_id = :c
+                LEFT JOIN core.app_user au ON lower(au.email) = lower(u.email)
+                                          AND au.deleted_at IS NULL
+                LEFT JOIN core.person   pr ON pr.iam_user_id = u.id
+                WHERE u.created_at >= :since
+            """), {"c": cid, "since": pol_when}).first()
+            a_n, a_oi, a_og, a_hp = (aft[0] or 0, aft[1] or 0, aft[2] or 0, aft[3] or 0)
+            print(f"  SINCE THE TOGGLE WAS SET ({pol_when:%Y-%m-%d %H:%M} UTC):")
+            print(f"      signups                     : {a_n}")
+            print(f"      opted in on iam.user        : {a_oi}   {_pct(a_oi, a_n)}")
+            print(f"      opted in on the Klaviyo gate: {a_og}   {_pct(a_og, a_n)}")
+            print(f"      core.person satellite made  : {a_hp}   {_pct(a_hp, a_n)}")
+            print()
+            if a_n == 0:
+                print("  NOTHING TO JUDGE YET. No one has signed up since the toggle was set, so the")
+                print("  earlier rows say nothing about whether the fix works — they predate it.")
+                print("  Re-run tomorrow; every row after this timestamp should read near 100%.")
+            elif a_n < 10:
+                print(f"  TOO EARLY TO CALL. Only {a_n} signup(s) since the toggle. {a_oi} opted in.")
+                print("  Re-run once a full day has passed rather than reading a handful of rows.")
+            elif a_oi >= 0.9 * a_n:
+                print("  WORKING. Signups since the toggle are landing opted IN. The leak is closed;")
+                print("  the low lifetime rate is history, not an ongoing bleed.")
+            elif a_hp >= 0.9 * a_n:
+                print("  BLOCK RAN, FLAG DID NOT. The core.person satellite is being created, so the")
+                print("  try-block in auth/principal.py reached its last statement — which means")
+                print("  _mkt came back FALSE even though the policy says true. Check that the club")
+                print("  resolved from memberships[0] is the one holding the policy row above.")
+            else:
+                print("  BROKE BEFORE THE FLAG. Signups since the toggle have no person satellite,")
+                print("  so auth/principal.py is throwing early in that try-block and log.debug is")
+                print("  swallowing it. Raise the log level and sign up a throwaway account.")
         print("-" * 78 + "\n")
 
 
