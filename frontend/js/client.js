@@ -8,7 +8,7 @@
   var DATA = {};                  // small cache; refreshed after actions
   var NAME = "";
   var PROFILE_RETURN = null;      // where to go after a profile Save (set when opened from the record)
-  // Ten-Fifty5 (AI match analysis / technique) embed URL, injected server-side (web_app.py).
+  // Ten-Fifty5 (AI match analysis) embed URL, injected server-side (web_app.py).
   // Empty -> the members-area entry + route stay hidden. The member is signed in inside the
   // iframe via the auth_client.js token relay (no second login).
   var TF5_URL = (window.__CF && window.__CF.__TF5_EMBED_URL) || "";
@@ -156,7 +156,7 @@
       return renderFindAGame();                                   // the open-games feed
     }
     if (top === "game") return renderGame(parts[1]);  // one game: seats, money, chat
-    if (top === "analysis") return renderAnalysis();  // embedded Ten-Fifty5 match analysis / technique
+    if (top === "analysis") return renderAnalysis();  // embedded Ten-Fifty5 match analysis
     if (top === "plan") return renderPlan(parts[1]);
     if (top === "profile") return parts[1] === "child" ? renderChildEdit(parts[2]) : renderProfile();  // /profile/edit → the same one screen
     return renderHome();                            // home / bookings / anything else
@@ -387,7 +387,7 @@
     // Your sessions (Upcoming / Past) — what's next, right after choosing a service.
     wrap.appendChild(card([el("h2", { style: "margin:0 0 8px", text: "Your sessions" }), el("div", { id: "home-sessions" })]));
 
-    // Match analysis & technique — directly under bookings (the embedded Ten-Fifty5 product).
+    // Match analysis — directly under bookings (the embedded Ten-Fifty5 product).
     // Allowlisted (private test) → the working embed; everyone else → a "Coming soon" teaser.
     if (TF5_URL) wrap.appendChild(tf5Enabled() ? analysisPromo() : analysisSoon());
 
@@ -547,7 +547,7 @@
     return c;
   }
 
-  // ---- Match analysis & technique (embedded Ten-Fifty5) ---------------------
+  // ---- Match analysis (embedded Ten-Fifty5) ---------------------------------
   // A Home card that drills into the embedded product. Inside the iframe the member is
   // signed in with their own Clerk token (relayed by auth_client.js) — no second login.
   // A drawn "analysis" glyph (a signal waveform + a spark) on the AI panel's glass tile — no emoji.
@@ -561,21 +561,21 @@
   function aiPanel(bodyText, tail) {
     var box = el("div", { class: "cf-ai" });
     box.appendChild(el("div", { class: "cf-ai-top" }, [aiGlyph(), el("span", { class: "cf-ai-badge", text: "AI · Ten-Fifty5" })]));
-    box.appendChild(el("h2", { text: "Match analysis & technique" }));
+    box.appendChild(el("h2", { text: "Match analysis" }));
     box.appendChild(el("p", { text: bodyText }));
     box.appendChild(tail);
     return box;
   }
   function analysisPromo() {
     return aiPanel(
-      "AI match stats and stroke-by-stroke technique breakdowns from your video — spot patterns, track progress, and sharpen your game. Opens right here, already signed in.",
+      "AI match stats from your video — point-by-point breakdowns, serve placement and rally patterns, so you can spot what is working and track progress. Opens right here, already signed in.",
       el("button", { class: "cf-ai-cta", text: "Open analysis ›", onclick: function () { go("#/analysis"); } }));
   }
 
   // Non-allowlisted members see this teaser on Home (private test in progress).
   function analysisSoon() {
     return aiPanel(
-      "AI match stats and stroke-by-stroke technique breakdowns from your video. Landing in your account soon.",
+      "AI match stats from your video — point-by-point breakdowns, serve placement and rally patterns. Landing in your account soon.",
       el("span", { class: "cf-ai-soon", text: "Coming soon" }));
   }
 
@@ -972,7 +972,7 @@
   function renderAnalysis() {
     if (!tf5Enabled()) { go("#/"); return; }   // non-allowlisted see the "Coming soon" card on Home
     var wrap = el("div", {});
-    wrap.appendChild(pageHeader("Match analysis & technique", "Home", "#/"));
+    wrap.appendChild(pageHeader("Match analysis", "Home", "#/"));
     var frameWrap = el("div", { style: "position:relative;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08)" });
     var frame = el("iframe", {
       src: TF5_URL,

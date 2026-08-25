@@ -505,7 +505,8 @@ gclid loop in **[`GOOGLE-ADS-PLAN.md`](docs/specs/GOOGLE-ADS-PLAN.md)**, the cro
   NextPoint here (`frontend/blog/_posts/`); Ten-Fifty5 in its own repo — commit there with `CLAUDE_CODE=1`.
 
 ## Ten-Fifty5 embed — match analysis inside the members area (LIVE, private test)
-A logged-in member opens **Ten-Fifty5** (AI match analysis / technique — the Ten-Fifty5 product; web at
+A logged-in member opens **Ten-Fifty5** (AI match analysis — the Ten-Fifty5 product; its Technique
+feature is PARKED pending SportAI's API, so nothing here may advertise it; web at
 `ten-fifty5.com`, API at `api.nextpointtennis.com`) **inside** the client SPA in an iframe, signed in with
 their OWN NextPoint Clerk token — **no second login**. The two products are **separate Clerk apps**
 (`clerk.nextpointtennis.com` vs `clerk.ten-fifty5.com`); the seam is a `postMessage` **token relay** (both
