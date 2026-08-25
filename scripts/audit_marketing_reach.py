@@ -143,6 +143,40 @@ def main():
             for r in iam_only[:8]:
                 print(f"         - {r[0]}")
 
+            # WHICH SIDE IS WRONG. The counts above say the two columns differ; they do not say
+            # whether we are mailing people who never agreed. core.consent is the only place an
+            # ACTIVE, dated, per-person decision is recorded (the re-permission page writes it,
+            # and a withdrawal stamps withdrawn_at) — so it is the tie-breaker, and it is the
+            # thing a complaint would be answered with. Read it like this:
+            #   app-only WITH a granted consent row  -> they opted in on the re-permission page and
+            #                                           iam.user is simply a stale copy. Mailing is
+            #                                           correct; the ADMIN SCREEN is what is wrong.
+            #   app-only with NO consent row at all  -> we cannot show they agreed. THIS is the
+            #                                           number that matters. Anything above zero
+            #                                           needs a look before the next send.
+            def _consent_split(emails_):
+                if not emails_:
+                    return (0, 0, 0)
+                addrs = [e[0] for e in emails_]
+                row = s.execute(text("""
+                    SELECT
+                      count(*) FILTER (WHERE c.status = 'granted' AND c.withdrawn_at IS NULL)  AS granted,
+                      count(*) FILTER (WHERE c.status = 'withdrawn' OR c.withdrawn_at IS NOT NULL) AS withdrawn,
+                      count(*) FILTER (WHERE c.id IS NULL)                                     AS none_
+                    FROM core.app_user au
+                    LEFT JOIN core.person p ON p.user_id = au.id
+                    LEFT JOIN core.consent c
+                           ON c.subject_person_id = p.id
+                          AND c.consent_type = 'marketing_email'
+                    WHERE lower(au.email) = ANY(:addrs)
+                """), {"addrs": addrs}).first()
+                return (row[0] or 0, row[1] or 0, row[2] or 0)
+
+            for label, bucket in (("app-only", app_only), ("iam-only", iam_only)):
+                g, w, n = _consent_split(bucket)
+                print(f"      {label}: consent rows -> granted {g} · withdrawn {w} · NONE {n}"
+                      + ("   <-- no evidence they agreed" if (label == "app-only" and n) else ""))
+
         # ---- C. trials -----------------------------------------------------
         print("\nC. TRIALS EVER GRANTED")
         tr_all = _one(s, "SELECT count(*) FROM billing.membership_subscription "
