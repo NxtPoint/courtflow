@@ -109,6 +109,39 @@ def main():
         if iam_opt != app_opt:
             print(f"   !! the two opt-in flags DISAGREE ({iam_opt} vs {app_opt}) — the gate and the")
             print( "      screen are reading different columns. Worth reconciling before a send.")
+            # Saying "they disagree" is not actionable; saying WHICH WAY it leans is. The two
+            # directions are different problems and only one of them is a consent risk:
+            #   app-only  = we are MAILING someone the admin screen shows as opted OUT
+            #   iam-only  = someone said yes on the screen and Klaviyo never heard about it
+            # (the second is the gap the backfill closes; the first is the one to look at hard).
+            app_only = s.execute(text("""
+                SELECT lower(au.email)
+                FROM core.app_user au
+                WHERE au.marketing_opt_in IS TRUE
+                  AND COALESCE(au.status,'active') = 'active' AND au.deleted_at IS NULL
+                  AND (au.club_id = :c OR au.club_id IS NULL)
+                  AND EXISTS (SELECT 1 FROM iam.membership m JOIN iam.user u ON u.id = m.user_id
+                               WHERE m.club_id = :c AND lower(u.email) = lower(au.email)
+                                 AND u.marketing_opt_in IS NOT TRUE)
+                ORDER BY 1
+            """), {"c": cid}).fetchall()
+            iam_only = s.execute(text("""
+                SELECT DISTINCT lower(u.email)
+                FROM iam.membership m
+                JOIN iam.user u ON u.id = m.user_id
+                LEFT JOIN core.app_user au ON lower(au.email) = lower(u.email)
+                WHERE m.club_id = :c AND u.marketing_opt_in IS TRUE
+                  AND (au.id IS NULL OR au.marketing_opt_in IS NOT TRUE)
+                ORDER BY 1
+            """), {"c": cid}).fetchall()
+            print(f"      app_user says YES, iam.user says NO : {len(app_only)}"
+                  "   <-- being mailed while the screen says opted out")
+            for r in app_only[:8]:
+                print(f"         - {r[0]}")
+            print(f"      iam.user says YES, app_user says NO : {len(iam_only)}"
+                  "   <-- said yes, Klaviyo never told")
+            for r in iam_only[:8]:
+                print(f"         - {r[0]}")
 
         # ---- C. trials -----------------------------------------------------
         print("\nC. TRIALS EVER GRANTED")
