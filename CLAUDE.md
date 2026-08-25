@@ -752,6 +752,14 @@ money decision quietly defaulted instead of being made.*
 - Volatile env/infra values: `docs/specs/ENV-STATUS.md`. **Session handover** (what to read, how we
   work, the gates): `BUILD_PROMPT.md` — rewritten 2026-08-02 from the old build-kickoff prompt.
 
+## How to answer Tomo (set 2026-08-25)
+**Lead with the answer in 1–2 plain sentences, then the next action, then STOP and offer the detail.**
+He is the owner/operator, not a full-time engineer — he needs *what happened, what it means, what to do
+next*. Long technical replies bury that and he stops reading. Keep `SERVFAIL`/`apex`/`DS record`-grade
+jargon out of the opening lines; it is welcome once he asks. **Exceptions that still lead:** a warning
+that stops him doing something harmful, a correction of something you got wrong, or a risk he is walking
+into — brevity never means withholding those. Tables and short lists read well; walls of prose do not.
+
 ## Ground rules
 - **Multi-tenant from day one** (the Iron rule, above).
 - **New repo, NEW Postgres DB**; reuse existing Render/Clerk/AWS/Klaviyo accounts with project-scoped values
