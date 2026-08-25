@@ -115,7 +115,12 @@ def _marketing_opt_in_default(session, club_id) -> bool:
             {"c": str(club_id)},
         ).scalar())
     except Exception:
-        log.debug("marketing opt-in default unreadable; treating as opt-OUT", exc_info=False)
+        # WARNING, not debug. Returning False here is the SAFE direction (we do not assume we may
+        # mail someone), but it is also indistinguishable from the club genuinely having the
+        # default switched off — so if this ever fires, every signup silently lands opted out and
+        # the only symptom is a flat opt-in rate weeks later. Say so, with the traceback.
+        log.warning("club.policy.marketing_opt_in_default unreadable for club %s — "
+                    "treating this signup as opt-OUT", club_id, exc_info=True)
         return False
 
 
@@ -214,7 +219,16 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
                     marketing_opt_in=(True if _mkt else None),
                 )
             except Exception:
-                log.debug("core.person satellite link skipped (benign)", exc_info=False)
+                # NOT benign, and it was labelled that way for a month. This block does two things
+                # that matter and neither is cosmetic: it links the Client-360 satellite AND it
+                # applies the club's marketing-consent default. Swallowing it at debug meant a
+                # failure would present only as "new members never opt in" — a symptom nobody can
+                # trace back to here, and one that costs a marketable person per signup for as
+                # long as it goes unnoticed. Still non-fatal (a CRM hiccup must never block a
+                # login), but it is now loud enough to find.
+                log.warning("signup CRM/consent step failed for user %s — the member has no "
+                            "core.person satellite and did NOT get the marketing default",
+                            user_id, exc_info=True)
 
     club_id, role = _resolve_active_club(memberships, host_club_id, x_club)
 
