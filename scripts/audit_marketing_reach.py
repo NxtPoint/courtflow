@@ -88,6 +88,18 @@ def main():
         _row("...with a usable email address", emailed, people)
 
         # ---- B. who we may email -------------------------------------------
+        # THE COLUMN THIS SECTION READS IS THE WHOLE POINT OF IT. marketing_crm/crm_sync will
+        # not mail anyone whose core.app_user.marketing_opt_in is false, so THAT is the gate and
+        # that is what "may email" has to mean. iam.user.marketing_opt_in is what the admin screen
+        # and Client-360 show, and it is a different number: on 2026-08-25 it read 82 LOWER than
+        # the gate (before the consent reconcile) and then 34 HIGHER (after it). Either way,
+        # sizing an audience off it is a read that lies — first understating the reach, then
+        # promising 34 recipients who cannot receive anything. Both flags are still PRINTED,
+        # because the gap between them is the diagnostic; but every count below that claims
+        # mailability joins through MAILABLE.
+        MAILABLE = ("JOIN core.app_user au ON lower(au.email) = lower(u.email) "
+                    "AND au.deleted_at IS NULL AND au.marketing_opt_in IS TRUE "
+                    "AND COALESCE(au.status, 'active') = 'active'")
         print("\nB. WHO WE MAY EMAIL   (consent, not headcount)")
         iam_opt = _one(s, "SELECT count(DISTINCT m.user_id) FROM iam.membership m "
                           "JOIN iam.user u ON u.id=m.user_id "
@@ -100,15 +112,15 @@ def main():
                           "AND COALESCE(status,'granted')='granted' AND withdrawn_at IS NULL", c=cid)
         reach = _one(s, "SELECT count(DISTINCT m.user_id) FROM iam.membership m "
                         "JOIN iam.user u ON u.id=m.user_id "
-                        "WHERE m.club_id=:c AND u.marketing_opt_in IS TRUE "
-                        "AND COALESCE(u.email,'') <> ''", c=cid)
+                        f"{MAILABLE} "
+                        "WHERE m.club_id=:c AND COALESCE(u.email,'') <> ''", c=cid)
         _row("iam.user.marketing_opt_in = true", iam_opt, people)
         _row("core.app_user.marketing_opt_in = true", app_opt, people, "(the Klaviyo gate)")
         _row("core.consent 'marketing_email' still granted", consent, people)
-        _row("REACHABLE  (opted in AND has an email)", reach, people, "<-- the real audience")
+        _row("REACHABLE  (past the Klaviyo gate, has an email)", reach, people,
+             "<-- the real audience")
         if iam_opt != app_opt:
-            print(f"   !! the two opt-in flags DISAGREE ({iam_opt} vs {app_opt}) — the gate and the")
-            print( "      screen are reading different columns. Worth reconciling before a send.")
+            print(f"   .. the two opt-in flags differ ({iam_opt} screen vs {app_opt} gate).")
             # Saying "they disagree" is not actionable; saying WHICH WAY it leans is. The two
             # directions are different problems and only one of them is a consent risk:
             #   app-only  = we are MAILING someone the admin screen shows as opted OUT
@@ -225,7 +237,8 @@ def main():
         print("\nF. CAMPAIGN SEGMENTS   (all filtered to opted-in + emailable)")
         OPTED = ("JOIN iam.membership m ON m.user_id=t.user_id AND m.club_id=:c "
                  "JOIN iam.user u ON u.id=t.user_id "
-                 "WHERE u.marketing_opt_in IS TRUE AND COALESCE(u.email,'') <> ''")
+                 f"{MAILABLE} "
+                 "WHERE COALESCE(u.email,'') <> ''")
         NO_PAID = ("NOT EXISTS (SELECT 1 FROM billing.membership_subscription ms WHERE ms.club_id=:c "
                    "AND ms.user_id=t.user_id AND COALESCE(ms.provider,'') <> 'trial')")
         PLAYED = ("EXISTS (SELECT 1 FROM diary.booking b WHERE b.club_id=:c "
@@ -238,7 +251,8 @@ def main():
         never = _one(s,
                      "SELECT count(DISTINCT m.user_id) FROM iam.membership m "
                      "JOIN iam.user u ON u.id=m.user_id "
-                     "WHERE m.club_id=:c AND u.marketing_opt_in IS TRUE AND COALESCE(u.email,'') <> '' "
+                     f"{MAILABLE} "
+                     "WHERE m.club_id=:c AND COALESCE(u.email,'') <> '' "
                      "AND NOT EXISTS (SELECT 1 FROM billing.membership_subscription ms "
                      "  WHERE ms.club_id=:c AND ms.user_id=m.user_id) "
                      "AND EXISTS (SELECT 1 FROM diary.booking b WHERE b.club_id=:c "
@@ -269,9 +283,12 @@ def main():
         rows = s.execute(text("""
             SELECT to_char(date_trunc('month', u.created_at), 'YYYY-MM') AS mon,
                    count(*)                                              AS signups,
-                   count(*) FILTER (WHERE u.marketing_opt_in IS TRUE)    AS opted_in
+                   count(*) FILTER (WHERE au.id IS NOT NULL)              AS opted_in
             FROM iam.user u
             JOIN iam.membership m ON m.user_id = u.id AND m.club_id = :c
+            LEFT JOIN core.app_user au ON lower(au.email) = lower(u.email)
+                  AND au.deleted_at IS NULL AND au.marketing_opt_in IS TRUE
+                  AND COALESCE(au.status, 'active') = 'active'
             WHERE u.created_at > now() - interval '12 months'
             GROUP BY 1 ORDER BY 1
         """), {"c": cid}).fetchall()
@@ -282,7 +299,10 @@ def main():
         print("\n   Of everyone who has EVER held a trial:")
         tr_opt = _one(s, "SELECT count(DISTINCT ms.user_id) FROM billing.membership_subscription ms "
                          "JOIN iam.user u ON u.id = ms.user_id "
-                         "WHERE ms.club_id=:c AND ms.provider='trial' AND u.marketing_opt_in IS TRUE", c=cid)
+                         "JOIN core.app_user au ON lower(au.email) = lower(u.email) "
+                         "AND au.deleted_at IS NULL AND au.marketing_opt_in IS TRUE "
+                         "AND COALESCE(au.status, 'active') = 'active' "
+                         "WHERE ms.club_id=:c AND ms.provider='trial'", c=cid)
         _row("trialists we may email", tr_opt, tr_ppl, "<-- the trial-grown audience")
 
         print("\n" + "=" * 78)
