@@ -296,6 +296,35 @@ def main():
         for mon, n_, o_ in rows:
             print(f"      {mon:9}{n_:>9}{o_:>10}{_pct(o_, n_):>8}")
 
+        # A MONTHLY RATE CANNOT TELL YOU WHETHER THE FIX IS WORKING. The default was switched on
+        # part-way through August, so that month is a blend of a broken week and a fixed one and
+        # reads ~10% either way — which is indistinguishable from "the switch did nothing". Waiting
+        # for a clean September means finding out in October, and the whole point of the leak is
+        # that it costs a marketable person per signup while you wait. So look at it daily instead:
+        # after the switch every row should read at or near 100%, and any zero-rate day AFTER the
+        # switch means signup is not honouring club.policy.marketing_opt_in_default and the leak
+        # is still open (start at auth/principal.py, the _created gate).
+        print("\n   The last 21 days, daily — is the fix actually holding?")
+        drows = s.execute(text("""
+            SELECT to_char(date_trunc('day', u.created_at), 'YYYY-MM-DD')  AS d,
+                   count(*)                                                AS signups,
+                   count(*) FILTER (WHERE au.id IS NOT NULL)               AS opted_in
+            FROM iam.user u
+            JOIN iam.membership m ON m.user_id = u.id AND m.club_id = :c
+            LEFT JOIN core.app_user au ON lower(au.email) = lower(u.email)
+                  AND au.deleted_at IS NULL AND au.marketing_opt_in IS TRUE
+                  AND COALESCE(au.status, 'active') = 'active'
+            WHERE u.created_at > now() - interval '21 days'
+            GROUP BY 1 ORDER BY 1
+        """), {"c": cid}).fetchall()
+        if not drows:
+            print("      (no signups in the last 21 days — nothing to judge the switch on yet)")
+        else:
+            print(f"      {'day':12}{'signups':>9}{'opted in':>10}{'rate':>8}")
+            for d_, n_, o_ in drows:
+                flag = "  <-- opted OUT, switch not honoured" if (n_ and not o_) else ""
+                print(f"      {d_:12}{n_:>9}{o_:>10}{_pct(o_, n_):>8}{flag}")
+
         print("\n   Of everyone who has EVER held a trial:")
         tr_opt = _one(s, "SELECT count(DISTINCT ms.user_id) FROM billing.membership_subscription ms "
                          "JOIN iam.user u ON u.id = ms.user_id "
