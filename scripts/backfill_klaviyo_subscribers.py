@@ -15,6 +15,14 @@
 # IT WILL NOT SUBSCRIBE ANYONE WHO DID NOT CONSENT. The audience is exactly
 # marketing_opt_in = true, and that is not a flag this script can set.
 #
+# IT ALSO WILL NOT SUBSCRIBE STAFF. The first run (2026-08-23) had no role filter, so every coach
+# and club admin went onto the marketing list along with the members — and they are now inside the
+# campaign segments, which quietly inflates every recipient count and every open rate with people
+# who work here. A coach opening the club's own membership pitch is not a signal about the pitch.
+# Staff = ANY iam.membership row at this club with role in (platform_admin, club_admin, coach);
+# a user can hold several roles, so this is an EXISTS, not a comparison on one row.
+# Pass --include-staff to override (there is rarely a good reason).
+#
 # DRY RUN BY DEFAULT — prints who WOULD be subscribed and writes nothing:
 #     python -m scripts.backfill_klaviyo_subscribers
 # To actually send them to Klaviyo (type YES at the prompt):
@@ -54,6 +62,8 @@ def main():
     ap.add_argument("--club", default="NextPoint Tennis")
     ap.add_argument("--commit", action="store_true", help="actually subscribe (default: dry run)")
     ap.add_argument("--limit", type=int, default=0, help="cap the number processed (0 = no cap)")
+    ap.add_argument("--include-staff", action="store_true",
+                    help="also subscribe coaches/admins (default: excluded, see the header)")
     args = ap.parse_args()
 
     _load_env()
@@ -77,7 +87,12 @@ def main():
         # Both opt-in flags are honoured — iam.user is what Client-360 shows and core.app_user is
         # the Klaviyo gate; they disagree on live data (455 vs 505), and for a SEND the safe read
         # is the union of "has said yes somewhere" minus anyone who has said no anywhere.
-        rows = s.execute(text("""
+        STAFF_EXISTS = """
+            EXISTS (SELECT 1 FROM iam.membership sm
+                     WHERE sm.club_id = m.club_id AND sm.user_id = m.user_id
+                       AND sm.role IN ('platform_admin', 'club_admin', 'coach'))
+        """
+        base = """
             SELECT DISTINCT lower(u.email) AS email
             FROM iam.membership m
             JOIN iam.user u ON u.id = m.user_id
@@ -89,8 +104,16 @@ def main():
               AND COALESCE(au.marketing_opt_in, TRUE) IS TRUE
               AND COALESCE(au.status, 'active') = 'active'
               AND au.deleted_at IS NULL
-            ORDER BY 1
-        """), {"c": cid}).fetchall()
+        """
+        rows = s.execute(text(
+            base + ("" if args.include_staff else f" AND NOT {STAFF_EXISTS}") + " ORDER BY 1"
+        ), {"c": cid}).fetchall()
+
+        # Count the staff separately either way, so the number is on screen rather than inferred
+        # from a total that moved. These are the people the first run wrongly subscribed.
+        staff = s.execute(text(
+            base + f" AND {STAFF_EXISTS} ORDER BY 1"
+        ), {"c": cid}).fetchall()
 
     emails = [r[0] for r in rows if r[0]]
     if args.limit:
@@ -99,6 +122,10 @@ def main():
     print(f"\n{cname} — Klaviyo subscriber backfill")
     print("=" * 66)
     print(f"  consented + emailable + active : {len(emails)}")
+    print(f"  staff excluded (coach/admin)   : {len(staff)}"
+          + ("  ** INCLUDED, --include-staff **" if args.include_staff else ""))
+    for e in [r[0] for r in staff][:10]:
+        print(f"      - {e}")
     print(f"  mode                           : {'COMMIT' if args.commit else 'DRY RUN (nothing written)'}")
     print("=" * 66)
     for e in emails[:20]:
