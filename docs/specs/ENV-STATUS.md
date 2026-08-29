@@ -10,7 +10,9 @@
 >   (all LIVE, updated 2026-07-11). **courtflow-api:** `GOOGLE_ADS_FEED_USER` / `GOOGLE_ADS_FEED_PASS` (offline-conversion CSV feed). Both services on **Starter** (no cold starts).
 > - **Clerk (console, not env):** a **custom Google OAuth** Web client is wired (redirect
 >   `https://clerk.nextpointtennis.com/v1/oauth_callback`) so "Continue with Google" works in production.
-> - Still dark (keys not entered): **Klaviyo** (marketing email), **S3** (coach photo uploads).
+> - **Klaviyo (marketing email) is LIVE** — `KLAVIYO_API_KEY` set 2026-08; ~500 subscribers, flows +
+>   campaigns sending (538 emails went out in the Spring Day sequence, 25-29 Aug 2026).
+>   Still dark (key not entered): **S3** (coach photo uploads).
 
 **What this is:** the single source of truth for environment variables. `render.yaml` does **not**
 auto-push to Render — you type env into the Render dashboard manually — so this sheet (derived from a
@@ -18,8 +20,8 @@ full `os.getenv` scan of the code) is the list to work from.
 
 **Live-audit (2026-06-21):** all code is deployed on both services — every API route answers `401`
 (exists, auth-gated), every public page `200`. Nothing is "stuck in yaml". As of 2026-07,
-**transactional SES email is LIVE** (interim, via the Ten-Fifty5 AWS account); the only things still
-dark are the optional integrations whose **keys aren't entered yet** (Klaviyo, S3).
+**transactional SES email is LIVE** (interim, via the Ten-Fifty5 AWS account), and as of 2026-08
+**Klaviyo marketing email is LIVE too**. The only thing still dark is **S3** (coach photo uploads).
 
 Legend: 🟢 set & working · 🟡 optional, dark until you add the key · ⚪ has a safe default, usually skip.
 
@@ -87,6 +89,20 @@ registration, not the DNS, and no record anywhere points at `185.230.63.x`.
   `courtflow-api` and is not. Never delete it.
 - **`ten-fifty5.com`'s three SES DKIM keys sign NextPoint's receipts too** — that zone is
   load-bearing for BOTH brands.
+- **🔴 KLAVIYO HAS NO AUTHENTICATED SENDING DOMAIN, AND THAT IS A DELIVERABILITY GAP** (found
+  2026-08-29). Klaviyo's sending-domains list is EMPTY, so marketing campaigns go out *From*
+  `info@nextpointtennis.com` but are signed on Klaviyo's SHARED infrastructure. This domain's SPF is
+  `v=spf1 include:_spf.google.com ~all` — Google only, no Klaviyo — so **DMARC alignment fails on every
+  campaign**. Nothing is blocked (`p=none`), but Gmail/Outlook weight unaligned mail toward Promotions
+  and spam. **A 97% "delivered" rate is NOT a 97% inbox rate** — delivered only means the receiving
+  server accepted it, and this is the leading unexcluded explanation for the Spring Day sequence's
+  ~1% click rate against a ~60% (Apple-MPP-inflated) open rate. **Fix = Klaviyo → Settings → Domains →
+  add `nextpointtennis.com`, then add its 3-4 CNAMEs in Cloudflare (grey cloud) and mirror them into
+  `migration/dns/nextpointtennis.com.zone`.** DNS is Tomo's to click, never an agent's.
+- **The daily Microsoft/Google DMARC report emails are WORKING AS DESIGNED, not a fault** — they began
+  at the Cloudflare cutover because that is when we published our own `_dmarc` TXT (it replaced the
+  Wix-hosted CNAME). `rua=mailto:info@nextpointtennis.com` is the request for them. Keep them until the
+  Klaviyo domain above is authenticated — they are the evidence it worked.
 
 ---
 
@@ -141,7 +157,7 @@ Everything above is already set on the **dev/onrender** config. At cutover, chan
 | `ANALYTICS_INGEST_HOST` | 🟢 | Where `marketing-digest.yml` POSTs the GA4/GSC metrics (`/api/cron/analytics-ingest`) | api host |
 | `MARKETING_DIGEST_API` | 🟢 | API base the digest emails through | api host |
 | `SIGNUP_TRIAL_DAYS` | 🟢 | Length of the signup trial (default 7) | `7` |
-| `KLAVIYO_MARKETING_LIST` / `KLAVIYO_REACTIVATION_LIST` | 🔴 | Klaviyo list ids — dark until `KLAVIYO_API_KEY` | unset |
+| `KLAVIYO_MARKETING_LIST` / `KLAVIYO_REACTIVATION_LIST` | ⚪ | Klaviyo list ids. `KLAVIYO_API_KEY` is now set, but audiences are driven by **segments defined in Klaviyo**, not these vars — verify in Render before assuming either is populated | unset/optional |
 | `HUBSPOT_*` | 🔴 | Legacy/unused CRM vars read defensively; not part of the live path | unset |
 | `CLUB_FROM_NAME` / `CLUB_REPLY_TO` | 🟢 | Club identity threaded into every transactional email | set |
 | `TRANSACTIONAL_BCC` | 🟡 | Optional BCC on transactional email (coach BCC is separate, per own lesson/class) | optional |
@@ -151,7 +167,7 @@ Everything above is already set on the **dev/onrender** config. At cutover, chan
 ### Optional integrations — dark until you add the key 🟡
 | Var | Status | Lights up | Format |
 |---|---|---|---|
-| `KLAVIYO_API_KEY` | 🟡 *(future)* | Klaviyo email sync (self-gates: no key = silent no-op) | Klaviyo private key |
+| `KLAVIYO_API_KEY` | 🟢 **LIVE** (set 2026-08) | Klaviyo marketing sync (self-gates: no key = silent no-op). Account `TckWKM`, sender `info@nextpointtennis.com` | Klaviyo private key |
 | `GOOGLE_ADS_FEED_USER` | 🟢 | HTTP Basic user for `GET /feeds/google-ads/offline-conversions.csv` (Google Ads scheduled upload). Feed is **404/dark until BOTH set** | any string you invent |
 | `GOOGLE_ADS_FEED_PASS` | 🟢 | HTTP Basic pass for the offline-conversion feed (paired with the above). `sync:false` | long random string |
 | `GOOGLE_ADS_FEED_WINDOW_DAYS` | ⚪ | Rolling days of rows the feed serves (Google accepts clicks < 90d + de-dupes) | `90` |
