@@ -54,6 +54,22 @@ imwkcbcr2kzvwv3phgsf5ynvojuhucoh._domainkey 3600 IN CNAME imwkcbcr2kzvwv3phgsf5y
 r3o5cfok7zeldlj6hr7d3e4efsubk35p._domainkey 3600 IN CNAME r3o5cfok7zeldlj6hr7d3e4efsubk35p.dkim.amazonses.com.
 tirvfmypxsmpeziylont7wtg67tlwa4s._domainkey 3600 IN CNAME tirvfmypxsmpeziylont7wtg67tlwa4s.dkim.amazonses.com.
 
+; --- KLAVIYO (marketing email sending domain) -------------------------------
+; Added 2026-08-30, mirroring nextpointtennis.com. Klaviyo had NO authenticated
+; sending domain on EITHER brand, so marketing mail left as info@ten-fifty5.com
+; signed on Klaviyo's SHARED infrastructure and DMARC alignment failed on every
+; campaign. p=none meant nothing was blocked - it just pushed mail toward
+; Promotions/spam with no error anywhere.
+; SUBDOMAIN, not apex: DMARC relaxed alignment accepts a subdomain of the From
+; domain, so these align without touching the apex SPF (Google) or the three SES
+; DKIM CNAMEs above, which carry transactional mail and must not be disturbed.
+; Routing type STATIC, not Klaviyo's recommended "dynamic": dynamic delegates NS
+; for this subdomain to Klaviyo and puts it outside this version-controlled zone.
+; The klaviyo-site-verification TXT was already present below and is already live.
+email                   3600 IN CNAME 3839852462349830343.klaviyodns.com.
+km1._domainkey          3600 IN CNAME km1._domainkey.3839852462349830343.klaviyodns.com.
+km2._domainkey          3600 IN CNAME km2._domainkey.3839852462349830343.klaviyodns.com.
+
 ; --- MAIL -------------------------------------------------------------------
 @                       3600 IN MX 10 aspmx.l.google.com.
 
