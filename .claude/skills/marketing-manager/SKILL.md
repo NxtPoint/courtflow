@@ -96,6 +96,24 @@ holds → recommend bumping budget ~20–30% and re-check next week; never *redu
 spend/bid/budget change = SHOW the exact change and get an explicit "go" BEFORE executing** (`update_bid_strategy`
 / `update_campaign` / `add_negative_keywords`). Ten-Fifty5 has no ads — skip.
 
+**Phase 4b · GEOGRAPHY — check the location targets are still all neighbourhood-scale (NextPoint).**
+**⚠ FIRST DUE 2026-09-06.** On 2026-08-30 the Search campaign was targeting TEN locations: nine
+neighbourhoods totalling ~198,000 reach (Houghton Estate, Lower Houghton, Parktown, Rosebank,
+Hyde Park, Craighall, Northcliff, Blairgowrie, Sandton) **and Randburg as a CITY at 993,000** —
+five times the entire rest combined, and the furthest away. Maximize Conversions spends where
+conversions are cheapest and Randburg held ~83% of the inventory, which is the likeliest reason
+59 of 82 conversions were cheap free-week signups rather than bookings. Randburg, Northcliff and
+Blairgowrie were removed (10 → 7 targets).
+**What to do:** pull Campaigns → Insights and reports → **Locations** for the 30 days BEFORE
+2026-08-30 and confirm Randburg really was eating the budget — the cut was made on the reach
+imbalance, NOT on performance data, and that gap was never closed. Then check the 14 days after:
+impressions SHOULD be down 50-70% (that is the change working), but **watch average CPC** (was
+R5.82) — with a much smaller pool Google still tries to spend the full R115/day by bidding harder.
+**If CPC climbs, LOWER THE DAILY BUDGET; do not re-add Randburg.** A dip is the expected shape of
+this change and reversing it mid-relearn gives the worst of both.
+**The general rule:** a local club's targets should all be the same scale. One city-level entry
+among neighbourhoods will quietly swallow the campaign, and reach is the tell — sort by it.
+
 **Phase 5 · Content — website pages + GBP posts (~5–8 min).** Two complementary plays off the same
 striking-distance queries. Aim to ship a website page AND its matching GBP post together.
 - **① Website blog / landing pages (organic — BOTH brands).** Propose 1–2 topics per brand from the 🎯
