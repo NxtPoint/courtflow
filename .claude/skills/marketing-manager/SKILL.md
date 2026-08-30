@@ -213,6 +213,31 @@ same session, per that repo's idiom, and say so in the report.**
   trusting a `queued` response — `"Queued without Recipients"` is a normal transient for a scheduled send,
   but only the recipient estimate proves the audience is real.
 
+- **⑧ AUTHENTICATION — check the sending domain is still verified, and READ THE DMARC REPORTS.**
+  **⚠ FIRST DUE 2026-09-06, and every session after.** Set up 2026-08-30, when it turned out
+  **neither brand had an authenticated Klaviyo sending domain**: campaigns left as
+  `info@<brand>` but were signed on Klaviyo's SHARED infrastructure, and each apex SPF named
+  only Google, so **DMARC alignment failed on every marketing send since Klaviyo went live**.
+  `p=none` meant nothing was blocked and nothing errored — it just pushed mail toward Promotions
+  and spam, invisibly, for six weeks. Now fixed: `email.nextpointtennis.com` (id 3399054,
+  selectors `mtd1`/`mtd2`) and `email.ten-fifty5.com` (selectors `km1`/`km2`), both **static**
+  routing, both **verified**, records committed to `migration/dns/<domain>.zone`.
+  **What to do each run:**
+  1. `get_sending_domains` per brand — status must still read **verified**. A domain that
+     silently reverts is a domain sending unsigned again.
+  2. **Read the daily DMARC aggregate reports** (Microsoft/Google, to `info@<brand>` via the
+     `rua` tag). They are NOT noise and they are NOT a fault — they are the only evidence the
+     fix held. Look for Klaviyo sends now **passing** DKIM+SPF alignment. Tomo had been
+     ignoring them; that is the correct default only while nothing has changed.
+  3. **A 97% "delivered" rate is NOT a 97% inbox rate.** Delivered means the receiving server
+     accepted it — it can accept straight into spam. Never quote delivery as inbox placement.
+  4. **Once a full week of reports shows clean alignment, raise `p=none` → `p=quarantine`** on
+     both `_dmarc` TXT records. Do NOT do this before the evidence is in, and remember DNS is
+     Tomo's to click — propose it, update the zone file, let him publish.
+  5. If a campaign's opens look healthy but clicks are ~1%, suspect **placement before
+     creative**. That was the 2026-08 Spring Day pattern (538 sends → 6 clicks → 0 memberships)
+     and unauthenticated mail was the leading unexcluded cause.
+
 **Phase 7 · Scorecard + action list.** Output a tight per-brand scorecard — Measurement / Organic / Technical /
 Ads / Content / Email / Reviews each as 🟢🟡🔴 with a one-line reason — then a **prioritized "do this week" list
 (top 3 per brand)** and a note of **what you auto-tuned this session**. That's the deliverable.
