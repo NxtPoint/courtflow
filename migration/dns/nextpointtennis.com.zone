@@ -44,10 +44,25 @@ clk2._domainkey         3600 IN CNAME dkim2.0jbxhs7cr2p2.clerk.services.
 ; --- MAIL -------------------------------------------------------------------
 @                       3600 IN MX 10 aspmx.l.google.com.
 
+; --- KLAVIYO (marketing email sending domain) -------------------------------
+; Added 2026-08-30. Klaviyo had NO authenticated sending domain, so campaigns
+; left as info@nextpointtennis.com signed on Klaviyo's SHARED infrastructure and
+; DMARC alignment failed on every send. Nothing was blocked (p=none) - it just
+; pushed mail toward Promotions/spam, invisibly.
+; A SUBDOMAIN is used deliberately: DMARC relaxed alignment (the default) accepts
+; a subdomain of the From domain, so these align with info@nextpointtennis.com
+; WITHOUT touching the apex SPF, which belongs to Google Workspace and must not
+; be merged with an ESP's.
+; Klaviyo sending-domain id 3399054 - status PENDING until these verify.
+email                   3600 IN CNAME 3839851061618392903.klaviyodns.com.
+mtd1._domainkey         3600 IN CNAME mtd1._domainkey.3839851061618392903.klaviyodns.com.
+mtd2._domainkey         3600 IN CNAME mtd2._domainkey.3839851061618392903.klaviyodns.com.
+
 ; --- TXT --------------------------------------------------------------------
 ; No SES DKIM here by design: this domain does not send transactional mail.
 @                       3600 IN TXT "v=spf1 include:_spf.google.com ~all"
 @                       3600 IN TXT "google-site-verification=b-gl3z87f0N2fkBl2IV6tzstWULGBNYcUJ0DRGjsWo8"
+@                       3600 IN TXT "klaviyo-site-verification=TckWKM"
 
 ; Replaces the Wix-hosted _dmarc CNAME. Same policy (p=none), reports to us.
 _dmarc                  3600 IN TXT "v=DMARC1; p=none; rua=mailto:info@nextpointtennis.com"
