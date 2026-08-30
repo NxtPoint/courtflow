@@ -31,7 +31,31 @@ matching picture is very often already sitting there, and a post shipped without
 post, `parents.png` → the juniors post). It is the ONLY picture source — never go hunting elsewhere, and
 never ship a post as image-less without saying so.
 
+## Phase 0 · PRE-FLIGHT (~1 min, do this FIRST — it saved nothing on 2026-08-30 because it did not exist)
+
+**① WHICH LOGIN OWNS WHAT. Check this BEFORE asking Tomo to sign into anything.** On 2026-08-30
+three separate tools were opened under the wrong account and each one looked like a broken or empty
+system rather than a wrong door. The answers were already written down:
+
+| System | Account that owns it | The trap |
+|---|---|---|
+| **Cloudflare DNS** (both zones) | **`tomo.stojakovic@gmail.com`** — recorded in `docs/specs/ENV-STATUS.md` §Domains | `info@ten-fifty5.com` and `info@nextpointtennis.com` BOTH have Cloudflare accounts with **zero zones**. Deliberate: a DNS account on a domain's own email locks you out when that domain's mail breaks. |
+| **Google Business Profile** | `info@nextpointtennis.com` | Defaults to `info@ten-fifty5.com`, which correctly has no listing (SaaS, no premises) — reads as "0 businesses". Also: **GBP is now managed inside Google Search**, not Business Profile Manager, which shows 0 businesses even for the right account. |
+| **Google Ads** | `info@nextpointtennis.com`, customer **704-275-3564** | Needs the Chrome extension granted permission for `ads.google.com` separately. |
+| **Klaviyo** | two separate accounts — NextPoint `TckWKM`, Ten-Fifty5 its own | `get_account_details` FIRST, every time, before any write. |
+
+**If a system looks empty, suspect the login before you suspect the system.** An empty Domains list,
+"0 businesses", or a segment at zero is far more often the wrong account than a broken one. And
+**grep the repo before asking Tomo** — `ENV-STATUS.md` and the `wix-decommission-2026-08` memory
+between them hold the Cloudflare account, the nameserver pair, and why the split exists.
+
+**② WHAT SHIPPED LAST WEEK.** `git log --oneline --since="8 days ago"` in BOTH repos, and skim the
+last session's scorecard. Sessions otherwise start blind and re-propose work already done, or miss
+that something shipped and needs measuring. Anything shipped last week should get a "did it move?"
+line in this week's scorecard — a change nobody measures is a change nobody learns from.
+
 ## Tools
+
 - **Adspirer** (Google Ads) — router `mcp__claude_ai_Adspirer__google_ads(action="execute", tool_name=…)`;
   key tools: `get_campaign_performance`, `get_campaign_targeting`, `analyze_wasted_spend`,
   `analyze_search_terms`, `update_bid_strategy`, `update_campaign` (budget), `add_negative_keywords`.
@@ -51,7 +75,22 @@ never ship a post as image-less without saying so.
   rebuild. That lands a ~1.6MB PNG at ~130–150KB. **Do NOT crop an infographic to 16:9** — they are dense
   full-canvas designs with headers and footers, so a crop eats content; keep the source aspect (the existing
   heroes are a mix of 1536x1024 and 1600x900, so either is in-convention). Crop to 16:9 only for photos.
-- **Browser** — Ads console / GSC / GA4 if the Chrome extension is connected (often flaky — prefer Adspirer + digest).
+- **Browser** — Ads console / GSC / GA4 if the Chrome extension is connected. **It is not "often flaky", it is
+  reliably hostile on `ads.google.com` specifically** — expect these, they are not your fault and not worth
+  fighting for more than two attempts each:
+  - **The SPA freezes.** `Page.captureScreenshot timed out … renderer may be frozen` repeatedly. Wait 10-20s
+    and retry; if three attempts fail, navigate away and back. Do not keep hammering.
+  - **The viewport re-zooms between your screenshot and your click**, so coordinates go stale mid-batch. When a
+    click "misses", this is usually why. **Prefer `find` → click by `ref`** over coordinates.
+  - **Custom comboboxes and React inputs ignore typing.** `Ctrl+A` selects the whole PAGE if focus is not in a
+    field — and on 2026-08-30 that pasted a blog post into the Google search box. Set values with the native
+    setter instead: `Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set` then
+    dispatch `input` + `change`. Works on Google Ads and Klaviyo alike.
+  - **`fetch` to any `/api/…` with credentials or a query string is BLOCKED** by the extension guard
+    ("Cookie/query string data"). The dashboard-API shortcut is not available; use the UI.
+  - **Some dialogs are iframed** (GBP post editor) so top-document JS cannot reach them — plain clicks only.
+  - **Editors are not always textareas.** Klaviyo's HTML box is **Ace** (`.ace_text-input` is a decoy); drive
+    it with `ace.edit(el).setValue(html, -1)`.
 - **Images: you CANNOT generate them — Tomo does, in ChatGPT.** Your job is the *conversion* half of the
   hero recipe (Pillow → WebP) on a picture that already exists in the library. Never promise a generated
   image, and never ship a post image-less in silence: if the library has no match, say so and ask for one.
@@ -116,6 +155,23 @@ among neighbourhoods will quietly swallow the campaign, and reach is the tell �
 
 **Phase 5 · Content — website pages + GBP posts (~5–8 min).** Two complementary plays off the same
 striking-distance queries. Aim to ship a website page AND its matching GBP post together.
+- **⓪ BEFORE WRITING ANYTHING: does this query justify a NEW URL at all?** Tomo caught this on
+  2026-08-30 and he was right. A "Tennis Cut vs SwingVision" post was proposed for a query worth
+  **5 impressions in 28 days**, against two existing SwingVision pages already carrying 135 and 54
+  impressions — one of them the 5th most-viewed page on the site. A third page splits a working
+  cluster against itself for nothing.
+  **The test: under roughly 20 impressions, REFRESH the page that already ranks. Do not create.**
+  Look at what you already have for the topic first (`ls frontend/blog/_posts/` and read the
+  TITLES, not the filenames), then ask whether the query's volume justifies a URL of its own.
+  Refreshing wins twice — it keeps the ranking signal on one page, and an updated date is itself a
+  freshness signal. A same-URL refresh is nearly always the higher-return move.
+- **⓪b AFTER PUBLISHING OR REFRESHING: ask Google to index it. This is a real reach lever and it is
+  free.** A brand-new URL sitting in the sitemap can wait days or weeks for discovery; a *refreshed*
+  page can keep serving its old content in the index for just as long. In Search Console → **URL
+  Inspection** → paste the URL → **Request indexing**. Usually crawled within hours. Do it for every
+  page you touched, new or updated — publishing and then not telling Google is leaving the whole
+  point of the work on the table. Note the sitemap does NOT do this for you; it only helps discovery
+  eventually.
 - **① Website blog / landing pages (organic — BOTH brands).** Propose 1–2 topics per brand from the 🎯
   queries (+ Ahrefs free Keyword Generator). Draft + publish via `build_blog.py`: create
   `frontend/blog/_posts/<slug>.md` (frontmatter `title/description/date/image:`; filename = the slug;
@@ -183,9 +239,22 @@ striking-distance queries. Aim to ship a website page AND its matching GBP post 
   week · the clay court · lessons · junior/cardio · floodlit evening play. The website page = the long organic
   game; the GBP post = the immediate local/map game. Ship both.
 
-**Phase 6 · Reviews / GBP — NextPoint only (~1 min).** Reviews drive the "tennis courts near me" map pack.
-Check velocity; if slowing, resurface the review-request WhatsApp/email + the gated `/feedback` flow (routes
-4–5★ → the GBP link). Aim 40+ reviews.
+**Phase 6 · Reviews + the rest of the GBP — NextPoint only (~3 min). TREAT THIS AS A GROWTH LEVER, NOT A
+HEALTH CHECK.** As of 2026-08-30: **5.0★ from 21 reviews, against a target of 40+** — so roughly half way,
+with no reputation risk in asking. Review count is a **direct map-pack ranking factor**, and the map pack is
+where `tennis courts near me` lives: **79 impressions, position 8.8, ZERO clicks** — the single biggest
+striking-distance query NextPoint has, and one a blog post cannot fix. Reviews and GBP activity can.
+- **Do something, don't just count.** The profile has an **"Ask for reviews"** button that generates a
+  shareable link — put it in front of active members. The gated `/feedback` flow already routes 4–5★ to the
+  GBP link; check it is actually being used, not just built.
+- **The rest of the profile is barely touched.** Beyond Posts, the profile carries **Products, Services,
+  Bookings, Photos and Q&A** — all of which feed the listing. **Q&A is the most under-used**: you may seed
+  your own questions and answer them, and they surface in the map pack. Obvious ones for a club: is there
+  parking, do I need to be a member, are there floodlights, can I hire a racket, is there coaching for
+  beginners. Each is a query someone is typing.
+- **GBP posts go stale in about a week**, which is why the cadence matters. One a week, rotating theme —
+  free week · clay court · floodlit evenings · juniors/cardio · lessons. Pair each with whatever website
+  page shipped that session.
 
 **Phase 6b · Klaviyo / lifecycle email — BOTH brands (~5 min).** The MCP connector gives direct API access;
 use it rather than the browser, which is how a previous session left things half-done and undetectable. Each
@@ -259,6 +328,72 @@ same session, per that repo's idiom, and say so in the report.**
 **Phase 7 · Scorecard + action list.** Output a tight per-brand scorecard — Measurement / Organic / Technical /
 Ads / Content / Email / Reviews each as 🟢🟡🔴 with a one-line reason — then a **prioritized "do this week" list
 (top 3 per brand)** and a note of **what you auto-tuned this session**. That's the deliverable.
+**Two additions that make the next session better than this one:** state **whether last week's changes moved
+anything** (from Phase 0 ②) — an unmeasured change teaches nobody — and name **which item from "Where the
+next 10x is" you looked at**, with what you found. Rotating through that list one item a week is what turns
+a weekly health check into compounding growth.
+
+## Where the next 10x is — the standing agenda (review one item per session, in this order)
+
+Written 2026-08-30 after the deepest review the account has had. These are ordered by size of prize,
+not by ease. **The first one is worth more than everything else in this skill combined**, and it is
+not a marketing problem, which is exactly why a marketing routine kept missing it.
+
+**① THE LOGIN WALL. Every campaign this skill runs points at a door that is locked.**
+Every CTA — the Klaviyo emails, the GBP posts, the Google Ads landing paths — resolves to
+`/portal#/plan` or `/portal#/play`, and **the portal requires a Clerk login**. So a stranger who
+finds NextPoint through "tennis courts near me" cannot see a price, cannot see whether a court is
+free at 18:00, and cannot book, until they have created an account. The ask is "sign up" before any
+value has been shown.
+Look at the evidence and it fits: Spring Day sent **538 emails, produced 6 clicks and 0
+memberships**, with the money CTA pointing at that wall. Nine of ten Wix-era members have never
+logged in. The `tennis courts near me` query has **79 impressions and zero clicks**.
+**This caps the return on every single thing this skill does.** A public page showing real court
+availability and prices — book first, account second, or at minimum *see* first — would lift email,
+ads, GBP and organic simultaneously. Raise it every session until it is built or explicitly
+rejected; nothing else here has the same multiple.
+
+**② THE NUMBER NOBODY HAS: what fraction of free weeks become paying members.**
+There were **207 trial grants in August**. Until that conversion rate is known: the Google Ads
+values are guesses, CPA means nothing, "is the free week working?" is unanswerable, and nobody can
+say what a signup is worth. It is one query against production. **Get it once, then track it
+monthly** — it is the number that prices every other decision in this document.
+
+**③ Content velocity is the one gap the data proves.**
+Ten-Fifty5 **19 posts**, NextPoint **7** — and the organic curves match that ratio almost exactly.
+This is the standing NextPoint finding and it is not subtle. One page a week, off the 🎯 queries,
+compounds. Also check **internal linking** while you are in there: 19 and 7 posts are only a cluster
+if they actually link to each other, and nobody has ever audited that. Interlinking existing pages
+costs nothing and moves rankings.
+
+**④ The offline-conversion loop works, and nobody is watching it.**
+`Offline purchase` imported **4 conversions worth R2,200** — real money, ~R550 each, via the
+gclid → paid order → CSV feed. It is the only truthful revenue signal in the Ads account. **If it
+silently stops, nothing alarms**, ad bidding quietly degrades, and the first symptom is a CPA that
+drifts for a month. Check the row is still non-zero every session. Two minutes.
+
+**⑤ Draft flows are paid-for assets left switched off.**
+A campaign converts once; a flow runs forever. NextPoint has had **5 of 7 flows in draft since
+July**, including the one built to turn court bookers into members. Either ship them or delete
+them — but a draft flow is work already done and earning nothing. Note the B1 segment is the
+blocker on the best one: it requires **2+ bookings AND subscribed** and holds **3 people**. Loosen
+to 1+ booking before switching anything on.
+
+**⑥ Nobody has ever looked at who is beating us.**
+For `tennis courts near me` (79 impr, pos 8.8) and `tennis lessons johannesburg`, we have never
+once looked at who ranks above us and why. One SERP check per session: who holds the map pack, how
+many reviews do they have, what does their landing page do that ours does not. Ahrefs free tier or
+just look at the results. Cheapest competitive intelligence available and currently zero.
+
+**⑦ Ideas worth trying that this skill has never attempted.** Pick one when the routine is clean:
+- **A public availability/pricing page** (see ① — this is the big one wearing a small hat).
+- **Seed the GBP Q&A** — you may ask and answer your own; they show in the map pack.
+- **Ask the 21 reviewers for a photo.** Photo-bearing reviews weigh more and the profile is thin.
+- **A landing page per intent**, not per topic — `book a court`, `tennis lessons`, `junior coaching`
+  as CTA-first pages rather than articles. Buy-intent queries want a page that sells, not one that
+  explains. The skill says this already and it has never been done.
+- **Ten-Fifty5 has no GBP and no local surface at all** — correct today, but it also means 100% of
+  its acquisition rides one blog. Worth asking whether a second channel should exist.
 
 ## Guardrails
 - **Approve before ANY spend change** (bidding, budget, pausing, new campaigns) — show the exact change first.
@@ -303,5 +438,10 @@ Ads / Content / Email / Reviews each as 🟢🟡🔴 with a one-line reason — 
   `git status` before editing a shared file** — work you did not write is probably deliberate.
 
 ## Efficiency (short on time?)
-Fast path = Phase 1 (health) → Phase 2 (SEO scorecard from the digest) → Phase 4 (Ads: CPA + scale decision) →
-Phase 7 (action list). Skip 3/5/6 unless something looks off. The whole fast path is ~5 minutes.
+Fast path = **Phase 0 ② (what shipped last week)** → Phase 1 (health) → Phase 2 (SEO scorecard from the
+digest) → Phase 4 (Ads: CPA + scale decision) → Phase 7 (action list). Skip 3/5/6 unless something looks
+off. The whole fast path is ~5 minutes.
+**Even on the fast path, do two things.** Phase 0 ① (the account map) the moment any login is needed — it
+costs seconds and prevents the wrong-account rabbit hole. And **one item from "Where the next 10x is"**,
+in order: the routine keeps the machine running, that list is what makes it bigger. A session that only
+runs the routine is a session that reports on the same ceiling.
