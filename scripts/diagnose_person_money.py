@@ -231,14 +231,96 @@ def section_bookings(s, club_id, user_id, month):
     return rows
 
 
+def section_shared_bookings(s, club_id, user_id, month):
+    """EVERY order on every booking this person appears on - INCLUDING orders owned by someone else.
+
+    This section exists because its absence produced a confidently wrong answer. `section_orders`
+    filters `o.user_id = :u`, which is the right question for "what does this person owe" and the
+    WRONG one for "why does this say paid over here and owed over there". A lesson can carry more
+    than one order -- semi-private bills PER HEAD, a dependent's head bills the GUARDIAN, and a
+    booking made on someone's behalf raises the debt against the payer -- so the money that settled
+    a booking routinely belongs to a different user from the one you are looking at.
+
+    Read this way: a booking with ONE order is ordinary. A booking with TWO orders at the SAME
+    amount, one paid and one open, is a phantom debt -- the money is banked, the coach has accrued,
+    and the open row is the one that should never have been raised."""
+    from sqlalchemy import text
+    clause = "AND to_char(bk.starts_at, 'YYYY-MM') = :ym" if month else ""
+    rows = s.execute(text(
+        "WITH mine AS ("
+        "  SELECT DISTINCT bk.id, bk.starts_at, bk.booking_type, bk.status "
+        "  FROM diary.booking bk "
+        "  WHERE bk.club_id = :c "
+        "    AND (bk.booked_by_user_id = :u "
+        "         OR EXISTS(SELECT 1 FROM diary.booking_party bp "
+        "                    WHERE bp.booking_id = bk.id AND bp.user_id = :u) "
+        "         OR EXISTS(SELECT 1 FROM billing.order_line ol JOIN billing.\"order\" o2 "
+        "                     ON o2.id = ol.order_id "
+        "                    WHERE ol.booking_id = bk.id AND o2.user_id = :u)) "
+        + clause + ") "
+        "SELECT m.id AS booking_id, "
+        "       (m.starts_at AT TIME ZONE 'Africa/Johannesburg') AS starts, "
+        "       m.booking_type, m.status AS booking_status, "
+        "       o.id AS order_id, o.status AS order_status, o.amount_minor, o.user_id AS owner_id, "
+        "       NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)), '') AS owner_name, u.email "
+        "FROM mine m "
+        "JOIN billing.order_line ol ON ol.booking_id = m.id "
+        "JOIN billing.\"order\" o ON o.id = ol.order_id "
+        "LEFT JOIN iam.user u ON u.id = o.user_id "
+        "ORDER BY m.starts_at, o.created_at"),
+        {"c": club_id, "u": user_id, "ym": month}).mappings().fetchall()
+
+    print("\nWHO PAID FOR WHAT  (every order on every booking they appear on, WHOEVER owns it)")
+    print("-" * 78)
+    if not rows:
+        print("   none.")
+        return
+    by_booking = {}
+    for r in rows:
+        by_booking.setdefault(r["booking_id"], []).append(r)
+    phantom = []
+    for bid, orders in by_booking.items():
+        head = orders[0]
+        print("   %s  %-7s %-10s  %d order(s)"
+              % (str(head["starts"])[:16], head["booking_type"], head["booking_status"], len(orders)))
+        for o in orders:
+            mine = " (this person)" if str(o["owner_id"]) == str(user_id) else ""
+            print("        %s  %-9s %9s  owner: %s%s"
+                  % (_short(o["order_id"]), o["order_status"], _r(o["amount_minor"]),
+                     (o["owner_name"] or o["email"] or "?")[:26], mine))
+        paid = [o for o in orders if o["order_status"] == "paid"]
+        open_ = [o for o in orders if o["order_status"] in ("open", "awaiting_payment")]
+        if paid and open_ and any(int(p["amount_minor"] or 0) == int(q["amount_minor"] or 0)
+                                  for p in paid for q in open_):
+            phantom.extend(open_)
+            print("        ^^ ONE booking, one amount, paid AND owed. The paid row is the real"
+                  " money;\n           the open row is a duplicate debt that should be voided.")
+
+    if phantom:
+        tot = sum(int(o["amount_minor"] or 0) for o in phantom)
+        print("\n   PHANTOM DEBT: %s across %d order(s). The money is banked and the coach has"
+              % (_r(tot), len(phantom)))
+        print("   accrued on the PAID row; these open rows are duplicates. Voiding them is the fix -")
+        print("   `scripts/void_orphaned_orders.py` exists for exactly this, and voiding an unpaid")
+        print("   duplicate moves no money and touches no commission.")
+
+
 def section_commission(s, club_id, user_id, month):
-    """Per PAID coaching line, does a commission_split exist - i.e. did the coach get their share?"""
+    """Per PAID coaching line, does a commission_split exist - i.e. did the coach get their share?
+
+    SCOPED BY THE BOOKINGS THIS PERSON PLAYED, NOT THE ORDERS THEY OWN. Scoping by owner reported
+    "no paid coaching lines" for a player whose lessons are paid for by a parent or a booker -- and
+    the honest reading of that sentence is "the coach was not paid", which was false and was said
+    out loud. The coach accrues on whoever's order carried the money; the question "did the coach
+    get paid for THIS person's lessons" is therefore a question about the booking, never the payer.
+    """
     from sqlalchemy import text
     clause = ("AND to_char(COALESCE(o.service_date, o.created_at::date), 'YYYY-MM') = :ym"
               if month else "")
     rows = s.execute(text(
         'SELECT ol.id AS line_id, ol.description, ol.amount_minor, o.status, '
         '       bk.coach_user_id, '
+        '       NULLIF(TRIM(CONCAT_WS(\' \', pu.first_name, pu.surname)), \'\') AS payer_name, '
         '       COALESCE(cp.display_name, NULLIF(TRIM(CONCAT_WS(\' \', cu.first_name, cu.surname)), \'\'), '
         '                cu.email) AS coach_name, '
         '       (SELECT count(*) FROM billing.commission_split cs '
@@ -250,9 +332,14 @@ def section_commission(s, club_id, user_id, month):
         'JOIN billing."order" o ON o.id = ol.order_id '
         'LEFT JOIN diary.booking bk ON bk.id = ol.booking_id '
         'LEFT JOIN iam.user cu ON cu.id = bk.coach_user_id '
+        'LEFT JOIN iam.user pu ON pu.id = o.user_id '
         'LEFT JOIN iam.coach_profile cp ON cp.user_id = bk.coach_user_id AND cp.club_id = :c '
-        'WHERE o.club_id = :c AND o.user_id = :u AND o.status = \'paid\' '
-        '  AND bk.coach_user_id IS NOT NULL ' + clause + ' '
+        'WHERE o.club_id = :c AND o.status = \'paid\' '
+        '  AND bk.coach_user_id IS NOT NULL '
+        '  AND (bk.booked_by_user_id = :u '
+        '       OR EXISTS(SELECT 1 FROM diary.booking_party bp '
+        '                  WHERE bp.booking_id = bk.id AND bp.user_id = :u) '
+        '       OR o.user_id = :u) ' + clause + ' '
         'ORDER BY o.created_at'), {"c": club_id, "u": user_id, "ym": month}).mappings().fetchall()
 
     print("\nCOACH SHARE  (paid coaching lines - did the coach accrue on this money?)")
@@ -260,16 +347,16 @@ def section_commission(s, club_id, user_id, month):
     if not rows:
         print("   No paid coaching lines in scope (court hire is 100% club, so it has no split).")
         return
-    print("   %-42s%10s%10s  %s" % ("line", "billed", "coach got", "coach"))
+    print("   %-34s%9s%10s  %-18s%s" % ("line", "billed", "coach got", "coach", "paid by"))
     missing = 0
     for r in rows:
         flag = ""
         if not r["splits"]:
             flag = "   <-- NO SPLIT: this coach was not paid on it"
             missing += 1
-        print("   %-42s%10s%10s  %s%s"
-              % ((r["description"] or "")[:42], _r(r["amount_minor"]), _r(r["coach_minor"]),
-                 (r["coach_name"] or "?")[:22], flag))
+        print("   %-34s%9s%10s  %-18s%s%s"
+              % ((r["description"] or "")[:34], _r(r["amount_minor"]), _r(r["coach_minor"]),
+                 (r["coach_name"] or "?")[:17], (r["payer_name"] or "?")[:18], flag))
     if missing:
         print("\n   %d paid coaching line(s) carry NO commission split. Confirm club-wide with" % missing)
         print("   `python -m scripts.reconcile_coach_commission` before paying anyone out.")
@@ -306,6 +393,10 @@ def main():
 
         section_orders(s, p["club_id"], p["id"], args.month)
         section_bookings(s, p["club_id"], p["id"], args.month)
+        # Runs BEFORE the coach section on purpose: a debt owned by somebody else explains most
+        # "paid here, owed there" reports, and the coach question is meaningless until you know
+        # which order actually carried the money.
+        section_shared_bookings(s, p["club_id"], p["id"], args.month)
         section_commission(s, p["club_id"], p["id"], args.month)
 
     print("\n" + "=" * 78)
