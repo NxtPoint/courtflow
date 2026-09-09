@@ -81,9 +81,24 @@ def _candidates(session):
                NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)), '') AS owner_name,
                u.email,
                (SELECT count(*) FROM diary.booking_party bp
-                 WHERE bp.booking_id = h.booking_id) AS party_count
+                 WHERE bp.booking_id = h.booking_id) AS party_count,
+               -- WHO was recorded on court, by name. The COUNT alone cannot settle this: the
+               -- booking's owner is NOT automatically written as a party (only `parties` and
+               -- `extra_parties` are), so "1 recorded" can mean one player OR a squad of two whose
+               -- primary was never recorded. The NAMES turn an unanswerable count into a question
+               -- the coach can answer in one sentence.
+               (SELECT string_agg(COALESCE(NULLIF(TRIM(CONCAT_WS(' ', pu.first_name, pu.surname)), ''),
+                                           bp.guest_name, pu.email, '?'), ', ')
+                  FROM diary.booking_party bp
+                  LEFT JOIN iam.user pu ON pu.id = bp.user_id
+                 WHERE bp.booking_id = h.booking_id) AS players,
+               COALESCE(cp.display_name,
+                        NULLIF(TRIM(CONCAT_WS(' ', cu.first_name, cu.surname)), ''),
+                        cu.email) AS coach_name
         FROM heads h
         JOIN diary.booking b ON b.id = h.booking_id
+        LEFT JOIN iam.user cu ON cu.id = b.coach_user_id
+        LEFT JOIN iam.coach_profile cp ON cp.user_id = b.coach_user_id AND cp.club_id = b.club_id
         LEFT JOIN iam.user u ON u.id = h.user_id
         WHERE h.booking_id IN (
             SELECT x.booking_id FROM heads x
@@ -110,9 +125,10 @@ def _report(session):
     suspects = []
     for bid, orders in by_booking.items():
         head = orders[0]
-        print("   %s  %-7s %-10s  players recorded: %d"
+        print("   %s  %-7s %-10s  coach: %s"
               % (str(head["starts"])[:16], head["booking_type"], head["booking_status"],
-                 head["party_count"]))
+                 (head["coach_name"] or "-")))
+        print("        on court (recorded): %s" % (head["players"] or "nobody recorded"))
         same_second = len({str(o["created"])[:19] for o in orders}) == 1
         for o in orders:
             mark = ""
@@ -129,9 +145,14 @@ def _report(session):
 
     total = sum(int(o["amount_minor"] or 0) for o in suspects)
     print("   %s of unpaid debt sits beside an already-paid order for the same lesson." % _r(total))
-    print("   Where only ONE person actually played, that unpaid row is a duplicate and should be")
-    print("   voided. Where the lesson really was a squad, it is a REAL debt - leave it and chase it.")
-    print("\n   To clear the ones you have judged duplicates, pass their FULL ids:")
+    print("\n   THE ONE QUESTION THAT SETTLES EACH LINE, and only the coach can answer it:")
+    print("   'On <date>, did BOTH of these people play, or just one?'")
+    print("      both played -> the unpaid row is a REAL debt. Leave it and chase it.")
+    print("      one played  -> the payer was billed as though they were on court. Void it.")
+    print("\n   Do not read 'on court (recorded)' as the whole answer. A booking's OWNER is not")
+    print("   automatically written as a party, so one recorded name can mean one player OR a pair")
+    print("   whose primary was never recorded. It names who to ask about, not who was there.")
+    print("\n   To clear the ones judged duplicates, pass their FULL ids:")
     print("     python -m scripts.audit_duplicate_heads --void-ids <id>,<id>")
     return suspects
 
