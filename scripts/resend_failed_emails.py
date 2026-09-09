@@ -164,24 +164,54 @@ def _resend_one(s, row, notice=True):
                         bcc=bcc, kind=kind, ctx=ctx, detail=detail, invoice_doc=invoice_doc)
 
 
+# What the member most likely still needs, per the CURRENT state of their request. The stale
+# acknowledgement is never the right email: by now the request has an ANSWER, and the answer is
+# what they are waiting for.
+_REFUND_ADVICE = {
+    "pending":   "STILL PENDING - decide it; approving sends the real email",
+    "approved":  "approved but not yet refunded - run the refund; that sends the receipt",
+    "refunded":  "already refunded - they got the payment_refunded receipt in this batch",
+    "declined":  "declined - check they were told; refund_decided is the email that says so",
+    "cancelled": "they withdrew it - nothing owed",
+}
+
+
 def _report_held_back(s, since):
-    """List the refund_requested rows we refuse to send, so they get a human instead of silence."""
+    """Show the refund_requested rows we refuse to send, WITH the live state of each request.
+
+    A list of four names says nothing actionable. The useful fact is what happened to each request
+    since: the acknowledgement is stale either way, but a member whose refund is still PENDING a
+    week later needs something entirely different from one who was paid an hour ago."""
     from sqlalchemy import text
     rows = s.execute(text(
-        "SELECT (n.created_at AT TIME ZONE 'Africa/Johannesburg')::date AS d, u.email, n.data "
-        "FROM core.notification n JOIN iam.user u ON u.id = n.user_id "
+        "SELECT (n.created_at AT TIME ZONE 'Africa/Johannesburg')::date AS d, u.email, n.data, "
+        "       rr.status, (rr.decided_at AT TIME ZONE 'Africa/Johannesburg')::date AS decided "
+        "FROM core.notification n "
+        "JOIN iam.user u ON u.id = n.user_id "
+        "LEFT JOIN billing.refund_request rr "
+        "       ON rr.club_id = n.club_id "
+        "      AND rr.order_id = NULLIF(n.data->>'ref_id', '')::uuid "
+        "      AND rr.user_id = n.user_id "
         "WHERE n.email_status = 'failed' AND n.created_at >= CAST(:since AS date) "
         "  AND n.kind = ANY(:kinds) ORDER BY n.created_at"),
         {"since": since, "kinds": HOLD_BACK_KINDS}).mappings().fetchall()
     if not rows:
         return
     print("\nHELD BACK - these are NOT resent, deliberately (%d):" % len(rows))
-    print("   An automated 'we have received your request, we will be in touch' arriving a week")
-    print("   late is worse than the silence it replaces. Email these people yourself:")
+    print("   This email says 'we have received your request, we will be in touch' - it is NOT a")
+    print("   refund confirmation. Sent a week on it either arrives after the money did, or")
+    print("   promises contact to someone still waiting. The state of each request is below;")
+    print("   act on that instead.")
+    print("\n     %-12s%-34s%-18s%s" % ("requested", "member", "status", "what they need"))
     for r in rows:
         d = dict(r["data"] or {})
-        print("     %-12s %-38s %s" % (r["d"], r["email"],
-                                       _money(d.get("amount_minor"), d.get("currency_code"))))
+        st = r["status"] or "no request found"
+        advice = _REFUND_ADVICE.get(st, "look this one up - the request row is missing")
+        print("     %-12s%-34s%-18s%s" % (r["d"], (r["email"] or "")[:33], st[:17], advice))
+        amt = _money(d.get("amount_minor"), d.get("currency_code"))
+        if amt:
+            print("     %-12s%s%s" % ("", "  " + amt,
+                                      ("  decided " + str(r["decided"])) if r["decided"] else ""))
 
 
 def main():
