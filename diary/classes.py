@@ -1945,8 +1945,17 @@ def reschedule_series(session, *, club_id, session_id, starts_at=None, duration_
         if res.get("ok"):
             moved += 1
         else:
+            # The DATE, in the club's own time, and in words. A UTC ISO string is the right thing
+            # to store and the wrong thing to hand somebody who has to go and clear the diary — and
+            # a bare count ("1 could not move") is worse still: it turns a fixable clash into a
+            # search. Several blocked weeks in a row then read as "the move did nothing from the
+            # 8th onwards", which is a different complaint from the truth.
+            local_d = row["starts_at"].astimezone(tz)
             failed.append({"session_id": str(row["id"]),
                            "starts_at": row["starts_at"].isoformat(),
+                           # Built from the parts, not strftime("%-d %b"): the dash-modifier is
+                           # glibc-only and raises on Windows, where the harness also runs.
+                           "date": "%d %s" % (local_d.day, local_d.strftime("%b")),
                            "error": res.get("error") or "FAILED"})
     return {"ok": True, "session": first.get("session"), "moved": moved,
             "failed": failed, "failed_count": len(failed)}

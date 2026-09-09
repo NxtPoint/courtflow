@@ -397,8 +397,16 @@
           // Partial by design: one busy court weeks out must not stop the rest moving. Say which
           // ones did not take, or the coach is left believing the whole term shifted.
           if (r && r.failed_count) {
-            UI.toast("Moved " + r.moved + ", but " + r.failed_count
-                     + " could not move (court or coach busy). Check the list.", "warn");
+            // NAME THE DATES. "1 could not move" sends the coach hunting through a term; the
+            // dates turn it into one thing to look at. Several in a row otherwise read as
+            // "nothing moved from the 8th onwards", which is a different problem entirely.
+            var why = { COACH_NOT_AVAILABLE: "you're busy", NO_COURT_AVAILABLE: "no court free",
+                        SESSION_EXISTS: "another session already there" };
+            var bits = (r.failed || []).slice(0, 6).map(function (f) {
+              return f.date + " (" + (why[f.error] || "blocked") + ")";
+            });
+            UI.toast("Moved " + r.moved + ". Still at the old time: " + bits.join(", ")
+                     + ((r.failed || []).length > 6 ? " and more" : ""), "warn");
           } else if (r && r.moved > 1) {
             UI.toast("Moved " + r.moved + " sessions.", "info");
           }
