@@ -66,6 +66,12 @@ def _load_env():
     return bool(os.getenv("DATABASE_URL"))
 
 
+def _recent_cutoff():
+    """Yesterday, in club time - the boundary between 'now' and 'history' for the verdict."""
+    import datetime
+    return datetime.date.today() - datetime.timedelta(days=1)
+
+
 def _err(e):
     """A botocore error rendered as 'Code: message', masked. Falls back to the class name."""
     code = ""
@@ -107,13 +113,40 @@ def section_config():
 
 # ---------------------------------------------------------------------------
 # B. AWS — do the credentials still work, and is the identity still allowed to send?
-#    Each probe is reported on its own line: a NARROWED policy can deny the probe while
-#    still allowing the send, so a failed GetSendQuota is evidence, never a verdict.
+#
+# ⚠ READ THE FAILURES HERE CAREFULLY, BECAUSE THEY ARE NOT ALL BAD NEWS. Since 2026-09-02
+# the sending identity is `nextpoint-app`, whose policy grants EXACTLY ses:SendEmail and
+# ses:SendRawEmail on our two verified identities and nothing else. Every probe below is a
+# READ, so under that policy they all return AccessDenied BY DESIGN — a wall of red that
+# means the credential is healthy and correctly scoped. That is the opposite of what it
+# looks like, which is why each line now says which of the two it is:
+#
+#   AccessDenied on a read      -> EXPECTED under least privilege. Proves nothing either
+#                                  way about sending. Section D is the only real test.
+#   InvalidClientTokenId /
+#   SignatureDoesNotMatch       -> DECISIVE. The key itself is dead: deleted or rotated.
+#
+# The distinction is load-bearing: on 2026-09-09 this section printed four AccessDenied
+# lines on a service whose email had JUST been fixed, and the old wording read them as
+# breakage. A check that cannot see must say so, not guess.
 # ---------------------------------------------------------------------------
+def _probe_note(e):
+    """Say which KIND of failure a probe hit. AccessDenied on a read is expected under the
+    least-privilege policy and is not evidence of anything; a bad token is decisive."""
+    s = str(e)
+    if "InvalidClientTokenId" in s or "SignatureDoesNotMatch" in s or "ExpiredToken" in s:
+        return "DEAD KEY"
+    if "AccessDenied" in s or "not authorized" in s:
+        return "denied read (expected under least privilege - NOT a fault)"
+    return "unknown"
+
+
 def section_aws(sender):
     from marketing_crm.email import ses
 
     print("\nB. AWS  (read-only probes - no email is sent here)")
+    print("   NOTE: the sending policy grants ONLY ses:SendEmail + ses:SendRawEmail, so every")
+    print("   probe below is denied BY DESIGN. 'denied read' = healthy. 'DEAD KEY' = the fault.")
     print("-" * 78)
     try:
         import boto3
@@ -127,6 +160,7 @@ def section_aws(sender):
         return
 
     # 1) Does the key authenticate at all, and is the account allowed to send?
+    dead_key = False
     try:
         q = client.get_send_quota()
         print("   send quota               : %.0f / 24h, %.0f sent in the last 24h, %.1f/sec"
@@ -134,16 +168,19 @@ def section_aws(sender):
         if q.get("Max24HourSend") == 200:
             print("       ^ 200/day is the SES SANDBOX default: only VERIFIED recipients get mail.")
     except Exception as e:
-        print("   send quota               : FAILED  %s" % _err(e))
-        print("       ^ InvalidClientTokenId / SignatureDoesNotMatch = the key is gone or rotated.")
-        print("         AccessDenied = the key still exists but its policy no longer allows SES.")
+        note = _probe_note(e)
+        dead_key = dead_key or note == "DEAD KEY"
+        print("   send quota               : %s" % note)
+        print("       %s" % _err(e))
 
     try:
         on = client.get_account_sending_enabled().get("Enabled")
         print("   account sending          : %s"
               % ("ENABLED" if on else "DISABLED  <-- AWS has paused sending"))
     except Exception as e:
-        print("   account sending          : could not read  (%s)" % _err(e))
+        note = _probe_note(e)
+        dead_key = dead_key or note == "DEAD KEY"
+        print("   account sending          : %s" % note)
 
     # 2) Is the From identity still verified? A security tidy-up can delete an identity.
     addr = (sender or "").strip()
@@ -161,7 +198,9 @@ def section_aws(sender):
                 print("       ^ neither the address nor its domain is verified IN THIS REGION.")
                 print("         Check SES_REGION matches where the identity lives before anything else.")
         except Exception as e:
-            print("   identity check           : could not read  (%s)" % _err(e))
+            note = _probe_note(e)
+            dead_key = dead_key or note == "DEAD KEY"
+            print("   identity check           : %s" % note)
         try:
             dkim = client.get_identity_dkim_attributes(
                 Identities=([domain] if domain else want)).get("DkimAttributes", {})
@@ -169,7 +208,17 @@ def section_aws(sender):
                 print("   DKIM %-20s: enabled=%s verification=%s"
                       % (ident, d.get("DkimEnabled"), d.get("DkimVerificationStatus")))
         except Exception as e:
-            print("   DKIM check               : could not read  (%s)" % _err(e))
+            note = _probe_note(e)
+            dead_key = dead_key or note == "DEAD KEY"
+            print("   DKIM check               : %s" % note)
+
+    if dead_key:
+        print("\n   [X] THE KEY ITSELF IS DEAD - deleted or rotated. Put a working key in this")
+        print("       service's SES_AWS_ACCESS_KEY_ID / SES_AWS_SECRET_ACCESS_KEY.")
+    else:
+        print("\n   [ok] No dead-key signal. Denied reads alone do not indicate a fault - the")
+        print("        only proof that sending works is a real send (--to).")
+    return dead_key
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +229,11 @@ def section_ledger(days):
     from sqlalchemy import text
     import db
 
-    verdict = {"rows": 0, "sent": 0, "failed": 0, "skipped": 0}
+    # The verdict is judged on the LAST TWO DAYS, not the whole window. A 21-day window on a
+    # service fixed an hour ago still holds a week of failures, and judging the total announced
+    # a fault that was already repaired. Recent state is the state; history is the timeline.
+    verdict = {"rows": 0, "sent": 0, "failed": 0, "skipped": 0,
+               "recent_rows": 0, "recent_sent": 0, "recent_failed": 0, "recent_skipped": 0}
     print("\nC. DELIVERY LEDGER  (core.notification.email_status, last %d days)" % days)
     print("-" * 78)
     with db.session_scope() as s:
@@ -212,6 +265,11 @@ def section_ledger(days):
                 verdict["sent"] += sent
                 verdict["failed"] += failed
                 verdict["skipped"] += skipped
+                if d >= _recent_cutoff():
+                    verdict["recent_rows"] += total
+                    verdict["recent_sent"] += sent
+                    verdict["recent_failed"] += failed
+                    verdict["recent_skipped"] += skipped
 
         last_sent = s.execute(text(
             "SELECT max(created_at AT TIME ZONE 'Africa/Johannesburg') FROM core.notification "
@@ -264,28 +322,54 @@ def section_ledger(days):
     return verdict
 
 
-def print_verdict(enabled, v):
-    """Say, in one line, which of the three distinct faults this is - they need different fixes."""
+def print_verdict(enabled, v, dead_key=False, test_sent=None):
+    """Say, in one line, which of the three distinct faults this is - they need different fixes.
+
+    Ordered by how decisive the evidence is: a real send that SUCCEEDED settles the question
+    outright, whichever way the history reads, because the history includes the failures from
+    before the fix. Only then does the ledger get a say, and only its RECENT slice."""
     print("\nVERDICT")
     print("-" * 78)
+    if test_sent is True:
+        print("   SENDING WORKS. A real email was accepted by SES just now, which settles it -")
+        print("   any failures listed above are HISTORY, from before the fix. Confirm the test")
+        print("   message actually arrived: accepted by SES is not the same as delivered to an")
+        print("   inbox, and only the inbox can tell you about spam placement.")
+        return
+    if test_sent is False:
+        print("   SENDING IS BROKEN. A real send was attempted and refused - the traceback in")
+        print("   section D names the exact cause, and section B says whether the key is dead.")
+        return
+    if dead_key:
+        print("   THE KEY IS DEAD. AWS rejected the credential itself (not a permission), so")
+        print("   nothing can send. Fix = a working key in SES_AWS_ACCESS_KEY_ID /")
+        print("   SES_AWS_SECRET_ACCESS_KEY, then re-run with --to to prove it.")
+        return
     if v is None:
         print("   No ledger read, so this is a partial answer: see sections A and B.")
         return
+    # Judge on the recent slice; fall back to the window only when there is no recent traffic.
+    recent = v.get("recent_rows") or 0
+    sent = v.get("recent_sent") if recent else v.get("sent")
+    failed = v.get("recent_failed") if recent else v.get("failed")
+    skipped = v.get("recent_skipped") if recent else v.get("skipped")
+    if recent:
+        print("   (judged on the last two days - earlier rows are timeline, not current state)")
     if not v.get("rows"):
         print("   Nothing to send in the window. Not an email fault - check that bookings are")
         print("   actually being made, then re-run over a longer --days.")
-    elif v.get("sent") and not (v.get("failed") or v.get("skipped")):
+    elif sent and not (failed or skipped):
         print("   SES ACCEPTED EVERY SEND. The platform's side is healthy, so if members are")
         print("   still not receiving mail this is a DELIVERABILITY problem, not a sending one:")
         print("   the mail is landing in spam or being rejected by the receiving server. Check")
         print("   SPF/DKIM/DMARC on the SENDING domain (section A's From address) and the DMARC")
         print("   aggregate reports - NOT this codebase.")
-    elif v.get("failed"):
+    elif failed:
         print("   SES REFUSED our sends. The credentials reached AWS and were rejected, or the")
-        print("   identity/permission is gone. Section B names the exact reason; a rotated or")
-        print("   deleted IAM key is the usual one. Fix = put a working key in this service's")
+        print("   identity/permission is gone. Re-run with --to for the exact cause; a rotated")
+        print("   or deleted IAM key is the usual one. Fix = put a working key in this service's")
         print("   SES_AWS_ACCESS_KEY_ID / SES_AWS_SECRET_ACCESS_KEY, then re-run with --to.")
-    elif v.get("skipped") and not enabled:
+    elif skipped and not enabled:
         print("   WE NEVER TRIED. ses.enabled() is False, so no email was attempted at all - a")
         print("   sender or the AWS credentials are missing from this service's environment.")
         print("   Fix = set them (section A lists which are unset), then re-run with --to.")
@@ -309,7 +393,7 @@ def main():
     print("=" * 78)
 
     enabled, sender = section_config()
-    section_aws(sender)
+    dead_key = section_aws(sender)
 
     v = None
     if not args.no_db:
@@ -320,8 +404,10 @@ def main():
                 print("\nC. DELIVERY LEDGER - could not read: %s" % _mask(e))
         else:
             print("\nC. DELIVERY LEDGER - skipped: no DATABASE_URL (run this on the Render shell).")
-    print_verdict(enabled, v)
 
+    # The test send runs BEFORE the verdict, because a send that succeeds outranks every other
+    # signal here - including a ledger full of failures from before the fix landed.
+    test_sent = None
     if args.to:
         import logging
         from marketing_crm.email import ses
@@ -337,6 +423,9 @@ def main():
         print("   send_email returned: %s" % ok)
         if not ok:
             print("   The exact cause is in the 'ses: send_email failed' traceback above.")
+        test_sent = bool(ok)
+
+    print_verdict(enabled, v, dead_key=dead_key, test_sent=test_sent)
 
     print("\n" + "=" * 78)
     print("Nothing was written to the database.\n")
