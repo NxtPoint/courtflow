@@ -231,6 +231,27 @@ def _t_statement_ready(ctx):
     return ("Your statement is ready", body, "/portal")
 
 
+def _t_coach_statement_ready(ctx):
+    """THE COACH'S OWN month-end statement — who they coached, what was billed, what they earned.
+
+    Why this exists rather than BCC'ing a coach on the client invoices they appear in: a month-end
+    invoice is ONE consolidated document per client covering court hire, membership, packs and
+    lessons from SEVERAL coaches. There is no single "the coach" to copy, and whoever was copied
+    would see another coach's rates and that client's whole financial position. So each coach gets
+    their own addressed email about their own work — the same rule that already governs the
+    lesson/class BCC (`coach ONLY on his own`), applied to the month.
+    """
+    month = _g(ctx, "month") or "last month"
+    n = int(_g(ctx, "client_count") or 0)
+    billed = _money(_g(ctx, "billed_minor"), _g(ctx, "currency_code", "currency"))
+    body = ("Your statement for %s is ready. It shows every client you coached, what each was "
+            "billed and what you earned." % month)
+    if n:
+        body += (" %d client%s%s." % (n, "" if n == 1 else "s",
+                                      (", %s billed" % billed) if billed else ""))
+    return ("Your %s coaching statement" % month, body, "/coach")
+
+
 def _t_invoice_paid(ctx):
     """ONE receipt for ONE payment against an invoice, however many lines it settled.
 
@@ -408,6 +429,9 @@ KIND_MAP = {
     "statement_ready":       _t_statement_ready,         # month-end: balance reminder → pay online
     "invoice_issued":        _t_invoice_issued,          # issued invoice DOCUMENT (summary + PDF + pay-online)
     "invoice_paid":          _t_invoice_paid,            # ONE receipt for a batch settlement
+    # The coach's OWN month-end statement (→ coach). Never a copy of a client's invoice: that
+    # document spans several coaches and the client's whole account. See _t_coach_statement_ready.
+    "coach_statement_ready": _t_coach_statement_ready,
     "lesson_booked":         _t_lesson_booked,           # THE coach's notification (→ coach)
     "class_booked":          _t_class_booked,            # THE coach's notification for a class (→ coach)
     # Booking/money lifecycle — these WERE emitted but silent (no map entry = no email/inbox).
@@ -489,6 +513,16 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
         except Exception:
             invoice_doc = None
 
+    # The coach's own month block (their clients + what each was billed). Loaded like the others,
+    # and like the others it degrades to the plain body rather than blocking the sweep.
+    coach_doc = None
+    if kind == "coach_statement_ready":
+        try:
+            from marketing_crm.email import coach_statement_detail
+            coach_doc = coach_statement_detail.load(session, club_id, ctx or {})
+        except Exception:
+            coach_doc = None
+
     # A payment that is one line of a BATCH (an invoice settled by EFT/cash) gets no notification of
     # its own — billing.invoicing.mark_invoice_paid sends ONE invoice_paid receipt naming every line.
     # Suppressed here rather than at the producer so the EVENT still reaches usage_event, Klaviyo and
@@ -533,7 +567,8 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
 
     status = _try_email(recipient.get("email"), title, body, recipient.get("name"),
                         from_name=ident.get("from_name"), reply_to=ident.get("reply_to"),
-                        bcc=bcc, kind=kind, ctx=ctx, detail=detail, invoice_doc=invoice_doc)
+                        bcc=bcc, kind=kind, ctx=ctx, detail=detail, invoice_doc=invoice_doc,
+                        coach_doc=coach_doc)
     if status and status != "skipped" and notif_id:
         try:
             notif_repo.set_email_status(session, notification_id=notif_id, email_status=status)
@@ -576,7 +611,7 @@ def _club_identity(session, club_id):
 
 
 def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, bcc=None,
-               kind=None, ctx=None, detail=None, invoice_doc=None):
+               kind=None, ctx=None, detail=None, invoice_doc=None, coach_doc=None):
     """Send a transactional email via SES: HTML + plain-text, the club's From-name + Reply-To, and a
     calendar (.ics) attachment for booking-type events. Returns 'sent'|'failed'|'skipped'. With no
     AWS/SES creds → 'skipped' (a clean no-op), so the engine is fully usable with NO keys. NEVER raises.
@@ -601,6 +636,14 @@ def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, 
             text_body = "%s%s\n\n%s\n\n%s" % (greeting, intro, invoice_detail.text_block(invoice_doc), sig)
             inner = ("<p style=\"margin:0 0 4px\">%s%s</p>%s"
                      % (html_greeting, ses._esc(intro), invoice_detail.html_block(invoice_doc)))
+            html_body = ses.html_wrap(title, inner, footer=sig)
+        elif coach_doc:
+            # The coach's own month: their clients + the summary, in the same green shell.
+            from marketing_crm.email import coach_statement_detail
+            text_body = "%s%s\n\n%s\n\n%s" % (greeting, intro,
+                                              coach_statement_detail.text_block(coach_doc), sig)
+            inner = ("<p style=\"margin:0 0 4px\">%s%s</p>%s"
+                     % (html_greeting, ses._esc(intro), coach_statement_detail.html_block(coach_doc)))
             html_body = ses.html_wrap(title, inner, footer=sig)
         elif detail:
             text_body = "%s%s\n\n%s\n\n%s" % (greeting, intro, booking_detail.text_block(detail), sig)

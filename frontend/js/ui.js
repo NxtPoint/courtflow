@@ -88,9 +88,52 @@
     setTimeout(function () { t.classList.add("cf-toast-out"); }, 3200);
     setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 3600);
   }
+  // Server error CODES that must never reach a human as-is. An API error body carries a machine
+  // code (AMOUNT_MISMATCH) plus the numbers that explain it, and errMsg used to toast the bare
+  // code — so recording R550 against a R330 order flashed the word "AMOUNT_MISMATCH" and the
+  // operator reasonably read it as a glitch rather than "you typed the wrong amount". The money
+  // was never taken, the debt stayed open, and it was found days later on a client's record.
+  // Each entry turns the code back into the sentence the server actually meant, using the body's
+  // own figures where it has them.
+  function _explainErr(b) {
+    var money = function (m) { return "R" + (Math.round(m || 0) / 100).toFixed(2); };
+    switch (b.error) {
+      case "AMOUNT_MISMATCH":
+        return "This charge is " + money(b.expected_minor) + ", and you entered "
+          + money(b.got_minor) + ". A desk payment has to settle one charge in full — enter "
+          + money(b.expected_minor) + ", or use Pay all to settle several at once.";
+      case "ORDER_NOT_OWED":
+        return "Nothing is owed on this charge" + (b.status ? " (it is already " + b.status + ")" : "")
+          + ", so there is nothing to record.";
+      case "ORDER_NOT_FOUND":
+        return "That charge no longer exists — reload the page and try again.";
+      case "COACH_REQUIRED":
+        return "That coach is not free at this time.";
+      case "NO_COURT_AVAILABLE":
+        return "No court is free at this time.";
+      case "COURT_NOT_AVAILABLE":
+        return "That court is already booked at this time.";
+      case "SLOT_TAKEN":
+        return "That slot has just been taken.";
+      case "COURT_SERVICE_CHANGED":
+        return "That court belongs to a different court service, so the price would change. Move it to a court of the same type.";
+      case "COURT_NOT_COVERED":
+        return "The member's membership does not cover that court, so the booking would no longer be free.";
+      case "COURT_MOVE_SINGLE_ONLY":
+        return "A court can only be changed on a single booking, not on a whole repeating series.";
+      case "SPLIT_LOCKED":
+        return "This game's price is already fixed, so a seat cannot be added now.";
+      default:
+        return null;
+    }
+  }
+
   function errMsg(e) {
     if (!e) return "Something went wrong.";
-    if (e.body && (e.body.message || e.body.error)) return e.body.message || e.body.error;
+    if (e.body) {
+      if (e.body.message) return e.body.message;
+      if (e.body.error) return _explainErr(e.body) || e.body.error;
+    }
     return e.message || "Something went wrong.";
   }
 

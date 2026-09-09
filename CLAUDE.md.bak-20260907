@@ -2,45 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## How to talk to Tomo (read this first)
-
-Tomo is the owner/operator, not a full-time engineer. This section outranks every
-formatting habit further down this file.
-
-**Every reply.** Lead with the answer in 1-2 plain sentences, then the next action, then
-STOP and offer the detail. No preamble, no restating the question. Long replies bury the
-answer and he stops reading.
-
-**Jargon.** Keep it out of the opening lines. If a term is unavoidable, define it in half a
-sentence the first time you use it ("SERVFAIL - the DNS server refused to answer"). Depth is
-welcome once he asks for it.
-
-**Say what it means, not just what it is.** Name the part of the product affected and the
-consequence for a customer or for the business, before you name the file, function or library.
-
-**Decisions - the important one.** Never hand him a menu of technical options. When you need
-a call, give him, in this order:
-1. the decision in one plain sentence, framed as a product or business choice, not a technical one;
-2. your recommendation, and why, in one sentence;
-3. the trade-off - what he gives up by taking it;
-4. what it costs to undo if it turns out wrong.
-If he cannot make the call without first understanding an internal, that means it has not been
-framed as a business choice yet. Reframe it; do not explain the internal and ask again.
-
-**Do not ask at all when you do not have to.** Do the obvious thing and say what you did.
-Interrupt him only for choices that are expensive, hard to reverse, or that change what the
-product does for a customer. Batch everything else to the end of the task.
-
-**Exceptions that still lead, however long they run:** a warning that stops him doing something
-harmful, a correction of something you got wrong, or a risk he is walking into. Brevity never
-means withholding those.
-
-**Format.** Short lists and small tables read well; walls of prose do not. Never manufacture
-confidence - "I don't know, and here is how we would find out" is a good answer.
-
-*(Set 2026-09-07. Supersedes any earlier note on how to answer Tomo.)*
-
-
 This repo is the **multi-tenant tennis club management platform** (working name "CourtFlow").
 NextPoint Tennis is club #1, migrating off Wix. The platform is **feature-complete for launch and LIVE
 in production at `https://nextpointtennis.com`** — what remains is config + backlog, not a build phase.
@@ -82,11 +43,11 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 690 / billing 728 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 690 / billing 721 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (92/99/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (92/98/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **When the numbers move, run `python -m scripts.audit_docs` and update
    EVERY doc it names** — the baseline is repeated in ~7 files and the gate fails unless they all
@@ -796,6 +757,14 @@ money decision quietly defaulted instead of being made.*
   details → EFT instructions on invoices); invoice PDF email attachment on (above).
 - Volatile env/infra values: `docs/specs/ENV-STATUS.md`. **Session handover** (what to read, how we
   work, the gates): `BUILD_PROMPT.md` — rewritten 2026-08-02 from the old build-kickoff prompt.
+
+## How to answer Tomo (set 2026-08-25)
+**Lead with the answer in 1–2 plain sentences, then the next action, then STOP and offer the detail.**
+He is the owner/operator, not a full-time engineer — he needs *what happened, what it means, what to do
+next*. Long technical replies bury that and he stops reading. Keep `SERVFAIL`/`apex`/`DS record`-grade
+jargon out of the opening lines; it is welcome once he asks. **Exceptions that still lead:** a warning
+that stops him doing something harmful, a correction of something you got wrong, or a risk he is walking
+into — brevity never means withholding those. Tables and short lists read well; walls of prose do not.
 
 ## Ground rules
 - **Multi-tenant from day one** (the Iron rule, above).

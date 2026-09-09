@@ -459,6 +459,20 @@ def cron_month_end():
                 stats["failed"] += 1
                 log.warning("month-end failed for club=%s user=%s", cid, tgt["user_id"],
                             exc_info=True)
+        # Phase 4 — each COACH's own statement, ONLY once every client in this club is swept.
+        # The figures it quotes (collected, still owed) are not final until the month's invoices
+        # exist, so sending it mid-sweep would email a coach numbers that change an hour later.
+        # Its own transaction, like phase 3, and idempotent per (club, coach, period) — so the
+        # pass that finally completes the club is the one that sends, however many it took.
+        if not timed_out:
+            try:
+                with session_scope() as s:
+                    stats["coach_statements"] = comm.month_end_coach_statements(
+                        s, club_id=cid, period=stats["period"])
+            except Exception:
+                # Never a sweep failure: the invoices are already out, which is the job that
+                # matters. A missed coach statement is re-sent by the next run.
+                log.warning("month-end: coach statements failed for club=%s", cid, exc_info=True)
         results.append(stats)
 
     if timed_out:

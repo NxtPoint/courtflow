@@ -11,7 +11,7 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 690 / billing 721 / statement 64** (92 / 98 / 12 `sc_*` functions).
+  **booking 690 / billing 728 / statement 64** (92 / 99 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
@@ -113,7 +113,7 @@ nudges an unpaid seat ONCE however often it runs, releases it only when the pay-
 
 ---
 
-## `test_billing_scenarios` — money (92 scenarios)
+## `test_billing_scenarios` — money (93 scenarios)
 
 Settlement modes, commission, tokens, membership (offline + per-tier), refunds + clawback, dispute
 routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards, **wallet adjust/expire**,
@@ -121,7 +121,7 @@ general order discount, 7-day-trial grant guard, lesson + class pack coach-linki
 commission parity, per-service packs (product-aware draw), desk-payment amount guard, partial-refund
 state, coach payout nets the ledger, month-end sweep idempotent, pack service-isolation (assign +
 buy-wizard coach/product scoping), admin ad-hoc invoice (service×qty + fee − discount, tamper-proof),
-client activity-summary (counts / minutes / by-service / by-week).
+client activity-summary (counts / minutes / by-service / by-week), **the coach month-end statement email** (`sc_the_coach_statement_email_is_the_coachs_own_month` — a coach is never copied on a CLIENT's consolidated invoice, which spans several coaches and that client's whole account; they get their OWN month instead. Pins the three properties that make it safe: no other coach's client can appear on the block, a coach with no month is not emailed at all, and it is idempotent per (club, coach, period) because the sweep is resumable).
 
 A pack respects its **SERVICE's** payment rule (a card-only pack is card-only — no at-court fallback
 that grants it unpaid). **PAID PACK NEVER BYPASSED** — an owed-mode booking auto-draws a matching pack.

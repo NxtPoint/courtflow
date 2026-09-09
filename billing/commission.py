@@ -1393,6 +1393,77 @@ def month_end_client(session, *, club_id, period, user_id, owed, cur, reissue=Fa
     return "notified"
 
 
+# The idempotency key for a COACH notice reuses billing.month_end_notice — same table, same
+# (club, user, period) primary key — with the period NAMESPACED. A coach is also a user, and a
+# coach who owes the club money as a CLIENT already holds a row for the bare period; sharing the
+# key would make one notice silently suppress the other. Namespacing costs a suffix and needs no
+# DDL on a live table, which a wider primary key would.
+_COACH_NOTICE_SUFFIX = "#coach"
+
+
+def month_end_coach_statements(session, *, club_id, period) -> int:
+    """Phase 4 — email each COACH their own statement for the period. Returns the number sent.
+
+    Runs AFTER every client has been swept, because the numbers it reports (collected, still owed)
+    are only final once the month's invoices exist. Idempotent per (club, coach, period): a re-run,
+    or the resumable sweep coming back for a second pass, notifies nobody twice.
+
+    THIS IS NOT A COPY OF A CLIENT'S INVOICE, and must never become one. A month-end invoice is one
+    consolidated document per client spanning court hire, membership, packs and SEVERAL coaches'
+    lessons; copying a coach on it would hand them another coach's rates and that client's whole
+    financial position. Each coach gets their own month instead — which is more of what the copy was
+    wanted for, not less.
+
+    Never raises: one coach's failure must not cost the sweep, which has already issued invoices."""
+    sent = 0
+    try:
+        coaches = session.execute(
+            text("SELECT DISTINCT cs.coach_user_id FROM billing.commission_split cs "
+                 "WHERE cs.club_id = :c AND cs.coach_user_id IS NOT NULL "
+                 "  AND to_char(cs.occurred_at,'YYYY-MM') = :ym "
+                 "UNION "
+                 "SELECT DISTINCT a.coach_user_id FROM billing.coach_arrears a "
+                 "WHERE a.club_id = :c AND a.coach_user_id IS NOT NULL AND a.status = 'owed'"),
+            {"c": club_id, "ym": period},
+        ).scalars().all()
+    except Exception:
+        log.info("month-end: could not list coaches for %s", period, exc_info=True)
+        return 0
+
+    for coach_user_id in coaches:
+        try:
+            fresh = session.execute(
+                text("INSERT INTO billing.month_end_notice (club_id, user_id, period_label, owed_minor) "
+                     "VALUES (:c, :u, :p, 0) "
+                     "ON CONFLICT (club_id, user_id, period_label) DO NOTHING RETURNING user_id"),
+                {"c": club_id, "u": coach_user_id, "p": period + _COACH_NOTICE_SUFFIX},
+            ).first()
+            if not fresh:
+                continue
+            # A coach with no clients, no money and no rent gets NO email. "You earned R0.00",
+            # monthly, is not a statement — it is a reason to stop reading them.
+            from marketing_crm.email import coach_statement_detail
+            doc = coach_statement_detail.load(session, club_id,
+                                              {"coach_user_id": str(coach_user_id), "month": period})
+            if not coach_statement_detail.has_content(doc):
+                continue
+            totals = (doc.get("totals") or {})
+            from marketing_crm.tracking import emit
+            emit("coach_statement_ready", {
+                "club_id": str(club_id), "user_id": str(coach_user_id),
+                "coach_user_id": str(coach_user_id), "month": period,
+                "client_count": len(doc.get("clients") or []),
+                "billed_minor": int(totals.get("billed_minor") or 0),
+                "earned_minor": int(totals.get("paid_minor") or 0),
+                "currency": doc.get("currency") or "ZAR",
+            })
+            sent += 1
+        except Exception:
+            log.warning("month-end: coach statement failed club=%s coach=%s",
+                        club_id, coach_user_id, exc_info=True)
+    return sent
+
+
 def run_month_end(session, *, club_id, period_label=None, reissue=False) -> Dict[str, Any]:
     """The month-end sweep (C3, OPS-triggered — no always-on cron, fired by the keep-warm Action):
     (1) accrue coach arrears + rent for the period so the coach tabs are current, then (2) notify
@@ -1417,8 +1488,10 @@ def run_month_end(session, *, club_id, period_label=None, reissue=False) -> Dict
             already += 1
         else:
             notified += 1
+    coach_statements = month_end_coach_statements(session, club_id=club_id, period=period)
     return {"period": period, "clients_owing": len(rows), "notified": notified,
-            "already": already, "rent_charges": rent_charges}
+            "already": already, "rent_charges": rent_charges,
+            "coach_statements": coach_statements}
 
 
 def settlement_overview(session, *, club_id) -> Dict[str, Any]:

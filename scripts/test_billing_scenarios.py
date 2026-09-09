@@ -3818,6 +3818,80 @@ def sc_ledger_direction_follows_who_holds_the_cash(s, fx):
           "balance moved twice")
 
 
+def sc_the_coach_statement_email_is_the_coachs_own_month(s, fx):
+    """A COACH IS NEVER COPIED ON A CLIENT'S INVOICE - THEY GET THEIR OWN MONTH.
+
+    The ask was "copy the coach on the monthly invoices so they can see who is billed and at what
+    amount". A month-end invoice is ONE consolidated document per CLIENT covering court hire,
+    membership, packs and lessons from SEVERAL coaches, so there is no single "the coach" to copy
+    and whoever was copied would read another coach's rates and that client's whole financial
+    position. This pins the shape that replaced it, and the three properties that make it safe:
+
+      1. the block a coach receives is built from THEIR coach_user_id only, so another coach's
+         client cannot appear on it however the month is swept;
+      2. a coach with nothing in the month is NOT emailed - a monthly "you earned R0.00" is not a
+         statement, it is a reason to stop opening them;
+      3. it is idempotent per (club, coach, period), because the sweep is RESUMABLE and comes back
+         for a second pass - the run that finally completes the club must not re-send to everyone
+         the earlier passes already reached.
+
+    The money is not re-derived here: the block delegates wholly to `coach_statement`, so the email
+    and the coach's Money screen cannot drift apart. What is asserted is the ISOLATION and the
+    sending rules, which is where a leak or a duplicate would actually come from."""
+    print("\n# The coach statement email: their own month, once, and only if there is one")
+    from billing.commission import month_end_coach_statements
+    from marketing_crm.email import coach_statement_detail as CSD
+
+    ym = datetime.now(timezone.utc).strftime("%Y-%m")
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',20,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+
+    # One paid lesson for THIS coach, so there is a month to report.
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.member, role="member",
+                         booking_type="lesson", resource_id=fx.coach_res,
+                         coach_user_id=fx.coach_uid, starts_at=iso(at(fx, 9)),
+                         ends_at=iso(at(fx, 10)), settlement_mode="at_court")
+    oid = r["booking"]["order_id"]
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=oid,
+                          amount_minor=int(s.execute(text('SELECT amount_minor FROM billing."order" '
+                                                          'WHERE id=:o'), {"o": oid}).scalar()),
+                          provider="eft", provider_payment_id="EFT-COACH-1", user_id=fx.member)
+
+    doc = CSD.load(s, fx.club_id, {"coach_user_id": str(fx.coach_uid), "month": ym})
+    check("the coach has a month to report", CSD.has_content(doc), str(doc))
+    check("it names the coach's own client", any(c["client_name"] for c in doc["clients"]), str(doc))
+    # ISOLATION: every client row on this block must be a client THIS coach actually coached.
+    own = {str(x) for x in s.execute(
+        text("SELECT DISTINCT COALESCE(b.booked_by_user_id, o2.user_id) "
+             "FROM billing.commission_split cs "
+             "LEFT JOIN diary.booking b ON b.id = cs.booking_id "
+             "LEFT JOIN billing.order_line ol ON ol.id = cs.order_line_id "
+             'LEFT JOIN billing."order" o2 ON o2.id = ol.order_id '
+             "WHERE cs.club_id=:c AND cs.coach_user_id=:u AND cs.party_type='coach'"),
+        {"c": fx.club_id, "u": str(fx.coach_uid)}).scalars().all() if x}
+    on_block = {c["client_user_id"] for c in doc["clients"] if c["client_user_id"]}
+    check("no client appears who this coach did not coach", on_block <= own,
+          "block=%s own=%s" % (on_block, own))
+
+    # A coach with NOTHING gets no email at all.
+    empty = CSD.load(s, fx.club_id, {"coach_user_id": str(fx.member), "month": ym})
+    check("a coach with no month is not emailed", not CSD.has_content(empty), str(empty))
+
+    # IDEMPOTENCY: the resumable sweep runs this again, and it must send nobody twice.
+    first = month_end_coach_statements(s, club_id=fx.club_id, period=ym)
+    check("the first pass sends the coach their statement", first >= 1, str(first))
+    again = month_end_coach_statements(s, club_id=fx.club_id, period=ym)
+    check("a second pass sends nothing - the sweep is resumable", again == 0, str(again))
+
+    # The coach notice must NOT collide with the same person's CLIENT notice for the month.
+    rows = s.execute(text("SELECT period_label FROM billing.month_end_notice "
+                          "WHERE club_id=:c AND user_id=:u"),
+                     {"c": fx.club_id, "u": str(fx.coach_uid)}).scalars().all()
+    check("the coach notice is namespaced, so a client notice cannot suppress it",
+          any(str(x).endswith("#coach") for x in rows), str(rows))
+
+
 def sc_coach_settlement_statement(s, fx):
     """THE COACH'S STATEMENT MATH, and that it reconciles to the ledger.
 
@@ -5521,6 +5595,7 @@ SCENARIOS = [
     sc_settlement_says_what_the_money_was,
     sc_only_yoco_and_eft_reach_the_club,
     sc_coach_settlement_statement,
+    sc_the_coach_statement_email_is_the_coachs_own_month,
     sc_service_editor_child_ownership,
     sc_removed_variation_stays_removed,
     sc_confirmation_email_block,
