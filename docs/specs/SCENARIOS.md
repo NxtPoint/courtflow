@@ -11,13 +11,13 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 690 / billing 728 / statement 64** (92 / 99 / 12 `sc_*` functions).
+  **booking 700 / billing 728 / statement 64** (93 / 99 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
 ---
 
-## `test_booking_scenarios` — the diary (82 scenarios)
+## `test_booking_scenarios` — the diary (83 scenarios)
 
 Double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
 **court→service allocation** (per-service courts + pricing), **classes reserve N courts** (held +
@@ -147,7 +147,11 @@ court is PAYG (the booking still succeeds); equipment obeys its OWN `payment_mod
 booking when the resolved method is online (unpayable → refused); club-default caps reach EVERY
 membership incl. the price-less trial (and a NULL-cap tier no longer wipes a capped one); and a
 waitlist promotion into a card-only class is HELD pending payment with the confirmation deferred
-(never `class_enrolled` on an unpaid seat).
+(never `class_enrolled` on an unpaid seat); and **a class moves as a SERIES**
+(`sc_a_class_moves_as_a_series_not_one_week_at_a_time` — the regular time changes once instead of
+twelve times. Pins that later occurrences take the new TIME OF DAY and keep their own DATES (a term
+must not collapse onto one afternoon), that a session BEFORE the one moved is history and untouched,
+that rosters survive, and that a single-occurrence move still moves only one).
 
 ---
 

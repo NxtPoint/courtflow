@@ -358,7 +358,7 @@ operating guide; **this folder is the detail.**
 > re-offers the member's own unpaid online order instead. Guarded by
 > `sc_buy_click_never_mints_a_duplicate_debt`.
 
-> **2026-08-12 — the three engine-but-no-UI community surfaces, resolved: booking 690 / billing 728 /
+> **2026-08-12 — the three engine-but-no-UI community surfaces, resolved: booking 700 / billing 728 /
 > statement 64.** Half-built is the worst of the three states, so each was wired or removed — but the
 > decision was not "which is least work", it was **"which one is load-bearing"**.
 > **`play-again` nearly got deleted and that would have been the mistake.** Documented as "10 of the
@@ -396,7 +396,7 @@ operating guide; **this folder is the detail.**
 > entry, the level-quiz save, invite acceptance, `join.html`) is still unproven outside the harness,
 > and the two screens added on 2026-08-12 join that list. `seat_rule_enforced` remains OFF.
 
-> **2026-08-15/22 — the money rules the model could not express: booking 690 / billing 728 / statement 64.**
+> **2026-08-15/22 — the money rules the model could not express: booking 700 / billing 728 / statement 64.**
 > Three rules, all found by reading LIVE config and screens rather than code.
 > **(1) A SHARE IS FOR SHARING.** Every seat was priced the same way, so switching the money on would
 > have dropped a PAYG member booking a 60-min court from R150 to R80 — `seat_a_new_booking` linked the

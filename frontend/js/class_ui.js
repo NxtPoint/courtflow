@@ -388,13 +388,41 @@
             Math.round((new Date(body.ends_at) - new Date(body.starts_at)) / 60000);
         }
         if (body.court_resource_id) payload.court_resource_ids = [body.court_resource_id];
-        return api.rescheduleClassSession(session.session_id, payload);
+        // A CLASS IS USUALLY A TERM, NOT AN EVENING. Moving one occurrence is right for "next
+        // Tuesday only" and wrong for the thing coaches actually want — the class runs at 17:15
+        // now — which used to mean repeating this dialog once per week. Half-done, that leaves a
+        // list reading 17:00, 17:00, 17:15, 17:15, which is how it was reported.
+        if (seriesBox && seriesBox.checked) payload.scope = "series";
+        return api.rescheduleClassSession(session.session_id, payload).then(function (r) {
+          // Partial by design: one busy court weeks out must not stop the rest moving. Say which
+          // ones did not take, or the coach is left believing the whole term shifted.
+          if (r && r.failed_count) {
+            UI.toast("Moved " + r.moved + ", but " + r.failed_count
+                     + " could not move (court or coach busy). Check the list.", "warn");
+          } else if (r && r.moved > 1) {
+            UI.toast("Moved " + r.moved + " sessions.", "info");
+          }
+          return r;
+        });
       },
       onDone: function () { if (typeof after === "function") after(); },
     });
-    if (multi && m && m.body) {
-      m.body.appendChild(el("p", { class: "cf-muted cf-sm",
-        text: "This class holds " + courts.length + " courts — they move with it." }));
+    var seriesBox = null;
+    if (m && m.body) {
+      // The shared modal appends its button row last, so anything added after it lands UNDER the
+      // buttons. Insert above that row instead — a choice that changes twelve weeks of a term must
+      // be read before the button, not after it.
+      var btnRow = m.body.lastChild;
+      var add = function (node) { m.body.insertBefore(node, btnRow); };
+      seriesBox = el("input", { type: "checkbox" });
+      add(el("label", { class: "cf-row", style: "gap:8px;align-items:center;margin-top:4px" },
+        [seriesBox, el("span", { text: "Apply to this and all later sessions of this class" })]));
+      add(el("p", { class: "cf-muted cf-sm", style: "margin:2px 0 8px",
+        text: "Later sessions keep their own dates and move to the new time." }));
+      if (multi) {
+        add(el("p", { class: "cf-muted cf-sm", style: "margin:0 0 8px",
+          text: "This class holds " + courts.length + " courts — they move with it." }));
+      }
     }
     return m;
   }

@@ -389,7 +389,12 @@ def patch_class_session(session_id):
         if not repo.owns_class_session(s, club_id=p.club_id, user_id=p.user_id,
                                        session_id=session_id):
             return jsonify(error="forbidden"), 403
-        res = classes_mod.reschedule_session(
+        # scope='series' moves this occurrence AND every later one to the new TIME OF DAY (each
+        # keeps its own date). Default stays 'this', so an existing caller is unaffected.
+        mover = (classes_mod.reschedule_series
+                 if str(b.get("scope") or "this").strip().lower() == "series"
+                 else classes_mod.reschedule_session)
+        res = mover(
             s, club_id=p.club_id, session_id=session_id,
             starts_at=b.get("starts_at"), duration_minutes=b.get("duration_minutes"),
             court_resource_ids=b.get("court_resource_ids"))

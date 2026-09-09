@@ -1075,6 +1075,81 @@ def _enrolled_n(s, sid):
                      {"cs": sid}).scalar()
 
 
+def sc_a_class_moves_as_a_series_not_one_week_at_a_time(s, fx):
+    """A CLASS IS A TERM, AND ITS REGULAR TIME CHANGES ONCE.
+
+    `reschedule_session` moves ONE occurrence, which is right for "next Tuesday only" and wrong for
+    what a coach actually asks for: the class runs at 15:00 now. Without a series move a twelve-week
+    term needed twelve moves, and a coach who did a few and stopped was left with a list reading
+    14:00, 14:00, 15:00, 15:00 - reported to us as "it doesn't update to the new time, and some
+    weeks say 17:15". The missing capability and the confusing symptom were the same bug.
+
+    Three properties are pinned, and each is a way this would go wrong:
+
+      1. THE SERIES TAKES THE TIME OF DAY, NOT THE DATE. Every later occurrence keeps its own date
+         and moves to the new local time. Get this wrong and a whole term collapses onto one
+         afternoon - on top of each other, on courts that cannot hold them.
+      2. IT DOES NOT REACH BACKWARDS. A session BEFORE the one being moved is history: it already
+         happened, people were charged for it, and re-timing it would rewrite the past.
+      3. SEATS SURVIVE. Enrolments follow their session; a series move is not a mass cancel.
+    """
+    print("\n# A class moves as a SERIES: the time of day changes, the dates do not")
+    court_a = fx.courts[0]
+    # Three weekly occurrences at 14:00, plus one BEFORE them that must not move.
+    days = [fx.target + timedelta(days=k) for k in (0, 7, 14)]
+    past = fx.target - timedelta(days=7)
+    C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                        dates=[d.isoformat() for d in ([past] + days)], start_time="14:00",
+                        duration_minutes=60, capacity=3, court_resource_ids=[court_a])
+
+    def sess_at(day, hour):
+        return s.execute(text("SELECT id FROM diary.class_session WHERE club_id=:c AND resource_id=:r "
+                              "AND (starts_at AT TIME ZONE 'Africa/Johannesburg')::date = :d "
+                              "AND EXTRACT(hour FROM starts_at AT TIME ZONE 'Africa/Johannesburg') = :h"),
+                         {"c": fx.club_id, "r": fx.class_res, "d": day, "h": hour}).scalar()
+
+    first = sess_at(days[0], 14)
+    check("three weekly sessions exist at 14:00", first is not None)
+    C.enrol(s, club_id=fx.club_id, class_session_id=first, user_id=fx.members[0])
+    seats_before = s.execute(text("SELECT count(*) FROM diary.enrolment WHERE class_session_id=:cs "
+                                  "AND status='enrolled'"), {"cs": first}).scalar()
+
+    res = C.reschedule_series(s, club_id=fx.club_id, session_id=str(first),
+                              starts_at=utc_iso(at(fx, 15)), duration_minutes=60,
+                              court_resource_ids=[court_a])
+    check("the series move succeeds", res.get("ok"), str(res))
+
+    # (1) each later occurrence keeps ITS OWN DATE and takes the new time.
+    moved_days = [d for d in days if sess_at(d, 15) is not None]
+    check("every occurrence in the series now runs at 15:00", len(moved_days) == 3,
+          "moved on %s of %s days" % (len(moved_days), len(days)))
+    still_14 = [d for d in days if sess_at(d, 14) is not None]
+    check("...and none is left behind at 14:00", not still_14, str(still_14))
+    check("the dates did NOT collapse onto one afternoon",
+          len({str(d) for d in moved_days}) == 3, str(moved_days))
+
+    # (2) the earlier session is history and must be untouched.
+    check("a session BEFORE the one moved is left alone", sess_at(past, 14) is not None)
+    check("...and did not move to 15:00", sess_at(past, 15) is None)
+
+    # (3) seats follow the session - a series move is not a mass cancel.
+    seats_after = s.execute(text("SELECT count(*) FROM diary.enrolment WHERE class_session_id=:cs "
+                                 "AND status='enrolled'"), {"cs": first}).scalar()
+    check("the roster survives the move", seats_after == seats_before,
+          "%s -> %s" % (seats_before, seats_after))
+
+    # A single-session move must still behave exactly as before (the default is unchanged).
+    one = sess_at(days[2], 15)
+    # On ITS OWN date - at(fx, ...) is the first test day, and moving week three onto week one
+    # would be a different bug wearing this test's clothes.
+    d2 = days[2]
+    C.reschedule_session(s, club_id=fx.club_id, session_id=str(one),
+                         starts_at=utc_iso(datetime(d2.year, d2.month, d2.day, 16, tzinfo=JHB)),
+                         duration_minutes=60, court_resource_ids=[court_a])
+    check("moving ONE occurrence still moves only that one", sess_at(d2, 16) is not None)
+    check("...and leaves its neighbours where the series put them", sess_at(days[1], 15) is not None)
+
+
 def sc_class_session_lifecycle(s, fx):
     """A class had only TWO verbs — schedule and cancel — and cancel didn't give the money back.
 
@@ -5051,6 +5126,7 @@ SCENARIOS = [
     sc_slot_granularity,
     sc_class_waitlist,
     sc_class_session_lifecycle,
+    sc_a_class_moves_as_a_series_not_one_week_at_a_time,
     sc_class_price_survives_rename,
     sc_class_list_shows_renamed_service,
     sc_class_name_cannot_break_the_class,

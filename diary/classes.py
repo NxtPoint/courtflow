@@ -1880,6 +1880,78 @@ def reschedule_session(session, *, club_id, session_id, starts_at=None, duration
             "courts": [c for c, _ in reserved], "notified": len(players)}
 
 
+def reschedule_series(session, *, club_id, session_id, starts_at=None, duration_minutes=None,
+                      coach_user_id=None, court_resource_ids=None):
+    """MOVE THIS OCCURRENCE AND EVERY FUTURE ONE — the class's regular time, changed once.
+
+    `reschedule_session` moves a single occurrence, which is right for "next Tuesday only" and wrong
+    for the thing coaches actually ask for: the class now runs at 17:15, from here on. Without this
+    a term of twelve sessions needed twelve moves, and a coach who did three and stopped was left
+    with a list reading 17:00, 17:00, 17:15, 17:15, 17:15, 17:00 — which is exactly how it was
+    reported ("doesn't update to new time, and some weeks say 17:15"). The capability gap and the
+    confusing symptom are the same bug.
+
+    THE SERIES TAKES THE TIME OF DAY, NOT THE DATE. Each future occurrence keeps its own date and
+    moves to the new local time — a term does not collapse onto one afternoon. The club's timezone
+    decides what "17:15" means, so a series set from a phone in another country still lands on the
+    club's clock.
+
+    Every occurrence goes through `reschedule_session`, so nothing here re-implements a guard: the
+    coach-free check, the court re-reservation, the same-slot clash, the GiST exclusion and the
+    `class_rescheduled` fan-out all apply per session exactly as they do for a single move.
+
+    IT IS DELIBERATELY PARTIAL-TOLERANT AND SAYS SO. One occupied court three weeks out must not
+    stop the other nine sessions moving — a series move that is all-or-nothing fails whenever the
+    diary is busy, which is always. Each failure is returned with its date and reason so the coach
+    can fix those by hand instead of wondering which ones took."""
+    cs = _session_row(session, club_id, session_id)
+    if not cs:
+        return _err("SESSION_NOT_FOUND", 404)
+    new_first = _parse_dt(starts_at) if starts_at else cs["starts_at"]
+    if new_first is None:
+        return _err("INVALID_START", 400)
+
+    tz = _club_tz(session, club_id)
+    local = new_first.astimezone(tz)
+    # The rest of the series follows THIS occurrence, so it moves first and its result decides
+    # whether the run is worth continuing at all.
+    first = reschedule_session(session, club_id=club_id, session_id=session_id,
+                               starts_at=starts_at, duration_minutes=duration_minutes,
+                               coach_user_id=coach_user_id,
+                               court_resource_ids=court_resource_ids)
+    if not first.get("ok"):
+        return first
+
+    later = session.execute(
+        text("SELECT id, starts_at FROM diary.class_session "
+             "WHERE club_id = :c AND resource_id = :r AND status = 'scheduled' "
+             "  AND starts_at > :after AND id <> :id ORDER BY starts_at"),
+        {"c": club_id, "r": cs["resource_id"], "after": cs["starts_at"], "id": session_id},
+    ).mappings().all()
+
+    moved = 1
+    failed = []
+    for row in later:
+        # Keep the occurrence's own DATE (in club time) and take the new time of day.
+        d = row["starts_at"].astimezone(tz)
+        target = datetime(d.year, d.month, d.day, local.hour, local.minute, local.second, tzinfo=tz)
+        if target == row["starts_at"]:
+            continue                                    # already at the new time — nothing to do
+        res = reschedule_session(session, club_id=club_id, session_id=str(row["id"]),
+                                 starts_at=target.isoformat(),
+                                 duration_minutes=duration_minutes,
+                                 coach_user_id=coach_user_id,
+                                 court_resource_ids=court_resource_ids)
+        if res.get("ok"):
+            moved += 1
+        else:
+            failed.append({"session_id": str(row["id"]),
+                           "starts_at": row["starts_at"].isoformat(),
+                           "error": res.get("error") or "FAILED"})
+    return {"ok": True, "session": first.get("session"), "moved": moved,
+            "failed": failed, "failed_count": len(failed)}
+
+
 def session_owner_coach(session, *, club_id, session_id):
     """coach_user_id (str) of a session's class, or None — for coach ownership gating."""
     cs = _session_row(session, club_id, session_id)
