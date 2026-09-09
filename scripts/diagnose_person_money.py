@@ -300,9 +300,12 @@ def section_shared_bookings(s, club_id, user_id, month):
         tot = sum(int(o["amount_minor"] or 0) for o in phantom)
         print("\n   PHANTOM DEBT: %s across %d order(s). The money is banked and the coach has"
               % (_r(tot), len(phantom)))
-        print("   accrued on the PAID row; these open rows are duplicates. Voiding them is the fix -")
-        print("   `scripts/void_orphaned_orders.py` exists for exactly this, and voiding an unpaid")
-        print("   duplicate moves no money and touches no commission.")
+        print("   accrued on the PAID row; these open rows LOOK like duplicates. Confirm how many")
+        print("   people actually PLAYED before clearing any of them - two orders at one price is a")
+        print("   duplicate when one person played and a correct SQUAD bill when two did.")
+        print("   `python -m scripts.audit_duplicate_heads` lists every booking in this shape and")
+        print("   voids only ids you name. NOT void_orphaned_orders: that one requires every booking")
+        print("   on the order to be cancelled, so it can never touch a completed lesson.")
 
 
 def section_commission(s, club_id, user_id, month):
