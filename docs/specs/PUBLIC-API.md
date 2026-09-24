@@ -91,6 +91,13 @@ booking by staff, statements, the admin console.
   gains a check that every `/api/v1/` route is in it and vice versa.
 - Rate limiting per user/IP on v1 (none exists today).
 
+## Progress
+- **Step 2 done (2026-09-24):** member court bookings now enforce opening hours, time-off and the
+  length menu on the server; `resource_id="any"` is picked server-side; court playmates are no
+  longer dropped by the route (`sc_a_member_court_booking_obeys_the_rules_the_screen_used_to_enforce`).
+  The playmates fix is in the ROUTE, so it is not yet under a scenario — the HTTP-level harness (step 3)
+  must cover it first. Still open from the gaps below: `billing/config`'s query-string club.
+
 ## Gaps found while mapping today's endpoints (fix as part of this)
 - **Named playmates on a COURT booking are dropped by the server** — `diary/routes.py` only reads
   `extra_clients` for lessons, while `create_booking` would seat them. Only reachable when the

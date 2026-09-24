@@ -131,6 +131,17 @@ def setup(s):
              "VALUES (:c, :p, 'any', 15000, 'ZAR', 60, true)"),
         {"c": fx.club_id, "p": court_prod},
     )
+    # The other lengths the scenarios book, OFFERED at the same R150 the 60-min row used to bill them
+    # through duration ranking — so every amount asserted below is unchanged. A member may only book a
+    # length the club actually sells (_self_booked_court_refusal); before that rule these lengths were
+    # simply priced off the nearest row.
+    for _mins in (30, 45, 90, 120, 150, 180):
+        s.execute(
+            text("INSERT INTO billing.price (club_id, product_id, audience, amount_minor, "
+                 "currency_code, duration_minutes, active) "
+                 "VALUES (:c, :p, 'any', 15000, 'ZAR', :m, true)"),
+            {"c": fx.club_id, "p": court_prod, "m": _mins},
+        )
     lesson_prod = s.execute(
         text("INSERT INTO billing.product (club_id, kind, name, active) "
              "VALUES (:c, 'lesson', 'Private lesson', true) RETURNING id"),
@@ -177,6 +188,19 @@ def setup(s):
 def at(fx, hour, minute=0):
     """A tz-aware JHB datetime on the test day."""
     return datetime(fx.target.year, fx.target.month, fx.target.day, hour, minute, tzinfo=JHB)
+
+
+def _open_all_courts(s, fx):
+    """Open every court of the scratch club 00:00-23:59, every day. The fixture publishes 08:00-18:00
+    on the test day only; a member may now only book a court inside its published hours
+    (diary.bookings._self_booked_court_refusal), so a scenario that is ABOUT something else but books
+    an evening game or a freshly created court calls this first. Rolled back with the scenario."""
+    for rid in s.execute(text("SELECT id FROM diary.resource WHERE club_id = :c AND kind = 'court'"),
+                         {"c": fx.club_id}).scalars().all():
+        for wd in range(7):
+            s.execute(text("INSERT INTO diary.availability_rule (club_id, resource_id, weekday, "
+                           "start_time, end_time, slot_minutes) VALUES (:c, :r, :w, '00:00', '23:59', 30)"),
+                      {"c": fx.club_id, "r": rid, "w": wd})
 
 
 def utc_iso(dt):
@@ -3183,6 +3207,7 @@ def sc_peak_survives_a_reschedule(s, fx):
     # dropping the cache reads whatever an earlier scenario resolved for this club.
     from diary import pricing as _P
     _P.clear_peak_cache(s)
+    _open_all_courts(s, fx)
 
     def book(court, hour, mins=60):
         st = at(fx, hour)
@@ -3307,6 +3332,7 @@ def sc_trial_obeys_the_same_court_rules_as_a_membership(s, fx):
                           ends_at=at(fx, 11), resource_id=clay_court) is False)
 
     # End to end: the trialist's clay booking is CHARGED, not blocked.
+    _open_all_courts(s, fx)
     r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=newu, role="member",
                          booking_type="court", resource_id=clay_court, product_id=str(clay),
                          settlement_mode="membership_covered",
@@ -3470,6 +3496,7 @@ def sc_equipment_is_scoped_to_its_court_service(s, fx):
           not s.execute(text("SELECT 1 FROM diary.booking WHERE club_id=:c AND resource_id=:r "
                              "AND starts_at=:sa AND status IN ('held','confirmed')"),
                         {"c": fx.club_id, "r": fx.courts[0], "sa": at(fx, 9)}).first())
+    _open_all_courts(s, fx)
     good = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
                             booking_type="court", resource_id=clay_court, product_id=str(clay_prod),
                             starts_at=utc_iso(at(fx, 9)), ends_at=utc_iso(at(fx, 10)),
@@ -3720,6 +3747,7 @@ def sc_the_quoted_share_is_frozen_for_the_life_of_the_game(s, fx):
     from community import seats as S
     _enable_seat_rule(s, fx)
     p1, p2, p3 = fx.members[0], fx.members[1], fx.members[2]
+    _open_all_courts(s, fx)
     r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=p1, role="member",
                          booking_type="court", resource_id=fx.courts[1],
                          settlement_mode="at_court",
@@ -4272,6 +4300,7 @@ def sc_a_crafted_game_cannot_cheapen_or_outlive_its_own_bill(s, fx):
     _enable_seat_rule(s, fx)
     m = fx.members[0]
     _membership_for_court(s, fx, m)
+    _open_all_courts(s, fx)
     r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role="member",
                          booking_type="court", resource_id=fx.courts[0],
                          settlement_mode="membership_covered",
@@ -4739,6 +4768,7 @@ def sc_a_game_says_what_kind_of_tennis_it_is(s, fx):
     host = fx.members[0]
     _membership_for_court(s, fx, host)
 
+    _open_all_courts(s, fx)
     r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=host, role="member",
                          booking_type="court", resource_id=fx.courts[0],
                          settlement_mode="membership_covered",
@@ -4871,6 +4901,7 @@ def sc_joining_a_game_bills_nobody_while_the_money_switch_is_off(s, fx):
                        fields={"community_enabled": True, "seat_rule_enforced": False})
     host, joiner = fx.members[0], fx.members[1]
 
+    _open_all_courts(s, fx)
     r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=host, role="member",
                          booking_type="court", resource_id=fx.courts[0],
                          settlement_mode="at_court",
@@ -5116,7 +5147,51 @@ def sc_an_outside_login_never_becomes_someone_else(s, fx):
           IR.clubs_accepting_issuer(s, iss) == {str(fx.club_id)})
 
 
+def sc_a_member_court_booking_obeys_the_rules_the_screen_used_to_enforce(s, fx):
+    print("\n# A member's court booking obeys hours, blocks and the length menu SERVER-side; 'any court' is picked by the server")
+    # The member app only ever offered open, unblocked slots of a sold length, so these rules lived on
+    # the screen alone. A partner calling the public API has no such screen: without them a hand-built
+    # request could book a court at 03:00, over a maintenance block, or for 75 minutes priced off the
+    # nearest row. Staff stay exempt (events, walk-ins, odd lengths).
+    m = fx.members[0]
+
+    def book(court, h, mi, mins, role="member", **kw):
+        st = at(fx, h, mi)
+        return B.create_booking(s, club_id=fx.club_id, booked_by_user_id=m, role=role,
+                                booking_type="court", resource_id=court, settlement_mode="at_court",
+                                starts_at=utc_iso(st), ends_at=utc_iso(st + timedelta(minutes=mins)), **kw)
+
+    r = book(fx.courts[0], 7, 0, 60)
+    check("before the court opens → OUTSIDE_OPENING_HOURS", r.get("error") == "OUTSIDE_OPENING_HOURS", str(r))
+    r = book(fx.courts[0], 17, 30, 60)
+    check("running past closing → OUTSIDE_OPENING_HOURS", r.get("error") == "OUTSIDE_OPENING_HOURS", str(r))
+    r = book(fx.courts[0], 9, 0, 75)
+    check("a length the club doesn't sell → DURATION_NOT_OFFERED, with the menu",
+          r.get("error") == "DURATION_NOT_OFFERED" and 60 in (r.get("offered_minutes") or []), str(r))
+    s.execute(text("INSERT INTO diary.time_off (club_id, resource_id, starts_at, ends_at, reason) "
+                   "VALUES (:c, :r, :s, :e, 'resurfacing')"),
+              {"c": fx.club_id, "r": fx.courts[0], "s": at(fx, 12), "e": at(fx, 13)})
+    r = book(fx.courts[0], 12, 0, 60)
+    check("over a maintenance block → COURT_BLOCKED", r.get("error") == "COURT_BLOCKED", str(r))
+    r = book(fx.courts[0], 7, 0, 60, role="club_admin")
+    check("STAFF may still book outside hours (an event, an early session)", r.get("ok"), str(r))
+
+    r = book("any", 10, 0, 60)
+    check("'any court' → the server picks an open, free court",
+          r.get("ok") and str(r["booking"]["resource_id"]) in {str(c) for c in fx.courts}, str(r))
+    first = str(r["booking"]["resource_id"]) if r.get("ok") else None
+    r2 = book("any", 10, 0, 60)
+    check("...and the next 'any' takes the OTHER court",
+          r2.get("ok") and str(r2["booking"]["resource_id"]) not in (first,), str(r2))
+    r3 = book("any", 10, 0, 60)
+    check("...and with every court taken → NO_COURT_AVAILABLE", r3.get("error") == "NO_COURT_AVAILABLE", str(r3))
+    r4 = book("any", 12, 0, 60)
+    check("'any court' skips a court blocked by time-off",
+          r4.get("ok") and str(r4["booking"]["resource_id"]) == str(fx.courts[1]), str(r4))
+
+
 SCENARIOS = [
+    sc_a_member_court_booking_obeys_the_rules_the_screen_used_to_enforce,
     sc_an_outside_login_never_becomes_someone_else,
     # THE SEAT RULE (community/) — the money core, pinned before create_booking learns about seats.
     sc_a_seat_share_is_a_fixed_fraction_of_the_court,

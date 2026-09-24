@@ -127,6 +127,19 @@ def at(fx, h, m=0):
     return datetime(fx.target.year, fx.target.month, fx.target.day, h, m, tzinfo=JHB)
 
 
+def _open_all_courts(s, fx):
+    """Open every court of the scratch club 00:00-23:59, every day. The fixture publishes 08:00-18:00
+    on the test day only, and a member may only book a court inside its published hours
+    (diary.bookings._self_booked_court_refusal) — a scenario about MONEY that books at 07:00 or 22:00
+    calls this first. Rolled back with the scenario."""
+    for rid in s.execute(text("SELECT id FROM diary.resource WHERE club_id = :c AND kind = 'court'"),
+                         {"c": fx.club_id}).scalars().all():
+        for wd in range(7):
+            s.execute(text("INSERT INTO diary.availability_rule (club_id, resource_id, weekday, "
+                           "start_time, end_time, slot_minutes) VALUES (:c, :r, :w, '00:00', '23:59', 30)"),
+                      {"c": fx.club_id, "r": rid, "w": wd})
+
+
 def iso(dt):
     return dt.astimezone(timezone.utc).isoformat()
 
@@ -2139,6 +2152,7 @@ def sc_payment_cannot_reopen_a_closed_debt(s, fx):
     The one void a late payment MAY reverse is a lapsed HOLD — that recovery is the whole reason
     reconcile exists, so it is asserted here too."""
     print("\n# A late/replayed charge can't resurrect a closed debt (but hold-expiry still recovers)")
+    _open_all_courts(s, fx)
 
     def _charge(oid, ref, amount=15000):
         ev = NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
@@ -4572,6 +4586,7 @@ def sc_a_desk_payment_recorded_in_error_can_be_undone(s, fx):
     The commission is the half that gets forgotten — the coach is credited the moment a payment is
     recorded, so leaving that in place pays him on a collection that never happened."""
     print("\n# A desk payment recorded in error can be undone (and the commission comes back)")
+    _open_all_courts(s, fx)
     from billing import orders as O2
 
     # A real commission rate, or there is no split to claw back and the assertion would pass

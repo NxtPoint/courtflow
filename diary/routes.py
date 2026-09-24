@@ -374,9 +374,14 @@ def create_booking():
         # (per-head). Accept member emails, member user_ids, or a member's DEPENDENT (child) user_id.
         # Each is validated as addable (see _addable_player_uid — a non-staff booker may only add club
         # members + their OWN kids, never an arbitrary account) and CAPPED at the service's max_clients.
+        #
+        # A COURT booking's named playmates (the seat step: "who's playing with you") ride the SAME
+        # validation. This used to read them for lessons only, so every name a member put on a court
+        # was silently dropped before community.seats ever saw it — the game showed one player and,
+        # with the seat rule on, the friends would never have been billed their share.
         extra_clients = []
         raw_extra = b.get("extra_clients") or []
-        if raw_extra and b.get("booking_type") == "lesson":
+        if raw_extra and b.get("booking_type") in ("lesson", "court"):
             is_staff = p.role in _ON_BEHALF_ROLES
             owner_uid = booked_for_user_id or p.user_id   # whose OWN dependents may be added (non-staff)
             for item in raw_extra:
@@ -390,7 +395,13 @@ def create_booking():
                 uid = _addable_player_uid(s, p.club_id, uid, owner_uid=owner_uid, is_staff=is_staff)
                 if uid:
                     extra_clients.append(uid)
-            cap = max(0, _service_max_clients(s, p.club_id, b.get("product_id")) - 1)
+            if b.get("booking_type") == "lesson":
+                cap = max(0, _service_max_clients(s, p.club_id, b.get("product_id")) - 1)
+            else:   # a court seats the booker + (seats - 1) named players
+                try:
+                    cap = max(0, int(b.get("seats") or 2) - 1)
+                except (TypeError, ValueError):
+                    cap = 1
             extra_clients = extra_clients[:cap]
         res = bookings_mod.create_booking(
             s, club_id=p.club_id, booked_by_user_id=p.user_id, role=p.role,

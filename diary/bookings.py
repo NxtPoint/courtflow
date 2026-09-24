@@ -171,6 +171,67 @@ def _court_service_guarded(session, club_id, resource_id):
         return None
 
 
+def _pick_court_for_service(session, club_id, product_id, starts, ends):
+    """"Any court" for a COURT booking: the first court of the chosen court SERVICE that is open for
+    the whole slot (its published hours) and free (no booking, no time-off). Returns None when none is.
+
+    The member app never needed this — it asks for availability with any=1 and posts the court that
+    came back. A partner calling the API has no such screen, so the server has to be able to choose;
+    the GiST constraint still has the last word on a concurrent grab (→ SLOT_TAKEN)."""
+    from diary.availability import resource_hours_cover
+    for rid in session.execute(
+        text("SELECT id FROM diary.resource WHERE club_id = :c AND kind = 'court' "
+             "AND is_active = true ORDER BY rank, name"),
+        {"c": club_id},
+    ).scalars().all():
+        if product_id and str(_court_service_guarded(session, club_id, rid) or "") != str(product_id):
+            continue
+        if not resource_hours_cover(session, club_id=club_id, resource_id=rid,
+                                    starts_at=starts, ends_at=ends):
+            continue
+        if _court_is_free(session, club_id, rid, starts, ends):
+            return rid
+    return None
+
+
+def _court_blocked_by_time_off(session, club_id, court_id, starts, ends):
+    return bool(session.execute(
+        text("SELECT 1 FROM diary.time_off WHERE club_id = :c AND resource_id = :r "
+             "AND ends_at > :s AND starts_at < :e LIMIT 1"),
+        {"c": club_id, "r": str(court_id), "s": starts, "e": ends},
+    ).first())
+
+
+def _self_booked_court_refusal(session, *, club_id, court_id, product_id, starts, ends, audience):
+    """The three rules the member app used to enforce ONLY on screen, now asked of the server for a
+    member booking a court for themselves. A partner calling the API has no screen, so without these
+    a hand-built request could book a court outside its hours, across a blocked period, or for a
+    length the club never offered. Staff are deliberately exempt (events, walk-ins, odd lengths).
+    Returns an _err dict, or None when the booking may proceed."""
+    from diary.availability import resource_hours_cover
+    if not resource_hours_cover(session, club_id=club_id, resource_id=court_id,
+                                starts_at=starts, ends_at=ends):
+        return _err("OUTSIDE_OPENING_HOURS", 422,
+                    message="that court isn't open for the whole of that time")
+    if _court_blocked_by_time_off(session, club_id, court_id, starts, ends):
+        return _err("COURT_BLOCKED", 409, message="that court is blocked off at that time")
+    try:
+        from diary.pricing import durations_for
+        offered = {int(d["duration_minutes"]) for d in durations_for(
+            session, club_id=club_id, kind="court_booking", audience=audience or "any",
+            product_id=product_id) if d.get("duration_minutes")}
+    except Exception:
+        offered = set()
+    minutes = int((ends - starts).total_seconds() // 60)
+    # An empty list means no duration is priced at all — the price check further down refuses a
+    # billable booking then, so this only speaks when the club HAS a menu and this isn't on it.
+    if offered and minutes not in offered:
+        return _err("DURATION_NOT_OFFERED", 422,
+                    message="the club doesn't offer that length of booking",
+                    offered_minutes=sorted(offered))
+    return None
+
+
 def _coach_class_conflict(session, club_id, coach_user_id, starts, ends):
     """True if the coach RUNS a scheduled class overlapping [starts, ends). A class_session is
     NOT a diary.booking, so the GiST exclusion constraint can't arbitrate a lesson-vs-class clash
@@ -706,6 +767,19 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
             {"c": club_id, "u": str(coach_user_id)},
         ).scalar()
 
+    # "ANY COURT" — the server picks, within the chosen court service, a court that is open and free.
+    if booking_type == "court" and (resource_id is None or str(resource_id).strip().lower() in ("", "any")):
+        _svc = product_id
+        if not _svc:
+            try:
+                from diary.pricing import _default_court_product_id
+                _svc = _default_court_product_id(session, club_id)
+            except Exception:
+                _svc = None
+        resource_id = _pick_court_for_service(session, club_id, _svc, starts, ends)
+        if not resource_id:
+            return _err("NO_COURT_AVAILABLE", 409, message="no court is free at that time")
+
     res = _resource(session, club_id, resource_id)
     if not res or not res["is_active"]:
         return _err("RESOURCE_NOT_FOUND", 404)
@@ -775,6 +849,13 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
             return _err("COURT_NOT_IN_SERVICE", 422,
                         message="that court isn't part of the chosen court service")
         product_id = product_id or court_own_service
+        # A MEMBER booking a court for themselves gets the rules the app used to enforce only on screen.
+        if not booked_for_user_id and (role or "") not in ("coach", "club_admin", "platform_admin"):
+            _refused = _self_booked_court_refusal(
+                session, club_id=club_id, court_id=resource_id, product_id=product_id,
+                starts=starts, ends=ends, audience=audience)
+            if _refused:
+                return _refused
 
     # ---- lesson approval gate (accept/propose/decline lifecycle) ----------------------------
     # THERE IS ONE LESSON FLOW. A lesson is booked the way a court is booked: it holds the coach AND
