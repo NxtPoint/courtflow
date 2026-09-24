@@ -158,6 +158,10 @@ players would land on NextPoint's login), vanilla JS isn't a supported framework
    `<courtflow>/app.html?club=<core.org.courtflow_club_slug>`; serve its token to the CourtFlow origin
    (its `serveChild` is same-origin only today).
 
+**Superseding the embed-only route (Tomo, 2026-09-24): CourtFlow becomes a versioned public API,
+NextPoint moves onto it first, then Ten-Fifty5 uses it — spec in [PUBLIC-API.md](PUBLIC-API.md).**
+Items 3 (logins) and the per-club payment work carry over unchanged.
+
 **Owed by the academy (no code):** their own Yoco merchant account, admin emails,
 courts, hours, prices, coaches, memberships.
 
