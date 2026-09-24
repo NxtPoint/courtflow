@@ -19,9 +19,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
+
+# Both handlers below log and carry on. Without this the swallow itself raised NameError, so a
+# failed receipt email rolled back the payment it was reporting.
+log = logging.getLogger("billing.invoicing")
 
 
 # ---------------------------------------------------------------------------
