@@ -568,7 +568,7 @@ def deliver(session, *, club_id, user_id, kind, ctx, email=None):
     status = _try_email(recipient.get("email"), title, body, recipient.get("name"),
                         from_name=ident.get("from_name"), reply_to=ident.get("reply_to"),
                         bcc=bcc, kind=kind, ctx=ctx, detail=detail, invoice_doc=invoice_doc,
-                        coach_doc=coach_doc)
+                        coach_doc=coach_doc, club_id=club_id)
     if status and status != "skipped" and notif_id:
         try:
             notif_repo.set_email_status(session, notification_id=notif_id, email_status=status)
@@ -611,7 +611,7 @@ def _club_identity(session, club_id):
 
 
 def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, bcc=None,
-               kind=None, ctx=None, detail=None, invoice_doc=None, coach_doc=None):
+               kind=None, ctx=None, detail=None, invoice_doc=None, coach_doc=None, club_id=None):
     """Send a transactional email via SES: HTML + plain-text, the club's From-name + Reply-To, and a
     calendar (.ics) attachment for booking-type events. Returns 'sent'|'failed'|'skipped'. With no
     AWS/SES creds → 'skipped' (a clean no-op), so the engine is fully usable with NO keys. NEVER raises.
@@ -672,7 +672,7 @@ def _try_email(to_email, title, body, name=None, from_name=None, reply_to=None, 
                 pass
         ok = ses.send_raw_email(to_email, title, text_body, body_html=html_body,
                                 attachments=attachments, from_name=from_name, reply_to=reply_to,
-                                bcc=bcc)
+                                bcc=bcc, club_id=club_id)
         return "sent" if ok else "failed"
     except Exception:
         log.exception("notification email send failed -> %s", to_email)

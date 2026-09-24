@@ -159,9 +159,17 @@ def _push(traits):
         log.exception("hubspot push failed")
 
 
+def _club_uses_platform_klaviyo(club_id):
+    """KLAVIYO_API_KEY is the HOME club's account (club.home). Another club's customers must never be
+    profiled in, tracked by, or subscribed to NextPoint's Klaviyo — its flows would email them as
+    NextPoint. A per-club Klaviyo account is future work; until then they are simply not sent."""
+    from club.home import is_home_club
+    return is_home_club(club_id)
+
+
 def sync_profile(email, club_id=None):
     """Fire-and-forget: upsert one account's profile to Klaviyo. Safe from request handlers."""
-    if not enabled():
+    if not enabled() or not _club_uses_platform_klaviyo(club_id):
         return
 
     def _run():
@@ -183,7 +191,7 @@ def subscribe_member(email, club_id=None, list_name=None):
     the marketing list WITH consent (we hold marketing_opt_in). Fire-and-forget; safe from a request
     handler. Call when marketing consent is GRANTED — this is what makes a new opted-in member
     marketable (flows trigger on the list subscription). No-op without a key."""
-    if not enabled():
+    if not enabled() or not _club_uses_platform_klaviyo(club_id):
         return
     lst = list_name or os.getenv("KLAVIYO_MARKETING_LIST", "NextPoint Members")
 
@@ -267,7 +275,7 @@ def forward_event(event_type, email, club_id=None, properties=None):
       - all other (marketing) events send ONLY when the adult contact's marketing_opt_in is true.
     Synchronous — call from a background context (emit() already runs on its own thread).
     Self-gates on KLAVIYO_API_KEY via enabled(); off-key is a clean no-op. Never raises."""
-    if not enabled():
+    if not enabled() or not _club_uses_platform_klaviyo(club_id):
         return False
     properties = properties or {}
     # Producers pass iam.user UUIDs and often no email — recover it so the forward isn't dropped.
@@ -315,6 +323,8 @@ def sync_all(limit=5000):
             .order_by(AppUser.id).limit(limit)
         ).all()
     for email, club_id in users:
+        if not _club_uses_platform_klaviyo(club_id):
+            continue
         try:
             with session_scope() as s:
                 traits = build_traits(s, email, club_id=club_id)

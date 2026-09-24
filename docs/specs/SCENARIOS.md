@@ -11,7 +11,7 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 752 / billing 735 / statement 64** (99 / 100 / 12 `sc_*` functions).
+  **booking 759 / billing 735 / statement 64** (100 / 100 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
@@ -34,6 +34,12 @@ for themselves is refused outside its published hours (`OUTSIDE_OPENING_HOURS`),
 (`COURT_BLOCKED`) and for a length the club doesn't sell (`DURATION_NOT_OFFERED`); staff are exempt;
 `resource_id="any"` makes the server pick an open, free court of the service (`NO_COURT_AVAILABLE`
 when none). Scenarios that book evenings or fresh courts call `_open_all_courts` first.
+
+**A SECOND CLUB GETS NONE OF THE HOME CLUB'S PLATFORM SETTINGS**
+(`sc_a_second_club_gets_none_of_the_home_clubs_platform_settings`) — `TRANSACTIONAL_BCC`, the Klaviyo
+account and `SIGNUP_TRIAL_DAYS` apply to the home club only (`club/home.py`); another club's emails
+are not copied to NextPoint, its customers never reach NextPoint's Klaviyo, and it gives no free week
+unless `club.policy.signup_trial_days` says so.
 
 **AN OUTSIDE LOGIN NEVER BECOMES SOMEONE ELSE** (`sc_an_outside_login_never_becomes_someone_else`) —
 a Ten-Fifty5 login is keyed by (issuer, sub) in `iam.user_identity`, needs a VERIFIED email to link

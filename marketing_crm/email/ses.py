@@ -99,12 +99,17 @@ def html_wrap(title, body_html, footer=None):
         '</td></tr></table></td></tr></table></body></html>')
 
 
-def _bcc_list(bcc, to_email):
+def _bcc_list(bcc, to_email, club_id=None):
     """Merge an explicit `bcc` (str or list) with the global TRANSACTIONAL_BCC floor, then drop
     blanks + the primary recipient + duplicates. TRANSACTIONAL_BCC lets the club be COPIED on EVERY
     transactional send (bookings/edits/cancellations/refunds) from one place — set it once in the
-    env. BCC is blind (SES Destination.BccAddresses / SendRawEmail Destinations), never a header."""
-    raw = ([bcc] if isinstance(bcc, str) else list(bcc or [])) + [os.getenv("TRANSACTIONAL_BCC")]
+    env. BCC is blind (SES Destination.BccAddresses / SendRawEmail Destinations), never a header.
+
+    The floor is the HOME club's (club.home): another club's customers' emails are never copied to
+    NextPoint. A club's OWN oversight copy is its explicit `bcc` (notifications._club_identity)."""
+    from club.home import is_home_club
+    floor = [os.getenv("TRANSACTIONAL_BCC")] if is_home_club(club_id) else []
+    raw = ([bcc] if isinstance(bcc, str) else list(bcc or [])) + floor
     prim = (to_email or "").strip().lower()
     out = []
     for b in raw:
@@ -114,7 +119,8 @@ def _bcc_list(bcc, to_email):
     return out
 
 
-def send_email(to_email, subject, body_text, body_html=None, from_name=None, reply_to=None, bcc=None):
+def send_email(to_email, subject, body_text, body_html=None, from_name=None, reply_to=None, bcc=None,
+               club_id=None):
     """Low-level SES send (structured Subject/Text/Html). No-op (False) unless enabled(). Never raises.
     `from_name` = the club's display name; `reply_to` = the club's contact (member replies reach them);
     `bcc` = an extra blind copy (merged with the TRANSACTIONAL_BCC env floor)."""
@@ -130,7 +136,7 @@ def send_email(to_email, subject, body_text, body_html=None, from_name=None, rep
         if body_html:
             body["Html"] = {"Data": body_html, "Charset": "UTF-8"}
         dest = {"ToAddresses": [to_email]}
-        bccs = _bcc_list(bcc, to_email)
+        bccs = _bcc_list(bcc, to_email, club_id)
         if bccs:
             dest["BccAddresses"] = bccs
         kw = dict(
@@ -148,14 +154,14 @@ def send_email(to_email, subject, body_text, body_html=None, from_name=None, rep
 
 
 def send_raw_email(to_email, subject, body_text, body_html=None, attachments=None,
-                   from_name=None, reply_to=None, bcc=None):
+                   from_name=None, reply_to=None, bcc=None, club_id=None):
     """MIME send (SES SendRawEmail) — like send_email but supports file ATTACHMENTS, e.g. a booking's
     .ics calendar invite. `attachments` = [{"filename", "content" (str|bytes), "mimetype"}]. With no
     attachments it falls back to send_email. No-op (False) unless enabled(). Never raises.
     `bcc` (blind, merged with TRANSACTIONAL_BCC) is added to the SES Destinations list, NOT a header."""
     if not attachments:
         return send_email(to_email, subject, body_text, body_html=body_html,
-                          from_name=from_name, reply_to=reply_to, bcc=bcc)
+                          from_name=from_name, reply_to=reply_to, bcc=bcc, club_id=club_id)
     if not enabled() or not to_email:
         return False
     src = _from_source(from_name)
@@ -193,7 +199,7 @@ def send_raw_email(to_email, subject, body_text, body_html=None, attachments=Non
             msg.attach(part)
         client = boto3.client("ses", region_name=_region(), **_ses_creds())
         # BCC stays blind: recipients come from Destinations, not from any Bcc header we omit.
-        destinations = [to_email] + _bcc_list(bcc, to_email)
+        destinations = [to_email] + _bcc_list(bcc, to_email, club_id)
         client.send_raw_email(Source=src, Destinations=destinations, RawMessage={"Data": msg.as_string()})
         return True
     except Exception:
@@ -202,7 +208,7 @@ def send_raw_email(to_email, subject, body_text, body_html=None, attachments=Non
         # attachment). This is why a booking confirmation still lands even without SendRawEmail.
         log.exception("ses: send_raw_email failed for %s — falling back to plain send", to_email)
         return send_email(to_email, subject, body_text, body_html=body_html,
-                          from_name=from_name, reply_to=reply_to, bcc=bcc)
+                          from_name=from_name, reply_to=reply_to, bcc=bcc, club_id=club_id)
 
 
 def send_booking_confirmation(payload):

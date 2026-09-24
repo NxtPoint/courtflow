@@ -40,11 +40,12 @@ it's idempotent per `(club,user,period)`, so it skips everyone already invoiced 
   real newlines inside a JS string: `admin_app.js` stopped parsing entirely and `/admin` hung on
   "Loading…" for 11 hours, reading as "cannot log in". Fails CLOSED if `node` is missing.
 - `test_booking_scenarios.py` · `test_billing_scenarios.py` · `test_statement_reconciliation.py`
-  — rollback-only scratch-DB harnesses (**booking 752 / billing 735 / statement 64**).
+  — rollback-only scratch-DB harnesses (**booking 759 / billing 735 / statement 64**).
 
 ## Load-bearing at runtime (KEEP — do not touch)
 - `seed_nextpoint.py` — re-seeds club #1 on every prod boot (`SEED_NEXTPOINT=1`, imported by `app.py`). Idempotent.
 - `provision_club.py` — provisions a new tenant (imported by `seed_nextpoint`).
+- `provision_api_club.py` — creates a club whose players book through the PUBLIC API from a partner's app (outside login, return origins, no free week, a court service + courts + hours). **Dry run by default**; `--commit` writes. Safe on the Render Shell.
 
 ## Ongoing tools / diagnostics (KEEP — re-runnable)
 - `verify_live.py` — read-only check against the real Render Postgres (uses gitignored `.env.local`).

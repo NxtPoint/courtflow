@@ -122,6 +122,10 @@ _DDL = [
     # own payment page. Empty = only the platform's own pay-return page.
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS allowed_return_origins text[] "
     f"NOT NULL DEFAULT '{{}}';",
+    # The free week a genuinely-new signup gets (days; 0 = none). NULL = the platform default, which is
+    # the HOME club's SIGNUP_TRIAL_DAYS for the home club and NONE for any other (club.home) — so a
+    # second club never hands out a free week it didn't choose to offer.
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS signup_trial_days int;",
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS default_max_courts_per_day int;",
 
     # Does a NEW member start opted IN to marketing (opt-OUT model) or OUT (opt-IN)?

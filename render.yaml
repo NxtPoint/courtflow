@@ -51,6 +51,11 @@ services:
         value: "https://clerk.nextpointtennis.com/.well-known/jwks.json"
       - key: AUTH_ISSUER
         value: "https://clerk.nextpointtennis.com"
+      # OUTSIDE login services whose tokens verify (auth/verifier.py). Verifying is not acting: a
+      # token only acts in clubs whose club.policy.accepted_login_issuers lists it, and only with a
+      # verified email. Ten-Fifty5's Clerk — academies whose players book inside Ten-Fifty5.
+      - key: AUTH_EXTRA_ISSUERS
+        value: "https://clerk.ten-fifty5.com"
       - key: AUTH_AUDIENCE
         value: ""            # blank — Clerk default session tokens set no aud
 

@@ -154,6 +154,24 @@ def _marketing_opt_in_default(session, club_id) -> bool:
         return False
 
 
+def _signup_trial_days(session, club_id) -> int:
+    """How long a free week this club gives a genuinely-new signup. The club's own
+    club.policy.signup_trial_days when set; otherwise SIGNUP_TRIAL_DAYS for the HOME club only
+    (club.home) and 0 for any other — the env var is NextPoint's offer, not every club's. Errors
+    give 0: a free week is money, so the failure mode is "no gift", never "a gift nobody chose"."""
+    try:
+        from sqlalchemy import text as _text
+        v = session.execute(_text("SELECT signup_trial_days FROM club.policy "
+                                  "WHERE club_id = CAST(:c AS uuid)"), {"c": str(club_id)}).scalar()
+        if v is not None:
+            return max(0, int(v))
+        from club.home import is_home_club
+        return int(os.getenv("SIGNUP_TRIAL_DAYS", "7") or 0) if is_home_club(club_id) else 0
+    except Exception:
+        log.warning("signup trial length unreadable for club %s — granting none", club_id, exc_info=True)
+        return 0
+
+
 def _principal_from_claims(claims, request, club_hint=None) -> Optional[Principal]:
     """Verified-token -> upsert iam.user -> load memberships -> resolve (club_id, role)."""
     uid = verifier.claim_uid(claims)
@@ -232,7 +250,7 @@ def _principal_from_claims(claims, request, club_hint=None) -> Optional[Principa
                 # grant_signup_trial (never granted if any subscription ever existed).
                 try:
                     from billing.membership import grant_signup_trial
-                    days = int(os.getenv("SIGNUP_TRIAL_DAYS", "7") or 0)
+                    days = _signup_trial_days(s, default_club)
                     if days > 0 and user.get("_created"):
                         _tr = grant_signup_trial(s, club_id=default_club, user_id=user["id"], days=days)
                         if _tr and _tr.get("granted"):

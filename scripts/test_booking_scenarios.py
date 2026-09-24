@@ -5462,7 +5462,61 @@ def sc_the_public_api_quotes_moves_and_knows_the_member(s, fx):
     check("court-services carries equipment and peak price slots (null when the club has none)",
           st == 200 and "equipment" in svc and all("peak_price" in d for d in svc.get("durations", [])), svcs)
 
+def sc_a_second_club_gets_none_of_the_home_clubs_platform_settings(s, fx):
+    print("\n# A second club gets NONE of NextPoint's one-per-platform settings: blind copy, Klaviyo, free week")
+    # TRANSACTIONAL_BCC, KLAVIYO_API_KEY and SIGNUP_TRIAL_DAYS are env vars from when the platform was
+    # one club. Applied to every club they would copy NextPoint on another club's customers' emails,
+    # put those customers into NextPoint's marketing (whose flows email them AS NextPoint), and hand
+    # out a free week the other club never offered. club.home scopes all three to the HOME club.
+    import os as _os
+    import db as _db
+    from club import home as H
+    from marketing_crm.email import ses
+    from marketing_crm.crm_sync import sync as CS
+    from auth.principal import _signup_trial_days
+    slug = s.execute(text("SELECT slug FROM club.club WHERE id = :c"), {"c": fx.club_id}).scalar()
+    saved = {k: _os.environ.get(k) for k in ("TRANSACTIONAL_BCC", "HOME_CLUB_SLUG", "SIGNUP_TRIAL_DAYS")}
+    saved_enabled, saved_track = CS.enabled, CS.klaviyo.track_event
+    tracked = []
+    try:
+        _os.environ.update(TRANSACTIONAL_BCC="owner@home.example", SIGNUP_TRIAL_DAYS="7")
+        _os.environ.pop("HOME_CLUB_SLUG", None)          # home = nextpoint; this scratch club is NOT home
+        H._SLUG_BY_ID.pop(str(fx.club_id), None)
+        CS.enabled = lambda: True
+        CS.klaviyo.track_event = lambda *a, **k: tracked.append(a) or True
+        with _db.use_session_for_tests(s):
+            check("a second club's email is NOT blind-copied to the home club",
+                  "owner@home.example" not in ses._bcc_list(None, "p@x.example", str(fx.club_id)))
+            check("...while a club-less (platform) send still is",
+                  "owner@home.example" in ses._bcc_list(None, "p@x.example", None))
+            check("a second club's customer is NOT sent to the home club's Klaviyo",
+                  CS.forward_event("booking_confirmed", "p@x.example", club_id=str(fx.club_id)) is False
+                  and tracked == [], tracked)
+            check("a second club gives NO free week unless it chooses to",
+                  _signup_trial_days(s, str(fx.club_id)) == 0)
+            s.execute(text("UPDATE club.policy SET signup_trial_days = 14 WHERE club_id = :c"),
+                      {"c": fx.club_id})
+            check("...and exactly the week it chose when it does", _signup_trial_days(s, str(fx.club_id)) == 14)
+            s.execute(text("UPDATE club.policy SET signup_trial_days = NULL WHERE club_id = :c"),
+                      {"c": fx.club_id})
+
+            _os.environ["HOME_CLUB_SLUG"] = slug             # now make THIS club the home club
+            H._SLUG_BY_ID.pop(str(fx.club_id), None)
+            check("the HOME club keeps its blind copy",
+                  "owner@home.example" in ses._bcc_list(None, "p@x.example", str(fx.club_id)))
+            check("...and its platform free week (SIGNUP_TRIAL_DAYS)", _signup_trial_days(s, str(fx.club_id)) == 7)
+    finally:
+        CS.enabled, CS.klaviyo.track_event = saved_enabled, saved_track
+        H._SLUG_BY_ID.pop(str(fx.club_id), None)
+        for k, v in saved.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+
+
 SCENARIOS = [
+    sc_a_second_club_gets_none_of_the_home_clubs_platform_settings,
     sc_the_public_api_quotes_moves_and_knows_the_member,
     sc_the_public_api_books_a_court_end_to_end,
     sc_the_public_api_card_checkout_goes_to_the_clubs_own_provider,

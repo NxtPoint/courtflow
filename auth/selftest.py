@@ -94,6 +94,8 @@ def _install_db_stub(monkey_state):
     # this stub every coach case raised inside the resolver, which fails CLOSED (None), so three
     # tenancy checks read as failures of club resolution when they never reached it.
     iam_repo.accept_coach_invites = lambda session, user_id: 0
+    from auth import principal as _pr
+    _pr._signup_trial_days = lambda session, club_id: 0   # a per-club DB read; not what this tests
 
     def _by_host(session, host):
         h = (host or "").split(":", 1)[0].strip().lower()   # mirror the real one: port + www.
