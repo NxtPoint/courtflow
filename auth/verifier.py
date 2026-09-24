@@ -19,6 +19,11 @@
 #   AUTH_JWKS_URL     JWKS endpoint, e.g. https://<frontend-api>/.well-known/jwks.json
 #   AUTH_ISSUER       expected `iss`, e.g. https://<frontend-api>
 #   AUTH_AUDIENCE     expected `aud` (OPTIONAL — leave blank for Clerk default tokens)
+#   AUTH_EXTRA_ISSUERS comma-separated OUTSIDE login services also trusted (e.g. Ten-Fifty5's
+#                     Clerk, whose players book inside Ten-Fifty5). Their JWKS is <iss>/.well-known/
+#                     jwks.json. Trusting an issuer here lets its tokens VERIFY; it does not let them
+#                     act anywhere — auth/principal.py confines them to clubs that list the issuer
+#                     in club.policy.accepted_login_issuers.
 #   AUTH_JWT_LEEWAY   clock-skew tolerance in seconds (default 30)
 
 import logging
@@ -72,6 +77,52 @@ def _get_jwks_client():
     return _jwks_client
 
 
+_extra_clients = {}   # issuer -> PyJWKClient for AUTH_EXTRA_ISSUERS
+
+
+def _norm_iss(v):
+    return (v or "").strip().rstrip("/")
+
+
+def primary_issuer():
+    return _norm_iss(os.getenv("AUTH_ISSUER")) or None
+
+
+def extra_issuers():
+    return [i for i in (_norm_iss(x) for x in (os.getenv("AUTH_EXTRA_ISSUERS") or "").split(",")) if i]
+
+
+def is_primary(claims):
+    """True for the platform's OWN login (or when no issuer is configured, as in the old
+    single-issuer setup). Everything else is an outside login with a confined principal."""
+    p = primary_issuer()
+    return p is None or _norm_iss((claims or {}).get("iss")) == p
+
+
+def _unverified_iss(token):
+    try:
+        import jwt
+        return _norm_iss(jwt.decode(token, options={"verify_signature": False}).get("iss"))
+    except Exception:
+        return ""
+
+
+def _client_for(iss):
+    """(client, expected issuer) for a token's claimed issuer, or (None, None) if untrusted.
+    The claimed iss only CHOOSES which trusted key set to check against; the signature and the
+    iss claim are then verified against that choice, so a forged iss simply fails."""
+    primary = primary_issuer()
+    if primary is None or not iss or iss == primary:
+        return _get_jwks_client(), (os.getenv("AUTH_ISSUER") or "").strip() or None
+    if iss in extra_issuers():
+        if iss not in _extra_clients:
+            from jwt import PyJWKClient
+            _extra_clients[iss] = PyJWKClient(iss + "/.well-known/jwks.json",
+                                              cache_keys=True, lifespan=3600)
+        return _extra_clients[iss], iss
+    return None, None
+
+
 def verify_jwt(token):
     """Verify a compact JWS and return its claims dict, or None on any failure.
     Returns None (never raises) so callers fail closed. No-op (None) unless AUTH_ENABLED=1."""
@@ -80,14 +131,13 @@ def verify_jwt(token):
     if not looks_like_jwt(token):
         return None
 
-    issuer = (os.getenv("AUTH_ISSUER") or "").strip() or None
     audience = (os.getenv("AUTH_AUDIENCE") or "").strip() or None
 
     try:
         import jwt  # lazy import (PyJWT)
-        client = _get_jwks_client()
+        client, issuer = _client_for(_unverified_iss(token))
         if client is None:
-            log.warning("auth: AUTH_JWKS_URL not set; cannot verify JWT")
+            log.info("auth: JWT from an untrusted issuer, or AUTH_JWKS_URL not set")
             return None
         signing_key = client.get_signing_key_from_jwt(token).key
         options = {

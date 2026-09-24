@@ -89,6 +89,77 @@ def upsert_user_by_clerk_id(session, *, clerk_user_id, email=None, first_name=No
     return d
 
 
+class IdentityRefused(Exception):
+    """An outside login without a VERIFIED email. Every person here is keyed by email (one human =
+    one row, and the platform's own login links by email), so an unverified email from another app
+    would let anyone who types someone's address there become — or pre-empt — that person here."""
+
+
+def resolve_external_identity(session, *, issuer, sub, email=None, email_verified=None,
+                              first_name=None, surname=None, phone=None):
+    """The iam.user for a login from ANOTHER login service (auth.verifier.is_primary is False).
+
+      1. Known (issuer, sub)          -> that user.
+      2. No VERIFIED email on the token -> IdentityRefused (a known identity in step 1 has
+                                        already proved itself, so it is not re-checked).
+      3. Email matches an existing user -> LINK. Never overwrites the user's own clerk_user_id:
+                                        they keep their own login.
+      4. Otherwise                    -> a new user + identity (`_created=True`).
+
+    What a linked person can DO is confined separately — auth.principal only honours their
+    memberships in clubs that accept this issuer — so linking never carries a staff role across."""
+    email = norm_email(email)
+    row = session.execute(
+        text("SELECT u.id, u.clerk_user_id, u.email, u.first_name, u.surname, u.phone "
+             "FROM iam.user_identity i JOIN iam.user u ON u.id = i.user_id "
+             "WHERE i.issuer = :iss AND i.sub = :sub"),
+        {"iss": issuer, "sub": sub},
+    ).mappings().first()
+    if row:
+        d = dict(row)
+        d["_created"] = False
+        return d
+
+    if not email or email_verified is not True:
+        raise IdentityRefused(email or "(no email)")
+    user = get_user_by_email(session, email)
+    if user:
+        created = False
+    else:
+        user = dict(session.execute(
+            text("INSERT INTO iam.user (email, first_name, surname, phone) "
+                 "VALUES (:e, :fn, :sn, :ph) "
+                 "RETURNING id, clerk_user_id, email, first_name, surname, phone"),
+            {"e": email, "fn": first_name, "sn": surname, "ph": phone},
+        ).mappings().first())
+        created = True
+    session.execute(
+        text("INSERT INTO iam.user_identity (issuer, sub, user_id) VALUES (:iss, :sub, :u) "
+             "ON CONFLICT (issuer, sub) DO NOTHING"),
+        {"iss": issuer, "sub": sub, "u": user["id"]},
+    )
+    user["_created"] = created
+    return user
+
+
+def clubs_accepting_issuer(session, issuer):
+    """Clubs whose policy lists this outside login service. Empty = it may act nowhere."""
+    return {str(r) for r in session.execute(
+        text("SELECT club_id FROM club.policy WHERE :iss = ANY (accepted_login_issuers)"),
+        {"iss": issuer},
+    ).scalars().all()}
+
+
+def resolve_club_by_slug(session, slug):
+    """A club by its slug (the `?club=` an embedding app puts on the frame URL). None if unknown."""
+    if not slug:
+        return None
+    return session.execute(
+        text("SELECT id FROM club.club WHERE slug = :s AND COALESCE(is_template, false) = false"),
+        {"s": slug.strip().lower()},
+    ).scalar()
+
+
 def set_marketing_opt_in(session, user_id, value):
     """Set iam.user.marketing_opt_in (the flag Client-360 and the audit read). The Klaviyo
     gate is the SEPARATE core.app_user.marketing_opt_in — callers that want a member actually

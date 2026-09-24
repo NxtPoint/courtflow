@@ -11,13 +11,18 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 700 / billing 735 / statement 64** (93 / 100 / 12 `sc_*` functions).
+  **booking 708 / billing 735 / statement 64** (94 / 100 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
 ---
 
 ## `test_booking_scenarios` — the diary (83 scenarios)
+
+**AN OUTSIDE LOGIN NEVER BECOMES SOMEONE ELSE** (`sc_an_outside_login_never_becomes_someone_else`) —
+a Ten-Fifty5 login is keyed by (issuer, sub) in `iam.user_identity`, needs a VERIFIED email to link
+or create, never overwrites a person's own `clerk_user_id`, and acts only in clubs that list its
+issuer in `club.policy.accepted_login_issuers` (the confinement itself is `python -m auth.selftest`).
 
 Double-book, lesson coach∩court, off-peak per-slot pricing, lifecycle,
 **court→service allocation** (per-service courts + pricing), **classes reserve N courts** (held +

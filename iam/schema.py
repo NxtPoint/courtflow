@@ -174,6 +174,22 @@ _DDL = [
     f"ON {SCHEMA}.dependent (club_id, guardian_user_id);",
     f"CREATE INDEX IF NOT EXISTS ix_dependent_dependent "
     f"ON {SCHEMA}.dependent (dependent_user_id);",
+
+    # --- iam.user_identity : a login from ANOTHER login service (e.g. Ten-Fifty5's Clerk), keyed
+    # by (issuer, sub). The platform's own Clerk keeps using iam.user.clerk_user_id, unchanged.
+    # A separate table on purpose: linking an outside login must NEVER overwrite the user's own
+    # clerk_user_id (that would log them out of their own club) and must never be keyed on the
+    # bare `sub`, which two Clerk instances could both issue.
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.user_identity (
+        issuer      text NOT NULL,
+        sub         text NOT NULL,
+        user_id     uuid NOT NULL REFERENCES {SCHEMA}.user(id),
+        created_at  timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (issuer, sub)
+    );
+    """,
+    f"CREATE INDEX IF NOT EXISTS ix_user_identity_user ON {SCHEMA}.user_identity (user_id);",
 ]
 
 

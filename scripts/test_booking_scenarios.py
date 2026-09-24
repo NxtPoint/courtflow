@@ -5071,7 +5071,53 @@ def _seats_of(s, booking_id):
         {"b": booking_id}).mappings().all()]
 
 
+def sc_an_outside_login_never_becomes_someone_else(s, fx):
+    print("\n# An OUTSIDE login (Ten-Fifty5's) is keyed by (issuer, sub), needs a VERIFIED email, and never takes over a login")
+    # Academies' players book inside Ten-Fifty5 and sign in with ITS login. Linking such a login by
+    # email alone would let anyone who types a NextPoint admin's address into Ten-Fifty5 become that
+    # admin here; overwriting clerk_user_id would log the real person out of their own club.
+    from iam import repositories as IR
+    iss = "https://clerk.outside.example"
+    stamp = datetime.now(timezone.utc).strftime("%H%M%S%f")
+    owner_email = f"owner-{stamp}@example.com"
+    owner = s.execute(text("INSERT INTO iam.user (clerk_user_id, email) VALUES (:c, :e) RETURNING id"),
+                      {"c": "user_own_" + stamp, "e": owner_email}).scalar_one()
+
+    try:
+        IR.resolve_external_identity(s, issuer=iss, sub="tf_1", email=owner_email, email_verified=None)
+        refused = False
+    except IR.IdentityRefused:
+        refused = True
+    check("an UNVERIFIED email matching an existing person is refused, not linked", refused)
+    try:
+        IR.resolve_external_identity(s, issuer=iss, sub="tf_2", email=f"new-{stamp}@example.com",
+                                     email_verified=False)
+        refused2 = False
+    except IR.IdentityRefused:
+        refused2 = True
+    check("an unverified email is refused even for a NEW person (no pre-empting an address)", refused2)
+
+    u = IR.resolve_external_identity(s, issuer=iss, sub="tf_1", email=owner_email, email_verified=True)
+    check("a VERIFIED email links to the same person (one human = one row)",
+          str(u["id"]) == str(owner) and u["_created"] is False, str(u))
+    cid = s.execute(text("SELECT clerk_user_id FROM iam.user WHERE id = :u"), {"u": owner}).scalar()
+    check("...WITHOUT overwriting their own login", cid == "user_own_" + stamp, cid)
+    again = IR.resolve_external_identity(s, issuer=iss, sub="tf_1", email=None, email_verified=None)
+    check("the linked identity is recognised next time by (issuer, sub)", str(again["id"]) == str(owner))
+    same_sub = IR.resolve_external_identity(s, issuer="https://clerk.other.example", sub="tf_1",
+                                            email=f"third-{stamp}@example.com", email_verified=True)
+    check("the same `sub` from ANOTHER issuer is a different person",
+          str(same_sub["id"]) != str(owner) and same_sub["_created"] is True)
+
+    check("no club accepts an outside issuer by default", fx.club_id and not IR.clubs_accepting_issuer(s, iss))
+    s.execute(text("UPDATE club.policy SET accepted_login_issuers = ARRAY[:i] WHERE club_id = :c"),
+              {"i": iss, "c": fx.club_id})
+    check("a club that opts in is the only club it may act in",
+          IR.clubs_accepting_issuer(s, iss) == {str(fx.club_id)})
+
+
 SCENARIOS = [
+    sc_an_outside_login_never_becomes_someone_else,
     # THE SEAT RULE (community/) — the money core, pinned before create_booking learns about seats.
     sc_a_seat_share_is_a_fixed_fraction_of_the_court,
     sc_a_game_says_what_kind_of_tennis_it_is,

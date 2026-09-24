@@ -128,7 +128,11 @@ players would land on NextPoint's login), vanilla JS isn't a supported framework
    charged through NextPoint's account. NextPoint's keys and webhook URL are unchanged. Env over
    encrypted-DB on purpose: no master key to lose, secrets never in a DB backup; revisit at dozens of
    clubs. `sc_each_club_is_paid_into_its_own_yoco_account`.
-3. **CourtFlow accepts Ten-Fifty5's login — but ONLY in clubs that opted in.** `auth/verifier.py`
+3. ✅ **(server side, 2026-09-24)** `AUTH_EXTRA_ISSUERS` + `club.policy.accepted_login_issuers` +
+   `iam.user_identity`; verified-email-only; guarded by `auth.selftest` +
+   `sc_an_outside_login_never_becomes_someone_else`. **Still owed:** Ten-Fifty5's Clerk JWT template
+   must carry `email_verified` (until it does, every Ten-Fifty5 login is refused — safe, but nothing
+   works). Original brief: **CourtFlow accepts Ten-Fifty5's login — but ONLY in clubs that opted in.** `auth/verifier.py`
    trusts one issuer; make it a list (mirror Ten-Fifty5's `auth_v2` `AUTH_ISSUERS`). A token from
    a secondary issuer may act ONLY in clubs allowlisted for that issuer — else a Ten-Fifty5 signup
    could join NextPoint and take a free week, or worse (next point).

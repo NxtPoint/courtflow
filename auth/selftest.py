@@ -241,6 +241,68 @@ def run():
     _check("NextPoint admin on club B's site is NOT made anything in club B",
            p9 is not None and p9.club_id == NP and p9.role == "club_admin")
 
+    # ---- an OUTSIDE login (Ten-Fifty5's Clerk) is CONFINED to clubs that accept it ----
+    print("outside login (second issuer):")
+    tf5 = "https://clerk.tf5.example"
+    tpriv, tpub = _mint_keypair()
+    os.environ["AUTH_EXTRA_ISSUERS"] = tf5
+    verifier._extra_clients[tf5] = _StubJWKS(tpub)
+    outside = _make_token(tpriv, iss=tf5, sub="user_tf5", email="a@b.com")
+    _check("an outside issuer's token verifies once it is trusted",
+           (verifier.verify_jwt(outside) or {}).get("iss") == tf5)
+    _check("...and is NOT the platform's own login", not verifier.is_primary(verifier.verify_jwt(outside)))
+    other = _make_token(tpriv, iss="https://clerk.untrusted.example", sub="x", email="a@b.com")
+    _check("an issuer NOT on the list is rejected", verifier.verify_jwt(other) is None)
+
+    accepting = {tf5: {AC}}
+    iam_repo.clubs_accepting_issuer = lambda session, iss: set(accepting.get(iss, set()))
+    refuse = {"on": False}
+
+    def _ext(session, *, issuer, sub, email=None, email_verified=None, **kw):
+        if refuse["on"]:
+            raise iam_repo.IdentityRefused(email)
+        return {"id": "user-" + sub, "email": email}
+    iam_repo.resolve_external_identity = _ext
+    iam_repo.sole_club_id = lambda session: NP          # prove an outside signup never uses it
+
+    # A NextPoint ADMIN who also plays at the academy: via Ten-Fifty5 they are ONLY the member.
+    state["memberships"] = [
+        {"club_id": NP, "user_id": "u", "role": "club_admin", "member_status": "active"},
+        {"club_id": AC, "user_id": "u", "role": "member", "member_status": "active"},
+    ]
+    q1 = principal.resolve_principal(_FakeRequest(headers={
+        "Authorization": f"Bearer {outside}", "Origin": "https://nextpointtennis.com", "X-Club": NP}))
+    _check("an outside login never acts in a club that didn't accept it (not even via X-Club)",
+           q1 is not None and q1.club_id == AC and q1.role == "member")
+    _check("...and never even SEES that club's membership",
+           q1 is not None and all(c == AC for c, _, _ in q1.memberships))
+
+    joined.clear()
+    state["memberships"] = []
+    iam_repo.resolve_club_by_slug = lambda session, slug: {"academy": AC, "nextpoint": NP}.get(slug)
+    q2 = principal.resolve_principal(_FakeRequest(headers={
+        "Authorization": f"Bearer {outside}", "Origin": "https://courtflow-web.onrender.com",
+        "X-Club-Site": "academy"}))
+    _check("a framed outside signup joins the club named by X-Club-Site", joined == [AC]
+           and q2 is not None and q2.club_id == AC)
+
+    joined.clear()
+    state["memberships"] = []
+    q3 = principal.resolve_principal(_FakeRequest(headers={
+        "Authorization": f"Bearer {outside}", "X-Club-Site": "nextpoint"}))
+    _check("an outside signup aimed at a club that didn't accept it joins NOTHING (no sole-club fallback)",
+           joined == [] and q3 is not None and q3.club_id is None)
+
+    refuse["on"] = True
+    q4 = principal.resolve_principal(_FakeRequest(headers={"Authorization": f"Bearer {outside}"}))
+    _check("an outside login without a verified email is refused", q4 is None)
+    refuse["on"] = False
+
+    accepting.clear()
+    q5 = principal.resolve_principal(_FakeRequest(headers={"Authorization": f"Bearer {outside}"}))
+    _check("an outside issuer accepted by NO club is refused outright", q5 is None)
+    os.environ.pop("AUTH_EXTRA_ISSUERS", None)
+
     # invalid JWT is rejected, never downgraded to OPS
     os.environ["OPS_KEY"] = "ops-secret"
     rej = principal.resolve_principal(_FakeRequest(

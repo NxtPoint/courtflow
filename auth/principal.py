@@ -85,9 +85,12 @@ def _origin_host(request):
 
 def _site_club_id(session, iam_repo, request):
     """Which club's site this request came from: the API host if it is mapped (a club on its own
-    API domain), else the browser's Origin. None when neither maps to a club."""
+    API domain), else the browser's Origin, else an `X-Club-Site: <slug>` header — what a club's
+    pages send when framed inside another app (Ten-Fifty5), where the Origin is the platform's own
+    web host and names no club. None when nothing maps to a club."""
     return (iam_repo.resolve_club_by_host(session, _request_host(request))
-            or iam_repo.resolve_club_by_host(session, _origin_host(request)))
+            or iam_repo.resolve_club_by_host(session, _origin_host(request))
+            or iam_repo.resolve_club_by_slug(session, (request.headers.get("X-Club-Site") or "").strip()))
 
 
 def resolve_principal(request) -> Optional[Principal]:
@@ -152,6 +155,12 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
     email = verifier.claim_email(claims)
     if not uid:
         return None
+    # The platform's OWN login behaves exactly as it always has. A login from an OUTSIDE service
+    # (e.g. Ten-Fifty5's, for an academy whose players book inside Ten-Fifty5) is CONFINED: it may
+    # only see, join or act in clubs whose policy lists its issuer, so it can never reach a club
+    # that did not opt in and can never carry a role held in one.
+    primary = verifier.is_primary(claims)
+    issuer = (claims.get("iss") or "").strip().rstrip("/")
 
     from db import session_scope
     from iam import repositories as iam_repo
@@ -161,17 +170,30 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
 
     # Capture primitives inside the txn (DB rows expire after commit).
     with session_scope() as s:
-        user = iam_repo.upsert_user_by_clerk_id(
-            s,
-            clerk_user_id=uid,
-            email=email,
-            first_name=verifier.claim_str(claims, "given_name", "first_name"),
-            surname=verifier.claim_str(claims, "family_name", "surname", "last_name"),
-        )
+        allowed = None if primary else iam_repo.clubs_accepting_issuer(s, issuer)
+        if allowed is not None and not allowed:
+            log.info("auth: outside issuer %s is accepted by no club", issuer)
+            return None
+        names = dict(first_name=verifier.claim_str(claims, "given_name", "first_name"),
+                     surname=verifier.claim_str(claims, "family_name", "surname", "last_name"))
+        if primary:
+            user = iam_repo.upsert_user_by_clerk_id(s, clerk_user_id=uid, email=email, **names)
+        else:
+            try:
+                user = iam_repo.resolve_external_identity(
+                    s, issuer=issuer, sub=uid, email=email,
+                    email_verified=verifier.claim_email_verified(claims), **names)
+            except iam_repo.IdentityRefused:
+                log.info("auth: outside login from %s refused — no verified email", issuer)
+                return None
         user_id = str(user["id"])
         resolved_email = (user.get("email") or email or None)
 
-        memberships = iam_repo.memberships_for_user(s, user["id"])
+        def _memberships():
+            ms = iam_repo.memberships_for_user(s, user["id"])
+            return ms if allowed is None else [m for m in ms if str(m["club_id"]) in allowed]
+
+        memberships = _memberships()
 
         # Signing in IS accepting the invite — once a coach has logged in, flip any
         # outstanding invite to 'accepted' so the admin roster stops showing "invite pending".
@@ -180,6 +202,8 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
         if any(m["role"] == "coach" for m in memberships):
             iam_repo.accept_coach_invites(s, user["id"])
         host_club_id = _site_club_id(s, iam_repo, request)
+        if allowed is not None and host_club_id is not None and str(host_club_id) not in allowed:
+            host_club_id = None      # an outside login never joins a club that didn't accept it
         # Auto-enrol: any authenticated user with NO membership becomes an active 'member' of
         # the target club (the club whose SITE they signed up on, else the single club if this
         # deployment has one). With two clubs `sole_club_id` is None, so the site is what keeps
@@ -188,11 +212,11 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
         # membership) instead of hitting "No active club". Admins/coaches are seeded/invited,
         # so they already hold a row and skip this.
         if not memberships:
-            default_club = host_club_id or iam_repo.sole_club_id(s)
+            default_club = host_club_id or (iam_repo.sole_club_id(s) if primary else None)
             if default_club:
                 iam_repo.upsert_membership(s, club_id=default_club, user_id=user["id"],
                                            role="member", member_status="active")
-                memberships = iam_repo.memberships_for_user(s, user["id"])
+                memberships = _memberships()
                 # Signup gift: a free week of COURT access — the "7 Day Trial Period". Grant a
                 # time-boxed trial membership (provider='trial'); courts become free via the
                 # membership engine (COURT-only — never classes/coaching) and it lapses on its own

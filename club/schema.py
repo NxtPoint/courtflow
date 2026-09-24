@@ -111,6 +111,12 @@ _DDL = [
     # is paid" — every cap DOWNGRADES to PAYG, it never blocks the booking.
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS default_max_covered_minutes int;",
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS default_max_covered_per_day int;",
+    # Outside login services (JWT `iss` values) whose users may book at THIS club — e.g. an
+    # academy whose players book inside Ten-Fifty5 lists Ten-Fifty5's Clerk issuer. Empty = only
+    # the platform's own login. A token from any other trusted issuer can act ONLY in clubs that
+    # list it (auth/principal.py), so an outside login can never reach a club that didn't opt in.
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS accepted_login_issuers text[] "
+    f"NOT NULL DEFAULT '{{}}';",
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS default_max_courts_per_day int;",
 
     # Does a NEW member start opted IN to marketing (opt-OUT model) or OUT (opt-IN)?

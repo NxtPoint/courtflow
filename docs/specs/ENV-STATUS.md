@@ -142,6 +142,7 @@ Everything above is already set on the **dev/onrender** config. At cutover, chan
 | `YOCO_PUBLIC_KEY` | 🟢 | Publishable key surfaced to the browser | `pk_live_…` |
 | `YOCO_WEBHOOK_SECRET` | 🟢 | Verifies Yoco webhook signatures | `whsec_…` |
 | `APP_BASE_URL` | 🟢 | Origin for Yoco return URLs (the web host) | `https://courtflow-web.onrender.com` |
+| `AUTH_EXTRA_ISSUERS` (courtflow-api) | ⚪ unset | OUTSIDE login services whose tokens CourtFlow verifies — e.g. Ten-Fifty5's Clerk issuer, for academies whose players book inside Ten-Fifty5. Comma-separated `iss` values; JWKS = `<iss>/.well-known/jwks.json`. Verifying is not acting: a token only acts in clubs whose `club.policy.accepted_login_issuers` lists it, and only with a VERIFIED `email_verified` claim. | `https://clerk.ten-fifty5.com` |
 | `YOCO_DEFAULT_CLUB` | ⚪ unset = `nextpoint` | The club whose Yoco account the unsuffixed keys above belong to | a club slug |
 | `YOCO_SECRET_KEY__<SLUG>` · `YOCO_PUBLIC_KEY__<SLUG>` · `YOCO_WEBHOOK_SECRET__<SLUG>` | ⚪ per extra club | **Any other club's OWN Yoco account** (`yoco_billing/credentials.py`). `<SLUG>` = the club slug upper-cased, non-alphanumerics → `_` (`acme-academy` → `ACME_ACADEMY`). In that club's Yoco dashboard point the webhook at **`/api/billing/yoco/webhook/<slug>`**. A club without these is REFUSED online payment — never charged through NextPoint's account. | as above |
 
