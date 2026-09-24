@@ -226,18 +226,30 @@ def club_info(club, p):
 @endpoint
 def court_services(club, p):
     from diary import pricing
+    from diary import equipment as eq
     with session_scope() as s:
         svcs = pricing.services_for(s, club_id=str(club["id"]), kind="court_booking", audience="member")
+        peak = {str(r["id"]): r["peak_amount_minor"] for r in s.execute(
+            text("SELECT id, peak_amount_minor FROM billing.price WHERE club_id = :c "
+                 "AND peak_amount_minor IS NOT NULL"), {"c": str(club["id"])}).mappings().all()}
+        kit = {sv["product_id"]: eq.list_equipment(s, club_id=str(club["id"]),
+                                                   court_product_id=sv["product_id"]) for sv in svcs}
     out = []
     for sv in svcs:
         cur = sv.get("currency_code") or club["currency_code"]
         modes = sv.get("payment_modes")
         out.append({
             "id": sv["product_id"], "name": sv["name"],
-            "durations": [{"minutes": d["duration_minutes"], "price": money(d["amount_minor"], cur)}
+            # peak_price: charged instead of price when a slot falls in that court's peak hours —
+            # GET /availability prices each slot, so a front end need not work this out itself.
+            "durations": [{"minutes": d["duration_minutes"], "price": money(d["amount_minor"], cur),
+                           "peak_price": money(peak.get(str(d.get("price_id"))), cur)}
                           for d in sv.get("durations") or []],
             # None = every method the club allows (see GET /)
             "payment_methods": ([_METHOD_FOR_MODE.get(m, m) for m in modes] if modes else None),
+            "equipment": [{"id": str(e["id"]), "name": e.get("name"),
+                           "price": money(e.get("amount_minor"), e.get("currency_code") or cur)}
+                          for e in kit.get(sv["product_id"]) or []],
         })
     return jsonify(services=out), 200
 
@@ -285,55 +297,70 @@ def _parse_start(v):
     return dt if dt.tzinfo else None
 
 
+def _booking_request(b):
+    """Parse a book/quote body. Returns (parsed, None) or (None, error response)."""
+    starts = _parse_start(b.get("starts_at"))
+    if starts is None:
+        return None, error("BAD_REQUEST", "starts_at must be an ISO time with a UTC offset", 400)
+    try:
+        minutes = int(b.get("duration_minutes") or 0)
+    except (TypeError, ValueError):
+        minutes = 0
+    if minutes <= 0:
+        return None, error("BAD_REQUEST", "duration_minutes is required", 400)
+    method = (b.get("payment_method") or "").strip()
+    if method not in PAYMENT_METHODS:
+        return None, error("BAD_REQUEST", "payment_method must be one of " + ", ".join(PAYMENT_METHODS), 400)
+    return {"starts": starts, "minutes": minutes, "method": method,
+            "players": b.get("players") or []}, None
+
+
+def _lane_create(s, club, p, b, req):
+    """ONE call into diary.bookings.create_booking for both booking and quoting, so a quote is
+    exactly what a booking would do."""
+    from diary import bookings as bookings_mod
+    from diary.booking_request import extra_players
+    players = req["players"]
+    extras = extra_players(s, p, {"booking_type": "court", "extra_clients": players,
+                                  "seats": len(players) + 1}, owner_uid=p.user_id, is_staff=False)
+    return bookings_mod.create_booking(
+        s, club_id=str(club["id"]), booked_by_user_id=p.user_id, role=p.role,
+        booking_type="court", resource_id=(b.get("court_id") or "any"),
+        starts_at=req["starts"].isoformat(),
+        ends_at=(req["starts"] + timedelta(minutes=req["minutes"])).isoformat(),
+        settlement_mode=PAYMENT_METHODS[req["method"]], audience="member",
+        product_id=b.get("service_id"),
+        addons=[{"resource_id": a.get("equipment_id"), "qty": a.get("quantity", 1)}
+                for a in (b.get("addons") or []) if isinstance(a, dict)],
+        extra_clients=extras or None, seats=(len(players) + 1 if players else None),
+        visibility="private")
+
+
 @api_v1_bp.post("/bookings")
 @endpoint
 def create_booking(club, p):
     """{service_id, court_id | "any", starts_at (ISO, with offset), duration_minutes,
         payment_method: card|at_club|account|pack|membership, addons?: [{equipment_id, quantity}],
         players?: [{email} | {user_id}]}  +  Idempotency-Key header."""
-    from diary import bookings as bookings_mod
-    from diary.booking_request import apply_min_profile, extra_players
+    from diary.booking_request import apply_min_profile
     b = _body()
     # The key is checked BEFORE anything is written (the first-booking details step below saves).
     if not (request.headers.get("Idempotency-Key") or "").strip():
         return error("IDEMPOTENCY_KEY_REQUIRED",
                      "send an Idempotency-Key header (any unique string, max 200 chars)", 400)
-    starts = _parse_start(b.get("starts_at"))
-    if starts is None:
-        return error("BAD_REQUEST", "starts_at must be an ISO time with a UTC offset", 400)
-    try:
-        minutes = int(b.get("duration_minutes") or 0)
-    except (TypeError, ValueError):
-        minutes = 0
-    if minutes <= 0:
-        return error("BAD_REQUEST", "duration_minutes is required", 400)
-    method = (b.get("payment_method") or "").strip()
-    if method not in PAYMENT_METHODS:
-        return error("BAD_REQUEST", "payment_method must be one of " + ", ".join(PAYMENT_METHODS), 400)
-
+    req, bad = _booking_request(b)
+    if bad:
+        return bad
     # First booking: the club needs the member's name + phone (the same rule the app applies).
     missing = apply_min_profile(p, b)
     if missing:
         return error("PROFILE_INCOMPLETE", "complete your details first (PATCH /me or send them here)",
                      422, needs_profile=missing)
-
-    players = b.get("players") or []
-    lane_body = {"booking_type": "court", "extra_clients": players, "seats": len(players) + 1}
     with session_scope() as s:
         key, early = _idem_begin(s, club, p, "POST /bookings")
         if early:
             return early
-        extras = extra_players(s, p, lane_body, owner_uid=p.user_id, is_staff=False)
-        res = bookings_mod.create_booking(
-            s, club_id=str(club["id"]), booked_by_user_id=p.user_id, role=p.role,
-            booking_type="court", resource_id=(b.get("court_id") or "any"),
-            starts_at=starts.isoformat(), ends_at=(starts + timedelta(minutes=minutes)).isoformat(),
-            settlement_mode=PAYMENT_METHODS[method], audience="member",
-            product_id=b.get("service_id"),
-            addons=[{"resource_id": a.get("equipment_id"), "qty": a.get("quantity", 1)}
-                    for a in (b.get("addons") or []) if isinstance(a, dict)],
-            extra_clients=extras or None, seats=(len(players) + 1 if players else None),
-            visibility="private")
+        res = _lane_create(s, club, p, b, req)
         if not res.get("ok"):
             _idem_release(s, club, p, key)
             return _from_lane(res)
@@ -341,6 +368,44 @@ def create_booking(club, p):
         body = {"booking": view}
         _idem_finish(s, club, p, key, 201, body)
     return jsonify(body), 201
+
+
+@api_v1_bp.post("/quotes")
+@endpoint
+def quote(club, p):
+    """The same body as POST /bookings → what that booking WOULD be: its court, total, line items and
+    how it would be paid (a membership that doesn't cover this slot shows as card/at_club), or the
+    exact refusal a booking would get. Nothing is kept and nothing is announced: it runs the real
+    booking inside a savepoint that is always rolled back, with emits silenced."""
+    from marketing_crm.tracking.client import suppressed
+    b = _body()
+    req, bad = _booking_request(b)
+    if bad:
+        return bad
+    with session_scope() as s:
+        sp = s.begin_nested()
+        try:
+            with suppressed():
+                res = _lane_create(s, club, p, b, req)
+                if not res.get("ok"):
+                    return _from_lane(res)
+                v = _booking_view(s, club, res["booking"]["id"])
+                order_id = res["booking"].get("order_id")
+                lines = [] if not order_id else [
+                    {"description": r["description"], "quantity": int(r["qty"] or 1),
+                     "amount": money(r["amount_minor"], v["payment"]["amount"]["currency"])}
+                    for r in s.execute(text("SELECT description, qty, amount_minor FROM billing.order_line "
+                                            "WHERE order_id = :o ORDER BY created_at, id"),
+                                       {"o": str(order_id)}).mappings().all()]
+        finally:
+            if sp.is_active:
+                sp.rollback()
+    return jsonify(quote={
+        "court": v["court"], "service_id": v["service_id"], "starts_at": v["starts_at"],
+        "ends_at": v["ends_at"], "duration_minutes": v["duration_minutes"],
+        "payment_method": v["payment"]["method"], "total": v["payment"]["amount"],
+        "card_payment_due": v["payment"]["card_payment_due"], "lines": lines,
+    }), 200
 
 
 @api_v1_bp.get("/bookings")
@@ -390,6 +455,125 @@ def cancel_booking(club, p, booking_id):
             return _from_lane(res)
         view = _public(_booking_view(s, club, booking_id))
     return jsonify(booking=view, fee=money(res.get("fee_minor") or 0, club["currency_code"])), 200
+
+
+@api_v1_bp.post("/bookings/<booking_id>/reschedule")
+@endpoint
+def reschedule(club, p, booking_id):
+    """{starts_at?, duration_minutes?, court_id?} — move time and/or court. The same money guards the
+    app's reschedule runs (a court move can't cross court services; a covered booking is re-checked
+    against the new slot)."""
+    from diary import bookings as bookings_mod
+    from iam.permissions import can
+    b = _body()
+    with session_scope() as s:
+        v = _own_booking(s, club, p, booking_id)
+        if not v:
+            return error("NOT_FOUND", "no such booking", 404)
+        bk = bookings_mod.get_booking(s, club_id=str(club["id"]), booking_id=booking_id)
+        if not bk or not can(p, "reschedule_booking", bk):
+            return error("NOT_FOUND", "no such booking", 404)
+        starts = _parse_start(b["starts_at"]) if b.get("starts_at") else _parse_start(v["starts_at"])
+        if starts is None:
+            return error("BAD_REQUEST", "starts_at must be an ISO time with a UTC offset", 400)
+        try:
+            minutes = int(b.get("duration_minutes") or v["duration_minutes"])
+        except (TypeError, ValueError):
+            return error("BAD_REQUEST", "duration_minutes must be whole minutes", 400)
+        res = bookings_mod.reschedule_booking(
+            s, club_id=str(club["id"]), booking_id=booking_id,
+            new_starts_at=starts.isoformat(), new_ends_at=(starts + timedelta(minutes=minutes)).isoformat(),
+            actor_user_id=p.user_id, role=p.role, scope="this",
+            new_court_resource_id=(b.get("court_id") or None))
+        if not res.get("ok"):
+            return _from_lane(res)
+        view = _public(_booking_view(s, club, booking_id))
+    return jsonify(booking=view), 200
+
+
+@api_v1_bp.post("/bookings/<booking_id>/promo")
+@endpoint
+def apply_promo(club, p, booking_id):
+    """{code} → the booking's order, discounted. A refusal says why (expired, not for this service,
+    already used…)."""
+    from billing import promotions
+    code = (_body().get("code") or "").strip()
+    if not code:
+        return error("BAD_REQUEST", "code is required", 400)
+    with session_scope() as s:
+        v = _own_booking(s, club, p, booking_id)
+        if not v:
+            return error("NOT_FOUND", "no such booking", 404)
+        order_id = s.execute(text("SELECT order_id FROM diary.booking WHERE id = CAST(:b AS uuid)"),
+                             {"b": booking_id}).scalar()
+        if not order_id:
+            return error("NOTHING_TO_DISCOUNT", "this booking has no charge", 409)
+        payer = s.execute(text('SELECT user_id FROM billing."order" WHERE id = :o'),
+                          {"o": str(order_id)}).scalar()
+        res = promotions.apply_to_order(s, club_id=str(club["id"]), code=code, order_id=str(order_id),
+                                        user_id=payer, actor_user_id=p.user_id)
+        if not res.get("ok"):
+            return error(str(res.get("error") or "PROMO_REFUSED").upper(),
+                         res.get("reason") or res.get("message") or "that code can't be used here", 422)
+        view = _public(_booking_view(s, club, booking_id))
+    return jsonify(booking=view, discount=money(res.get("discount_minor") or 0, club["currency_code"]),
+                   label=res.get("label")), 200
+
+
+def _me(s, club, p):
+    from iam import repositories as iam_repo
+    from iam.validation import missing_min_fields
+    from billing.me import member_plan
+    from billing.bundles import wallets_for
+    prof = iam_repo.get_profile(s, user_id=p.user_id) or {}
+    plan = member_plan(s, club_id=str(club["id"]), user_id=p.user_id) or {}
+    packs = wallets_for(s, club_id=str(club["id"]), user_id=p.user_id, active_only=True)
+    return {
+        "email": prof.get("email") or p.email,
+        "first_name": prof.get("first_name"), "surname": prof.get("surname"), "phone": prof.get("phone"),
+        "missing_details": [f["field"] for f in missing_min_fields(prof)],
+        "membership": {
+            "active": bool(plan.get("active")), "name": plan.get("name"),
+            "is_trial": bool(plan.get("is_trial")), "trial_days_left": plan.get("trial_days_left"),
+            "ends_at": (plan["current_period_end"].isoformat()
+                        if hasattr(plan.get("current_period_end"), "isoformat")
+                        else plan.get("current_period_end")),
+            "courts_free_when": plan.get("membership_window_summary"),
+        },
+        "packs": [{"id": str(w["id"]), "label": w.get("label"), "service_kind": w.get("service_kind"),
+                   "sessions_left": w.get("tokens_remaining"), "minutes_left": w.get("minutes_remaining"),
+                   "expires_at": (w["expires_at"].isoformat() if w.get("expires_at") else None)}
+                  for w in packs],
+    }
+
+
+@api_v1_bp.get("/me")
+@endpoint
+def me(club, p):
+    with session_scope() as s:
+        out = _me(s, club, p)
+    return jsonify(me=out), 200
+
+
+@api_v1_bp.patch("/me")
+@endpoint
+def update_me(club, p):
+    """{first_name?, surname?, phone?, marketing_opt_in?} — the details a first booking needs."""
+    from diary.booking_request import apply_min_profile
+    b = _body()
+    body = {k: b.get(k) for k in ("first_name", "surname", "phone", "marketing_opt_in") if k in b}
+    if p.role == "member":
+        apply_min_profile(p, body)
+    else:   # staff aren't asked at booking time, but may still keep their own details current
+        from iam import repositories as iam_repo
+        fields = {k: (body.get(k) or "").strip() for k in ("first_name", "surname", "phone")
+                  if (body.get(k) or "").strip()}
+        if fields:
+            with session_scope() as s:
+                iam_repo.patch_profile(s, user_id=p.user_id, fields=fields)
+    with session_scope() as s:
+        out = _me(s, club, p)
+    return jsonify(me=out), 200
 
 
 def _allowed_return(club, url):

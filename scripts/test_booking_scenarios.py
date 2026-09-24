@@ -214,6 +214,8 @@ def _open_all_courts(s, fx):
 _HTTP = {}
 
 
+_ORIGINAL_DIARY_EMIT = None   # set in main() before diary.events.emit is stubbed
+
 def _http_client():
     if "client" not in _HTTP:
         # Importing `app` builds the Flask app, which runs the boot DDL on its own connection. That
@@ -5262,8 +5264,9 @@ def sc_the_public_api_books_a_court_end_to_end(s, fx):
     st, body = _api(s, me, "GET", base + "/court-services")
     svc = next((x for x in body.get("services", []) if x["id"] == str(fx.court_product)), None)
     check("GET court-services → the court service with its priced lengths",
-          st == 200 and svc and {"minutes": 60, "price": {"amount_minor": 15000, "currency": "ZAR"}}
-          in svc["durations"], body)
+          st == 200 and svc and any(d["minutes"] == 60 and d["price"] == {"amount_minor": 15000,
+                                                                          "currency": "ZAR"}
+                                    for d in svc["durations"]), body)
 
     st, body = _api(s, me, "GET", base + f"/availability?date={fx.target.isoformat()}&duration=60")
     check("GET availability → priced slots inside opening hours",
@@ -5385,7 +5388,82 @@ def sc_the_booking_route_keeps_a_courts_named_playmates(s, fx):
     check("the named playmate is on the court booking", st in (200, 201) and str(mate) in party,
           (st, body, party))
 
+def sc_the_public_api_quotes_moves_and_knows_the_member(s, fx):
+    print("\n# The PUBLIC API: /me, a QUOTE that keeps and announces nothing, and a move that obeys the booking rules")
+    import diary.events as DE
+    from marketing_crm.tracking import client as TC
+    slug = s.execute(text("SELECT slug FROM club.club WHERE id = :c"), {"c": fx.club_id}).scalar()
+    base = f"/api/v1/clubs/{slug}"
+    me = "member1@scratch.test"
+
+    st, body = _api(s, me, "GET", base + "/me")
+    check("GET /me → who I am here, what's missing, no membership, no packs",
+          st == 200 and body["me"]["email"] == me and "phone" in body["me"]["missing_details"]
+          and body["me"]["membership"]["active"] is False and body["me"]["packs"] == [], body)
+    st, body = _api(s, me, "PATCH", base + "/me", json={"surname": "Quote", "phone": "0825550000"})
+    check("PATCH /me completes the details a first booking needs",
+          st == 200 and body["me"]["missing_details"] == [] and body["me"]["surname"] == "Quote", body)
+
+    req = {"service_id": str(fx.court_product), "court_id": "any", "starts_at": at(fx, 10).isoformat(),
+           "duration_minutes": 60, "payment_method": "at_club"}
+    # A quote runs the REAL booking and rolls it back. Prove it announces nothing: put the real diary
+    # emit back (the harness stubs it) and catch any thread the CRM emit would start.
+    started = []
+    real_emit, real_thread = DE.emit, TC.threading.Thread
+
+    class _Rec:
+        def __init__(self, *a, **k):
+            started.append(k.get("args"))
+        def start(self):
+            pass
+    try:
+        TC.threading.Thread = _Rec
+        DE.emit = _ORIGINAL_DIARY_EMIT
+        st, q = _api(s, me, "POST", base + "/quotes", json=req)
+        quiet = list(started)
+        st_b, booked = _api(s, me, "POST", base + "/bookings", json=req, headers={"Idempotency-Key": "q-real"})
+        loud = list(started)
+    finally:
+        DE.emit = real_emit
+        TC.threading.Thread = real_thread
+    qq = q.get("quote") or {}
+    check("POST /quotes → the court, the R150 total and its line, paid at the club",
+          st == 200 and qq.get("total") == {"amount_minor": 15000, "currency": "ZAR"}
+          and qq.get("payment_method") == "at_club" and len(qq.get("lines") or []) == 1
+          and qq["court"]["id"] in {str(c) for c in fx.courts}, q)
+    check("...and it announced NOTHING (no confirmation email, no event)", quiet == [], quiet)
+    check("...while the real booking straight after DID announce itself (the check can fail)",
+          st_b == 201 and len(loud) > 0, (booked, loud))
+    n = s.execute(text("SELECT count(*) FROM diary.booking WHERE club_id = :c AND starts_at = :t "
+                       "AND status IN ('held','confirmed')"), {"c": fx.club_id, "t": at(fx, 10)}).scalar()
+    check("...and the quote KEPT nothing — only the real booking holds a court", n == 1, n)
+    st, q2 = _api(s, me, "POST", base + "/quotes", json=dict(req, starts_at=at(fx, 7).isoformat()))
+    check("a quote gives the exact refusal a booking would (OUTSIDE_OPENING_HOURS)",
+          st == 422 and q2["error"]["code"] == "OUTSIDE_OPENING_HOURS", q2)
+
+    bid = (booked.get("booking") or {}).get("id")
+    st, mv = _api(s, me, "POST", base + f"/bookings/{bid}/reschedule",
+                  json={"starts_at": at(fx, 12).isoformat()})
+    check("reschedule → moved to 12:00, same length",
+          st == 200 and mv["booking"]["starts_at"] == at(fx, 12).astimezone(timezone.utc).isoformat()
+          and mv["booking"]["duration_minutes"] == 60, mv)
+    st, mv2 = _api(s, me, "POST", base + f"/bookings/{bid}/reschedule",
+                   json={"starts_at": at(fx, 7).isoformat()})
+    check("a member can't MOVE a court outside its hours either (the create rule, on reschedule)",
+          st == 422 and mv2["error"]["code"] == "OUTSIDE_OPENING_HOURS", mv2)
+    st, mv3 = _api(s, me, "POST", base + f"/bookings/{bid}/reschedule",
+                   json={"starts_at": at(fx, 12).isoformat(), "duration_minutes": 75})
+    check("...nor stretch it to a length the club doesn't sell",
+          st == 422 and mv3["error"]["code"] == "DURATION_NOT_OFFERED", mv3)
+    st, pr = _api(s, me, "POST", base + f"/bookings/{bid}/promo", json={"code": "NOPE-NOT-A-CODE"})
+    check("an unknown promo code → a clear refusal", st == 422 and pr["error"]["code"] == "PROMO_NOT_FOUND", pr)
+    st, svcs = _api(s, me, "GET", base + "/court-services")
+    svc = next((x for x in svcs.get("services", []) if x["id"] == str(fx.court_product)), {})
+    check("court-services carries equipment and peak price slots (null when the club has none)",
+          st == 200 and "equipment" in svc and all("peak_price" in d for d in svc.get("durations", [])), svcs)
+
 SCENARIOS = [
+    sc_the_public_api_quotes_moves_and_knows_the_member,
     sc_the_public_api_books_a_court_end_to_end,
     sc_the_public_api_card_checkout_goes_to_the_clubs_own_provider,
     sc_the_booking_route_keeps_a_courts_named_playmates,
@@ -5499,6 +5577,8 @@ def main():
     # its own tests), so stub emit to a no-op for the run. bookings/classes both call the module
     # attribute diary.events.emit, so this one patch covers both lanes.
     import diary.events
+    global _ORIGINAL_DIARY_EMIT
+    _ORIGINAL_DIARY_EMIT = diary.events.emit     # kept for the ONE scenario that proves a quote is silent
     diary.events.emit = lambda *a, **k: False
     _http_client()        # build the Flask app (and its boot DDL) before any lock is held
     engine = get_engine()

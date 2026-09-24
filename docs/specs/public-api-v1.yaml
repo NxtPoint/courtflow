@@ -1,0 +1,243 @@
+openapi: 3.0.3
+info:
+  title: CourtFlow public API
+  version: "1"
+  description: |
+    Court hire, for any front end (a club's own app, a partner such as Ten-Fifty5, a mobile app).
+    Design and rules: docs/specs/PUBLIC-API.md. THIS FILE IS THE CONTRACT — `python -m scripts.audit_docs`
+    fails if a route in api_v1/routes.py is missing here, or a path here has no route.
+
+    Within v1 changes are ADDITIVE only (new fields / endpoints). Clients must ignore unknown fields.
+    Money is always {amount_minor, currency}. Times are ISO-8601 with a UTC offset.
+    Every error is: HTTP status + {"error": {"code": "UPPER_SNAKE", "message": "...", "details": {...}}}.
+    Writes that create something (POST /bookings, POST /bookings/{id}/checkout) need an
+    Idempotency-Key header; a retry with the same key returns the first response.
+servers:
+  - url: https://courtflow-api.onrender.com/api/v1
+security:
+  - clerkJwt: []
+
+components:
+  securitySchemes:
+    clerkJwt:
+      type: http
+      scheme: bearer
+      description: |
+        A Clerk session token — the club's own login, or an outside login service the club accepts
+        (club.policy.accepted_login_issuers; the token must carry email_verified=true).
+  parameters:
+    club:
+      name: club_slug
+      in: path
+      required: true
+      schema: {type: string}
+    booking:
+      name: booking_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    idempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, maxLength: 200}
+  schemas:
+    Money:
+      type: object
+      properties:
+        amount_minor: {type: integer, description: "cents"}
+        currency: {type: string, example: ZAR}
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: {type: string, example: SLOT_TAKEN}
+            message: {type: string}
+            details: {type: object}
+    PaymentMethod:
+      type: string
+      enum: [card, at_club, account, pack, membership]
+    Booking:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        status: {type: string, enum: [held, confirmed, cancelled, completed]}
+        court: {type: object, properties: {id: {type: string}, name: {type: string}}}
+        service_id: {type: string, nullable: true}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+        duration_minutes: {type: integer}
+        payment:
+          type: object
+          properties:
+            method: {$ref: "#/components/schemas/PaymentMethod"}
+            amount: {$ref: "#/components/schemas/Money"}
+            status: {type: string, description: "due | paid | none | void | refunded ..."}
+            card_payment_due: {type: boolean}
+        hold_expires_at: {type: string, format: date-time, nullable: true,
+                          description: "a card booking not paid by then is released"}
+    BookingRequest:
+      type: object
+      required: [starts_at, duration_minutes, payment_method]
+      properties:
+        service_id: {type: string, description: "a court service from GET /court-services"}
+        court_id: {type: string, description: "a court id, or \"any\" for the server to pick"}
+        starts_at: {type: string, format: date-time}
+        duration_minutes: {type: integer}
+        payment_method: {$ref: "#/components/schemas/PaymentMethod"}
+        addons:
+          type: array
+          items: {type: object, properties: {equipment_id: {type: string}, quantity: {type: integer}}}
+        players:
+          type: array
+          description: "named playmates (members, or your own dependants)"
+          items: {type: object, properties: {email: {type: string}, user_id: {type: string}}}
+        first_name: {type: string, description: "first booking only: the details the club needs"}
+        surname: {type: string}
+        phone: {type: string}
+
+  responses:
+    Error:
+      description: Refused — see error.code
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+
+paths:
+  /clubs/{club_slug}:
+    get:
+      summary: The club — name, timezone, currency, booking window, payment methods, branding
+      parameters: [{$ref: "#/components/parameters/club"}]
+      responses:
+        "200": {description: OK}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+
+  /clubs/{club_slug}/me:
+    get:
+      summary: The caller at this club — details still missing, membership, packs
+      parameters: [{$ref: "#/components/parameters/club"}]
+      responses:
+        "200": {description: OK}
+    patch:
+      summary: Complete the details a first booking needs (first_name, surname, phone, marketing_opt_in)
+      parameters: [{$ref: "#/components/parameters/club"}]
+      responses:
+        "200": {description: OK}
+
+  /clubs/{club_slug}/court-services:
+    get:
+      summary: Court services with their lengths, prices, peak prices, payment methods and equipment
+      parameters: [{$ref: "#/components/parameters/club"}]
+      responses:
+        "200": {description: OK}
+
+  /clubs/{club_slug}/availability:
+    get:
+      summary: Free slots, each priced for THIS caller (membership-covered = 0, peak applied)
+      parameters:
+        - {$ref: "#/components/parameters/club"}
+        - {name: service, in: query, schema: {type: string}}
+        - {name: date, in: query, schema: {type: string, format: date}}
+        - {name: from, in: query, schema: {type: string, format: date}}
+        - {name: to, in: query, schema: {type: string, format: date}}
+        - {name: duration, in: query, required: true, schema: {type: integer}}
+      responses:
+        "200": {description: OK}
+        "400": {$ref: "#/components/responses/Error"}
+
+  /clubs/{club_slug}/quotes:
+    post:
+      summary: What a booking WOULD be — court, total, lines, payment method — or its exact refusal. Keeps nothing.
+      parameters: [{$ref: "#/components/parameters/club"}]
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BookingRequest"}
+      responses:
+        "200": {description: OK}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+
+  /clubs/{club_slug}/bookings:
+    get:
+      summary: The caller's own court bookings (?from=&to=)
+      parameters: [{$ref: "#/components/parameters/club"}]
+      responses:
+        "200": {description: OK}
+    post:
+      summary: Book a court
+      description: |
+        Refusals include SLOT_TAKEN, NO_COURT_AVAILABLE, OUTSIDE_OPENING_HOURS, COURT_BLOCKED,
+        DURATION_NOT_OFFERED, OUTSIDE_BOOKING_WINDOW, SETTLEMENT_NOT_ALLOWED, NO_TOKEN,
+        PROFILE_INCOMPLETE (details.needs_profile), IDEMPOTENCY_KEY_REQUIRED.
+      parameters:
+        - {$ref: "#/components/parameters/club"}
+        - {$ref: "#/components/parameters/idempotencyKey"}
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/BookingRequest"}
+      responses:
+        "201":
+          description: Booked (status held = card payment due before hold_expires_at)
+          content:
+            application/json:
+              schema: {type: object, properties: {booking: {$ref: "#/components/schemas/Booking"}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+
+  /clubs/{club_slug}/bookings/{booking_id}:
+    get:
+      summary: One of the caller's bookings (someone else's is 404)
+      parameters: [{$ref: "#/components/parameters/club"}, {$ref: "#/components/parameters/booking"}]
+      responses:
+        "200": {description: OK}
+        "404": {$ref: "#/components/responses/Error"}
+
+  /clubs/{club_slug}/bookings/{booking_id}/reschedule:
+    post:
+      summary: Move time and/or court ({starts_at?, duration_minutes?, court_id?})
+      parameters: [{$ref: "#/components/parameters/club"}, {$ref: "#/components/parameters/booking"}]
+      responses:
+        "200": {description: OK}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+
+  /clubs/{club_slug}/bookings/{booking_id}/cancel:
+    post:
+      summary: Cancel ({reason?}); returns the booking and any late-cancellation fee
+      parameters: [{$ref: "#/components/parameters/club"}, {$ref: "#/components/parameters/booking"}]
+      responses:
+        "200": {description: OK}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+
+  /clubs/{club_slug}/bookings/{booking_id}/promo:
+    post:
+      summary: Apply a promo code ({code}) to the booking's charge
+      parameters: [{$ref: "#/components/parameters/club"}, {$ref: "#/components/parameters/booking"}]
+      responses:
+        "200": {description: OK}
+        "422": {$ref: "#/components/responses/Error"}
+
+  /clubs/{club_slug}/bookings/{booking_id}/checkout:
+    post:
+      summary: Start card payment into the CLUB's own account → {provider, redirect_url, expires_at}
+      description: |
+        Send the player to redirect_url. The booking confirms when the provider tells CourtFlow it was
+        paid — not when the player comes back. return_url must be on the club's allow-list
+        (club.policy.allowed_return_origins) or the club's own domain.
+      parameters:
+        - {$ref: "#/components/parameters/club"}
+        - {$ref: "#/components/parameters/booking"}
+        - {$ref: "#/components/parameters/idempotencyKey"}
+      responses:
+        "200": {description: OK}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}

@@ -13,10 +13,27 @@
 # We resolve account/user from the email best-effort; if unresolved we keep the email in metadata so
 # the event can be linked later. We NEVER duplicate the email into metadata once it IS linked.
 
+import contextvars
 import logging
 import threading
+from contextlib import contextmanager
 
 log = logging.getLogger("marketing_crm.tracking")
+
+# A PRICE CHECK runs a real booking inside a transaction that is always rolled back (api_v1 POST
+# /quotes), so the quote can never disagree with the charge. Nothing it would have announced happened,
+# so nothing may be announced: no confirmation email, no coach notice, no usage_event, no Klaviyo.
+# Scoped to the current request's context, so a real booking elsewhere is never silenced.
+_SUPPRESSED = contextvars.ContextVar("marketing_crm_emit_suppressed", default=False)
+
+
+@contextmanager
+def suppressed():
+    token = _SUPPRESSED.set(True)
+    try:
+        yield
+    finally:
+        _SUPPRESSED.reset(token)
 
 # Payload keys that are control/linkage, not free-form metadata. Stripped out of the JSONB blob.
 _RESERVED = {"club_id", "email", "account_id", "user_id", "person_id", "ref_type", "ref_id"}
@@ -45,6 +62,9 @@ def emit(event, payload=None):
                  (see contracts/events.md). May also carry `ref_type`/`ref_id` linkage and
                  pre-resolved `account_id`/`user_id`/`person_id`.
     """
+    if _SUPPRESSED.get():
+        log.debug("emit %s suppressed (dry run)", event)
+        return
     payload = dict(payload or {})
     try:
         threading.Thread(target=_emit, args=(event, payload), daemon=True).start()

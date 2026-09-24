@@ -11,7 +11,7 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 740 / billing 735 / statement 64** (98 / 100 / 12 `sc_*` functions).
+  **booking 752 / billing 735 / statement 64** (99 / 100 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
@@ -26,7 +26,7 @@ Flask app is built in `main()` BEFORE the harness transaction (its boot DDL woul
 forever). Use it for anything whose rule lives in a ROUTE: `sc_the_public_api_books_a_court_end_to_end`
 (v1 contract: error shape, idempotency, own-bookings-only, 404-not-403),
 `sc_the_public_api_card_checkout_goes_to_the_clubs_own_provider` (return_url allow-list, the club's own
-account, the booking's own amount) and `sc_the_booking_route_keeps_a_courts_named_playmates`.
+account, the booking's own amount) and `sc_the_booking_route_keeps_a_courts_named_playmates`, and `sc_the_public_api_quotes_moves_and_knows_the_member` (`/me`, a quote that keeps and announces nothing, a move that obeys the member court rules).
 
 **A MEMBER'S COURT BOOKING OBEYS THE RULES THE SCREEN USED TO ENFORCE**
 (`sc_a_member_court_booking_obeys_the_rules_the_screen_used_to_enforce`) — a member booking a court

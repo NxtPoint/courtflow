@@ -101,8 +101,19 @@ booking by staff, statements, the admin console.
 - **Step 3 (first cut) done (2026-09-24) — `api_v1/`**, registered in `app.py`:
   `GET /` · `GET /court-services` · `GET /availability` · `POST /bookings` · `GET /bookings` ·
   `GET /bookings/{id}` · `POST /bookings/{id}/cancel` · `POST /bookings/{id}/checkout`.
-  Still to build: `GET/PATCH /me`, `POST /quotes`, `POST /bookings/{id}/reschedule`, `POST /bookings/{id}/promo`,
-  equipment + peak detail on `court-services`, the OpenAPI file and its audit, rate limiting.
+- **Step 3 complete (2026-09-24): all 13 court-hire calls are live**, adding `GET/PATCH /me`,
+  `POST /quotes`, `POST /bookings/{id}/reschedule`, `POST /bookings/{id}/promo`, and equipment +
+  `peak_price` on `court-services`. Still to do: rate limiting.
+  - **The contract is [`public-api-v1.yaml`](public-api-v1.yaml)** (OpenAPI 3). `scripts/audit_docs`
+    checks it against `api_v1/routes.py` in BOTH directions — a route not in the file, or a path in the
+    file with no route, is a miss.
+  - **A quote IS a booking that is rolled back** — `create_booking` runs inside a savepoint that is
+    always undone, with `marketing_crm.tracking.client.suppressed()` silencing every emit (no email,
+    no coach notice, no usage_event). So a quote can never disagree with the charge, and nothing is
+    announced. `sc_the_public_api_quotes_moves_and_knows_the_member` proves both halves (and that the
+    real booking straight after DOES emit, so the silence check can fail).
+  - **A member's court RESCHEDULE now obeys the member booking rules too** (hours, blocks, and the
+    length menu when the length changes) — step 2 had covered create only.
   - The club is resolved from the URL and passed to `auth.resolve_principal(request, club_hint=)`;
     a caller whose principal lands in another club gets `403 NOT_ALLOWED_AT_THIS_CLUB`.
   - `Idempotency-Key` is stored in `api.idempotency`; a refused write releases its key.

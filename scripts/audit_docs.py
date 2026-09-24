@@ -80,6 +80,33 @@ def check_routes(docs):
     return "API routes", len(routes), missing
 
 
+def check_public_api_contract(_docs):
+    """The public API's written contract (docs/specs/public-api-v1.yaml) must list EXACTLY the routes
+    api_v1/routes.py serves — BOTH directions. A route missing from the contract is a promise nobody
+    made; a contract path with no route is a promise the API breaks. Partners code against the file."""
+    src = (ROOT / "api_v1" / "routes.py")
+    spec = (ROOT / "docs" / "specs" / "public-api-v1.yaml")
+    if not src.exists():
+        return "Public API routes vs its OpenAPI contract", 0, []
+    served = set()
+    for m in re.finditer(r"""@api_v1_bp\.(get|post|patch|put|delete)\(\s*['"]([^'"]*)""",
+                         src.read_text(encoding="utf-8")):
+        path = "/clubs/{club_slug}" + re.sub(r"<(?:\w+:)?(\w+)>", lambda g: "{" + g.group(1) + "}", m.group(2))
+        served.add(f"{m.group(1).upper()} {path}")
+    promised, current = set(), None
+    for line in (spec.read_text(encoding="utf-8").splitlines() if spec.exists() else []):
+        pm = re.match(r"^  (/\S*):\s*$", line)
+        if pm:
+            current = pm.group(1)
+            continue
+        mm = re.match(r"^    (get|post|patch|put|delete):", line)
+        if mm and current:
+            promised.add(f"{mm.group(1).upper()} {current}")
+    missing = (sorted(f"not in the contract: {r}" for r in served - promised)
+               + sorted(f"in the contract, not served: {r}" for r in promised - served))
+    return "Public API routes vs its OpenAPI contract", len(served | promised), missing
+
+
 def check_tables(docs):
     tables = set()
     for f in _tracked("*/schema.py", "schema.py"):
@@ -262,7 +289,7 @@ def main(argv):
 
     print(f"DOC AUDIT — {len(doc_paths)} docs vs the codebase   (read-only)\n")
     results = [
-        check_routes(docs), check_tables(docs), check_widgets(docs), check_dead_widgets(docs),
+        check_routes(docs), check_public_api_contract(docs), check_tables(docs), check_widgets(docs), check_dead_widgets(docs),
         check_events(docs),
         check_scenarios(docs), check_scenario_counts(docs), check_scripts(docs),
         check_undocumented_scripts(docs),

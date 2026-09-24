@@ -207,7 +207,8 @@ def _court_blocked_by_time_off(session, club_id, court_id, starts, ends):
     ).first())
 
 
-def _self_booked_court_refusal(session, *, club_id, court_id, product_id, starts, ends, audience):
+def _self_booked_court_refusal(session, *, club_id, court_id, product_id, starts, ends, audience,
+                               check_length=True):
     """The three rules the member app used to enforce ONLY on screen, now asked of the server for a
     member booking a court for themselves. A partner calling the API has no screen, so without these
     a hand-built request could book a court outside its hours, across a blocked period, or for a
@@ -227,6 +228,8 @@ def _self_booked_court_refusal(session, *, club_id, court_id, product_id, starts
             product_id=product_id) if d.get("duration_minutes")}
     except Exception:
         offered = set()
+    if not check_length:
+        return None
     minutes = int((ends - starts).total_seconds() // 60)
     # An empty list means no duration is priced at all — the price check further down refuses a
     # billable booking then, so this only speaks when the club HAS a menu and this isn't on it.
@@ -1408,6 +1411,19 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
                                         starts_at=new_s, ends_at=new_e):
                 return _err("OUTSIDE_COACH_HOURS", 422,
                             message="the coach isn't available at that time — pick an offered slot")
+        # The same for a COURT: a member's move obeys the rules a member's booking obeys (hours,
+        # blocks, a sold length), or a booking made legitimately could be MOVED to 03:00. The length
+        # is only checked when it changes, so an older booking of a length no longer sold can still
+        # be moved as it is.
+        if bk.get("booking_type") == "court":
+            _target = new_court_resource_id or bk["resource_id"]
+            _refused = _self_booked_court_refusal(
+                session, club_id=club_id, court_id=_target,
+                product_id=(bk.get("product_id") or _court_service_guarded(session, club_id, _target)),
+                starts=new_s, ends=new_e, audience="member",
+                check_length=((new_e - new_s) != (_parse_dt(bk["ends_at"]) - _parse_dt(bk["starts_at"]))))
+            if _refused:
+                return _refused
 
     # Can't stretch a PAID booking into a LONGER (pricier) slot — that would under-bill (the order is
     # already settled and we don't silently re-charge). Cancel & rebook to change a paid booking's
