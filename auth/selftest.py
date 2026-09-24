@@ -90,8 +90,15 @@ def _install_db_stub(monkey_state):
 
     iam_repo.upsert_user_by_clerk_id = _upsert
     iam_repo.memberships_for_user = lambda session, user_id: monkey_state["memberships"]
-    iam_repo.resolve_club_by_host = lambda session, host: monkey_state["host_map"].get(
-        (host or "").split(":", 1)[0].lower())
+    # A coach login flips outstanding invites — a real UPDATE the no-op session can't run. Without
+    # this stub every coach case raised inside the resolver, which fails CLOSED (None), so three
+    # tenancy checks read as failures of club resolution when they never reached it.
+    iam_repo.accept_coach_invites = lambda session, user_id: 0
+
+    def _by_host(session, host):
+        h = (host or "").split(":", 1)[0].strip().lower()   # mirror the real one: port + www.
+        return monkey_state["host_map"].get(h[4:] if h.startswith("www.") else h)
+    iam_repo.resolve_club_by_host = _by_host
 
 
 # ---- assertions ----------------------------------------------------------
@@ -179,6 +186,60 @@ def run():
     p4 = principal.resolve_principal(_FakeRequest(
         headers={"Authorization": f"Bearer {good}", "X-Club": "club-stranger"}))
     _check("X-Club not in memberships -> no club/role", p4 is not None and p4.role is None)
+
+    # The portal calls the API CROSS-ORIGIN, so Host is the API's own (unmapped) host and only the
+    # browser's Origin says which club's site the member is on. Two clubs deployed, so the
+    # sole-club fallback is gone — a brand-new signup must land in the club whose site it used.
+    from iam import repositories as iam_repo
+    state["host_map"] = {"nextpointtennis.com": NP, "book.academy.example": AC}
+    iam_repo.sole_club_id = lambda session: None          # two real clubs → ambiguous
+    joined = []
+
+    def _join(session, *, club_id, user_id, role, member_status="none"):
+        joined.append(club_id)
+        state["memberships"] = [{"club_id": club_id, "user_id": user_id, "role": role,
+                                 "member_status": member_status}]
+    iam_repo.upsert_membership = _join
+
+    state["memberships"] = []
+    p5 = principal.resolve_principal(_FakeRequest(headers={
+        "Authorization": f"Bearer {good}", "Host": "courtflow-api.onrender.com",
+        "Origin": "https://book.academy.example"}))
+    _check("signup on club B's site joins club B", joined == [AC] and p5 is not None
+           and p5.club_id == AC and p5.role == "member")
+
+    joined.clear()
+    state["memberships"] = []
+    p6 = principal.resolve_principal(_FakeRequest(headers={
+        "Authorization": f"Bearer {good}", "Host": "courtflow-api.onrender.com",
+        "Referer": "https://www.nextpointtennis.com/app.html#/book"}))
+    _check("Referer (www + path) resolves the site too", joined == [NP] and p6 is not None
+           and p6.club_id == NP)
+
+    joined.clear()
+    state["memberships"] = []
+    p7 = principal.resolve_principal(_FakeRequest(headers={
+        "Authorization": f"Bearer {good}", "Host": "courtflow-api.onrender.com",
+        "Origin": "https://unknown.example"}))
+    _check("signup from an unmapped site with two clubs joins NOTHING (no guessing)",
+           joined == [] and p7 is not None and p7.club_id is None)
+
+    # A member of BOTH clubs: the site they are on picks which club they act in.
+    state["memberships"] = [
+        {"club_id": NP, "user_id": "u", "role": "member", "member_status": "active"},
+        {"club_id": AC, "user_id": "u", "role": "member", "member_status": "active"},
+    ]
+    p8 = principal.resolve_principal(_FakeRequest(headers={
+        "Authorization": f"Bearer {good}", "Origin": "https://book.academy.example"}))
+    _check("two-club member acts in the club whose site they are on",
+           p8 is not None and p8.club_id == AC)
+    # ...and the Origin can never hand a role the user doesn't hold.
+    state["memberships"] = [{"club_id": NP, "user_id": "u", "role": "club_admin",
+                             "member_status": "active"}]
+    p9 = principal.resolve_principal(_FakeRequest(headers={
+        "Authorization": f"Bearer {good}", "Origin": "https://book.academy.example"}))
+    _check("NextPoint admin on club B's site is NOT made anything in club B",
+           p9 is not None and p9.club_id == NP and p9.role == "club_admin")
 
     # invalid JWT is rejected, never downgraded to OPS
     os.environ["OPS_KEY"] = "ops-secret"

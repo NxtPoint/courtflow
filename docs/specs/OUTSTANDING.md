@@ -100,6 +100,47 @@ look like it converts nothing until the offline-conversion loop is running.
 
 ---
 
+## ⭐ CLUB #2 — an academy on CourtFlow, with Ten-Fifty5 inside it (from 2026-09-24)
+
+An academy using Ten-Fifty5 wants NextPoint-style booking. **Decided shape:** the academy becomes
+CourtFlow club #2 on its own booking site, with the existing Ten-Fifty5 "Analysis" tab inside it
+(the same embed NextPoint members use). A booking tab inside Ten-Fifty5 is NOT planned — it would
+still need everything below AND a second login bridge.
+
+> **⚠ Do NOT create a second club row in production until items 2–5 ship.** While one club exists,
+> an unmapped request falls back to "the only club" (`iam.sole_club_id`). With two it returns
+> nothing, so any signup NOT arriving from a mapped site joins no club and gets no free week.
+
+1. ✅ **The API knows which club's SITE a request came from (2026-09-24).** The portal calls the API
+   cross-origin, so the API's own `Host` never mapped to a club; `auth/principal.py::_site_club_id`
+   now falls back to the browser's `Origin`/`Referer`. A signup joins the club whose site it used;
+   an unmapped site with two clubs joins nothing (no guessing). Memberships still gate every role.
+   Guarded by `python -m auth.selftest` (the two-club cases).
+2. **Card payments into the club's OWN Yoco account.** Today `YOCO_SECRET_KEY`/`YOCO_WEBHOOK_SECRET`
+   are global env vars (`yoco_billing/client.py`, `billing/routes.py`), so the academy's money would
+   land in NextPoint's account. Per-club encrypted keys + a per-club webhook path; env stays the
+   NextPoint fallback. **The most important remaining item.**
+3. **Login on the academy's domain.** Clerk prod is tied to `clerk.nextpointtennis.com`. Find out
+   whether Clerk satellite domains fit our plan/price, else a Clerk instance per club — **a cost
+   decision for Tomo once the facts are in.**
+4. **Per-club branding on the public pages** — `frontend/_shared/branding.py` is a static list that
+   falls back to NextPoint for any unknown host; its API lookup is a stub.
+5. **Per-club email/invoice/review details** — sender name, `APP_BASE_URL`, `GOOGLE_REVIEW_URL`,
+   BCC move onto `club.branding` (env = fallback); remove the hardcoded "NextPoint Tennis" fallbacks
+   in invoicing, the SES self-test, `marketing_crm/signing.py` and `feedback/tokens.py`.
+6. **`scripts/provision_club.py` creates a usable club** — first admin, courts, hours, starter
+   prices (reuse `seed_nextpoint.py`'s builders), dry-run by default.
+7. **Two-club harness scenarios** — club A's admin can't read club B; a club-B Yoco webhook can't
+   settle a club-A order.
+8. **Ten-Fifty5 tab for the academy** — swap the `TF5_EMBED_ALLOW_EMAILS` gate for a per-club
+   `club.policy` switch; in the Ten-Fifty5 repo add the academy's domain to
+   `TF_TRUSTED_PARENT_ORIGINS` (+ its login issuer to `AUTH_ISSUERS` if item 3 gives it one).
+
+**Owed by the academy (no code):** their own Yoco merchant account, a web address, admin emails,
+courts, hours, prices, coaches, memberships.
+
+---
+
 ## A. Config — owed by Tomo (flips dark features → live; no code)
 See **[FEATURE-FLAGS.md](FEATURE-FLAGS.md)** for the full switch-on detail of each.
 

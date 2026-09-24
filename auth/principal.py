@@ -15,7 +15,8 @@
 # is skipped entirely.
 #
 # Tenancy resolution (docs/04 §3), in order:
-#   1. Host        -> club.branding.domain / marketing_hosts -> club_id   (primary signal)
+#   1. Site        -> the API host, else the browser's Origin, matched against
+#                     club.branding.domain / marketing_hosts -> club_id   (primary signal)
 #   2. X-Club header (multi-club admin switcher) -> validated against the user's memberships
 #   3. Default     -> the user's single membership if they have exactly one
 # The resolved (club_id, role) MUST come from a membership the user actually holds.
@@ -66,6 +67,27 @@ def _request_host(request):
             or request.headers.get("Host")
             or getattr(request, "host", None)
             or "")
+
+
+def _origin_host(request):
+    """The host of the SITE the browser is on (Origin, else Referer), without scheme or path.
+
+    The portal calls the API cross-origin, so `_request_host` is always the API's own host and
+    never maps to a club. The browser sets Origin itself, so this is the only request signal
+    that says WHICH club's site the member is on. It decides nothing a member couldn't choose by
+    visiting that site anyway: it picks the club a brand-new signup joins, and breaks the tie for
+    a user who belongs to several clubs. Memberships still gate every role."""
+    o = (request.headers.get("Origin") or request.headers.get("Referer") or "").strip()
+    if not o or o == "null":
+        return ""
+    return o.split("://", 1)[-1].split("/", 1)[0]
+
+
+def _site_club_id(session, iam_repo, request):
+    """Which club's site this request came from: the API host if it is mapped (a club on its own
+    API domain), else the browser's Origin. None when neither maps to a club."""
+    return (iam_repo.resolve_club_by_host(session, _request_host(request))
+            or iam_repo.resolve_club_by_host(session, _origin_host(request)))
 
 
 def resolve_principal(request) -> Optional[Principal]:
@@ -134,7 +156,6 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
     from db import session_scope
     from iam import repositories as iam_repo
 
-    host = _request_host(request)
     x_club = (request.headers.get("X-Club") or "").strip() or None
     trial_ends = None  # set if a signup free-week is granted → drives the trial_started event
 
@@ -158,9 +179,11 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
         # 878 members never issue a needless write.
         if any(m["role"] == "coach" for m in memberships):
             iam_repo.accept_coach_invites(s, user["id"])
-        host_club_id = iam_repo.resolve_club_by_host(s, host)
+        host_club_id = _site_club_id(s, iam_repo, request)
         # Auto-enrol: any authenticated user with NO membership becomes an active 'member' of
-        # the target club (the host's club, else the single club if this deployment has one).
+        # the target club (the club whose SITE they signed up on, else the single club if this
+        # deployment has one). With two clubs `sole_club_id` is None, so the site is what keeps
+        # signups working — a signup from an unmapped site joins nothing rather than a guess.
         # New sign-ups land in the portal as members (they then choose PAYG or buy a
         # membership) instead of hitting "No active club". Admins/coaches are seeded/invited,
         # so they already hold a row and skip this.
