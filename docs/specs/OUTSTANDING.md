@@ -100,14 +100,20 @@ look like it converts nothing until the offline-conversion loop is running.
 
 ---
 
-## ⭐ CLUB #2 — an academy on CourtFlow, with Ten-Fifty5 inside it (from 2026-09-24)
+## ⭐ CLUB #2 — an academy booking courts INSIDE Ten-Fifty5 (from 2026-09-24)
 
-An academy using Ten-Fifty5 wants NextPoint-style booking. **Decided shape:** the academy becomes
-CourtFlow club #2 on its own booking site, with the existing Ten-Fifty5 "Analysis" tab inside it
-(the same embed NextPoint members use). A booking tab inside Ten-Fifty5 is NOT planned — it would
-still need everything below AND a second login bridge.
+An academy using Ten-Fifty5 wants NextPoint-style booking. **Decided by Tomo 2026-09-24:** the
+academy's players book **inside Ten-Fifty5** — one product, one login (Ten-Fifty5's). The academy is
+still its own CourtFlow club (courts, prices, members, its OWN payment account); Ten-Fifty5 shows
+CourtFlow's own booking screens in an iframe and CourtFlow accepts Ten-Fifty5's login. Ten-Fifty5
+does NOT rebuild booking against an API (months of work, two copies). It is the mirror of the
+existing embed (NextPoint shows Ten-Fifty5). **Money:** Ten-Fifty5's PayPal collects only the
+academy's subscription; what players pay for courts/lessons is the academy's and goes to the
+academy's own account. Standalone club sites (NextPoint, future direct clubs) keep working as-is.
+**Clerk satellite domains were rejected:** sign-in must happen on the PRIMARY domain (academy
+players would land on NextPoint's login), vanilla JS isn't a supported framework, $25+$10/mo.
 
-> **⚠ Do NOT create a second club row in production until items 2–5 ship.** While one club exists,
+> **⚠ Do NOT create a second club row in production until items 3–5 ship.** While one club exists,
 > an unmapped request falls back to "the only club" (`iam.sole_club_id`). With two it returns
 > nothing, so any signup NOT arriving from a mapped site joins no club and gets no free week.
 
@@ -122,23 +128,33 @@ still need everything below AND a second login bridge.
    charged through NextPoint's account. NextPoint's keys and webhook URL are unchanged. Env over
    encrypted-DB on purpose: no master key to lose, secrets never in a DB backup; revisit at dozens of
    clubs. `sc_each_club_is_paid_into_its_own_yoco_account`.
-3. **Login on the academy's domain.** Clerk prod is tied to `clerk.nextpointtennis.com`. Find out
-   whether Clerk satellite domains fit our plan/price, else a Clerk instance per club — **a cost
-   decision for Tomo once the facts are in.**
-4. **Per-club branding on the public pages** — `frontend/_shared/branding.py` is a static list that
-   falls back to NextPoint for any unknown host; its API lookup is a stub.
+3. **CourtFlow accepts Ten-Fifty5's login — but ONLY in clubs that opted in.** `auth/verifier.py`
+   trusts one issuer; make it a list (mirror Ten-Fifty5's `auth_v2` `AUTH_ISSUERS`). A token from
+   a secondary issuer may act ONLY in clubs allowlisted for that issuer — else a Ten-Fifty5 signup
+   could join NextPoint and take a free week, or worse (next point).
+   **⚠ Identity risk to close first:** `iam.upsert_user_by_clerk_id` links an unknown login to an
+   existing user BY EMAIL and overwrites their `clerk_user_id`. A Ten-Fifty5 account with the email of
+   a NextPoint staff member (e.g. the platform admin) would inherit that person's roles. Store
+   identities as (issuer, sub) without overwriting, require a verified email to link, and take roles
+   only from memberships in the issuer's allowed clubs.
+4. **CourtFlow's screens run inside Ten-Fifty5.** The child relay in `auth_client.js` already exists
+   (`inIframe` → `callParent`) and speaks the same `__tfauth` protocol Ten-Fifty5 serves; add a
+   trusted-PARENT origin check (responses are accepted from any origin today). The club comes from a
+   `?club=<slug>` on the iframe URL (the Origin is CourtFlow's own inside a frame) → sent as a header
+   → `_site_club_id`. Branding for that club by slug, not host. **Yoco's hosted checkout must open
+   top-level** (payment pages usually refuse to be framed) — verify.
 5. **Per-club email/invoice/review details** — sender name, `APP_BASE_URL`, `GOOGLE_REVIEW_URL`,
    BCC move onto `club.branding` (env = fallback); remove the hardcoded "NextPoint Tennis" fallbacks
    in invoicing, the SES self-test, `marketing_crm/signing.py` and `feedback/tokens.py`.
 6. **`scripts/provision_club.py` creates a usable club** — first admin, courts, hours, starter
    prices (reuse `seed_nextpoint.py`'s builders), dry-run by default.
-7. **Two-club harness scenarios** — club A's admin can't read club B; a club-B Yoco webhook can't
-   settle a club-A order.
-8. **Ten-Fifty5 tab for the academy** — swap the `TF5_EMBED_ALLOW_EMAILS` gate for a per-club
-   `club.policy` switch; in the Ten-Fifty5 repo add the academy's domain to
-   `TF_TRUSTED_PARENT_ORIGINS` (+ its login issuer to `AUTH_ISSUERS` if item 3 gives it one).
+7. **Two-club harness scenarios** — club A's admin can't read club B; a Ten-Fifty5 login can't act in
+   NextPoint.
+8. **Ten-Fifty5 side (that repo's session owns it):** a "Book" tab iframing
+   `<courtflow>/app.html?club=<core.org.courtflow_club_slug>`; serve its token to the CourtFlow origin
+   (its `serveChild` is same-origin only today).
 
-**Owed by the academy (no code):** their own Yoco merchant account, a web address, admin emails,
+**Owed by the academy (no code):** their own Yoco merchant account, admin emails,
 courts, hours, prices, coaches, memberships.
 
 ---
