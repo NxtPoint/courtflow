@@ -171,10 +171,39 @@ def yoco_checkout():
 # POST /api/billing/yoco/webhook — verify -> normalize -> apply_payment_event
 # ---------------------------------------------------------------------------
 
+# ONE URL PER CLUB. Each club's Yoco account is set up (in Yoco's dashboard) to send its webhooks to
+# /api/billing/yoco/webhook/<club slug>, and is verified with THAT club's webhook secret. The original
+# slug-less URL is the DEFAULT club's (NextPoint's), unchanged, so nothing about the live account moves.
 @yoco_bp.post("/api/billing/yoco/webhook")
 def yoco_webhook():
+    return _handle_webhook(None)
+
+
+@yoco_bp.post("/api/billing/yoco/webhook/<club_slug>")
+def yoco_webhook_for_club(club_slug):
+    return _handle_webhook(club_slug)
+
+
+def _event_belongs_elsewhere(s, event, verified_club_id) -> bool:
+    """True if a correctly-signed event names an order in ANOTHER club. The signature proves which
+    club's Yoco account sent it; the money it reports can only settle that club's orders."""
+    if not verified_club_id:
+        return False
+    if event.club_id and str(event.club_id) != verified_club_id:
+        return True
+    if event.order_ref:
+        from sqlalchemy import text
+        oc = s.execute(text('SELECT club_id FROM billing."order" WHERE id::text = :o'),
+                       {"o": str(event.order_ref)}).scalar()
+        if oc is not None and str(oc) != verified_club_id:
+            return True
+    return False
+
+
+def _handle_webhook(club_slug):
     from billing.gateway import get_gateway
     from billing.events import apply_payment_event
+    from yoco_billing.credentials import club_id_for_slug, default_club_slug
 
     gw = get_gateway("yoco")
     if gw is None:
@@ -182,7 +211,7 @@ def yoco_webhook():
         return jsonify(ok=True, ignored="no_gateway"), 200
 
     # verify_webhook reads the RAW body (request.get_data()) before any JSON parsing.
-    if not gw.verify_webhook(request):
+    if not gw.verify_webhook(request, club_slug=club_slug):
         return jsonify(error="invalid_signature"), 401
 
     payload = request.get_json(silent=True) or {}
@@ -193,6 +222,23 @@ def yoco_webhook():
         return jsonify(error="parse_failed"), 400
 
     from db import session_scope
+    try:
+        with session_scope() as s:
+            slug = club_slug or default_club_slug()
+            verified_club = club_id_for_slug(s, slug)
+            if verified_club is None:
+                # The default slug not resolving must never stop NextPoint's payments landing, so
+                # this only warns. (For a slug URL it cannot happen: an unknown slug has no secret
+                # and already failed the signature check above.)
+                log.warning("yoco webhook: club slug %r not found — cross-club check skipped", slug)
+            elif _event_belongs_elsewhere(s, event, verified_club):
+                log.error("yoco webhook from %s's account names an order in another club "
+                          "(order=%s event_club=%s) — ignored", slug, event.order_ref, event.club_id)
+                return jsonify(ok=True, ignored="wrong_club"), 200
+    except Exception:
+        log.exception("yoco webhook club check failed")
+        return jsonify(error="internal"), 500
+
     try:
         # Settlement + membership activation in ONE transaction. apply_payment_event keeps its
         # OWN idempotency intact: passing `session` joins (doesn't change) its logic, and on a

@@ -57,6 +57,7 @@ class YocoGateway:
         currency = _get(order, "currency_code") or "ZAR"
 
         resp = client.create_checkout(
+            club_id=club_id,            # into THIS club's own Yoco account
             amount_minor=amount,
             currency=currency,
             metadata={"order_id": order_id, "club_id": str(club_id) if club_id else None},
@@ -71,11 +72,15 @@ class YocoGateway:
             extra={"status": resp.get("status"), "order_id": order_id},
         )
 
-    def verify_webhook(self, request) -> bool:
-        """Standard-Webhooks signature check. Reads the RAW body (the exact bytes Yoco
-        signed) before any JSON parsing."""
+    def verify_webhook(self, request, club_slug: Optional[str] = None) -> bool:
+        """Standard-Webhooks signature check, against the webhook secret of the club whose
+        endpoint received it (the default club on the original, slug-less URL). Reads the RAW
+        body (the exact bytes Yoco signed) before any JSON parsing."""
+        from yoco_billing.credentials import default_club_slug, webhook_secret_for_slug
         raw = request.get_data()
-        return client.verify_signature(headers=request.headers, raw_body=raw)
+        return client.verify_signature(
+            headers=request.headers, raw_body=raw,
+            secret=webhook_secret_for_slug(club_slug or default_club_slug()))
 
     def parse_event(self, payload) -> NormalizedPaymentEvent:
         """Map a Yoco webhook envelope to the normalized event. Yoco wraps the resource in
@@ -128,6 +133,7 @@ class YocoGateway:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
         amt_tag = "full" if amount_minor is None else str(int(amount_minor))
         resp = client.refund_checkout(
+            club_id=_get(payment, "club_id"),   # refunded FROM the account that took the money
             checkout_id=str(checkout_id),
             amount_minor=amount_minor,
             idempotency_key=f"refund:{checkout_id}:{amt_tag}:{stamp}",

@@ -395,7 +395,7 @@ def sc_reconcile_guard_activates_pack(s, fx):
                    "VALUES (:c,:o,'yoco','ch_guard_1','created')"), {"c": fx.club_id, "o": oid})
     # Stub Yoco's GET checkout → a COMPLETED checkout with a paymentId (no network).
     _orig = yoco_client.get_checkout
-    yoco_client.get_checkout = lambda checkout_id: {
+    yoco_client.get_checkout = lambda checkout_id, **_kw: {
         "status": "completed", "paymentId": "p_guard_reco_1",
         "amount": 170000, "currency": "ZAR", "metadata": {"club_id": str(fx.club_id)}}
     try:
@@ -3291,7 +3291,7 @@ def sc_refund_finds_the_checkout_that_holds_the_money(s, fx):
     probed = []
     _orig = yoco_client.get_checkout
 
-    def _stub(checkout_id):
+    def _stub(checkout_id, **_kw):
         probed.append(checkout_id)
         if checkout_id == "ch_paid_second":
             return {"status": "completed", "paymentId": "p_real_money", "amount": 40000,
@@ -3322,7 +3322,7 @@ def sc_refund_finds_the_checkout_that_holds_the_money(s, fx):
                    "status) VALUES (:c,:o,'yoco','ch_only_one','created')"),
               {"c": fx.club_id, "o": oid2})
     calls = []
-    yoco_client.get_checkout = lambda checkout_id: calls.append(checkout_id) or {}
+    yoco_client.get_checkout = lambda checkout_id, **_kw: calls.append(checkout_id) or {}
     try:
         only = RC.paid_checkout_id_for_order(s, str(oid2))
     finally:
@@ -3331,7 +3331,7 @@ def sc_refund_finds_the_checkout_that_holds_the_money(s, fx):
           f"only={only} calls={calls}")
 
     # Yoco unreachable + several attempts → fall back to the NEWEST, never the oldest.
-    yoco_client.get_checkout = lambda checkout_id: (_ for _ in ()).throw(RuntimeError("yoco down"))
+    yoco_client.get_checkout = lambda checkout_id, **_kw: (_ for _ in ()).throw(RuntimeError("yoco down"))
     try:
         fallback = RC.paid_checkout_id_for_order(s, str(oid))
     finally:
@@ -3489,7 +3489,7 @@ def sc_refund_retry_is_not_poisoned_by_the_idempotency_key(s, fx):
     from yoco_billing import client as ycl
     _orig_client_refund = ycl.refund_checkout
 
-    def _capture(checkout_id, amount_minor=None, idempotency_key=None):
+    def _capture(checkout_id, amount_minor=None, idempotency_key=None, **_kw):
         keys.append(idempotency_key)
         raise ycl.YocoError(400, "insufficient funds")     # the failure that used to get cached
 
@@ -5573,7 +5573,78 @@ def sc_a_collapsed_seat_respects_the_courts_payment_modes(s, fx):
           all(m in ("online", "membership_covered") for m in modes), "modes=%s" % (modes,))
 
 
+def sc_each_club_is_paid_into_its_own_yoco_account(s, fx):
+    print("\n# Each club's card money goes into ITS OWN Yoco account — and a club with none FAILS CLOSED")
+    # With a second club on the platform, one global YOCO_SECRET_KEY meant club B's customers paid
+    # into club A's bank account. Keys are now per club (Render env, suffixed by slug); the default
+    # club keeps the original names. A club with no keys must be REFUSED, never quietly charged
+    # through the default club's account — that fallback is the whole bug.
+    import base64, hashlib, hmac as _hmac, json as _json, os as _os, time as _time
+    from yoco_billing import credentials as CR, client as YC, adapter as YA, routes as YR
+    slug = s.execute(text("SELECT slug FROM club.club WHERE id = :c"), {"c": fx.club_id}).scalar()
+    CR._SLUG_BY_CLUB[str(fx.club_id)] = slug      # scratch club is uncommitted: prime the cache
+    sec_var, hook_var = CR.env_names(slug)
+    saved = {k: _os.environ.get(k) for k in ("YOCO_SECRET_KEY", "YOCO_WEBHOOK_SECRET", sec_var, hook_var)}
+    try:
+        _os.environ["YOCO_SECRET_KEY"] = "sk_default_club"
+        _os.environ["YOCO_WEBHOOK_SECRET"] = "whsec_" + base64.b64encode(b"default-hook").decode()
+        _os.environ.pop(sec_var, None)
+        _os.environ.pop(hook_var, None)
+        try:
+            YC._headers(fx.club_id)
+            refused = False
+        except YC.YocoError:
+            refused = True
+        check("a club with no keys of its own is REFUSED, not charged via the default account", refused)
+
+        _os.environ[sec_var] = "sk_this_club"
+        auth = YC._headers(fx.club_id)["Authorization"]
+        check("with its own keys set, the club is charged through ITS account",
+              auth == "Bearer sk_this_club", auth)
+        check("the default club's env names are unchanged (NextPoint's live keys don't move)",
+              CR.env_names(CR.default_club_slug()) == ("YOCO_SECRET_KEY", "YOCO_WEBHOOK_SECRET"))
+
+        # A webhook is verified with the secret of the club whose URL received it.
+        raw_key = b"this-club-hook"
+        _os.environ[hook_var] = "whsec_" + base64.b64encode(raw_key).decode()
+        body = _json.dumps({"type": "payment.succeeded", "payload": {}}).encode()
+        wid, wts = "msg_1", str(int(_time.time()))
+        sig = base64.b64encode(_hmac.new(raw_key, f"{wid}.{wts}.".encode() + body,
+                                         hashlib.sha256).digest()).decode()
+
+        class _Req:
+            headers = {"webhook-id": wid, "webhook-timestamp": wts, "webhook-signature": "v1," + sig}
+            def get_data(self):
+                return body
+        gw = YA.YocoGateway()
+        check("its webhook verifies on its OWN url", gw.verify_webhook(_Req(), club_slug=slug))
+        check("...and NOT on the default club's url (other secret)", not gw.verify_webhook(_Req()))
+
+        # A correctly-signed event can only settle orders of the club that signed it.
+        other = s.execute(text("INSERT INTO club.club (slug, name) VALUES (:s,'Other') RETURNING id"),
+                          {"s": slug + "-other"}).scalar_one()
+        plan = BN.create_plan(s, club_id=fx.club_id, service_kind="lesson", sessions_count=2,
+                              price_minor=20000, duration_minutes=60, coach_user_id=fx.coach_uid, label="own-yoco")
+        oid = str(BN.create_bundle_order(s, club_id=fx.club_id, user_id=fx.member,
+                                         bundle_plan_id=plan["id"], settlement_mode="online")["order_id"])
+        ev_ok = NormalizedPaymentEvent(provider="yoco", kind="charge_succeeded", order_ref=oid,
+                                       provider_payment_id="p_x", amount_minor=20000, currency="ZAR",
+                                       status="succeeded", direction="charge", club_id=None, raw={})
+        check("an event for this club's own order is accepted",
+              not YR._event_belongs_elsewhere(s, ev_ok, str(fx.club_id)))
+        check("the same event arriving on ANOTHER club's account is refused",
+              YR._event_belongs_elsewhere(s, ev_ok, str(other)))
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+        CR._SLUG_BY_CLUB.pop(str(fx.club_id), None)
+
+
 SCENARIOS = [
+    sc_each_club_is_paid_into_its_own_yoco_account,
     sc_a_seat_debt_reaches_the_statement_and_the_fold_reconciles,
     sc_refunding_a_seat_restores_the_split,
     sc_a_collapsed_seat_respects_the_courts_payment_modes,

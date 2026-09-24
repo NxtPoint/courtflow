@@ -18,7 +18,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import os
 import time
 from typing import Any, Dict, Optional
 
@@ -44,16 +43,19 @@ class YocoError(Exception):
 # REST
 # ---------------------------------------------------------------------------
 
-def _secret_key() -> str:
-    k = (os.getenv("YOCO_SECRET_KEY") or "").strip()
-    if not k:
-        raise YocoError(0, "YOCO_SECRET_KEY not configured")
-    return k
+def _secret_key(club_id) -> str:
+    """The secret key of THIS club's Yoco account (yoco_billing.credentials). A club with no keys
+    of its own raises here — it is never charged through another club's account."""
+    from yoco_billing.credentials import YocoNotConfigured, secret_key_for_club
+    try:
+        return secret_key_for_club(club_id)
+    except YocoNotConfigured as e:
+        raise YocoError(0, str(e))
 
 
-def _headers(idempotency_key: Optional[str] = None) -> Dict[str, str]:
+def _headers(club_id, idempotency_key: Optional[str] = None) -> Dict[str, str]:
     h = {
-        "Authorization": f"Bearer {_secret_key()}",
+        "Authorization": f"Bearer {_secret_key(club_id)}",
         "Content-Type": "application/json",
     }
     if idempotency_key:
@@ -62,10 +64,11 @@ def _headers(idempotency_key: Optional[str] = None) -> Dict[str, str]:
     return h
 
 
-def _post(path: str, json_body: Dict[str, Any], idempotency_key: Optional[str] = None) -> Dict[str, Any]:
+def _post(path: str, json_body: Dict[str, Any], *, club_id,
+          idempotency_key: Optional[str] = None) -> Dict[str, Any]:
     url = YOCO_API_BASE + path
     try:
-        r = requests.post(url, json=json_body, headers=_headers(idempotency_key),
+        r = requests.post(url, json=json_body, headers=_headers(club_id, idempotency_key),
                           timeout=_TIMEOUT_SECONDS)
     except requests.RequestException as e:
         raise YocoError(0, f"network error: {e.__class__.__name__}")
@@ -85,7 +88,7 @@ def _post(path: str, json_body: Dict[str, Any], idempotency_key: Optional[str] =
         return {}
 
 
-def create_checkout(*, amount_minor: int, currency: str, metadata: Dict[str, Any],
+def create_checkout(*, club_id, amount_minor: int, currency: str, metadata: Dict[str, Any],
                     success_url: str, cancel_url: str, failure_url: Optional[str] = None,
                     idempotency_key: Optional[str] = None) -> Dict[str, Any]:
     """POST /api/checkouts. amount_minor is ZAR cents. Returns Yoco's checkout object
@@ -98,10 +101,10 @@ def create_checkout(*, amount_minor: int, currency: str, metadata: Dict[str, Any
         "failureUrl": failure_url or cancel_url,
         "metadata": {k: v for k, v in (metadata or {}).items() if v is not None},
     }
-    return _post("/api/checkouts", body, idempotency_key=idempotency_key)
+    return _post("/api/checkouts", body, club_id=club_id, idempotency_key=idempotency_key)
 
 
-def refund_checkout(*, checkout_id: str, amount_minor: Optional[int] = None,
+def refund_checkout(*, club_id, checkout_id: str, amount_minor: Optional[int] = None,
                     idempotency_key: Optional[str] = None) -> Dict[str, Any]:
     """POST /api/checkouts/{id}/refund. Omitting amount refunds the full checkout; passing
     amount_minor (ZAR cents) does a partial refund. Live keys only (Yoco rejects test-mode
@@ -109,23 +112,24 @@ def refund_checkout(*, checkout_id: str, amount_minor: Optional[int] = None,
     body: Dict[str, Any] = {}
     if amount_minor is not None:
         body["amount"] = int(amount_minor)
-    return _post(f"/api/checkouts/{checkout_id}/refund", body, idempotency_key=idempotency_key)
+    return _post(f"/api/checkouts/{checkout_id}/refund", body, club_id=club_id,
+                 idempotency_key=idempotency_key)
 
 
-def get_checkout(*, checkout_id: str) -> Dict[str, Any]:
+def get_checkout(*, club_id, checkout_id: str) -> Dict[str, Any]:
     """GET /api/checkouts/{id} — retrieve a checkout to read its current status + paymentId
     (used by reconciliation to recover a payment whose webhook we never received). The
     checkout carries: status ('created'|'started'|'processing'|'completed'), paymentId (set
     once a payment succeeds, else null), amount, currency, metadata. Raises YocoError on
     non-2xx — reconciliation treats a 404/405 (endpoint unavailable) as 'cannot verify'
     rather than failing, so this stays safe even if the GET surface changes."""
-    return _get(f"/api/checkouts/{checkout_id}")
+    return _get(f"/api/checkouts/{checkout_id}", club_id=club_id)
 
 
-def _get(path: str) -> Dict[str, Any]:
+def _get(path: str, *, club_id) -> Dict[str, Any]:
     url = YOCO_API_BASE + path
     try:
-        r = requests.get(url, headers=_headers(), timeout=_TIMEOUT_SECONDS)
+        r = requests.get(url, headers=_headers(club_id), timeout=_TIMEOUT_SECONDS)
     except requests.RequestException as e:
         raise YocoError(0, f"network error: {e.__class__.__name__}")
     if r.status_code // 100 != 2:
@@ -177,13 +181,14 @@ def _signing_key(secret: str) -> bytes:
         return s.encode("utf-8")
 
 
-def verify_signature(*, headers: Any, raw_body: Any,
+def verify_signature(*, headers: Any, raw_body: Any, secret: str,
                      tolerance_seconds: int = WEBHOOK_TOLERANCE_SECONDS,
                      now: Optional[int] = None) -> bool:
     """Verify a Yoco webhook. Returns True only if the signature matches and the timestamp
     is within tolerance. Fails closed on any missing piece. `raw_body` MUST be the exact
-    bytes Yoco signed (read request.get_data() BEFORE parsing JSON)."""
-    secret = (os.getenv("YOCO_WEBHOOK_SECRET") or "").strip()
+    bytes Yoco signed (read request.get_data() BEFORE parsing JSON). `secret` is the webhook
+    secret of the club whose endpoint received it (yoco_billing.credentials)."""
+    secret = (secret or "").strip()
     if not secret:
         return False
 

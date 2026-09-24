@@ -77,7 +77,12 @@ def billing_config():
 
     public_key = ""
     if provider == "yoco":
-        public_key = os.getenv("YOCO_PUBLIC_KEY", "")
+        # The club's OWN account's public key (yoco_billing.credentials naming), never another's.
+        try:
+            from yoco_billing.credentials import public_key_for_club
+            public_key = public_key_for_club(club_id) if club_id else ""
+        except Exception:
+            public_key = ""
     elif provider == "paypal":
         public_key = os.getenv("PAYPAL_CLIENT_ID", "")
 

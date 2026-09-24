@@ -130,8 +130,12 @@ def execute_order_refund(session, *, order_id, amount_minor=None):
                           "No Yoco checkout found for this order.", status=404)
 
     amount = int(amount_minor) if amount_minor is not None else None
+    # Refunded FROM the account that took the money — the order's own club's Yoco account.
+    order_club = session.execute(text('SELECT club_id FROM billing."order" WHERE id = :o'),
+                                 {"o": str(order_id)}).scalar()
     try:
-        result = gw.refund(payment={"checkout_id": checkout_id}, amount_minor=amount)
+        result = gw.refund(payment={"checkout_id": checkout_id, "club_id": order_club},
+                           amount_minor=amount)
     except Exception as e:
         # Surface Yoco's actual reason (str(YocoError) = "yoco <status>: <desc>").
         log.warning("yoco refund failed order=%s checkout=%s: %s", order_id, checkout_id, e)

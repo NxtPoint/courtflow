@@ -46,6 +46,13 @@ def _checkout_id_for_order(session, order_id: str) -> Optional[str]:
     ).scalar()
 
 
+def _club_of_order(session, order_id) -> Optional[str]:
+    """Whose Yoco account an order's checkouts live in — its own club's."""
+    cid = session.execute(text('SELECT club_id FROM billing."order" WHERE id = :o'),
+                          {"o": str(order_id)}).scalar()
+    return str(cid) if cid else None
+
+
 def _checkout_is_paid(co: Dict[str, Any]) -> bool:
     status = str(co.get("status") or "").strip().lower()
     # Require BOTH a payment id AND a paid status. (The old `or bool(paymentId)` made the status
@@ -93,9 +100,10 @@ def paid_checkout_id_for_order(session, order_id) -> Optional[str]:
         return None
     if len(ids) == 1:
         return ids[0]
+    club_id = _club_of_order(session, order_id)   # the account the checkouts were created in
     for cid in ids:                       # newest first
         try:
-            co = client.get_checkout(checkout_id=cid)
+            co = client.get_checkout(club_id=club_id, checkout_id=cid)
         except Exception as e:
             log.info("checkout probe failed order=%s checkout=%s: %s", order_id, cid, e)
             continue
@@ -148,7 +156,7 @@ def reconcile_order(session, *, order_id: str) -> Dict[str, Any]:
 
     # Ask Yoco for the truth. A missing GET surface (404/405) => unverifiable, not an error.
     try:
-        co = client.get_checkout(checkout_id=str(checkout_id))
+        co = client.get_checkout(club_id=order.get("club_id"), checkout_id=str(checkout_id))
     except client.YocoError as e:
         if e.status in (404, 405, 501):
             log.info("reconcile: GET checkout unavailable (status=%s) order=%s", e.status, order_id)

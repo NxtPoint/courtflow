@@ -142,6 +142,8 @@ Everything above is already set on the **dev/onrender** config. At cutover, chan
 | `YOCO_PUBLIC_KEY` | 🟢 | Publishable key surfaced to the browser | `pk_live_…` |
 | `YOCO_WEBHOOK_SECRET` | 🟢 | Verifies Yoco webhook signatures | `whsec_…` |
 | `APP_BASE_URL` | 🟢 | Origin for Yoco return URLs (the web host) | `https://courtflow-web.onrender.com` |
+| `YOCO_DEFAULT_CLUB` | ⚪ unset = `nextpoint` | The club whose Yoco account the unsuffixed keys above belong to | a club slug |
+| `YOCO_SECRET_KEY__<SLUG>` · `YOCO_PUBLIC_KEY__<SLUG>` · `YOCO_WEBHOOK_SECRET__<SLUG>` | ⚪ per extra club | **Any other club's OWN Yoco account** (`yoco_billing/credentials.py`). `<SLUG>` = the club slug upper-cased, non-alphanumerics → `_` (`acme-academy` → `ACME_ACADEMY`). In that club's Yoco dashboard point the webhook at **`/api/billing/yoco/webhook/<slug>`**. A club without these is REFUSED online payment — never charged through NextPoint's account. | as above |
 
 ### Transactional email (SES) — LIVE 🟢 (interim via the Ten-Fifty5 AWS account)
 | Var | Status | What it does | Value |

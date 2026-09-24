@@ -116,10 +116,12 @@ still need everything below AND a second login bridge.
    now falls back to the browser's `Origin`/`Referer`. A signup joins the club whose site it used;
    an unmapped site with two clubs joins nothing (no guessing). Memberships still gate every role.
    Guarded by `python -m auth.selftest` (the two-club cases).
-2. **Card payments into the club's OWN Yoco account.** Today `YOCO_SECRET_KEY`/`YOCO_WEBHOOK_SECRET`
-   are global env vars (`yoco_billing/client.py`, `billing/routes.py`), so the academy's money would
-   land in NextPoint's account. Per-club encrypted keys + a per-club webhook path; env stays the
-   NextPoint fallback. **The most important remaining item.**
+2. ✅ **Card payments into the club's OWN Yoco account (2026-09-24).** Keys are per-club Render env
+   vars (`YOCO_SECRET_KEY__<SLUG>` etc. — [ENV-STATUS.md](ENV-STATUS.md)), each club's webhook has its
+   own URL (`/api/billing/yoco/webhook/<slug>`), and a club with no keys is REFUSED rather than
+   charged through NextPoint's account. NextPoint's keys and webhook URL are unchanged. Env over
+   encrypted-DB on purpose: no master key to lose, secrets never in a DB backup; revisit at dozens of
+   clubs. `sc_each_club_is_paid_into_its_own_yoco_account`.
 3. **Login on the academy's domain.** Clerk prod is tied to `clerk.nextpointtennis.com`. Find out
    whether Clerk satellite domains fit our plan/price, else a Clerk instance per club — **a cost
    decision for Tomo once the facts are in.**
