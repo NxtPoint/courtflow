@@ -177,8 +177,12 @@ def _pick_court_for_service(session, club_id, product_id, starts, ends):
 
     The member app never needed this — it asks for availability with any=1 and posts the court that
     came back. A partner calling the API has no such screen, so the server has to be able to choose;
-    the GiST constraint still has the last word on a concurrent grab (→ SLOT_TAKEN)."""
+    the GiST constraint still has the last word on a concurrent grab (→ SLOT_TAKEN).
+
+    Returns (court_id, any_open): `any_open` says whether ANY court of the service is open then, so
+    the caller can tell "the club is closed" from "every court is taken" — two different answers."""
     from diary.availability import resource_hours_cover
+    any_open = False
     for rid in session.execute(
         text("SELECT id FROM diary.resource WHERE club_id = :c AND kind = 'court' "
              "AND is_active = true ORDER BY rank, name"),
@@ -189,9 +193,10 @@ def _pick_court_for_service(session, club_id, product_id, starts, ends):
         if not resource_hours_cover(session, club_id=club_id, resource_id=rid,
                                     starts_at=starts, ends_at=ends):
             continue
+        any_open = True
         if _court_is_free(session, club_id, rid, starts, ends):
-            return rid
-    return None
+            return rid, True
+    return None, any_open
 
 
 def _court_blocked_by_time_off(session, club_id, court_id, starts, ends):
@@ -776,8 +781,11 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                 _svc = _default_court_product_id(session, club_id)
             except Exception:
                 _svc = None
-        resource_id = _pick_court_for_service(session, club_id, _svc, starts, ends)
+        resource_id, _any_open = _pick_court_for_service(session, club_id, _svc, starts, ends)
         if not resource_id:
+            if not _any_open:
+                return _err("OUTSIDE_OPENING_HOURS", 422,
+                            message="no court of that service is open for the whole of that time")
             return _err("NO_COURT_AVAILABLE", 409, message="no court is free at that time")
 
     res = _resource(session, club_id, resource_id)

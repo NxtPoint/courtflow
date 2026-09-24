@@ -98,6 +98,23 @@ booking by staff, statements, the admin console.
   The playmates fix is in the ROUTE, so it is not yet under a scenario — the HTTP-level harness (step 3)
   must cover it first. Still open from the gaps below: `billing/config`'s query-string club.
 
+- **Step 3 (first cut) done (2026-09-24) — `api_v1/`**, registered in `app.py`:
+  `GET /` · `GET /court-services` · `GET /availability` · `POST /bookings` · `GET /bookings` ·
+  `GET /bookings/{id}` · `POST /bookings/{id}/cancel` · `POST /bookings/{id}/checkout`.
+  Still to build: `GET/PATCH /me`, `POST /quotes`, `POST /bookings/{id}/reschedule`, `POST /bookings/{id}/promo`,
+  equipment + peak detail on `court-services`, the OpenAPI file and its audit, rate limiting.
+  - The club is resolved from the URL and passed to `auth.resolve_principal(request, club_hint=)`;
+    a caller whose principal lands in another club gets `403 NOT_ALLOWED_AT_THIS_CLUB`.
+  - `Idempotency-Key` is stored in `api.idempotency`; a refused write releases its key.
+  - Route-only rules were LIFTED, not copied: `diary/booking_request.py` (extra players, first-booking
+    profile) and `billing/checkout.py` (checkout ownership + provider call) now serve both the member
+    app's routes and v1.
+  - Payment methods: `card` · `at_club` · `account` · `pack` · `membership` (= the lanes' settlement modes).
+  - `return_url` for checkout must be on `club.policy.allowed_return_origins` (or the club's own domain).
+  - **Guarded over HTTP** by `sc_the_public_api_books_a_court_end_to_end`,
+    `sc_the_public_api_card_checkout_goes_to_the_clubs_own_provider` and
+    `sc_the_booking_route_keeps_a_courts_named_playmates` (booking harness, via `_api`).
+
 ## Gaps found while mapping today's endpoints (fix as part of this)
 - **Named playmates on a COURT booking are dropped by the server** — `diary/routes.py` only reads
   `extra_clients` for lessons, while `create_booking` would seat them. Only reachable when the

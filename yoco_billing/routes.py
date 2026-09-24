@@ -88,83 +88,45 @@ def _in_callers_club(principal, club_id) -> bool:
 
 @yoco_bp.post("/api/billing/yoco/checkout")
 def yoco_checkout():
+    """The member app's checkout. The checks and the provider call live in billing.checkout — ONE
+    copy, shared with the public API. This keeps the response bodies the app has always read."""
     from auth import resolve_principal
-    from iam.permissions import can
-    from billing.gateway import get_gateway
+    from billing.checkout import start_checkout
+    from db import session_scope
 
     p = resolve_principal(request)
     if p is None or not p.authenticated:
         return jsonify(error="unauthorized"), 401
-
     body = request.get_json(silent=True) or {}
     order_id = (body.get("order_id") or "").strip()
     if not order_id:
         return jsonify(error="order_id required"), 400
 
-    if not _truthy("PAYMENTS_ENABLED"):
-        return jsonify(error="online_payments_disabled"), 403
-
-    gw = get_gateway("yoco")
-    if gw is None:
-        return jsonify(error="yoco_unavailable"), 503
-
-    from db import session_scope
-    from sqlalchemy import text
-    from billing import orders as orders_repo
-
+    base = _app_base_url()
     with session_scope() as s:
-        order = orders_repo.get_order(s, order_id=order_id)
-        if not order:
-            return jsonify(error="order not found"), 404
-
-        # Tenancy first, then ownership: the payer, or a club admin, may start checkout.
-        if not _in_callers_club(p, order["club_id"]):
-            return jsonify(error="forbidden"), 403
-        owns = bool(p.user_id and order.get("user_id") and str(order["user_id"]) == str(p.user_id))
-        if not (owns or can(p, "take_pay_at_court", {"club_id": order["club_id"]})):
-            return jsonify(error="forbidden"), 403
-
-        if (order.get("settlement_mode") or "") != "online":
-            return jsonify(error="order is not an online-payment order"), 400
-        if order.get("status") not in ("awaiting_payment", "open"):
-            return jsonify(error="order already settled", status=order.get("status")), 409
-        if int(order.get("amount_minor") or 0) <= 0:
-            return jsonify(error="order has no amount to pay"), 400
-        if not _club_allows_online(s, order["club_id"]):
-            return jsonify(error="online_payments_not_enabled_for_club"), 403
-
-        base = _app_base_url()
-        success = f"{base}/pay-return.html?order={order_id}&r=success"
-        cancel = f"{base}/pay-return.html?order={order_id}&r=cancel"
-
-        try:
-            intent = gw.create_checkout(order=order, success_url=success, cancel_url=cancel)
-        except Exception as e:
-            # Surface Yoco's FULL error body (which field it rejected) into the logs + response —
-            # a bare "yoco 400: For input string" hides which field is at fault.
-            yb = getattr(e, "body", None)
-            log.warning("yoco create_checkout failed for order=%s amount=%s: %s | yoco_body=%s",
-                        order_id, order.get("amount_minor"), e, yb)
-            return jsonify(error="checkout_failed", detail=str(e), yoco=yb), 502
-
-        # Persist the Yoco checkout id (event_hash NULL) so /refund can reference it later.
-        if intent.intent_id:
-            try:
-                s.execute(
-                    text("""
-                        INSERT INTO billing.payment_attempt
-                            (club_id, order_id, provider, intent_id, status, raw_event)
-                        VALUES (:club_id, :order_id, 'yoco', :intent_id, 'created',
-                                CAST(:raw AS jsonb))
-                    """),
-                    {"club_id": str(order["club_id"]), "order_id": order_id,
-                     "intent_id": intent.intent_id, "raw": json.dumps(intent.extra or {})},
-                )
-            except Exception:
-                log.info("could not persist checkout intent for order=%s (continuing)", order_id)
-
-    return jsonify(redirect_url=intent.redirect_url, intent_id=intent.intent_id,
-                   provider="yoco"), 200
+        r = start_checkout(s, principal=p, order_id=order_id,
+                           success_url=f"{base}/pay-return.html?order={order_id}&r=success",
+                           cancel_url=f"{base}/pay-return.html?order={order_id}&r=cancel")
+    if r.get("ok"):
+        return jsonify(redirect_url=r["redirect_url"], intent_id=r["intent_id"],
+                       provider=r["provider"]), 200
+    legacy = {
+        "ONLINE_PAYMENTS_DISABLED": "online_payments_disabled",
+        "ORDER_NOT_FOUND": "order not found",
+        "FORBIDDEN": "forbidden",
+        "NOT_AN_ONLINE_ORDER": "order is not an online-payment order",
+        "ALREADY_SETTLED": "order already settled",
+        "NOTHING_TO_PAY": "order has no amount to pay",
+        "ONLINE_PAYMENTS_OFF_FOR_CLUB": "online_payments_not_enabled_for_club",
+        "PROVIDER_UNAVAILABLE": "yoco_unavailable",
+        "CHECKOUT_FAILED": "checkout_failed",
+    }
+    out = {"error": legacy.get(r["error"], r["error"])}
+    if r["error"] == "ALREADY_SETTLED":
+        out["status"] = r.get("order_status")
+    if r["error"] == "CHECKOUT_FAILED":
+        out.update(detail=r.get("detail"), yoco=r.get("provider_body"))
+    return jsonify(out), r["status"]
 
 
 # ---------------------------------------------------------------------------

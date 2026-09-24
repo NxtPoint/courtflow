@@ -59,11 +59,47 @@ def get_engine():
     return _engine
 
 
+_TEST_SESSION = None   # set ONLY by the scenario harnesses (use_session_for_tests), never by a request
+_TEST_THREAD = None    # ...and only the thread that set it uses it (a Session is not thread-safe)
+
+
+@contextmanager
+def use_session_for_tests(session):
+    """Route every session_scope() in this process through the harness's OWN session, as a
+    savepoint, so an HTTP request made with Flask's test client runs inside the harness transaction
+    and is rolled back with it. Without this a route opens its own connection, cannot see the
+    scratch club, and commits — which is why the harnesses could only ever call Python directly,
+    and why every bug that lived in a ROUTE was invisible to them. Module state, set from Python:
+    no request can reach it."""
+    global _TEST_SESSION, _TEST_THREAD
+    import threading
+    prev, _TEST_SESSION = _TEST_SESSION, session
+    prev_thread, _TEST_THREAD = _TEST_THREAD, threading.get_ident()
+    try:
+        yield session
+    finally:
+        _TEST_SESSION, _TEST_THREAD = prev, prev_thread
+
+
 @contextmanager
 def session_scope():
     """Transactional scope: commits on success, rolls back on error, always closes.
     Repository functions take an explicit `session` and never commit themselves, so
     callers compose multi-step writes atomically (ported from 1050 core_db.db)."""
+    import threading
+    if _TEST_SESSION is not None and threading.get_ident() == _TEST_THREAD:
+        # A background thread (the CRM emit fires one) gets an ordinary session below: it cannot see
+        # the scratch club, so its write fails and is logged — exactly as before this hook existed.
+        sp = _TEST_SESSION.begin_nested()
+        try:
+            yield _TEST_SESSION
+            if sp.is_active:
+                sp.commit()      # releases the savepoint; the harness still rolls it all back
+        except Exception:
+            if sp.is_active:
+                sp.rollback()
+            raise
+        return
     s = Session(get_engine())
     try:
         yield s
@@ -97,6 +133,7 @@ BOOT_MODULES = [
     "coach.schema",    # Coach — iam.coach_profile.onboarding_completed + billing.product.coach_user_id
     "community.schema",  # Community — community.* + the SEAT columns on diary.booking/booking_party
                          # (+ iam.player_profile, club.policy flags). LAST: it ALTERs four lanes.
+    "api_v1.schema",   # Public API — api.idempotency (FKs club.club only)
 ]
 
 # Extensions every schema depends on. pgcrypto -> gen_random_uuid(); btree_gist ->

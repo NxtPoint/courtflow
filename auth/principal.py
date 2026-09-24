@@ -93,9 +93,14 @@ def _site_club_id(session, iam_repo, request):
             or iam_repo.resolve_club_by_slug(session, (request.headers.get("X-Club-Site") or "").strip()))
 
 
-def resolve_principal(request) -> Optional[Principal]:
+def resolve_principal(request, club_hint=None) -> Optional[Principal]:
     """Return an authenticated, club-scoped Principal, or None if unauthorized.
-    Never raises — verify/DB failures fail CLOSED (None -> caller returns 401/403)."""
+    Never raises — verify/DB failures fail CLOSED (None -> caller returns 401/403).
+
+    `club_hint` (a club id) is the club the CALLER named explicitly — the public API puts it in the
+    URL. It is both the club a new signup joins and the club a multi-club user acts in; it still
+    grants nothing the memberships (and an outside login's allowed clubs) don't already allow, so
+    the API must check `principal.club_id == club_hint` itself and refuse otherwise."""
     # 1) JWT path — only when explicitly enabled.
     if verifier.is_enabled():
         token = _bearer(request)
@@ -104,7 +109,7 @@ def resolve_principal(request) -> Optional[Principal]:
             if not claims:
                 return None  # a JWT was presented but invalid — reject, don't downgrade
             try:
-                return _principal_from_claims(claims, request)
+                return _principal_from_claims(claims, request, club_hint=club_hint)
             except Exception as e:
                 log.warning("auth: principal resolution failed: %s", e.__class__.__name__)
                 return None
@@ -149,7 +154,7 @@ def _marketing_opt_in_default(session, club_id) -> bool:
         return False
 
 
-def _principal_from_claims(claims, request) -> Optional[Principal]:
+def _principal_from_claims(claims, request, club_hint=None) -> Optional[Principal]:
     """Verified-token -> upsert iam.user -> load memberships -> resolve (club_id, role)."""
     uid = verifier.claim_uid(claims)
     email = verifier.claim_email(claims)
@@ -165,7 +170,7 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
     from db import session_scope
     from iam import repositories as iam_repo
 
-    x_club = (request.headers.get("X-Club") or "").strip() or None
+    x_club = (str(club_hint) if club_hint else None) or (request.headers.get("X-Club") or "").strip() or None
     trial_ends = None  # set if a signup free-week is granted → drives the trial_started event
 
     # Capture primitives inside the txn (DB rows expire after commit).
@@ -201,7 +206,7 @@ def _principal_from_claims(claims, request) -> Optional[Principal]:
         # 878 members never issue a needless write.
         if any(m["role"] == "coach" for m in memberships):
             iam_repo.accept_coach_invites(s, user["id"])
-        host_club_id = _site_club_id(s, iam_repo, request)
+        host_club_id = club_hint or _site_club_id(s, iam_repo, request)
         if allowed is not None and host_club_id is not None and str(host_club_id) not in allowed:
             host_club_id = None      # an outside login never joins a club that didn't accept it
         # Auto-enrol: any authenticated user with NO membership becomes an active 'member' of

@@ -82,11 +82,11 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 717 / billing 735 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 740 / billing 735 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (95/100/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (98/100/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **When the numbers move, run `python -m scripts.audit_docs` and update
    EVERY doc it names** — the baseline is repeated in ~7 files and the gate fails unless they all
@@ -205,6 +205,7 @@ Touch only your lane; coordinate on shared interface files (`contracts/events.md
 | **Admin** | `admin/`, `services/`, `insights/` | Owner write APIs + onboarding, per-service commission editor, financial cockpit, person-360, the insights composer, **general order discount + pack-wallet adjust/expire**. |
 | **Coach / Client** | `coach/`, `me/` | Coach self-service (onboarding, clients-360, statement, cockpit; reschedule/cancel own lessons + move own class sessions) + client self-service (profile, dependents, statement, refund requests). |
 | **Community** | `community/` | **Find a Game + THE SEAT RULE** — who is on a court, and who pays for them. `seats.py` is the money core (the ONE place the split lives); `games.py` open/join/leave; `invites.py` bring-a-friend + the free week; `matching.py`/`chat.py`/`results.py`; `crons.py` the sweep. `/api/community/*`. **Ships DARK** behind two `club.policy` flags. |
+| **Public API** | `api_v1/` | CourtFlow's versioned PUBLIC API — `/api/v1/clubs/<slug>/…` (court hire first). A thin layer over the lanes: **no rules of its own** (a rule that seems needed here belongs in the lane, so the member app obeys it too). One error shape, `Idempotency-Key` writes (`api.idempotency`), money as `{amount_minor, currency}`. Spec + progress: [`PUBLIC-API.md`](docs/specs/PUBLIC-API.md). Tested OVER HTTP via the booking harness's `_api`. |
 | **Analytics** | `analytics/` | Read-only guarded aggregations → `/api/analytics/*` (the standalone `/overview.html`); first-party beacon in `beacon.py`. |
 | **Frontend** | `frontend/` | Three role SPAs on one widget layer (below). |
 | **Marketing/SEO** | `frontend/marketing/`, `frontend/_shared/`, `build_blog.py`, `migration/`, `marketing_digest/` | Host-switched public site, blog, sitemap, Wix→Render migration scripts, cross-brand organic-growth digest (below). |

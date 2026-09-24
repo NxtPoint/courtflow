@@ -203,6 +203,58 @@ def _open_all_courts(s, fx):
                       {"c": fx.club_id, "r": rid, "w": wd})
 
 
+# ---------------------------------------------------------------------------
+# HTTP — call a ROUTE, not the Python under it
+# ---------------------------------------------------------------------------
+# Until 2026-09-24 every scenario called the lanes directly, so a bug that lived in a ROUTE (the court
+# playmates the booking route dropped, five community bugs found only in a browser) could not be seen.
+# `_api` sends a real request through Flask's test client, signed with a real JWT (the auth self-test's
+# keypair), and db.use_session_for_tests routes the request's session_scope() through THIS harness
+# session — so the route sees the scratch club and is rolled back with it.
+_HTTP = {}
+
+
+def _http_client():
+    if "client" not in _HTTP:
+        # Importing `app` builds the Flask app, which runs the boot DDL on its own connection. That
+        # must happen BEFORE the harness transaction holds any lock (main() calls this first), or
+        # the ALTER TABLEs wait on the scratch club forever.
+        from auth.selftest import _mint_keypair, _StubJWKS
+        import app as _appmod
+        priv, pub = _mint_keypair()
+        _HTTP.update(client=_appmod.app.test_client(), priv=priv, pub=pub, stub=_StubJWKS)
+    return _HTTP
+
+
+def _api(s, email, method, path, json=None, headers=None, issuer="https://harness.courtflow.test"):
+    import os as _os
+    from auth import verifier
+    from auth.selftest import _make_token
+    import db as _db
+    h = _http_client()
+    env = {"AUTH_ENABLED": "1", "AUTH_ISSUER": "https://harness.courtflow.test",
+           "AUTH_JWKS_URL": "https://harness.courtflow.test/.well-known/jwks.json"}
+    saved = {k: _os.environ.get(k) for k in env}
+    saved_client = verifier._get_jwks_client
+    _os.environ.update(env)
+    verifier._get_jwks_client = lambda: h["stub"](h["pub"])
+    hdrs = dict(headers or {})
+    if email:
+        hdrs["Authorization"] = "Bearer " + _make_token(h["priv"], iss=issuer,
+                                                         sub="harness|" + email, email=email)
+    try:
+        with _db.use_session_for_tests(s):
+            r = h["client"].open(path, method=method, json=json, headers=hdrs)
+        return r.status_code, (r.get_json(silent=True) or {})
+    finally:
+        verifier._get_jwks_client = saved_client
+        for k, v in saved.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+
+
 def utc_iso(dt):
     return dt.astimezone(timezone.utc).isoformat()
 
@@ -5190,7 +5242,153 @@ def sc_a_member_court_booking_obeys_the_rules_the_screen_used_to_enforce(s, fx):
           r4.get("ok") and str(r4["booking"]["resource_id"]) == str(fx.courts[1]), str(r4))
 
 
+def sc_the_public_api_books_a_court_end_to_end(s, fx):
+    print("\n# The PUBLIC API (v1) books a court end to end, over HTTP — one error shape, idempotent, own bookings only")
+    # Called through the real route with a real signed token: the club from the URL, the caller from
+    # the token, every rule from the lanes. What this proves that the Python-level scenarios cannot:
+    # the contract (shapes, codes, statuses) and the route's own checks.
+    slug = s.execute(text("SELECT slug FROM club.club WHERE id = :c"), {"c": fx.club_id}).scalar()
+    base = f"/api/v1/clubs/{slug}"
+    me, other = "member1@scratch.test", "member2@scratch.test"
+
+    st, body = _api(s, None, "GET", base)
+    check("no token → 401 UNAUTHENTICATED", st == 401 and body["error"]["code"] == "UNAUTHENTICATED", body)
+    st, body = _api(s, me, "GET", "/api/v1/clubs/no-such-club")
+    check("unknown club → 404 CLUB_NOT_FOUND", st == 404 and body["error"]["code"] == "CLUB_NOT_FOUND", body)
+    st, body = _api(s, me, "GET", base)
+    check("GET club → name + currency", st == 200 and body.get("currency") == "ZAR"
+          and body.get("name") == "Scratch Tennis", body)
+
+    st, body = _api(s, me, "GET", base + "/court-services")
+    svc = next((x for x in body.get("services", []) if x["id"] == str(fx.court_product)), None)
+    check("GET court-services → the court service with its priced lengths",
+          st == 200 and svc and {"minutes": 60, "price": {"amount_minor": 15000, "currency": "ZAR"}}
+          in svc["durations"], body)
+
+    st, body = _api(s, me, "GET", base + f"/availability?date={fx.target.isoformat()}&duration=60")
+    check("GET availability → priced slots inside opening hours",
+          st == 200 and body.get("slots") and all(x["price"] for x in body["slots"]), body)
+
+    booking = {"service_id": str(fx.court_product), "court_id": "any",
+               "starts_at": at(fx, 10).isoformat(), "duration_minutes": 60, "payment_method": "at_club"}
+    st, body = _api(s, me, "POST", base + "/bookings", json=booking)
+    check("a write without an Idempotency-Key → 400", st == 400
+          and body["error"]["code"] == "IDEMPOTENCY_KEY_REQUIRED", body)
+    st, body = _api(s, me, "POST", base + "/bookings", json=booking, headers={"Idempotency-Key": "k1"})
+    check("a first booking without name/phone → 422 PROFILE_INCOMPLETE, naming the fields",
+          st == 422 and body["error"]["code"] == "PROFILE_INCOMPLETE"
+          and {"surname", "phone"} <= {f["field"] for f in body["error"]["details"]["needs_profile"]}, body)
+
+    booking.update(surname="Api", phone="0821234567")
+    st, body = _api(s, me, "POST", base + "/bookings", json=booking, headers={"Idempotency-Key": "k1"})
+    bk = body.get("booking") or {}
+    check("POST booking → 201, confirmed, on a real court, R150 at the club",
+          st == 201 and bk.get("status") == "confirmed" and bk["court"]["id"] in {str(c) for c in fx.courts}
+          and bk["payment"] == {"method": "at_club", "amount": {"amount_minor": 15000, "currency": "ZAR"},
+                                "status": "due", "card_payment_due": False}, body)
+    st2, again = _api(s, me, "POST", base + "/bookings", json=booking, headers={"Idempotency-Key": "k1"})
+    n = s.execute(text("SELECT count(*) FROM diary.booking WHERE club_id = :c AND booked_by_user_id = "
+                       "(SELECT id FROM iam.user WHERE email = :e) AND status = 'confirmed'"),
+                  {"c": fx.club_id, "e": me}).scalar()
+    check("the SAME Idempotency-Key replays the first booking — no second booking",
+          st2 == 201 and again.get("booking", {}).get("id") == bk.get("id") and n == 1, (again, n))
+
+    st, b2 = _api(s, me, "POST", base + "/bookings", json=booking, headers={"Idempotency-Key": "k2"})
+    st3, b3 = _api(s, me, "POST", base + "/bookings", json=booking, headers={"Idempotency-Key": "k3"})
+    check("'any court' takes the other court, then → 409 NO_COURT_AVAILABLE",
+          st == 201 and st3 == 409 and b3["error"]["code"] == "NO_COURT_AVAILABLE", (b2, b3))
+    st, early = _api(s, me, "POST", base + "/bookings", headers={"Idempotency-Key": "k4"},
+                     json=dict(booking, starts_at=at(fx, 7).isoformat()))
+    check("a lane refusal arrives in the ONE error shape (422 OUTSIDE_OPENING_HOURS)",
+          st == 422 and early["error"]["code"] == "OUTSIDE_OPENING_HOURS" and early["error"]["message"], early)
+    st, retry = _api(s, me, "POST", base + "/bookings", headers={"Idempotency-Key": "k4"},
+                     json=dict(booking, starts_at=at(fx, 11).isoformat()))
+    check("...and a REFUSED key can be retried for real once fixed", st == 201, retry)
+
+    st, mine = _api(s, me, "GET", base + "/bookings")
+    check("GET bookings → the caller's own",
+          st == 200 and bk.get("id") in [x["id"] for x in mine.get("bookings", [])], mine)
+    st, theirs = _api(s, other, "GET", base + f"/bookings/{bk.get('id')}")
+    check("someone else's booking reads as 404, never 403", st == 404, theirs)
+    st, _ = _api(s, other, "POST", base + f"/bookings/{bk.get('id')}/cancel", json={})
+    check("...and cannot be cancelled by them", st == 404)
+    st, cx = _api(s, me, "POST", base + f"/bookings/{bk.get('id')}/cancel", json={"reason": "rain"})
+    check("the owner cancels → 200, cancelled",
+          st == 200 and (cx.get("booking") or {}).get("status") == "cancelled", cx)
+
+
+def sc_the_public_api_card_checkout_goes_to_the_clubs_own_provider(s, fx):
+    print("\n# The PUBLIC API's card checkout: own booking only, allow-listed return_url, the club's provider")
+    import os as _os
+    from yoco_billing import client as YC
+    slug = s.execute(text("SELECT slug FROM club.club WHERE id = :c"), {"c": fx.club_id}).scalar()
+    base = f"/api/v1/clubs/{slug}"
+    me = "member3@scratch.test"
+    s.execute(text("UPDATE iam.user SET surname = 'Card', phone = '0820000000' WHERE email = :e"), {"e": me})
+    saved_env, saved_create = _os.environ.get("PAYMENTS_ENABLED"), YC.create_checkout
+    _os.environ["PAYMENTS_ENABLED"] = "1"
+    sent = {}
+
+    def _fake(**kw):
+        sent.update(kw)
+        return {"id": "ch_api_1", "redirectUrl": "https://pay.example/ch_api_1", "status": "created"}
+    YC.create_checkout = _fake
+    try:
+        st, body = _api(s, me, "POST", base + "/bookings", headers={"Idempotency-Key": "card-1"},
+                        json={"service_id": str(fx.court_product), "court_id": str(fx.courts[0]),
+                              "starts_at": at(fx, 14).isoformat(), "duration_minutes": 60,
+                              "payment_method": "card"})
+        bk = body.get("booking") or {}
+        check("a card booking is HELD with a card payment due",
+              st == 201 and bk.get("status") == "held" and bk["payment"]["card_payment_due"], body)
+        st, r = _api(s, me, "POST", base + f"/bookings/{bk.get('id')}/checkout",
+                     headers={"Idempotency-Key": "co-1"}, json={"return_url": "https://evil.example/x"})
+        check("a return_url off the club's allow-list → 422 RETURN_URL_NOT_ALLOWED",
+              st == 422 and r["error"]["code"] == "RETURN_URL_NOT_ALLOWED", r)
+        s.execute(text("UPDATE club.policy SET allowed_return_origins = ARRAY['https://app.partner.example'] "
+                       "WHERE club_id = :c"), {"c": fx.club_id})
+        st, r = _api(s, me, "POST", base + f"/bookings/{bk.get('id')}/checkout",
+                     headers={"Idempotency-Key": "co-2"}, json={"return_url": "https://app.partner.example/done"})
+        check("an allow-listed return_url → the provider's hosted page",
+              st == 200 and r.get("redirect_url") == "https://pay.example/ch_api_1"
+              and r.get("provider") == "yoco", r)
+        check("...charged into THIS club's account for the booking's own amount",
+              str(sent.get("club_id")) == str(fx.club_id) and sent.get("amount_minor") == 15000, sent)
+        check("...and the player comes back to the partner's page",
+              str(sent.get("success_url", "")).startswith("https://app.partner.example/done?booking="), sent)
+        st, r = _api(s, "member2@scratch.test", "POST", base + f"/bookings/{bk.get('id')}/checkout",
+                     headers={"Idempotency-Key": "co-3"}, json={})
+        check("someone else can't start a checkout for it (404)", st == 404, r)
+    finally:
+        YC.create_checkout = saved_create
+        if saved_env is None:
+            _os.environ.pop("PAYMENTS_ENABLED", None)
+        else:
+            _os.environ["PAYMENTS_ENABLED"] = saved_env
+
+
+def sc_the_booking_route_keeps_a_courts_named_playmates(s, fx):
+    print("\n# The booking ROUTE keeps a court booking's named playmates (it used to read them for lessons only)")
+    from community import repositories as repo
+    repo.save_settings(s, club_id=fx.club_id, fields={"community_enabled": True, "seat_rule_enforced": False})
+    me, mate = "member1@scratch.test", fx.members[1]
+    s.execute(text("UPDATE iam.user SET surname = 'Host', phone = '0821111111' WHERE email = :e"), {"e": me})
+    st, body = _api(s, me, "POST", "/api/diary/bookings", json={
+        "booking_type": "court", "resource_id": str(fx.courts[1]), "product_id": str(fx.court_product),
+        "starts_at": utc_iso(at(fx, 15)), "ends_at": utc_iso(at(fx, 16)), "settlement_mode": "at_court",
+        "audience": "member", "play_format": "singles", "seats": 2,
+        "extra_clients": [{"user_id": str(mate)}]})
+    bid = (body.get("booking") or {}).get("id")
+    party = ({str(x) for x in s.execute(text("SELECT user_id FROM diary.booking_party WHERE booking_id = :b "
+                                             "AND user_id IS NOT NULL"), {"b": bid}).scalars().all()}
+             if bid else set())
+    check("the named playmate is on the court booking", st in (200, 201) and str(mate) in party,
+          (st, body, party))
+
 SCENARIOS = [
+    sc_the_public_api_books_a_court_end_to_end,
+    sc_the_public_api_card_checkout_goes_to_the_clubs_own_provider,
+    sc_the_booking_route_keeps_a_courts_named_playmates,
     sc_a_member_court_booking_obeys_the_rules_the_screen_used_to_enforce,
     sc_an_outside_login_never_becomes_someone_else,
     # THE SEAT RULE (community/) — the money core, pinned before create_booking learns about seats.
@@ -5302,6 +5500,7 @@ def main():
     # attribute diary.events.emit, so this one patch covers both lanes.
     import diary.events
     diary.events.emit = lambda *a, **k: False
+    _http_client()        # build the Flask app (and its boot DDL) before any lock is held
     engine = get_engine()
     s = Session(engine)
     try:

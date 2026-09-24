@@ -11,13 +11,22 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 717 / billing 735 / statement 64** (95 / 100 / 12 `sc_*` functions).
+  **booking 740 / billing 735 / statement 64** (98 / 100 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
 ---
 
 ## `test_booking_scenarios` — the diary (83 scenarios)
+
+**OVER HTTP (2026-09-24) — `_api(s, email, method, path, json, headers)`** sends a real request through
+Flask's test client with a real signed JWT; `db.use_session_for_tests` routes the request's
+`session_scope()` through the harness session so it sees the scratch club and rolls back with it. The
+Flask app is built in `main()` BEFORE the harness transaction (its boot DDL would otherwise wait on it
+forever). Use it for anything whose rule lives in a ROUTE: `sc_the_public_api_books_a_court_end_to_end`
+(v1 contract: error shape, idempotency, own-bookings-only, 404-not-403),
+`sc_the_public_api_card_checkout_goes_to_the_clubs_own_provider` (return_url allow-list, the club's own
+account, the booking's own amount) and `sc_the_booking_route_keeps_a_courts_named_playmates`.
 
 **A MEMBER'S COURT BOOKING OBEYS THE RULES THE SCREEN USED TO ENFORCE**
 (`sc_a_member_court_booking_obeys_the_rules_the_screen_used_to_enforce`) — a member booking a court

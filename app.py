@@ -96,6 +96,7 @@ def create_app():
     _try_register(app, "services.routes", "services_bp")    # Unified service editor: /api/services/* (owner + coach)
     _try_register(app, "community.routes", "community_bp")  # Community: /api/community/* (Find a Game + seats)
     _try_register(app, "community.routes", "community_cron_bp")  # Community: POST /api/cron/open-games
+    _try_register(app, "api_v1.routes", "api_v1_bp")        # Public API v1: /api/v1/clubs/<slug>/* (PUBLIC-API.md)
 
     return app
 

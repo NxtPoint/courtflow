@@ -117,6 +117,11 @@ _DDL = [
     # list it (auth/principal.py), so an outside login can never reach a club that didn't opt in.
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS accepted_login_issuers text[] "
     f"NOT NULL DEFAULT '{{}}';",
+    # Where a partner's checkout may send the player back to (scheme://host origins). A return_url
+    # outside this list is refused — else the public API's checkout is an open redirect off the club's
+    # own payment page. Empty = only the platform's own pay-return page.
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS allowed_return_origins text[] "
+    f"NOT NULL DEFAULT '{{}}';",
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS default_max_courts_per_day int;",
 
     # Does a NEW member start opted IN to marketing (opt-OUT model) or OUT (opt-IN)?

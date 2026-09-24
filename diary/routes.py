@@ -17,7 +17,6 @@ from auth import resolve_principal
 from db import session_scope
 from iam.permissions import can
 from iam import repositories as iam_repo
-from iam.validation import missing_min_fields
 from diary import availability as availability_mod
 from diary import bookings as bookings_mod
 from diary import classes as classes_mod
@@ -65,42 +64,9 @@ def _body():
 
 
 def _min_profile_gate(p, b):
-    """Client-360 Step 4 — minimum-data capture at the first booking. For a SELF-booking member
-    (staff + on-behalf are exempt), persist any name/surname/cell the SPA supplied, sync the CRM
-    satellite, then return a 422 {needs_profile:[...]} response if the profile is still incomplete
-    (the booking widget renders a 'confirm your details' step + re-submits). Returns None to
-    proceed. See docs/specs/CLIENT-360-CRM-PLAN.md §10 Step 4."""
-    if p.role != "member":
-        return None
-    supplied = {k: (b.get(k) or "").strip() for k in ("first_name", "surname", "phone")}
-    supplied = {k: v for k, v in supplied.items() if v}
-    opted_in = str(b.get("marketing_opt_in")).lower() in ("1", "true", "yes", "on")
-    with session_scope() as s:
-        if supplied:
-            iam_repo.patch_profile(s, user_id=p.user_id, fields=supplied)
-            try:  # keep the CRM satellite in step (best-effort — never blocks the booking)
-                prof = iam_repo.get_profile(s, user_id=p.user_id)
-                from core.repositories.persons import link_person_for_user
-                link_person_for_user(
-                    s, iam_user_id=p.user_id, club_id=p.club_id, email=prof.get("email"),
-                    first_name=prof.get("first_name"), surname=prof.get("surname"),
-                    phone=prof.get("phone"))
-            except Exception:
-                log.debug("satellite sync at booking skipped (benign)", exc_info=False)
-        if opted_in and p.email:  # marketing opt-in ticked in the "confirm your details" modal
-            try:
-                from marketing_crm.consent.blueprint import grant_marketing_consent
-                grant_marketing_consent(s, email=p.email, club_id=p.club_id, source="first_booking")
-            except Exception:
-                log.debug("marketing consent record skipped (benign)", exc_info=False)
-        prof = iam_repo.get_profile(s, user_id=p.user_id)
-    if opted_in and p.email:  # after commit: sync + subscribe to the Klaviyo marketing list
-        try:
-            from marketing_crm.crm_sync import sync as _crm
-            _crm.subscribe_member(p.email, club_id=p.club_id)
-        except Exception:
-            log.debug("subscribe_member skipped (benign)", exc_info=False)
-    missing = missing_min_fields(prof or {})
+    """Client-360 Step 4 — the first-booking details check (diary.booking_request.apply_min_profile).
+    Returns a 422 {needs_profile:[...]} response while details are missing, else None."""
+    missing = _apply_min_profile(p, b)
     if missing:
         return jsonify(error="profile_incomplete", needs_profile=missing), 422
     return None
@@ -121,58 +87,13 @@ def _can_manage_class(p, coach_user_id):
     return False
 
 
-def _member_by_email(session, club_id, email):
-    """Resolve an email to an iam.user that has ANY membership in this club (case-
-    insensitive). Returns the user id (str) or None. Club-scoped — we never resolve a user
-    who isn't a member of the actor's club. Used by the on-behalf booking flow only."""
-    if not email:
-        return None
-    from sqlalchemy import text
-    row = session.execute(
-        text("SELECT u.id FROM iam.user u "
-             "JOIN iam.membership m ON m.user_id = u.id AND m.club_id = :c "
-             "WHERE lower(u.email) = lower(:e) LIMIT 1"),
-        {"c": club_id, "e": email.strip()},
-    ).mappings().first()
-    return str(row["id"]) if row else None
-
-
-def _service_max_clients(session, club_id, product_id):
-    """How many clients a service (billing.product) allows on one slot — 1 for a normal private
-    lesson, >1 for a semi-private / squad. Club-scoped; defaults to 1 (no product → private)."""
-    if not product_id:
-        return 1
-    from sqlalchemy import text
-    row = session.execute(
-        text("SELECT COALESCE(max_clients, 1) AS mc FROM billing.product "
-             "WHERE id = :p AND club_id = :c"),
-        {"p": str(product_id), "c": club_id},
-    ).scalar()
-    try:
-        return max(1, int(row or 1))
-    except (TypeError, ValueError):
-        return 1
-
-
-def _addable_player_uid(session, club_id, uid, *, owner_uid, is_staff):
-    """Validate a semi-private extra PLAYER before billing them. Returns the uid (str) if allowed, else
-    None. Allowed: a club MEMBER (adult with their own account) — anyone may add one (they get their own
-    bill, per the squad rule) — OR a DEPENDENT (child): staff may add any in-club child; a member may add
-    only their OWN. Blocks a member from dumping a bill on an arbitrary account by posting a raw user_id."""
-    if not uid:
-        return None
-    from sqlalchemy import text
-    uid = str(uid)
-    if session.execute(
-        text("SELECT 1 FROM iam.membership WHERE club_id = :c AND user_id = :u LIMIT 1"),
-        {"c": club_id, "u": uid}).first():
-        return uid
-    guardian = session.execute(
-        text("SELECT guardian_user_id FROM iam.dependent WHERE club_id = :c AND dependent_user_id = :u "
-             "AND is_active = true LIMIT 1"), {"c": club_id, "u": uid}).scalar()
-    if guardian and (is_staff or str(guardian) == str(owner_uid)):
-        return uid
-    return None
+# The player helpers and the first-booking profile rule live in diary.booking_request — ONE copy,
+# shared with the public API (api_v1). Kept under their old names because this module uses them.
+from diary.booking_request import (member_by_email as _member_by_email,          # noqa: E402
+                                   service_max_clients as _service_max_clients,
+                                   addable_player_uid as _addable_player_uid,
+                                   extra_players as _extra_players,
+                                   apply_min_profile as _apply_min_profile)
 
 
 # ---------------------------------------------------------------------------
@@ -370,39 +291,10 @@ def create_booking():
             return gate
 
     with session_scope() as s:
-        # SEMI-PRIVATE (squad) lesson: extra PLAYERS ride the same slot, each billed their own order
-        # (per-head). Accept member emails, member user_ids, or a member's DEPENDENT (child) user_id.
-        # Each is validated as addable (see _addable_player_uid — a non-staff booker may only add club
-        # members + their OWN kids, never an arbitrary account) and CAPPED at the service's max_clients.
-        #
-        # A COURT booking's named playmates (the seat step: "who's playing with you") ride the SAME
-        # validation. This used to read them for lessons only, so every name a member put on a court
-        # was silently dropped before community.seats ever saw it — the game showed one player and,
-        # with the seat rule on, the friends would never have been billed their share.
-        extra_clients = []
-        raw_extra = b.get("extra_clients") or []
-        if raw_extra and b.get("booking_type") in ("lesson", "court"):
-            is_staff = p.role in _ON_BEHALF_ROLES
-            owner_uid = booked_for_user_id or p.user_id   # whose OWN dependents may be added (non-staff)
-            for item in raw_extra:
-                uid = None
-                if isinstance(item, str) and "@" in item:
-                    uid = _member_by_email(s, p.club_id, item.strip())
-                elif isinstance(item, dict):
-                    uid = item.get("user_id") or _member_by_email(s, p.club_id, (item.get("email") or "").strip())
-                else:
-                    uid = item
-                uid = _addable_player_uid(s, p.club_id, uid, owner_uid=owner_uid, is_staff=is_staff)
-                if uid:
-                    extra_clients.append(uid)
-            if b.get("booking_type") == "lesson":
-                cap = max(0, _service_max_clients(s, p.club_id, b.get("product_id")) - 1)
-            else:   # a court seats the booker + (seats - 1) named players
-                try:
-                    cap = max(0, int(b.get("seats") or 2) - 1)
-                except (TypeError, ValueError):
-                    cap = 1
-            extra_clients = extra_clients[:cap]
+        # Extra PLAYERS on the slot — a squad lesson's per-head clients, or a court booking's named
+        # playmates — validated and capped in diary.booking_request.extra_players.
+        extra_clients = _extra_players(s, p, b, owner_uid=booked_for_user_id or p.user_id,
+                                       is_staff=p.role in _ON_BEHALF_ROLES)
         res = bookings_mod.create_booking(
             s, club_id=p.club_id, booked_by_user_id=p.user_id, role=p.role,
             booking_type=b.get("booking_type", "court"),
