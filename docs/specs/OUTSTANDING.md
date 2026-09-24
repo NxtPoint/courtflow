@@ -122,6 +122,12 @@ domains were both considered and dropped.) Ten-Fifty5's `/book` page is live on 
   `sc_a_second_club_gets_none_of_the_home_clubs_platform_settings`.
 - `scripts/provision_api_club.py` — creates such a club (dry run by default).
 
+**✅ Verified LIVE end to end (2026-09-24)** on `academy-test`: Ten-Fifty5's `/book` page, signed in
+with a Ten-Fifty5 Clerk token (`email_verified` true), read the club, `/me`, services and availability,
+saved the profile, quoted R150 at-club, booked (Court 1), listed it and cancelled it — the slot freed.
+Card checkout is NOT yet tested (off until the academy connects its own account). The steps below are
+how that club was created — kept for the next one.
+
 **To go live with the TEST academy (Tomo, in this order):**
 1. Ten-Fifty5's Clerk session-token template gets `email_verified` (until then every Ten-Fifty5 login
    is refused — by design).
