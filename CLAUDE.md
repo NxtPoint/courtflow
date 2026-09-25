@@ -787,10 +787,14 @@ money decision quietly defaulted instead of being made.*
   "Add to calendar" download works regardless. Long-term CourtFlow-domain setup: `docs/specs/SES-SETUP.md`.
   **Klaviyo marketing is LIVE** (`KLAVIYO_API_KEY` set 2026-08; ~506 subscribers, flows + campaigns
   sending). Consent state and the audiences are audited by `scripts/audit_marketing_reach.py`.
-- **Cancel the Wix plan (~R10k)** — the LAST thing Wix is owed anything for. Both domains left Wix on
-  2026-08-23/24 (Porkbun + Cloudflare), so Wix holds no registration, no DNS and no record pointing at it;
-  cancelling cannot take either site down. Check the billing page for whether the site plan and any domain
-  line are billed separately before clicking.
+- **Wix — the site plans are OFF, but Wix STILL BILLS BOTH DOMAINS' EMAIL** (checked 2026-09-25). Both
+  old Wix sites were UNPUBLISHED 2026-09-25 (members were still booking on the free wixsite fallback); both
+  site plans already have auto-renew OFF and lapse 2026-12-08 / 2027-01-15. **The two "Business email"
+  subscriptions are the Google Workspace mailboxes for @nextpointtennis.com and @ten-fifty5.com, resold
+  by Wix** (MX = `aspmx.l.google.com`) — **NEVER cancel them in Wix**: it kills info@ mail, which is also
+  the platform-admin/Clerk/Klaviyo/Ads login. Move Workspace billing to Google direct before they renew
+  (NextPoint 2026-08-24→**2027-08-24**, Ten-Fifty5 **2027-09-21**). Wix's "unassigned subscription" is
+  just the NextPoint email with no site attached — expected, harmless.
 - **Done (config that WAS pending):** `OPS_KEY` GitHub Actions secret set → the monthly statement sweep
   (`.github/workflows/month-end.yml`) now fires on the **1st**, billing the month just ended, issuing each client's
   consolidated statement invoice + pay-link email; Admin → Setup → **Company & billing details** filled (bank
