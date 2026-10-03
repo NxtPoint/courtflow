@@ -84,11 +84,11 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 771 / billing 757 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 785 / billing 757 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (101/101/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (102/101/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **When the numbers move, run `python -m scripts.audit_docs` and update
    EVERY doc it names** — the baseline is repeated in ~7 files and the gate fails unless they all
@@ -285,7 +285,11 @@ ONLY under a service** — the standalone section and every other write path wer
 **SEMI-PRIVATE (squad) lessons bill PER HEAD** (`billing.product.max_clients`) — each client gets their OWN
 owed order at the service price, **never merged**, and each head bills whoever **PAYS**: the player if a
 member, else their **GUARDIAN** (so a parent's two kids raise two orders both owned by the parent — spend
-rolls up to the payer, activity to the player). **Cancel voids EVERY order on the booking** (primary + every
+rolls up to the payer, activity to the player). **Several players on ONE account — a class or a
+semi-private — are ticked under "Who's playing?" and paid in ONE checkout**: each keeps their own seat
+and order, bundled by the same settlement wrapper "Pay all" uses (`group_checkout` /
+`include_awaiting`; `sc_one_checkout_pays_for_several_players_on_one_account`). Children sit under the
+account — one email, no child login. **Cancel voids EVERY order on the booking** (primary + every
 partner), so no partner is left owing. Mechanics, the add-later path and the `_addable_player_uid` guard that
 stops a booker attaching another family's child: [BUSINESS-RULES.md § 2](docs/specs/BUSINESS-RULES.md).
 

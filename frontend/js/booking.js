@@ -768,6 +768,13 @@
       rows.push(["When", st.selClass ? UI.fmtRange(st.selClass.starts_at, st.selClass.ends_at) : UI.fmtDate(st.day)]);
     }
     rows.push(["Price", priceLabel()]);
+    // Several players on one account: say how many, and what they come to together.
+    if (multiPlayer() && who().length > 1) {
+      rows.push(["Players", String(who().length)]);
+      var each = (st.type === "lesson") ? st.selDurationPrice
+        : (st.selClass ? (st.selClass.price_minor != null ? st.selClass.price_minor : st.selClass.price) : null);
+      if (each != null && st.settlement !== "token") rows.push(["Total", UI.money(each * who().length, ctx.billing && ctx.billing.currency)]);
+    }
     // Equipment add-ons (court) as their own lines + a Total when any are chosen, so the client sees the
     // added fees (the court can be covered/free while the equipment is still a flat charge).
     if (st.type === "court" && st.addonQty) {
@@ -912,7 +919,7 @@
     card.appendChild(sm);
 
     // On-behalf: only a LESSON asks who's playing (start() loads the client's kids for lessons only).
-    if (ctx.dependents && ctx.dependents.length && (!st.onBehalf || st.type === "lesson")) card.appendChild(playerSection());
+    if (multiPlayer() || (ctx.dependents && ctx.dependents.length && (!st.onBehalf || st.type === "lesson"))) card.appendChild(playerSection());
 
     // Semi-private (squad) lesson: add fellow PLAYERS who each get their own bill (not a free guest).
     var squad = squadSection();
@@ -998,7 +1005,84 @@
     return "Confirm booking";
   }
   function playerName(d) { return ((d.first_name || "") + " " + (d.surname || "")).trim() || "Child"; }
+  // ---- WHO'S PLAYING — ONE process for every session that is not private -----------------------
+  // A class or a semi-private can take SEVERAL players from ONE account: tick the account holder
+  // and/or any of their children. Each ticked player gets their own place and their own line on the
+  // bill, and they are paid for together in ONE checkout (see submit). Children always sit UNDER the
+  // account — no login, no second email. A private lesson or a court keeps the single choice below.
+  function multiPlayer() { return st.type === "class" || isSemiPrivate(); }
+  function holderLabel() { return st.onBehalf ? (st.onBehalf.name || "The client") : "Myself"; }
+  // The ticked players: the account holder first ("ME"), then children in the order they are listed.
+  function who() {
+    var w = st.who || ["ME"];
+    var ids = (ctx.dependents || []).map(function (d) { return d.dependent_user_id; });
+    return (w.indexOf("ME") >= 0 ? ["ME"] : []).concat(ids.filter(function (id) { return w.indexOf(id) >= 0; }));
+  }
+  function playerCap() {
+    if (isSemiPrivate()) return Math.max(1, (parseInt(st.selService.max_clients, 10) || 1) - (st.squad || []).length);
+    return 99;   // a class is capped by its own capacity — the server seats or waitlists each player
+  }
+  function playersChecklist() {
+    var picked = who(), cap = playerCap();
+    var sec = el("div", { class: "cf-confirm-sec" }, [el("h3", { text: "Who's playing?" })]);
+    sec.appendChild(el("p", { class: "cf-muted cf-tiny",
+      text: "Tick everyone who is coming. Each player has their own place" + (st.onBehalf ? "." : " — you pay for them together, once.") }));
+    var list = el("div", { class: "cf-list" });
+    function row(id, label) {
+      var box = el("input", { type: "checkbox" });
+      box.checked = picked.indexOf(id) >= 0;
+      box.addEventListener("change", function () {
+        var now = who().filter(function (x) { return x !== id; });
+        if (box.checked) {
+          if (now.length >= cap) {
+            box.checked = false;
+            UI.toast("This session takes " + (cap === 1 ? "one more player" : cap + " players") + " at most.", "warn"); return;
+          }
+          now.push(id);
+        }
+        if (!now.length) { box.checked = true; UI.toast("At least one player has to be coming.", "warn"); return; }
+        st.who = now; renderConfirm();
+      });
+      list.appendChild(el("label", { class: "cf-item", style: "cursor:pointer;gap:10px" }, [
+        box, el("div", { class: "cf-item-main" }, [el("div", { class: "cf-item-t", text: label })]) ]));
+    }
+    row("ME", holderLabel());
+    (ctx.dependents || []).forEach(function (d) { row(d.dependent_user_id, playerName(d)); });
+    sec.appendChild(list);
+    if (!st.onBehalf) {
+      sec.appendChild(el("button", { class: "cf-btn cf-btn-sm", type: "button", style: "margin-top:8px",
+        text: "+ Add a child", onclick: addChildModal }));
+    }
+    return sec;
+  }
+  // Add a child WITHOUT leaving the booking: they sit under the parent's account and are ticked.
+  function addChildModal() {
+    var m = UI.modal("Add a child", {});
+    m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
+      text: "Children sit under your account — no separate login or email. You book and pay for them from here." }));
+    var fn = el("input", { class: "cf-input", placeholder: "First name" });
+    var sn = el("input", { class: "cf-input", placeholder: "Surname (optional)" });
+    var go = el("button", { class: "cf-btn cf-btn-primary", text: "Add" });
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "First name" }), fn]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Surname" }), sn]));
+    m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:12px" },
+      [el("button", { class: "cf-btn", text: "Cancel", onclick: m.close }), go]));
+    go.addEventListener("click", async function () {
+      var first = fn.value.trim();
+      if (!first) { UI.toast("First name is required.", "warn"); return; }
+      go.disabled = true;
+      try {
+        var before = (ctx.dependents || []).map(function (d) { return d.dependent_user_id; });
+        await window.API.addDependent({ first_name: first, surname: sn.value.trim() || null });
+        ctx.dependents = (await window.API.dependents()).dependents || [];
+        var added = ctx.dependents.filter(function (d) { return before.indexOf(d.dependent_user_id) < 0; })[0];
+        if (added && who().length < playerCap()) st.who = who().concat([added.dependent_user_id]);
+        m.close(); renderConfirm();
+      } catch (e) { go.disabled = false; UI.toast(UI.errMsg(e), "error"); }
+    });
+  }
   function playerSection() {
+    if (multiPlayer()) return playersChecklist();
     var sel = el("select", { class: "cf-select", onchange: function (ev) {
       var v = ev.target.value;
       st.player = v === "ME" ? null : ctx.dependents.filter(function (d) { return d.dependent_user_id === v; })[0] || null;
@@ -1040,24 +1124,14 @@
   function isSemiPrivate() {
     return st.type === "lesson" && st.selService && (parseInt(st.selService.max_clients, 10) || 1) > 1;
   }
-  // Local (client-side) kid search — a self-booking member picks from THEIR OWN dependents (the staff
-  // member-search endpoint is not exposed to members). Same {results:[…]} shape the picker expects.
-  function localKidSearch(q) {
-    var term = (q || "").toLowerCase();
-    var kids = (ctx.dependents || []).filter(function (d) { return playerName(d).toLowerCase().indexOf(term) >= 0; })
-      .map(function (d) { return { user_id: d.dependent_user_id, name: playerName(d), kind: "dependent", guardian_name: "your child" }; });
-    return Promise.resolve({ results: kids });
-  }
+  // Players from ANOTHER account (a different family sharing the lesson). Players on THIS account
+  // are ticked under "Who's playing?" above — so this step no longer lists the booker's own children.
   function squadPickerConfig() {
     var picked = (st.squad || []).map(function (x) { return x.payload && x.payload.user_id; }).filter(Boolean);
-    var primaryDep = st.player && st.player.dependent_user_id;
     return {
-      // Staff (on-behalf) → the full member+kids search; a self-booking member → their own kids only.
-      searchFn: st.onBehalf ? function (q) { return window.API.searchBookingMembers(q); }
-                            : ((ctx.dependents && ctx.dependents.length) ? localKidSearch : null),
-      excludeIds: picked.concat(primaryDep ? [primaryDep] : []),
-      // A parent picking from their OWN kids sees them listed at once — no typing a name to find them.
-      minChars: st.onBehalf ? 2 : 0,
+      // Staff → the member search; a self-booking member → the other member's email.
+      searchFn: st.onBehalf ? function (q) { return window.API.searchBookingMembers(q); } : null,
+      excludeIds: picked.concat(who().filter(function (x) { return x !== "ME"; })),
       toast: "Added to the booking.",
       onSubmit: function (payload, label) {
         st.squad = st.squad || [];
@@ -1069,17 +1143,13 @@
   }
   function squadSection() {
     if (!isSemiPrivate()) return null;
-    var maxPartners = (parseInt(st.selService.max_clients, 10) || 1) - 1;
-    if (maxPartners < 1) return null;
     if (!st.squad) st.squad = [];
+    var room = (parseInt(st.selService.max_clients, 10) || 1) - who().length - st.squad.length;
+    if (room < 1 && !st.squad.length) return null;
     var sec = el("div", { class: "cf-confirm-sec" });
-    sec.appendChild(el("h3", { text: "Semi-private — add players" }));
+    sec.appendChild(el("h3", { text: "Sharing with another member?" }));
     sec.appendChild(el("p", { class: "cf-muted cf-tiny",
-      text: "Up to " + maxPartners + " other player" + (maxPartners === 1 ? "" : "s") + " can share this lesson. "
-          + "Each is billed separately at the lesson price. "
-          + ((ctx.dependents && ctx.dependents.length)
-              ? "The FIRST player is the one chosen under \"Who's playing?\" above — for two children, pick one there and add the other here."
-              : "Add a member or one of your children.") }));
+      text: "Someone on a DIFFERENT account can share this lesson. They get their own bill, settled separately." }));
     var list = el("div", { class: "cf-list" });
     st.squad.forEach(function (item, i) {
       list.appendChild(el("div", { class: "cf-item" }, [
@@ -1089,11 +1159,10 @@
           onclick: function () { st.squad.splice(i, 1); renderConfirm(); } }),
       ]));
     });
-    if (!st.squad.length) list.appendChild(el("div", { class: "cf-empty", text: "No extra players yet." }));
-    sec.appendChild(list);
-    if (st.squad.length < maxPartners) {
+    if (st.squad.length) sec.appendChild(list);
+    if (room >= 1) {
       sec.appendChild(el("button", { class: "cf-btn cf-btn-sm", type: "button", style: "margin-top:8px",
-        text: "+ Add player", onclick: function () { window.CRMUI.addLessonPlayerModal(squadPickerConfig()); } }));
+        text: "+ Add a member", onclick: function () { window.CRMUI.addLessonPlayerModal(squadPickerConfig()); } }));
     }
     return sec;
   }
@@ -1273,34 +1342,53 @@
       UI.toast("Choose a hit or a match first — it's what members filter on.", "warn");
       return;
     }
+    // Never send more players than the service takes — the server would drop the extra one silently.
+    if (isSemiPrivate() && who().length + (st.squad || []).length > (parseInt(st.selService.max_clients, 10) || 1)) {
+      UI.toast("This lesson takes " + st.selService.max_clients + " players at most — untick someone.", "warn");
+      return;
+    }
     captureGuest();
     btn.disabled = true; btn.textContent = "Booking…";
     try {
       var res, playerDepId = st.player && st.player.dependent_user_id;
       if (st.type === "class") {
-        var enrolBody = { settlement_mode: st.settlement, audience: "member" };
-        if (playerDepId) enrolBody.dependent_user_id = playerDepId;
-        mergeProfileFields(enrolBody);   // Client-360 Step 4: carry captured name/surname/cell
-        if (st.onBehalf) {
-          // Staff on-behalf: enrol the CLIENT (the enrol route honours user_id for coach/admin). A
-          // class needs a member account, so a walk-in guest (no user_id) can't be enrolled here.
-          if (!st.onBehalf.user_id) { btn.disabled = false; btn.textContent = confirmLabel();
-            UI.toast("A class booking needs a member account — pick a member, not a guest.", "warn"); return; }
-          enrolBody.user_id = st.onBehalf.user_id;
+        if (st.onBehalf && !st.onBehalf.user_id) {
+          // A class needs a member account, so a walk-in guest (no user_id) can't be enrolled here.
+          btn.disabled = false; btn.textContent = confirmLabel();
+          UI.toast("A class booking needs a member account — pick a member, not a guest.", "warn"); return;
         }
-        res = await window.API.enrol(st.selClass.id, enrolBody);
-        // SAME paywall as court/lesson: an online enrolment now creates an awaiting_payment order —
-        // drive the client to Yoco instead of silently confirming an unpaid seat. Staff on-behalf
-        // (skipOnline) collect at court / pack / account, so they never hit this.
-        var enrolOrderId = res.order_id || (res.enrolment && res.enrolment.order_id);
-        if (!st.skipOnline && st.settlement === "online" && enrolOrderId) {
-          if (window.Pay) { await window.Pay.startYocoCheckout(enrolOrderId); return; }
+        // ONE SEAT PER TICKED PLAYER, each its own enrolment + order (so one child can be cancelled
+        // or refunded alone). Sequential: the server seats or waitlists each against live capacity.
+        var payIds = [], players = multiPlayer() ? who() : [playerDepId || "ME"];
+        for (var pi = 0; pi < players.length; pi++) {
+          var enrolBody = { settlement_mode: st.settlement, audience: "member" };
+          if (players[pi] !== "ME") enrolBody.dependent_user_id = players[pi];
+          mergeProfileFields(enrolBody);   // Client-360 Step 4: carry captured name/surname/cell
+          // Staff on-behalf: enrol the CLIENT (or the client's child) — the route honours user_id.
+          if (st.onBehalf) enrolBody.user_id = st.onBehalf.user_id;
+          res = await window.API.enrol(st.selClass.id, enrolBody);
+          var enrolOrderId = res.order_id || (res.enrolment && res.enrolment.order_id);
+          if (enrolOrderId && payIds.indexOf(enrolOrderId) < 0) payIds.push(enrolOrderId);
+        }
+        // SAME paywall as court/lesson: an online seat is held until its charge lands — drive the
+        // client to Yoco instead of silently confirming an unpaid seat. Several seats go through ONE
+        // checkout. Staff on-behalf (skipOnline) collect at court / pack / account.
+        if (!st.skipOnline && st.settlement === "online" && payIds.length) {
+          if (window.Pay) { await payTogether(payIds); return; }
           UI.toast("Couldn't open the payment page — please refresh and try again.", "error"); return;
         }
         if (res.checkout && res.checkout.redirect_url) { location.href = res.checkout.redirect_url; return; }
         success("class", res); return;
       }
       var parties = [];
+      // Non-private: the ticked players. The first is THE player (the account holder unless only
+      // children are coming); the rest ride as extra heads on the same account.
+      var extraSame = [];
+      if (multiPlayer()) {
+        var ticked = who();
+        playerDepId = ticked[0] !== "ME" ? ticked[0] : null;
+        extraSame = ticked.slice(1).map(function (id) { return { user_id: id }; });
+      }
       if (playerDepId) parties.push({ party_role: "player", user_id: playerDepId });
       if (st.guest) {
         parties.push({ party_role: "host", user_id: ctx.principal.user_id });
@@ -1326,9 +1414,11 @@
         body.court_resource_id = (st.selCourt !== "ANY" && st.selCourt.id) || st.slot.court_resource_id || null;
         // Semi-private (squad): fellow players (members or a parent's kids), each billed their own
         // order (server validates + caps at max_clients). Send the picked {user_id}|{email} payloads.
-        if (isSemiPrivate() && st.squad && st.squad.length) {
-          var squad = st.squad.map(function (x) { return x.payload; }).filter(Boolean);
+        if (isSemiPrivate()) {
+          var squad = extraSame.concat((st.squad || []).map(function (x) { return x.payload; }).filter(Boolean));
           if (squad.length) body.extra_clients = squad;
+          // Heads on THIS account ride the booker's card payment — one checkout for all of them.
+          if (extraSame.length && !st.skipOnline && st.settlement === "online") body.group_checkout = true;
         }
       } else {
         body.resource_id = st.slot.resource_id;
@@ -1383,7 +1473,7 @@
       // real money. Without honouring it the booking sits held and lazy-expires while the member
       // thinks they're booked.
       if (!st.skipOnline && (st.settlement === "online" || res.requires_payment) && orderId) {
-        if (window.Pay) { await window.Pay.startYocoCheckout(orderId); return; }
+        if (window.Pay) { await payTogether((res.booking && res.booking.checkout_order_ids) || [orderId]); return; }
         UI.toast("Couldn't open the payment page — please refresh and try again.", "error"); return;
       }
       if (res.checkout && res.checkout.redirect_url) { location.href = res.checkout.redirect_url; return; }
@@ -1407,6 +1497,15 @@
       }
       UI.toast(UI.errMsg(e), "error");
     }
+  }
+
+  // ONE CHECKOUT. One order goes straight to Yoco, as it always has. Several — a place for each of
+  // a parent's children — are bundled by the SAME "Pay all" settlement the statement uses, so the
+  // card is charged once and every seat is confirmed by that one payment.
+  async function payTogether(orderIds) {
+    if (orderIds.length === 1) return window.Pay.startYocoCheckout(orderIds[0]);
+    var w = await window.API.payStatement({ order_ids: orderIds, seats: true });
+    return window.Pay.startYocoCheckout(w.order_id);
   }
 
   // Client-360 Step 4: merge any captured minimum-profile fields into an outgoing booking body.
@@ -1539,7 +1638,7 @@
     // played, and leaving room for only ONE of their kids. Reloaded every start (the client changes).
     if (opts.onBehalf) {
       ctx.dependents = [];
-      if (type === "lesson" && opts.onBehalf.user_id && opts.onBehalf.email) {
+      if ((type === "lesson" || type === "class") && opts.onBehalf.user_id && opts.onBehalf.email) {
         try {
           var kr = await window.API.searchBookingMembers(opts.onBehalf.email);
           ctx.dependents = ((kr && kr.results) || []).filter(function (it) {

@@ -563,7 +563,10 @@ def pay_statement():
     from billing import statement as statement_repo
     with session_scope() as s:
         res = statement_repo.create_settlement_order(
-            s, club_id=p.club_id, user_id=p.user_id, order_ids=order_ids)
+            s, club_id=p.club_id, user_id=p.user_id, order_ids=order_ids,
+            # `seats`: the booking flow paying for SEVERAL players in one checkout — the listed
+            # orders are seats held for this payment, not debts already on the statement.
+            include_awaiting=bool(order_ids and body.get("seats")))
     if not res:
         return jsonify(error="NOTHING_OWED", message="You have no outstanding balance to settle."), 409
     return jsonify(res), 201

@@ -424,10 +424,30 @@ def _settle_unified_statement(session, order_id):
             from billing import statement as _statement
             if not _statement.is_settlement_order(session, order_id=order_id):
                 return None
-            return _statement.settle_settlement_order(session, settlement_order_id=order_id)
+            res = _statement.settle_settlement_order(session, settlement_order_id=order_id)
     except Exception:
         log.info("unified statement settlement skipped order=%s", order_id)
         return None
+    # A child may be a SEAT that was HELD for this payment (one checkout for several players). Being
+    # marked paid is not enough — the booking / class seat has to be CONFIRMED, exactly as it would
+    # be had its own order been paid directly, or the hold lapses and a paid seat is cancelled. Both
+    # calls are idempotent and no-ops for an ordinary owed debt, which holds nothing.
+    for child in (res.get("children") or []):
+        club_id = None
+        try:
+            club_id = session.execute(
+                text('SELECT club_id FROM billing."order" WHERE id = :o'), {"o": child}).scalar()
+            if _confirm_held_bookings(session, child, club_id):
+                from diary.bookings import notify_coach_of_confirmed_order
+                notify_coach_of_confirmed_order(session, club_id=club_id, order_id=child)
+        except Exception:
+            log.debug("seat booking confirm skipped child=%s", child, exc_info=False)
+        try:
+            from diary.classes import confirm_paid_enrolments
+            confirm_paid_enrolments(session, club_id=club_id, order_id=child)
+        except Exception:
+            log.debug("seat enrolment confirm skipped child=%s", child, exc_info=False)
+    return res
 
 
 def _mark_order(session, order_id, status: str) -> None:

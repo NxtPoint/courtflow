@@ -313,6 +313,7 @@ def create_booking():
             product_id=b.get("product_id"),   # the chosen SERVICE (Private/Semi-private) → price exactly it
             addons=b.get("addons"),            # equipment hire [{resource_id, qty}] on a court booking
             extra_clients=extra_clients,       # semi-private squad members (each billed their own order)
+            group_checkout=bool(b.get("group_checkout")),   # same-account heads ride ONE card payment
             # THE SEAT RULE (community/): who is on the court. `seats` and `play_format` set the
             # denominator of the money split, so they are read from the body but the SPLIT itself is
             # computed server-side from the club's own court price — a crafted `seats` can only change
@@ -579,10 +580,13 @@ def enrol(class_session_id):
     payer_user = None
     dep = (b.get("dependent_user_id") or "").strip() or None
     with session_scope() as s:
+        # The guardian is the caller — or, for STAFF enrolling on a client's behalf, that client. So
+        # a coach can put a parent's child in a class, billed to the parent, exactly as the parent can.
+        guardian = target_user if (p.role in _ON_BEHALF_ROLES and b.get("user_id")) else p.user_id
         if dep and iam_repo.owns_dependent_user(
-                s, club_id=p.club_id, guardian_user_id=p.user_id, dependent_user_id=dep):
+                s, club_id=p.club_id, guardian_user_id=guardian, dependent_user_id=dep):
             target_user = dep
-            payer_user = p.user_id   # bill the guardian, not the child
+            payer_user = guardian    # bill the guardian, not the child
         res = classes_mod.enrol(
             s, club_id=p.club_id, class_session_id=class_session_id, user_id=target_user,
             settlement_mode=b.get("settlement_mode", "at_court"),

@@ -2487,6 +2487,98 @@ def sc_staff_can_book_a_familys_semi_private_for_both_children(s, fx):
           f"ok={d.get('ok')} orders={n}")
 
 
+def sc_one_checkout_pays_for_several_players_on_one_account(s, fx):
+    """ONE process for booking several players from one account — a class or a semi-private — with ONE
+    card payment. Each player keeps their OWN seat and order (so one child can still be cancelled or
+    refunded alone); the orders are paid together through the SAME settlement wrapper 'Pay all' uses.
+    A seat held for that payment must be CONFIRMED when the wrapper is paid, an abandoned checkout must
+    void every head's order, and a payment landing after the hold lapsed must still buy the seats."""
+    print("\n# One checkout for several players: 2 kids on a semi-private AND on a class, one card payment each")
+    from billing import statement as S
+    from billing.events import apply_payment_event
+    from billing.gateway import NormalizedPaymentEvent
+
+    def _pay(order_id, amount, ref):
+        return apply_payment_event(NormalizedPaymentEvent(
+            provider="yoco", kind="charge_succeeded", order_ref=str(order_id),
+            provider_payment_id=ref, amount_minor=amount, currency="ZAR", status="succeeded",
+            direction="charge", club_id=str(fx.club_id), user_id=str(g)), session=s)
+
+    def _status(order_ids):
+        return sorted(str(x) for x in s.execute(
+            text('SELECT status FROM billing."order" WHERE id = ANY(CAST(:i AS uuid[]))'),
+            {"i": [str(o) for o in order_ids]}).scalars())
+
+    g = fx.members[0]
+    k1 = _mk_dependent(s, fx.club_id, g, "Kid1")
+    k2 = _mk_dependent(s, fx.club_id, g, "Kid2")
+    s.execute(text("UPDATE billing.product SET max_clients = 2 WHERE club_id = :c AND kind = 'lesson'"),
+              {"c": fx.club_id})
+
+    def _lesson(hour, **kw):
+        return B.create_booking(
+            s, club_id=fx.club_id, booked_by_user_id=g, role="member", booking_type="lesson",
+            resource_id=fx.coach_res, coach_user_id=fx.coach_uid, starts_at=utc_iso(at(fx, hour)),
+            ends_at=utc_iso(at(fx, hour + 1)), settlement_mode="online",
+            parties=[{"party_role": "player", "user_id": k1}], extra_clients=[k2], **kw)
+
+    # ---- an OLD client (no flag) keeps the old behaviour: the extra is owed at the desk --------
+    old = _lesson(7)
+    check("without the flag the second head still settles at the desk (no card order nobody pays)",
+          old.get("ok") and "checkout_order_ids" not in old["booking"]
+          and _status(old["booking"]["extra_order_ids"]) == ["open"], str(old.get("booking")))
+
+    # ---- SEMI-PRIVATE: two kids, one card payment --------------------------------------------
+    r = _lesson(9, group_checkout=True)
+    bk = r.get("booking") or {}
+    ids = bk.get("checkout_order_ids") or []
+    check("two heads -> two orders to pay together", r.get("ok") and len(ids) == 2, str(bk))
+    check("both wait for the card; the lesson is HELD", _status(ids) == ["awaiting_payment"] * 2
+          and bk.get("status") == "held", f"{_status(ids)} {bk.get('status')}")
+    w = S.create_settlement_order(s, club_id=fx.club_id, user_id=g, order_ids=ids, include_awaiting=True)
+    check("ONE checkout covers both heads at 2 x R400", bool(w) and w["amount_minor"] == 80000
+          and w["items"] == 2, str(w))
+    check("a plain 'Pay all' does NOT sweep up a held seat (only the booking flow may)",
+          S.create_settlement_order(s, club_id=fx.club_id, user_id=fx.members[2], order_ids=ids,
+                                    include_awaiting=True) is None)
+    _pay(w["order_id"], 80000, "p_group_1")
+    check("one payment settles BOTH heads", _status(ids) == ["paid", "paid"], str(_status(ids)))
+    check("...and CONFIRMS the lesson (a held seat is not left to lapse)",
+          _booking_row(s, bk["id"])["status"] == "confirmed", _booking_row(s, bk["id"])["status"])
+
+    # ---- ABANDONED checkout: every head's order goes, not just the first ----------------------
+    a = _lesson(11, group_checkout=True)
+    a_ids = a["booking"]["checkout_order_ids"]
+    aw = S.create_settlement_order(s, club_id=fx.club_id, user_id=g, order_ids=a_ids, include_awaiting=True)
+    s.execute(text("UPDATE diary.booking SET held_until = now() - interval '1 minute' "
+                   "WHERE order_id = :o"), {"o": a_ids[0]})
+    B.release_expired_holds(s, fx.club_id)
+    check("a lapsed hold voids BOTH heads' orders", _status(a_ids) == ["void", "void"], str(_status(a_ids)))
+    # ...and a payment that lands AFTER the lapse is not lost and not silently applied: voiding a
+    # covered head killed the wrapper, so the money is recorded and FLAGGED for a human to refund.
+    late = _pay(aw["order_id"], 80000, "p_group_late") or {}
+    check("a LATE payment is recorded and flagged for refund, never silently kept",
+          late.get("payment_recorded") and late.get("needs_attention") == "payment_on_closed_order",
+          str({k: late.get(k) for k in ("payment_recorded", "needs_attention", "order_status")}))
+    check("...and settles nothing it should not", _status(a_ids) == ["void", "void"], str(_status(a_ids)))
+
+    # ---- CLASS: the SAME process — two kids, two seats, one card payment ----------------------
+    sid = _class_at(s, fx, 13, capacity=4)
+    seats = [C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=k, settlement_mode="online",
+                     payer_user_id=g) for k in (k1, k2)]
+    c_ids = [(x.get("enrolment") or {}).get("order_id") or x.get("order_id") for x in seats]
+    check("two class seats, each its own order billed to the PARENT",
+          all(c_ids) and len(set(c_ids)) == 2 and _status(c_ids) == ["awaiting_payment"] * 2, str(seats))
+    cw = S.create_settlement_order(s, club_id=fx.club_id, user_id=g, order_ids=c_ids, include_awaiting=True)
+    check("ONE checkout covers both class seats", bool(cw) and cw["items"] == 2, str(cw))
+    _pay(cw["order_id"], cw["amount_minor"], "p_group_class")
+    check("one payment settles both class seats", _status(c_ids) == ["paid", "paid"], str(_status(c_ids)))
+    held = s.execute(text("SELECT count(*) FROM diary.enrolment WHERE class_session_id = :cs "
+                          "AND user_id = ANY(CAST(:u AS uuid[])) AND status = 'enrolled' "
+                          "AND held_until IS NULL"), {"cs": sid, "u": [k1, k2]}).scalar()
+    check("...and both children are ENROLLED with no hold left to lapse", held == 2, f"enrolled={held}")
+
+
 def sc_class_payment_gate(s, fx):
     """A class is a SERVICE — enrolment must respect the payment rules like a court/lesson booking. A
     member CANNOT post 'membership_covered'/'free' to conjure an R0 seat (a membership covers COURTS
@@ -5684,6 +5776,7 @@ SCENARIOS = [
     sc_semi_private_dependents,
     sc_semi_private_addable_guard,
     sc_staff_can_book_a_familys_semi_private_for_both_children,
+    sc_one_checkout_pays_for_several_players_on_one_account,
     sc_card_only_service_gate,
     sc_class_payment_gate,
     # Revenue-leak hardening (2026-07-27) — see each docstring for the leak it closes.

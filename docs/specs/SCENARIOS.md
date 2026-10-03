@@ -11,7 +11,7 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 771 / billing 757 / statement 64** (101 / 101 / 12 `sc_*` functions).
+  **booking 785 / billing 757 / statement 64** (102 / 101 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
@@ -59,7 +59,10 @@ coach back-capture of a PAST lesson (staff-only `allow_past`, resource resolved 
 a parent's kids bill the guardian, a member can't add a stranger / another family's child, cancel
 voids every head, and **staff booking on a parent's behalf can put BOTH children on it** — the child
 is named as the player, so the parent is not a third head
-(`sc_staff_can_book_a_familys_semi_private_for_both_children`). A card-only SERVICE refuses pay-at-court on the booking; a class enrolment is
+(`sc_staff_can_book_a_familys_semi_private_for_both_children`). **One checkout for several players on
+one account** — two children on a semi-private AND on a class, each with their own seat and order,
+paid by ONE card charge that confirms every seat; an abandoned checkout voids every head; a late
+payment is flagged, not kept (`sc_one_checkout_pays_for_several_players_on_one_account`). A card-only SERVICE refuses pay-at-court on the booking; a class enrolment is
 payment-gated (no free seat via `membership_covered`/free, card-only class refuses pay-at-court).
 
 **RESCHEDULE CAN MOVE THE COURT** — a court booking's own resource; a lesson keeps the coach and its

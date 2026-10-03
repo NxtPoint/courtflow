@@ -381,7 +381,29 @@ def statement(session, *, club_id, user_id) -> Dict[str, Any]:
     }
 
 
-def create_settlement_order(session, *, club_id, user_id, order_ids=None) -> Optional[Dict[str, Any]]:
+def _awaiting_seat_orders(session, *, club_id, user_id, order_ids) -> List[Dict[str, Any]]:
+    """The caller's own ONLINE seat orders still waiting for a card payment, out of `order_ids`.
+
+    A SEAT order only — one with a line for a booking or a class enrolment. This is what lets ONE
+    checkout pay for several players (a parent's two children in a class, a family's semi-private):
+    each player keeps their own order, so one of them can still be cancelled or refunded alone, and
+    the wrapper pays them together. A membership or pack waiting for payment is deliberately NOT
+    eligible: settling one through a wrapper would mark it paid without ever ACTIVATING it."""
+    rows = session.execute(
+        text('SELECT o.id, o.amount_minor, o.currency_code FROM billing."order" o '
+             "WHERE o.club_id = :c AND o.user_id = :u AND o.id = ANY(CAST(:ids AS uuid[])) "
+             "  AND o.status = 'awaiting_payment' AND o.covered_order_ids IS NULL "
+             "  AND EXISTS (SELECT 1 FROM billing.order_line ol WHERE ol.order_id = o.id "
+             "               AND (ol.booking_id IS NOT NULL OR ol.enrolment_id IS NOT NULL)) "
+             "ORDER BY o.created_at, o.id"),
+        {"c": str(club_id), "u": str(user_id), "ids": [str(x) for x in order_ids]},
+    ).mappings().all()
+    return [{"order_id": str(r["id"]), "amount_minor": int(r["amount_minor"] or 0),
+             "currency": r["currency_code"]} for r in rows]
+
+
+def create_settlement_order(session, *, club_id, user_id, order_ids=None,
+                            include_awaiting=False) -> Optional[Dict[str, Any]]:
     """Create ONE online (awaiting_payment) settlement order that pays the client's owed orders by card.
     `order_ids` selects which to settle (default = ALL owed). Links each covered child via
     order.settled_by_order_id; on the settlement order's charge_succeeded, settle_settlement_order marks
@@ -395,6 +417,9 @@ def create_settlement_order(session, *, club_id, user_id, order_ids=None) -> Opt
     if order_ids:
         want = {str(o) for o in order_ids}
         items = [i for i in items if i["order_id"] in want]
+        # ONE CHECKOUT FOR SEVERAL SEATS: seats booked just now, each held until its card payment.
+        if include_awaiting:
+            items += _awaiting_seat_orders(session, club_id=club_id, user_id=user_id, order_ids=want)
     if not items:
         return None
     total = sum(int(i["amount_minor"] or 0) for i in items)
@@ -449,14 +474,20 @@ def settle_settlement_order(session, *, settlement_order_id) -> Dict[str, Any]:
     # survived a successful payment and they were billed again. `status='open'` still gates the write,
     # so a child already settled by another path is never double-settled and this stays idempotent.
     children = session.execute(
+        # 'awaiting_payment' too: a multi-seat checkout covers seats that are HELD until this very
+        # payment (see _awaiting_seat_orders). Still idempotent — a settled child is 'paid'.
         text('SELECT id, club_id FROM billing."order" '
-             "WHERE status = 'open' AND ("
+             "WHERE status IN ('open', 'awaiting_payment') AND ("
              "      settled_by_order_id = :s"
              "   OR id = ANY(COALESCE((SELECT covered_order_ids FROM billing.\"order\" "
              "                          WHERE id = :s), ARRAY[]::uuid[]))"
              ")"),
         {"s": str(settlement_order_id)},
     ).mappings().all()
+    # (A seat whose hold LAPSED before the payment landed is not revived here. Voiding a covered
+    # child kills its wrapper — invalidate_live_settlement_for — so a late charge lands on a closed
+    # wrapper, is recorded, and is flagged `payment_on_closed_order` for a refund. Safe, and pinned
+    # by sc_one_checkout_pays_for_several_players_on_one_account.)
     if not children:
         # A paid wrapper that settles nothing is either a duplicate call (fine) or the failure above
         # (money taken, debt still owed). Nothing else surfaces it, so say so loudly.
@@ -506,7 +537,8 @@ def settle_settlement_order(session, *, settlement_order_id) -> Dict[str, Any]:
                         settlement_order_id, taken, applied, surplus)
     except Exception:
         log.debug("settlement surplus check skipped", exc_info=False)
-    return {"settled": settled, "splits": splits, "surplus_minor": surplus}
+    return {"settled": settled, "splits": splits, "surplus_minor": surplus,
+            "children": [str(ch["id"]) for ch in children]}
 
 
 def is_settlement_order(session, *, order_id) -> bool:

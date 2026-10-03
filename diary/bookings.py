@@ -464,6 +464,20 @@ def release_expired_holds(session, club_id, now=None):
     ).mappings().all()
     _void_orders_with_no_live_bookings(
         session, club_id, {str(r["order_id"]) for r in rows if r.get("order_id")})
+    # EVERY head's order, not only the primary's. A semi-private raises an order per player, linked
+    # by order_line.booking_id rather than booking.order_id — so an abandoned checkout for a parent's
+    # two children voided one order and left the other waiting for a payment that would never come.
+    for r in rows:
+        try:
+            from billing.statement import void_order
+            for oid in session.execute(
+                    text("SELECT DISTINCT ol.order_id FROM billing.order_line ol "
+                         '  JOIN billing."order" o ON o.id = ol.order_id '
+                         " WHERE ol.booking_id = :b AND o.status IN ('open', 'awaiting_payment')"),
+                    {"b": r["id"]}).scalars().all():
+                void_order(session, club_id=club_id, order_id=str(oid), reason="hold expired")
+        except Exception:
+            log.debug("expired-hold head order void skipped", exc_info=False)
 
 
 def _void_orders_with_no_live_bookings(session, club_id, order_ids):
@@ -696,7 +710,7 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
                    coach_user_id=None, court_resource_id=None, audience="member",
                    notes=None, recurrence_id=None, hold_minutes=HOLD_MINUTES_DEFAULT,
                    booked_for_user_id=None, propose=False, product_id=None, addons=None,
-                   allow_past=False, now=None, extra_clients=None,
+                   allow_past=False, now=None, extra_clients=None, group_checkout=False,
                    seats=None, play_format=None, visibility="private", open_until=None,
                    play_intent=None):
     """Create a court/lesson/class booking, concurrency-safe (docs/03 §4).
@@ -1193,18 +1207,32 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     # attached to booking.order_id (that stays the primary's) — they link via order_line.booking_id, so
     # cancel_booking voids them all and each client sees only their own line. Extras always settle at the
     # desk (owed) — a single Yoco checkout can't collect from multiple payers.
+    #
+    # ONE CHECKOUT FOR ONE ACCOUNT (`group_checkout`): a head the BOOKER pays for — their own child —
+    # follows the booker's card payment instead of dropping to an owed desk order, and the caller
+    # pays every such order together through ONE settlement wrapper (billing.statement). A head on
+    # ANOTHER account still settles at the desk: one card cannot pay two families. The flag is
+    # explicit so a client that does not know to bundle them (an older cached page) keeps getting
+    # owed extras, rather than leaving a card order nobody will ever be sent to pay.
     extra_order_ids = []
+    checkout_order_ids = [str(order_id)] if order_id else []
     for p in extra_parties:
         # Bill whoever PAYS for this player: the player if a member, else their guardian (a login-less
         # dependent child bills to the adult) — so a parent's two kids raise two orders BOTH owned by them.
+        payer = _bill_owner(session, p["user_id"])
+        same_card = bool(group_checkout and settlement_mode == "online"
+                         and str(payer) == str(owner_user_id))
         eo = _create_order_guarded(
-            session, club_id=club_id, user_id=_bill_owner(session, p["user_id"]), booking_id=booking_id,
-            booking_type=booking_type, settlement_mode="at_court", parties=[p],
+            session, club_id=club_id, user_id=payer, booking_id=booking_id,
+            booking_type=booking_type, settlement_mode=("online" if same_card else "at_court"),
+            parties=[p],
             resource_id=resource_id, starts_at=starts, ends_at=ends, audience=audience,
             duration_minutes=duration_minutes, coach_user_id=coach_uid, product_id=product_id,
         )
         if eo.get("order_id"):
             extra_order_ids.append(eo["order_id"])
+            if same_card:
+                checkout_order_ids.append(str(eo["order_id"]))
 
     # ---- THE SEAT RULE (community/) -------------------------------------------------------
     # A court booking has SEATS, and the court fee is split among the seats nobody covers — so one
@@ -1255,6 +1283,9 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     booking = _booking_dict(session, booking_id)
     if extra_order_ids:
         booking["extra_order_ids"] = extra_order_ids
+    if len(checkout_order_ids) > 1:
+        # Every order this ONE card payment must cover — the caller wraps them (statement.pay).
+        booking["checkout_order_ids"] = checkout_order_ids
 
     # Online stays held -> return checkout; everything else is confirmed -> emit.
     if online:

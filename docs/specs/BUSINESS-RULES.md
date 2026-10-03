@@ -53,6 +53,29 @@ a membership tier's lifecycle derives from its term plans' status.
   in-club member/child — enforced by **`_addable_player_uid`** in the route, which validates EACH extra player
   so a booker can never attach an arbitrary account or another family's child. The picker itself is the shared
   `CRMUI.addLessonPlayerModal`, serving BOTH the add-later modal and the upfront booking-flow squad step. **Cancel voids EVERY order on the booking**, not just the primary's.
+  **ONE PROCESS FOR SEVERAL PLAYERS ON ONE ACCOUNT — CLASSES AND SEMI-PRIVATES ALIKE (2026-10-03,
+  owner's decision).** Every session that is not private asks **"Who's playing?"** as a tick-list: the
+  account holder and each of their children (`booking.js` `playersChecklist`; "+ Add a child" creates
+  the dependent without leaving the booking). **Children always sit UNDER the account — one email,
+  no child login.** Each ticked player still gets their OWN seat and their OWN order (so one child can
+  be cancelled or refunded alone, and one debt = one order still holds); what is shared is the
+  PAYMENT: **one checkout, one card charge**, by bundling the seats' orders in the SAME settlement
+  wrapper "Pay all" uses (`booking.js` `payTogether` → `POST /api/me/statement/pay {order_ids,
+  seats:true}`). The engine needed three things to carry that: `create_settlement_order(
+  include_awaiting=True)` may cover seat orders still HELD for the card (a seat order only — a pack or
+  membership waiting for payment is refused, because the wrapper would mark it paid without
+  activating it); `settle_settlement_order` settles `awaiting_payment` children and
+  `billing.events._settle_unified_statement` then CONFIRMS each one's booking / class seat, or the
+  hold lapses on a paid seat; and `create_booking(group_checkout=True)` lets a head the BOOKER pays
+  for follow the card instead of dropping to an owed desk order (a head on ANOTHER account still
+  settles at the desk — one card cannot pay two families; without the flag nothing changes, so an
+  older cached page never leaves a card order nobody is sent to pay). `release_expired_holds` now
+  voids EVERY head's order on an abandoned checkout, not just the primary's. A payment landing after
+  the hold lapsed finds the wrapper killed and is recorded + flagged `payment_on_closed_order` for a
+  refund, never silently applied. Staff enrolling on a client's behalf can enrol the client's child
+  (`enrol` route: the guardian is the client). The squad step ("Sharing with another member?") is
+  now only for a player on a DIFFERENT account. Guarded by
+  `sc_one_checkout_pays_for_several_players_on_one_account`.
   **THE ACCOUNT HOLDER IS NOT AUTOMATICALLY A PLAYER (2026-10-03).** The first head is whoever is named
   under **"Who's playing?"** — the account holder, or one of their children (a `player` party). That
   step existed for a parent booking for themselves but NOT for staff booking on a parent's behalf, so
