@@ -691,6 +691,14 @@
     { key: "classes", label: "Classes", desc: "Create, schedule & manage rosters", mount: mountCoachClasses },
     { key: "commission", label: "Club commission", desc: "What the club keeps on your coaching", mount: mountCoachCommission },
   ];
+  // THE COURT AUDIT appears ONLY for someone an admin has listed as a reviewer (the server refuses
+  // anyone else regardless) — so an ordinary coach never sees it. Same widget as the admin console.
+  window.TFAuth.apiJSON("/api/admin/timesheet/access").then(function (a) {
+    if (!a || !a.allowed) return;
+    COACH_SETUP.push({ key: "audit", label: "Court audit", desc: "Booked versus seen on court — review a coach's day",
+      mount: function (h) { window.Widgets.Timesheet.mount(h, {}); } });
+    if ((location.hash || "").indexOf("#/setup") === 0) route();
+  }, function () {});
   function renderSetup(section) {
     var host = el("div", {});
     set(host);

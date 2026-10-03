@@ -44,8 +44,11 @@ def init(engine=None):
     if engine is None:
         from db import get_engine
         engine = get_engine()
+    # 3) the court audit (admin/timesheet.py owns its own DDL): diary.timesheet_auditor +
+    #    diary.timesheet_entry — what was BOOKED versus what was SEEN on court.
+    from admin.timesheet import DDL as _TIMESHEET_DDL
     with engine.begin() as conn:
-        for stmt in _DDL:
+        for stmt in _DDL + _TIMESHEET_DDL:
             conn.execute(text(stmt))
     return engine
 

@@ -720,6 +720,7 @@
     ["revenue", "Club earnings", "Courts + memberships + commission from coaches → coach → client → transaction"],
     ["bookings", "Bookings by day", "Every booking — client, service and coach"],
     ["approvals", "Refund requests", "Members asking for money back — opens the transaction to decide"],
+    ["audit", "Court audit", "What was booked against what was seen on court — and the unbooked-court penalty"],
     ["activity", "Club activity", "Every payment, refund and adjustment"],
   ];
   function clubCur() { return (CLUB && CLUB.currency_code) || "ZAR"; }
@@ -733,6 +734,12 @@
     if (section === "coach-statement") return sub ? go("#/money/revenue/" + sub) : go("#/money/revenue");
     if (section === "bookings") return moneyBookings();
     if (section === "approvals") return moneyApprovals();
+    // THE COURT AUDIT — Widgets.Timesheet, the same widget the reviewer uses in the coach app.
+    if (section === "audit") {
+      var th = el("div", {}); set(th);
+      return window.Widgets.Timesheet.mount(th, { back: { label: "Money", hash: "#/money" },
+        searchMembers: function (q) { return window.API.searchBookingMembers(q); } });
+    }
     if (section === "activity") return moneyActivity();
     return moneyMenu();
   }

@@ -5249,6 +5249,97 @@ def sc_partial_payment_leaves_the_invoice_open(s, fx):
           f'{doc4["billed_now_minor"]} vs {doc4["paid_minor"]}+{doc4["outstanding_minor"]}')
 
 
+def sc_a_court_used_without_a_booking_is_found_and_charged_once(s, fx):
+    """THE COURT AUDIT. A lesson a coach never enters is the one thing the diary has no row for, so a
+    reviewer records what he SAW on court: a booked session is verified (or marked not seen), and a
+    court in use with no booking becomes an 'unbooked' entry. The month-end recon puts booked and seen
+    side by side, and an ADMIN can charge the R500 penalty — once, as a coach-ledger adjustment dated
+    on the day it happened, so it reaches the coach's statement with no second money store."""
+    print("\n# Court audit: verify a booked session, record an UNBOOKED one, charge the penalty once")
+    from admin import timesheet as TS
+
+    if not s.execute(text("SELECT 1 FROM iam.coach_profile WHERE club_id = :c AND user_id = :u"),
+                     {"c": fx.club_id, "u": fx.coach_uid}).first():
+        s.execute(text("INSERT INTO iam.coach_profile (club_id, user_id) VALUES (:c, :u)"),
+                  {"c": fx.club_id, "u": fx.coach_uid})
+    yday = (datetime.now(JHB) - timedelta(days=1)).date()
+    day, month = yday.isoformat(), yday.strftime("%Y-%m")
+    start = datetime(yday.year, yday.month, yday.day, 8, 0, tzinfo=JHB)
+    bid = s.execute(
+        text("INSERT INTO diary.booking (club_id, booking_type, resource_id, coach_user_id, starts_at, "
+             "ends_at, status, booked_by_user_id) VALUES (:c, 'lesson', :r, :u, :s, :e, 'completed', :m) "
+             "RETURNING id"),
+        {"c": fx.club_id, "r": fx.coach_res, "u": fx.coach_uid, "s": start,
+         "e": start + timedelta(hours=1), "m": fx.member}).scalar_one()
+
+    # ---- access: an admin always; anyone else only once an admin lists them ------------------
+    check("an ordinary member may NOT audit",
+          not TS.can_audit(s, club_id=fx.club_id, user_id=fx.member, role="member"))
+    check("an admin always may", TS.can_audit(s, club_id=fx.club_id, user_id=fx.member, role="club_admin"))
+    TS.set_auditor(s, club_id=fx.club_id, user_id=fx.member, allowed=True)
+    check("a listed reviewer may — without becoming an admin",
+          TS.can_audit(s, club_id=fx.club_id, user_id=fx.member, role="coach"))
+
+    # ---- a BOOKED session: seen, or not ----------------------------------------------------
+    d = TS.day(s, club_id=fx.club_id, coach_user_id=fx.coach_uid, date=day)
+    mine = [x for x in d["sessions"] if x["ref_id"] == str(bid)]
+    check("the booked lesson shows on the coach's day, not yet reviewed",
+          len(mine) == 1 and mine[0]["verdict"] is None, str(d["sessions"]))
+    TS.set_verdict(s, club_id=fx.club_id, kind="lesson", ref_id=bid, verdict="verified")
+    TS.set_verdict(s, club_id=fx.club_id, kind="lesson", ref_id=bid, verdict="not_seen")
+    d = TS.day(s, club_id=fx.club_id, coach_user_id=fx.coach_uid, date=day)
+    check("re-marking REPLACES the verdict (one per session, never stacked)",
+          [x["verdict"] for x in d["sessions"] if x["ref_id"] == str(bid)] == ["not_seen"]
+          and s.execute(text("SELECT count(*) FROM diary.timesheet_entry WHERE booking_id = :b"),
+                        {"b": bid}).scalar() == 1)
+    check("a session of ANOTHER club can't be marked",
+          TS.set_verdict(s, club_id="00000000-0000-0000-0000-000000000000", kind="lesson",
+                         ref_id=bid, verdict="verified").get("error") == "NOT_FOUND")
+
+    # ---- court use with NO booking ---------------------------------------------------------
+    clash = TS.add_unbooked(s, club_id=fx.club_id, coach_user_id=fx.coach_uid, date=day,
+                            start_time="08:30", duration_minutes=60)
+    check("time he DID book is refused as 'unbooked' (verify it instead — no false penalty)",
+          clash.get("error") == "ALREADY_BOOKED", str(clash))
+    future = TS.add_unbooked(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
+                             date=(datetime.now(JHB) + timedelta(days=2)).date().isoformat(),
+                             start_time="10:00", duration_minutes=60)
+    check("court use can't be recorded before it happens", future.get("error") == "IN_THE_FUTURE", str(future))
+    ub = TS.add_unbooked(s, club_id=fx.club_id, coach_user_id=fx.coach_uid, date=day,
+                         start_time="11:00", duration_minutes=90, note="seen on camera 2")
+    check("an unbooked 90 minutes is recorded", ub.get("ok"), str(ub))
+
+    r = TS.recon(s, club_id=fx.club_id, month=month)
+    row = next((c for c in r["coaches"] if c["coach_user_id"] == str(fx.coach_uid)), {})
+    check("the recon counts it: 1 unbooked, 90 min, penalty still pending",
+          row.get("unbooked") == 1 and row.get("unbooked_minutes") == 90
+          and row.get("penalties_pending") == 1 and row.get("penalties_minor") == 0, str(row))
+    check("...beside the booked work and its verdict", row.get("booked", 0) >= 1 and row.get("not_seen") == 1,
+          str(row))
+
+    # ---- the penalty: ONCE, on the coach's ledger, in the month it happened ----------------
+    def _ledger():
+        return int(s.execute(text("SELECT COALESCE(SUM(amount_minor),0) FROM billing.coach_ledger "
+                                  "WHERE club_id = :c AND coach_user_id = :u AND ref_type = 'timesheet'"),
+                             {"c": fx.club_id, "u": fx.coach_uid}).scalar())
+    before = CM.coach_settlement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
+                                 month=month)["settlement"]["due_now_minor"]
+    p1 = TS.charge_penalty(s, club_id=fx.club_id, entry_id=ub["id"])
+    p2 = TS.charge_penalty(s, club_id=fx.club_id, entry_id=ub["id"])
+    check("the penalty is R500, owed BY the coach", p1.get("penalty_minor") == 50000 and _ledger() == -50000,
+          f"{p1} ledger={_ledger()}")
+    check("a second click charges nothing more", p2.get("already") is True and _ledger() == -50000, str(p2))
+    after = CM.coach_settlement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
+                                month=month)["settlement"]["due_now_minor"]
+    check("...and it comes off what he is due for THAT month", after == before - 50000, f"{before} -> {after}")
+    check("a charged entry can no longer be removed",
+          TS.remove_unbooked(s, club_id=fx.club_id, entry_id=ub["id"]).get("error") == "PENALTY_CHARGED")
+    r2 = TS.recon(s, club_id=fx.club_id, month=month)
+    row2 = next((c for c in r2["coaches"] if c["coach_user_id"] == str(fx.coach_uid)), {})
+    check("the recon shows it charged, nothing pending",
+          row2.get("penalties_minor") == 50000 and row2.get("penalties_pending") == 0, str(row2))
+
+
 def sc_an_invoice_can_be_found_by_its_number_without_knowing_the_client(s, fx):
     """An EFT arrives quoting an invoice NUMBER and nothing else. The only invoice list was the one
     on a client's own record — so to receipt it the owner first had to know whose it was, which is
@@ -5780,6 +5871,7 @@ SCENARIOS = [
     sc_partial_payment_leaves_the_invoice_open,
     sc_one_payment_one_receipt,
     sc_an_invoice_can_be_found_by_its_number_without_knowing_the_client,
+    sc_a_court_used_without_a_booking_is_found_and_charged_once,
     sc_an_invoice_covers_its_own_month,
     sc_a_month_swept_early_can_still_be_closed,
     sc_buy_click_never_mints_a_duplicate_debt,

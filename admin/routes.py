@@ -2042,3 +2042,156 @@ def admin_wallet_expire(client_user_id, wallet_id):
             code = str(e)
             return jsonify(error=code), (404 if code == "WALLET_NOT_FOUND" else 400)
     return jsonify(res), 200
+
+
+# ---------------------------------------------------------------------------
+# THE COURT AUDIT (admin/timesheet.py) — booked versus seen on court.
+# Its OWN gate: admins, plus anyone an admin put on the auditor list. The reviewer is an ordinary
+# coach account, so these routes deliberately do NOT use _admin() — and the two that move money or
+# grant access (penalty, access) are admin-only on top.
+# ---------------------------------------------------------------------------
+
+def _auditor():
+    """(principal, is_admin, error). Admin roles pass; anyone else must be a listed auditor."""
+    from admin import timesheet as TS
+    p = resolve_principal(request)
+    if p is None or not p.authenticated:
+        return None, False, (jsonify(error="unauthorized"), 401)
+    if p.club_id is None:
+        return None, False, (jsonify(error="no_club_scope"), 400)
+    is_admin = p.role in _ADMIN_ROLES
+    if not is_admin:
+        with session_scope() as s:
+            ok = TS.can_audit(s, club_id=p.club_id, user_id=p.user_id, role=p.role)
+        if not ok:
+            return None, False, (jsonify(error="forbidden"), 403)
+    return p, is_admin, None
+
+
+def _ts_result(res, ok_status=200):
+    if isinstance(res, dict) and res.get("ok") is False:
+        return jsonify(res), (404 if res.get("error") == "NOT_FOUND" else 422)
+    return jsonify(res), ok_status
+
+
+@admin_bp.get("/timesheet/access")
+def timesheet_access():
+    """Who may capture. Open to ANY signed-in user so an app can decide whether to show the screen
+    at all: {allowed, is_admin} — and, for an admin, the auditor list."""
+    from admin import timesheet as TS
+    p = resolve_principal(request)
+    if p is None or not p.authenticated or p.club_id is None:
+        return jsonify(allowed=False, is_admin=False), 200
+    is_admin = p.role in _ADMIN_ROLES
+    with session_scope() as s:
+        allowed = TS.can_audit(s, club_id=p.club_id, user_id=p.user_id, role=p.role)
+        people = TS.auditors(s, club_id=p.club_id) if is_admin else []
+    return jsonify(allowed=allowed, is_admin=is_admin, auditors=people), 200
+
+
+@admin_bp.post("/timesheet/access")
+def timesheet_set_access():
+    """Grant / revoke capture access. Body {user_id, allowed}. club_admin+ ONLY."""
+    from admin import timesheet as TS
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        res = TS.set_auditor(s, club_id=p.club_id, user_id=b.get("user_id"),
+                             allowed=bool(b.get("allowed")), granted_by=p.user_id)
+    return _ts_result(res)
+
+
+@admin_bp.get("/timesheet/day")
+def timesheet_day():
+    """One coach's day: booked sessions + the reviewer's verdicts + unbooked court use.
+    `?coach=&date=YYYY-MM-DD`. Also returns the coach + court lists the capture form needs."""
+    from admin import timesheet as TS
+    p, _is_admin, err = _auditor()
+    if err:
+        return err
+    coach = (request.args.get("coach") or "").strip() or None
+    date = (request.args.get("date") or "").strip()
+    with session_scope() as s:
+        out = {"coaches": TS.coaches(s, club_id=p.club_id),
+               "courts": [{"id": str(r["id"]), "name": r["name"]} for r in s.execute(
+                   text("SELECT id, name FROM diary.resource WHERE club_id = :c AND kind = 'court' "
+                        "AND is_active = true ORDER BY rank, name"), {"c": str(p.club_id)}).mappings().all()]}
+        if coach and date:
+            out.update(TS.day(s, club_id=p.club_id, coach_user_id=coach, date=date))
+    return jsonify(out), 200
+
+
+@admin_bp.post("/timesheet/verdict")
+def timesheet_verdict():
+    """Mark a BOOKED session. Body {kind: lesson|class, ref_id, verdict: verified|not_seen|null}."""
+    from admin import timesheet as TS
+    p, _is_admin, err = _auditor()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        res = TS.set_verdict(s, club_id=p.club_id, kind=b.get("kind"), ref_id=b.get("ref_id"),
+                             verdict=(b.get("verdict") or None), captured_by=p.user_id)
+    return _ts_result(res)
+
+
+@admin_bp.post("/timesheet/unbooked")
+def timesheet_add_unbooked():
+    """Record court use with NO booking. Body {coach_user_id, date, start_time, duration_minutes,
+    court_resource_id?, note?}."""
+    from admin import timesheet as TS
+    p, _is_admin, err = _auditor()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        res = TS.add_unbooked(s, club_id=p.club_id, coach_user_id=b.get("coach_user_id"),
+                              date=b.get("date"), start_time=b.get("start_time"),
+                              duration_minutes=b.get("duration_minutes"),
+                              court_resource_id=(b.get("court_resource_id") or None),
+                              note=b.get("note"), captured_by=p.user_id)
+    return _ts_result(res, 201)
+
+
+@admin_bp.delete("/timesheet/unbooked/<entry_id>")
+def timesheet_remove_unbooked(entry_id):
+    """Remove an unbooked entry captured in error (refused once a penalty was charged)."""
+    from admin import timesheet as TS
+    p, _is_admin, err = _auditor()
+    if err:
+        return err
+    with session_scope() as s:
+        res = TS.remove_unbooked(s, club_id=p.club_id, entry_id=entry_id)
+    return _ts_result(res)
+
+
+@admin_bp.get("/timesheet/recon")
+def timesheet_recon():
+    """The month, coach by coach: booked vs verified vs not seen vs unbooked. `?month=YYYY-MM`."""
+    from admin import timesheet as TS
+    p, _is_admin, err = _auditor()
+    if err:
+        return err
+    month = (request.args.get("month") or "").strip()
+    with session_scope() as s:
+        if not month:
+            month = s.execute(text("SELECT to_char(now(), 'YYYY-MM')")).scalar()
+        res = TS.recon(s, club_id=p.club_id, month=month)
+    return jsonify(res), 200
+
+
+@admin_bp.post("/timesheet/unbooked/<entry_id>/penalty")
+def timesheet_penalty(entry_id):
+    """Charge the admin penalty for an unbooked court — a coach-ledger adjustment. club_admin+ ONLY:
+    the reviewer records what he saw; only an admin turns that into a charge. Body {amount_minor?}."""
+    from admin import timesheet as TS
+    p, err = _admin()
+    if err:
+        return err
+    b = _body()
+    with session_scope() as s:
+        res = TS.charge_penalty(s, club_id=p.club_id, entry_id=entry_id,
+                                amount_minor=b.get("amount_minor"), charged_by=p.user_id)
+    return _ts_result(res)

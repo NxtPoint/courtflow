@@ -94,6 +94,10 @@ widgets/_registry → widgets/* → <role>_app`):
     **`Widgets.ServiceList`** (the ONE services list: edit via ServiceEditor + lifecycle
     deactivate/reactivate/terminate + optional create; owner sees ALL, coach sees only OWN;
     `/api/services` enforces who-may-change-what). Adopted by BOTH the owner and coach Setup.
+  - `timesheet.js` → **`Widgets.Timesheet`** (added 2026-10-03) — THE COURT AUDIT: booked versus seen on court. Mounted in the
+    admin console (Money → Court audit) and in the coach app's Setup menu, where it appears ONLY for someone an admin has
+    listed as a reviewer. No role fork: what a user may do is what the server allows (only an admin sees the penalty button
+    and the access list).
   - `game.js` → **`Widgets.Game`** + **`Widgets.GameList`** (added 2026-08-09, the community lane) —
     the ONE render of a game and of the Find-a-Game feed.
     `cfg = { id, me, data:{get(id), chat(id)|list()}, actions:{join,leave,invite,post,pay,result,create},

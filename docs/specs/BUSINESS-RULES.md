@@ -89,6 +89,20 @@ a membership tier's lifecycle derives from its term plans' status.
   rule this paragraph has always claimed was not enforced on the add-later route. A parent adding a
   child later gets their kids listed by name (a child has no email to type). Guarded by
   `sc_staff_can_book_a_familys_semi_private_for_both_children`.
+- **THE COURT AUDIT — booked versus seen on court (2026-10-03, owner's request).** A lesson a coach never enters
+  is the one thing the diary has no row for: the client is not billed through the platform and the club earns no
+  commission. A REVIEWER (the manager, from court footage) records what happened — `admin/timesheet.py`, screen
+  `Widgets.Timesheet`: each BOOKED session of a coach's day is marked **Seen** or **Not seen** (one verdict per
+  session — re-marking replaces it), and a court in use with NO booking is recorded as an **unbooked** entry
+  (coach, time, court, note). Time the coach DID book is refused as unbooked (`ALREADY_BOOKED` — verify it instead,
+  so a properly entered lesson can never be put in front of the admin as a penalty), and nothing can be recorded
+  before it has happened. The **month recon** shows, per coach, booked · seen · not seen · not reviewed · unbooked,
+  and every unbooked entry. **The R500 admin penalty is charged by an ADMIN only** (`charge_penalty`, default
+  `DEFAULT_PENALTY_MINOR`), ONCE per entry, as a `billing.coach_ledger` **adjustment** dated on the day of the
+  session — so it lands on that month's coach statement as an Adjustment with no second money store, and a charged
+  entry can no longer be removed. **Access is its own list** (`diary.timesheet_auditor`), not a role: the reviewer
+  is an ordinary coach account and gains nothing else in the admin console. Tables: `diary.timesheet_entry`,
+  `diary.timesheet_auditor`. Guarded by `sc_a_court_used_without_a_booking_is_found_and_charged_once`.
 - **Classes:** owner/coach create class types + schedule **recurring or one-off** sessions; capacity +
   **waitlist** (auto-promote the next person on a cancellation); rosters + attendance; shown on the
   master diary. A class **reserves N real courts** (court-blocking `booking_type='class'` rows under the
