@@ -5294,6 +5294,34 @@ def sc_an_invoice_can_be_found_by_its_number_without_knowing_the_client(s, fx):
     check("the client's own list is unchanged by all this (same reader)",
           {a["invoice_id"], b["invoice_id"]} <= {x["invoice_id"] for x in mine})
 
+    # A CANCELLED DEBT IS NOT A RECEIVABLE. Every way a charge stops being owed without money
+    # arriving must take its invoice off the queue — and must not then read as "Paid".
+    from billing.statement import void_order as _void
+    o_void, o_woff, o_doc, o_half_a, o_half_b = (_owed(10000), _owed(11000), _owed(12000),
+                                                 _owed(13000), _owed(14000))
+    inv = {k: INVQ.issue_invoice(s, club_id=fx.club_id, user_id=fx.member, order_ids=ids)
+           for k, ids in (("void", [o_void]), ("woff", [o_woff]), ("doc", [o_doc]),
+                          ("half", [o_half_a, o_half_b]))}
+    _void(s, club_id=fx.club_id, order_id=o_void)
+    _void(s, club_id=fx.club_id, order_id=o_woff, write_off=True)
+    INVQ.void_invoice(s, club_id=fx.club_id, invoice_id=inv["doc"]["invoice_id"])
+    _void(s, club_id=fx.club_id, order_id=o_half_a)          # one line cancelled, one still owed
+    queue = {x["invoice_id"]: x for x in INVQ.list_invoices(s, club_id=fx.club_id, unpaid_only=True)}
+    for k, why in (("void", "its charge was VOIDED"), ("woff", "its charge was WRITTEN OFF"),
+                   ("doc", "the invoice itself was voided")):
+        check(f"an invoice leaves the queue when {why}", inv[k]["invoice_id"] not in queue)
+    half = queue.get(inv["half"]["invoice_id"]) or {}
+    check("a half-cancelled invoice stays, owing only the live line",
+          half.get("outstanding_minor") == 14000, str(half.get("outstanding_minor")))
+    check("...and is 'Unpaid', not 'Partially paid' — nothing was PAID",
+          half.get("status_label") == "Unpaid", str(half.get("status_label")))
+    full = {x["invoice_id"]: x["status_label"] for x in INVQ.list_invoices(s, club_id=fx.club_id)}
+    check("a voided charge reads 'Cancelled', never 'Paid'",
+          full.get(inv["void"]["invoice_id"]) == "Cancelled", str(full.get(inv["void"]["invoice_id"])))
+    check("a written-off charge reads 'Cancelled', never 'Paid'",
+          full.get(inv["woff"]["invoice_id"]) == "Cancelled", str(full.get(inv["woff"]["invoice_id"])))
+    check("a voided document reads 'Void'", full.get(inv["doc"]["invoice_id"]) == "Void")
+
 
 def sc_one_payment_one_receipt(s, fx):
     """Settling a multi-line invoice sends ONE receipt, not one per line.

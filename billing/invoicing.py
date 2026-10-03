@@ -781,6 +781,8 @@ def list_invoices(session, *, club_id, user_id=None, q=None, unpaid_only=False,
              '       i.total_minor, i.currency_code, i.user_id, u.email AS client_email, '
              "       NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)), '') AS client_name, "
              '       COALESCE(SUM(CASE WHEN o.status = \'open\' THEN o.amount_minor ELSE 0 END),0) AS outstanding, '
+             "       COALESCE(SUM(CASE WHEN o.status = 'paid' THEN o.amount_minor ELSE 0 END),0) AS paid, "
+             '       COUNT(o.id) AS n_orders, '
              "       COALESCE(array_agg(o.id) FILTER (WHERE o.status IN ('open','awaiting_payment')), "
              "                '{}') AS open_order_ids "
              'FROM billing.invoice i '
@@ -803,11 +805,16 @@ def list_invoices(session, *, club_id, user_id=None, q=None, unpaid_only=False,
     out = []
     for r in rows:
         outstanding = int(r["outstanding"] or 0)
+        paid = int(r["paid"] or 0)
+        # The SAME words build_invoice_document uses, judged on what was actually PAID. This list
+        # used to call anything with nothing left to pay "Paid" — so an invoice whose every charge
+        # had been voided or written off read as money received — and anything owing less than its
+        # original total "Partially paid", when the missing part had been cancelled, not paid.
         if r["status"] == "void":
             label = "Void"
         elif outstanding <= 0:
-            label = "Paid"
-        elif outstanding < int(r["total_minor"] or 0):
+            label = "Paid" if (paid > 0 or not int(r["n_orders"] or 0)) else "Cancelled"
+        elif paid > 0:
             label = "Partially paid"
         else:
             label = "Unpaid"
