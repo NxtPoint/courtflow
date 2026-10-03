@@ -746,6 +746,10 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     extra_parties = []
     if extra_clients and booking_type == "lesson":
         seen_extra = {str(owner_user_id)}
+        # The PRIMARY player (a parent's child named as `player`) already holds the first head — an
+        # extra naming the same child would bill that child twice on one lesson.
+        seen_extra |= {str(p["user_id"]) for p in parties
+                       if isinstance(p, dict) and p.get("party_role") == "player" and p.get("user_id")}
         for ec in extra_clients:
             uid = ec.get("user_id") if isinstance(ec, dict) else ec
             if not uid or str(uid) in seen_extra:

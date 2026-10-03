@@ -93,6 +93,7 @@ from diary.booking_request import (member_by_email as _member_by_email,         
                                    service_max_clients as _service_max_clients,
                                    addable_player_uid as _addable_player_uid,
                                    extra_players as _extra_players,
+                                   foreign_player as _foreign_player,
                                    apply_min_profile as _apply_min_profile)
 
 
@@ -291,6 +292,11 @@ def create_booking():
             return gate
 
     with session_scope() as s:
+        # The PRIMARY player may be the owner's own child (a parent booking for a kid, or staff doing
+        # so on the parent's behalf) — never somebody else's.
+        if _foreign_player(s, p.club_id, parties, owner_uid=booked_for_user_id or p.user_id):
+            return jsonify(error="PLAYER_NOT_YOURS",
+                           message="That player isn't on this client's account."), 422
         # Extra PLAYERS on the slot — a squad lesson's per-head clients, or a court booking's named
         # playmates — validated and capped in diary.booking_request.extra_players.
         extra_clients = _extra_players(s, p, b, owner_uid=booked_for_user_id or p.user_id,
@@ -426,6 +432,14 @@ def add_lesson_player(booking_id):
         if not uid:
             return jsonify(error="MEMBER_NOT_FOUND",
                            message="No member with that email in your club."), 404
+        # The SAME guard the upfront squad step runs. This route used to take a posted user_id
+        # verbatim, so the booking's owner could raise an owed order on any account whose id they
+        # held — including another family's child, or somebody not in the club at all.
+        uid = _addable_player_uid(s, p.club_id, uid, owner_uid=bk.get("booked_by_user_id"),
+                                  is_staff=p.role in _ON_BEHALF_ROLES)
+        if not uid:
+            return jsonify(error="PLAYER_NOT_ADDABLE",
+                           message="You can add a club member or one of your own children."), 422
         res = bookings_mod.add_lesson_partner(
             s, club_id=p.club_id, booking_id=booking_id, new_user_id=uid,
             actor_user_id=p.user_id, role=p.role)

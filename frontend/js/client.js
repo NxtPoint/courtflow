@@ -1359,7 +1359,16 @@
         add_to_calendar: { manual: true, run: function (b) { addToCalendar(b.ics_url); } },
         receipt: { manual: true, run: function (b) { window.open("/receipt.html?order=" + encodeURIComponent(b.charge.order_id), "_blank"); } },
         reschedule: { manual: true, run: function (b) { rescheduleSheet(b); } },
-        add_player: { manual: true, run: function (b) { window.CRMUI.addLessonPlayerModal({ onSubmit: function (payload) { return window.API.addBookingPlayer(b.id, payload); }, onDone: function () { renderBookingStory(b.id); } }); } },
+        // A parent adds their OWN child by name (a child has no email to type) — listed at once.
+        add_player: { manual: true, run: function (b) { window.CRMUI.addLessonPlayerModal({ minChars: 0, searchFn: function (q) {
+            var term = (q || "").toLowerCase();
+            return window.API.dependents().then(function (r) {
+              return { results: ((r && r.dependents) || []).map(function (d) {
+                return { user_id: d.dependent_user_id, kind: "dependent", guardian_name: "your child",
+                         name: ((d.first_name || "") + " " + (d.surname || "")).trim() || "Child" };
+              }).filter(function (k) { return k.name.toLowerCase().indexOf(term) >= 0; }) };
+            });
+          }, onSubmit: function (payload) { return window.API.addBookingPlayer(b.id, payload); }, onDone: function () { renderBookingStory(b.id); } }); } },
         cancel: { manual: true, run: function (b) { cancelBooking(b); } },
         request_refund: { manual: true, run: function (b) { requestRefund(b.charge.order_id); } },
       },

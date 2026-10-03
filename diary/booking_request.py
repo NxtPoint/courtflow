@@ -4,6 +4,8 @@
 #
 #   member_by_email / addable_player_uid / service_max_clients / extra_players
 #       who may be added as an extra player on a slot (a squad lesson's clients, a court's playmates)
+#   foreign_player
+#       who the owner may name as the booking's PRIMARY player (themselves, or their own child)
 #   apply_min_profile
 #       the first-booking "confirm your details" rule (Client-360 Step 4)
 
@@ -64,6 +66,31 @@ def addable_player_uid(session, club_id, uid, *, owner_uid, is_staff):
              "AND is_active = true LIMIT 1"), {"c": club_id, "u": uid}).scalar()
     if guardian and (is_staff or str(guardian) == str(owner_uid)):
         return uid
+    return None
+
+
+def foreign_player(session, club_id, parties, *, owner_uid):
+    """The first `player` party that names somebody the booking's OWNER may not put on court as
+    THEIR player, or None when every one is fine.
+
+    The PRIMARY player of a booking is billed to its owner, so the only people an owner can name are
+    themselves and their OWN active dependents. This is what lets a parent's account book a lesson
+    for a child — and what lets STAFF do the same on a parent's behalf (the owner is then the parent,
+    never the coach): without it a coach booking a family's semi-private had no way to say "the
+    player is the child", so the parent silently took the first seat and only ONE child fitted.
+    Guest parties carry no user_id and are not this function's business."""
+    for party in parties or []:
+        if not isinstance(party, dict) or party.get("party_role") != "player":
+            continue
+        uid = party.get("user_id")
+        if not uid or str(uid) == str(owner_uid):
+            continue
+        guardian = session.execute(
+            text("SELECT guardian_user_id FROM iam.dependent WHERE club_id = :c "
+                 "AND dependent_user_id = :u AND is_active = true LIMIT 1"),
+            {"c": club_id, "u": str(uid)}).scalar()
+        if not guardian or str(guardian) != str(owner_uid):
+            return str(uid)
     return None
 
 

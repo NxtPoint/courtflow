@@ -531,9 +531,11 @@
       m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Find a member or child" }), q]));
       m.body.appendChild(results);
       var timer = null, token = 0;
+      // cfg.minChars: 0 lists everything at once (a parent's own few children); staff search stays at 2.
+      var minChars = (cfg.minChars == null) ? 2 : cfg.minChars;
       function runSearch() {
         var term = q.value.trim(); var mine = ++token;
-        if (term.length < 2) { UI.clear(results); return; }
+        if (term.length < minChars) { UI.clear(results); return; }
         Promise.resolve(cfg.searchFn(term)).then(function (r) {
           if (mine !== token) return;   // a newer keystroke won
           UI.clear(results);
@@ -554,6 +556,7 @@
         }, function () { if (mine === token) { UI.clear(results); } });
       }
       q.addEventListener("input", function () { clearTimeout(timer); timer = setTimeout(runSearch, 220); });
+      if (minChars === 0) runSearch();
     }
 
     // Always offer a direct email fallback (add a member by email, no search needed).

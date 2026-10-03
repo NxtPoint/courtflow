@@ -2403,6 +2403,72 @@ def sc_semi_private_addable_guard(s, fx):
           _addable_player_uid(s, fx.club_id, str(stranger), owner_uid=str(g1), is_staff=True) is None)
 
 
+def sc_staff_can_book_a_familys_semi_private_for_both_children(s, fx):
+    """A COACH booking a family's semi-private on the parent's behalf must be able to put BOTH children
+    on it. He could not: the on-behalf flow had no way to say who was playing, so the PARENT (the only
+    one with an email to pick) silently took the first seat — billed for a lesson they never played —
+    and a 2-player service had room for only ONE child. The parent self-booking path always worked
+    (sc_semi_private_dependents); this pins the staff one, through the same guards the route runs."""
+    print("\n# Semi-private ON BEHALF: a coach books a parent's TWO kids — both play, parent is not a 3rd head")
+    from types import SimpleNamespace
+    from diary.booking_request import extra_players, foreign_player
+    g, other = fx.members[0], fx.members[1]
+    k1 = _mk_dependent(s, fx.club_id, g, "Kid1")
+    k2 = _mk_dependent(s, fx.club_id, g, "Kid2")
+    theirs = _mk_dependent(s, fx.club_id, other, "TheirKid")
+    s.execute(text("UPDATE billing.product SET max_clients = 2 WHERE club_id = :c AND kind = 'lesson'"),
+              {"c": fx.club_id})
+    pid = str(s.execute(text("SELECT id FROM billing.product WHERE club_id = :c AND kind = 'lesson' LIMIT 1"),
+                        {"c": fx.club_id}).scalar())
+    coach = SimpleNamespace(club_id=fx.club_id, user_id=fx.coach_uid, role="coach")
+
+    # What the screen USED to send: the parent as the client and both kids as extras. The cap is
+    # max_clients - 1, so the second child was dropped without a word.
+    old = extra_players(s, coach, {"booking_type": "lesson", "product_id": pid,
+                                   "extra_clients": [{"user_id": k1}, {"user_id": k2}]},
+                        owner_uid=g, is_staff=True)
+    check("the old shape (parent in seat 1) had room for only ONE child", len(old) == 1, str(old))
+
+    # What it sends now: child 1 as THE player, child 2 as the extra.
+    parties = [{"party_role": "player", "user_id": k1}]
+    check("the parent's own child may be named as the player",
+          foreign_player(s, fx.club_id, parties, owner_uid=g) is None)
+    check("another family's child may NOT be named as this client's player",
+          foreign_player(s, fx.club_id, [{"party_role": "player", "user_id": theirs}], owner_uid=g) == theirs)
+    extras = extra_players(s, coach, {"booking_type": "lesson", "product_id": pid,
+                                      "extra_clients": [{"user_id": k2}]}, owner_uid=g, is_staff=True)
+    check("the second child fits as the extra player", extras == [k2], str(extras))
+
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+                         booked_for_user_id=g, booking_type="lesson", resource_id=fx.coach_res,
+                         coach_user_id=fx.coach_uid, starts_at=utc_iso(at(fx, 15)),
+                         ends_at=utc_iso(at(fx, 16)), parties=parties, extra_clients=extras)
+    check("the coach books the family's semi-private", r.get("ok"), str(r))
+    bid = (r.get("booking") or {}).get("id")
+    rows = s.execute(
+        text('SELECT o.user_id AS uid, SUM(ol.amount_minor) AS amt FROM billing."order" o '
+             'JOIN billing.order_line ol ON ol.order_id = o.id WHERE ol.booking_id = :b '
+             'GROUP BY o.id, o.user_id'), {"b": bid}).mappings().all()
+    check("exactly TWO heads are billed (one per child, none for the parent)", len(rows) == 2,
+          f"orders={len(rows)}")
+    check("both heads bill the PARENT at the lesson price",
+          all(str(x["uid"]) == str(g) and int(x["amt"]) == 40000 for x in rows), str([dict(x) for x in rows]))
+    players = {str(x) for x in s.execute(
+        text("SELECT user_id FROM diary.booking_party WHERE booking_id = :b AND party_role <> 'guest'"),
+        {"b": bid}).scalars()}
+    check("the players on the lesson are the two CHILDREN", players == {k1, k2}, str(players))
+
+    # The player named twice (as THE player and again as an extra) is one head, not two bills.
+    d = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+                         booked_for_user_id=g, booking_type="lesson", resource_id=fx.coach_res,
+                         coach_user_id=fx.coach_uid, starts_at=utc_iso(at(fx, 16)),
+                         ends_at=utc_iso(at(fx, 17)), parties=parties, extra_clients=[k1])
+    n = s.execute(text("SELECT count(DISTINCT order_id) FROM billing.order_line WHERE booking_id = :b"),
+                  {"b": (d.get("booking") or {}).get("id")}).scalar()
+    check("a child named as the player AND as an extra is billed ONCE", d.get("ok") and n == 1,
+          f"ok={d.get('ok')} orders={n}")
+
+
 def sc_class_payment_gate(s, fx):
     """A class is a SERVICE — enrolment must respect the payment rules like a court/lesson booking. A
     member CANNOT post 'membership_covered'/'free' to conjure an R0 seat (a membership covers COURTS
@@ -5599,6 +5665,7 @@ SCENARIOS = [
     sc_semi_private_add_later,
     sc_semi_private_dependents,
     sc_semi_private_addable_guard,
+    sc_staff_can_book_a_familys_semi_private_for_both_children,
     sc_card_only_service_gate,
     sc_class_payment_gate,
     # Revenue-leak hardening (2026-07-27) — see each docstring for the leak it closes.

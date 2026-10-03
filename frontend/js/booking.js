@@ -911,7 +911,8 @@
     });
     card.appendChild(sm);
 
-    if (ctx.dependents && ctx.dependents.length) card.appendChild(playerSection());
+    // On-behalf: only a LESSON asks who's playing (start() loads the client's kids for lessons only).
+    if (ctx.dependents && ctx.dependents.length && (!st.onBehalf || st.type === "lesson")) card.appendChild(playerSection());
 
     // Semi-private (squad) lesson: add fellow PLAYERS who each get their own bill (not a free guest).
     var squad = squadSection();
@@ -1001,8 +1002,14 @@
     var sel = el("select", { class: "cf-select", onchange: function (ev) {
       var v = ev.target.value;
       st.player = v === "ME" ? null : ctx.dependents.filter(function (d) { return d.dependent_user_id === v; })[0] || null;
+      // The first player can't also be an extra one — drop them from the squad if they were added.
+      if (st.player && st.squad) {
+        st.squad = st.squad.filter(function (x) { return !(x.payload && x.payload.user_id === st.player.dependent_user_id); });
+      }
+      if (isSemiPrivate()) renderConfirm();
     } });
-    sel.appendChild(el("option", { value: "ME", text: "Myself", selected: st.player ? null : "selected" }));
+    sel.appendChild(el("option", { value: "ME", text: st.onBehalf ? (st.onBehalf.name || "The client") : "Myself",
+      selected: st.player ? null : "selected" }));
     ctx.dependents.forEach(function (d) {
       sel.appendChild(el("option", { value: d.dependent_user_id, text: playerName(d),
         selected: (st.player && st.player.dependent_user_id === d.dependent_user_id) ? "selected" : null }));
@@ -1049,6 +1056,8 @@
       searchFn: st.onBehalf ? function (q) { return window.API.searchBookingMembers(q); }
                             : ((ctx.dependents && ctx.dependents.length) ? localKidSearch : null),
       excludeIds: picked.concat(primaryDep ? [primaryDep] : []),
+      // A parent picking from their OWN kids sees them listed at once — no typing a name to find them.
+      minChars: st.onBehalf ? 2 : 0,
       toast: "Added to the booking.",
       onSubmit: function (payload, label) {
         st.squad = st.squad || [];
@@ -1067,7 +1076,10 @@
     sec.appendChild(el("h3", { text: "Semi-private — add players" }));
     sec.appendChild(el("p", { class: "cf-muted cf-tiny",
       text: "Up to " + maxPartners + " other player" + (maxPartners === 1 ? "" : "s") + " can share this lesson. "
-          + "Each is billed separately at the lesson price. Add a member or one of your children." }));
+          + "Each is billed separately at the lesson price. "
+          + ((ctx.dependents && ctx.dependents.length)
+              ? "The FIRST player is the one chosen under \"Who's playing?\" above — for two children, pick one there and add the other here."
+              : "Add a member or one of your children.") }));
     var list = el("div", { class: "cf-list" });
     st.squad.forEach(function (item, i) {
       list.appendChild(el("div", { class: "cf-item" }, [
@@ -1301,7 +1313,9 @@
       };
       // On-behalf: the server resolves for_email → booked_for_user_id (a member) or a walk-in guest;
       // the booking auto-confirms and no self parties are sent.
-      if (st.onBehalf) { body.parties = []; body.for_email = st.onBehalf.email || undefined;
+      // The one party staff may set is the client's OWN child as the player (server-validated).
+      if (st.onBehalf) { body.parties = (playerDepId && st.type === "lesson") ? [{ party_role: "player", user_id: playerDepId }] : [];
+        body.for_email = st.onBehalf.email || undefined;
         if (!body.for_email && st.onBehalf.name) body.for_guest_name = st.onBehalf.name; }
       // BACK-CAPTURE: authorise the past-slot on the server (route re-checks staff role + on-behalf).
       if (st.backdate) body.allow_past = true;
@@ -1520,6 +1534,20 @@
     if (!container) return;
     await ensureCtx(principal, opts.onBehalf);
     var type = ALLOWED[service] ? service : "court";
+    // On-behalf LESSON: load THIS client's own children so staff can say WHO is playing. Without it
+    // the parent silently took the first seat of a semi-private — billed for a lesson they never
+    // played, and leaving room for only ONE of their kids. Reloaded every start (the client changes).
+    if (opts.onBehalf) {
+      ctx.dependents = [];
+      if (type === "lesson" && opts.onBehalf.user_id && opts.onBehalf.email) {
+        try {
+          var kr = await window.API.searchBookingMembers(opts.onBehalf.email);
+          ctx.dependents = ((kr && kr.results) || []).filter(function (it) {
+            return it.kind === "dependent" && String(it.guardian_user_id) === String(opts.onBehalf.user_id);
+          }).map(function (it) { return { dependent_user_id: it.user_id, first_name: it.name, surname: "" }; });
+        } catch (e) { ctx.dependents = []; }
+      }
+    }
     st = {
       type: type, calMonth: startOfMonth(new Date()), day: new Date(),
       durations: [], selDuration: null, selDurationPrice: null, membershipCovered: false,

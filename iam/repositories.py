@@ -368,7 +368,7 @@ def search_members_with_dependents(session, *, club_id, q, limit=8):
         name = " ".join(x for x in [r["first_name"], r["surname"]] if x).strip() or (r["email"] or "Member")
         out.append({"user_id": uid, "kind": "member", "name": name, "email": r["email"]})
     for r in session.execute(
-        text("SELECT d.dependent_user_id, d.first_name, d.surname, "
+        text("SELECT d.dependent_user_id, d.guardian_user_id, d.first_name, d.surname, "
              "       gu.first_name AS g_first, gu.surname AS g_surname, gu.email AS g_email "
              "FROM iam.dependent d "
              "JOIN iam.\"user\" gu ON gu.id = d.guardian_user_id "
@@ -387,7 +387,10 @@ def search_members_with_dependents(session, *, club_id, q, limit=8):
         seen.add(uid)
         gname = " ".join(x for x in [r["g_first"], r["g_surname"]] if x).strip() or (r["g_email"] or "guardian")
         cname = " ".join(x for x in [r["first_name"], r["surname"]] if x).strip() or "Child"
-        out.append({"user_id": uid, "kind": "dependent", "name": cname, "guardian_name": gname})
+        # guardian_user_id lets the on-behalf booking flow pick out THIS client's own children exactly
+        # (a name or email match alone would also return another family's).
+        out.append({"user_id": uid, "kind": "dependent", "name": cname, "guardian_name": gname,
+                    "guardian_user_id": str(r["guardian_user_id"])})
     return out[: limit * 2]
 
 

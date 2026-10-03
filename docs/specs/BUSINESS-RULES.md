@@ -53,6 +53,19 @@ a membership tier's lifecycle derives from its term plans' status.
   in-club member/child — enforced by **`_addable_player_uid`** in the route, which validates EACH extra player
   so a booker can never attach an arbitrary account or another family's child. The picker itself is the shared
   `CRMUI.addLessonPlayerModal`, serving BOTH the add-later modal and the upfront booking-flow squad step. **Cancel voids EVERY order on the booking**, not just the primary's.
+  **THE ACCOUNT HOLDER IS NOT AUTOMATICALLY A PLAYER (2026-10-03).** The first head is whoever is named
+  under **"Who's playing?"** — the account holder, or one of their children (a `player` party). That
+  step existed for a parent booking for themselves but NOT for staff booking on a parent's behalf, so
+  the parent (the only one with an email to pick) silently took seat 1: billed for a lesson they never
+  played, and a 2-player service had room for only ONE child — which is how a coach reported it. The
+  on-behalf flow now loads the client's own children (`booking.js` `start()`, via the staff search's
+  `guardian_user_id`) and sends the chosen child as the player. Server guards, all in
+  `diary/booking_request.py`: `foreign_player` — the primary player must be the owner or the owner's
+  OWN active dependent (`PLAYER_NOT_YOURS`); a child named as the player AND as an extra is one head;
+  and **`add-player` now runs `addable_player_uid` too** — it took a posted `user_id` verbatim, so the
+  rule this paragraph has always claimed was not enforced on the add-later route. A parent adding a
+  child later gets their kids listed by name (a child has no email to type). Guarded by
+  `sc_staff_can_book_a_familys_semi_private_for_both_children`.
 - **Classes:** owner/coach create class types + schedule **recurring or one-off** sessions; capacity +
   **waitlist** (auto-promote the next person on a cancellation); rosters + attendance; shown on the
   master diary. A class **reserves N real courts** (court-blocking `booking_type='class'` rows under the
