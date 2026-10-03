@@ -171,6 +171,19 @@ def sc_pay_all(s, fx):
                           provider="card_at_desk", provider_payment_id="SETTLE-1", user_id=fx.member)
     check("balance still ZERO after replay", owed(s, fx)["total_owed_minor"] == 0)
     check("commission unchanged after replay", coach_earnings(s, fx) == earn1, str(coach_earnings(s, fx)))
+    # A SALE PAID THROUGH "PAY ALL" IS STILL A SALE. The earnings reader used to drop both the wrapper
+    # AND the debts it paid, so this lesson vanished from the coach's sales and received figures while
+    # his settlement (which reads the commission splits) still counted it — found live, where one
+    # coach's page was R12,300 short over three months and the correct payout looked like overpaying.
+    from admin import repositories as AR
+    pnl = AR.revenue_coach_pnl(s, club_id=fx.club_id, coach_user_id=fx.coach_uid)
+    check("the lesson paid through Pay-all still counts in the coach's SALES",
+          int(pnl.get("sales_minor") or 0) > 0, str(pnl.get("sales_minor")))
+    check("...and in what was RECEIVED for it", int(pnl.get("received_minor") or 0) > 0,
+          str(pnl.get("received_minor")))
+    check("...once, not twice (the wrapper itself is not a sale)",
+          int(pnl.get("sales_minor") or 0) == int(pnl.get("received_minor") or 0)
+          + int(pnl.get("owed_minor") or 0), f"{pnl.get('sales_minor')} {pnl.get('received_minor')} {pnl.get('owed_minor')}")
 
 
 def _fresh_court(s, fx, name):

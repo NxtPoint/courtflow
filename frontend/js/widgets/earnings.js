@@ -78,93 +78,88 @@
       ]);
     }
 
-    // THE coach card — ONE statement, top to bottom: sales − disc − w/off = net ; net = received +
-    // owed ; commission on each ; then what actually changes hands after rent and anything already
-    // paid. It was two cards for a day and that was a mistake: two money blocks that did not add up
-    // to each other, and the owner asked which one to believe. One card, one story.
+    // THE coach card — ONE statement on ONE basis: the month the work was done, read from the money
+    // that was actually paid (the settlement). It follows the owner's rule, in his order:
+    //   what clients PAID  ->  the club's commission on all of it  ->  the coach's share
+    //   ->  less what the coach already took at the court  ->  less what has already been paid out
+    //   ->  DUE NOW.  Then, separately, what clients have not paid yet.
+    // It used to open with a second set of figures (sales / received / "coach keeps") worked out a
+    // different way, from the month each ORDER was created. The two never agreed, and the top half
+    // silently left out anything paid through "Pay all" — so the payout line underneath, which was
+    // right, read as the club overpaying. One basis, one story, every line feeding the next.
     function pnlCard(p, onRecordPayout) {
       var box = UI.card([]);
+      var who = isCoach ? "you" : "the coach";
+      var st = p.settlement, L = p.ledger || {};
+      var pct = (st && st.effective_pct != null) ? st.effective_pct : (p.rate_pct || 0);
       box.appendChild(el("h1", { style: "margin:0 0 2px;font-size:1.2rem", text: p.name || "Coach" }));
       box.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin-bottom:6px", text: monthLabel(MONTH) + " · " + (p.rate_pct || 0) + "% club commission" }));
-      box.appendChild(stmtLine("Total sales", money(p.sales_minor)));
-      if (p.discount_minor) box.appendChild(stmtLine("Less discount", "− " + money(p.discount_minor), { muted: true }));
-      if (p.written_off_minor) box.appendChild(stmtLine("Less write-off", "− " + money(p.written_off_minor), { muted: true }));
-      box.appendChild(stmtLine("Net", money(p.net_minor), { strong: true, border: true }));
-      box.appendChild(stmtLine("Received", money(p.received_minor), { border: true }));
-      // WHERE that received money is. A coach-collected lesson is settled from the client's side but
-      // the cash never reached the club — it is the club's commission that is still owed, by him.
-      if (p.banked_minor != null && (p.coach_held_minor || 0) > 0) {
-        box.appendChild(stmtLine("in your bank", money(p.banked_minor), { indent: true, tone: "good", sub: "Yoco + EFT" }));
-        box.appendChild(stmtLine("held by " + (isCoach ? "you" : "the coach"), money(p.coach_held_minor), { indent: true, tone: "bad", sub: "Collected at the court — never reached the club" }));
+      if (!st) {   // no settlement in the payload — say what we can rather than nothing
+        box.appendChild(stmtLine("Total sales", money(p.sales_minor)));
+        box.appendChild(stmtLine("Received", money(p.received_minor)));
+        box.appendChild(stmtLine("Owed by clients", money(p.owed_minor)));
+        return box;
       }
-      box.appendChild(stmtLine("Club commission", "+ " + money(p.club_comm_received_minor), { indent: true, tone: "good", sub: (p.rate_pct || 0) + "%" }));
-      box.appendChild(stmtLine(keepLabel, money(p.coach_keeps_received_minor), { indent: true }));
-      box.appendChild(stmtLine("Owed", money(p.owed_minor), { border: true }));
-      box.appendChild(stmtLine("Projected commission", "+ " + money(p.club_comm_owed_minor), { indent: true, tone: "good", muted: true, sub: "on collect" }));
-      box.appendChild(stmtLine(keepLabel, money(p.coach_keeps_owed_minor), { indent: true, muted: true }));
-      box.appendChild(stmtLine(keepLabel + " (total)", money(p.coach_keeps_total_minor), { strong: true, border: true }));
-      box.appendChild(stmtLine("Club commission (total)", money(p.club_comm_total_minor), { strong: true, tone: "good" }));
+      var total = st.total_collected_minor || 0, held = st.coach_held_minor || 0, comm = st.commission_minor || 0;
+      var kinds = [];
+      ["lesson", "class", "pack"].forEach(function (k) {
+        var v = (st.by_kind || {})[k]; if (!v) return;
+        var amt = (v.club_minor || 0) + (v.coach_minor || 0);
+        if (amt) kinds.push(k + (k === "class" ? "es " : "s ") + money(amt));
+      });
 
-      // THE SETTLEMENT, ON THE SAME CARD. It was a second card below this one, and two money blocks
-      // that did not add up to each other is what made the page unreadable — the owner asked which
-      // one to believe. Everything above is the month; these last lines are what actually changes
-      // hands after rent and anything already paid, which is the only figure anyone acts on.
-      var st = p.settlement;
-      if (st) {
-        if (st.by_kind) {
-          var bits = [];
-          ["lesson", "class", "pack"].forEach(function (k) {
-            var v = st.by_kind[k];
-            if (!v) return;
-            var amt = (v.club_minor || 0) + (v.coach_minor || 0);
-            if (amt) bits.push((v.n ? v.n + " " : "") + k + " " + money(amt));
-          });
-          if (bits.length) {
-            box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:8px 0 0",
-              text: "Collected: " + bits.join(" · ")
-                  + (st.by_kind.pack ? "  (a pack counts in full at the moment it is sold)" : "") }));
-          }
-        }
-        if (p.ledger && p.ledger.rent_minor) {
-          box.appendChild(stmtLine("Less rent", money(p.ledger.rent_minor), { border: true }));
-        }
-        if (p.ledger && p.ledger.payouts_minor) {
-          box.appendChild(stmtLine("Less already paid", money(p.ledger.payouts_minor),
-                                   { sub: "credited to this month" }));
-        }
-        if (st.due_now_minor != null) {
-          var due = st.due_now_minor || 0;
-          box.appendChild(stmtLine(
-            due >= 0 ? (isCoach ? "DUE TO YOU NOW" : "DUE TO THE COACH NOW")
-                     : (isCoach ? "YOU OWE THE CLUB" : "OWED BY THE COACH"),
-            money(Math.abs(due)), { strong: true, border: true, tone: due >= 0 ? "" : "bad" }));
-          box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:4px 0 0", text:
-            "Commission is only ever calculated on money already collected, so this rises as "
-            + "clients pay and “Owed” falls." }));
-        }
-        if (st.reconciles === false) {
-          box.appendChild(el("div", { class: "cf-note cf-note-warn", style: "margin-top:10px", text:
-            "These figures don't tie to the ledger. Don't settle from this screen until it's checked." }));
-        }
-        if (typeof onRecordPayout === "function") {
-          box.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:10px" }, [
-            el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Record payout",
-                           onclick: function () { onRecordPayout(); } }),
-          ]));
-        }
+      // 1) WHAT CLIENTS PAID for this month's work, and where that money is.
+      box.appendChild(stmtLine("Paid by clients", money(total), { strong: true, border: true }));
+      if (kinds.length) {
+        box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:0 0 4px",
+          text: kinds.join(" · ") + ((st.by_kind || {}).pack ? " — a pack counts in full when it is sold" : "") }));
+      }
+      box.appendChild(stmtLine("into the club's account", money(st.club_held_minor), { indent: true, sub: "card + EFT" }));
+      if (held) box.appendChild(stmtLine("paid to " + who + " at the court", money(held), { indent: true }));
+
+      // 2) THE SPLIT, then what has already changed hands.
+      box.appendChild(stmtLine("Club commission", "− " + money(comm), { border: true, sub: pct + "% of everything paid" }));
+      box.appendChild(stmtLine(keepLabel, money(total - comm), { strong: true }));
+      if (held) box.appendChild(stmtLine("Less what " + who + " already collected", "− " + money(held), { indent: true, muted: true }));
+      if (L.rent_minor) box.appendChild(stmtLine("Less rent", "− " + money(Math.abs(L.rent_minor)), { indent: true, muted: true }));
+      if (L.adjustments_minor) {
+        box.appendChild(stmtLine("Adjustments", (L.adjustments_minor < 0 ? "− " : "+ ") + money(Math.abs(L.adjustments_minor)), { indent: true, muted: true }));
+      }
+      if (L.payouts_minor) {
+        box.appendChild(stmtLine("Less already paid out", "− " + money(Math.abs(L.payouts_minor)),
+                                 { indent: true, muted: true, sub: "for this month" }));
+      }
+      var due = st.due_now_minor || 0;
+      box.appendChild(stmtLine(
+        due >= 0 ? (isCoach ? "DUE TO YOU NOW" : "DUE TO THE COACH NOW")
+                 : (isCoach ? "YOU OWE THE CLUB" : "OWED BY THE COACH"),
+        money(Math.abs(due)), { strong: true, border: true, tone: due >= 0 ? "" : "bad" }));
+
+      // 3) WHAT HAS NOT BEEN PAID YET — nothing is due on it until the client pays.
+      if (st.outstanding_minor) {
+        box.appendChild(stmtLine("Not yet paid by clients", money(st.outstanding_minor), { border: true, muted: true }));
+        box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:2px 0 0", text:
+          "As clients pay, " + money(st.outstanding_net_minor) + " more becomes due to " + who
+          + ". That is why a month can show a little still owing after it was paid out." }));
+      }
+      if (st.reconciles === false) {
+        box.appendChild(el("div", { class: "cf-note cf-note-warn", style: "margin-top:10px", text:
+          "These figures don't tie to the ledger. Don't settle from this screen until it's checked." }));
+      }
+      if (typeof onRecordPayout === "function") {
+        box.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:10px" }, [
+          el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Record payout",
+                         onclick: function () { onRecordPayout(); } }),
+        ]));
       }
       // THE RUNNING BALANCE IS ALL TIME — every other figure on this card is the MONTH. That one
-      // unlabelled difference is a five-figure trap: an owner opened July, read "Net balance with
-      // the club R23,407 · owed to Allon Rock" directly above a Record-payout button, and R23,407
-      // was June+July+August less what had already been paid, while July itself owed R3,682. So the
-      // label says "all time", and the payout action moved DOWN to the Settlement card, which is
-      // the block that actually computes what to pay for the month being viewed.
+      // unlabelled difference is a five-figure trap, so the label says so.
       if (p.ledger_balance_minor != null) {
         var bal = p.ledger_balance_minor || 0;
         var sub = isCoach ? (bal > 0 ? "the club owes you" : (bal < 0 ? "you owe the club" : "settled"))
                           : (bal > 0 ? "owed to " + (p.name || "the coach") : (bal < 0 ? "owed by " + (p.name || "the coach") : "settled"));
-        box.appendChild(stmtLine("Net balance with the club · ALL TIME", money(Math.abs(bal)),
-                                 { strong: true, border: true, sub: sub + " across every month" }));
+        box.appendChild(stmtLine("All months together", money(Math.abs(bal)),
+                                 { strong: true, border: true, sub: sub }));
       }
       return box;
     }
@@ -178,8 +173,8 @@
       var box = el("div", { class: "cf-card", style: "margin-top:14px" });
       box.appendChild(el("h3", { text: "Sessions delivered" }));
       box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:0 0 10px",
-        text: "Dated by the day they RAN — the work, not the money. This will not equal the "
-            + "settlement above, and is not meant to: one is what was taught, the other what was paid." }));
+        text: "Every lesson and class that ran this month. A session drawn from a pack shows no charge "
+            + "here — the pack was counted above when it was sold." }));
       box.appendChild(stmtLine(t.sessions + " session" + (t.sessions === 1 ? "" : "s"),
                                money(t.billed_minor), { strong: true, border: true }));
       box.appendChild(stmtLine("Paid to the club", money(t.to_club_minor), { indent: true, muted: true }));

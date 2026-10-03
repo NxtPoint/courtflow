@@ -84,7 +84,7 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 785 / billing 757 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 785 / billing 757 / statement 67**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -672,6 +672,15 @@ looks like a harmless simplification until you read what it cost.
 - THE COLLECTED FIGURE MUST SAY WHAT IT WAS (2026-07-30) — `sc_settlement_says_what_the_money_was`
 - A PACK SALE RESOLVES ITS COACH FROM THE WALLET (2026-07-30)
 - THE COACH STATEMENT is the coach-side of a client invoice — `sc_coach_settlement_statement`
+- **A SALE PAID THROUGH "PAY ALL" IS STILL A SALE, AND THE COACH CARD HAS ONE BASIS** (2026-10-03) — the
+  earnings reader (`_earnings_cte`) dropped the wrapper AND the debts it paid, so every lesson a client
+  settled by "Pay all" / an invoice pay-link vanished from the coach's sales + received (R12,300 on one
+  coach over three months) while the settlement, read from the splits, was right — the correct payout
+  looked like overpaying. The wrapper is excluded, its children are not; the charge sits on the WRAPPER,
+  so "is it in the bank" must look at `settled_by_order_id` too (the work log made the same mistake and
+  called those lessons "collected by coach"). The coach card now renders from the SETTLEMENT only:
+  paid by clients → commission → coach's share → less collected at court → less paid out → DUE NOW.
+  `sc_pay_all`
 - A PAYOUT MUST SAY WHICH MONTH IT SETTLES, and the screen that records one must ASK (2026-08-10) — the engine honoured `period_label` for weeks while the modal never sent it, so every real payout credited the month the cash moved — `sc_coach_earnings_carries_the_settlement`
 
 **The seat rule (community/)** — [GOTCHAS.md#the-seat-rule-community](docs/specs/GOTCHAS.md#the-seat-rule-community)

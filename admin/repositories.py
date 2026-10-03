@@ -2227,7 +2227,11 @@ def _earnings_cte(coach=False):
                -- COACH. Calling that "collected/banked" overstated what the club holds by the whole
                -- gross (R15,950 on one coach in July 2026). Same rule as
                -- billing.commission.cash_custody_for, so this page and the coach statement agree.
-               EXISTS(SELECT 1 FROM billing.payment pm WHERE pm.order_id = ord.id
+               -- ...INCLUDING a payment made through "Pay all": that charge is recorded on the
+               -- settlement WRAPPER, not on the debt it paid, so looking only at the order's own
+               -- payments called every such sale "held by the coach".
+               EXISTS(SELECT 1 FROM billing.payment pm
+                       WHERE pm.order_id IN (ord.id, ord.settled_by_order_id)
                        AND pm.direction = 'charge' AND pm.status = 'succeeded'
                        AND pm.provider IN ('yoco','eft')) AS in_bank,
                EXISTS(SELECT 1 FROM billing.token_wallet w WHERE w.order_id = ord.id) AS is_pack,
@@ -2248,7 +2252,13 @@ def _earnings_cte(coach=False):
         WHERE ord.club_id = :c
           AND ord.created_at >= :s AND ord.created_at < :e
           AND ord.status IN ('open','paid','written_off','refunded')
-          AND ord.settled_by_order_id IS NULL
+          -- Leave out the "Pay all" WRAPPER (it stands in for other debts — counting it would
+          -- count them twice) but KEEP the debts it paid. This used to drop both: every sale a
+          -- client settled through "Pay all" or an invoice pay-link vanished from the earnings
+          -- — R12,300 of one coach's lessons over three months — while the settlement, which reads
+          -- the commission splits, still counted them. Two halves of one screen disagreed, and the
+          -- half that was right looked like the club overpaying.
+          AND ord.covered_order_ids IS NULL
           AND NOT EXISTS (SELECT 1 FROM billing."order" ch WHERE ch.settled_by_order_id = ord.id)""" + coach_filter + """
     ),
     cat AS (

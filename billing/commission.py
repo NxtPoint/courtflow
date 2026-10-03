@@ -1611,8 +1611,12 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
                        -- coaching order is money the coach took from the client himself (the club
                        -- has no facility for collecting on his behalf) -- so there is no "desk"
                        -- bucket here to be ambiguous about.
+                       -- A debt paid through "Pay all" carries its charge on the settlement WRAPPER,
+                       -- not on itself — so the wrapper's payment counts too, or every lesson a
+                       -- client settled that way reads as "Collected by coach" when the club has it.
                        COALESCE((SELECT SUM(pm.amount_minor) FROM billing.payment pm
-                                  WHERE pm.order_id = o.id AND pm.direction = 'charge'
+                                  WHERE pm.order_id IN (o.id, o.settled_by_order_id)
+                                    AND pm.direction = 'charge'
                                     AND pm.status = 'succeeded'
                                     AND pm.provider IN ('yoco','eft')), 0) AS to_bank
                 FROM src
@@ -1963,10 +1967,16 @@ def _settlement_by_kind(session, *, club_id, coach_user_id, ym):
                 LEFT JOIN billing.product pr ON pr.id = p2.product_id
                 WHERE cs.club_id = :club AND cs.coach_user_id = CAST(:coach AS uuid)
                   AND cs.party_type = 'owner'
-                  AND to_char(cs.occurred_at, 'YYYY-MM') = :ym
+                  AND COALESCE(pm.status, 'succeeded') <> 'reversed'
+                  -- THE SAME MONTH AS THE SETTLEMENT IT BREAKS DOWN — the month the work was done.
+                  -- This was still bounded on the day the money landed, so "Collected: lessons …
+                  -- classes … packs …" summed to a different figure from the headline directly
+                  -- above it (R52,140 against R39,380 in one live month).
+                  AND """ + _SPLIT_WORK_MONTH + """ = :ym
                 GROUP BY 1, 2, 3
             """),
-            {"club": club_id, "coach": str(coach_user_id), "ym": ym},
+            {"club": club_id, "coach": str(coach_user_id), "ym": ym,
+             "tz": _club_tz(session, club_id)},
         ).mappings().all()
     except Exception:
         session.rollback()
