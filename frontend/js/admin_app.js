@@ -470,6 +470,7 @@
   function renderPerson(id) {
     var host = el("div", {});
     set(host);
+    var invActs = invoiceActions(function () { renderPerson(id); });
     window.Widgets.ClientRecord.mount(host, {
       scope: { id: id, role: "admin" },
       back: { label: "People", hash: "#/people" },
@@ -519,50 +520,10 @@
         // Invoices — issue one for the current outstanding balance, mark an unpaid one paid (EFT/cash),
         // or void it. All render over the LIVE orders, so paid-status always matches the statement.
         issue_statement_invoice: { manual: true, run: function () { issueStatementInvoice(id); } },
-        invoice_mark_paid: { manual: true, run: function (iv) { invoiceMarkPaidModal(iv, function () { renderPerson(id); }); } },
-        // VOIDING AN INVOICE CANCELS THE DOCUMENT, NOT THE DEBT. An invoice renders over live
-        // orders and is never a second debt store, so tearing up the printout leaves every charge
-        // owed. That is correct and deliberate — but "Void" reads as "cancel this bill", and an
-        // owner voided one, saw the balance unchanged, and reasonably filed it as a bug. So the
-        // button says "Void document", the prompt leads with the money that will STILL be owed,
-        // and the toast repeats it rather than saying a cheerful "Invoice voided."
-        // VOID MEANS CANCEL. The document AND the charges under it — one word, one meaning, which
-        // is what an owner expects and what he asked for after voiding an invoice and finding the
-        // balance unchanged. invoice_void_keep_charges is the escape hatch for the one case that
-        // would otherwise lose money: voiding a document you intend to RE-ISSUE (wrong bill-to,
-        // wrong period, a missing line). Nothing un-voids an order, so cascading there would
-        // destroy the debt for good.
-        invoice_void: {
-          tone: "danger", label: "Void",
-          confirm: function (iv) {
-            var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
-            return "Void invoice " + (iv.number || "") + "?\n\n"
-              + "This cancels the invoice AND the " + owed + " of charges on it. Anything already "
-              + "PAID is left alone.\n\nThis cannot be undone — there is no un-void. If you "
-              + "mean to correct and RE-ISSUE it, use “Void, keep charges” instead.";
-          },
-          done: function (iv, res) {
-            var n = (res && res.charges_voided) || 0;
-            return n ? ("Invoice voided — " + n + " charge(s) cancelled, "
-                        + money((res && res.amount_minor) || 0, iv.currency || clubCur()) + ".")
-                     : "Invoice voided.";
-          },
-          run: function (iv) { return window.API.invoiceVoid(iv.invoice_id); },
-        },
-        invoice_void_keep_charges: {
-          tone: "ghost", label: "Void, keep charges",
-          confirm: function (iv) {
-            var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
-            return "Void the DOCUMENT " + (iv.number || "") + ", keeping the debt?\n\n"
-              + owed + " of charges STAY OWED and can be re-invoiced. Use this when you mean to "
-              + "correct and re-issue.";
-          },
-          done: function (iv) {
-            var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
-            return "Document voided — " + owed + " of charges are still owed and billable.";
-          },
-          run: function (iv) { return window.API.invoiceVoid(iv.invoice_id, { keep_charges: true }); },
-        },
+        // ONE definition, shared with Money → Invoices (invoiceActions below).
+        invoice_mark_paid: invActs.invoice_mark_paid,
+        invoice_void: invActs.invoice_void,
+        invoice_void_keep_charges: invActs.invoice_void_keep_charges,
         // Decide a pending refund REQUEST in place (same endpoints as Money → Approvals; the record
         // reloads on success so the status updates here without leaving the client). A cancelled prompt
         // returns a rejected promise → the widget silently aborts (runAct only toasts a truthy error).
@@ -754,6 +715,7 @@
   // Sales by day, which now nets reversals.)
   var MONEY_SECTIONS = [
     ["invoice", "New invoice", "Bill a client for a service (× times) or a custom fee — emailed to pay online"],
+    ["invoices", "Invoices & receipting", "Find an invoice by its number or the client — then record the payment"],
     ["sales", "Sales by day", "Daily takings incl. Yoco reversals — net income"],
     ["revenue", "Club earnings", "Courts + memberships + commission from coaches → coach → client → transaction"],
     ["bookings", "Bookings by day", "Every booking — client, service and coach"],
@@ -763,6 +725,7 @@
   function clubCur() { return (CLUB && CLUB.currency_code) || "ZAR"; }
   function renderMoney(section, sub) {
     if (section === "invoice") return moneyInvoice();
+    if (section === "invoices") return moneyInvoices();
     if (section === "sales") return moneySales();
     if (section === "revenue") return moneyRevenue();
     // RETIRED 2026-08-09 — Club earnings now carries the settlement, so there is ONE screen. Old
@@ -1674,21 +1637,162 @@
     });
   }
 
+  // Money → Invoices — THE RECEIPTING QUEUE. An EFT lands on the bank statement quoting an invoice
+  // number and nothing else; this is where the owner gets from that number to the person and records
+  // the payment. It adds no capability of its own: the row is CRMUI.invoiceRow and the actions are
+  // invoiceActions — the same two the client record uses — over the club-wide invoice list.
+  var INVOICES_VIEW = { q: "", status: "unpaid", sort: "number" };
+  async function moneyInvoices() {
+    loading();
+    var v = INVOICES_VIEW, list = null;
+    try { list = (await window.AdminAPI.invoices({ q: v.q, status: v.status })).invoices || []; } catch (e) {}
+    var wrap = el("div", {}, [backBar("Money", "#/money"),
+      el("h1", { style: "margin:0 0 4px", text: "Invoices & receipting" }),
+      el("p", { class: "cf-muted", style: "margin:0 0 12px;font-size:.88rem",
+        text: "Search the invoice number off your bank statement, or a client's name. Mark paid records the payment and emails the receipt." })]);
+
+    var search = el("input", { class: "cf-input", placeholder: "Invoice number or client name…", value: v.q });
+    var tmr;
+    search.addEventListener("input", function () {
+      clearTimeout(tmr);
+      tmr = setTimeout(function () { v.q = search.value.trim(); v.typing = true; moneyInvoices(); }, 350);
+    });
+    function pick(key, opts) {
+      var sel = el("select", { class: "cf-input", style: "max-width:190px", onchange: function (ev) { v[key] = ev.target.value; moneyInvoices(); } });
+      opts.forEach(function (o) { sel.appendChild(el("option", { value: o[0], text: o[1], selected: v[key] === o[0] ? "selected" : null })); });
+      return sel;
+    }
+    wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin-bottom:10px" }, [
+      el("div", { style: "flex:1;min-width:200px" }, [search]),
+      pick("status", [["unpaid", "Unpaid only"], ["all", "All invoices"]]),
+      pick("sort", [["number", "Sort: invoice number"], ["client", "Sort: client name"], ["newest", "Sort: newest first"]]),
+    ]));
+
+    // A FAILED read must never render as "nothing owed" — that is a false all-clear on money.
+    if (list === null) {
+      wrap.appendChild(card([el("div", { class: "cf-empty", text: "Couldn't load invoices. Reload to try again." })]));
+      set(wrap); return;
+    }
+    if (v.sort === "number") list.sort(function (a, b) { return String(a.number || "").localeCompare(String(b.number || ""), undefined, { numeric: true }); });
+    else if (v.sort === "client") list.sort(function (a, b) { return String(a.client_name || "").localeCompare(String(b.client_name || "")) || String(a.number || "").localeCompare(String(b.number || ""), undefined, { numeric: true }); });
+
+    var owed = list.reduce(function (t, iv) { return t + (iv.doc_status === "void" ? 0 : (iv.outstanding_minor || 0)); }, 0);
+    wrap.appendChild(el("div", { class: "cf-muted", style: "margin:0 2px 8px;font-size:.86rem",
+      text: list.length + " invoice" + (list.length === 1 ? "" : "s") + " · " + money(owed, clubCur()) + " outstanding" }));
+
+    var acts = invoiceActions(function () { moneyInvoices(); });
+    // Confirm -> run -> say what happened -> reload. (Mark paid is `manual`: it opens its own modal.)
+    function actBtn(key, iv, o) {
+      var a = acts[key]; if (!a) return null;
+      var tone = a.tone || (o && o.tone) || "";
+      return el("button", { type: "button", text: a.label || (o && o.label) || key,
+        class: "cf-btn cf-btn-sm" + (tone === "ghost" ? " cf-btn-ghost" : (tone ? " cf-btn-" + tone : "")),
+        onclick: function () {
+          if (a.confirm && !window.confirm(typeof a.confirm === "function" ? a.confirm(iv) : a.confirm)) return;
+          if (a.manual) return a.run(iv);
+          Promise.resolve(a.run(iv)).then(function (res) {
+            UI.toast((typeof a.done === "function" ? a.done(iv, res) : a.done) || "Done.", "info"); moneyInvoices();
+          }, function (e) { UI.toast(UI.errMsg(e), "error"); });
+        } });
+    }
+    var c = card([]), l = el("div", { class: "cf-list" });
+    if (!list.length) l.appendChild(el("div", { class: "cf-empty", text: v.q ? "No invoice matches that." : (v.status === "unpaid" ? "No unpaid invoices." : "No invoices yet.") }));
+    list.forEach(function (iv) {
+      l.appendChild(window.CRMUI.invoiceRow(iv, { currency: clubCur(), actBtn: actBtn, showClient: true,
+        onClient: function (x) { if (x.user_id) go("#/person/" + x.user_id); } }));
+    });
+    c.appendChild(l); wrap.appendChild(c);
+    set(wrap);
+    // The list re-renders as you type — hand the cursor back so a search isn't one letter at a time.
+    if (v.typing) { v.typing = false; search.focus(); search.setSelectionRange(search.value.length, search.value.length); }
+  }
+
+  // THE invoice actions — mark paid / void / void-keeping-charges — defined ONCE and used by the
+  // client record AND Money → Invoices. `refresh` re-renders whichever screen ran the action.
+  function invoiceActions(refresh) {
+    return {
+      invoice_mark_paid: { manual: true, run: function (iv) { invoiceMarkPaidModal(iv, refresh); } },
+    // VOIDING AN INVOICE CANCELS THE DOCUMENT, NOT THE DEBT. An invoice renders over live
+    // orders and is never a second debt store, so tearing up the printout leaves every charge
+    // owed. That is correct and deliberate — but "Void" reads as "cancel this bill", and an
+    // owner voided one, saw the balance unchanged, and reasonably filed it as a bug. So the
+    // button says "Void document", the prompt leads with the money that will STILL be owed,
+    // and the toast repeats it rather than saying a cheerful "Invoice voided."
+    // VOID MEANS CANCEL. The document AND the charges under it — one word, one meaning, which
+    // is what an owner expects and what he asked for after voiding an invoice and finding the
+    // balance unchanged. invoice_void_keep_charges is the escape hatch for the one case that
+    // would otherwise lose money: voiding a document you intend to RE-ISSUE (wrong bill-to,
+    // wrong period, a missing line). Nothing un-voids an order, so cascading there would
+    // destroy the debt for good.
+    invoice_void: {
+      tone: "danger", label: "Void",
+      confirm: function (iv) {
+        var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
+        return "Void invoice " + (iv.number || "") + "?\n\n"
+          + "This cancels the invoice AND the " + owed + " of charges on it. Anything already "
+          + "PAID is left alone.\n\nThis cannot be undone — there is no un-void. If you "
+          + "mean to correct and RE-ISSUE it, use “Void, keep charges” instead.";
+      },
+      done: function (iv, res) {
+        var n = (res && res.charges_voided) || 0;
+        return n ? ("Invoice voided — " + n + " charge(s) cancelled, "
+                    + money((res && res.amount_minor) || 0, iv.currency || clubCur()) + ".")
+                 : "Invoice voided.";
+      },
+      run: function (iv) { return window.API.invoiceVoid(iv.invoice_id); },
+    },
+    invoice_void_keep_charges: {
+      tone: "ghost", label: "Void, keep charges",
+      confirm: function (iv) {
+        var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
+        return "Void the DOCUMENT " + (iv.number || "") + ", keeping the debt?\n\n"
+          + owed + " of charges STAY OWED and can be re-invoiced. Use this when you mean to "
+          + "correct and re-issue.";
+      },
+      done: function (iv) {
+        var owed = money(iv.outstanding_minor || 0, iv.currency || clubCur());
+        return "Document voided — " + owed + " of charges are still owed and billable.";
+      },
+      run: function (iv) { return window.API.invoiceVoid(iv.invoice_id, { keep_charges: true }); },
+    },
+    };
+  }
+
   // Mark a whole INVOICE paid by EFT/cash/card-at-desk (settles all its open orders → receipts fire).
   function invoiceMarkPaidModal(iv, then) {
+    var cur = iv.currency || clubCur();
+    var due = iv.outstanding_minor || iv.total_minor || 0;
     var m = modal("Mark invoice paid");
     m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px", text:
-      "Records " + money(iv.outstanding_minor || iv.total_minor, iv.currency || clubCur()) + " for invoice " + (iv.number || "") + " and generates a receipt." }));
+      "Invoice " + (iv.number || "") + (iv.client_name ? " — " + iv.client_name : "") + ". "
+      + money(due, cur) + " is outstanding. Recording the payment sends the client ONE receipt." }));
     var prov = el("select", { class: "cf-input" }, [["eft", "EFT"], ["cash", "Cash"], ["card_at_desk", "Card at desk"]].map(function (o) { return el("option", { value: o[0], text: o[1] }); }));
+    // The amount that actually ARRIVED. Left at the full balance it settles the invoice; a smaller
+    // amount settles whole lines, oldest first, and leaves the rest owed (the server's rule).
+    var amt = el("input", { class: "cf-input", inputmode: "decimal", value: (due / 100).toFixed(2) });
     var ref = el("input", { class: "cf-input", placeholder: "e.g. EFT / bank reference (optional)" });
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Method" }), prov]));
+    m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Amount received" }), amt]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Reference" }), ref]));
     m.body.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;gap:8px;margin-top:10px" }, [
       el("button", { class: "cf-btn", text: "Close", onclick: m.close }),
       el("button", { class: "cf-btn cf-btn-primary", text: "Mark paid", onclick: function () {
-        window.API.invoiceMarkPaid(iv.invoice_id, { provider: prov.value, reference: (ref.value.trim() || null) })
-          .then(function () { UI.toast("Invoice marked paid.", "info"); m.close(); (then || route)(); },
-                function (e) { UI.toast(UI.errMsg(e), "error"); });
+        var got = Math.round(parseFloat(String(amt.value).replace(",", ".")) * 100);
+        if (!(got > 0)) { UI.toast("Enter the amount received.", "warn"); return; }
+        var body = { provider: prov.value, reference: (ref.value.trim() || null) };
+        if (got < due) body.amount_minor = got;      // a part payment; the full amount sends nothing
+        window.API.invoiceMarkPaid(iv.invoice_id, body).then(function (res) {
+          // Say what the money DID — a part payment that settled nothing must not read as "paid".
+          var msg = "Invoice marked paid.";
+          if (res && !res.fully_paid) {
+            msg = res.settled
+              ? (money(res.collected_minor, cur) + " recorded — " + money(res.outstanding_minor, cur) + " still owed.")
+              : "Nothing recorded — that amount doesn't cover the oldest line on this invoice.";
+            if (res.settled && res.unallocated_minor) msg += " " + money(res.unallocated_minor, cur) + " could not be placed.";
+          }
+          UI.toast(msg, (res && !res.fully_paid && !res.settled) ? "warn" : "info");
+          m.close(); (then || route)();
+        }, function (e) { UI.toast(UI.errMsg(e), "error"); });
       } }),
     ]));
   }

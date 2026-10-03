@@ -149,6 +149,14 @@
       return A().apiJSON("/api/admin/policy", { method: "PATCH", body: body });
     },
 
+    // ---- the club's invoices (Money → Invoices, the receipting queue) ----
+    // GET /api/admin/invoices?q=&status=unpaid|all -> {invoices:[…same shape as a client's…], count}
+    invoices: function (params) {
+      var p = params || {};
+      return A().apiJSON("/api/admin/invoices?status=" + encodeURIComponent(p.status || "unpaid")
+        + (p.q ? "&q=" + encodeURIComponent(p.q) : ""));
+    },
+
     // ---- invoice a client's outstanding balance (intra-month statement invoice) ----
     // POST /api/admin/clients/<id>/statement-invoice  body: {due_date?, period?}
     statementInvoice: function (userId, body) {

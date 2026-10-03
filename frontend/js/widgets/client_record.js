@@ -146,7 +146,6 @@
     // current outstanding balance + mark an unpaid one paid (EFT/cash) or void it. Paid-status is
     // LIVE (derived from the underlying orders), so it always matches the statement.
     function invoicesCard(pn, c) {
-      var CHIP = { "Paid": "confirmed", "Unpaid": "held", "Partially paid": "held", "Void": "" };
       var head = [el("div", { class: "cf-row", style: "justify-content:space-between;align-items:center" }, [
         el("h2", { style: "margin:0;font-size:1.05rem", text: "Invoices" }),
         actBtn("issue_statement_invoice", pn, { label: "Invoice outstanding" }) || el("span"),
@@ -157,32 +156,9 @@
         card.appendChild(el("div", { class: "cf-empty", style: "padding:10px", text: "No invoices issued yet." }));
         return card;
       }
+      // The row is CRMUI.invoiceRow — the SAME one Money → Invoices renders (golden rule).
       var l = el("div", { class: "cf-list" });
-      list.forEach(function (iv) {
-        var actions = el("div", { class: "cf-row", style: "gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end" }, [
-          el("span", { style: "font-weight:700", text: money(iv.total_minor, iv.currency || c) }),
-          el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", type: "button", text: "PDF",
-            onclick: function () { UI.openAuthedFile("/api/billing/invoice/" + iv.invoice_id + "/pdf", (iv.number || "invoice") + ".pdf"); } }),
-        ]);
-        if (iv.doc_status !== "void" && iv.outstanding_minor > 0) {
-          var mp = actBtn("invoice_mark_paid", iv, { label: "Mark paid" }); if (mp) actions.appendChild(mp);
-        }
-        if (iv.doc_status !== "void") {
-          // "Void" cancels the invoice AND its charges. The keep-charges variant sits beside it for
-          // the re-issue case, so one word never has to mean two things.
-          var vd = actBtn("invoice_void", iv, { label: "Void", tone: "danger" }); if (vd) actions.appendChild(vd);
-          var vk = actBtn("invoice_void_keep_charges", iv, { label: "Void, keep charges", tone: "ghost" });
-          if (vk) actions.appendChild(vk);
-        }
-        l.appendChild(el("div", { class: "cf-item" }, [
-          el("span", { class: "cf-chip " + (CHIP[iv.status_label] || ""), text: iv.status_label }),
-          el("div", { class: "cf-item-main" }, [
-            el("div", { class: "cf-item-t", text: iv.number || "Invoice" }),
-            el("div", { class: "cf-item-s", text: (iv.issued_at ? fDate(iv.issued_at) : "") + (iv.outstanding_minor > 0 ? " · " + money(iv.outstanding_minor, iv.currency || c) + " due" : "") + (iv.kind === "statement" ? " · statement" : "") }),
-          ]),
-          actions,
-        ]));
-      });
+      list.forEach(function (iv) { l.appendChild(CRMUI.invoiceRow(iv, { currency: c, actBtn: actBtn })); });
       card.appendChild(l);
       return card;
     }

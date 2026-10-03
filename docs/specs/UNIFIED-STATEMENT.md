@@ -47,6 +47,17 @@ mid-month card payment flips the invoice to Paid and double-counting is structur
 - **Serve/act:** `GET /api/billing/invoice/<id>` (+ `/pdf`), `POST …/mark-paid` (EFT/cash → settles every open order
   via the desk-payment core → receipts fire → invoice derives Paid), `POST …/void`. Lists: `GET /api/me/invoices` ·
   `GET /api/admin/clients/<id>/invoices`. Client UI: `#/invoices` (view + download PDF + pay-outstanding).
+- **THE RECEIPTING QUEUE — Money → Invoices & receipting (2026-10-03).** An EFT lands on the bank
+  statement quoting an invoice NUMBER and nothing else, and the only invoice list was the one on a
+  client's own record — so receipting it meant already knowing whose it was. `GET /api/admin/invoices`
+  (`?q=` number / client name / email · `?status=unpaid` default | `all`) is the SAME reader,
+  `invoicing.list_invoices`, with the client left out; the screen (`admin_app.js` `moneyInvoices`,
+  `#/money/invoices`) searches, sorts by number or client, and marks paid. **It adds no capability:**
+  the row is `CRMUI.invoiceRow` and the actions are `invoiceActions` — the same two the client record
+  renders — so the two places cannot drift. The mark-paid modal now takes the **amount received**
+  (the part-payment rule the server always had, never reachable from a screen) and says what the
+  money did. The client record keeps its Invoices card: it is that client's history, and the same row.
+  Guarded by `sc_an_invoice_can_be_found_by_its_number_without_knowing_the_client`.
 - **Email:** the `invoice_issued` event reuses the booking-confirmation shell + a statement summary + a **"Pay online"**
   box + the **PDF attached** — attachment is **flag-gated `EMAIL_INVOICE_PDF_ENABLED`, now ON** (verified
   2026-07-18; the SES key carries `AmazonSESFullAccess`/`ses:SendRawEmail`, so MIME attachments send).

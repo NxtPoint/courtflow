@@ -1976,6 +1976,23 @@ def list_client_invoices(client_user_id):
     return jsonify(invoices=invoices), 200
 
 
+@admin_bp.get("/invoices")
+def list_club_invoices():
+    """THE RECEIPTING QUEUE (Money → Invoices): every invoice in the club, found by NUMBER or client
+    name. An EFT arrives on the bank statement quoting only the invoice number, so the owner has to
+    get from the number to the person — the per-client list above cannot do that. The SAME reader,
+    without a client. `?q=` number / name / email · `?status=unpaid` (default) | `all`. club_admin+."""
+    p, err = _admin()
+    if err:
+        return err
+    from billing import invoicing
+    with session_scope() as s:
+        invoices = invoicing.list_invoices(
+            s, club_id=p.club_id, q=(request.args.get("q") or "").strip() or None,
+            unpaid_only=(request.args.get("status") or "unpaid") != "all", limit=500)
+    return jsonify(invoices=invoices, count=len(invoices)), 200
+
+
 @admin_bp.post("/clients/<client_user_id>/wallets/<wallet_id>/adjust")
 def admin_wallet_adjust(client_user_id, wallet_id):
     """Manually adjust a client's prepaid pack balance (money-adjacent, audited). Body:

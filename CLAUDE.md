@@ -84,11 +84,11 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 768 / billing 735 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 768 / billing 748 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (101/100/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (101/101/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **When the numbers move, run `python -m scripts.audit_docs` and update
    EVERY doc it names** — the baseline is repeated in ~7 files and the gate fails unless they all
@@ -349,7 +349,9 @@ a second debt store** (the debt stays on `billing."order"`) — line amounts FRE
 derives LIVE, so double-counting is structurally impossible; numbering is **gapless per club**; **AN INVOICE
 COVERS A PERIOD** — the month the SERVICE WAS DELIVERED (`invoicing.DELIVERED_AT_SQL`, the ONE resolver), with
 earlier debt frozen as DISPLAY-ONLY `brought_forward_minor`, never re-billed; ONE `invoice_paid` receipt per
-payment however many lines it settles; a part-payment settles WHOLE lines, oldest first. The three issue paths,
+payment however many lines it settles; a part-payment settles WHOLE lines, oldest first. **Receipting
+happens at Money → Invoices & receipting** (find an invoice by its NUMBER, mark it paid) — the same
+`CRMUI.invoiceRow` + `invoiceActions` the client record uses, never a second render. The three issue paths,
 the routes, the PDF/email flag, the EFT reference and company/bank setup:
 **[UNIFIED-STATEMENT.md § As-built](docs/specs/UNIFIED-STATEMENT.md#invoice--receipt-documents)**.
 

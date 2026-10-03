@@ -11,7 +11,7 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 768 / billing 735 / statement 64** (101 / 100 / 12 `sc_*` functions).
+  **booking 768 / billing 748 / statement 64** (101 / 101 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
@@ -149,7 +149,9 @@ routing, void/lockstep, event stories, two-tier pricing, cancel/resize guards, *
 general order discount, 7-day-trial grant guard, lesson + class pack coach-linking, class↔coach
 commission parity, per-service packs (product-aware draw), desk-payment amount guard, partial-refund
 state, coach payout nets the ledger, month-end sweep idempotent, pack service-isolation (assign +
-buy-wizard coach/product scoping), admin ad-hoc invoice (service×qty + fee − discount, tamper-proof),
+buy-wizard coach/product scoping), admin ad-hoc invoice (service×qty + fee − discount, tamper-proof), **the receipting queue** (an invoice
+found by NUMBER across the club, marked paid, drops out of "unpaid" —
+`sc_an_invoice_can_be_found_by_its_number_without_knowing_the_client`),
 client activity-summary (counts / minutes / by-service / by-week), **the coach month-end statement email** (`sc_the_coach_statement_email_is_the_coachs_own_month` — a coach is never copied on a CLIENT's consolidated invoice, which spans several coaches and that client's whole account; they get their OWN month instead. Pins the three properties that make it safe: no other coach's client can appear on the block, a coach with no month is not emailed at all, and it is idempotent per (club, coach, period) because the sweep is resumable).
 
 **EACH CLUB IS PAID INTO ITS OWN YOCO ACCOUNT** (`sc_each_club_is_paid_into_its_own_yoco_account`) —

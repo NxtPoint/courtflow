@@ -680,8 +680,49 @@
     return m;
   }
 
+  // THE one invoice row — the client record's "Invoices" card AND the Money → Invoices receipting
+  // queue. Differences are config, never a second render:
+  //   opts.currency          fallback currency
+  //   opts.actBtn(key, iv, {label, tone}) -> a button, or null when that action isn't allowed here
+  //   opts.showClient        lead with WHOSE invoice it is (the club-wide list); off on a client's own
+  //   opts.onClient(iv)      tap the row's text -> that client's record
+  var INVOICE_CHIP = { "Paid": "confirmed", "Unpaid": "held", "Partially paid": "held", "Void": "" };
+  function invoiceRow(iv, opts) {
+    opts = opts || {};
+    var c = iv.currency || opts.currency;
+    var actBtn = opts.actBtn || function () { return null; };
+    var actions = el("div", { class: "cf-row", style: "gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end" }, [
+      el("span", { style: "font-weight:700", text: money(iv.total_minor, c) }),
+      el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", type: "button", text: "PDF",
+        onclick: function (ev) { ev.stopPropagation(); UI.openAuthedFile("/api/billing/invoice/" + iv.invoice_id + "/pdf", (iv.number || "invoice") + ".pdf"); } }),
+    ]);
+    function add(key, o) { var b = actBtn(key, iv, o); if (b) { b.addEventListener("click", function (ev) { ev.stopPropagation(); }); actions.appendChild(b); } }
+    if (iv.doc_status !== "void" && iv.outstanding_minor > 0) add("invoice_mark_paid", { label: "Mark paid" });
+    if (iv.doc_status !== "void") {
+      // "Void" cancels the invoice AND its charges. The keep-charges variant sits beside it for the
+      // re-issue case, so one word never has to mean two things.
+      add("invoice_void", { label: "Void", tone: "danger" });
+      add("invoice_void_keep_charges", { label: "Void, keep charges", tone: "ghost" });
+    }
+    var issued = iv.issued_at ? UI.fmtDate(iv.issued_at) : "";
+    var sub = [opts.showClient ? (iv.number || "Invoice") : "", issued,
+               iv.outstanding_minor > 0 ? money(iv.outstanding_minor, c) + " due" : "",
+               iv.kind === "statement" ? "statement" : ""].filter(Boolean).join(" · ");
+    var main = el("div", { class: "cf-item-main" }, [
+      el("div", { class: "cf-item-t", text: opts.showClient ? (iv.client_name || "Client") : (iv.number || "Invoice") }),
+      el("div", { class: "cf-item-s", text: sub }),
+    ]);
+    var row = el("div", { class: "cf-item" + (opts.onClient ? " cf-item-tap" : "") }, [
+      el("span", { class: "cf-chip " + (INVOICE_CHIP[iv.status_label] || ""), text: iv.status_label }),
+      main, actions,
+    ]);
+    if (opts.onClient) row.addEventListener("click", function () { opts.onClient(iv); });
+    return row;
+  }
+
   window.CRMUI = {
     money: money,
+    invoiceRow: invoiceRow,
     rescheduleModal: rescheduleModal,
     stats: stats,
     moneySummary: moneySummary,

@@ -5234,6 +5234,67 @@ def sc_partial_payment_leaves_the_invoice_open(s, fx):
           f'{doc4["billed_now_minor"]} vs {doc4["paid_minor"]}+{doc4["outstanding_minor"]}')
 
 
+def sc_an_invoice_can_be_found_by_its_number_without_knowing_the_client(s, fx):
+    """An EFT arrives quoting an invoice NUMBER and nothing else. The only invoice list was the one
+    on a client's own record — so to receipt it the owner first had to know whose it was, which is
+    exactly what the bank line doesn't say. list_invoices is ONE reader for both shapes: a client's
+    (user_id given, unchanged) and the club's (no user_id — Money -> Invoices), searchable by number
+    or name, narrowed to what still wants money. Marking it paid from there is the SAME core."""
+    print("\n# Receipting queue: find an invoice by NUMBER across the club, then mark it paid")
+    from billing import invoicing as INVQ
+
+    def _owed(amount):
+        oid = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,'
+                             "currency_code,settlement_mode,status) "
+                             "VALUES (:c,:u,:a,'ZAR','monthly_account','open') RETURNING id"),
+                        {"c": fx.club_id, "u": fx.member, "a": amount}).scalar_one()
+        s.execute(text("INSERT INTO billing.order_line (order_id,club_id,description,qty,"
+                       "amount_minor) VALUES (:o,:c,'Lesson',1,:a)"),
+                  {"o": str(oid), "c": fx.club_id, "a": amount})
+        return str(oid)
+
+    a = INVQ.issue_invoice(s, club_id=fx.club_id, user_id=fx.member, order_ids=[_owed(30000)])
+    b = INVQ.issue_invoice(s, club_id=fx.club_id, user_id=fx.member, order_ids=[_owed(45000)])
+    check("two invoices issued", a.get("ok") and b.get("ok"), f"{a} {b}")
+    num_b = b["invoice_number"]
+
+    club = INVQ.list_invoices(s, club_id=fx.club_id, unpaid_only=True)
+    ids = {x["invoice_id"] for x in club}
+    check("the club-wide list (no client given) holds both", {a["invoice_id"], b["invoice_id"]} <= ids,
+          f"{len(club)} rows")
+    row_b = next((x for x in club if x["invoice_id"] == b["invoice_id"]), {})
+    check("...each row says WHOSE it is", row_b.get("user_id") == str(fx.member)
+          and bool(row_b.get("client_name")), str(row_b.get("client_name")))
+    check("...and carries the orders it still wants paid", len(row_b.get("open_order_ids") or []) == 1,
+          str(row_b.get("open_order_ids")))
+
+    hit = INVQ.list_invoices(s, club_id=fx.club_id, q=num_b)
+    check("searching the NUMBER finds exactly that invoice",
+          [x["invoice_id"] for x in hit] == [b["invoice_id"]], str([x["number"] for x in hit]))
+    check("a number that doesn't exist finds nothing",
+          INVQ.list_invoices(s, club_id=fx.club_id, q="NO-SUCH-INVOICE-9999") == [])
+    email = s.execute(text('SELECT email FROM iam."user" WHERE id = :u'), {"u": fx.member}).scalar()
+    by_client = {x["invoice_id"] for x in INVQ.list_invoices(s, club_id=fx.club_id, q=email)}
+    check("searching the client finds theirs", {a["invoice_id"], b["invoice_id"]} <= by_client)
+    check("another club sees none of it",
+          INVQ.list_invoices(s, club_id="00000000-0000-0000-0000-000000000000", q=num_b) == [])
+
+    # Receipt it from the queue — the same core the client record uses — and it leaves the queue.
+    paid = INVQ.mark_invoice_paid(s, club_id=fx.club_id, invoice_id=b["invoice_id"],
+                                  provider="eft", reference=num_b)
+    check("marked paid from the queue", paid.get("fully_paid"), str(paid))
+    after = {x["invoice_id"] for x in INVQ.list_invoices(s, club_id=fx.club_id, unpaid_only=True)}
+    check("a paid invoice drops out of 'unpaid'", b["invoice_id"] not in after)
+    check("...while the unpaid one stays", a["invoice_id"] in after)
+    everything = {x["invoice_id"]: x for x in INVQ.list_invoices(s, club_id=fx.club_id)}
+    check("...and 'all' still shows it, as Paid",
+          (everything.get(b["invoice_id"]) or {}).get("status_label") == "Paid",
+          str((everything.get(b["invoice_id"]) or {}).get("status_label")))
+    mine = INVQ.list_invoices(s, club_id=fx.club_id, user_id=fx.member)
+    check("the client's own list is unchanged by all this (same reader)",
+          {a["invoice_id"], b["invoice_id"]} <= {x["invoice_id"] for x in mine})
+
+
 def sc_one_payment_one_receipt(s, fx):
     """Settling a multi-line invoice sends ONE receipt, not one per line.
 
@@ -5673,6 +5734,7 @@ SCENARIOS = [
     sc_abandoned_purchases_expire_by_themselves,
     sc_partial_payment_leaves_the_invoice_open,
     sc_one_payment_one_receipt,
+    sc_an_invoice_can_be_found_by_its_number_without_knowing_the_client,
     sc_an_invoice_covers_its_own_month,
     sc_a_month_swept_early_can_still_be_closed,
     sc_buy_click_never_mints_a_duplicate_debt,

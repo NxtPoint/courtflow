@@ -765,21 +765,40 @@ def void_invoice(session, *, club_id, invoice_id, cascade=True, reason=None) -> 
 # BUILD the canonical invoice document (frozen lines + LIVE paid/outstanding)
 # ---------------------------------------------------------------------------
 
-def list_invoices(session, *, club_id, user_id, limit=100) -> List[Dict[str, Any]]:
-    """A client's invoice documents, newest first, with live outstanding derived from the
-    covered orders (one aggregate query). For lists/records — the full doc is build_invoice_document."""
+def list_invoices(session, *, club_id, user_id=None, q=None, unpaid_only=False,
+                  limit=100) -> List[Dict[str, Any]]:
+    """Invoice documents, newest first, with live outstanding derived from the covered orders (one
+    aggregate query). For lists/records — the full doc is build_invoice_document.
+
+    ONE reader for both shapes: a CLIENT's invoices (`user_id` given — the client record, the
+    member's own list) and the CLUB's (`user_id` omitted — Money → Invoices, the receipting queue).
+    `q` matches the invoice NUMBER or the client's name/email, because an EFT lands on the bank
+    statement carrying only "INV-0042" and the owner has to find whose it is. `unpaid_only` keeps
+    the documents that still want money."""
+    like = ("%" + q.strip().replace("%", "") + "%") if (q or "").strip() else None
     rows = session.execute(
         text('SELECT i.id, i.invoice_number, i.kind, i.status, i.issued_at, i.due_date, '
-             '       i.total_minor, i.currency_code, '
-             '       COALESCE(SUM(CASE WHEN o.status = \'open\' THEN o.amount_minor ELSE 0 END),0) AS outstanding '
+             '       i.total_minor, i.currency_code, i.user_id, u.email AS client_email, '
+             "       NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)), '') AS client_name, "
+             '       COALESCE(SUM(CASE WHEN o.status = \'open\' THEN o.amount_minor ELSE 0 END),0) AS outstanding, '
+             "       COALESCE(array_agg(o.id) FILTER (WHERE o.status IN ('open','awaiting_payment')), "
+             "                '{}') AS open_order_ids "
              'FROM billing.invoice i '
+             'LEFT JOIN iam."user" u ON u.id = i.user_id '
              'LEFT JOIN (SELECT DISTINCT invoice_id, order_id FROM billing.invoice_line '
              '           WHERE order_id IS NOT NULL) il ON il.invoice_id = i.id '
              'LEFT JOIN billing."order" o ON o.id = il.order_id '
-             'WHERE i.club_id = :c AND i.user_id = :u '
-             'GROUP BY i.id '
+             'WHERE i.club_id = :c '
+             '  AND (CAST(:u AS uuid) IS NULL OR i.user_id = CAST(:u AS uuid)) '
+             '  AND (CAST(:q AS text) IS NULL OR i.invoice_number ILIKE CAST(:q AS text) '
+             "       OR CONCAT_WS(' ', u.first_name, u.surname) ILIKE CAST(:q AS text) "
+             '       OR u.email ILIKE CAST(:q AS text)) '
+             'GROUP BY i.id, u.id '
+             "HAVING (NOT :unpaid) OR (i.status <> 'void' AND "
+             "        COALESCE(SUM(CASE WHEN o.status = 'open' THEN o.amount_minor ELSE 0 END),0) > 0) "
              'ORDER BY i.issued_at DESC LIMIT :lim'),
-        {"c": str(club_id), "u": str(user_id), "lim": int(limit)},
+        {"c": str(club_id), "u": (str(user_id) if user_id else None), "q": like,
+         "unpaid": bool(unpaid_only), "lim": int(limit)},
     ).mappings().all()
     out = []
     for r in rows:
@@ -798,16 +817,16 @@ def list_invoices(session, *, club_id, user_id, limit=100) -> List[Dict[str, Any
             "total_minor": int(r["total_minor"] or 0), "currency": r["currency_code"],
             "outstanding_minor": outstanding, "is_paid": (r["status"] != "void" and outstanding <= 0),
             "status_label": label,
+            # WHOSE it is — the club-wide list needs it; a client's own list simply ignores it.
+            "user_id": (str(r["user_id"]) if r["user_id"] else None),
+            "client_name": r["client_name"] or r["client_email"] or "Client",
+            "client_email": r["client_email"],
             # THE ORDERS THIS INVOICE STILL WANTS PAID, so a client can settle THIS invoice rather
             # than everything they owe. The pay-all path takes explicit order ids and always could
             # — but the invoice screen had none to give it, so "Pay outstanding online" charged the
             # whole account. A member settling their July invoice would have paid August's
             # part-month too, which is not what the button says.
-            "open_order_ids": [str(x) for x in (session.execute(
-                text('SELECT DISTINCT o.id FROM billing.invoice_line il '
-                     '  JOIN billing."order" o ON o.id = il.order_id '
-                     " WHERE il.invoice_id = :i AND o.status IN ('open','awaiting_payment')"),
-                {"i": str(r["id"])}).scalars().all())],
+            "open_order_ids": sorted(str(x) for x in (r["open_order_ids"] or [])),
         })
     return out
 
