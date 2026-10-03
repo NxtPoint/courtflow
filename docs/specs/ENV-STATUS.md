@@ -206,7 +206,7 @@ Everything above is already set on the **dev/onrender** config. At cutover, chan
 ### Ten-Fifty5 members-area embed (match analysis SSO) — LIVE, private test 🟢
 A member opens Ten-Fifty5 inside the portal, signed in with their own NextPoint Clerk token. **This is NOT
 the removed `BRIDGE_TENFIFTY5_*` cross-business bridge** — it's a live member-area SSO embed. Full write-up:
-root `CLAUDE.md` → "Ten-Fifty5 embed".
+[SYSTEM.md](SYSTEM.md) → "Auth & multi-tenancy" → Cross-app SSO.
 | Var | Status | What it does | Value |
 |---|---|---|---|
 | `TF5_EMBED_URL` | 🟢 | The embed iframe `src` (Ten-Fifty5 portal). Empty → the members-area entry hides | `https://www.ten-fifty5.com/portal?embed=1` |

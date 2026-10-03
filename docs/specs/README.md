@@ -141,7 +141,7 @@ operating guide; **this folder is the detail.**
 > non-allowlisted); `auth_client.js` parent relay allowlist + `mode` field; `web_app.py`/`render.yaml` inject
 > the `TF5_EMBED_*` config. **Gated to a private test** (`TF5_EMBED_ALLOW_EMAILS`; launch = clear it) + a public
 > "Match analysis" marketing CTA → ten-fifty5.com. The 1050 repo was modified (additive/flag-guarded) — the ONE
-> exception to "read-only reference." Full write-up: root `CLAUDE.md` → "Ten-Fifty5 embed"; env: `ENV-STATUS.md`.
+> exception to "read-only reference." Full write-up: `SYSTEM.md` → "Auth & multi-tenancy" → Cross-app SSO; env: `ENV-STATUS.md`.
 >
 > **2026-07-12 — EQUIPMENT+CONSTRAINTS MERGED + a coach-feedback batch + the CLOSE-OUT.** The
 > `feat/equipment-and-constraints` work is **merged + live on prod** (equipment hire · peak PAYG court pricing

@@ -28,6 +28,9 @@ before it will mail anyone)**. They are written from different places and they d
 that claims mailability must read the **gate**; `core.consent` is the tie-breaker when the two
 differ. Full story: [GOTCHAS.md#reads-that-lie](GOTCHAS.md#reads-that-lie).
 
+**Never size an email audience from a headcount.** 1270 members → ~506 mailable. `python -m
+scripts.audit_marketing_reach` (read-only, safe on the Render Shell) is the number that matters.
+
 | Script | What it answers |
 |---|---|
 | `scripts/audit_marketing_reach.py` | who we HAVE vs who we may EMAIL, trial conversion, ready-made segments, and a **daily** "are new signups arriving marketable" rate |

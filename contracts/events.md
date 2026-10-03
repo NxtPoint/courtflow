@@ -126,7 +126,7 @@ forwarded to Klaviyo (too noisy/expensive) — DB only.
 `emit()` — for `payment_succeeded` it resolves the buyer's captured `gclid` (`core.acquisition`) and ledgers a
 `core.offline_conversion` row for the Google Ads offline-conversion feed. It NEVER blocks the producer and adds
 no new event names; it's a pure downstream reader of the existing `payment_succeeded` payload
-(`amount_minor`/`currency`/`user_id`). See root `CLAUDE.md` → "Growth & acquisition measurement".
+(`amount_minor`/`currency`/`user_id`). See `docs/specs/MARKETING-ENGINE.md` → "What a platform session must know".
 
 ## Transactional vs marketing — the send rule (`docs/06 §4`)
 

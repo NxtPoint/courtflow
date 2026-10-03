@@ -69,7 +69,9 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    only gate needing no `DATABASE_URL`, so it still works when the others can't. Added 2026-08-09 after
    real newlines inside a string stopped `admin_app.js` parsing and took `/admin` down for 11 hours
    (Gotchas). **Fails CLOSED if `node` is absent** — a gate that can't verify must not report success.
-3. `python -m db` **twice** — second run must be a clean no-op (idempotency gate).
+3. `python -m db` **twice** — second run must be a clean no-op (idempotency gate). **READ the output:
+   it exits 0 even when a module fails** — `run_boot_init` catches the exception and prints `error`
+   beside that module instead of `ok`, so the exit code proves nothing. Every line must say `ok`.
 4. `python -m scripts.audit_docs` — **the DOCS gate.** Prose doesn't fail `py_compile`, so docs rot
    invisibly and are then trusted precisely when they're wrong. This extracts the real routes, tables,
    shared widgets, emitted events, scenarios and scripts from SOURCE and reports what the docs haven't
@@ -82,11 +84,11 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 759 / billing 735 / statement 64**. Each uses its own scratch club and always rolls back.
+   **booking 768 / billing 735 / statement 64**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (100/100/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (101/100/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **When the numbers move, run `python -m scripts.audit_docs` and update
    EVERY doc it names** — the baseline is repeated in ~7 files and the gate fails unless they all
@@ -171,7 +173,7 @@ re-run or a doubled schedule is safe. When adding a recurring job, add a workflo
 
 **Capacity-sweep needs no job at all** — abandoned holds are released by lazy expiry (see Gotchas).
 
-**One Postgres DB, six schemas** (idempotent boot DDL, no migration framework; `db.py` runs `BOOT_MODULES`):
+**One Postgres DB, seven schemas** (idempotent boot DDL, no migration framework; `db.py` runs `BOOT_MODULES`):
 - `club.*` — tenants/config/branding/location/policies
 - `iam.*` — user↔Clerk, membership, coach_profile, dependents, coach_invite
 - `diary.*` — resources, availability, booking, class_session, enrolment, waitlist, recurrence (**the heart**);
@@ -182,9 +184,10 @@ re-run or a doubled schedule is safe. When adding a recurring job, add a workflo
   nets the ledger) + **`month_end_notice`** (month-end-sweep idempotency)
 - `core.*` — account/user/person, usage_event, consent, nps (ported from Ten-Fifty5 `core_db`)
 - `community.*` — player_invite, message (match chat), match_result, play_again (the PRIVATE
-  would-play-again signal), favourite. **A GAME IS A BOOKING** — there is deliberately no
+  would-play-again signal). **A GAME IS A BOOKING** — there is deliberately no
   `community.game` table; an open game is a `diary.booking` with `visibility='open'` and a seat is a
   `diary.booking_party` row (see the Community section below)
+- `api.*` — `idempotency` only (the public API's `Idempotency-Key` replay store, owned by `api_v1/`)
 
 **Decoupling interfaces** (why the lanes stay independent): the **schema** is the contract between diary,
 billing, and CRM; `contracts/events.md` is the producer→consumer **event contract** (diary/billing `emit()`
@@ -204,7 +207,7 @@ Touch only your lane; coordinate on shared interface files (`contracts/events.md
 | **Client 360** | `client360/` | The ONE cross-lane read-model — `get_client_360(scope, coach_user_id, month)` composes existing lane readers into a single client payload (identity/memberships/packages/statement/payments/bookings/refunds/coaching/activity + `month_events` + the reconciling `statement_fold` + `can{}`; booking rows carry service + pay-status + their own head's amount). Read-only, reuse-first. **`scope='coach'` is a STRICT SERVER-SIDE filter** (the coach fork was retired — coach = a filter, not a fork): it returns ONLY the coach's own events + own coaching fold + own packages + coaching; membership/card-payments/full-statement/dependents/refunds/PII/activity are OMITTED server-side (never sent to a coach's browser). **Each block runs in a SAVEPOINT (`_guard`→`begin_nested`), NEVER a bare `session.rollback()`** — the composer runs inside the caller's `session_scope`, so a full rollback would discard the caller's writes. `admin.get_person` delegates here; coach `/clients/<id>/360` + client `/me/360` call it. **The single source of truth every client view is a view off**, and the money everywhere is the ONE reconciling fold: **Billed − Discount − Written-off = Invoiced = Paid + Outstanding + Refunded**. **The refunded term is load-bearing and easy to drop** — status `refunded` sits in NEITHER the paid nor the outstanding bucket, so a fully refunded order reads `invoiced 8000 · paid 0 · outstanding 0` and looks broken to anyone asserting the short form (`CRMUI.statementFold` prints it as "… refunded or written off this month" for exactly that reason). Guarded by `sc_refunding_a_seat_restores_the_split` (`CRMUI.statementFold`/`moneySummary`, coach + admin + client all reconcile). |
 | **Admin** | `admin/`, `services/`, `insights/` | Owner write APIs + onboarding, per-service commission editor, financial cockpit, person-360, the insights composer, **general order discount + pack-wallet adjust/expire**. |
 | **Coach / Client** | `coach/`, `me/` | Coach self-service (onboarding, clients-360, statement, cockpit; reschedule/cancel own lessons + move own class sessions) + client self-service (profile, dependents, statement, refund requests). |
-| **Community** | `community/` | **Find a Game + THE SEAT RULE** — who is on a court, and who pays for them. `seats.py` is the money core (the ONE place the split lives); `games.py` open/join/leave; `invites.py` bring-a-friend + the free week; `matching.py`/`chat.py`/`results.py`; `crons.py` the sweep. `/api/community/*`. **Ships DARK** behind two `club.policy` flags. |
+| **Community** | `community/` | **Find a Game + THE SEAT RULE** — who is on a court, and who pays for them. `seats.py` is the money core (the ONE place the split lives); `games.py` open/join/leave; `invites.py` bring-a-friend + the free week; `matching.py`/`chat.py`/`results.py`; `crons.py` the sweep. `/api/community/*`. Gated by two `club.policy` flags (state: the spec's status line). |
 | **Public API** | `api_v1/` | CourtFlow's versioned PUBLIC API — `/api/v1/clubs/<slug>/…` (court hire first). A thin layer over the lanes: **no rules of its own** (a rule that seems needed here belongs in the lane, so the member app obeys it too). One error shape, `Idempotency-Key` writes (`api.idempotency`), money as `{amount_minor, currency}`. Spec + progress: [`PUBLIC-API.md`](docs/specs/PUBLIC-API.md). Tested OVER HTTP via the booking harness's `_api`. |
 | **Analytics** | `analytics/` | Read-only guarded aggregations → `/api/analytics/*` (the standalone `/overview.html`); first-party beacon in `beacon.py`. |
 | **Frontend** | `frontend/` | Three role SPAs on one widget layer (below). |
@@ -437,65 +440,21 @@ per-service breakdown that powers the **month → client → service → transac
 `coach.get_client` reader was retired. `CRMUI.activityBlock / spendBlock / weekChart` = ONE shared renderer
 for the client Home modules AND the Client 360 rollup. Client Home: **no emoji** (drawn line-glyphs).
 
-## Community — Find a Game + THE SEAT RULE (built 2026-08-09/10, ships DARK)
-Full spec: **[`docs/specs/COMMUNITY-ENGINE.md`](docs/specs/COMMUNITY-ENGINE.md)**.
-
-**Why it exists — two problems that are one.** A membership makes court bookings free, but nothing knew
-WHO ELSE was on the court, so one membership could cover a second player who never paid. Separately,
-~1,100 members often have nobody to play with and courts sit empty. **An unpaid second player and an
-empty seat are the same object** — a seat nobody has accounted for. That is why this is one lane, not two.
-
-> **THE SEAT RULE.** A court booking has SEATS. Every seat is a covered member (free), a payer (owes
-> **a share**), or OPEN. **A SHARE IS A FIXED FRACTION OF THE COURT PRICE** (`seat_share_pct`, default
-> 50%, rounded — NOT a division of the fee among whoever happens to be playing). An OPEN seat unfilled
-> at the cutoff **collapses** onto the booking holder as one charged share.
-
-A fixed fraction, not a split, because **the price a player is quoted has to survive somebody else
-joining, leaving or turning out to be a member** — that one property removed a lock, a re-price and a
-refusal from the design.
-
-> **A SHARE IS FOR SHARING — `visibility` decides which rule applies (2026-08-15).** `open` (the
-> spare seat is published to the club) = Find a Game: everyone pays a share, unfilled seats collapse,
-> the court holds until every online seat settles. `private` (Book a court — someone buys a court and
-> names who's coming) = **the booker pays the court's NORMAL PRICE**, a guest pays a share **only if
-> the court isn't otherwise paid for** (i.e. only behind a membership-covered booker), and **nothing
-> ever holds the court** — an unpaid guest is collected at the desk, never by cancelling a member's
-> booking. Re-pricing a PAYG booker down to a share would have let anyone book "singles", claim a
-> friend was coming and take the court at half price. Publishing is never cheaper (own share +
-> collapsed spare = R160 on a R150 court), so the split can't be gamed.
-> `sc_a_payg_booker_pays_the_whole_court_not_a_share` · `sc_a_guest_is_free_once_the_court_itself_is_paid_for`
-> · `sc_a_private_court_never_lapses_because_a_guest_did_not_pay`
-
-**The five invariants — change none of them without reading the spec:**
-- **`community/seats.py` is the ONE place the split lives, and it RAISES rather than guards** — a seat
-  whose share silently computes to R0 is a court given away free that nobody would ever see. Money paths
-  raise `SeatError`; only display reads swallow.
-- **It invents no coverage logic and no pricing** — coverage delegates to `diary.entitlement.court_covered`,
-  price resolves exactly as `_create_order_guarded` resolves it. Anything else splits a number the booking
-  flow never quoted.
-- **A GAME IS A BOOKING**, and **one debt = one order still holds** — no parallel game object, no second
-  debt store, so seats reach the statement, Client-360, month-end and Club earnings for free.
-- **The quoted share is FROZEN per game** (`diary.booking.seat_share_minor`) — a later change to
-  `seat_share_pct`, the rounding rule or the court price cannot re-price a game already sold.
-- **The free week for an invited friend IS the existing 7-day trial** — no second free-play mechanism.
-
-**Everything else about this lane — the money worked examples, the schema, the frontend routes, the
-`play_intent` axis, the two-block Home, the admin surfaces and the privacy rules — is in
-[`COMMUNITY-ENGINE.md`](docs/specs/COMMUNITY-ENGINE.md).** Two things you must know before touching it:
-- **THE RESULT SCREEN IS DRIVEN BY THE SERVER'S `can{}`, AND `rate[]` IS PRIVATE** (wired 2026-08-12,
-  closing the three engine-but-no-UI surfaces). Whether a game is over is the CLUB's clock, not the
-  browser's — the old widget compared `new Date(game.ends_at) < new Date()`, so a wrong phone clock
-  offered "Enter the result" mid-match. **`play-again` survived the audit because it is the "don't
-  match me with them again" FILTER** (`matching.py` DROPS a thumbed-down player, it does not merely
-  rank them down), and it is folded into the same screen. `rate[]` returns ONLY the viewer's own
-  answers — proved on a DOUBLES game, because with two players the subject uniquely identifies the
-  rater and the assertion passes for the wrong reason. **`favourites` was DELETED** (never had a UI,
-  no caller, empty everywhere; the boot DDL carries an idempotent DROP so the orphan doesn't survive).
-  `sc_the_result_screen_offers_only_what_the_server_allows`
-- **NO WRITE PATH HAS BEEN EXERCISED BY A REAL SECOND PERSON.** Join, leave, chat, result entry, the
-  level-quiz save, invite acceptance and `join.html` are unverified end to end. The harnesses call Python
-  directly (never HTTP, never DOM), which is why five of this lane's bugs were findable ONLY in a browser.
-  **Green gates are not a claim about these paths.**
+## Community — Find a Game + THE SEAT RULE
+**Read [`docs/specs/COMMUNITY-ENGINE.md`](docs/specs/COMMUNITY-ENGINE.md) before touching `community/`** —
+it opens with the current switch state and the five invariants. What you need without opening it:
+- **THE SEAT RULE.** A court booking has SEATS; each is a covered member (free), a payer (owes a
+  **share** — a FIXED fraction of the court price, frozen per game, never a division among whoever is
+  playing) or OPEN, and an open seat unfilled at the cutoff collapses onto the holder. `visibility`
+  picks the rule: `open` = Find a Game (everyone pays a share), `private` = Book a court (the booker
+  pays the NORMAL price; a guest pays only behind a membership-covered booker).
+- **`community/seats.py` is the ONE place the split lives, and it RAISES rather than guards.**
+  **A GAME IS A BOOKING** and one debt = one order still holds.
+- **Two `club.policy` switches, set in Admin → Setup → Community & games (NOT env vars):**
+  `community_enabled` (the social half) and `seat_rule_enforced` (the money half). Their live state is
+  the spec's opening status line — do not trust a copy of it here.
+- **Green gates are not a claim about the write paths** — join, leave, chat, result entry and invite
+  acceptance have not been exercised by a real second person.
 
 ## First-party analytics + the admin Overview tab
 `analytics/` is a read-only, platform-owner dashboard (`/overview.html`, rolling `?days=`) built on **guarded**
@@ -524,48 +483,21 @@ snapshot store, `core/schema.py`) → `insights.web_metrics` renders it. **No Go
 Render.** Consequence: if the Acquisition panel goes stale, suspect the Action or the ingest, not the app —
 and never "fix" it by adding a Google API client to the API service.
 
-## Growth & acquisition — LIVE
-**This does not touch platform code and is specced in full elsewhere** — the Google Ads / gclid loop
-in **[`GOOGLE-ADS-PLAN.md`](docs/specs/GOOGLE-ADS-PLAN.md)**, the digest in
-**[`MARKETING-ENGINE.md`](docs/specs/MARKETING-ENGINE.md)**. What a session here must know:
-- **The acquisition loop is: tag → gclid → paid order → CSV back to Google.** `web_app._google_tag_head`
-  injects GA4+Ads (dark until `GA4_MEASUREMENT_ID`/`GOOGLE_ADS_ID`); `frontend/js/attribution.js` records
-  the FIRST gclid/utm on landing and flushes it to `POST /api/me/acquisition` after sign-in (**FIRST-TOUCH
-  WINS**); when that buyer PAYS, the `emit()` funnel's 4th forward ledgers a `core.offline_conversion` row,
-  served at `GET /feeds/google-ads/offline-conversions.csv` (Basic auth, **dark/404 until the env is set**).
-- **`offline_conversions/` is kept BYTE-IDENTICAL with the Ten-Fifty5 repo** (like the analytics engine) —
-  the only per-repo glue is `recorder.CONVERSION_MAP`. Don't "improve" the package in one repo alone.
-- **The digest is CI-only and KEYLESS** (`marketing-digest.yml` + `marketing_digest/`) — org policy blocks
-  service-account key downloads, so Workload Identity Federation is not a preference. It is also **the
-  tag-breakage alarm**: a dark tag flatlines that site's GA4 traffic to zero in the morning digest. (A
-  `marketing-canary.yml` tripwire was tried and DELETED 2026-07-18 — Cloudflare blocks GitHub's CI IPs,
-  so it could only ever false-fail.) The engine covers both brands; **this repo's blog content is
-  `frontend/blog/_posts/`.**
-
-## Lifecycle email (Klaviyo) — LIVE
-**`KLAVIYO_API_KEY` is set; ~506 real members are subscribed and flows are sending.** State, the flow
-list and the operating scripts: **[KLAVIYO-MASTER-PLAN.md § 0 As-built](docs/specs/KLAVIYO-MASTER-PLAN.md)**.
-Two things that bite before anything else:
-- **The consent gate is `core.app_user.marketing_opt_in`, NOT `iam.user`.** The second is only what the
-  admin screen and Client-360 show; they are written from different places and they disagree. Any count
-  that claims mailability must read the gate, and `core.consent` is the tie-breaker (Gotchas).
-- **Never size an email audience from a headcount.** 1270 members → ~506 mailable. `python -m
-  scripts.audit_marketing_reach` (read-only, safe on the Render Shell) is the number that matters.
-
-## Ten-Fifty5 embed — match analysis inside the members area (LIVE, private test)
-A logged-in member opens **Ten-Fifty5** (the AI match-analysis product, `ten-fifty5.com`) **inside** the
-client SPA in an iframe, signed in with their OWN NextPoint Clerk token — **no second login**. Two
-separate Clerk apps; the seam is a `postMessage` token relay in `auth_client.js` plus issuer federation
-on Ten-Fifty5's verifier. **Email is the cross-system key.**
-- **This repo's side:** `client.js` `#/analysis` + `renderAnalysis()`; a Home card (**"Coming soon"**
-  off-allowlist); `auth_client.js` `serveChild` (serves a token ONLY to `TF5_EMBED_ORIGINS`);
-  `web_app.py`'s `__TF5_EMBED_*` injection. Mechanism → [SYSTEM.md](docs/specs/SYSTEM.md); files + env →
-  [INVENTORY.md](docs/specs/INVENTORY.md); the gate + rollback → [FEATURE-FLAGS.md](docs/specs/FEATURE-FLAGS.md)
-  A4; values → [ENV-STATUS.md](docs/specs/ENV-STATUS.md).
-- **Gated to a PRIVATE prod test** via `TF5_EMBED_ALLOW_EMAILS` (courtflow-web); **launch = clear that env.**
-- **The Ten-Fifty5 repo IS modified for this** — the ONE exception to "read-only reference" below.
-  Additive + flag-guarded; **commit there with `CLAUDE_CODE=1`**. Its Technique feature is PARKED pending
-  SportAI's API, so nothing here may advertise it.
+## Growth, lifecycle email & the Ten-Fifty5 embed — LIVE, specced elsewhere
+Three live areas that rarely touch platform code. The detail moved to the specs 2026-10-03; what stays
+here is only what stops you doing harm.
+- **Growth & acquisition** (tag → gclid → paid order → CSV back to Google; the keyless CI digest) →
+  [`MARKETING-ENGINE.md`](docs/specs/MARKETING-ENGINE.md) + [`GOOGLE-ADS-PLAN.md`](docs/specs/GOOGLE-ADS-PLAN.md).
+  **`offline_conversions/` is kept BYTE-IDENTICAL with the Ten-Fifty5 repo** — don't "improve" it in one
+  repo alone; the only per-repo glue is `recorder.CONVERSION_MAP`.
+- **Lifecycle email (Klaviyo)** → [KLAVIYO-MASTER-PLAN.md § 0 As-built](docs/specs/KLAVIYO-MASTER-PLAN.md).
+  **The consent gate is `core.app_user.marketing_opt_in`, NOT `iam.user`** (that one is only what the
+  screens show), and **never size an audience from a headcount** — run
+  `python -m scripts.audit_marketing_reach`.
+- **Ten-Fifty5 embed** (match analysis inside the members area, one login, gated to a PRIVATE test by
+  `TF5_EMBED_ALLOW_EMAILS`) → [SYSTEM.md](docs/specs/SYSTEM.md) § Auth & multi-tenancy. **The Ten-Fifty5
+  repo IS modified for this** — the ONE exception to "read-only reference" below; commit there with
+  `CLAUDE_CODE=1`. Its Technique feature is PARKED, so nothing here may advertise it.
 
 ## Commands
 - **Run the API locally:** `gunicorn wsgi:app` (or `python -m app`) — needs `DATABASE_URL`.
@@ -611,7 +543,7 @@ on Ten-Fifty5's verifier. **Email is the cross-system key.**
   above, which needed additive flag-guarded changes to that repo's auth; commit there with `CLAUDE_CODE=1`.
 
 ## Gotchas
-**The war stories live in [`docs/specs/GOTCHAS.md`](docs/specs/GOTCHAS.md) — 57 entries, moved out
+**The war stories live in [`docs/specs/GOTCHAS.md`](docs/specs/GOTCHAS.md), moved out
 verbatim. Below is the INDEX: the rule, and the `sc_…` scenario that pins it.** Follow the link before
 you change the code an entry names — each one is a bug that reached production, and every one of them
 looks like a harmless simplification until you read what it cost.

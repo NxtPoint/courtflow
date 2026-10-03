@@ -9,6 +9,27 @@ ever raised a real charge. Lane: **`community/`**.
 > **Both switches live in Admin → Setup → Community & games — they are `club.policy` rows, NOT Render
 > env vars.** Worth stating because that is where they were looked for first.
 
+## Read first — the five invariants, and what green gates do NOT prove
+*(Moved here from the root `CLAUDE.md` 2026-10-03, which now only points at this doc.)*
+
+**The five invariants — change none of them without reading the rest of this spec:**
+- **`community/seats.py` is the ONE place the split lives, and it RAISES rather than guards** — a seat
+  whose share silently computes to R0 is a court given away free that nobody would ever see. Money paths
+  raise `SeatError`; only display reads swallow.
+- **It invents no coverage logic and no pricing** — coverage delegates to `diary.entitlement.court_covered`,
+  price resolves exactly as `_create_order_guarded` resolves it. Anything else splits a number the booking
+  flow never quoted.
+- **A GAME IS A BOOKING**, and **one debt = one order still holds** — no parallel game object, no second
+  debt store, so seats reach the statement, Client-360, month-end and Club earnings for free.
+- **The quoted share is FROZEN per game** (`diary.booking.seat_share_minor`) — a later change to
+  `seat_share_pct`, the rounding rule or the court price cannot re-price a game already sold.
+- **The free week for an invited friend IS the existing 7-day trial** — no second free-play mechanism.
+
+**NO WRITE PATH HAS BEEN EXERCISED BY A REAL SECOND PERSON.** Join, leave, chat, result entry, the
+level-quiz save, invite acceptance and `join.html` are unverified end to end. The harnesses call Python
+directly (never HTTP, never DOM), which is why five of this lane's bugs were findable ONLY in a browser.
+**Green gates are not a claim about these paths.**
+
 ---
 
 ## Why it exists

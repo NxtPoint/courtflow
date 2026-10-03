@@ -11,6 +11,6 @@ state, start at `docs/specs/README.md`.
 | `coach-self-service-spec.md` | The coach SPA (`coach_app.js`) + `ADMIN-REDESIGN.md` |
 | `owner-self-service-spec.md` | The admin SPA (`/admin`) → `ADMIN-REDESIGN.md` |
 | `crm-and-foundations-spec.md` | The `client360/` composer (not the proposed `crm.vw_*` views) + `CLIENT-360-CRM-PLAN.md` |
-| `12-tenfifty5-bridge.md` | Self-deprecated 2026-06-21; the cross-business analytics bridge was removed. **Unrelated** to the live members-area Ten-Fifty5 SSO embed (that's in `CLAUDE.md` → "Ten-Fifty5 embed"). |
+| `12-tenfifty5-bridge.md` | Self-deprecated 2026-06-21; the cross-business analytics bridge was removed. **Unrelated** to the live members-area Ten-Fifty5 SSO embed (that's in `SYSTEM.md` → "Auth & multi-tenancy" → Cross-app SSO). |
 
 Design intent that is still authoritative was NOT archived — it stays in `docs/specs/` (`01-commission-and-coaching-decisions.md`, `02-token-bundle-engine.md`) and `docs/00`→`docs/11`.

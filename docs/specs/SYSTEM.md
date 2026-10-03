@@ -92,13 +92,23 @@ the NextPoint portal (parent) mints its own Clerk JWT and relays it to the ifram
 iframe, so a middle frame proxies its grandchild's request up to its own parent). Ten-Fifty5's verifier was
 taught to **also** trust NextPoint's issuer (**multi-issuer federation**); **email** is the cross-system
 identity key (Ten-Fifty5 auto-provisions the member by email). The NextPoint side only *relays* the token —
-the verifier change lives in the Ten-Fifty5 repo (`auth_v2/verifier.py`). Full write-up: root `CLAUDE.md`.
+the verifier change lives in the Ten-Fifty5 repo (`auth_v2/verifier.py`).
+*(The bullets below moved here from the root `CLAUDE.md` 2026-10-03 — this is now the full write-up.)*
+- **This repo's side:** `client.js` `#/analysis` + `renderAnalysis()`; a Home card (**"Coming soon"**
+  off-allowlist); `auth_client.js` `serveChild` (serves a token ONLY to `TF5_EMBED_ORIGINS`);
+  `web_app.py`'s `__TF5_EMBED_*` injection. Files + env → [INVENTORY.md](INVENTORY.md); the gate +
+  rollback → [FEATURE-FLAGS.md](FEATURE-FLAGS.md) A4; values → [ENV-STATUS.md](ENV-STATUS.md).
+- **Gated to a PRIVATE prod test** via `TF5_EMBED_ALLOW_EMAILS` (courtflow-web); **launch = clear that env.**
+- **The Ten-Fifty5 repo IS modified for this** — the ONE exception to "read-only reference".
+  Additive + flag-guarded; **commit there with `CLAUDE_CODE=1`**. Its Technique feature is PARKED pending
+  SportAI's API, so nothing here may advertise it.
 
-## The six schemas (idempotent boot DDL — NO migration framework)
+## The seven schemas (idempotent boot DDL — NO migration framework)
 `club` (tenants/branding/location/policy) · `iam` (identity/membership/coach/dependents) · `diary`
 (the booking engine) · `billing` (orders/ledger + the commercial engines) · `core` (ported Ten-Fifty5
 account/usage_event/consent/nps + notifications) · **`community`** (Find a Game: invites, match chat,
-results, the private would-play-again signal, favourites — 2026-08-09). *(The Business Overview analytics are read-only
+results, the private would-play-again signal — 2026-08-09; `favourite` was deleted 2026-08-12) ·
+`api` (`idempotency` only — the public API's replay store). *(The Business Overview analytics are read-only
 views over `core.usage_event` — no separate schema.)*
 `db.py` runs each registered module's `init()` on boot; **`python -m db` twice must be a no-op** — that's
 the schema gate. Extensions: `btree_gist` (the no-double-book EXCLUDE constraint), `pgcrypto` (UUIDs).

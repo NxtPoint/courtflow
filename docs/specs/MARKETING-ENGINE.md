@@ -4,6 +4,21 @@
 growth across BOTH brands. Same DNA as the platform's multi-tenant model and the byte-identical shared
 packages (`offline_conversions/`, `analytics/`).
 
+## What a platform session must know (moved from the root `CLAUDE.md` 2026-10-03)
+None of this touches platform code. The Google Ads / gclid loop is specced in
+[`GOOGLE-ADS-PLAN.md`](GOOGLE-ADS-PLAN.md); the digest is below.
+- **The acquisition loop is: tag → gclid → paid order → CSV back to Google.** `web_app._google_tag_head`
+  injects GA4+Ads (dark until `GA4_MEASUREMENT_ID`/`GOOGLE_ADS_ID`); `frontend/js/attribution.js` records
+  the FIRST gclid/utm on landing and flushes it to `POST /api/me/acquisition` after sign-in (**FIRST-TOUCH
+  WINS**); when that buyer PAYS, the `emit()` funnel's 4th forward ledgers a `core.offline_conversion` row,
+  served at `GET /feeds/google-ads/offline-conversions.csv` (Basic auth, **dark/404 until the env is set**).
+- **`offline_conversions/` is kept BYTE-IDENTICAL with the Ten-Fifty5 repo** (like the analytics engine) —
+  the only per-repo glue is `recorder.CONVERSION_MAP`. Don't "improve" the package in one repo alone.
+- **The digest is CI-only and KEYLESS** (`marketing-digest.yml` + `marketing_digest/`) — org policy blocks
+  service-account key downloads, so Workload Identity Federation is not a preference. It is also **the
+  tag-breakage alarm** (§2). The engine covers both brands; **this repo's blog content is
+  `frontend/blog/_posts/`.**
+
 ## The repo model (where marketing work lives)
 - **`NxtPoint/courtflow` (this repo) = the central marketing engine + NextPoint content.** The
   cross-brand **monitoring/reporting** (daily digest + canary) and the **keyless Google API access**
