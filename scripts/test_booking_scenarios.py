@@ -2286,6 +2286,17 @@ def sc_semi_private_perhead(s, fx):
         check(f"client {idx}'s 360 lesson shows their OWN head R400",
               bool(les) and int(les[0].get("amount_minor") or 0) == 40000,
               str(les[0]) if les else "none")
+    # THE COACH'S WORK LOG files each head under the client it BILLS. It used to read the booking's
+    # owner, so both heads sat under the booker — found live, where a client who had paid showed as
+    # "outstanding" on his coach's statement because the open head was really his partner's.
+    from billing.commission import coach_sessions_by_day
+    log_ = coach_sessions_by_day(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
+                                 month=start.strftime("%Y-%m"))
+    per = {c["client_user_id"]: [r["order_id"] for r in c["rows"]] for c in log_["clients"]}
+    check("the coach's work log puts client 1's head under client 1",
+          [str(x) for x in per.get(str(m0), [])] == [str(prim_oid)], str(per.get(str(m0))))
+    check("...and the partner's head under the PARTNER, not the booker",
+          bool(extra) and [str(x) for x in per.get(str(m1), [])] == [str(extra[0])], str(per.get(str(m1))))
     # Cancel the lesson → BOTH clients' owed orders void (no phantom debt on the partner).
     B.cancel_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=m0, role="member")
     for idx, oid in enumerate((prim_oid, extra[0] if extra else None), start=1):

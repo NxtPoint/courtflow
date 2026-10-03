@@ -1568,9 +1568,14 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
                 WITH src AS (
                     -- LESSONS the coach delivers (his own resource / denormalised coach_user_id).
                     SELECT b.starts_at, b.ends_at,
-                           -- booked_by_user_id IS the client: an on-behalf booking sets it to the
-                           -- client, not the acting staff member (created_by_user_id is the actor).
-                           b.booked_by_user_id AS client_user_id,
+                           -- THE CLIENT IS WHOEVER THIS ORDER BILLS, not whoever made the booking. A
+                           -- semi-private lesson is ONE booking with an order PER HEAD, so reading
+                           -- the booking's owner filed every partner's lesson under the booker: a
+                           -- client who had paid showed as "outstanding" (it was his partner's head)
+                           -- while his own paid lessons sat under the partner's name. For an ordinary
+                           -- lesson the two are the same person, so nothing else moves.
+                           COALESCE((SELECT o2.user_id FROM billing."order" o2 WHERE o2.id = ol.order_id),
+                                    b.booked_by_user_id) AS client_user_id,
                            ol.order_id, ol.amount_minor, 'lesson' AS kind,
                            COALESCE(pr.name, ol.description) AS service
                     FROM diary.booking b

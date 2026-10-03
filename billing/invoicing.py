@@ -778,7 +778,7 @@ def list_invoices(session, *, club_id, user_id=None, q=None, unpaid_only=False,
     like = ("%" + q.strip().replace("%", "") + "%") if (q or "").strip() else None
     rows = session.execute(
         text('SELECT i.id, i.invoice_number, i.kind, i.status, i.issued_at, i.due_date, '
-             '       i.total_minor, i.currency_code, i.user_id, u.email AS client_email, '
+             '       i.total_minor, i.currency_code, i.user_id, i.period_label, u.email AS client_email, '
              "       NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)), '') AS client_name, "
              '       COALESCE(SUM(CASE WHEN o.status = \'open\' THEN o.amount_minor ELSE 0 END),0) AS outstanding, '
              "       COALESCE(SUM(CASE WHEN o.status = 'paid' THEN o.amount_minor ELSE 0 END),0) AS paid, "
@@ -824,6 +824,10 @@ def list_invoices(session, *, club_id, user_id=None, q=None, unpaid_only=False,
             "total_minor": int(r["total_minor"] or 0), "currency": r["currency_code"],
             "outstanding_minor": outstanding, "is_paid": (r["status"] != "void" and outstanding <= 0),
             "status_label": label,
+            # THE MONTH IT BILLS ('YYYY-MM'). An invoice is ISSUED on the 1st of the month AFTER, so
+            # the issue date alone reads as the wrong month — August's invoice is dated 1 September,
+            # and was taken for September's on the receipting screen.
+            "period_label": r["period_label"],
             # WHOSE it is — the club-wide list needs it; a client's own list simply ignores it.
             "user_id": (str(r["user_id"]) if r["user_id"] else None),
             "client_name": r["client_name"] or r["client_email"] or "Client",

@@ -704,8 +704,12 @@
       add("invoice_void", { label: "Void", tone: "danger" });
       add("invoice_void_keep_charges", { label: "Void, keep charges", tone: "ghost" });
     }
+    // Lead with the MONTH IT BILLS. An invoice is issued on the 1st of the month after, so the bare
+    // issue date reads as the wrong month (August's invoice is dated 1 September).
     var issued = iv.issued_at ? UI.fmtDate(iv.issued_at) : "";
-    var sub = [opts.showClient ? (iv.number || "Invoice") : "", issued,
+    var period = /^\d{4}-\d{2}$/.test(iv.period_label || "") ? monthLabel(iv.period_label) : "";
+    if (period && issued) issued = "issued " + issued;
+    var sub = [opts.showClient ? (iv.number || "Invoice") : "", period, issued,
                iv.outstanding_minor > 0 ? money(iv.outstanding_minor, c) + " due" : "",
                iv.kind === "statement" ? "statement" : ""].filter(Boolean).join(" · ");
     var main = el("div", { class: "cf-item-main" }, [
