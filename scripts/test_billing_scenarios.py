@@ -4763,6 +4763,21 @@ def sc_coach_earnings_carries_the_settlement(s, fx):
     check("...and the ledger ties on the same basis", prev_work["reconciles"] is True,
           f'net={prev_work["net_minor"]} ledger={prev_work.get("ledger_for_month_minor")}')
 
+    # THE STATEMENT IS A RUNNING ACCOUNT: opening + this month - paid out = closing, and one month's
+    # closing IS the next month's opening. Without it an unpaid balance from an earlier month was
+    # invisible on later statements, and the all-time figure that stood in for it included LATER
+    # months — September's statement showed October's money.
+    check("a month closes at its opening plus its own movement",
+          prev_work["closing_minor"] == prev_work["opening_minor"] + prev_work["due_now_minor"],
+          f'{prev_work.get("opening_minor")} + {prev_work.get("due_now_minor")} != {prev_work.get("closing_minor")}')
+    check("the UNPAID R420 of last month is carried into this month's opening balance",
+          this_work["opening_minor"] == prev_work["closing_minor"]
+          and prev_work["closing_minor"] - prev_work["opening_minor"] == 42000,
+          f'prev closing={prev_work.get("closing_minor")} this opening={this_work.get("opening_minor")}')
+    check("...so this month closes still owing it (nothing new, nothing paid)",
+          this_work["closing_minor"] == this_work["opening_minor"] + this_work["due_now_minor"],
+          str(this_work.get("closing_minor")))
+
     # A PAYOUT CREDITS THE MONTH IT SETTLES. Record one NOW (this month) but label it for LAST month.
     CM3.record_coach_payout(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid),
                             amount_minor=50000, direction="club_to_coach", method="eft",

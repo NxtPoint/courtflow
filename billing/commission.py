@@ -1737,9 +1737,9 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
     ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
     z = {"club_held_minor": 0, "coach_held_minor": 0, "total_collected_minor": 0,
          "commission_minor": 0, "clawback_minor": 0, "net_minor": 0, "effective_pct": None}
-    try:
+    def _splits(op):
       with session.begin_nested():
-        r = session.execute(
+        return session.execute(
             text("""
                 WITH sp AS (
                     SELECT cs.*,
@@ -1765,7 +1765,7 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
                       -- deleting the split keeps the ledger append-only and leaves the mistake
                       -- visible, which is the point of keeping it.
                       AND COALESCE(pm.status, 'succeeded') <> 'reversed'
-                      AND """ + _SPLIT_WORK_MONTH + """ = :ym
+                      AND """ + _SPLIT_WORK_MONTH + " " + op + """ :ym
                 )
                 SELECT
                   -- The OWNER side carries the club's cut; gross_minor is the sale it was cut from.
@@ -1786,6 +1786,9 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
             """),
             {"club": club_id, "coach": str(coach_user_id), "ym": ym, "tz": _club_tz(session, club_id)},
         ).mappings().first() or {}
+
+    try:
+        r = _splits("=")
     except Exception:
         log.exception("coach_settlement splits failed")     # savepoint above scopes the failure
         r = {}
@@ -1933,6 +1936,39 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
     # `adjustments_minor` is now MANUAL corrections only (the clawback moved to the commission side,
     # where the splits already accounted for it) — so this cannot double-count it.
     st["due_now_minor"] = net + led["rent_minor"] + led["adjustments_minor"] + led["payouts_minor"]
+
+    # THE RUNNING ACCOUNT: opening + this month - paid out = closing. A month's own "due now" is
+    # only that month's movement — it says nothing about a balance left unpaid from an EARLIER month,
+    # and the all-time figure that used to stand in for it included LATER months too, so September's
+    # statement showed October's money and the club always looked further behind than it was. The
+    # opening balance is everything before this month, worked out the SAME way this month is (the
+    # same splits, the same payout-to-its-month rule), so each month's closing is the next one's
+    # opening by construction. A failure leaves both None and the card simply omits the lines —
+    # never a zero, which would read as "nothing brought forward".
+    st["opening_minor"] = st["closing_minor"] = None
+    try:
+        b = _splits("<")
+        gb = lambda k: int((b or {}).get(k) or 0)                               # noqa: E731
+        net_before = (gb("club_gross") + gb("refunded_club")) - (gb("commission") + gb("clawback"))
+        with session.begin_nested():
+            moved_before = int(session.execute(
+                text("SELECT COALESCE(SUM(l.amount_minor),0) FROM billing.coach_ledger l "
+                     "LEFT JOIN billing.coach_payout p "
+                     "       ON l.entry_type = 'payout' "
+                     "      AND p.id = CASE WHEN l.ref_id ~ "
+                     "                 '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                     "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' THEN CAST(l.ref_id AS uuid) END "
+                     "WHERE l.club_id = :club AND l.coach_user_id = CAST(:coach AS uuid) "
+                     # rent, payouts and MANUAL adjustments only — commission entries (and the
+                     # refund clawbacks written as split-adjustments) are already in the splits.
+                     "  AND (l.entry_type IN ('rent_charge', 'payout') "
+                     "       OR (l.entry_type = 'adjustment' AND COALESCE(l.ref_type,'') <> 'split')) "
+                     "  AND COALESCE(NULLIF(p.period_label,''), to_char(l.occurred_at,'YYYY-MM')) < :ym"),
+                {"club": club_id, "coach": str(coach_user_id), "ym": ym}).scalar() or 0)
+        st["opening_minor"] = net_before + moved_before
+        st["closing_minor"] = st["opening_minor"] + st["due_now_minor"]
+    except Exception:
+        log.exception("coach_settlement opening balance failed")
     return {"month": ym, "settlement": st, "ledger": led,
             "currency": _club_currency_code(session, club_id)}
 

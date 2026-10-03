@@ -108,6 +108,16 @@
         if (amt) kinds.push(k + (k === "class" ? "es " : "s ") + money(amt));
       });
 
+      // 0) BROUGHT FORWARD — what was still unpaid at the end of the month before. The statement is
+      // a running account: opening + this month - paid out = closing, and the closing is next
+      // month's opening. Omitted (not shown as zero) when the server could not work it out.
+      var hasBal = st.opening_minor != null && st.closing_minor != null;
+      function owedWord(v) { return v > 0 ? "owed to " + who : (v < 0 ? "owed by " + who : "settled"); }
+      if (hasBal) {
+        box.appendChild(stmtLine("Opening balance", money(Math.abs(st.opening_minor)),
+                                 { border: true, sub: "brought forward · " + owedWord(st.opening_minor) }));
+      }
+
       // 1) WHAT CLIENTS PAID for this month's work, and where that money is.
       box.appendChild(stmtLine("Paid by clients", money(total), { strong: true, border: true }));
       if (kinds.length) {
@@ -130,17 +140,27 @@
                                  { indent: true, muted: true, sub: "for this month" }));
       }
       var due = st.due_now_minor || 0;
-      box.appendChild(stmtLine(
-        due >= 0 ? (isCoach ? "DUE TO YOU NOW" : "DUE TO THE COACH NOW")
-                 : (isCoach ? "YOU OWE THE CLUB" : "OWED BY THE COACH"),
-        money(Math.abs(due)), { strong: true, border: true, tone: due >= 0 ? "" : "bad" }));
+      if (hasBal) {
+        var close = st.closing_minor || 0;
+        box.appendChild(stmtLine("This month", (due < 0 ? "− " : "") + money(Math.abs(due)),
+                                 { border: true, muted: true, sub: "after commission and payouts" }));
+        box.appendChild(stmtLine("CLOSING BALANCE", money(Math.abs(close)), {
+          strong: true, border: true, tone: close < 0 ? "bad" : "",
+          sub: close === 0 ? "settled" : (close > 0 ? (isCoach ? "due to you now" : "due to the coach now")
+                                                   : (isCoach ? "you owe the club" : "owed by the coach")) }));
+      } else {
+        box.appendChild(stmtLine(
+          due >= 0 ? (isCoach ? "DUE TO YOU NOW" : "DUE TO THE COACH NOW")
+                   : (isCoach ? "YOU OWE THE CLUB" : "OWED BY THE COACH"),
+          money(Math.abs(due)), { strong: true, border: true, tone: due >= 0 ? "" : "bad" }));
+      }
 
       // 3) WHAT HAS NOT BEEN PAID YET — nothing is due on it until the client pays.
       if (st.outstanding_minor) {
         box.appendChild(stmtLine("Not yet paid by clients", money(st.outstanding_minor), { border: true, muted: true }));
         box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:2px 0 0", text:
           "As clients pay, " + money(st.outstanding_net_minor) + " more becomes due to " + who
-          + ". That is why a month can show a little still owing after it was paid out." }));
+          + ", and the closing balance rises by that much." }));
       }
       if (st.reconciles === false) {
         box.appendChild(el("div", { class: "cf-note cf-note-warn", style: "margin-top:10px", text:
@@ -152,14 +172,13 @@
                          onclick: function () { onRecordPayout(); } }),
         ]));
       }
-      // THE RUNNING BALANCE IS ALL TIME — every other figure on this card is the MONTH. That one
-      // unlabelled difference is a five-figure trap, so the label says so.
-      if (p.ledger_balance_minor != null) {
+      // (The ALL-TIME balance used to close this card. It included LATER months, so September's
+      // statement showed October's money. The closing balance above replaces it; it is shown only
+      // when the running account could not be worked out.)
+      if (!hasBal && p.ledger_balance_minor != null) {
         var bal = p.ledger_balance_minor || 0;
-        var sub = isCoach ? (bal > 0 ? "the club owes you" : (bal < 0 ? "you owe the club" : "settled"))
-                          : (bal > 0 ? "owed to " + (p.name || "the coach") : (bal < 0 ? "owed by " + (p.name || "the coach") : "settled"));
         box.appendChild(stmtLine("All months together", money(Math.abs(bal)),
-                                 { strong: true, border: true, sub: sub }));
+                                 { strong: true, border: true, sub: owedWord(bal) }));
       }
       return box;
     }

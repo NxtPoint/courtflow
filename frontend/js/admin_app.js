@@ -812,12 +812,16 @@
   function recordPayoutModal(pnl, then) {
     var cur = pnl.currency || clubCur();
     var bal = pnl.ledger_balance_minor || 0;
-    var due = (pnl.settlement && pnl.settlement.due_now_minor) || 0;
+    // Pay the CLOSING balance of the month on screen — what was brought forward plus this month,
+    // less what has been paid. (The all-time balance includes LATER months and is not what to pay.)
+    var stl = pnl.settlement || {};
+    var due = (stl.closing_minor != null) ? stl.closing_minor : (stl.due_now_minor || 0);
+    if (stl.closing_minor != null) bal = stl.closing_minor;
     var period = pnl.month || "";
     var m = modal("Record payout · " + (pnl.name || "Coach"));
     m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 12px;font-size:.86rem", text:
-      "Net balance: " + money(Math.abs(bal), cur) + (bal > 0 ? " owed to the coach" : (bal < 0 ? " owed by the coach" : " — settled")) +
-      " across every month. Recording a payout posts a ledger entry so the balance reflects money that actually moved." }));
+      "Closing balance: " + money(Math.abs(bal), cur) + (bal > 0 ? " owed to the coach" : (bal < 0 ? " owed by the coach" : " — settled")) +
+      ". Recording a payout posts a ledger entry so the balance reflects money that actually moved." }));
     var dir = el("select", { class: "cf-input" }, [["club_to_coach", "Pay the coach"], ["coach_to_club", "Collect from the coach"], ["offset", "Offset / adjustment"]].map(function (o) {
       return el("option", { value: o[0], text: o[1], selected: o[0] === (bal >= 0 ? "club_to_coach" : "coach_to_club") });
     }));
