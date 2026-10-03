@@ -201,6 +201,9 @@
     // Lessons price by the chosen SERVICE's duration (fixed) — never the availability slot price
     // (which can't distinguish a coach's multiple services). Courts keep the per-slot price (covered).
     var minor = (st.type !== "lesson" && st.slot && st.slot.price != null) ? st.slot.price : st.selDurationPrice;
+    // A class has no slot and no duration choice — its price is the session's own. (This read "—"
+    // on every class confirmation, so a parent saw a total with no price beside it.)
+    if (st.type === "class" && st.selClass) minor = st.selClass.price_minor != null ? st.selClass.price_minor : st.selClass.price;
     return minor != null ? UI.money(minor, ctx.billing.currency) : "—";
   }
 
