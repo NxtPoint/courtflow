@@ -1615,7 +1615,12 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
                        -- not on itself — so the wrapper's payment counts too, or every lesson a
                        -- client settled that way reads as "Collected by coach" when the club has it.
                        COALESCE((SELECT SUM(pm.amount_minor) FROM billing.payment pm
-                                  WHERE pm.order_id IN (o.id, o.settled_by_order_id)
+                                  WHERE (pm.order_id IN (o.id, o.settled_by_order_id)
+                                         -- ...or by the wrapper's own snapshot: the back-link is
+                                         -- cleared when an abandoned checkout is reclaimed.
+                                         OR pm.order_id IN (SELECT w.id FROM billing."order" w
+                                                             WHERE w.covered_order_ids IS NOT NULL
+                                                               AND o.id = ANY(w.covered_order_ids)))
                                     AND pm.direction = 'charge'
                                     AND pm.status = 'succeeded'
                                     AND pm.provider IN ('yoco','eft')), 0) AS to_bank

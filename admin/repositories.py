@@ -2230,8 +2230,15 @@ def _earnings_cte(coach=False):
                -- ...INCLUDING a payment made through "Pay all": that charge is recorded on the
                -- settlement WRAPPER, not on the debt it paid, so looking only at the order's own
                -- payments called every such sale "held by the coach".
+               -- The wrapper is found BOTH ways: the debt's own back-link, and the wrapper's
+               -- immutable covered_order_ids snapshot — the back-link is cleared when an abandoned
+               -- checkout is reclaimed, and a payment that lands afterwards still settles from the
+               -- snapshot (found live: a class seat paid that way still read "held by the coach").
                EXISTS(SELECT 1 FROM billing.payment pm
-                       WHERE pm.order_id IN (ord.id, ord.settled_by_order_id)
+                       WHERE (pm.order_id IN (ord.id, ord.settled_by_order_id)
+                              OR pm.order_id IN (SELECT w.id FROM billing."order" w
+                                                  WHERE w.covered_order_ids IS NOT NULL
+                                                    AND ord.id = ANY(w.covered_order_ids)))
                        AND pm.direction = 'charge' AND pm.status = 'succeeded'
                        AND pm.provider IN ('yoco','eft')) AS in_bank,
                EXISTS(SELECT 1 FROM billing.token_wallet w WHERE w.order_id = ord.id) AS is_pack,
