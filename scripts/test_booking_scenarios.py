@@ -2297,6 +2297,13 @@ def sc_semi_private_perhead(s, fx):
           [str(x) for x in per.get(str(m0), [])] == [str(prim_oid)], str(per.get(str(m0))))
     check("...and the partner's head under the PARTNER, not the booker",
           bool(extra) and [str(x) for x in per.get(str(m1), [])] == [str(extra[0])], str(per.get(str(m1))))
+    # An invoice for a lesson names the lesson's COACH — the receipting screen filters on it.
+    from billing import invoicing as _INV
+    iv = _INV.issue_invoice(s, club_id=fx.club_id, user_id=m0, order_ids=[str(prim_oid)])
+    row = next((x for x in _INV.list_invoices(s, club_id=fx.club_id)
+                if x["invoice_id"] == iv.get("invoice_id")), {})
+    check("the invoice row names the lesson's coach", len(row.get("coaches") or []) == 1,
+          str(row.get("coaches")))
     # Cancel the lesson → BOTH clients' owed orders void (no phantom debt on the partner).
     B.cancel_booking(s, club_id=fx.club_id, booking_id=bid, actor_user_id=m0, role="member")
     for idx, oid in enumerate((prim_oid, extra[0] if extra else None), start=1):

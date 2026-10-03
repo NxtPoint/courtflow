@@ -783,6 +783,21 @@ def list_invoices(session, *, club_id, user_id=None, q=None, unpaid_only=False,
              '       COALESCE(SUM(CASE WHEN o.status = \'open\' THEN o.amount_minor ELSE 0 END),0) AS outstanding, '
              "       COALESCE(SUM(CASE WHEN o.status = 'paid' THEN o.amount_minor ELSE 0 END),0) AS paid, "
              '       COUNT(o.id) AS n_orders, '
+             # WHICH COACH(ES) the invoice is for — the lesson's coach or the class's. The owner
+             # receipts coach by coach ("what is still owed on Allon's clients?"), and it is the
+             # first thing a coach asks about a payment.
+             "       (SELECT COALESCE(array_agg(DISTINCT x.nm), '{}') FROM ( "
+             "          SELECT COALESCE(NULLIF(cp.display_name, ''), "
+             "                          NULLIF(TRIM(CONCAT_WS(' ', cu.first_name, cu.surname)), ''), "
+             '                          cu.email) AS nm '
+             '          FROM billing.invoice_line il2 '
+             '          JOIN billing.order_line ol2 ON ol2.order_id = il2.order_id '
+             '          LEFT JOIN diary.booking bk ON bk.id = ol2.booking_id '
+             '          LEFT JOIN diary.enrolment en ON en.id = ol2.enrolment_id '
+             '          LEFT JOIN diary.class_session cls ON cls.id = en.class_session_id '
+             '          JOIN iam."user" cu ON cu.id = COALESCE(bk.coach_user_id, cls.coach_user_id) '
+             '          LEFT JOIN iam.coach_profile cp ON cp.user_id = cu.id AND cp.club_id = i.club_id '
+             '          WHERE il2.invoice_id = i.id) x) AS coaches, '
              "       COALESCE(array_agg(o.id) FILTER (WHERE o.status IN ('open','awaiting_payment')), "
              "                '{}') AS open_order_ids "
              'FROM billing.invoice i '
@@ -828,6 +843,7 @@ def list_invoices(session, *, club_id, user_id=None, q=None, unpaid_only=False,
             # the issue date alone reads as the wrong month — August's invoice is dated 1 September,
             # and was taken for September's on the receipting screen.
             "period_label": r["period_label"],
+            "coaches": sorted(x for x in (r["coaches"] or []) if x),
             # WHOSE it is — the club-wide list needs it; a client's own list simply ignores it.
             "user_id": (str(r["user_id"]) if r["user_id"] else None),
             "client_name": r["client_name"] or r["client_email"] or "Client",

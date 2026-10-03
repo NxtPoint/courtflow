@@ -711,6 +711,7 @@
     if (period && issued) issued = "issued " + issued;
     var sub = [opts.showClient ? (iv.number || "Invoice") : "", period, issued,
                iv.outstanding_minor > 0 ? money(iv.outstanding_minor, c) + " due" : "",
+               (iv.coaches && iv.coaches.length) ? "with " + iv.coaches.join(", ") : "",
                iv.kind === "statement" ? "statement" : ""].filter(Boolean).join(" · ");
     var main = el("div", { class: "cf-item-main" }, [
       el("div", { class: "cf-item-t", text: opts.showClient ? (iv.client_name || "Client") : (iv.number || "Invoice") }),

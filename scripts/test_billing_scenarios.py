@@ -5267,6 +5267,8 @@ def sc_an_invoice_can_be_found_by_its_number_without_knowing_the_client(s, fx):
           and bool(row_b.get("client_name")), str(row_b.get("client_name")))
     check("...and carries the orders it still wants paid", len(row_b.get("open_order_ids") or []) == 1,
           str(row_b.get("open_order_ids")))
+    check("...and a coaches list (empty here — these charges belong to no lesson or class)",
+          row_b.get("coaches") == [], str(row_b.get("coaches")))
 
     hit = INVQ.list_invoices(s, club_id=fx.club_id, q=num_b)
     check("searching the NUMBER finds exactly that invoice",

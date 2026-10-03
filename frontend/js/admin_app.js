@@ -1641,7 +1641,7 @@
   // number and nothing else; this is where the owner gets from that number to the person and records
   // the payment. It adds no capability of its own: the row is CRMUI.invoiceRow and the actions are
   // invoiceActions — the same two the client record uses — over the club-wide invoice list.
-  var INVOICES_VIEW = { q: "", status: "unpaid", sort: "number" };
+  var INVOICES_VIEW = { q: "", status: "unpaid", sort: "number", coach: "" };
   async function moneyInvoices() {
     loading();
     var v = INVOICES_VIEW, list = null;
@@ -1662,8 +1662,15 @@
       opts.forEach(function (o) { sel.appendChild(el("option", { value: o[0], text: o[1], selected: v[key] === o[0] ? "selected" : null })); });
       return sel;
     }
+    // Coach filter — built from the coaches actually ON these invoices, applied to the loaded list.
+    var coachNames = {};
+    (list || []).forEach(function (iv) { (iv.coaches || []).forEach(function (n) { coachNames[n] = 1; }); });
+    if (v.coach && !coachNames[v.coach]) coachNames[v.coach] = 1;   // keep the choice while it matches nothing
+    var coachOpts = [["", "All coaches"]].concat(Object.keys(coachNames).sort().map(function (n) { return [n, n]; }));
+    if (list && v.coach) list = list.filter(function (iv) { return (iv.coaches || []).indexOf(v.coach) >= 0; });
     wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;flex-wrap:wrap;margin-bottom:10px" }, [
       el("div", { style: "flex:1;min-width:200px" }, [search]),
+      pick("coach", coachOpts),
       pick("status", [["unpaid", "Unpaid only"], ["all", "All invoices"]]),
       pick("sort", [["number", "Sort: invoice number"], ["client", "Sort: client name"], ["newest", "Sort: newest first"]]),
     ]));
