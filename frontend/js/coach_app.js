@@ -178,9 +178,10 @@
     wrap.appendChild(todayCard);
 
     // Quick actions
+    // "Log a past session" is GONE from the coach app (the coaches' contract, 2026-10-04): no lesson
+    // is captured once it has started. The server refuses it too; the admin console keeps the button.
     wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;margin-top:4px" }, [
       el("button", { class: "cf-btn cf-btn-primary cf-btn-block", text: "+ Book a client in", onclick: function () { bookForClient(false); } }),
-      el("button", { class: "cf-btn cf-btn-block", text: "Log a past session", onclick: function () { bookForClient(true); } }),
     ]));
     set(wrap);
   }

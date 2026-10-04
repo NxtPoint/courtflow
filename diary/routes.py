@@ -333,7 +333,9 @@ def create_booking():
             booked_for_user_id=booked_for_user_id,
             # BACK-CAPTURE: allow a PAST date only for a STAFF on-behalf booking (a coach/admin logging a
             # lesson that already happened). ANDed with the role here — a member self-book can never backdate.
-            allow_past=(bool(b.get("allow_past")) and p.role in _ON_BEHALF_ROLES),
+            # ADMIN only since 2026-10-04 — the coaches' contract: no lesson is captured once it
+            # has started (create_booking re-asserts it and tells a coach why).
+            allow_past=(bool(b.get("allow_past")) and p.role in ("club_admin", "platform_admin")),
             propose=bool(b.get("propose")),
         )
     return _result(res)

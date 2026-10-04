@@ -2198,8 +2198,8 @@ def sc_unpriced_booking_refused(s, fx):
 
 
 def sc_backcapture_past_lesson(s, fx):
-    print("\n# Back-capture: a coach logs a PAST lesson on-behalf → bills the client, no past-guard, "
-          "resource resolved from coach_user_id")
+    print("\n# Back-capture: an ADMIN logs a PAST lesson on-behalf → bills the client; a COACH may not "
+          "(the coaches' contract)")
     m = fx.members[0]
     past = datetime.now(JHB) - timedelta(days=2)
     start = past.replace(hour=15, minute=0, second=0, microsecond=0)
@@ -2211,14 +2211,22 @@ def sc_backcapture_past_lesson(s, fx):
                                starts_at=utc_iso(start), ends_at=utc_iso(end), allow_past=True)
     check("member self-book cannot backdate (IN_THE_PAST)",
           blocked.get("error") == "IN_THE_PAST", str(blocked))
-    # Coach ON-BEHALF, resource_id OMITTED → the server resolves the coach's diary resource from
-    # coach_user_id (a past lesson has no availability slot to carry it).
-    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+    # THE COACHES' CONTRACT (2026-10-04): no lesson is captured once it has started. A COACH could
+    # log any past lesson for any date; that is now refused, and says why.
+    refused = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+                               booking_type="lesson", resource_id=None, coach_user_id=fx.coach_uid,
+                               starts_at=utc_iso(start), ends_at=utc_iso(end),
+                               settlement_mode="monthly_account", booked_for_user_id=m, allow_past=True)
+    check("a COACH cannot capture a lesson that has already started",
+          refused.get("error") == "LESSON_ALREADY_STARTED", str(refused))
+    # An ADMIN still can (the correction path), resource_id OMITTED → the server resolves the coach's
+    # diary resource from coach_user_id (a past lesson has no availability slot to carry it).
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="club_admin",
                          booking_type="lesson", resource_id=None, coach_user_id=fx.coach_uid,
                          starts_at=utc_iso(start), ends_at=utc_iso(end),
                          settlement_mode="monthly_account", booked_for_user_id=m, allow_past=True)
     ok = r.get("ok")
-    check("coach on-behalf logs a past lesson", ok, str(r))
+    check("an admin on-behalf logs a past lesson", ok, str(r))
     b = r.get("booking") or {}
     check("coach resource resolved from coach_user_id when omitted",
           str(b.get("resource_id")) == str(fx.coach_res),
@@ -2577,6 +2585,62 @@ def sc_one_checkout_pays_for_several_players_on_one_account(s, fx):
                           "AND user_id = ANY(CAST(:u AS uuid[])) AND status = 'enrolled' "
                           "AND held_until IS NULL"), {"cs": sid, "u": [k1, k2]}).scalar()
     check("...and both children are ENROLLED with no hold left to lapse", held == 2, f"enrolled={held}")
+
+
+def sc_a_coach_cannot_rewrite_a_lesson_once_it_is_over(s, fx):
+    """THE COACHES' CONTRACT. A coach may cancel a lesson right up to the moment it ENDS (it can be
+    called off while it is running) but not afterwards, and may not move an ended lesson to a future
+    date — both un-deliver a lesson that was taught, voiding the client's charge and the club's
+    commission with it. The same holds for a class he runs. An admin can still do all of it."""
+    print("\n# Coaches' contract: cancel until the lesson ENDS, never after; no moving an ended lesson")
+    from datetime import timezone as _tz
+    m = fx.members[0]
+    now = datetime.now(_tz.utc)
+
+    def _lesson(start, end):
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="club_admin",
+                             booking_type="lesson", resource_id=None, coach_user_id=fx.coach_uid,
+                             starts_at=utc_iso(start), ends_at=utc_iso(end),
+                             settlement_mode="monthly_account", booked_for_user_id=m, allow_past=True)
+        return (r.get("booking") or {}).get("id"), r
+
+    # ---- a lesson that ENDED yesterday -------------------------------------------------------
+    ended, r1 = _lesson(now - timedelta(days=1, hours=2), now - timedelta(days=1, hours=1))
+    check("fixture: an ended lesson exists", bool(ended), str(r1))
+    c = B.cancel_booking(s, club_id=fx.club_id, booking_id=ended, actor_user_id=fx.coach_uid, role="coach")
+    check("a COACH cannot cancel a lesson after it has ended", c.get("error") == "LESSON_ENDED", str(c))
+    mv = B.reschedule_booking(s, club_id=fx.club_id, booking_id=ended,
+                              new_starts_at=utc_iso(at(fx, 9)), new_ends_at=utc_iso(at(fx, 10)),
+                              actor_user_id=fx.coach_uid, role="coach")
+    check("...nor move it to a future date (the same thing by another route)",
+          mv.get("error") == "LESSON_ENDED", str(mv))
+    check("...and it is still on the books, still owed",
+          _booking_row(s, ended)["status"] in ("confirmed", "completed"), _booking_row(s, ended)["status"])
+    story = B.coach_booking_story(s, club_id=fx.club_id, coach_user_id=fx.coach_uid, booking_id=ended)
+    check("the coach's screen does not OFFER cancel on it", (story.get("can") or {}).get("cancel") is False,
+          str((story.get("can") or {}).get("cancel")))
+    a = B.cancel_booking(s, club_id=fx.club_id, booking_id=ended, actor_user_id=fx.coach_uid, role="club_admin")
+    check("an ADMIN can still cancel it (the correction path)", a.get("ok"), str(a))
+
+    # ---- a lesson IN PROGRESS: started ten minutes ago, ends in fifty --------------------------
+    live, r2 = _lesson(now - timedelta(minutes=10), now + timedelta(minutes=50))
+    check("fixture: a lesson in progress exists", bool(live), str(r2))
+    c2 = B.cancel_booking(s, club_id=fx.club_id, booking_id=live, actor_user_id=fx.coach_uid, role="coach")
+    check("a coach CAN cancel a lesson while it is still running", c2.get("ok"), str(c2))
+
+    # ---- classes: the same line ----------------------------------------------------------------
+    sid = _class_at(s, fx, 9, capacity=4)
+    check("a class that has not run yet has not 'ended'",
+          C.session_has_ended(s, club_id=fx.club_id, session_id=sid) is False)
+    s.execute(text("UPDATE diary.class_session SET starts_at = now() - interval '3 hours', "
+                   "ends_at = now() - interval '2 hours' WHERE id = :s"), {"s": sid})
+    check("...and one whose end time has passed has (the coach routes refuse to cancel or move it)",
+          C.session_has_ended(s, club_id=fx.club_id, session_id=sid) is True)
+    late = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m, role="coach")
+    check("a COACH cannot capture a class seat once the class has started",
+          late.get("error") == "CLASS_ALREADY_STARTED", str(late))
+    fix = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m, role="club_admin")
+    check("an ADMIN still can", fix.get("error") is None, str(fix))
 
 
 def sc_class_payment_gate(s, fx):
@@ -5777,6 +5841,7 @@ SCENARIOS = [
     sc_semi_private_addable_guard,
     sc_staff_can_book_a_familys_semi_private_for_both_children,
     sc_one_checkout_pays_for_several_players_on_one_account,
+    sc_a_coach_cannot_rewrite_a_lesson_once_it_is_over,
     sc_card_only_service_gate,
     sc_class_payment_gate,
     # Revenue-leak hardening (2026-07-27) — see each docstring for the leak it closes.

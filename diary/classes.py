@@ -142,6 +142,13 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
         return _err("SESSION_NOT_FOUND", 404)
     if cs["status"] != "scheduled":
         return _err("SESSION_CLOSED", 409, status_value=cs["status"])
+    # THE COACHES' CONTRACT (2026-10-04): nothing is captured once it has started — a class seat
+    # included. A COACH could enrol a client into a session that had already run (the back-capture
+    # flow listed past sessions), with no record it was entered late. Admins still can.
+    if (role or "") == "coach" and _parse_dt(cs["starts_at"]) <= datetime.now(timezone.utc):
+        return _err("CLASS_ALREADY_STARTED", 422,
+                    message="A class can't be captured once it has started. Ask the club office "
+                            "to add it.")
 
     # PAYMENT GATE — a class is a SERVICE, so enrolment must respect the same rules as a court/lesson
     # booking (create_booking), else a member could post a mode that bypasses the gate:
@@ -1627,6 +1634,15 @@ def list_type_sessions(session, *, club_id, resource_id, date_from=None, date_to
                 d[k] = d[k].isoformat()
         out.append(d)
     return out
+
+
+def session_has_ended(session, *, club_id, session_id) -> bool:
+    """True once a class session's end time has passed. The coach routes use it: under the coaches'
+    contract a coach may cancel or move a class until it ENDS, never afterwards (cancelling releases
+    every seat and refunds the paid ones — on a class that ran, that is giving the money back)."""
+    return bool(session.execute(
+        text("SELECT 1 FROM diary.class_session WHERE id = :s AND club_id = :c AND ends_at <= now()"),
+        {"s": str(session_id), "c": str(club_id)}).first())
 
 
 def cancel_session(session, *, club_id, session_id):

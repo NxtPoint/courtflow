@@ -89,6 +89,25 @@ a membership tier's lifecycle derives from its term plans' status.
   rule this paragraph has always claimed was not enforced on the add-later route. A parent adding a
   child later gets their kids listed by name (a child has no email to type). Guarded by
   `sc_staff_can_book_a_familys_semi_private_for_both_children`.
+- **THE COACHES' CONTRACT — a lesson cannot be rewritten once it is over (2026-10-04, owner's rule).**
+  *No lesson may be captured once it has started, and none may be cancelled after it has ended.* Before
+  this a coach could log a lesson for any past date ("Log a past session") with no record it was entered
+  late, and cancel a lesson that had been delivered — which voids the client's charge (or refunds a card
+  payment) and the club's commission with it. Now, for the **coach** role:
+  - **Capture:** `create_booking` refuses a start time that has passed (`LESSON_ALREADY_STARTED`);
+    `allow_past` (back-capture) is honoured for `club_admin` / `platform_admin` only. `classes.enrol`
+    refuses a class seat once the session has started (`CLASS_ALREADY_STARTED`).
+  - **Cancel:** allowed until the lesson's END time — a lesson can be called off while it is running
+    (the owner's explicit choice) — and refused after it (`LESSON_ENDED`).
+  - **Move:** an ended lesson cannot be rescheduled to a future date (`LESSON_ENDED`) — it un-delivers
+    the lesson exactly as a cancel would.
+  - **Classes:** the coach routes refuse to cancel or move a session whose end time has passed
+    (`CLASS_ENDED`, `classes.session_has_ended`).
+  An **admin keeps every one of these** as the correction path, and the members' rules are unchanged
+  (a member can never backdate, and cannot cancel once a booking has started). The coach's event story
+  no longer offers Cancel on an ended lesson, and the coach app's "Log a past session" button is gone.
+  A lesson a coach forgot to enter is now found by the court audit and put right by the club. Guarded by
+  `sc_a_coach_cannot_rewrite_a_lesson_once_it_is_over` + `sc_backcapture_past_lesson`.
 - **THE COURT AUDIT — booked versus seen on court (2026-10-03, owner's request).** A lesson a coach never enters
   is the one thing the diary has no row for: the client is not billed through the platform and the club earns no
   commission. A REVIEWER (the manager, from court footage) records what happened — `admin/timesheet.py`, screen

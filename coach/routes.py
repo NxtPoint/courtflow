@@ -373,6 +373,9 @@ def post_class_session_cancel(session_id):
         if not repo.owns_class_session(s, club_id=p.club_id, user_id=p.user_id,
                                        session_id=session_id):
             return jsonify(error="forbidden"), 403
+        if classes_mod.session_has_ended(s, club_id=p.club_id, session_id=session_id):
+            return jsonify(error="CLASS_ENDED", message="This class has ended, so it can no longer "
+                           "be cancelled. Ask the club office if it needs correcting."), 409
         res = classes_mod.cancel_session(s, club_id=p.club_id, session_id=session_id)
     return _class_result(res)
 
@@ -389,6 +392,9 @@ def patch_class_session(session_id):
         if not repo.owns_class_session(s, club_id=p.club_id, user_id=p.user_id,
                                        session_id=session_id):
             return jsonify(error="forbidden"), 403
+        if classes_mod.session_has_ended(s, club_id=p.club_id, session_id=session_id):
+            return jsonify(error="CLASS_ENDED", message="This class has ended, so it can no longer "
+                           "be moved. Ask the club office if it needs correcting."), 409
         # scope='series' moves this occurrence AND every later one to the new TIME OF DAY (each
         # keeps its own date). Default stays 'this', so an existing caller is unaffected.
         mover = (classes_mod.reschedule_series

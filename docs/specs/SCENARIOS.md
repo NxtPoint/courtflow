@@ -11,7 +11,7 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 785 / billing 776 / statement 67** (102 / 102 / 12 `sc_*` functions).
+  **booking 798 / billing 776 / statement 67** (103 / 102 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
@@ -59,7 +59,9 @@ coach back-capture of a PAST lesson (staff-only `allow_past`, resource resolved 
 a parent's kids bill the guardian, a member can't add a stranger / another family's child, cancel
 voids every head, and **staff booking on a parent's behalf can put BOTH children on it** — the child
 is named as the player, so the parent is not a third head
-(`sc_staff_can_book_a_familys_semi_private_for_both_children`). **One checkout for several players on
+(`sc_staff_can_book_a_familys_semi_private_for_both_children`). **The coaches' contract** — a coach cannot capture a lesson or class seat once it has started, cannot
+cancel or move a lesson once it has ended (but may cancel one still running), and an admin still can
+(`sc_a_coach_cannot_rewrite_a_lesson_once_it_is_over`, `sc_backcapture_past_lesson`). **One checkout for several players on
 one account** — two children on a semi-private AND on a class, each with their own seat and order,
 paid by ONE card charge that confirms every seat; an abandoned checkout voids every head; a late
 payment is flagged, not kept (`sc_one_checkout_pays_for_several_players_on_one_account`). A card-only SERVICE refuses pay-at-court on the booking; a class enrolment is

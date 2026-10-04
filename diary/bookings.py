@@ -778,9 +778,19 @@ def create_booking(session, *, club_id, booked_by_user_id, role, booking_type, r
     # past date) may bypass the past-slot guard. Gated hard to staff on-behalf — a member self-booking can
     # NEVER back-date (that would dodge the booking window / late-cancel-fee logic). The route ANDs allow_past
     # with the staff-role check before it reaches here, but we re-assert booked_for_user_id + role locally.
+    #
+    # THE COACHES' CONTRACT (2026-10-04): NO lesson may be captured once it has started. A coach
+    # could log any past lesson, for any date, with no record that it was entered late — which is
+    # exactly how an unbooked lesson became a booked one after the fact. Back-capture is now an
+    # ADMIN-only correction; a lesson a coach forgot to enter is found by the court audit and put
+    # right by the club, not quietly written in by the coach.
     staff_backcapture = bool(allow_past and booked_for_user_id
-                             and role in ("coach", "club_admin", "platform_admin"))
+                             and role in ("club_admin", "platform_admin"))
     if starts < now and not staff_backcapture:
+        if (role or "") == "coach":
+            return _err("LESSON_ALREADY_STARTED", 422,
+                        message="A lesson can't be captured once it has started. Ask the club "
+                                "office to add it.")
         return _err("IN_THE_PAST", 400, message="cannot book a past slot")
 
     # BACK-CAPTURE fallback: a PAST lesson has no availability slot to carry the coach's resource id
@@ -1431,6 +1441,12 @@ def reschedule_booking(session, *, club_id, booking_id, new_starts_at, new_ends_
         return _err("BAD_RANGE", 400)
     if new_s < now:
         return _err("IN_THE_PAST", 400)
+    # Moving a lesson that has ENDED to a future date un-delivers it — the same effect as cancelling
+    # it after the fact, which the coaches' contract forbids (see cancel_booking).
+    if (role or "") == "coach" and _parse_dt(bk["ends_at"]) <= now:
+        return _err("LESSON_ENDED", 409,
+                    message="This lesson has ended, so it can no longer be moved. Ask the club "
+                            "office if it needs correcting.")
 
     if role in ("member", "guest"):
         cutoff_h = _policy(session, club_id).get("cancellation_cutoff_hours") or 0
@@ -1681,6 +1697,14 @@ def cancel_booking(session, *, club_id, booking_id, actor_user_id, role, reason=
     if (member_initiated and bk["status"] in ("held", "confirmed")
             and _parse_dt(bk["starts_at"]) <= now):
         return _err("CANNOT_CANCEL_STARTED", 409)
+    # THE COACHES' CONTRACT (2026-10-04): a COACH may cancel right up to the moment the lesson ENDS
+    # (the owner's call — a lesson can be called off while it is running), but NOT afterwards.
+    # Cancelling voids the client's charge, or refunds a card payment, so cancelling a lesson that
+    # was delivered made the debt — and the club's commission on it — disappear. An admin still can.
+    if (role or "") == "coach" and _parse_dt(bk["ends_at"]) <= now:
+        return _err("LESSON_ENDED", 409,
+                    message="This lesson has ended, so it can no longer be cancelled. Ask the club "
+                            "office if it needs correcting.")
 
     policy = _policy(session, club_id)
     cutoff_h = policy.get("cancellation_cutoff_hours") or 0
@@ -2478,7 +2502,9 @@ def coach_booking_story(session, *, club_id, coach_user_id, booking_id):
 
     can = {
         "reschedule": status in ("confirmed", "held") and is_future,
-        "cancel": status in ("confirmed", "held"),
+        # A coach may cancel until the lesson ENDS, not after (the coaches' contract) — so the
+        # button is not offered on a lesson the server would refuse.
+        "cancel": status in ("confirmed", "held") and bool(ends and ends > datetime.now(timezone.utc)),
         "mark_completed": status == "confirmed" and started and is_lesson,
         "mark_no_show": status == "confirmed" and started and is_lesson,
         "add_to_calendar": status in ("confirmed", "held", "completed"),
