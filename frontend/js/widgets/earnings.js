@@ -335,7 +335,8 @@
             el("span", { class: "cf-chip " + (x.category || ""), text: x.label }),
             el("div", { class: "cf-item-main" }, [
               el("div", { class: "cf-item-t", text: x.client_name }),
-              el("div", { class: "cf-item-s", text: (x.at ? UI.fmtDate(x.at) : "") + (x.description ? " · " + x.description : "") }),
+              el("div", { class: "cf-item-s", text: (x.at ? UI.fmtDate(x.at) : "") + (x.description ? " · " + x.description : "")
+                + (x.shared_head ? " · shared lesson" + (x.shared_with ? " with " + x.shared_with : "") : "") }),
             ]),
             el("div", { style: "text-align:right" }, [
               el("div", { style: "font-weight:700", text: money(x.billed_minor) }),
@@ -349,7 +350,10 @@
     }
     function drillTxn(x) {
       if (!cfg.onNavigate) return;
-      if (x.booking_id) cfg.onNavigate({ kind: "event", id: x.booking_id });
+      // A second player's OWN bill on a shared lesson opens ITS record. The booking's record shows
+      // only the booker's charge — so an unpaid head opened onto somebody else's "paid".
+      if (x.shared_head && x.order_id) cfg.onNavigate({ kind: "txn", id: x.order_id });
+      else if (x.booking_id) cfg.onNavigate({ kind: "event", id: x.booking_id });
       else if (x.enrolment_id) cfg.onNavigate({ kind: "class", id: x.enrolment_id });
       else if (x.order_id) cfg.onNavigate({ kind: "txn", id: x.order_id });
     }

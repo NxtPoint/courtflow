@@ -2504,6 +2504,15 @@ def earnings_transactions(session, *, club_id, month=None, category=None, user_i
         rows = session.execute(
             text(cte + "SELECT c.id AS order_id, c.user_id, c.status, c.amount_minor, c.billed_orig, "
                  "c.created_at, c.category, c.booking_id, c.enrolment_id, c.description, "
+                 # IS THIS ORDER THE BOOKING'S OWN, or a second player's head on a shared lesson? A
+                 # semi-private raises an order per player on ONE booking, and the booking's record
+                 # shows only its OWN order's charge. Drilling a partner's unpaid head into that
+                 # record showed the BOOKER's paid charge — "owed" in the list, "paid" when opened.
+                 "(c.booking_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM diary.booking bk "
+                 "   WHERE bk.id = c.booking_id AND bk.order_id = c.id)) AS shared_head, "
+                 "(SELECT COALESCE(NULLIF(TRIM(CONCAT_WS(' ', bu.first_name, bu.surname)),''), bu.email) "
+                 "   FROM diary.booking bk JOIN iam.\"user\" bu ON bu.id = bk.booked_by_user_id "
+                 "  WHERE bk.id = c.booking_id AND bk.order_id <> c.id) AS shared_with, "
                  "COALESCE(cp.display_name, NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)),''), "
                  "         u.email, 'Walk-in') AS client_name "
                  "FROM cat c LEFT JOIN iam.\"user\" u ON u.id = c.user_id "
@@ -2531,6 +2540,10 @@ def earnings_transactions(session, *, club_id, month=None, category=None, user_i
             "at": r["created_at"].isoformat() if r["created_at"] else None,
             "billed_minor": billed, "amount_minor": amt,
             "discount_minor": max(0, billed - amt), "state": state, "status": st,
+            # A second player's own bill on a shared (semi-private) lesson → open ITS record, not
+            # the booking's, and say whose lesson it shares.
+            "shared_head": bool(r["shared_head"]),
+            "shared_with": r["shared_with"],
         })
     return {
         "month": ym, "currency": cur,

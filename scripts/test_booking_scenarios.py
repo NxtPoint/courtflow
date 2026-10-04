@@ -2305,6 +2305,18 @@ def sc_semi_private_perhead(s, fx):
           [str(x) for x in per.get(str(m0), [])] == [str(prim_oid)], str(per.get(str(m0))))
     check("...and the partner's head under the PARTNER, not the booker",
           bool(extra) and [str(x) for x in per.get(str(m1), [])] == [str(extra[0])], str(per.get(str(m1))))
+    # THE EARNINGS DRILL KNOWS WHICH BILL IS WHOSE. Both heads link to ONE booking, and that booking's
+    # record shows only its OWN order's charge — so the partner's unpaid head, opened that way, showed
+    # the booker's PAID charge ("owed" in the list, "paid" when opened; found live). The row now says
+    # it is a shared head so the screen opens that order's own record.
+    from admin import repositories as _AR
+    tx = {t["order_id"]: t for t in _AR.earnings_transactions(
+        s, club_id=fx.club_id, month=datetime.now(JHB).strftime("%Y-%m"))["transactions"]}
+    check("the booker's own order is NOT flagged as a shared head",
+          (tx.get(str(prim_oid)) or {}).get("shared_head") is False, str(tx.get(str(prim_oid))))
+    check("the partner's order IS — and names whose lesson it shares",
+          bool(extra) and (tx.get(str(extra[0])) or {}).get("shared_head") is True
+          and bool((tx.get(str(extra[0])) or {}).get("shared_with")), str(tx.get(str(extra[0])) if extra else None))
     # An invoice for a lesson names the lesson's COACH — the receipting screen filters on it.
     from billing import invoicing as _INV
     iv = _INV.issue_invoice(s, club_id=fx.club_id, user_id=m0, order_ids=[str(prim_oid)])
