@@ -1052,7 +1052,9 @@
     row("ME", holderLabel());
     (ctx.dependents || []).forEach(function (d) { row(d.dependent_user_id, playerName(d)); });
     sec.appendChild(list);
-    if (!st.onBehalf) {
+    // The parent can add a child — and so can STAFF booking for them: most of a coach's clients never
+    // open the app, so a child who was not already on the account could not be booked at all.
+    if (!st.onBehalf || st.onBehalf.user_id) {
       sec.appendChild(el("button", { class: "cf-btn cf-btn-sm", type: "button", style: "margin-top:8px",
         text: "+ Add a child", onclick: addChildModal }));
     }
@@ -1062,7 +1064,9 @@
   function addChildModal() {
     var m = UI.modal("Add a child", {});
     m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 10px;font-size:.85rem",
-      text: "Children sit under your account — no separate login or email. You book and pay for them from here." }));
+      text: st.onBehalf
+        ? "The child is added to " + (st.onBehalf.name || "the client") + "'s account — no separate login or email. Their lessons are billed to the parent."
+        : "Children sit under your account — no separate login or email. You book and pay for them from here." }));
     var fn = el("input", { class: "cf-input", placeholder: "First name" });
     var sn = el("input", { class: "cf-input", placeholder: "Surname (optional)" });
     var go = el("button", { class: "cf-btn cf-btn-primary", text: "Add" });
@@ -1076,8 +1080,9 @@
       go.disabled = true;
       try {
         var before = (ctx.dependents || []).map(function (d) { return d.dependent_user_id; });
-        await window.API.addDependent({ first_name: first, surname: sn.value.trim() || null });
-        ctx.dependents = (await window.API.dependents()).dependents || [];
+        var kid = { first_name: first, surname: sn.value.trim() || null };
+        if (st.onBehalf) { await window.API.addDependentFor(st.onBehalf.user_id, kid); await loadClientKids(st.onBehalf); }
+        else { await window.API.addDependent(kid); ctx.dependents = (await window.API.dependents()).dependents || []; }
         var added = ctx.dependents.filter(function (d) { return before.indexOf(d.dependent_user_id) < 0; })[0];
         if (added && who().length < playerCap()) st.who = who().concat([added.dependent_user_id]);
         m.close(); renderConfirm();
@@ -1621,6 +1626,19 @@
     ]));
   }
 
+  // THE CLIENT'S OWN CHILDREN, for staff booking on their behalf (matched on guardian_user_id — a
+  // name or email match alone would also return another family's).
+  async function loadClientKids(client) {
+    ctx.dependents = [];
+    if (!(client && client.user_id && client.email)) return;
+    try {
+      var kr = await window.API.searchBookingMembers(client.email);
+      ctx.dependents = ((kr && kr.results) || []).filter(function (it) {
+        return it.kind === "dependent" && String(it.guardian_user_id) === String(client.user_id);
+      }).map(function (it) { return { dependent_user_id: it.user_id, first_name: it.name, surname: "" }; });
+    } catch (e) { ctx.dependents = []; }
+  }
+
   // ---- public API ------------------------------------------------------------
   var ALLOWED = { court: 1, lesson: 1, class: 1 };
   // start(principal, service[, opts]). opts (ONLY for staff on-behalf; omit for the client flow — the
@@ -1641,14 +1659,7 @@
     // played, and leaving room for only ONE of their kids. Reloaded every start (the client changes).
     if (opts.onBehalf) {
       ctx.dependents = [];
-      if ((type === "lesson" || type === "class") && opts.onBehalf.user_id && opts.onBehalf.email) {
-        try {
-          var kr = await window.API.searchBookingMembers(opts.onBehalf.email);
-          ctx.dependents = ((kr && kr.results) || []).filter(function (it) {
-            return it.kind === "dependent" && String(it.guardian_user_id) === String(opts.onBehalf.user_id);
-          }).map(function (it) { return { dependent_user_id: it.user_id, first_name: it.name, surname: "" }; });
-        } catch (e) { ctx.dependents = []; }
-      }
+      if (type === "lesson" || type === "class") await loadClientKids(opts.onBehalf);
     }
     st = {
       type: type, calMonth: startOfMonth(new Date()), day: new Date(),

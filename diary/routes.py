@@ -94,6 +94,7 @@ from diary.booking_request import (member_by_email as _member_by_email,         
                                    addable_player_uid as _addable_player_uid,
                                    extra_players as _extra_players,
                                    foreign_player as _foreign_player,
+                                   add_child_for as _add_child_for,
                                    apply_min_profile as _apply_min_profile)
 
 
@@ -412,6 +413,28 @@ def search_members():
     with session_scope() as s:
         results = iam_repo.search_members_with_dependents(s, club_id=p.club_id, q=q, limit=8)
     return jsonify(results=results, count=len(results)), 200
+
+
+@diary_bp.post("/members/<user_id>/dependents")
+def staff_add_dependent(user_id):
+    """STAFF add a child to a CLIENT's account, from the booking screen. Most of a coach's clients
+    never open the app — he books for them — so a child who was not already on the parent's account
+    could not be booked at all: only the parent could add one, from an app they do not use. Body
+    {first_name, surname?}. The child sits UNDER the parent (no login, no email) and bills to them.
+    Idempotent on the name: adding "Sam" twice returns the Sam already there, so a second tap or a
+    second coach cannot leave a family with duplicate children."""
+    p = _principal()
+    if not p or not _need_club(p):
+        return jsonify(error="unauthorized"), 401
+    if p.role not in _ON_BEHALF_ROLES:
+        return jsonify(error="forbidden"), 403
+    b = _body()
+    with session_scope() as s:
+        res = _add_child_for(s, club_id=p.club_id, guardian_user_id=user_id,
+                             first_name=b.get("first_name"), surname=b.get("surname"))
+    if not res.get("ok"):
+        return jsonify(error=res["error"], message=res.get("message")), res.get("status", 422)
+    return jsonify(dependent=res["dependent"], existed=res["existed"]), (200 if res["existed"] else 201)
 
 
 @diary_bp.post("/bookings/<booking_id>/add-player")

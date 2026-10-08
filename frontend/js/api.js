@@ -81,6 +81,11 @@
     // POST /api/diary/bookings/:id/add-player  body: {email} | {user_id}
     // Add another client to an existing semi-private lesson (squad confirmations land late) — each
     // added client is billed their own order at the lesson price (per-head).
+    // POST /api/diary/members/:user_id/dependents  body {first_name, surname?} — STAFF add a child to a
+    // client's account (most of a coach's clients never open the app). -> {dependent, existed}
+    addDependentFor: function (userId, body) {
+      return A().apiJSON("/api/diary/members/" + encodeURIComponent(userId) + "/dependents", { method: "POST", body: body });
+    },
     addBookingPlayer: function (id, body) {
       return A().apiJSON("/api/diary/bookings/" + encodeURIComponent(id) + "/add-player",
         { method: "POST", body: body || {} });

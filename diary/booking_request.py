@@ -4,6 +4,8 @@
 #
 #   member_by_email / addable_player_uid / service_max_clients / extra_players
 #       who may be added as an extra player on a slot (a squad lesson's clients, a court's playmates)
+#   add_child_for
+#       staff add a child to a client's account (their clients do not use the app)
 #   foreign_player
 #       who the owner may name as the booking's PRIMARY player (themselves, or their own child)
 #   apply_min_profile
@@ -92,6 +94,42 @@ def foreign_player(session, club_id, parties, *, owner_uid):
         if not guardian or str(guardian) != str(owner_uid):
             return str(uid)
     return None
+
+
+def add_child_for(session, *, club_id, guardian_user_id, first_name, surname=None):
+    """STAFF add a child to a CLIENT's account. Most of a coach's clients never open the app — he books
+    for them — so a child who was not already on the parent's account could not be booked at all: only
+    the parent could add one, from an app they do not use.
+
+    The child sits UNDER the parent (no login, no email) and bills to them. The parent must be a real
+    member of THIS club and an account holder, not somebody's child. IDEMPOTENT on the name: adding
+    "Sam" twice returns the Sam already there, so a second tap — or a second coach — cannot leave a
+    family with duplicate children. Returns {ok, dependent, existed} or {ok: False, error, status}."""
+    from iam import repositories as iam_repo
+    first = " ".join((first_name or "").split())
+    sn = " ".join((surname or "").split()) or None
+    if not first or len(first) > 60 or (sn and len(sn) > 60):
+        return {"ok": False, "error": "VALIDATION", "status": 422,
+                "message": "Enter the child's first name."}
+    if not session.execute(text("SELECT 1 FROM iam.membership WHERE club_id = :c AND user_id = :u"),
+                           {"c": str(club_id), "u": str(guardian_user_id)}).first():
+        return {"ok": False, "error": "MEMBER_NOT_FOUND", "status": 404,
+                "message": "That client isn't a member of this club."}
+    if iam_repo.guardian_user_id_for(session, str(guardian_user_id)):
+        return {"ok": False, "error": "NOT_AN_ACCOUNT_HOLDER", "status": 422,
+                "message": "A child can only be added to a parent's account."}
+    existing = session.execute(
+        text("SELECT id, dependent_user_id, first_name, surname FROM iam.dependent "
+             "WHERE club_id = :c AND guardian_user_id = :g AND is_active = true "
+             "  AND lower(first_name) = lower(:f) "
+             "  AND lower(COALESCE(surname, '')) = lower(COALESCE(CAST(:sn AS text), '')) LIMIT 1"),
+        {"c": str(club_id), "g": str(guardian_user_id), "f": first, "sn": sn}).mappings().first()
+    row = existing or iam_repo.create_dependent(
+        session, club_id=str(club_id), guardian_user_id=str(guardian_user_id),
+        first_name=first, surname=sn)
+    return {"ok": True, "existed": bool(existing),
+            "dependent": {"id": str(row["id"]), "dependent_user_id": str(row["dependent_user_id"]),
+                          "first_name": row["first_name"], "surname": row["surname"]}}
 
 
 def extra_players(session, p, body, *, owner_uid, is_staff):

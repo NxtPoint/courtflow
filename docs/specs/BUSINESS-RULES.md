@@ -76,6 +76,13 @@ a membership tier's lifecycle derives from its term plans' status.
   (`enrol` route: the guardian is the client). The squad step ("Sharing with another member?") is
   now only for a player on a DIFFERENT account. Guarded by
   `sc_one_checkout_pays_for_several_players_on_one_account`.
+  **STAFF CAN ADD A CLIENT'S CHILD (2026-10-08).** Most of a coach's clients never open the app — he
+  books for them — so a child not already on the parent's account could not be booked at all: only the
+  parent could add one. The "+ Add a child" button on "Who's playing?" now also shows when staff book
+  on a client's behalf (`POST /api/diary/members/<user_id>/dependents` → `booking_request.add_child_for`):
+  the parent must be a member of this club and an account holder; the child sits under them with no
+  login and bills to them; and it is IDEMPOTENT on the name, so a second tap or a second coach cannot
+  leave a family with duplicate children. `sc_a_coach_can_add_a_clients_child_and_book_them`.
   **THE ACCOUNT HOLDER IS NOT AUTOMATICALLY A PLAYER (2026-10-03).** The first head is whoever is named
   under **"Who's playing?"** — the account holder, or one of their children (a `player` party). That
   step existed for a parent booking for themselves but NOT for staff booking on a parent's behalf, so

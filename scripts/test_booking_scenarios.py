@@ -2507,6 +2507,43 @@ def sc_staff_can_book_a_familys_semi_private_for_both_children(s, fx):
           f"ok={d.get('ok')} orders={n}")
 
 
+def sc_a_coach_can_add_a_clients_child_and_book_them(s, fx):
+    """Most of a coach's clients never open the app — he books for them. A child who was not already
+    on the parent's account therefore could not be booked at all: only the PARENT could add one, from
+    an app they do not use. Staff can now add the child to the client's account from the booking
+    screen; the child is immediately bookable as that client's player and bills to the parent."""
+    print("\n# Staff add a child to a CLIENT's account, then book them — the parent never opens the app")
+    from diary.booking_request import add_child_for, foreign_player
+    g, other = fx.members[0], fx.members[1]
+    a = add_child_for(s, club_id=fx.club_id, guardian_user_id=g, first_name="  Sam  ", surname="Koor")
+    check("the child is added to the client's account", a.get("ok") and a.get("existed") is False, str(a))
+    kid = a["dependent"]["dependent_user_id"]
+    again = add_child_for(s, club_id=fx.club_id, guardian_user_id=g, first_name="sam", surname="KOOR")
+    check("adding the same child again returns the one already there (no duplicate)",
+          again.get("existed") is True and again["dependent"]["dependent_user_id"] == kid, str(again))
+    n = s.execute(text("SELECT count(*) FROM iam.dependent WHERE club_id = :c AND guardian_user_id = :g "
+                       "AND is_active = true AND lower(first_name) = 'sam'"),
+                  {"c": fx.club_id, "g": g}).scalar()
+    check("...so the family has ONE Sam", n == 1, f"n={n}")
+    check("a blank name is refused", add_child_for(s, club_id=fx.club_id, guardian_user_id=g,
+                                                    first_name="   ").get("error") == "VALIDATION")
+    stranger = _mk_user(s, "notinclub@nope.test", "Stray")
+    check("a child can't be added to someone who is not a member of this club",
+          add_child_for(s, club_id=fx.club_id, guardian_user_id=stranger,
+                        first_name="X").get("error") == "MEMBER_NOT_FOUND")
+    check("the new child is that client's own player — and nobody else's",
+          foreign_player(s, fx.club_id, [{"party_role": "player", "user_id": kid}], owner_uid=g) is None
+          and foreign_player(s, fx.club_id, [{"party_role": "player", "user_id": kid}], owner_uid=other) == kid)
+    r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+                         booked_for_user_id=g, booking_type="lesson", resource_id=fx.coach_res,
+                         coach_user_id=fx.coach_uid, starts_at=utc_iso(at(fx, 9)),
+                         ends_at=utc_iso(at(fx, 10)), parties=[{"party_role": "player", "user_id": kid}])
+    check("the coach books the child in straight away", r.get("ok"), str(r))
+    owner = s.execute(text('SELECT user_id FROM billing."order" WHERE id = :o'),
+                      {"o": (r.get("booking") or {}).get("order_id")}).scalar()
+    check("...billed to the PARENT", str(owner) == str(g), f"owner={owner}")
+
+
 def sc_one_checkout_pays_for_several_players_on_one_account(s, fx):
     """ONE process for booking several players from one account — a class or a semi-private — with ONE
     card payment. Each player keeps their OWN seat and order (so one child can still be cancelled or
@@ -5852,6 +5889,7 @@ SCENARIOS = [
     sc_semi_private_dependents,
     sc_semi_private_addable_guard,
     sc_staff_can_book_a_familys_semi_private_for_both_children,
+    sc_a_coach_can_add_a_clients_child_and_book_them,
     sc_one_checkout_pays_for_several_players_on_one_account,
     sc_a_coach_cannot_rewrite_a_lesson_once_it_is_over,
     sc_card_only_service_gate,
