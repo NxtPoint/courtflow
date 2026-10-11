@@ -84,11 +84,11 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 808 / billing 776 / statement 67**. Each uses its own scratch club and always rolls back.
+   **booking 828 / billing 776 / statement 67**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (104/102/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (105/102/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **When the numbers move, run `python -m scripts.audit_docs` and update
    EVERY doc it names** — the baseline is repeated in ~7 files and the gate fails unless they all
@@ -647,6 +647,11 @@ looks like a harmless simplification until you read what it cost.
 - A CLASS resolves its service through `diary.resource.product_id`, NEVER by joining on names
 - A CLASS HAS THREE VERBS, AND CANCEL GIVES THE MONEY BACK (2026-07-29) — `sc_class_session_lifecycle`
 - A WAITLIST PROMOTION CANNOT CONFIRM AN UNPAID CARD-ONLY SEAT — `sc_waitlist_promotion_into_a_cardonly_class_is_held`
+- **A COACH MANAGES A CLIENT'S CLASS SEAT LIKE A LESSON (2026-10-11)** — take the client out (until the
+  class ENDS, the coaches' contract), collect / discount / write off the seat's charge. A seat cancelled
+  and re-booked gets its coaching line RE-POINTED at the new order (one arrears row per enrolment), and a
+  CANCELLED session no longer blocks scheduling the class again at its own time —
+  `sc_a_coach_can_manage_a_clients_class_seat`
 
 **Memberships, the trial & entitlement caps** — [GOTCHAS.md#memberships-the-trial--entitlement-caps](docs/specs/GOTCHAS.md#memberships-the-trial--entitlement-caps)
 - THE SIGNUP TRIAL IS A TIER-LEVEL FLAG, AND A TIER IS SEVERAL PRICES — `sc_signup_trial_is_a_tier_level_flag`

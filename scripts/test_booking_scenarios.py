@@ -2692,6 +2692,113 @@ def sc_a_coach_cannot_rewrite_a_lesson_once_it_is_over(s, fx):
     check("an ADMIN still can", fix.get("error") is None, str(fix))
 
 
+def sc_a_coach_can_manage_a_clients_class_seat(s, fx):
+    """A coach books most of his clients into classes himself, and then could do nothing with the seat.
+    Four holes, all found from one phone call:
+      (1) NO WAY TO TAKE A CLIENT OUT. The server allowed it; the coach app never offered it.
+      (2) NO WAY TO AMEND THE CHARGE. A lesson carried collect / discount / write-off; a class seat
+          carried nothing, so a seat that should not be billed went onto the invoice untouched.
+      (3) CANCEL-THEN-REBOOK LOST THE COACHING LINE. The re-booked seat got a new order, but the old
+          written-off arrears row held the one slot per enrolment — nothing to collect or amend.
+      (4) A CANCELLED CLASS COULD NOT BE PUT BACK at its own time: scheduling skipped it silently.
+    And the coaches' contract holds for a seat as for a lesson: out until the class ENDS, not after."""
+    print("\n# A coach manages a client's class seat: take out, put back, discount, write off; re-schedule a cancelled class")
+    from billing import commission as CM
+    m, m2 = fx.members[0], fx.members[1]
+    sid = _class_at(s, fx, 9, capacity=4)
+
+    def _story():
+        eid = s.execute(text("SELECT id FROM diary.enrolment WHERE class_session_id=:cs AND user_id=:u"),
+                        {"cs": sid, "u": m}).scalar()
+        return C.enrolment_story(s, club_id=fx.club_id, enrolment_id=eid, scope="coach",
+                                 user_id=fx.coach_uid)
+
+    def _order(oid):
+        return s.execute(text('SELECT status, amount_minor FROM billing."order" WHERE id=:o'),
+                         {"o": oid}).mappings().first()
+
+    r = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m, role="coach",
+                settlement_mode="monthly_account")
+    check("the coach books his client into the class", r.get("ok") and r.get("order_id"), str(r))
+    o1 = r.get("order_id")
+    st = _story()
+    can = st.get("can") or {}
+    check("(1) the coach's record OFFERS taking the client out", can.get("cancel") is True, str(can))
+    check("(2) ...and carries the seat's coaching charge, owed",
+          (st.get("arrears") or {}).get("status") == "owed"
+          and (st.get("arrears") or {}).get("gross_minor") == 12000, str(st.get("arrears")))
+    check("(2) ...with discount + write-off on offer", can.get("discount") and can.get("write_off"), str(can))
+    d = CM.adjust_arrears(s, club_id=fx.club_id, arrears_id=st["arrears"]["id"],
+                          coach_user_id=fx.coach_uid, gross_minor=6000, reason="shared court")
+    check("the coach discounts the seat to R60", d.get("ok"), str(d))
+    check("...and the CLIENT now owes R60, not R120", _order(o1)["amount_minor"] == 6000, str(dict(_order(o1))))
+
+    c = C.cancel_enrolment(s, club_id=fx.club_id, class_session_id=sid, user_id=m,
+                           actor_user_id=fx.coach_uid, role="coach")
+    check("(1) the coach takes the client out", c.get("ok"), str(c))
+    check("...and the unpaid charge is cancelled with the seat", _order(o1)["status"] == "void",
+          _order(o1)["status"])
+
+    r2 = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m, role="coach",
+                 settlement_mode="monthly_account")
+    o2 = r2.get("order_id")
+    check("(3) the coach books the same client back in — a fresh charge at the full price",
+          r2.get("ok") and o2 and o2 != o1 and _order(o2)["amount_minor"] == 12000, str(r2))
+    st2 = _story()
+    check("(3) the re-booked seat HAS a live coaching line again (it used to have none)",
+          (st2.get("arrears") or {}).get("status") == "owed"
+          and (st2.get("arrears") or {}).get("gross_minor") == 12000, str(st2.get("arrears")))
+    n = s.execute(text("SELECT count(*) FROM billing.coach_arrears a JOIN diary.enrolment e "
+                       "ON e.id = a.enrolment_id WHERE e.class_session_id=:cs AND e.user_id=:u"),
+                  {"cs": sid, "u": m}).scalar()
+    check("...ONE line for the seat, not two", n == 1, f"n={n}")
+    w = CM.adjust_arrears(s, club_id=fx.club_id, arrears_id=st2["arrears"]["id"],
+                          coach_user_id=fx.coach_uid, status="written_off", reason="injured")
+    check("(2) the coach writes the seat off before the invoice goes out", w.get("ok"), str(w))
+    check("...and the client is no longer billed for it", _order(o2)["status"] == "written_off",
+          _order(o2)["status"])
+    CM.accrue_arrears_for_club(s, club_id=fx.club_id)
+    check("...and a written-off seat does NOT come back as owed on the next read",
+          (_story().get("arrears") or {}).get("status") == "written_off", str(_story().get("arrears")))
+
+    # ---- the contract: out until the class ENDS, never after ---------------------------------
+    C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m2, role="coach",
+            settlement_mode="monthly_account")
+    s.execute(text("UPDATE diary.class_session SET starts_at = now() - interval '10 minutes', "
+                   "ends_at = now() + interval '50 minutes' WHERE id = :s"), {"s": sid})
+    eid2 = s.execute(text("SELECT id FROM diary.enrolment WHERE class_session_id=:cs AND user_id=:u"),
+                     {"cs": sid, "u": m2}).scalar()
+    live = C.enrolment_story(s, club_id=fx.club_id, enrolment_id=eid2, scope="coach", user_id=fx.coach_uid)
+    check("while the class is RUNNING the coach may still take a client out",
+          (live.get("can") or {}).get("cancel") is True)
+    s.execute(text("UPDATE diary.class_session SET starts_at = now() - interval '3 hours', "
+                   "ends_at = now() - interval '2 hours' WHERE id = :s"), {"s": sid})
+    late = C.cancel_enrolment(s, club_id=fx.club_id, class_session_id=sid, user_id=m2,
+                              actor_user_id=fx.coach_uid, role="coach")
+    check("once it has ENDED a coach cannot cancel the seat", late.get("error") == "CLASS_ENDED", str(late))
+    done = C.enrolment_story(s, club_id=fx.club_id, enrolment_id=eid2, scope="coach", user_id=fx.coach_uid)
+    dc = done.get("can") or {}
+    check("...the screen does not offer it — but write-off is still there",
+          dc.get("cancel") is False and dc.get("write_off") is True, str(dc))
+    adm = C.cancel_enrolment(s, club_id=fx.club_id, class_session_id=sid, user_id=m2,
+                             actor_user_id=fx.coach_uid, role="club_admin")
+    check("an ADMIN still can (the correction path)", adm.get("ok"), str(adm))
+
+    # ---- (4) a cancelled class can be put back at its own time --------------------------------
+    sid4 = _class_at(s, fx, 14, capacity=4)
+    C.cancel_session(s, club_id=fx.club_id, session_id=sid4)
+    again = C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                                dates=[fx.target.isoformat()], start_time="14:00",
+                                duration_minutes=90, capacity=4)
+    check("(4) a cancelled class can be scheduled again at the same time",
+          again.get("created") == 1 and again.get("skipped") == 0, str(again))
+    twice = C.schedule_sessions(s, club_id=fx.club_id, resource_id=fx.class_res,
+                                dates=[fx.target.isoformat()], start_time="14:00",
+                                duration_minutes=90, capacity=4)
+    check("...and scheduling is still idempotent on a LIVE session",
+          twice.get("created") == 0 and twice.get("skipped") == 1, str(twice))
+
+
 def sc_class_payment_gate(s, fx):
     """A class is a SERVICE — enrolment must respect the payment rules like a court/lesson booking. A
     member CANNOT post 'membership_covered'/'free' to conjure an R0 seat (a membership covers COURTS
@@ -5890,6 +5997,7 @@ SCENARIOS = [
     sc_semi_private_addable_guard,
     sc_staff_can_book_a_familys_semi_private_for_both_children,
     sc_a_coach_can_add_a_clients_child_and_book_them,
+    sc_a_coach_can_manage_a_clients_class_seat,
     sc_one_checkout_pays_for_several_players_on_one_account,
     sc_a_coach_cannot_rewrite_a_lesson_once_it_is_over,
     sc_card_only_service_gate,

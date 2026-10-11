@@ -515,7 +515,8 @@
   }
   // A CLASS enrolment's event story — the SAME shared widget (Widgets.TransactionDetail) over the class
   // sibling reader (CoachAPI.classStory → enrolment_story), so a class drills to the fold + Transactions
-  // just like a lesson. Coach-side classes are view-first; the receipt opens for a paid seat.
+  // just like a lesson. The coach can take the client out (until the class ends) and collect /
+  // discount / write off the seat's charge — the SAME handlers a lesson uses (arr).
   function renderClassEvent(id) {
     var host = el("div", {});
     set(host);
@@ -528,6 +529,10 @@
       actions: {
         receipt: { manual: true, run: function (b) { var oid = b.charge && b.charge.order_id; if (oid) window.open("/receipt.html?order=" + encodeURIComponent(oid), "_blank"); } },
         add_to_calendar: { manual: true, run: function (b) { addToCalendar(b.ics_url); } },
+        cancel: { tone: "danger", back: true, confirm: "Take this client out of the class? Their seat is freed and an unpaid charge is cancelled.", done: "Removed from the class.", run: function (b) { return window.API.cancelEnrolment(b.class_session_id, { user_id: b.player_user_id }); } },
+        collect: { group: "Coaching charge", manual: true, run: function (b) { arr(b.arrears.id, "collect", function () { renderClassEvent(id); }); } },
+        discount: { group: "Coaching charge", manual: true, run: function (b) { arr(b.arrears.id, "discount", function () { renderClassEvent(id); }, b.arrears); } },
+        write_off: { group: "Coaching charge", tone: "danger", manual: true, run: function (b) { arr(b.arrears.id, "writeoff", function () { renderClassEvent(id); }); } },
       },
     });
   }
@@ -548,6 +553,13 @@
       var acts = el("div", { class: "cf-row", style: "gap:6px" });
       if (p.status !== "attended") acts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Check in", onclick: function () { mark(true); } }));
       if (p.status !== "no_show") acts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "No-show", onclick: function () { mark(false); } }));
+      // Take a client OUT of the class (they called to cancel). Not offered once they are checked in.
+      if (p.status === "enrolled") acts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove", onclick: function () {
+        if (!window.confirm("Remove " + (p.name || "this player") + " from the class? Their seat is freed and an unpaid charge is cancelled.")) return;
+        window.API.cancelEnrolment(sessionId, { user_id: p.user_id })
+          .then(function () { UI.toast("Removed from the class.", "info"); renderRoster(sessionId); },
+                function (e) { UI.toast(UI.errMsg(e), "error"); });
+      } }));
       // Same payment chip the admin roster shows — the coach taking the register is usually the one
       // who can actually collect, so they must see an unpaid seat too.
       var pay = p.payment_label

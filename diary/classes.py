@@ -399,6 +399,14 @@ def cancel_enrolment(session, *, club_id, class_session_id, user_id, actor_user_
     if (role in ("member", "guest") and row["status"] in ("enrolled", "held")
             and _parse_dt(cs["starts_at"]) <= datetime.now(timezone.utc)):
         return _err("CANNOT_CANCEL_STARTED", 409)
+    # THE COACHES' CONTRACT: a coach may take a client out of a class until it ENDS, never after —
+    # cancelling the seat voids its charge, so on a class that ran it un-bills a delivered session.
+    # A seat that should not be charged is WRITTEN OFF instead (with a reason, on the record).
+    if ((role or "") == "coach" and row["status"] != "waitlisted"
+            and _parse_dt(cs["ends_at"]) <= datetime.now(timezone.utc)):
+        return _err("CLASS_ENDED", 409,
+                    message="This class has ended, so the seat can no longer be cancelled. "
+                            "Write the charge off instead, or ask the club office.")
 
     was_enrolled = row["status"] == "enrolled"
     session.execute(
@@ -1238,8 +1246,12 @@ def schedule_sessions(session, *, club_id, resource_id, weekdays=None, start_tim
         starts_at = datetime(d.year, d.month, d.day, st.hour, st.minute, st.second, tzinfo=tz)
         ends_at = starts_at + timedelta(minutes=eff_dur)
         exists = session.execute(
+            # A CANCELLED session is not "already there". It used to count, so a class cancelled by
+            # mistake could never be scheduled again at its own time — the request was skipped
+            # silently and the coach was left with a hole in the term he could not fill.
             text("SELECT 1 FROM diary.class_session "
-                 "WHERE club_id = :c AND resource_id = :r AND starts_at = :sa"),
+                 "WHERE club_id = :c AND resource_id = :r AND starts_at = :sa "
+                 "  AND status <> 'cancelled'"),
             {"c": club_id, "r": resource_id, "sa": starts_at},
         ).first()
         if exists:
@@ -1497,9 +1509,31 @@ def enrolment_story(session, *, club_id, enrolment_id, scope, user_id=None):
     is_future = bool(starts and starts > datetime.now(timezone.utc))
     is_you = (scope == "client" and str(r["player_user_id"]) == str(user_id))
     state = charge.get("state")
+    # The coaching money for THIS seat (the coach's arrears line), exactly as coach_booking_story
+    # carries it for a lesson — without it a coach could discount or write off a lesson but had no
+    # way at all to amend a CLASS seat before the invoice went out. Accrue first (idempotent).
+    arrears = None
+    if scope == "coach":
+        try:
+            from billing.commission import accrue_arrears_for_club
+            accrue_arrears_for_club(session, club_id=club_id)
+        except Exception:
+            pass
+        arr = session.execute(
+            text("SELECT id, status, gross_minor FROM billing.coach_arrears "
+                 "WHERE club_id = :c AND enrolment_id = :e LIMIT 1"),
+            {"c": str(club_id), "e": str(r["id"])}).mappings().first()
+        arrears = ({"id": str(arr["id"]), "status": arr["status"],
+                    "gross_minor": int(arr["gross_minor"] or 0)} if arr else None)
+    owed_line = bool(arrears and arrears["status"] == "owed")
+    ended = bool(ends and ends <= datetime.now(timezone.utc))
     can = {
         "add_to_calendar": False,   # class .ics not built yet
-        "cancel": status in ("enrolled", "waitlisted"),
+        # A coach may take a client out until the class ENDS (the coaches' contract) — the button is
+        # not offered where the server would refuse.
+        "cancel": status in ("enrolled", "waitlisted") and not (scope == "coach" and ended),
+        "collect": owed_line, "discount": owed_line,
+        "write_off": owed_line or (scope == "owner" and state == "owed"),
         "pay": scope == "client" and state in ("owed", "pending"),
         "settle": scope == "client" and state == "owed",
         "receipt": state in ("paid", "refunded", "part_refunded"),
@@ -1507,9 +1541,9 @@ def enrolment_story(session, *, club_id, enrolment_id, scope, user_id=None):
         "refund": scope == "owner" and bool(charge.get("refundable")),
         "desk_pay": scope == "owner" and state == "owed",
         "void": scope == "owner" and state == "owed",
-        "write_off": scope == "owner" and state == "owed",
     }
     return {
+        "arrears": arrears,
         "record_id": "enrolment:" + str(r["id"]),
         "id": str(r["id"]),
         "kind": "class",

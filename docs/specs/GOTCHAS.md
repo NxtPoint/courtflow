@@ -320,6 +320,26 @@ caller's uncommitted work.
 
 ## Classes
 
+### A coach manages a client's class seat like a lesson (2026-10-11)
+A coach books most of his clients into classes himself, and then could do nothing with the seat. Four
+holes, all reported in one phone call:
+1. **No way to take a client out.** `cancel-enrolment` always allowed a coach; the coach app never
+   offered it. The class record and the roster (coach + admin) now carry it.
+2. **No way to amend the charge.** A lesson's record carried collect / discount / write-off (the
+   coach's arrears line); `enrolment_story` carried nothing, so a seat that should not be billed went
+   onto the invoice untouched. Coach scope now accrues and returns `arrears`, same handlers as a lesson.
+3. **Cancel-then-rebook lost the coaching line.** Re-enrolling REUSES the enrolment row with a NEW
+   order, but `ux_coach_arrears_enrolment` allows one arrears row per enrolment and the old one was
+   written off when the first order was voided. `accrue_arrears_for_club` now re-points a written-off
+   row at the live order line. A row the coach wrote off himself cannot revive: its order is written
+   off too, so it is never in the accrual SELECT.
+4. **A cancelled class could not be put back.** `schedule_sessions` treated a CANCELLED session as
+   "already there" and skipped the date silently.
+
+The coaches' contract holds for a seat as for a lesson: a coach may cancel it until the class ENDS
+(`CLASS_ENDED` after) — afterwards the route is a write-off, which leaves a reason on the record.
+`sc_a_coach_can_manage_a_clients_class_seat`.
+
 ### A class name can NEVER break the class — enforced at THREE layers (2026-07-26)
 
 A class is two

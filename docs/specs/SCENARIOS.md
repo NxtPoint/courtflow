@@ -11,7 +11,7 @@ about to change is guarded — and by which `sc_…`.
   `grep -rn "def sc_the_name" scripts/` to read the war story it encodes.
 - Each harness builds its own scratch club inside one transaction, runs every `sc_*` in its own
   SAVEPOINT, and **always rolls back**. Current green baseline:
-  **booking 808 / billing 776 / statement 67** (104 / 102 / 12 `sc_*` functions).
+  **booking 828 / billing 776 / statement 67** (105 / 102 / 12 `sc_*` functions).
 - The **war stories** — why each rule exists and what it cost in production — are in
   [`GOTCHAS.md`](GOTCHAS.md). This file is the index of what is *covered*; that one is *why*.
 
@@ -59,7 +59,9 @@ coach back-capture of a PAST lesson (staff-only `allow_past`, resource resolved 
 a parent's kids bill the guardian, a member can't add a stranger / another family's child, cancel
 voids every head, and **staff booking on a parent's behalf can put BOTH children on it** — the child
 is named as the player, so the parent is not a third head
-(`sc_staff_can_book_a_familys_semi_private_for_both_children`). **Staff add a client's child** and book them at once, idempotent on the name, billed to the parent
+(`sc_staff_can_book_a_familys_semi_private_for_both_children`). **A coach manages a client's class seat** — takes them out until the class ends, discounts or writes
+off the charge, re-books them with a live coaching line, and re-schedules a cancelled class at its own
+time (`sc_a_coach_can_manage_a_clients_class_seat`). **Staff add a client's child** and book them at once, idempotent on the name, billed to the parent
 (`sc_a_coach_can_add_a_clients_child_and_book_them`). **The coaches' contract** — a coach cannot capture a lesson or class seat once it has started, cannot
 cancel or move a lesson once it has ended (but may cancel one still running), and an admin still can
 (`sc_a_coach_cannot_rewrite_a_lesson_once_it_is_over`, `sc_backcapture_past_lesson`). **One checkout for several players on

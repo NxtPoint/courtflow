@@ -1392,6 +1392,13 @@
       var acts = el("div", { class: "cf-row", style: "gap:6px" });
       if (p.status !== "attended") acts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "Check in", onclick: function () { mark(true); } }));
       if (p.status !== "no_show") acts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-ghost", text: "No-show", onclick: function () { mark(false); } }));
+      // Take a client OUT of the class (they called to cancel). Not offered once they are checked in.
+      if (p.status === "enrolled") acts.appendChild(el("button", { class: "cf-btn cf-btn-sm cf-btn-danger", text: "Remove", onclick: function () {
+        if (!window.confirm("Remove " + (p.name || "this player") + " from the class? Their seat is freed and an unpaid charge is cancelled.")) return;
+        window.API.cancelEnrolment(sessionId, { user_id: p.user_id })
+          .then(function () { UI.toast("Removed from the class.", "info"); renderRoster(sessionId); },
+                function (e) { UI.toast(UI.errMsg(e), "error"); });
+      } }));
       // PAYMENT STATE, always visible. An unpaid seat used to look identical to a settled one here,
       // which is how classes got delivered unpaid. `unpaid` is the server's single flag; the label
       // wording is single-sourced server-side so no two surfaces can disagree.

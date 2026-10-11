@@ -530,7 +530,7 @@ def accrue_arrears_for_club(session, *, club_id) -> int:
                 INSERT INTO billing.coach_arrears
                     (club_id, coach_user_id, client_user_id, booking_id, enrolment_id,
                      order_line_id, product_id, gross_minor, currency, status)
-                SELECT cs.club_id,
+                SELECT DISTINCT ON (e.id) cs.club_id,
                        cs.coach_user_id AS coach_user_id,
                        o.user_id        AS client_user_id,
                        NULL::uuid       AS booking_id,
@@ -556,8 +556,21 @@ def accrue_arrears_for_club(session, *, club_id) -> int:
                         SELECT 1 FROM billing.payment pay
                         WHERE pay.order_id = o.id AND pay.direction = 'charge'
                           AND pay.status = 'succeeded')
+                ORDER BY e.id, o.created_at DESC
+                -- A SEAT CANCELLED AND RE-BOOKED keeps its enrolment row but gets a NEW order, while
+                -- the old arrears row (written off when the first order was voided) still held the
+                -- one slot this index allows. The re-booked seat then had no coaching line at all:
+                -- off the coach's owed tab, nothing to collect, discount or write off. Re-point the
+                -- dead row at the live charge. A row the coach wrote off himself can never revive —
+                -- its order is written off too, so it is not in this SELECT.
                 ON CONFLICT (club_id, enrolment_id) WHERE enrolment_id IS NOT NULL
-                DO NOTHING
+                DO UPDATE SET order_line_id = EXCLUDED.order_line_id,
+                              client_user_id = EXCLUDED.client_user_id,
+                              product_id = EXCLUDED.product_id,
+                              gross_minor = EXCLUDED.gross_minor,
+                              status = 'owed', updated_at = now()
+                WHERE billing.coach_arrears.status = 'written_off'
+                  AND billing.coach_arrears.order_line_id IS DISTINCT FROM EXCLUDED.order_line_id
             """),
             {"club": club_id},
         )
