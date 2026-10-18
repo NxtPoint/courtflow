@@ -1,87 +1,87 @@
-# 🎾 Marketing digest — 2026-10-17
+# 🎾 Marketing digest — 2026-10-18
 _Cross-brand organic growth (GA4 + Search Console)._
 
-# 🎾 NextPoint Tennis — marketing digest · 2026-10-17
+# 🎾 NextPoint Tennis — marketing digest · 2026-10-18
 _Organic growth from GA4 + Search Console. The 🎯 striking-distance queries are the highest-value action: you rank page 1-2 for them, so a post or page nudges them to the top._
 
 ## GA4 — your traffic (last 7 days)
 ### 📊 NextPoint Tennis — GA4 (last 7 days)
-- **325** active users · **646** sessions · **1686** page views
+- **320** active users · **652** sessions · **1786** page views
 - **Top pages:**
-    - `/portal` — 381 views
-    - `/` — 333 views
-    - `/login` — 322 views
-    - `/coach` — 197 views
-    - `/pricing` — 128 views
-- **By channel:** Organic Search 258, Direct 197, Referral 162, Paid Search 9, Email 7, Unassigned 5
+    - `/portal` — 428 views
+    - `/login` — 353 views
+    - `/` — 344 views
+    - `/coach` — 201 views
+    - `/pricing` — 120 views
+- **By channel:** Organic Search 271, Direct 195, Referral 159, Paid Search 9, Email 8, Unassigned 5
 
 ## Search Console — what you rank for (last 28 days)
 ### 🔎 https://www.nextpointtennis.com/ — Search Console (last 28 days)
-- **60** clicks · **1502** impressions · CTR 4.0% · avg pos 3.4
+- **64** clicks · **1588** impressions · CTR 4.0% · avg pos 3.5
 - **Top queries:**
-    - “next point tennis” — 21 clicks / 126 impr / pos 2.7
+    - “next point tennis” — 20 clicks / 127 impr / pos 2.8
     - “tennis lessons johannesburg” — 2 clicks / 17 impr / pos 2.1
     - “green point tennis” — 1 clicks / 1 impr / pos 12.0
     - “johannesburg tennis courts” — 1 clicks / 10 impr / pos 2.0
-    - “nextpoint tennis” — 1 clicks / 86 impr / pos 4.0
+    - “nextpoint tennis” — 1 clicks / 97 impr / pos 4.0
 - **🎯 Striking-distance queries** (pos 8-20 — nudge these to page 1):
     - “tennis players” — pos 8.3, 7 impr, 0 clicks
     - “tenis” — pos 10.0, 2 impr, 0 clicks
-    - “tennis courts” — pos 8.0, 2 impr, 0 clicks
     - “tennis courts near me free” — pos 9.0, 2 impr, 0 clicks
     - “green point tennis” — pos 12.0, 1 impr, 1 clicks
-    - “best tennis club” — pos 8.0, 1 impr, 0 clicks
     - “clay court tennis” — pos 13.0, 1 impr, 0 clicks
     - “free tennis courts” — pos 10.0, 1 impr, 0 clicks
+    - “indoor tennis courts near me” — pos 10.0, 1 impr, 0 clicks
+    - “mini tennis” — pos 13.0, 1 impr, 0 clicks
 ### 🔎 sc-domain:nextpointtennis.com — Search Console (last 28 days)
-- **424** clicks · **8937** impressions · CTR 4.7% · avg pos 5.7
+- **451** clicks · **9188** impressions · CTR 4.9% · avg pos 5.8
 - **Top queries:**
-    - “next point tennis” — 69 clicks / 135 impr / pos 1.4
-    - “nextpoint tennis” — 60 clicks / 87 impr / pos 1.5
-    - “tennis courts near me” — 14 clicks / 1508 impr / pos 5.3
+    - “next point tennis” — 72 clicks / 135 impr / pos 1.4
+    - “nextpoint tennis” — 68 clicks / 98 impr / pos 1.5
+    - “tennis courts near me” — 14 clicks / 1504 impr / pos 5.3
     - “nextpoint” — 10 clicks / 16 impr / pos 11.8
-    - “killarney country club tennis” — 7 clicks / 29 impr / pos 5.0
+    - “killarney country club tennis” — 6 clicks / 30 impr / pos 5.2
 - **🎯 Striking-distance queries** (pos 8-20 — nudge these to page 1):
     - “neville godwin” — pos 8.8, 40 impr, 1 clicks
-    - “book a court near me” — pos 10.2, 21 impr, 0 clicks
-    - “tennis club near me” — pos 9.2, 17 impr, 2 clicks
+    - “book a court near me” — pos 16.3, 22 impr, 0 clicks
     - “nextpoint” — pos 11.8, 16 impr, 10 clicks
+    - “tennis club near me” — pos 9.2, 16 impr, 2 clicks
+    - “courts near me” — pos 8.3, 14 impr, 0 clicks
     - “tennis club” — pos 9.8, 12 impr, 1 clicks
-    - “courts near me” — pos 8.6, 12 impr, 0 clicks
     - “kcc tennis courts” — pos 8.0, 11 impr, 1 clicks
-    - “mondeor tennis club” — pos 9.4, 9 impr, 0 clicks
+    - “alexei popyrin coach” — pos 8.7, 6 impr, 0 clicks
 
 ---
 
-# 🎾 Ten-Fifty5 — marketing digest · 2026-10-17
+# 🎾 Ten-Fifty5 — marketing digest · 2026-10-18
 _Organic growth from GA4 + Search Console. The 🎯 striking-distance queries are the highest-value action: you rank page 1-2 for them, so a post or page nudges them to the top._
 
 ## GA4 — your traffic (last 7 days)
 ### 📊 Ten-Fifty5 — GA4 (last 7 days)
-- **32** active users · **85** sessions · **369** page views
+- **28** active users · **78** sessions · **357** page views
 - **Top pages:**
-    - `/portal` — 95 views
-    - `/dashboard` — 49 views
-    - `/media-room` — 29 views
-    - `/match-truth` — 26 views
+    - `/portal` — 91 views
+    - `/dashboard` — 48 views
+    - `/media-room` — 32 views
+    - `/match-truth` — 30 views
     - `/pro-insights` — 23 views
-- **By channel:** Organic Search 44, Referral 26, Direct 7, AI Assistant 4, Organic Social 3, Unassigned 1
+- **By channel:** Organic Search 35, Referral 29, Direct 7, AI Assistant 4, Organic Social 3
 
 ## Search Console — what you rank for (last 28 days)
 ### 🔎 https://www.ten-fifty5.com/ — Search Console (last 28 days)
-- **193** clicks · **3531** impressions · CTR 5.5% · avg pos 6.5
+- **200** clicks · **3721** impressions · CTR 5.4% · avg pos 6.5
 - **Top queries:**
-    - “ten-fifty5” — 35 clicks / 38 impr / pos 1.0
-    - “swing vision android” — 9 clicks / 170 impr / pos 8.1
-    - “swingvision android” — 8 clicks / 297 impr / pos 8.4
-    - “swing vision alternative” — 4 clicks / 18 impr / pos 3.2
-    - “tennis cut vs swingvision” — 3 clicks / 9 impr / pos 2.1
+    - “ten-fifty5” — 37 clicks / 40 impr / pos 1.0
+    - “swing vision android” — 9 clicks / 180 impr / pos 8.1
+    - “swingvision android” — 8 clicks / 313 impr / pos 8.4
+    - “swing vision alternative” — 4 clicks / 17 impr / pos 2.9
+    - “tennis cut vs swingvision” — 4 clicks / 10 impr / pos 2.0
 - **🎯 Striking-distance queries** (pos 8-20 — nudge these to page 1):
-    - “swingvision android” — pos 8.4, 297 impr, 8 clicks
-    - “swing vision android” — pos 8.1, 170 impr, 9 clicks
-    - “swingvision for android” — pos 8.4, 59 impr, 1 clicks
-    - “swing vision for android” — pos 8.1, 27 impr, 2 clicks
-    - “tennis serve analysis” — pos 19.3, 19 impr, 0 clicks
+    - “swingvision android” — pos 8.4, 313 impr, 8 clicks
+    - “swing vision android” — pos 8.1, 180 impr, 9 clicks
+    - “swingvision for android” — pos 8.3, 61 impr, 2 clicks
+    - “tenfifty” — pos 13.8, 20 impr, 0 clicks
+    - “tennis serve analysis” — pos 19.8, 16 impr, 0 clicks
     - “fifty5” — pos 19.1, 9 impr, 0 clicks
     - “does swingvision work on android” — pos 10.0, 7 impr, 0 clicks
     - “swingvision android 2026” — pos 9.4, 7 impr, 0 clicks
@@ -96,5 +96,5 @@ _Organic growth from GA4 + Search Console. The 🎯 striking-distance queries ar
 
 
 ## 📈 Dashboard ingest (this run)
-- NextPoint Tennis → dashboard (nextpointtennis.com): HTTP 200 — {"club_id":"bc67c6a1-efb8-47e8-aa68-9d53a9de35bd","day":"2026-10-17","ingested":80}
+- NextPoint Tennis → dashboard (nextpointtennis.com): HTTP 200 — {"club_id":"bc67c6a1-efb8-47e8-aa68-9d53a9de35bd","day":"2026-10-18","ingested":80}
  (80 metrics)
