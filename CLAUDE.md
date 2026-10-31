@@ -84,7 +84,7 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 833 / billing 790 / statement 67**. Each uses its own scratch club and always rolls back.
+   **booking 833 / billing 792 / statement 67**. Each uses its own scratch club and always rolls back.
    **In the last 3 days of a month ~30 billing checks fail on correct code** (settlement and statement
    figures reading R0): the harness books 3 days ahead, so its sessions land in NEXT month while those
    checks read this one. Compare the failures against the untouched code before believing them.
@@ -702,6 +702,10 @@ looks like a harmless simplification until you read what it cost.
   The outstanding side runs through EVERY month up to the one on screen, because the balance does, and
   includes unpaid packs. The coach list reads the same settlement, so the two cannot differ. One month's
   pay figure is the next one's carried-over. `sc_pay_all` · `sc_the_coach_card_follows_the_owners_formula`
+- A LEDGER REPAIR IS NOT A FINE (2026-10-31) — the settlement balance is built from the SPLITS, which never held
+  the ledger's mistakes, so an adjustment with ref_type `correction` or `reversal` must stay out of it. Counted, it
+  took R14,150 off Colbert twice and showed a R13,665 debt that was really R485 owed TO him —
+  `sc_the_coach_card_follows_the_owners_formula`
 - A PAYOUT MUST SAY WHICH MONTH IT SETTLES, and the screen that records one must ASK (2026-08-10) — the engine honoured `period_label` for weeks while the modal never sent it, so every real payout credited the month the cash moved — `sc_coach_earnings_carries_the_settlement`
 
 **The seat rule (community/)** — [GOTCHAS.md#the-seat-rule-community](docs/specs/GOTCHAS.md#the-seat-rule-community)

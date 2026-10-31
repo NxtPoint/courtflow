@@ -1907,6 +1907,11 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
                 if (e["ref_type"] or "") == "split":
                     led["clawback_minor"] += amt
                     led["commission_entries_minor"] += amt
+                elif (e["ref_type"] or "") in ("correction", "reversal"):
+                    # These repair the LEDGER's own commission entries. The balance here is built
+                    # from the splits, which never held the mistake, so counting one takes it off
+                    # twice: R14,150 too much on Colbert, whose July showed as a debt he never had.
+                    led["commission_entries_minor"] += amt
                 else:
                     led["adjustments_minor"] += amt
             else:                                     # commission_earning | commission_due
@@ -2006,9 +2011,11 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
                      "[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' THEN CAST(l.ref_id AS uuid) END "
                      "WHERE l.club_id = :club AND l.coach_user_id = CAST(:coach AS uuid) "
                      # rent, payouts and MANUAL adjustments only — commission entries (and the
-                     # refund clawbacks written as split-adjustments) are already in the splits.
+                     # refund clawbacks, ledger corrections and reversals written as adjustments)
+                     # are already in the splits.
                      "  AND (l.entry_type IN ('rent_charge', 'payout') "
-                     "       OR (l.entry_type = 'adjustment' AND COALESCE(l.ref_type,'') <> 'split')) "
+                     "       OR (l.entry_type = 'adjustment' "
+                     "           AND COALESCE(l.ref_type,'') NOT IN ('split','correction','reversal'))) "
                      "  AND COALESCE(NULLIF(p.period_label,''), to_char(l.occurred_at,'YYYY-MM')) < :ym"),
                 {"club": club_id, "coach": str(coach_user_id), "ym": ym}).scalar() or 0)
         st["opening_minor"] = net_before + moved_before

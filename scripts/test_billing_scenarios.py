@@ -4752,7 +4752,21 @@ def sc_the_coach_card_follows_the_owners_formula(s, fx):
                    "coach_user_id,status) VALUES (:c,:u,:o,'lesson',:coach,'active')"),
               {"c": fx.club_id, "u": fx.member, "o": str(pack), "coach": fx.coach_uid})
 
-    st = settle(prev_m)
+    # A repair of the ledger's own entries: the splits never held the mistake, so neither may move the pay figure.
+    for ref_type, amount in (("correction", -77700), ("reversal", 11100)):
+        s.execute(text("INSERT INTO billing.coach_ledger (club_id,coach_user_id,entry_type,amount_minor,"
+                       "currency,ref_type,ref_id,occurred_at) VALUES (:c,:u,'adjustment',:a,'ZAR',"
+                       ":rt,:ref,:at)"),
+                  {"c": fx.club_id, "u": fx.coach_uid, "a": amount, "rt": ref_type,
+                   "ref": "formula-" + ref_type,
+                   "at": datetime(prev.year, prev.month, 15, 12, 0, tzinfo=JHB)})
+
+    full = CMf.coach_settlement(s, club_id=fx.club_id, coach_user_id=fx.coach_uid, month=prev_m)
+    st = full["settlement"]
+    check("a ledger correction or reversal is not a fine: only the R500 shows",
+          full["ledger"]["adjustments_minor"] == -50000, str(full["ledger"]["adjustments_minor"]))
+    check("...and neither reaches the balance carried into the next month",
+          settle(this_m)["opening_minor"] == st["closing_minor"], str(settle(this_m)["opening_minor"]))
     check("the bank line is only the money that reached the bank", st["club_held_minor"] == 100000,
           str(st["club_held_minor"]))
     check("the commission line is exactly 30% of the bank line", st["commission_bank_minor"] == 30000,
