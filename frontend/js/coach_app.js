@@ -178,8 +178,8 @@
     wrap.appendChild(todayCard);
 
     // Quick actions
-    // "Log a past session" is GONE from the coach app (the coaches' contract, 2026-10-04): no lesson
-    // is captured once it has started. The server refuses it too; the admin console keeps the button.
+    // No "Log a past session" here (the coaches' contract, 2026-10-04): no LESSON is captured once it
+    // has started. A past CLASS he runs can be (Schedule → "Log past class", 2026-10-31).
     wrap.appendChild(el("div", { class: "cf-row", style: "gap:8px;margin-top:4px" }, [
       el("button", { class: "cf-btn cf-btn-primary cf-btn-block", text: "+ Book a client in", onclick: function () { bookForClient(false); } }),
     ]));
@@ -224,7 +224,7 @@
     wrap.appendChild(el("div", { class: "cf-row", style: "align-items:center;gap:8px;margin-bottom:2px;flex-wrap:wrap" }, [
       el("h1", { style: "margin:0", text: "Schedule" }),
       el("span", { class: "cf-spacer" }),
-      el("button", { class: "cf-btn cf-btn-sm", text: "Log past", onclick: function () { bookForClient(true); } }),
+      el("button", { class: "cf-btn cf-btn-sm", text: "Log past class", onclick: function () { bookForClient(true); } }),
       el("button", { class: "cf-btn cf-btn-sm cf-btn-primary", text: "+ Book a client", onclick: function () { bookForClient(false); } }),
     ]));
     wrap.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 6px;font-size:.85rem", text: "The whole club’s diary — courts, lessons & classes. Filter by court or coach (pick yourself) to spot open gaps to book." }));
@@ -307,7 +307,7 @@
   // self, no Yoco (staff collect at court / pack / account). GOLDEN RULE: one booking widget per role.
   async function bookForClient(backdate) {
     if (!window.BookFlow) { UI.toast("Booking module still loading — try again in a moment.", "warn"); return; }
-    var m = modal(backdate ? "Log a past session" : "Book a client in");
+    var m = modal(backdate ? "Log a past class" : "Book a client in");
     var selected = null;
     var searchInp = el("input", { class: "cf-input", placeholder: "Search client by name or email…" });
     var resultsBox = el("div", { class: "cf-list", style: "max-height:180px;overflow:auto" });
@@ -352,7 +352,7 @@
     });
 
     m.body.appendChild(el("p", { class: "cf-muted", style: "margin:0 0 8px;font-size:.85rem", text: backdate
-      ? "Pick the client, then choose the lesson/class, the DAY it happened, time and how they'll pay — it bills them and credits you, without touching the calendar."
+      ? "Pick the client, then the class they came to (one you run) and how they'll pay — it adds them to that session, bills them and credits you. Past lessons can't be logged; ask the club office."
       : "Pick the client, then choose the service, time and payment on the next screen — the same booking flow clients use." }));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "Client" }), searchInp, resultsBox, chosenBox]));
     m.body.appendChild(el("div", { class: "cf-field" }, [el("label", { text: "…or guest name (walk-in, no account)" }), guest]));
@@ -364,10 +364,10 @@
         else if (guest.value.trim()) onBehalf = { name: guest.value.trim() };
         else { UI.toast("Search & pick a client, or enter a guest name.", "warn"); return; }
         m.close();
-        window.BookFlow.start(principal, "lesson", {
+        window.BookFlow.start(principal, backdate ? "class" : "lesson", {
           onBehalf: onBehalf,
           coachLock: principal.user_id,            // the coach books their OWN lessons
-          backdate: !!backdate,                    // BACK-CAPTURE: log a lesson/class that already happened
+          backdate: !!backdate,                    // BACK-CAPTURE: a coach logs a past CLASS only
           backTo: "#/schedule",
           onDone: function () { location.hash = "#/schedule"; route(); },
           // Auto-route to the client's prepaid pack with this coach (draw, not a new charge). The

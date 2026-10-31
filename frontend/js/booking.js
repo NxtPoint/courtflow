@@ -317,6 +317,13 @@
       if (slotCacheKey() === ck) renderSlots(st.slotsCache[ck]);
     } catch (e) { box.className = ""; UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
   }
+  // A coach back-capturing a past class sees only the classes HE runs — the server refuses anyone
+  // else's once it has started (diary.classes.enrol), so listing them would only offer a dead end.
+  function coachBackcapture() { return !!(st.backdate && st.coachLock); }
+  function ownClassesOnly(list) {
+    if (!coachBackcapture()) return list;
+    return list.filter(function (c) { return String(c.coach_user_id) === String(st.coachLock); });
+  }
   async function loadClasses() {
     var box = document.getElementById("bk-slots"); if (!box) return;
     var dk = UI.dateKey(st.day), ck = "class|" + dk;
@@ -324,7 +331,7 @@
     box.className = "cf-loading"; box.textContent = "Finding classes…";
     try {
       var r = await window.API.classes({ date_from: dk, date_to: dk });
-      st.slotsCache[ck] = r.classes || [];
+      st.slotsCache[ck] = ownClassesOnly(r.classes || []);
       if (UI.dateKey(st.day) === dk) renderClasses(st.slotsCache[ck]);
     } catch (e) { box.className = ""; UI.clear(box); box.appendChild(el("div", { class: "cf-empty", text: UI.errMsg(e) })); }
   }
@@ -342,7 +349,7 @@
     // Normal flow floors to today (no past sessions); BACK-CAPTURE needs the month's PAST sessions too.
     var from = UI.dateKey((!st.backdate && mStart < today) ? today : mStart);
     var to = UI.dateKey(new Date(m.getFullYear(), m.getMonth() + 1, 0));
-    try { st.monthClasses = (await window.API.classes({ date_from: from, date_to: to })).classes || []; }
+    try { st.monthClasses = ownClassesOnly((await window.API.classes({ date_from: from, date_to: to })).classes || []); }
     catch (e) { st.monthClasses = []; }
   }
   function classTypes() {
@@ -398,7 +405,10 @@
     var seg = el("div", { class: "cf-segment", style: "max-width:420px" });
     // BACK-CAPTURE logs coach time only (lesson/class) — a past court hire has no coach to credit and
     // "any court" carries no resource to attribute, so the Court tab is hidden while back-dating.
-    var opts = st.backdate ? [["lesson", "Lesson"], ["class", "Class"]]
+    // A COACH back-captures CLASSES only (the coaches' contract: a lesson is never captured after it
+    // started; a class he runs is — players turn up unbooked). Admin back-capture keeps both.
+    var opts = coachBackcapture() ? [["class", "Class"]]
+             : st.backdate ? [["lesson", "Lesson"], ["class", "Class"]]
                            : [["court", "Court"], ["lesson", "Lesson"], ["class", "Class"]];
     opts.forEach(function (s) {
       seg.appendChild(el("button", { type: "button", class: st.type === s[0] ? "on" : "", text: s[1],

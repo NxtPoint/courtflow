@@ -43,6 +43,18 @@ def _session_row(session, club_id, class_session_id, lock=False):
     return dict(row) if row else None
 
 
+def _coach_runs_session(session, club_id, cs, coach_user_id) -> bool:
+    """True when `coach_user_id` runs this class session — its own coach, or (for a session with
+    none) the class's coach. The gate on a coach back-capturing a seat in a class that has started."""
+    if not coach_user_id:
+        return False
+    if cs.get("coach_user_id"):
+        return str(cs["coach_user_id"]) == str(coach_user_id)
+    return session.execute(
+        text("SELECT 1 FROM diary.resource WHERE club_id = :c AND id = :r AND coach_user_id = :u"),
+        {"c": str(club_id), "r": str(cs["resource_id"]), "u": str(coach_user_id)}).first() is not None
+
+
 def _class_product_id(session, club_id, price_id):
     """The billing.product this class's price belongs to — so a PER-SERVICE class pack draws only for
     THIS class's own product (Cardio pack ≠ Yoga pack), never any class of the same coach. Guarded →
@@ -142,13 +154,17 @@ def enrol(session, *, club_id, class_session_id, user_id, settlement_mode="at_co
         return _err("SESSION_NOT_FOUND", 404)
     if cs["status"] != "scheduled":
         return _err("SESSION_CLOSED", 409, status_value=cs["status"])
-    # THE COACHES' CONTRACT (2026-10-04): nothing is captured once it has started — a class seat
-    # included. A COACH could enrol a client into a session that had already run (the back-capture
-    # flow listed past sessions), with no record it was entered late. Admins still can.
-    if (role or "") == "coach" and _parse_dt(cs["starts_at"]) <= datetime.now(timezone.utc):
+    # THE COACHES' CONTRACT, with ONE exception (owner's call, 2026-10-31): a coach may BACK-CAPTURE
+    # a seat in a class HE RUNS after it has started — a class is a roll-call, and players who turn
+    # up without booking are only known afterwards. Lessons stay closed (create_booking). The late
+    # entry is on the record: created_by_user_id + created_at later than the session's start.
+    # Anyone else's class is still refused, so a coach cannot bill a client into a session he did not
+    # take. Admins can always.
+    if ((role or "") == "coach" and _parse_dt(cs["starts_at"]) <= datetime.now(timezone.utc)
+            and not _coach_runs_session(session, club_id, cs, created_by_user_id)):
         return _err("CLASS_ALREADY_STARTED", 422,
-                    message="A class can't be captured once it has started. Ask the club office "
-                            "to add it.")
+                    message="A class can't be captured once it has started unless you run it. "
+                            "Ask the club office to add it.")
 
     # PAYMENT GATE — a class is a SERVICE, so enrolment must respect the same rules as a court/lesson
     # booking (create_booking), else a member could post a mode that bypasses the gate:

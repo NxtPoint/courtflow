@@ -103,7 +103,10 @@ a membership tier's lifecycle derives from its term plans' status.
   payment) and the club's commission with it. Now, for the **coach** role:
   - **Capture:** `create_booking` refuses a start time that has passed (`LESSON_ALREADY_STARTED`);
     `allow_past` (back-capture) is honoured for `club_admin` / `platform_admin` only. `classes.enrol`
-    refuses a class seat once the session has started (`CLASS_ALREADY_STARTED`).
+    refuses a class seat once the session has started (`CLASS_ALREADY_STARTED`) — **except in a class
+    the coach runs himself** (owner's call, 2026-10-31: a class is a roll-call and players turn up
+    unbooked, so the coach adds them afterwards). The seat is billed like any other and the enrolment
+    records who entered it (`created_by_user_id`). Someone else's class stays closed; lessons stay closed.
   - **Cancel:** allowed until the lesson's END time — a lesson can be called off while it is running
     (the owner's explicit choice) — and refused after it (`LESSON_ENDED`).
   - **Move:** an ended lesson cannot be rescheduled to a future date (`LESSON_ENDED`) — it un-delivers
@@ -112,7 +115,7 @@ a membership tier's lifecycle derives from its term plans' status.
     (`CLASS_ENDED`, `classes.session_has_ended`).
   An **admin keeps every one of these** as the correction path, and the members' rules are unchanged
   (a member can never backdate, and cannot cancel once a booking has started). The coach's event story
-  no longer offers Cancel on an ended lesson, and the coach app's "Log a past session" button is gone.
+  no longer offers Cancel on an ended lesson, and the coach app's back-capture is "Log past class" — CLASSES ONLY, his own.
   A lesson a coach forgot to enter is now found by the court audit and put right by the club. Guarded by
   `sc_a_coach_cannot_rewrite_a_lesson_once_it_is_over` + `sc_backcapture_past_lesson`.
 - **THE COURT AUDIT — booked versus seen on court (2026-10-03, owner's request).** A lesson a coach never enters

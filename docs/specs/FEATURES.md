@@ -55,7 +55,8 @@ test** (per `TESTING.md`) · **🌐 needs a live key/HTTP** (Yoco webhook, SES, 
   client is emailed a `/portal` pay link. Not booked to the calendar (`POST /api/admin/clients/<id>/invoice`). ✅
 - **Coach/admin back-capture of a PAST session** — the SAME on-behalf booking flow, opened for a past
   date ("Log a past session"): a lesson/class that already happened is billed to the client + credits
-  the coach, with no calendar hold. Staff-only (`allow_past`, role-gated); a member can never back-date. ✅
+  the coach, with no calendar hold. Admin: lessons + classes. **Coach: classes he runs only** ("Log past
+  class" — the coaches' contract keeps past lessons closed). A member can never back-date. ✅
 - **Client monthly Activity view** — one screen: the month's bookings, spend by category, and the
   outstanding balance to settle (`GET /api/me/activity`). ✅
 - **15-minute start cadence** — bookings can start on any quarter-hour (`BOOKING_GRANULARITY_MIN=15`,

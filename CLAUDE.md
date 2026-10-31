@@ -84,7 +84,7 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 828 / billing 776 / statement 67**. Each uses its own scratch club and always rolls back.
+   **booking 833 / billing 776 / statement 67**. Each uses its own scratch club and always rolls back.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
@@ -636,8 +636,10 @@ looks like a harmless simplification until you read what it cost.
 - A PAID lesson cancelled BY THE CLUB refunds itself
 - **THE COACHES' CONTRACT (2026-10-04): a COACH cannot capture a lesson once it has STARTED, nor cancel or
   move one once it has ENDED** (he may cancel while it is running — the owner's call). Back-capture
-  (`allow_past`) is ADMIN-only; the coach app's "Log a past session" button is gone. Same line for a
-  class he runs. A forgotten lesson is found by the court audit, not written in afterwards —
+  (`allow_past`) is ADMIN-only for LESSONS. **One exception (2026-10-31): a coach may back-capture a
+  seat in a CLASS HE RUNS after it started** (a class is a roll-call — players turn up unbooked);
+  someone else's class stays closed (`CLASS_ALREADY_STARTED`). Coach app: Schedule → "Log past class".
+  Cancel/move is the same line for a class he runs. A forgotten lesson is found by the court audit —
   `sc_a_coach_cannot_rewrite_a_lesson_once_it_is_over` · `sc_backcapture_past_lesson`
 - accept / propose / decline are GONE (deleted 2026-07-29 once production's queue was empty)
 - A lesson email must state THIS booking's state, not the usual one

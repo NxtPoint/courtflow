@@ -2685,11 +2685,36 @@ def sc_a_coach_cannot_rewrite_a_lesson_once_it_is_over(s, fx):
                    "ends_at = now() - interval '2 hours' WHERE id = :s"), {"s": sid})
     check("...and one whose end time has passed has (the coach routes refuse to cancel or move it)",
           C.session_has_ended(s, club_id=fx.club_id, session_id=sid) is True)
-    late = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m, role="coach")
-    check("a COACH cannot capture a class seat once the class has started",
+    # The ONE exception (owner's call, 2026-10-31): a class is a roll-call, so the coach who RAN it may
+    # back-capture a player who turned up unbooked. Anyone else's class stays closed to him.
+    other_coach = _mk_user(s, "notmyclass_coach@scratch.test", "Other")
+    late = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m, role="coach",
+                   created_by_user_id=other_coach)
+    check("a COACH cannot capture a seat in SOMEONE ELSE's class once it has started",
           late.get("error") == "CLASS_ALREADY_STARTED", str(late))
+    anon = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m, role="coach")
+    check("...nor with no acting coach named at all (fails closed)",
+          anon.get("error") == "CLASS_ALREADY_STARTED", str(anon))
+    own = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m, role="coach",
+                  settlement_mode="monthly_account", created_by_user_id=fx.coach_uid)
+    check("the coach who RAN the class CAN back-capture a seat in it",
+          own.get("error") is None and own.get("status_value") != "waitlisted", str(own))
+    eo = _order_of_enrolment(s, fx, sid, m)
+    check("...and the late seat is BILLED like any other (an owed order, not a free seat)",
+          bool(eo) and eo["status"] in ("open", "awaiting_payment"), str(dict(eo) if eo else eo))
+    by = s.execute(text("SELECT created_by_user_id FROM diary.enrolment "
+                        "WHERE class_session_id = :cs AND user_id = :u"), {"cs": sid, "u": m}).scalar()
+    check("...and the record says WHO entered it", str(by) == str(fx.coach_uid), str(by))
+    C.cancel_enrolment(s, club_id=fx.club_id, class_session_id=sid, user_id=m, role="club_admin")
     fix = C.enrol(s, club_id=fx.club_id, class_session_id=sid, user_id=m, role="club_admin")
     check("an ADMIN still can", fix.get("error") is None, str(fix))
+    # A LESSON stays closed to back-capture by a coach — the exception is classes only.
+    lz = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="coach",
+                          booking_type="lesson", resource_id=None, coach_user_id=fx.coach_uid,
+                          starts_at=utc_iso(now - timedelta(days=2, hours=2)),
+                          ends_at=utc_iso(now - timedelta(days=2, hours=1)),
+                          settlement_mode="monthly_account", booked_for_user_id=m, allow_past=True)
+    check("a COACH still cannot back-capture a LESSON", not lz.get("ok") and bool(lz.get("error")), str(lz))
 
 
 def sc_a_coach_can_manage_a_clients_class_seat(s, fx):
