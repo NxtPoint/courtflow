@@ -436,6 +436,10 @@ _DDL = [
             CHECK (billing_model IN ('commission','rent'));
     EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     """,
+    # Who the coach's clients pay. Separate from billing_model on purpose: a commission coach can
+    # invoice his own clients and still have his lessons charged, which 'rent' would switch off.
+    f"ALTER TABLE {SCHEMA}.coach_agreement ADD COLUMN IF NOT EXISTS invoices_own_clients boolean "
+    f"NOT NULL DEFAULT false;",
     f"CREATE INDEX IF NOT EXISTS ix_coach_agreement_club "
     f"ON {SCHEMA}.coach_agreement (club_id, coach_user_id);",
     # one active, open-ended agreement per coach at a time:

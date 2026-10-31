@@ -1284,6 +1284,19 @@ def coach_billing_model(session, *, club_id, coach_user_id) -> str:
         return "commission"
 
 
+def coach_collects_own_invoices(session, *, club_id, coach_user_id) -> bool:
+    """True when this coach's clients pay the COACH, so an unpaid invoice never becomes money the
+    club passes on: all that is still to come is the club's commission. A rent coach bills his own
+    clients by definition. Not guarded: the caller refuses to print a total without the answer."""
+    row = session.execute(
+        text("SELECT invoices_own_clients, billing_model FROM billing.coach_agreement "
+             " WHERE club_id = :c AND coach_user_id = :u AND status = 'active' "
+             "   AND (effective_to IS NULL OR effective_to >= CURRENT_DATE) "
+             " ORDER BY effective_from DESC LIMIT 1"),
+        {"c": str(club_id), "u": str(coach_user_id)}).mappings().first()
+    return bool(row) and (bool(row["invoices_own_clients"]) or row["billing_model"] == "rent")
+
+
 def month_end_period(session, period_label=None) -> str:
     """The month the sweep bills — by default the month JUST ENDED, because the sweep now runs on the
     1st. It used to run on the 25th and default to the CURRENT month, which is why an invoice could
@@ -2037,6 +2050,8 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
         with session.begin_nested():
             unpaid_packs = _unpaid_pack_sales_minor(session, club_id=club_id,
                                                     coach_user_id=coach_user_id, ym=ym)
+            collects_own = coach_collects_own_invoices(session, club_id=club_id,
+                                                       coach_user_id=coach_user_id)
         owed = int(thru["totals"]["outstanding_minor"]) + unpaid_packs
         rate = (Decimal(str(st["effective_pct"])) if st["effective_pct"] is not None
                 else resolve_commission_pct(session, club_id=club_id, coach_user_id=coach_user_id))
@@ -2045,7 +2060,8 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
         st["outstanding_total_minor"] = owed
         st["outstanding_total_commission_minor"] = future
         st["outstanding_total_net_minor"] = owed - future
-        st["total_payable_minor"] = pay_now + owed - future
+        st["coach_collects_invoices"] = collects_own
+        st["total_payable_minor"] = pay_now - future if collects_own else pay_now + owed - future
     except Exception:
         log.exception("coach_settlement total payable failed")
     return {"month": ym, "settlement": st, "ledger": led,

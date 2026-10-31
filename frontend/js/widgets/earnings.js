@@ -154,12 +154,18 @@
         box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:8px 0 0", text:
           "Outstanding invoices could not be worked out, so no total is shown." }));
       } else if (st.outstanding_total_minor) {
-        box.appendChild(stmtLine("Invoices outstanding", money(st.outstanding_total_minor),
-                                 { border: true, sub: "not yet paid by clients, this month and earlier" }));
-        box.appendChild(stmtLine("Less future commission", "− " + money(st.outstanding_total_commission_minor), { sub: pct + "%" }));
-        box.appendChild(stmtLine(payLabel(st.total_payable_minor, true), money(Math.abs(st.total_payable_minor)), {
-          strong: true, border: true, tone: st.total_payable_minor < 0 ? "bad" : "",
-          sub: "once every client has paid" }));
+        // A coach who invoices his own clients receives this money himself, so it never joins the
+        // total: only the club's commission on it is still to come.
+        var direct = !!st.coach_collects_invoices, future = st.outstanding_total_commission_minor;
+        box.appendChild(stmtLine("Invoices outstanding", money(st.outstanding_total_minor), { border: true,
+          sub: direct ? "clients pay " + who + " directly, so this is not added" : "not yet paid by clients, this month and earlier" }));
+        if (future || !direct) {
+          box.appendChild(stmtLine(direct ? "Commission still to come" : "Less future commission", "− " + money(future),
+                                   { sub: pct + "%" + (direct ? " of those invoices" : "") }));
+          box.appendChild(stmtLine(payLabel(st.total_payable_minor, true), money(Math.abs(st.total_payable_minor)), {
+            strong: true, border: true, tone: st.total_payable_minor < 0 ? "bad" : "",
+            sub: "once every client has paid" }));
+        }
       }
 
       // (Only when the running balance could not be worked out.)

@@ -1325,7 +1325,9 @@ def put_coach_agreement(coach_user_id):
             # 'rent' = the coach bills his own clients, so a lesson he books against himself
             # raises NO club charge (billing.commission.coach_billing_model).
             billing_model=(b.get("billing_model") if b.get("billing_model") in
-                           ("commission", "rent") else None))
+                           ("commission", "rent") else None),
+            invoices_own_clients=(bool(b["invoices_own_clients"])
+                                  if "invoices_own_clients" in b else None))
     return jsonify(agreement=agr), 200
 
 

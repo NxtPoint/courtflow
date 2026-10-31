@@ -2084,7 +2084,7 @@
       var uid = c.user_id || c.id, ag = aggFor(uid), pending = isPending(c), life = coachLife(c);
       var subbits = [c.email || ""];
       if (ag.rent_minor) subbits.push("rent " + UI.money(ag.rent_minor));
-      if (ag.billing_model === "rent") subbits.push("bills own clients");
+      if (ag.billing_model === "rent" || ag.invoices_own_clients) subbits.push("bills own clients");
       if (ag.coach_pct != null) subbits.push(ag.coach_pct + "% commission");
       if (pending) subbits.push("invite pending");
       function setStatus(ns) { window.AdminAPI.patchCoach(uid, { status: ns }).then(renderList, function (e) { UI.toast(UI.errMsg(e), "error"); }); }
@@ -2120,7 +2120,7 @@
 
     function openCoach(c, ag) {
       var uid = c.user_id || c.id, pending = isPending(c);
-      var m = { rent_minor: ag.rent_minor || 0, rent_day: ag.rent_day || 1, coach_pct: (ag.coach_pct != null ? ag.coach_pct : ""), billing_model: ag.billing_model || "commission" };
+      var m = { rent_minor: ag.rent_minor || 0, rent_day: ag.rent_day || 1, coach_pct: (ag.coach_pct != null ? ag.coach_pct : ""), billing_model: ag.billing_model || "commission", invoices_own_clients: !!ag.invoices_own_clients };
       render();
       function render() {
         UI.clear(host);
@@ -2152,15 +2152,24 @@
         }
         syncModelNote();
         modelS.addEventListener("change", function () { m.billing_model = modelS.value; syncModelNote(); });
+        // Who the clients PAY decides what an unpaid invoice is worth on the coach's Club earnings
+        // card. Not the billing model above: that one also decides whether a lesson is charged.
+        var ownI = el("input", { type: "checkbox" });
+        ownI.checked = !!m.invoices_own_clients;
+        ownI.addEventListener("change", function () { m.invoices_own_clients = ownI.checked; });
         host.appendChild(el("div", { class: "cf-card" }, [
-          el("h3", { text: "Billing model" }), modelS, modelNote]));
+          el("h3", { text: "Billing model" }), modelS, modelNote,
+          el("label", { class: "cf-row", style: "gap:8px;align-items:center;margin-top:10px" }, [
+            ownI, el("span", { text: "This coach invoices their own clients" })]),
+          el("p", { class: "cf-muted cf-tiny", style: "margin:6px 0 0",
+            text: "Unpaid invoices are then paid to the coach, so Club earnings counts only the commission still to come on them." })]));
         var pctI = input({ type: "number", min: 0, max: 100, value: m.coach_pct, placeholder: String(DATA.agg.club_default_pct || 0), style: "max-width:100px" }); pctI.addEventListener("input", function () { m.coach_pct = pctI.value; });
         host.appendChild(el("div", { class: "cf-card" }, [el("h3", { text: "Default commission" }), el("p", { class: "cf-muted cf-tiny", text: "The % the club keeps on all this coach's lessons. Blank = the club default (" + (DATA.agg.club_default_pct || 0) + "%). Per-service overrides live in the service editor." }), el("div", { class: "cf-row", style: "gap:8px;align-items:center" }, [pctI, el("span", { class: "cf-muted", text: "% to the club" })])]));
       }
       async function save(btn) {
         btn.disabled = true; btn.textContent = "Saving…";
         try {
-          await window.AdminAPI.putCoachAgreement(uid, { rent_minor: m.rent_minor, rent_day: m.rent_day, billing_model: m.billing_model });
+          await window.AdminAPI.putCoachAgreement(uid, { rent_minor: m.rent_minor, rent_day: m.rent_day, billing_model: m.billing_model, invoices_own_clients: m.invoices_own_clients });
           if (m.coach_pct !== "" && m.coach_pct != null) { var v = parseFloat(m.coach_pct); if (!isNaN(v)) await window.AdminAPI.setCommissionRule({ coach_user_id: uid, commission_pct: Math.max(0, Math.min(100, v)) }); }
           UI.toast("Saved.", "info"); renderList();
         } catch (e) { btn.disabled = false; btn.textContent = "Save & close"; UI.toast(UI.errMsg(e) || "Couldn't save.", "error"); }

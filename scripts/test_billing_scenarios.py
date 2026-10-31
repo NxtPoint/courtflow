@@ -4798,6 +4798,18 @@ def sc_the_coach_card_follows_the_owners_formula(s, fx):
     check("...and takes it off the total, so it cannot be paid twice",
           paid["total_payable_minor"] == 84000, str(paid["total_payable_minor"]))
 
+    # A coach who invoices his own clients: the unpaid R1,200 is paid to him, so only the R360 is to come.
+    ARf.upsert_agreement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid), invoices_own_clients=True)
+    check("a coach's own invoices never join the total: R0 - R360 = R360 owed by him",
+          settle(prev_m)["total_payable_minor"] == -36000, str(settle(prev_m)["total_payable_minor"]))
+    ARf.upsert_agreement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid), invoices_own_clients=False)
+    check("...and unticking it puts the invoices back", settle(prev_m)["total_payable_minor"] == 84000,
+          str(settle(prev_m)["total_payable_minor"]))
+    ARf.upsert_agreement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid), billing_model="rent")
+    check("a rent coach bills his own clients, so the same holds for him",
+          settle(prev_m)["total_payable_minor"] == -36000, str(settle(prev_m)["total_payable_minor"]))
+    ARf.upsert_agreement(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid), billing_model="commission")
+
     rows = []
     for m in (prev_m, this_m):
         rows += [(m, c) for c in ARf.revenue_club_overview(s, club_id=fx.club_id, month=m)["coaches"]
