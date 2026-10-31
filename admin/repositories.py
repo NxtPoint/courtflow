@@ -2735,6 +2735,17 @@ def revenue_club_overview(session, *, club_id, month=None):
     except Exception:
         session.rollback()
         coaches = []
+    # Each row shows the same settlement as the card it opens, so the amount to pay cannot differ
+    # between the list and the coach. None on failure: the row then shows no pay figure at all.
+    from billing.commission import coach_settlement
+    for co in coaches:
+        try:
+            co["settlement"] = coach_settlement(session, club_id=club_id,
+                                                coach_user_id=co["coach_user_id"], month=ym)["settlement"]
+        except Exception:
+            log.warning("settlement unavailable on coach row coach=%s month=%s",
+                        co["coach_user_id"], ym, exc_info=True)
+            co["settlement"] = None
 
     direct = []
     try:

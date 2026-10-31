@@ -84,11 +84,14 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 833 / billing 776 / statement 67**. Each uses its own scratch club and always rolls back.
+   **booking 833 / billing 790 / statement 67**. Each uses its own scratch club and always rolls back.
+   **In the last 3 days of a month ~30 billing checks fail on correct code** (settlement and statement
+   figures reading R0): the harness books 3 days ahead, so its sessions land in NEXT month while those
+   checks read this one. Compare the failures against the untouched code before believing them.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (105/102/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (105/103/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **When the numbers move, run `python -m scripts.audit_docs` and update
    EVERY doc it names** — the baseline is repeated in ~7 files and the gate fails unless they all
@@ -692,9 +695,13 @@ looks like a harmless simplification until you read what it cost.
   coach over three months) while the settlement, read from the splits, was right — the correct payout
   looked like overpaying. The wrapper is excluded, its children are not; the charge sits on the WRAPPER,
   so "is it in the bank" must look at `settled_by_order_id` too (the work log made the same mistake and
-  called those lessons "collected by coach"). The coach card now renders from the SETTLEMENT only:
-  OPENING balance → paid by clients → commission → coach's share → less collected at court → less paid out → CLOSING balance (one month's closing is the next one's opening; the all-time line is gone because it included LATER months).
-  `sc_pay_all`
+  called those lessons "collected by coach"). The coach card renders from the SETTLEMENT only, in the
+  OWNER'S FORMULA (2026-10-31): carried over + billed and received in the bank (card + EFT) − commission
+  − fines = PAY TO COACH / OWED BY COACH; then invoices outstanding − future commission, added on, =
+  TOTAL AMOUNT PAYABLE. Commission on court-collected cash, rent and payouts show only when they exist.
+  The outstanding side runs through EVERY month up to the one on screen, because the balance does, and
+  includes unpaid packs. The coach list reads the same settlement, so the two cannot differ. One month's
+  pay figure is the next one's carried-over. `sc_pay_all` · `sc_the_coach_card_follows_the_owners_formula`
 - A PAYOUT MUST SAY WHICH MONTH IT SETTLES, and the screen that records one must ASK (2026-08-10) — the engine honoured `period_label` for weeks while the modal never sent it, so every real payout credited the month the cash moved — `sc_coach_earnings_carries_the_settlement`
 
 **The seat rule (community/)** — [GOTCHAS.md#the-seat-rule-community](docs/specs/GOTCHAS.md#the-seat-rule-community)

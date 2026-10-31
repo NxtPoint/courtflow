@@ -25,7 +25,6 @@
     var UI = window.UI, CRMUI = window.CRMUI, el = UI.el;
     var role = (cfg.scope && cfg.scope.role) || "admin";
     var isCoach = role === "coach";
-    var keepLabel = isCoach ? "You keep" : "Coach keeps";
     var MONTH = cfg.month || null;
     var CUR = "ZAR";
     function money(m) { return UI.money(m || 0, CUR); }
@@ -78,15 +77,14 @@
       ]);
     }
 
-    // THE coach card — ONE statement on ONE basis: the month the work was done, read from the money
-    // that was actually paid (the settlement). It follows the owner's rule, in his order:
-    //   what clients PAID  ->  the club's commission on all of it  ->  the coach's share
-    //   ->  less what the coach already took at the court  ->  less what has already been paid out
-    //   ->  DUE NOW.  Then, separately, what clients have not paid yet.
-    // It used to open with a second set of figures (sales / received / "coach keeps") worked out a
-    // different way, from the month each ORDER was created. The two never agreed, and the top half
-    // silently left out anything paid through "Pay all" — so the payout line underneath, which was
-    // right, read as the club overpaying. One basis, one story, every line feeding the next.
+    // THE coach card — the owner's formula, in his order, every line feeding the next:
+    //   carried over from last month + billed and received in the bank (card + EFT)
+    //   - commission - fines = PAY TO COACH / OWED BY COACH
+    //   then invoices outstanding - future commission, for the TOTAL AMOUNT PAYABLE.
+    // The month is the month the work was done. Commission on cash the coach took at the court comes
+    // out of the same balance, so it gets its own line, shown only when there is any: folded into
+    // the commission line, the percentage printed beside it would not match the figure. Rent and
+    // payouts likewise appear only when they exist, and must stay: they change what is payable.
     function pnlCard(p, onRecordPayout) {
       var box = UI.card([]);
       var who = isCoach ? "you" : "the coach";
@@ -100,68 +98,46 @@
         box.appendChild(stmtLine("Owed by clients", money(p.owed_minor)));
         return box;
       }
-      var total = st.total_collected_minor || 0, held = st.coach_held_minor || 0, comm = st.commission_minor || 0;
+      function signed(v) { return (v < 0 ? "− " : "+ ") + money(Math.abs(v)); }
+      function owedWord(v) { return v > 0 ? "owed to " + who : (v < 0 ? "owed by " + who : "nothing carried over"); }
+      function payLabel(v, total) {
+        if (isCoach) return v < 0 ? (total ? "TOTAL YOU OWE THE CLUB" : "YOU OWE THE CLUB") : (total ? "TOTAL AMOUNT PAYABLE TO YOU" : "PAY TO YOU");
+        return v < 0 ? (total ? "TOTAL OWED BY COACH" : "OWED BY COACH") : (total ? "TOTAL AMOUNT PAYABLE" : "PAY TO COACH");
+      }
       var kinds = [];
       ["lesson", "class", "pack"].forEach(function (k) {
-        var v = (st.by_kind || {})[k]; if (!v) return;
-        var amt = (v.club_minor || 0) + (v.coach_minor || 0);
+        var amt = ((st.by_kind || {})[k] || {}).club_minor;
         if (amt) kinds.push(k + (k === "class" ? "es " : "s ") + money(amt));
       });
 
-      // 0) BROUGHT FORWARD — what was still unpaid at the end of the month before. The statement is
-      // a running account: opening + this month - paid out = closing, and the closing is next
-      // month's opening. Omitted (not shown as zero) when the server could not work it out.
+      // 1) CARRIED OVER. Omitted (never shown as zero) when the server could not work it out.
       var hasBal = st.opening_minor != null && st.closing_minor != null;
-      function owedWord(v) { return v > 0 ? "owed to " + who : (v < 0 ? "owed by " + who : "settled"); }
       if (hasBal) {
-        box.appendChild(stmtLine("Opening balance", money(Math.abs(st.opening_minor)),
-                                 { border: true, sub: "brought forward · " + owedWord(st.opening_minor) }));
+        box.appendChild(stmtLine("Carried over from last month", (st.opening_minor < 0 ? "− " : "") + money(Math.abs(st.opening_minor)),
+                                 { border: true, sub: owedWord(st.opening_minor) }));
       }
 
-      // 1) WHAT CLIENTS PAID for this month's work, and where that money is.
-      box.appendChild(stmtLine("Paid by clients", money(total), { strong: true, border: true }));
+      // 2) WHAT REACHED THE BANK for this month's work.
+      box.appendChild(stmtLine("Billed and received in the bank", "+ " + money(st.club_held_minor), { strong: true, border: !hasBal, sub: "card + EFT" }));
       if (kinds.length) {
         box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:0 0 4px",
-          text: kinds.join(" · ") + ((st.by_kind || {}).pack ? " — a pack counts in full when it is sold" : "") }));
-      }
-      box.appendChild(stmtLine("into the club's account", money(st.club_held_minor), { indent: true, sub: "card + EFT" }));
-      if (held) box.appendChild(stmtLine("paid to " + who + " at the court", money(held), { indent: true }));
-
-      // 2) THE SPLIT, then what has already changed hands.
-      box.appendChild(stmtLine("Club commission", "− " + money(comm), { border: true, sub: pct + "% of everything paid" }));
-      box.appendChild(stmtLine(keepLabel, money(total - comm), { strong: true }));
-      if (held) box.appendChild(stmtLine("Less what " + who + " already collected", "− " + money(held), { indent: true, muted: true }));
-      if (L.rent_minor) box.appendChild(stmtLine("Less rent", "− " + money(Math.abs(L.rent_minor)), { indent: true, muted: true }));
-      if (L.adjustments_minor) {
-        box.appendChild(stmtLine("Adjustments", (L.adjustments_minor < 0 ? "− " : "+ ") + money(Math.abs(L.adjustments_minor)), { indent: true, muted: true }));
-      }
-      if (L.payouts_minor) {
-        box.appendChild(stmtLine("Less already paid out", "− " + money(Math.abs(L.payouts_minor)),
-                                 { indent: true, muted: true, sub: "for this month" }));
-      }
-      var due = st.due_now_minor || 0;
-      if (hasBal) {
-        var close = st.closing_minor || 0;
-        box.appendChild(stmtLine("This month", (due < 0 ? "− " : "") + money(Math.abs(due)),
-                                 { border: true, muted: true, sub: "after commission and payouts" }));
-        box.appendChild(stmtLine("CLOSING BALANCE", money(Math.abs(close)), {
-          strong: true, border: true, tone: close < 0 ? "bad" : "",
-          sub: close === 0 ? "settled" : (close > 0 ? (isCoach ? "due to you now" : "due to the coach now")
-                                                   : (isCoach ? "you owe the club" : "owed by the coach")) }));
-      } else {
-        box.appendChild(stmtLine(
-          due >= 0 ? (isCoach ? "DUE TO YOU NOW" : "DUE TO THE COACH NOW")
-                   : (isCoach ? "YOU OWE THE CLUB" : "OWED BY THE COACH"),
-          money(Math.abs(due)), { strong: true, border: true, tone: due >= 0 ? "" : "bad" }));
+          text: kinds.join(" · ") + (((st.by_kind || {}).pack || {}).club_minor ? " — a pack counts in full when it is sold" : "") }));
       }
 
-      // 3) WHAT HAS NOT BEEN PAID YET — nothing is due on it until the client pays.
-      if (st.outstanding_minor) {
-        box.appendChild(stmtLine("Not yet paid by clients", money(st.outstanding_minor), { border: true, muted: true }));
-        box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:2px 0 0", text:
-          "As clients pay, " + money(st.outstanding_net_minor) + " more becomes due to " + who
-          + ", and the closing balance rises by that much." }));
+      // 3) WHAT COMES OFF IT. A line that does not apply to this coach is not shown at all.
+      box.appendChild(stmtLine("Club commission", "− " + money(st.commission_bank_minor), { sub: pct + "% of the money in the bank" }));
+      if (st.commission_coach_held_minor) {
+        box.appendChild(stmtLine("Commission on money collected at the court", signed(-st.commission_coach_held_minor),
+                                 { sub: money(st.coach_held_minor) + " went straight to " + who }));
       }
+      if (L.adjustments_minor) box.appendChild(stmtLine("Fines and adjustments", signed(L.adjustments_minor)));
+      if (L.rent_minor) box.appendChild(stmtLine("Rent", signed(L.rent_minor)));
+      if (L.payouts_minor) box.appendChild(stmtLine(L.payouts_minor < 0 ? "Already paid out" : "Already paid in", signed(L.payouts_minor), { sub: "for this month" }));
+
+      // 4) THE AMOUNT TO PAY.
+      var pay = hasBal ? st.closing_minor : (st.due_now_minor || 0);
+      box.appendChild(stmtLine(payLabel(pay, false), money(Math.abs(pay)), {
+        strong: true, border: true, tone: pay < 0 ? "bad" : "", sub: pay === 0 ? "settled" : null }));
       if (st.reconciles === false) {
         box.appendChild(el("div", { class: "cf-note cf-note-warn", style: "margin-top:10px", text:
           "These figures don't tie to the ledger. Don't settle from this screen until it's checked." }));
@@ -172,9 +148,21 @@
                          onclick: function () { onRecordPayout(); } }),
         ]));
       }
-      // (The ALL-TIME balance used to close this card. It included LATER months, so September's
-      // statement showed October's money. The closing balance above replaces it; it is shown only
-      // when the running account could not be worked out.)
+
+      // 5) STILL TO COME. Nothing here is due until the client pays, so it sits below the payout.
+      if (st.total_payable_minor == null) {
+        box.appendChild(el("p", { class: "cf-muted cf-tiny", style: "margin:8px 0 0", text:
+          "Outstanding invoices could not be worked out, so no total is shown." }));
+      } else if (st.outstanding_total_minor) {
+        box.appendChild(stmtLine("Invoices outstanding", money(st.outstanding_total_minor),
+                                 { border: true, sub: "not yet paid by clients, this month and earlier" }));
+        box.appendChild(stmtLine("Less future commission", "− " + money(st.outstanding_total_commission_minor), { sub: pct + "%" }));
+        box.appendChild(stmtLine(payLabel(st.total_payable_minor, true), money(Math.abs(st.total_payable_minor)), {
+          strong: true, border: true, tone: st.total_payable_minor < 0 ? "bad" : "",
+          sub: "once every client has paid" }));
+      }
+
+      // (Only when the running balance could not be worked out.)
       if (!hasBal && p.ledger_balance_minor != null) {
         var bal = p.ledger_balance_minor || 0;
         box.appendChild(stmtLine("All months together", money(Math.abs(bal)),
@@ -235,13 +223,14 @@
         var coaches = d.coaches || [], direct = (d.direct || []).filter(function (x) { return (x.billed_minor || 0) > 0; });
         var cc = UI.card([CRMUI.sectionHead("Coaches" + (coaches.length ? " · " + coaches.length : ""))]);
         if (!coaches.length) cc.appendChild(el("div", { class: "cf-empty", text: "No coach revenue this month." }));
-        else { var cl = el("div", { class: "cf-list" }); coaches.forEach(function (p) { var held = p.coach_held_minor || 0;
-          // "in" used to mean "the client settled" — which for a coach who collects at the court is
-          // the CLUB's money in HIS pocket. Only Yoco + EFT reaches the club, so say which is which.
-          var sub = money(p.banked_minor != null ? p.banked_minor : p.received_minor) + " in your bank"
-                  + (held ? " · " + money(held) + " held by them" : "")
-                  + " · " + money(p.owed_minor) + " owed by clients";
-          cl.appendChild(tapRow(p.name, sub, money(p.net_minor), money(p.club_comm_total_minor) + " club", function () { renderCoach(p.coach_user_id, false); })); }); cc.appendChild(cl); }
+        else { var cl = el("div", { class: "cf-list" }); coaches.forEach(function (p) {
+          // The same figures as the card it opens: read from the settlement, never worked out twice.
+          var st = p.settlement || null, open = function () { renderCoach(p.coach_user_id, false); };
+          if (!st) { cl.appendChild(tapRow(p.name, "Tap to see this coach", money(p.net_minor), null, open)); return; }
+          var pay = st.closing_minor != null ? st.closing_minor : (st.due_now_minor || 0);
+          var sub = money(st.club_held_minor) + " in the bank · " + money(st.commission_minor) + " commission"
+                  + (st.outstanding_total_minor ? " · " + money(st.outstanding_total_minor) + " invoices outstanding" : "");
+          cl.appendChild(tapRow(p.name, sub, money(Math.abs(pay)), pay < 0 ? "owed by coach" : "pay to coach", open)); }); cc.appendChild(cl); }
         wrap.appendChild(cc);
 
         if (direct.length) {

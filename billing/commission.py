@@ -1562,7 +1562,8 @@ def settlement_overview(session, *, club_id) -> Dict[str, Any]:
             "total_owed_minor": sum(c["owed_minor"] for c in client_rows)}
 
 
-def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dict[str, Any]:
+def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None,
+                          through=False) -> Dict[str, Any]:
     """THE WORK LOG: every session this coach delivered in the month, by CLIENT, by DAY.
 
     Bounded on the **SESSION's own date** (`diary.booking.starts_at` / `class_session.starts_at`), not
@@ -1572,8 +1573,14 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
     `coach_settlement`. The two deliberately differ, and the statement says so.)
 
     Each row carries what it cost, whether it is settled, and \u2014 the point of the exercise \u2014 WHERE THAT
-    MONEY IS: with the club, with the coach, or not yet collected. Guarded \u2192 empty."""
+    MONEY IS: with the club, with the coach, or not yet collected. Guarded \u2192 empty, with
+    `failed` set so a money total built on this can refuse to read that as nothing owed.
+
+    `through=True` widens it to every month UP TO AND INCLUDING `month`: the running account carries
+    what was collected in earlier months, so what is still unpaid has to cover them too."""
     ym = month or session.execute(text("SELECT to_char(now(),'YYYY-MM')")).scalar()
+    month_op = "<=" if through else "="
+    failed = False
     try:
       with session.begin_nested():
         rows = session.execute(
@@ -1598,7 +1605,7 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
                     WHERE b.club_id = :club AND b.coach_user_id = CAST(:coach AS uuid)
                       AND b.booking_type = 'lesson'
                       AND b.status IN ('confirmed','completed','held')
-                      AND to_char(b.starts_at, 'YYYY-MM') = :ym
+                      AND to_char(b.starts_at, 'YYYY-MM') """ + month_op + """ :ym
                     UNION ALL
                     -- CLASSES he runs: one row per enrolled seat (that is what he is paid on).
                     SELECT cls.starts_at, cls.ends_at, e.user_id AS client_user_id,
@@ -1612,7 +1619,7 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
                     LEFT JOIN billing.product pr ON pr.id = p2.product_id
                     WHERE cls.club_id = :club AND cls.coach_user_id = CAST(:coach AS uuid)
                       AND cls.status <> 'cancelled'
-                      AND to_char(cls.starts_at, 'YYYY-MM') = :ym
+                      AND to_char(cls.starts_at, 'YYYY-MM') """ + month_op + """ :ym
                 )
                 SELECT src.*, o.status AS order_status, o.settlement_mode,
                        COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)),''),
@@ -1650,6 +1657,7 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
         # scopes the failure to this block. (Same discipline as client360._guard.)
         log.exception("coach_sessions_by_day failed")
         rows = []
+        failed = True
 
     clients: Dict[str, Dict[str, Any]] = {}
     totals = {"sessions": 0, "billed_minor": 0, "to_club_minor": 0,
@@ -1700,7 +1708,25 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None) -> Dic
 
     out = sorted(clients.values(),
                  key=lambda c: (-c["totals"]["outstanding_minor"], c["client_name"] or ""))
-    return {"month": ym, "clients": out, "totals": totals}
+    return {"month": ym, "clients": out, "totals": totals, "failed": failed}
+
+
+def _unpaid_pack_sales_minor(session, *, club_id, coach_user_id, ym) -> int:
+    """Packs this coach sold on account that are still unpaid, up to and including `ym`. A pack is
+    activated before it is paid and its sessions then show no charge, so the work log never sees this
+    debt. Not guarded: the caller refuses to print a total without it."""
+    return int(session.execute(
+        text("""
+            SELECT COALESCE(SUM(o.amount_minor), 0)
+            FROM billing."order" o
+            WHERE o.club_id = :club AND o.status = 'open'
+              AND EXISTS (SELECT 1 FROM billing.token_wallet w
+                           WHERE w.order_id = o.id AND w.coach_user_id = CAST(:coach AS uuid))
+              AND to_char(COALESCE(o.service_date::timestamptz, o.created_at) AT TIME ZONE :tz,
+                          'YYYY-MM') <= :ym
+        """),
+        {"club": club_id, "coach": str(coach_user_id), "ym": ym,
+         "tz": _club_tz(session, club_id)}).scalar() or 0)
 
 
 # WHICH MONTH A SPLIT'S WORK WAS DONE IN — one definition, used by the settlement and by the
@@ -1791,6 +1817,11 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
                       WHERE basis <> 'refund_clawback'), 0)                         AS commission,
                   COALESCE(SUM(amount_minor) FILTER (
                       WHERE basis = 'refund_clawback'), 0)                          AS clawback,
+                  -- The club's cut on money the COACH holds, clawbacks included. The card shows
+                  -- it on its own line: it is taken out of the banked money, so printed as one
+                  -- figure the commission reads as far more than the rate.
+                  COALESCE(SUM(amount_minor) FILTER (
+                      WHERE COALESCE(club_banked, false) = false), 0)               AS commission_coach_held,
                   COALESCE(SUM(gross_minor) FILTER (
                       WHERE basis = 'refund_clawback'), 0)                          AS refunded_gross,
                   COALESCE(SUM(gross_minor) FILTER (
@@ -1819,6 +1850,8 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
     net = club_held - commission
     st = {"club_held_minor": club_held, "coach_held_minor": coach_held,
           "total_collected_minor": total, "commission_minor": commission,
+          "commission_bank_minor": commission - g("commission_coach_held"),
+          "commission_coach_held_minor": g("commission_coach_held"),
           "clawback_minor": g("clawback"), "refunded_gross_minor": g("refunded_gross"),
           "net_minor": net,
           "effective_pct": (round(commission * 100.0 / total, 2) if total else None)}
@@ -1982,6 +2015,32 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
         st["closing_minor"] = st["opening_minor"] + st["due_now_minor"]
     except Exception:
         log.exception("coach_settlement opening balance failed")
+
+    # TOTAL AMOUNT PAYABLE: what is payable now, plus the coach's share of everything clients still
+    # owe. The balance runs across months, so the unpaid side must too: this month alone would drop
+    # an August invoice unpaid in October from every screen. All None on failure, so the card omits
+    # the total instead of printing one that quietly leaves money out.
+    st["outstanding_total_minor"] = st["outstanding_total_commission_minor"] = None
+    st["outstanding_total_net_minor"] = st["total_payable_minor"] = None
+    try:
+        thru = coach_sessions_by_day(session, club_id=club_id, coach_user_id=coach_user_id,
+                                     month=ym, through=True)
+        if thru.get("failed"):
+            raise RuntimeError("sessions read failed")
+        with session.begin_nested():
+            unpaid_packs = _unpaid_pack_sales_minor(session, club_id=club_id,
+                                                    coach_user_id=coach_user_id, ym=ym)
+        owed = int(thru["totals"]["outstanding_minor"]) + unpaid_packs
+        rate = (Decimal(str(st["effective_pct"])) if st["effective_pct"] is not None
+                else resolve_commission_pct(session, club_id=club_id, coach_user_id=coach_user_id))
+        future = int(owed * Decimal(rate) / 100)
+        pay_now = st["closing_minor"] if st["closing_minor"] is not None else st["due_now_minor"]
+        st["outstanding_total_minor"] = owed
+        st["outstanding_total_commission_minor"] = future
+        st["outstanding_total_net_minor"] = owed - future
+        st["total_payable_minor"] = pay_now + owed - future
+    except Exception:
+        log.exception("coach_settlement total payable failed")
     return {"month": ym, "settlement": st, "ledger": led,
             "currency": _club_currency_code(session, club_id)}
 

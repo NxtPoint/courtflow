@@ -4687,6 +4687,113 @@ def sc_a_desk_payment_recorded_in_error_can_be_undone(s, fx):
     check("an UNPAID order is refused", none.get("error") == "ORDER_NOT_PAID", str(none))
 
 
+def sc_the_coach_card_follows_the_owners_formula(s, fx):
+    """THE OWNER'S FORMULA, on the Club earnings coach card:
+        carried over + billed and received in the bank - commission - fines = PAY TO COACH
+        invoices outstanding - future commission, added to that = TOTAL AMOUNT PAYABLE
+    Three things this pins. Commission on cash the coach took at the court is split out, or a 30%
+    line prints a figure well above 30% of the bank line. The outstanding side covers EARLIER months,
+    because the balance does: an invoice unpaid from two months ago must not leave the total. And
+    an unpaid PACK counts, though the work log cannot see it (its sessions show no charge).
+    Every month here is explicit, so this holds in the last days of a month too."""
+    print("\n# The coach card follows the owner's formula, and the coach list shows the same figure")
+    from admin import repositories as ARf
+    from billing import commission as CMf
+    import datetime as _dt
+
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',30,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=1)})
+    tz_now = s.execute(text("SELECT now() AT TIME ZONE 'Africa/Johannesburg'")).scalar()
+    prev = tz_now.replace(day=1) - _dt.timedelta(days=1)
+    older = prev.replace(day=1) - _dt.timedelta(days=1)
+    this_m, prev_m, older_m = (d.strftime("%Y-%m") for d in (tz_now, prev, older))
+
+    def lesson(month_end, hour, amount):
+        day = datetime(month_end.year, month_end.month, 15, hour, 0, tzinfo=JHB)
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="club_admin",
+                             booking_type="lesson", resource_id=fx.coach_res,
+                             coach_user_id=fx.coach_uid, starts_at=iso(day),
+                             ends_at=iso(day + timedelta(hours=1)), settlement_mode="monthly_account",
+                             booked_for_user_id=fx.member, allow_past=True)
+        oid = r["booking"]["order_id"]
+        s.execute(text("UPDATE billing.order_line SET amount_minor=:a WHERE order_id=:o"),
+                  {"a": amount, "o": oid})
+        s.execute(text('UPDATE billing."order" SET amount_minor=:a WHERE id=:o'),
+                  {"a": amount, "o": oid})
+        return oid
+
+    def settle(m):
+        return CMf.coach_settlement(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
+                                    month=m)["settlement"]
+
+    # R1,000 reached the bank; R500 the coach took at the court; a R500 fine; R400 still unpaid.
+    banked = lesson(prev, 9, 100000)
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=banked, amount_minor=100000, provider="eft",
+                          provider_payment_id="EFT-FORMULA", user_id=fx.member)
+    cash_line = _line_of(s, lesson(prev, 11, 50000))
+    _seed_owed_arrears(s, fx, cash_line, gross=50000)
+    aid = s.execute(text("SELECT id FROM billing.coach_arrears WHERE order_line_id=:ol"),
+                    {"ol": cash_line}).scalar()
+    CMf.mark_arrears_collected(s, club_id=fx.club_id, arrears_id=aid)
+    s.execute(text("INSERT INTO billing.coach_ledger (club_id,coach_user_id,entry_type,amount_minor,"
+                   "currency,ref_type,ref_id,occurred_at) VALUES (:c,:u,'adjustment',-50000,'ZAR',"
+                   "'timesheet','formula-fine',:at)"),
+              {"c": fx.club_id, "u": fx.coach_uid,
+               "at": datetime(prev.year, prev.month, 15, 12, 0, tzinfo=JHB)})
+    lesson(prev, 13, 40000)
+    # Still owed from the month before, and a pack sold on account.
+    lesson(older, 9, 20000)
+    pack = s.execute(text('INSERT INTO billing."order" (club_id,user_id,amount_minor,currency_code,'
+                          "settlement_mode,status,service_date) VALUES (:c,:u,60000,'ZAR',"
+                          "'monthly_account','open',CAST(:d AS date)) RETURNING id"),
+                     {"c": fx.club_id, "u": fx.member, "d": prev.strftime("%Y-%m-15")}).scalar_one()
+    s.execute(text("INSERT INTO billing.token_wallet (club_id,user_id,order_id,service_kind,"
+                   "coach_user_id,status) VALUES (:c,:u,:o,'lesson',:coach,'active')"),
+              {"c": fx.club_id, "u": fx.member, "o": str(pack), "coach": fx.coach_uid})
+
+    st = settle(prev_m)
+    check("the bank line is only the money that reached the bank", st["club_held_minor"] == 100000,
+          str(st["club_held_minor"]))
+    check("the commission line is exactly 30% of the bank line", st["commission_bank_minor"] == 30000,
+          str(st.get("commission_bank_minor")))
+    check("...and the commission on court cash stands on its own line",
+          st["commission_coach_held_minor"] == 15000, str(st.get("commission_coach_held_minor")))
+    check("...and the two lines are the whole commission, none lost or counted twice",
+          st["commission_bank_minor"] + st["commission_coach_held_minor"] == st["commission_minor"],
+          str(st["commission_minor"]))
+    check("nothing carried over into the month", st["opening_minor"] == 0, str(st["opening_minor"]))
+    check("PAY TO COACH = R0 + R1,000 - R300 - R150 - R500 fine = R50",
+          st["closing_minor"] == 5000, str(st["closing_minor"]))
+    check("invoices outstanding cover this month, EARLIER months and the unpaid pack (R1,200)",
+          st["outstanding_total_minor"] == 120000, str(st.get("outstanding_total_minor")))
+    check("...less future commission at 30%", st["outstanding_total_commission_minor"] == 36000,
+          str(st.get("outstanding_total_commission_minor")))
+    check("TOTAL AMOUNT PAYABLE = R50 + R1,200 - R360 = R890",
+          st["total_payable_minor"] == 89000, str(st.get("total_payable_minor")))
+
+    early = settle(older_m)
+    check("an earlier month's outstanding does not reach forward into later invoices",
+          early["outstanding_total_minor"] == 20000, str(early.get("outstanding_total_minor")))
+
+    CMf.record_coach_payout(s, club_id=fx.club_id, coach_user_id=str(fx.coach_uid), amount_minor=5000,
+                            direction="club_to_coach", method="eft", reference="formula",
+                            period_label=prev_m)
+    paid = settle(prev_m)
+    check("paying the coach clears PAY TO COACH", paid["closing_minor"] == 0, str(paid["closing_minor"]))
+    check("...and takes it off the total, so it cannot be paid twice",
+          paid["total_payable_minor"] == 84000, str(paid["total_payable_minor"]))
+
+    rows = []
+    for m in (prev_m, this_m):
+        rows += [(m, c) for c in ARf.revenue_club_overview(s, club_id=fx.club_id, month=m)["coaches"]
+                 if c["coach_user_id"] == str(fx.coach_uid)]
+    check("the coach list carries the settlement", bool(rows) and all(c["settlement"] for _, c in rows),
+          str(rows)[:300])
+    check("...and its pay figure IS the figure on the card it opens",
+          all(c["settlement"]["closing_minor"] == settle(m)["closing_minor"] for m, c in rows), str(len(rows)))
+
+
 def sc_coach_earnings_carries_the_settlement(s, fx):
     """ONE coach money screen: the P&L carries the settlement, and a payout credits the month it's FOR.
 
@@ -5864,6 +5971,7 @@ SCENARIOS = [
     sc_the_client_account_reads_month_by_month,
     sc_a_desk_payment_recorded_in_error_can_be_undone,
     sc_coach_earnings_carries_the_settlement,
+    sc_the_coach_card_follows_the_owners_formula,
     sc_one_active_price_per_duration,
     sc_a_rent_coach_lesson_raises_no_club_charge,
     sc_bulk_void_cancels_charges_not_just_the_document,
