@@ -679,7 +679,9 @@ def _can(scope):
                 "approve_refund_request": True, "decline_refund_request": True}
     if scope == "coach":
         # A coach decides a dispute routed to them (the backend still enforces they own it).
+        # Collections: write off an owed lesson and email the client a payment reminder.
         return {"discount": True, "collect": True,
+                "arrears_write_off": True, "send_reminder": True,
                 "approve_refund_request": True, "decline_refund_request": True}
     # client
     return {"pay": True, "request_refund": True}

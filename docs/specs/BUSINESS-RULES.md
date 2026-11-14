@@ -583,6 +583,15 @@ did not exist. Read this before diagnosing a failed refund; `scripts/diagnose_re
   answer. Check whether the order has >1 `payment_attempt` row before assuming which of the four it is.
 
 ## 6. Commission / coaching-settlement engine (the commercial core)
+- **THE VOLUME DISCOUNT (owner deal, 2026-11).** A coach who bills MORE than `club.policy.coach_volume_hours`
+  (NextPoint: 80) hours to client accounts in a month pays `coach_volume_discount_pct` (5) points less
+  commission on that month's work — 30% becomes 25%. Hours = each session ONCE for its length (a class or
+  semi-private is one block of the coach's time), counted only when a client account was charged for it
+  (a real charge or a pack draw; covered, free, void, refunded, written-off do not count), on the month the
+  session RAN (`commission.coach_billed_hours`). The splits stay at the full rate; `coach_settlement` applies
+  the discount on top (`settlement.volume`), so it carries into the pay figure, next month's carried-over
+  and the ledger tie-out. The Club-earnings roll-up and the lifetime ledger balance still read the full
+  rate. NULL/0 hours = no deal (a new tenant never inherits it). `sc_over_the_hours_bar_the_commission_drops`
 - **THE ONE money model — money is an OUTCOME of bookings (order-status-driven fold).** Every money surface
   — coach console, admin Money, and the client record — reports the SAME month-scoped reconciling fold:
   **Billed − Discount − Written-off = Invoiced; Invoiced = Paid + Outstanding.** A cancelled/void booking is

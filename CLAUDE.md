@@ -84,14 +84,14 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 833 / billing 795 / statement 67**. Each uses its own scratch club and always rolls back.
+   **booking 833 / billing 804 / statement 67**. Each uses its own scratch club and always rolls back.
    **In the last 3 days of a month ~30 billing checks fail on correct code** (settlement and statement
    figures reading R0): the harness books 3 days ahead, so its sessions land in NEXT month while those
    checks read this one. Compare the failures against the untouched code before believing them.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (105/103/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (105/104/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **When the numbers move, run `python -m scripts.audit_docs` and update
    EVERY doc it names** — the baseline is repeated in ~7 files and the gate fails unless they all
@@ -704,6 +704,9 @@ looks like a harmless simplification until you read what it cost.
   pay figure is the next one's carried-over. A coach who invoices his own clients
   (`coach_agreement.invoices_own_clients`, or a rent coach) collects those invoices himself, so they
   never join the total: only the commission on them does. `sc_pay_all` · `sc_the_coach_card_follows_the_owners_formula`
+- OVER 80 HOURS BILLED, THE COMMISSION DROPS 5 POINTS (2026-11) — applied by the SETTLEMENT on top of
+  full-rate splits, never by rewriting them; `club.policy.coach_volume_hours` (NULL = no deal) —
+  `sc_over_the_hours_bar_the_commission_drops` · [BUSINESS-RULES § 6](docs/specs/BUSINESS-RULES.md)
 - A LEDGER REPAIR IS NOT A FINE (2026-10-31) — the settlement balance is built from the SPLITS, which never held
   the ledger's mistakes, so an adjustment with ref_type `correction` or `reversal` must stay out of it. Counted, it
   took R14,150 off Colbert twice and showed a R13,665 debt that was really R485 owed TO him —

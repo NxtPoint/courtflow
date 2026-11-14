@@ -135,6 +135,15 @@ _DDL = [
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS marketing_opt_in_default "
     f"boolean NOT NULL DEFAULT false;",
 
+    # THE COACH VOLUME DISCOUNT (owner deal, 2026-11): a coach who bills more than this many hours
+    # to client accounts in a month pays `coach_volume_discount_pct` points less commission on that
+    # month's work (NextPoint: over 80 hours, 30% becomes 25%). NULL or 0 = no such deal — a new
+    # tenant never inherits NextPoint's commercial terms; seed_nextpoint sets club #1's.
+    # Applied by billing.commission.coach_settlement, never by rewriting the splits.
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS coach_volume_hours numeric;",
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS coach_volume_discount_pct numeric "
+    f"NOT NULL DEFAULT 5;",
+
     # --- club.billing_profile : the club's FINANCIAL IDENTITY for invoices/receipts ------
     # One row per club. Everything a professional invoice / statement letterhead needs that
     # isn't already on club.club (legal_name) or club.location (address) or club.branding

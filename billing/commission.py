@@ -1764,6 +1764,118 @@ def _club_tz(session, club_id) -> str:
         return "Africa/Johannesburg"
 
 
+def _volume_terms(session, club_id):
+    """(hours threshold, discount points) for the club's coach volume deal, or (None, 0) when it has
+    none. Guarded → no deal, which is the conservative reading (the coach is charged the full rate
+    rather than the club silently giving money away)."""
+    try:
+        with session.begin_nested():
+            r = session.execute(
+                text("SELECT coach_volume_hours, coach_volume_discount_pct FROM club.policy "
+                     "WHERE club_id = :c"), {"c": club_id}).mappings().first()
+    except Exception:
+        log.exception("coach volume terms unreadable")
+        return None, Decimal("0")
+    hours = Decimal(str(r["coach_volume_hours"])) if r and r["coach_volume_hours"] else None
+    pct = Decimal(str(r["coach_volume_discount_pct"] or 0)) if r else Decimal("0")
+    if not hours or hours <= 0 or pct <= 0:
+        return None, Decimal("0")
+    return hours, pct
+
+
+def coach_billed_hours(session, *, club_id, coach_user_id, ym, op="=") -> Dict[str, float]:
+    """HOURS BILLED TO CLIENT ACCOUNTS, per month ('YYYY-MM' → hours) — what the volume deal counts.
+
+    A session counts ONCE for its length, however many clients were on it (a class or a semi-private
+    is one hour of the coach's time), and only if a client account was actually charged for it: a
+    real charge, or a session drawn from a client's pack. Membership-covered, free, voided, refunded
+    and written-off sessions are not billed, so they do not count. Bounded on the month the session
+    RAN, in the club's timezone — the same month the settlement is for. Not guarded: the caller
+    decides what a failure means for money."""
+    tz = _club_tz(session, club_id)
+    rows = session.execute(
+        text("""
+            WITH s AS (
+                SELECT DISTINCT 'b' || b.id::text AS sid, b.starts_at, b.ends_at
+                FROM diary.booking b
+                JOIN billing.order_line ol ON ol.booking_id = b.id
+                JOIN billing."order" o ON o.id = ol.order_id
+                WHERE b.club_id = :club AND b.coach_user_id = CAST(:coach AS uuid)
+                  AND b.booking_type = 'lesson'
+                  AND b.status IN ('confirmed','completed','held','no_show')
+                  AND (ol.amount_minor > 0 OR o.settlement_mode = 'token')
+                  AND COALESCE(o.settlement_mode,'') NOT IN ('membership_covered','free')
+                  AND o.status NOT IN ('void','refunded','written_off')
+                UNION
+                SELECT DISTINCT 'c' || cls.id::text, cls.starts_at, cls.ends_at
+                FROM diary.class_session cls
+                JOIN diary.enrolment e ON e.class_session_id = cls.id
+                                      AND e.status IN ('enrolled','attended','no_show')
+                JOIN billing.order_line ol ON ol.enrolment_id = e.id
+                JOIN billing."order" o ON o.id = ol.order_id
+                WHERE cls.club_id = :club AND cls.coach_user_id = CAST(:coach AS uuid)
+                  AND cls.status <> 'cancelled'
+                  AND (ol.amount_minor > 0 OR o.settlement_mode = 'token')
+                  AND COALESCE(o.settlement_mode,'') NOT IN ('membership_covered','free')
+                  AND o.status NOT IN ('void','refunded','written_off')
+            )
+            SELECT to_char(starts_at AT TIME ZONE :tz, 'YYYY-MM') AS ym,
+                   SUM(EXTRACT(EPOCH FROM (ends_at - starts_at))) / 3600.0 AS hours
+            FROM s
+            WHERE to_char(starts_at AT TIME ZONE :tz, 'YYYY-MM') """ + op + """ :ym
+            GROUP BY 1
+        """),
+        {"club": club_id, "coach": str(coach_user_id), "ym": ym, "tz": tz},
+    ).mappings().all()
+    return {r["ym"]: round(float(r["hours"] or 0), 2) for r in rows}
+
+
+def _volume_discount(session, *, club_id, coach_user_id, ym, op="="):
+    """THE VOLUME DISCOUNT the club gives back, for every month `op` ym in which this coach billed
+    MORE than the threshold: `discount points × the commissioned gross` of that month's splits, split
+    by who holds the money (the same club_banked rule as the settlement). The splits themselves stay
+    at the full rate — the deal can only be known once the month's hours are in, and the payment
+    that created a split happened long before — so the settlement applies it on top, every time it
+    is read, and it follows late bookings, cancellations and refunds by itself.
+
+    Returns {hours, threshold, points, bank_minor, coach_minor} — hours only meaningful for '='."""
+    threshold, points = _volume_terms(session, club_id)
+    out = {"hours": None, "threshold": (float(threshold) if threshold else None),
+           "points": float(points), "bank_minor": 0, "coach_minor": 0}
+    with session.begin_nested():     # a failed read must not abort the caller's transaction
+        hours = coach_billed_hours(session, club_id=club_id, coach_user_id=coach_user_id, ym=ym, op=op)
+    if op == "=":
+        out["hours"] = hours.get(ym, 0.0)
+    if not threshold:
+        return out
+    months = [m for m, h in hours.items() if Decimal(str(h)) > threshold]
+    if not months:
+        return out
+    with session.begin_nested():
+        rows = session.execute(
+            text("""
+                SELECT """ + _SPLIT_WORK_MONTH + """ AS ym,
+                       COALESCE(pm.provider IN ('yoco','eft'), false) AS club_banked,
+                       SUM(cs.gross_minor * LEAST(cs.commission_pct, :pts) / 100.0) AS give
+                FROM billing.commission_split cs
+                LEFT JOIN billing.payment pm ON pm.id = cs.payment_id
+                LEFT JOIN billing.order_line ol ON ol.id = cs.order_line_id
+                LEFT JOIN billing."order" o ON o.id = ol.order_id
+                WHERE cs.club_id = :club AND cs.coach_user_id = CAST(:coach AS uuid)
+                  AND cs.party_type = 'owner' AND cs.commission_pct > 0
+                  AND COALESCE(pm.status, 'succeeded') <> 'reversed'
+                GROUP BY 1, 2
+            """),
+            {"club": club_id, "coach": str(coach_user_id), "pts": str(points),
+             "tz": _club_tz(session, club_id)},
+        ).mappings().all()
+    for r in rows:
+        if r["ym"] in months:
+            amt = int(Decimal(str(r["give"] or 0)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+            out["bank_minor" if r["club_banked"] else "coach_minor"] += amt
+    return out
+
+
 def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str, Any]:
     """THE SETTLEMENT MATH \u2014 what the club and the coach owe each other for the month.
 
@@ -1851,6 +1963,15 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
         r = {}
 
     g = lambda k: int((r or {}).get(k) or 0)                                   # noqa: E731
+    # THE VOLUME DISCOUNT: over the club's hours threshold this month, the commission comes down by
+    # the deal's points (30% -> 25%). Guarded to NO discount with the hours unknown, so the card
+    # never claims a discount it could not work out.
+    try:
+        vol = _volume_discount(session, club_id=club_id, coach_user_id=coach_user_id, ym=ym)
+    except Exception:
+        log.exception("coach_settlement volume discount failed")
+        vol = {"hours": None, "threshold": None, "points": 0, "bank_minor": 0, "coach_minor": 0}
+    give = vol["bank_minor"] + vol["coach_minor"]
     # A refund reverses a collection: money the club banked and gave back is no longer held, so it
     # must come off club_held too, not just off the commission. (refunded_club is negative-signed
     # gross on the clawback rows.)
@@ -1859,12 +1980,19 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
     total = club_held + coach_held
     # A clawback is a NEGATIVE owner split (commission returned on a refund) — it reduces what the
     # club is owed, so it belongs in the commission figure rather than beside it.
-    commission = g("commission") + g("clawback")
+    commission = g("commission") + g("clawback") - give
+    commission_coach_held = g("commission_coach_held") - vol["coach_minor"]
     net = club_held - commission
     st = {"club_held_minor": club_held, "coach_held_minor": coach_held,
           "total_collected_minor": total, "commission_minor": commission,
-          "commission_bank_minor": commission - g("commission_coach_held"),
-          "commission_coach_held_minor": g("commission_coach_held"),
+          "commission_bank_minor": commission - commission_coach_held,
+          "commission_coach_held_minor": commission_coach_held,
+          # What the card says about the deal: hours billed, the bar, and what it was worth.
+          "volume": {"hours_billed": vol["hours"], "threshold_hours": vol["threshold"],
+                     "discount_points": vol["points"],
+                     "qualifies": bool(vol["threshold"] and vol["hours"] is not None
+                                       and vol["hours"] > vol["threshold"]),
+                     "discount_minor": give},
           "clawback_minor": g("clawback"), "refunded_gross_minor": g("refunded_gross"),
           "net_minor": net,
           "effective_pct": (round(commission * 100.0 / total, 2) if total else None)}
@@ -1961,8 +2089,7 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
         sess = coach_sessions_by_day(session, club_id=club_id, coach_user_id=coach_user_id, month=ym)
         t = (sess or {}).get("totals") or {}
         outstanding = int(t.get("outstanding_minor") or 0)
-        rate = (Decimal(str(st["effective_pct"])) if st["effective_pct"] is not None
-                else resolve_commission_pct(session, club_id=club_id, coach_user_id=coach_user_id))
+        rate = _projection_rate(session, club_id, coach_user_id, st)
         proj = int(outstanding * Decimal(rate) / 100)
         st["outstanding_minor"] = outstanding
         st["outstanding_commission_minor"] = proj
@@ -1993,7 +2120,9 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
             {"c": club_id, "u": str(coach_user_id), "ym": ym,
              "tz": _club_tz(session, club_id)}).scalar() or 0)
         st["ledger_for_month_minor"] = tied
-        st["reconciles"] = (tied == net)
+        # The ledger posted every split at the FULL rate; the volume discount is applied here, on
+        # top, so the ledger ties to the net before it.
+        st["reconciles"] = (tied == net - give)
     except Exception:
         st["reconciles"] = True
     # What actually changes hands after rent and anything already settled this month.
@@ -2014,6 +2143,10 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
         b = _splits("<")
         gb = lambda k: int((b or {}).get(k) or 0)                               # noqa: E731
         net_before = (gb("club_gross") + gb("refunded_club")) - (gb("commission") + gb("clawback"))
+        # Earlier months' volume discounts were part of what those months paid, so they carry too:
+        # one month's pay figure is the next one's carried-over.
+        vb = _volume_discount(session, club_id=club_id, coach_user_id=coach_user_id, ym=ym, op="<")
+        net_before += vb["bank_minor"] + vb["coach_minor"]
         with session.begin_nested():
             moved_before = int(session.execute(
                 text("SELECT COALESCE(SUM(l.amount_minor),0) FROM billing.coach_ledger l "
@@ -2053,8 +2186,7 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
             collects_own = coach_collects_own_invoices(session, club_id=club_id,
                                                        coach_user_id=coach_user_id)
         owed = int(thru["totals"]["outstanding_minor"]) + unpaid_packs
-        rate = (Decimal(str(st["effective_pct"])) if st["effective_pct"] is not None
-                else resolve_commission_pct(session, club_id=club_id, coach_user_id=coach_user_id))
+        rate = _projection_rate(session, club_id, coach_user_id, st)
         future = int(owed * Decimal(rate) / 100)
         pay_now = st["closing_minor"] if st["closing_minor"] is not None else st["due_now_minor"]
         st["outstanding_total_minor"] = owed
@@ -2066,6 +2198,19 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
         log.exception("coach_settlement total payable failed")
     return {"month": ym, "settlement": st, "ledger": led,
             "currency": _club_currency_code(session, club_id)}
+
+
+def _projection_rate(session, club_id, coach_user_id, st):
+    """The rate future commission is projected at: this month's actual rate where money has come in
+    (it already carries any volume discount), else the coach's resolved rate less the discount when
+    this month is over the bar."""
+    if st.get("effective_pct") is not None:
+        return Decimal(str(st["effective_pct"]))
+    rate = resolve_commission_pct(session, club_id=club_id, coach_user_id=coach_user_id)
+    vol = st.get("volume") or {}
+    if vol.get("qualifies"):
+        rate = max(Decimal("0"), rate - Decimal(str(vol.get("discount_points") or 0)))
+    return rate
 
 
 def _settlement_by_kind(session, *, club_id, coach_user_id, ym):

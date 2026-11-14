@@ -4820,6 +4820,78 @@ def sc_the_coach_card_follows_the_owners_formula(s, fx):
           all(c["settlement"]["closing_minor"] == settle(m)["closing_minor"] for m, c in rows), str(len(rows)))
 
 
+def sc_over_the_hours_bar_the_commission_drops(s, fx):
+    """THE COACHES' VOLUME DEAL (owner, 2026-11): bill MORE than 80 hours to client accounts in a
+    month and the commission for that month drops 5 points, 30% -> 25%. The splits stay at the full
+    rate (the payment that wrote each one came long before the month's hours were known), so the
+    settlement applies the discount on top, and it must flow through everything the card shows: the
+    commission, the pay figure, the next month's carried-over, and the ledger tie-out. A session only
+    counts if a client account was charged for it, and counts ONCE for its length."""
+    print("\n# Over the hours bar, the commission drops 30% -> 25%")
+    from billing import commission as CMv
+    import datetime as _dt
+
+    s.execute(text("INSERT INTO billing.commission_rule (club_id, scope, commission_pct, "
+                   "effective_from, active) VALUES (:c,'club',30,:ef,true)"),
+              {"c": fx.club_id, "ef": datetime.now(timezone.utc) - timedelta(days=90)})
+    tz_now = s.execute(text("SELECT now() AT TIME ZONE 'Africa/Johannesburg'")).scalar()
+    prev = tz_now.replace(day=1) - _dt.timedelta(days=1)
+    prev_m, this_m = prev.strftime("%Y-%m"), tz_now.strftime("%Y-%m")
+
+    def lesson(hour, amount):
+        day = datetime(prev.year, prev.month, 15, hour, 0, tzinfo=JHB)
+        r = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="club_admin",
+                             booking_type="lesson", resource_id=fx.coach_res,
+                             coach_user_id=fx.coach_uid, starts_at=iso(day),
+                             ends_at=iso(day + timedelta(hours=1)), settlement_mode="monthly_account",
+                             booked_for_user_id=fx.member, allow_past=True)
+        oid = r["booking"]["order_id"]
+        s.execute(text("UPDATE billing.order_line SET amount_minor=:a WHERE order_id=:o"), {"a": amount, "o": oid})
+        s.execute(text('UPDATE billing."order" SET amount_minor=:a WHERE id=:o'), {"a": amount, "o": oid})
+        return oid
+
+    paid = lesson(9, 100000)
+    O.record_desk_payment(s, club_id=fx.club_id, order_id=paid, amount_minor=100000, provider="eft",
+                          provider_payment_id="EFT-VOLUME", user_id=fx.member)
+    voided = lesson(11, 40000)
+    s.execute(text('UPDATE billing."order" SET status=\'void\' WHERE id=:o'), {"o": voided})
+
+    def terms(hours):
+        s.execute(text("UPDATE club.policy SET coach_volume_hours=:h, coach_volume_discount_pct=5 "
+                       "WHERE club_id=:c"), {"h": hours, "c": fx.club_id})
+
+    def settle(m):
+        return CMv.coach_settlement(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
+                                    month=m)["settlement"]
+
+    terms(None)
+    base = settle(prev_m)
+    check("hours billed counts the charged lesson and not the voided one: 1 h",
+          base["volume"]["hours_billed"] == 1.0, str(base["volume"]))
+    check("no deal configured -> full 30% commission (R300 on R1,000)",
+          base["commission_minor"] == 30000 and not base["volume"]["qualifies"], str(base["commission_minor"]))
+    open_base = settle(this_m)["opening_minor"]
+
+    terms(1)
+    check("exactly AT the bar is not over it -> still 30%", settle(prev_m)["commission_minor"] == 30000,
+          str(settle(prev_m)["commission_minor"]))
+
+    terms(0.5)
+    st = settle(prev_m)
+    check("over the bar -> commission is 25%: R250", st["commission_minor"] == 25000, str(st["commission_minor"]))
+    check("...the card's rate reads 25%", st["effective_pct"] == 25.0, str(st["effective_pct"]))
+    check("...the discount is stated: R50", st["volume"]["qualifies"] and st["volume"]["discount_minor"] == 5000,
+          str(st["volume"]))
+    check("...and the coach is paid R50 more", st["net_minor"] == base["net_minor"] + 5000,
+          f"{st['net_minor']} vs {base['net_minor']}")
+    check("...the ledger (posted at 30%) still ties out", st["reconciles"] is True,
+          f"tied={st.get('ledger_for_month_minor')} net={st['net_minor']}")
+    check("...and next month carries the extra R50 over",
+          settle(this_m)["opening_minor"] == open_base + 5000,
+          f"{settle(this_m)['opening_minor']} vs {open_base}")
+    terms(None)
+
+
 def sc_coach_earnings_carries_the_settlement(s, fx):
     """ONE coach money screen: the P&L carries the settlement, and a payout credits the month it's FOR.
 
@@ -5998,6 +6070,7 @@ SCENARIOS = [
     sc_a_desk_payment_recorded_in_error_can_be_undone,
     sc_coach_earnings_carries_the_settlement,
     sc_the_coach_card_follows_the_owners_formula,
+    sc_over_the_hours_bar_the_commission_drops,
     sc_one_active_price_per_duration,
     sc_a_rent_coach_lesson_raises_no_club_charge,
     sc_bulk_void_cancels_charges_not_just_the_document,

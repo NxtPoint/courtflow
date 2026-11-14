@@ -395,12 +395,17 @@
         var rowActs = [];
         if (has("collect")) rowActs.push({ label: cfg.actions.collect.label || "Mark collected", onClick: function (it) { runAct(cfg.actions.collect, it); } });
         if (has("discount")) rowActs.push({ label: cfg.actions.discount.label || "Discount", onClick: function (it) { runAct(cfg.actions.discount, it); } });
+        // Write off = the coach waives that lesson (the client's charge is forgiven with it).
+        if (has("arrears_write_off")) rowActs.push({ label: cfg.actions.arrears_write_off.label || "Write off", tone: "danger", onClick: function (it) { runAct(cfg.actions.arrears_write_off, it); } });
         card.appendChild(CRMUI.lineItems(arrears, {
           currency: c,
           label: function (it) { return it.description || it.client_name || "Coaching"; },
           sub: function (it) { return [it.coach_name, it.starts_at ? fDate(it.starts_at) : ""].filter(Boolean).join(" · "); },
           actions: rowActs,
         }));
+        // Chase it: email the client what they owe, with a link to pay online.
+        var nudge = actBtn("send_reminder", pn, { label: "Send payment reminder" });
+        if (nudge) card.appendChild(el("div", { class: "cf-row", style: "justify-content:flex-end;margin-top:8px" }, [nudge]));
       }
       return card;
     }

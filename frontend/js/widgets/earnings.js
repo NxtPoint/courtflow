@@ -124,6 +124,20 @@
           text: kinds.join(" · ") + (((st.by_kind || {}).pack || {}).club_minor ? " — a pack counts in full when it is sold" : "") }));
       }
 
+      // HOURS BILLED — the coaches' volume deal: over the bar in a month, the commission drops
+      // (30% -> 25%). The server has already applied it to every figure below; this says why.
+      var vol = st.volume || {};
+      if (vol.hours_billed != null) {
+        var hrs = (Math.round(vol.hours_billed * 10) / 10) + " h", volSub = "to client accounts this month";
+        if (vol.threshold_hours) {
+          var std = (p.rate_pct || 0), cut = Math.max(0, std - (vol.discount_points || 0));
+          volSub = vol.qualifies
+            ? "over " + vol.threshold_hours + " h, so commission is " + cut + "% instead of " + std + "% · saves " + money(vol.discount_minor)
+            : (Math.round((vol.threshold_hours - vol.hours_billed) * 10) / 10) + " h more for " + cut + "% commission (over " + vol.threshold_hours + " h)";
+        }
+        box.appendChild(stmtLine("Hours billed", hrs, { sub: volSub, tone: vol.qualifies ? "good" : "" }));
+      }
+
       // 3) WHAT COMES OFF IT. A line that does not apply to this coach is not shown at all.
       box.appendChild(stmtLine("Club commission", "− " + money(st.commission_bank_minor), { sub: pct + "% of the money in the bank" }));
       if (st.commission_coach_held_minor) {
@@ -234,7 +248,9 @@
           var st = p.settlement || null, open = function () { renderCoach(p.coach_user_id, false); };
           if (!st) { cl.appendChild(tapRow(p.name, "Tap to see this coach", money(p.net_minor), null, open)); return; }
           var pay = st.closing_minor != null ? st.closing_minor : (st.due_now_minor || 0);
-          var sub = money(st.club_held_minor) + " in the bank · " + money(st.commission_minor) + " commission"
+          var hb = st.volume && st.volume.hours_billed;
+          var sub = (hb != null ? (Math.round(hb * 10) / 10) + " h" + (st.volume.qualifies ? " · volume discount" : "") + " · " : "")
+                  + money(st.club_held_minor) + " in the bank · " + money(st.commission_minor) + " commission"
                   + (st.outstanding_total_minor ? " · " + money(st.outstanding_total_minor) + " invoices outstanding" : "");
           cl.appendChild(tapRow(p.name, sub, money(Math.abs(pay)), pay < 0 ? "owed by coach" : "pay to coach", open)); }); cc.appendChild(cl); }
         wrap.appendChild(cc);

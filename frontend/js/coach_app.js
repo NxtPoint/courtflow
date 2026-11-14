@@ -382,13 +382,15 @@
   // ---- CLIENTS (list → full record) ---------------------------------------
   async function renderClients() {
     ensureMonth(); loading();
-    var clients = [], money = {}, packs = [];
+    var clients = [], money = {}, packs = [], unpaid = null;
     try {
       var pair = await Promise.all([
         window.CoachAPI.clients({}),
         window.CoachAPI.money(MONTH).catch(function () { return { clients: [] }; }),   // same fold as Money tab
         (window.CoachAPI.packages ? window.CoachAPI.packages() : Promise.resolve({ packages: [] })).catch(function () { return { packages: [] }; }),
+        window.CoachAPI.statement(MONTH).catch(function () { return null; }),   // the owed tab, all months
       ]);
+      unpaid = ((pair[3] && pair[3].arrears_items) || []).filter(function (a) { return a.status === "owed"; });
       clients = pair[0].clients || [];
       ((pair[1] && pair[1].clients) || []).forEach(function (m) { money[String(m.client_user_id)] = m; });
       packs = (pair[2] && pair[2].packages) || [];
@@ -402,6 +404,32 @@
       ]),
     ]));
     wrap.appendChild(el("p", { class: "cf-muted", style: "margin:-2px 0 12px;font-size:.85rem", text: "Everyone who trains with you — what they've paid and still owe this month. Tap for their full record." }));
+
+    // UNPAID — every lesson/class still owed to you, ANY month (the list below is this month only),
+    // by client, biggest first. Tap → their record: collect, discount, write off, send a reminder.
+    if (unpaid && unpaid.length) {
+      var byC = {}, order = [], tot = 0;
+      unpaid.forEach(function (a) {
+        var k = String(a.client_user_id || "_");
+        if (!byC[k]) { byC[k] = { id: a.client_user_id, name: a.client_name || "Client", n: 0, amt: 0, oldest: a.starts_at }; order.push(k); }
+        byC[k].n += 1; byC[k].amt += (a.gross_minor || 0); tot += (a.gross_minor || 0);
+        if (a.starts_at && (!byC[k].oldest || a.starts_at < byC[k].oldest)) byC[k].oldest = a.starts_at;
+      });
+      order.sort(function (x, y) { return byC[y].amt - byC[x].amt; });
+      wrap.appendChild(el("h2", { style: "margin:4px 0 6px;font-size:1rem", text: "Unpaid · " + money2(tot) }));
+      var uc = el("div", { class: "cf-card", style: "padding:6px 14px" }), ul = el("div", { class: "cf-list" });
+      order.forEach(function (k) {
+        var u = byC[k];
+        ul.appendChild(el("div", { class: "cf-item cf-item-tap", onclick: function () { if (u.id) go("#/client/" + u.id); } }, [
+          el("div", { class: "cf-item-main" }, [
+            el("div", { class: "cf-item-t", text: u.name }),
+            el("div", { class: "cf-item-s", text: u.n + " unpaid" + (u.oldest ? " · oldest " + new Date(u.oldest).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "") }),
+          ]),
+          el("span", { class: "cf-chip held", text: money2(u.amt) }),
+        ]));
+      });
+      uc.appendChild(ul); wrap.appendChild(uc);
+    }
 
     // Prepaid packages — clients who bought a pack WITH you (already funded); a lesson you book for
     // them draws it down instead of raising a new charge. Tap → their full record.
@@ -473,6 +501,12 @@
         // Coaching arrears — collect / discount (the same handler the event story uses).
         collect: { manual: true, run: function (it) { arr(it.id, "collect", function () { renderClient(userId); }); } },
         discount: { manual: true, run: function (it) { arr(it.id, "discount", function () { renderClient(userId); }, it); } },
+        arrears_write_off: { manual: true, run: function (it) { arr(it.id, "writeoff", function () { renderClient(userId); }); } },
+        send_reminder: {
+          confirm: "Email this client what they owe you, with a link to pay online?",
+          run: function () { return window.CoachAPI.issueInvoice(userId); },
+          done: function (_c, res) { return (res && res.notified) ? "Reminder sent." : "Nothing owed — no reminder sent."; },
+        },
       },
     });
   }

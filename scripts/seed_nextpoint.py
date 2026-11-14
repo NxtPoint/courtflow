@@ -433,6 +433,12 @@ def seed(session):
         branding=BRANDING, policy=POLICY, locations=[LOCATION],
     )
 
+    # The coaches' volume deal: over 80 hours billed to clients in a month, commission drops 5 points
+    # (30% -> 25%). Set only while unset, so an owner who changes or switches it off (0) keeps it.
+    session.execute(
+        text("UPDATE club.policy SET coach_volume_hours = 80 "
+             "WHERE club_id = :c AND coach_volume_hours IS NULL"), {"c": club_id})
+
     location_id = session.execute(
         text("SELECT id FROM club.location WHERE club_id = :c AND name = :n"),
         {"c": club_id, "n": LOCATION["name"]},
