@@ -855,6 +855,42 @@ def list_invoices(session, *, club_id, user_id=None, q=None, unpaid_only=False,
             # part-month too, which is not what the button says.
             "open_order_ids": sorted(str(x) for x in (r["open_order_ids"] or [])),
         })
+    # HOW MUCH OF EACH INVOICE IS EACH COACH'S. An invoice is the client's whole account for the
+    # month, so filtering Money -> Invoices to a coach showed every rand on "his" invoices — court
+    # hire and club charges included. Allon's filter read R16,220 while R14,900 was his (a R1,320
+    # club charge on Razeena's July invoice, 2026-11-15). Unattributed charges stay out of every coach.
+    open_ids = sorted({oid for o in out for oid in o["open_order_ids"]})
+    owner = {}
+    if open_ids:
+        try:
+            with session.begin_nested():
+                for r in session.execute(text(
+                        'SELECT DISTINCT o.id AS order_id, o.amount_minor, '
+                        "       COALESCE(NULLIF(cp.display_name, ''), "
+                        "                NULLIF(TRIM(CONCAT_WS(' ', cu.first_name, cu.surname)), ''), "
+                        '                cu.email) AS nm '
+                        'FROM billing."order" o '
+                        'JOIN billing.order_line ol ON ol.order_id = o.id '
+                        'LEFT JOIN diary.booking bk ON bk.id = ol.booking_id '
+                        'LEFT JOIN diary.enrolment en ON en.id = ol.enrolment_id '
+                        'LEFT JOIN diary.class_session cls ON cls.id = en.class_session_id '
+                        'JOIN iam."user" cu ON cu.id = COALESCE(bk.coach_user_id, cls.coach_user_id) '
+                        'LEFT JOIN iam.coach_profile cp ON cp.user_id = cu.id AND cp.club_id = o.club_id '
+                        'WHERE o.club_id = :c AND CAST(o.id AS text) = ANY(:ids)'),
+                        {"c": str(club_id), "ids": open_ids}).mappings():
+                    owner[str(r["order_id"])] = (r["nm"], int(r["amount_minor"] or 0))
+        except Exception:
+            owner = None       # unknown: the screen falls back to the whole-invoice figure
+    for o in out:
+        if owner is None:
+            o["outstanding_by_coach"] = None
+            continue
+        by = {}
+        for oid in o["open_order_ids"]:
+            if oid in owner:
+                nm, amt = owner[oid]
+                by[nm] = by.get(nm, 0) + amt
+        o["outstanding_by_coach"] = by
     return out
 
 

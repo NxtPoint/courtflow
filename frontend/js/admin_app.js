@@ -1703,7 +1703,16 @@
 
     var owed = list.reduce(function (t, iv) { return t + (iv.doc_status === "void" ? 0 : (iv.outstanding_minor || 0)); }, 0);
     wrap.appendChild(el("div", { class: "cf-muted", style: "margin:0 2px 8px;font-size:.86rem",
-      text: list.length + " invoice" + (list.length === 1 ? "" : "s") + " · " + money(owed, clubCur()) + " outstanding" }));
+      text: list.length + " invoice" + (list.length === 1 ? "" : "s") + " · " + money(owed, clubCur()) + " outstanding" + coachShare() }));
+    // An invoice is the client's whole month, so a coach's filter also shows court hire and club
+    // charges on the same invoices. Say how much is actually the coach's, or the total reads as his.
+    function coachShare() {
+      if (!v.coach || list.some(function (iv) { return !iv.outstanding_by_coach; })) return "";
+      var his = list.reduce(function (t, iv) {
+        return t + (iv.doc_status === "void" ? 0 : ((iv.outstanding_by_coach || {})[v.coach] || 0)); }, 0);
+      return his === owed ? "" : " · " + money(his, clubCur()) + " of it is " + v.coach
+        + "'s — the rest is other charges on the same invoices";
+    }
 
     var acts = invoiceActions(function () { moneyInvoices(); });
     // Confirm -> run -> say what happened -> reload. (Mark paid is `manual`: it opens its own modal.)
