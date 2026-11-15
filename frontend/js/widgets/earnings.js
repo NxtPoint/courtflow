@@ -91,7 +91,9 @@
       var st = p.settlement, L = p.ledger || {};
       var pct = (st && st.effective_pct != null) ? st.effective_pct : (p.rate_pct || 0);
       box.appendChild(el("h1", { style: "margin:0 0 2px;font-size:1.2rem", text: p.name || "Coach" }));
-      box.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin-bottom:6px", text: monthLabel(MONTH) + " · " + (p.rate_pct || 0) + "% club commission" }));
+      box.appendChild(el("div", { class: "cf-muted", style: "font-size:.82rem;margin-bottom:6px", text: monthLabel(MONTH) + " · " + ((st && st.volume && st.volume.qualifies)
+        ? Math.max(0, (p.rate_pct || 0) - (Number(st.volume.discount_points) || 0)) + "% club commission (volume discount, normally " + (p.rate_pct || 0) + "%)"
+        : (p.rate_pct || 0) + "% club commission") }));
       if (!st) {   // no settlement in the payload — say what we can rather than nothing
         box.appendChild(stmtLine("Total sales", money(p.sales_minor)));
         box.appendChild(stmtLine("Received", money(p.received_minor)));
