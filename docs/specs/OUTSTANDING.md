@@ -13,6 +13,20 @@ and the dated log in [README.md](README.md). This file is the forward-looking ba
 
 ---
 
+## ⭐ COACH MONEY — checks owed from the 2026-11-15 session
+
+- [ ] **Allon confirms on his phone** that a client with old debt shows the "Unpaid lessons — chase
+  payment" box and that "Send payment reminder" emails only earlier months. Not seen on his screen
+  (the coach app has no view-as).
+- [ ] **After the 2026-12-01 month-end run:** a client with both lessons and court hire must have
+  received TWO invoices ("Coaching with …" + "Club charges"), each for its own amount. Then run
+  `python -m scripts.reconcile_coach_screens` in the Render shell — every coach should read OK.
+- [ ] **Allon's October payout:** R16,661.25 was recorded where the screen asked for R11,774. If that
+  was a fresh transfer rather than recording money already paid, he has been overpaid ~R4,887 —
+  Tomo to confirm against the bank.
+- [ ] *(Optional, owner's call)* split the mid-month "invoice outstanding balance" action per coach too;
+  today only the month-end run splits.
+
 ## ⭐ NEXT SESSION (from 2026-08-26) — the Spring Day campaign + one opt-in verdict
 
 Two things, both small. Then the Community switch-on below is the next real piece of work.

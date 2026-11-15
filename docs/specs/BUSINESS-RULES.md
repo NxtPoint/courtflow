@@ -682,6 +682,17 @@ actually received** — and this needs no monthly commission run, because there 
 - Unpaid coaching sits on the coach's tab as **projected** commission that never realises until the client
   pays. That is deliberate: the coach holds the client relationship, so **the coach chases the payment**.
   The club does not carry the cost of a client who doesn't pay.
+- **THE COACH'S COLLECTION TOOLS (2026-11-15).** On a client's record the coach app shows an **"Unpaid
+  lessons — chase payment"** box (`Widgets.ClientRecord`, coach scope) listing every owed lesson in every
+  month, each with Mark collected / Discount / Write off, and a **Send payment reminder** button. The
+  reminder (`billing.commission.issue_client_invoice` → `statement_ready` email with a pay link) asks
+  ONLY for lessons from **earlier months** (club timezone): this month's are invoiced on the 1st, so
+  chasing them first would bill the client twice in two documents. Nothing overdue = no email, and the
+  coach is told so. Guarded by `sc_client_month_end`.
+- **THE COACH CARD LISTS ITS UNPAID INVOICES (2026-11-15).** "Invoices outstanding" on the coach P&L is
+  backed by `settlement.outstanding_breakdown`: each unpaid charge mapped to its latest live invoice
+  (number, month, client, the coach's part), plus "not invoiced yet" and unpaid packs, so the lines add
+  to the headline. A no-show is still owed. Cross-check with `scripts/reconcile_coach_screens.py`.
 
 - **"PAID" IS NOT "IN THE BANK" — Money → Coach statement is the split.** `order.status='paid'` merges Yoco
   + EFT (the club's bank) with cash/card taken at the court (the COACH — the club has no facility for

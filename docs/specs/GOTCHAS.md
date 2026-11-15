@@ -767,6 +767,20 @@ and R300 and leave the R200, not settle a NEWER R200 and leave the older R300 op
 cannot fill the next line comes back as `unallocated_minor` for a human to place, never silently
 absorbed. Guarded by `sc_partial_payment_leaves_the_invoice_open`.
 
+**ONE MONTH-END INVOICE PER COACH + ONE FOR THE CLUB (2026-11-15, from the 2026-12-01 run).** A
+consolidated invoice mixed court hire and membership with several coaches' lessons, so filtering
+Money → Invoices by coach showed R1,320 of Razeena's club charges under Allon, and a part-payment
+settled the oldest line whoever owned it. With `club.policy.invoice_per_coach` on, `issue_statement_invoice`
+groups a client's month by owner (`invoicing.order_owners`) and issues one invoice per coach plus a
+"Club charges" one, each with its OWN brought-forward and its own `invoice_issued` email. Old invoices
+are untouched; the intra-month action still issues one. Guarded by `sc_month_end_splits_the_invoice_by_coach`.
+
+**A COACH'S PAYMENT REMINDER CHASES EARLIER MONTHS ONLY (2026-11-15).** The reminder summed every owed
+line, so a client got asked for this month's lessons mid-month and then invoiced for them again on the
+1st. `issue_client_invoice` now counts only lines delivered before the current month (club timezone)
+and sends nothing when that is zero. The button had also been invisible for weeks: it lived in a card
+the client record no longer rendered, and no test reads the coach app. Guarded by `sc_client_month_end`.
+
 
 ---
 

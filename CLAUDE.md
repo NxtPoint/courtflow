@@ -674,6 +674,7 @@ looks like a harmless simplification until you read what it cost.
 - BILL THE MONTH AFTER IT ENDS, and let a month swept early be closed — `sc_a_month_swept_early_can_still_be_closed`
 - ONE PAYMENT IS ONE RECEIPT, however many lines it settles — `sc_one_payment_one_receipt`
 - ONE MONTH-END INVOICE PER COACH + one for the club, when `club.policy.invoice_per_coach` is on (NextPoint, from the 2026-12-01 run) — `sc_month_end_splits_the_invoice_by_coach`
+- A COACH'S PAYMENT REMINDER CHASES EARLIER MONTHS ONLY (2026-11-15) — this month is invoiced on the 1st, so including it billed the client twice; nothing overdue = no email. The button lives in the coach-scope "Unpaid lessons — chase payment" box on the client record — `sc_client_month_end`
 - A PART PAYMENT SETTLES WHOLE LINES, oldest first — it never part-settles an order — `sc_partial_payment_leaves_the_invoice_open`
 
 **Refunds & the Yoco gateway** — [GOTCHAS.md#refunds--the-yoco-gateway](docs/specs/GOTCHAS.md#refunds--the-yoco-gateway)

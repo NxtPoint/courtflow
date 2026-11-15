@@ -426,6 +426,19 @@ operating guide; **this folder is the detail.**
 > Both were fixed; the second was the owner correcting the agent, and it is the sharpest reminder in
 > this log that a report is only worth what its blind spots allow.
 
+> **2026-11-15 — THE COACH VOLUME DEAL, COACH COLLECTIONS, AND ONE INVOICE PER COACH: booking 833 /
+> billing 812 / statement 67.** The owner's deal went in: a coach billing MORE than 80 h to client
+> accounts in a month pays 25% commission, not 30% (`club.policy.coach_volume_hours`; Allon qualified
+> in October at 104 h). The coach card now LISTS the unpaid invoices behind "Invoices outstanding"
+> (plus "not invoiced yet" and unpaid packs) so it adds up on sight, and `scripts/reconcile_coach_screens.py`
+> proved the card, the client list and Money → Invoices agree for all four coaches. The one
+> disagreement was a consolidated invoice carrying R1,320 of club charges under a coach's filter, so
+> from the **2026-12-01** run the month-end issues **one invoice per coach plus one "Club charges"
+> invoice** (`club.policy.invoice_per_coach`). Two coach-app bugs, both reported by a coach: the
+> payment reminder and write-off lived in a card the client page had stopped rendering (now the
+> "Unpaid lessons — chase payment" box), and the reminder asked for THIS month's lessons before they
+> had been invoiced — it now chases **earlier months only** and sends nothing if nothing is overdue.
+
 ## Read in this order
 0. **[GOTCHAS.md](GOTCHAS.md)** — the **war stories behind the rules**: 45 bugs that reached production
    (or came within a merge of it), each with the reasoning and the `sc_…` scenario that pins it. Moved
