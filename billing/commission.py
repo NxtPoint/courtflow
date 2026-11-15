@@ -2193,32 +2193,56 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
         future = int(owed * Decimal(rate) / 100)
         pay_now = st["closing_minor"] if st["closing_minor"] is not None else st["due_now_minor"]
         st["outstanding_total_minor"] = owed
-        # WHERE THE TOTAL COMES FROM. The card's client list is THIS month only, so without this the
-        # total looked like it did not reconcile (Allon, 2026-11-15: R14,900 against a list adding
-        # to R12,420 — the rest was July and August). Earlier months' unpaid sessions are listed by
-        # client and month so the card adds up on one screen.
-        earlier: Dict[tuple, Dict[str, Any]] = {}
-        this_month = 0
-        for c in thru.get("clients") or []:
-            for r in c.get("rows") or []:
-                if r.get("custody") != "outstanding":
+        # WHERE THE TOTAL COMES FROM — AS THE INVOICES THE CLIENTS ACTUALLY HOLD. The card's client
+        # list is THIS month only, so the total looked like it did not reconcile (Allon, 2026-11-15:
+        # R14,900 against a list adding to R12,420). The owner's ask: just list the invoices due. So
+        # every unpaid session is grouped under the invoice it sits on (number, client, month, the
+        # coach's part of it), and what has not been invoiced yet is one line. Guarded: on failure
+        # the breakdown is None and the card prints the total alone.
+        st["outstanding_breakdown"] = None
+        try:
+            per_order: Dict[str, Dict[str, Any]] = {}
+            for c in thru.get("clients") or []:
+                for r in c.get("rows") or []:
+                    if r.get("custody") != "outstanding" or not r.get("order_id"):
+                        continue
+                    o = per_order.setdefault(r["order_id"], {
+                        "client_name": c.get("client_name"), "client_user_id": c.get("client_user_id"),
+                        "amount_minor": 0, "month": (r.get("date") or "")[:7]})
+                    o["amount_minor"] += int(r.get("amount_minor") or 0)
+            inv_of: Dict[str, Any] = {}
+            if per_order:
+                with session.begin_nested():
+                    for r in session.execute(text(
+                            "SELECT DISTINCT ON (il.order_id) CAST(il.order_id AS text) AS order_id, "
+                            "       i.id, i.invoice_number, i.period_label, i.issued_at "
+                            "FROM billing.invoice_line il JOIN billing.invoice i ON i.id = il.invoice_id "
+                            "WHERE i.club_id = :c AND i.status <> 'void' "
+                            "  AND CAST(il.order_id AS text) = ANY(:ids) "
+                            "ORDER BY il.order_id, i.issued_at DESC"),
+                            {"c": club_id, "ids": list(per_order)}).mappings():
+                        inv_of[r["order_id"]] = r
+            invoices: Dict[str, Dict[str, Any]] = {}
+            not_invoiced = 0
+            for oid, o in per_order.items():
+                r = inv_of.get(oid)
+                if not r:
+                    not_invoiced += o["amount_minor"]
                     continue
-                amt = int(r.get("amount_minor") or 0)
-                m = (r.get("date") or "")[:7]
-                if m >= ym:
-                    this_month += amt
-                    continue
-                e = earlier.setdefault((c.get("client_user_id"), m), {
-                    "client_user_id": c.get("client_user_id"), "client_name": c.get("client_name"),
-                    "month": m, "sessions": 0, "amount_minor": 0})
-                e["sessions"] += 1
-                e["amount_minor"] += amt
-        st["outstanding_breakdown"] = {
-            "this_month_minor": this_month,
-            "earlier_minor": sum(e["amount_minor"] for e in earlier.values()),
-            "packs_minor": unpaid_packs,
-            "earlier": sorted(earlier.values(), key=lambda e: (e["month"], e["client_name"] or "")),
-        }
+                e = invoices.setdefault(str(r["id"]), {
+                    "invoice_id": str(r["id"]), "number": r["invoice_number"],
+                    "month": r["period_label"] or o["month"],
+                    "client_name": o["client_name"], "client_user_id": o["client_user_id"],
+                    "amount_minor": 0})
+                e["amount_minor"] += o["amount_minor"]
+            st["outstanding_breakdown"] = {
+                "invoiced_minor": sum(e["amount_minor"] for e in invoices.values()),
+                "not_invoiced_minor": not_invoiced,
+                "packs_minor": unpaid_packs,
+                "invoices": sorted(invoices.values(), key=lambda e: (e["month"] or "", e["number"] or "")),
+            }
+        except Exception:
+            log.exception("coach_settlement invoice breakdown failed")
         st["outstanding_total_commission_minor"] = future
         st["outstanding_total_net_minor"] = owed - future
         st["coach_collects_invoices"] = collects_own

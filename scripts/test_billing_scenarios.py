@@ -4905,11 +4905,18 @@ def sc_over_the_hours_bar_the_commission_drops(s, fx):
     # listed as EARLIER debt, and the parts add back up to the total.
     nxt = settle(this_m)
     b = nxt.get("outstanding_breakdown") or {}
-    check("the outstanding total splits into this month + earlier months + packs, and adds up",
-          b.get("this_month_minor", 0) + b.get("earlier_minor", 0) + b.get("packs_minor", 0)
-          == nxt["outstanding_total_minor"]
-          and any(e["month"] == prev_m and e["amount_minor"] >= 30000 for e in b.get("earlier") or []),
+    check("the outstanding total splits into invoiced + not invoiced yet + packs, and adds up",
+          b.get("invoiced_minor", 0) + b.get("not_invoiced_minor", 0) + b.get("packs_minor", 0)
+          == nxt["outstanding_total_minor"] and nxt["outstanding_total_minor"] >= 30000,
           str(b))
+    # Once last month is invoiced, its unpaid sessions are listed under the INVOICE they sit on.
+    from billing import invoicing as INVv
+    INVv.issue_invoice(s, club_id=fx.club_id, user_id=fx.member, order_ids=[owed_lesson])
+    b2 = settle(this_m).get("outstanding_breakdown") or {}
+    check("...and an invoiced debt is listed under its invoice number",
+          any(e.get("number") and e["amount_minor"] >= 30000 for e in b2.get("invoices") or [])
+          and b2.get("invoiced_minor", 0) + b2.get("not_invoiced_minor", 0) + b2.get("packs_minor", 0)
+          == settle(this_m)["outstanding_total_minor"], str(b2))
 
 
 def sc_coach_earnings_carries_the_settlement(s, fx):

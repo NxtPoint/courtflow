@@ -194,27 +194,32 @@
     }
 
 
-    // Where "Invoices outstanding" comes from. The By-client list below is THIS month only, so the
-    // total has to say how much of it is earlier months — or it reads as not reconciling.
+    // Where "Invoices outstanding" comes from: the invoices the clients hold, then what is not
+    // invoiced yet. The owner's ask — "just list the invoices due" — so the total adds up on sight.
     function outstandingSub(st) {
       var b = st.outstanding_breakdown;
       if (!b) return "not yet paid by clients, this month and earlier";
-      var parts = [money(b.this_month_minor) + " this month"];
-      if (b.earlier_minor) parts.push(money(b.earlier_minor) + " from earlier months (listed just below)");
+      var parts = [];
+      if (b.invoiced_minor) parts.push(money(b.invoiced_minor) + " on " + b.invoices.length + " invoice" + (b.invoices.length === 1 ? "" : "s") + " (listed just below)");
+      if (b.not_invoiced_minor) parts.push(money(b.not_invoiced_minor) + " not invoiced yet");
       if (b.packs_minor) parts.push(money(b.packs_minor) + " unpaid packs");
-      return parts.join(" + ");
+      return parts.join(" + ") || "not yet paid by clients";
     }
 
-    // The earlier months' unpaid sessions, by client and month — the part of "Invoices outstanding"
-    // the This-month client list cannot show.
+    // The unpaid invoices themselves — number, client, month, the coach's part — summing (with the
+    // not-yet-invoiced and pack lines) to "Invoices outstanding".
     function earlierCard(p) {
       var b = p.settlement && p.settlement.outstanding_breakdown;
-      if (!b || !b.earlier || !b.earlier.length) return null;
-      var box = UI.card([CRMUI.sectionHead("Still unpaid from earlier months · " + money(b.earlier_minor))]);
-      b.earlier.forEach(function (e) {
+      if (!b || !(b.invoices && b.invoices.length) && !b.not_invoiced_minor && !b.packs_minor) return null;
+      var total = (b.invoiced_minor || 0) + (b.not_invoiced_minor || 0) + (b.packs_minor || 0);
+      var box = UI.card([CRMUI.sectionHead("Unpaid invoices · " + money(total))]);
+      (b.invoices || []).forEach(function (e) {
         box.appendChild(stmtLine(e.client_name || "Client", money(e.amount_minor), {
-          sub: monthLabel(e.month) + " · " + e.sessions + " session" + (e.sessions === 1 ? "" : "s") }));
+          sub: (e.number || "Invoice") + " · " + monthLabel(e.month) }));
       });
+      if (b.not_invoiced_minor) box.appendChild(stmtLine("Not invoiced yet", money(b.not_invoiced_minor),
+        { border: true, sub: "this month's sessions — invoiced on the 1st" }));
+      if (b.packs_minor) box.appendChild(stmtLine("Unpaid packs", money(b.packs_minor), { sub: "sold on account" }));
       return box;
     }
 
