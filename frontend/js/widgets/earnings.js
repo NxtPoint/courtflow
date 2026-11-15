@@ -200,7 +200,7 @@
       var b = st.outstanding_breakdown;
       if (!b) return "not yet paid by clients, this month and earlier";
       var parts = [money(b.this_month_minor) + " this month"];
-      if (b.earlier_minor) parts.push(money(b.earlier_minor) + " from earlier months (listed below)");
+      if (b.earlier_minor) parts.push(money(b.earlier_minor) + " from earlier months (listed just below)");
       if (b.packs_minor) parts.push(money(b.packs_minor) + " unpaid packs");
       return parts.join(" + ");
     }
@@ -305,6 +305,8 @@
           ? function () { cfg.onRecordPayout(p, function () { renderCoach(coachId, isL0); }); }
           : null;
         wrap.appendChild(pnlCard(p, payoutFn));
+        // Right under the card, beside the total it explains — not below a list of every client.
+        var ec = earlierCard(p); if (ec) wrap.appendChild(ec);
         // ONE card for the money (above) + the work log. The settlement used to be a second money
         // card and two blocks that didn't add up to each other is what made the page unreadable.
         var sc = sessionsCard(p); if (sc) wrap.appendChild(sc);
@@ -317,7 +319,6 @@
           if (!clients.length) cc.appendChild(el("div", { class: "cf-empty", text: "No clients this month." }));
           else { var cl = el("div", { class: "cf-list" }); clients.forEach(function (x) { cl.appendChild(clientRow(x, { earned_by: q.earned_by, backLabel: p.name, onBack: function () { renderCoach(coachId, isL0); } })); }); cc.appendChild(cl); }
           wrap.appendChild(cc);
-          var ec = earlierCard(p); if (ec) wrap.appendChild(ec);
           if (isL0 && typeof cfg.homeExtra === "function") { try { var extra = cfg.homeExtra(p); if (extra) wrap.appendChild(extra); } catch (e) {} }
           show(wrap);
         }, function () { show(wrap); });
