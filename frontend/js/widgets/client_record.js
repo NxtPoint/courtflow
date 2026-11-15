@@ -128,6 +128,15 @@
       if (_role !== "coach") head.appendChild(membershipLine(pn, c));
       wrap.appendChild(head);
 
+      // ---- 1b) COLLECTIONS (coach) — what this client still owes the coach, every month, with
+      // Mark collected / Discount / Write off per lesson and "Send payment reminder". Right under
+      // the name, because chasing is why a coach opens an owing client. (The July redesign dropped
+      // the old Coaching card from the page, and with it the only place these actions rendered —
+      // the reminder button was built into it and never showed, 2026-11-15.)
+      if (_role === "coach" && pn.coaching && (pn.coaching.arrears_items || []).some(function (a) { return a.status === "owed"; })) {
+        wrap.appendChild(coachingCard(pn));
+      }
+
       // ---- 2) PACKAGES — prepaid holdings + change/buy (unchanged). ----
       if (fields.showPackages !== false && pn.packages) wrap.appendChild(packagesCard(pn, c));
 
@@ -383,7 +392,7 @@
 
     function coachingCard(pn) {
       var co = pn.coaching, c = co.currency || pn.currency || "ZAR", t = co.totals || {};
-      var card = UI.card([CRMUI.sectionHead("Coaching")], "cf-mt");
+      var card = UI.card([CRMUI.sectionHead("Unpaid lessons — chase payment")], "cf-mt");
       card.appendChild(CRMUI.stats([
         { value: money(t.paid_minor, c), label: "Paid" },
         { value: money(t.owed_minor, c), label: "Owed" },
