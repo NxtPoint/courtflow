@@ -1617,7 +1617,10 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None,
                     LEFT JOIN billing.product pr ON pr.id = p2.product_id
                     WHERE b.club_id = :club AND b.coach_user_id = CAST(:coach AS uuid)
                       AND b.booking_type = 'lesson'
-                      AND b.status IN ('confirmed','completed','held')
+                      -- A NO-SHOW is still billed (the client owes it), so it stays in the log:
+                      -- leaving it out made the card's "Invoices outstanding" disagree with the
+                      -- client list by every unpaid no-show (R540 on Allon, 2026-11-15).
+                      AND b.status IN ('confirmed','completed','held','no_show')
                       AND to_char(b.starts_at, 'YYYY-MM') """ + month_op + """ :ym
                     UNION ALL
                     -- CLASSES he runs: one row per enrolled seat (that is what he is paid on).
@@ -1626,7 +1629,7 @@ def coach_sessions_by_day(session, *, club_id, coach_user_id, month=None,
                            COALESCE(pr.name, ol.description) AS service
                     FROM diary.class_session cls
                     JOIN diary.enrolment e ON e.class_session_id = cls.id
-                                          AND e.status IN ('enrolled','attended')
+                                          AND e.status IN ('enrolled','attended','no_show')
                     JOIN billing.order_line ol ON ol.enrolment_id = e.id
                     LEFT JOIN billing.price   p2 ON p2.id = ol.price_id
                     LEFT JOIN billing.product pr ON pr.id = p2.product_id

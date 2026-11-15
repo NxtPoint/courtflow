@@ -4891,6 +4891,17 @@ def sc_over_the_hours_bar_the_commission_drops(s, fx):
           f"{settle(this_m)['opening_minor']} vs {open_base}")
     terms(None)
 
+    # A NO-SHOW IS STILL OWED. The card's "Invoices outstanding" is built from the work log, which
+    # once skipped no-shows while the client list kept them: R540 of Allon's unpaid no-show seats
+    # sat on the clients' accounts but not on his card (2026-11-15).
+    owed_lesson = lesson(13, 30000)
+    before = settle(prev_m)["outstanding_total_minor"]
+    s.execute(text("UPDATE diary.booking SET status='no_show' WHERE id IN "
+                   "(SELECT booking_id FROM billing.order_line WHERE order_id=:o)"), {"o": owed_lesson})
+    after = settle(prev_m)["outstanding_total_minor"]
+    check("an unpaid NO-SHOW stays in the card's invoices outstanding",
+          after == before and before >= 30000, f"{after} vs {before}")
+
 
 def sc_coach_earnings_carries_the_settlement(s, fx):
     """ONE coach money screen: the P&L carries the settlement, and a payout credits the month it's FOR.
