@@ -4919,6 +4919,57 @@ def sc_over_the_hours_bar_the_commission_drops(s, fx):
           == settle(this_m)["outstanding_total_minor"], str(b2))
 
 
+def sc_month_end_splits_the_invoice_by_coach(s, fx):
+    """ONE INVOICE PER COACH (owner, 2026-11-15, from the 2026-12-01 run). A client's month used to
+    be one invoice covering court hire AND every coach's lessons, so filtering invoices by coach
+    showed club charges as the coach's (R1,320 of court hire on Razeena's July invoice under
+    Allon), and a part-payment settled the oldest charge whoever it belonged to. With the club's
+    switch on, month-end issues one invoice per coach plus one for the club's own charges, each
+    for its own amount and each carrying only its own brought-forward."""
+    print("\n# Month-end: one invoice per coach, one for the club")
+    from billing import invoicing as INVs
+    import datetime as _dt
+
+    tz_now = s.execute(text("SELECT now() AT TIME ZONE 'Africa/Johannesburg'")).scalar()
+    prev = tz_now.replace(day=1) - _dt.timedelta(days=1)
+    prev_m = prev.strftime("%Y-%m")
+    day = datetime(prev.year, prev.month, 14, 10, 0, tzinfo=JHB)
+
+    lesson = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="club_admin",
+                              booking_type="lesson", resource_id=fx.coach_res, coach_user_id=fx.coach_uid,
+                              starts_at=iso(day), ends_at=iso(day + timedelta(hours=1)),
+                              settlement_mode="monthly_account", booked_for_user_id=fx.member,
+                              allow_past=True)["booking"]["order_id"]
+    court = B.create_booking(s, club_id=fx.club_id, booked_by_user_id=fx.coach_uid, role="club_admin", booked_for_user_id=fx.member,
+                             booking_type="court", resource_id=fx.courts[0],
+                             starts_at=iso(day + timedelta(hours=3)), ends_at=iso(day + timedelta(hours=4)),
+                             settlement_mode="at_court", allow_past=True)["booking"]["order_id"]
+    amt = {o: int(_order(s, o)["amount_minor"]) for o in (lesson, court)}
+
+    s.execute(text("UPDATE club.policy SET invoice_per_coach = true WHERE club_id = :c"), {"c": fx.club_id})
+    res = INVs.issue_statement_invoice(s, club_id=fx.club_id, user_id=fx.member, period_label=prev_m,
+                                       scope_to_period=True)
+    docs = res.get("invoices") or []
+    mine = [d for d in docs if lesson in d.get("order_ids", [])]
+    club = [d for d in docs if court in d.get("order_ids", [])]
+    check("the switch on -> the coach's lesson and the club's court hire are on DIFFERENT invoices",
+          len(mine) == 1 and len(club) == 1 and mine[0]["invoice_id"] != club[0]["invoice_id"],
+          str([(d.get("label"), d.get("order_ids")) for d in docs]))
+    check("...each invoice is for its own amount",
+          bool(mine and club) and mine[0]["total_minor"] == amt[lesson] and club[0]["total_minor"] == amt[court],
+          f"{[d.get('total_minor') for d in docs]} vs {amt}")
+    check("...and says whose it is",
+          bool(mine and club) and (mine[0].get("label") or "").startswith("Coaching with")
+          and club[0].get("label") == "Club charges",
+          str([d.get("label") for d in docs]))
+    check("...the coach's invoice carries no club charge",
+          bool(mine) and court not in mine[0].get("order_ids", []), str(mine))
+    again = INVs.issue_statement_invoice(s, club_id=fx.club_id, user_id=fx.member, period_label=prev_m,
+                                         scope_to_period=True)
+    check("a second month-end run issues nothing new", not again.get("ok"), str(again))
+    s.execute(text("UPDATE club.policy SET invoice_per_coach = NULL WHERE club_id = :c"), {"c": fx.club_id})
+
+
 def sc_coach_earnings_carries_the_settlement(s, fx):
     """ONE coach money screen: the P&L carries the settlement, and a payout credits the month it's FOR.
 
@@ -6098,6 +6149,7 @@ SCENARIOS = [
     sc_coach_earnings_carries_the_settlement,
     sc_the_coach_card_follows_the_owners_formula,
     sc_over_the_hours_bar_the_commission_drops,
+    sc_month_end_splits_the_invoice_by_coach,
     sc_one_active_price_per_duration,
     sc_a_rent_coach_lesson_raises_no_club_charge,
     sc_bulk_void_cancels_charges_not_just_the_document,

@@ -276,7 +276,8 @@ def _t_invoice_issued(ctx):
     num = _g(ctx, "invoice_number")
     amt = _money(_g(ctx, "amount_minor"), _g(ctx, "currency_code", "currency"))
     lead = f"Invoice {num}" if num else "Your invoice"
-    body = (f"{lead}" + (f" for {amt}" if amt else "") + " is ready. A summary is below and the "
+    what = _g(ctx, "label")          # "Coaching with Allon Rock" / "Club charges" when split by coach
+    body = (f"{lead}" + (f" ({what})" if what else "") + (f" for {amt}" if amt else "") + " is ready. A summary is below and the "
             "full invoice is attached. Pay securely online, or by EFT using the banking details "
             "on the invoice.")
     return ("Your invoice is ready", body, "/portal")

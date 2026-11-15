@@ -438,6 +438,11 @@ def seed(session):
     session.execute(
         text("UPDATE club.policy SET coach_volume_hours = 80 "
              "WHERE club_id = :c AND coach_volume_hours IS NULL"), {"c": club_id})
+    # One month-end invoice per coach + one for the club (owner, from the 2026-12-01 run). Set only
+    # while unset, so switching it off (false) in the database sticks.
+    session.execute(
+        text("UPDATE club.policy SET invoice_per_coach = true "
+             "WHERE club_id = :c AND invoice_per_coach IS NULL"), {"c": club_id})
 
     location_id = session.execute(
         text("SELECT id FROM club.location WHERE club_id = :c AND name = :n"),

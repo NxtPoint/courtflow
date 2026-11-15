@@ -1382,6 +1382,7 @@ def month_end_client(session, *, club_id, period, user_id, owed, cur, reissue=Fa
     # already invoiced intra-month), fall back to a plain balance reminder so the client is still
     # nudged. The orders themselves are never modified (still card-settleable live).
     invoice_id = None
+    issued = []          # every document issued — several when the club splits invoices by coach
     try:
         from billing import invoicing
         res = invoicing.issue_statement_invoice(
@@ -1389,6 +1390,7 @@ def month_end_client(session, *, club_id, period, user_id, owed, cur, reissue=Fa
             scope_to_period=True)
         if res.get("ok"):
             invoice_id = res.get("invoice_id")
+            issued = res.get("invoices") or []
         elif reissue and not fresh:
             # A REISSUE exists to bill what arrived AFTER the first sweep. If there is nothing new,
             # this client already holds the right document and re-sending it is noise, not service —
@@ -1407,9 +1409,18 @@ def month_end_client(session, *, club_id, period, user_id, owed, cur, reissue=Fa
         log.info("run_month_end: invoice issue skipped user=%s", user_id)
     try:
         from marketing_crm.tracking import emit
-        if invoice_id:
+        if len(issued) > 1:
+            # Split by coach: one email per invoice, each for its OWN amount and saying whose it is.
+            for d in issued:
+                emit("invoice_issued", {"club_id": str(club_id), "user_id": str(user_id),
+                                        "invoice_id": d["invoice_id"],
+                                        "invoice_number": d.get("invoice_number"),
+                                        "amount_minor": int(d.get("total_minor") or 0),
+                                        "label": d.get("label"), "currency": cur or "ZAR"})
+        elif invoice_id:
             emit("invoice_issued", {"club_id": str(club_id), "user_id": str(user_id),
                                     "invoice_id": invoice_id, "amount_minor": int(owed or 0),
+                                    "label": (issued[0].get("label") if issued else None),
                                     "currency": cur or "ZAR"})
         else:
             emit("statement_ready", {"club_id": str(club_id), "user_id": str(user_id),

@@ -62,6 +62,15 @@ mid-month card payment flips the invoice to Paid and double-counting is structur
   box + the **PDF attached** — attachment is **flag-gated `EMAIL_INVOICE_PDF_ENABLED`, now ON** (verified
   2026-07-18; the SES key carries `AmazonSESFullAccess`/`ses:SendRawEmail`, so MIME attachments send).
   `EFT` desk payments carry a **reference** (`provider_payment_id`, captured in the "Mark as paid" modal).
+- **ONE MONTH-END INVOICE PER COACH (owner, 2026-11-15, from the 2026-12-01 run).** With
+  `club.policy.invoice_per_coach` on (NextPoint: seeded true; a new tenant: off), the month-end sweep
+  splits a client's month into one invoice per coach (lessons, classes, packs — `invoicing.order_owners`)
+  plus one "Club charges" invoice (court hire, membership, fees), each emailed separately for its OWN
+  amount, labelled "Coaching with <coach>" / "Club charges", and each carrying only its own
+  brought-forward. Why: a consolidated invoice put Razeena's R1,320 of club charges under Allon's
+  invoice filter, and a part-payment settled the oldest line whoever it belonged to. The intra-month
+  "invoice the outstanding balance" action still issues one invoice. Invoices issued before the switch
+  are untouched. `sc_month_end_splits_the_invoice_by_coach`
 
 ### "Pay all" settlement orders — the wrapper OWNS its contents
 

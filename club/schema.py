@@ -144,6 +144,12 @@ _DDL = [
     f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS coach_volume_discount_pct numeric "
     f"NOT NULL DEFAULT 5;",
 
+    # ONE MONTH-END INVOICE PER COACH (owner, 2026-11-15, from the 2026-12-01 run): a client's month
+    # is split into one invoice per coach plus one for the club's own charges (court hire,
+    # membership, fees), so each coach chases only his own and a payment says whose money it is.
+    # NULL/false = one consolidated invoice per client (the old behaviour; a new tenant's default).
+    f"ALTER TABLE {SCHEMA}.policy ADD COLUMN IF NOT EXISTS invoice_per_coach boolean;",
+
     # --- club.billing_profile : the club's FINANCIAL IDENTITY for invoices/receipts ------
     # One row per club. Everything a professional invoice / statement letterhead needs that
     # isn't already on club.club (legal_name) or club.location (address) or club.branding

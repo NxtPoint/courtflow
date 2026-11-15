@@ -561,15 +561,61 @@ def open_order_ids(session, *, club_id, user_id, period_label=None) -> List[str]
     return [str(r) for r in rows]
 
 
-def brought_forward_minor(session, *, club_id, user_id, period_label) -> int:
+_ANY = object()
+
+
+def invoice_per_coach(session, club_id) -> bool:
+    """Does this club split a client's month-end invoice by coach? Guarded: unknown = no split."""
+    try:
+        with session.begin_nested():
+            return bool(session.execute(
+                text("SELECT invoice_per_coach FROM club.policy WHERE club_id = :c"),
+                {"c": str(club_id)}).scalar())
+    except Exception:
+        return False
+
+
+def order_owners(session, *, club_id, order_ids) -> Dict[str, Optional[str]]:
+    """{order_id: coach_user_id or None} — whose charge each order is: the lesson's coach, the
+    class's coach, or the coach whose pack it is. None = the club's own (court hire, membership,
+    fees). One definition, so the invoice split and its brought-forward agree."""
+    if not order_ids:
+        return {}
+    rows = session.execute(
+        text("SELECT CAST(o.id AS text) AS oid, "
+             "  (SELECT CAST(COALESCE(bk.coach_user_id, cls.coach_user_id) AS text) "
+             "     FROM billing.order_line ol "
+             "     LEFT JOIN diary.booking bk ON bk.id = ol.booking_id "
+             "     LEFT JOIN diary.enrolment en ON en.id = ol.enrolment_id "
+             "     LEFT JOIN diary.class_session cls ON cls.id = en.class_session_id "
+             "    WHERE ol.order_id = o.id "
+             "      AND COALESCE(bk.coach_user_id, cls.coach_user_id) IS NOT NULL LIMIT 1) AS by_session, "
+             "  (SELECT CAST(w.coach_user_id AS text) FROM billing.token_wallet w "
+             "    WHERE w.order_id = o.id AND w.coach_user_id IS NOT NULL LIMIT 1) AS by_pack "
+             'FROM billing."order" o WHERE o.club_id = :c AND CAST(o.id AS text) = ANY(:ids)'),
+        {"c": str(club_id), "ids": [str(x) for x in order_ids]}).mappings().all()
+    return {r["oid"]: (r["by_session"] or r["by_pack"]) for r in rows}
+
+
+def _coach_label(session, coach_user_id) -> Optional[str]:
+    if not coach_user_id:
+        return None
+    return session.execute(
+        text("SELECT COALESCE(NULLIF(cp.display_name, ''), "
+             "       NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.surname)), ''), u.email) "
+             'FROM iam."user" u LEFT JOIN iam.coach_profile cp ON cp.user_id = u.id '
+             "WHERE u.id = CAST(:u AS uuid) LIMIT 1"), {"u": str(coach_user_id)}).scalar()
+
+
+def brought_forward_minor(session, *, club_id, user_id, period_label, owner=_ANY) -> int:
     """What this client still owed from BEFORE `period_label`, at this moment.
 
     Frozen onto the invoice at issue and shown as "Balance brought forward" — display only. It is
     deliberately NOT an invoice_line and NOT part of total_minor: those older orders are already
     invoiced on their own month's document, so re-billing them here would issue the same debt twice,
     and a line carrying no order_id could never be settled by mark_invoice_paid."""
-    return int(session.execute(
-        text('SELECT COALESCE(SUM(o.amount_minor), 0) FROM billing."order" o '
+    rows = session.execute(
+        text('SELECT CAST(o.id AS text) AS oid, o.amount_minor FROM billing."order" o '
              "WHERE o.club_id = :c AND o.user_id = :u AND o.status = 'open' "
              "AND o.settled_by_order_id IS NULL AND o.covered_order_ids IS NULL "
              "AND o.amount_minor > 0 "
@@ -577,7 +623,12 @@ def brought_forward_minor(session, *, club_id, user_id, period_label) -> int:
              "     COALESCE((SELECT timezone FROM club.club WHERE id = :c),'Africa/Johannesburg')),"
              "     'YYYY-MM') < :period"),
         {"c": str(club_id), "u": str(user_id), "period": period_label},
-    ).scalar() or 0)
+    ).mappings().all()
+    if owner is _ANY:
+        return int(sum(int(r["amount_minor"] or 0) for r in rows))
+    # A per-coach invoice carries forward only THAT coach's earlier debt; the club's carries the club's.
+    who = order_owners(session, club_id=club_id, order_ids=[r["oid"] for r in rows])
+    return int(sum(int(r["amount_minor"] or 0) for r in rows if who.get(r["oid"]) == owner))
 
 
 def latest_active_invoice_with_open_debt(session, *, club_id, user_id) -> Optional[str]:
@@ -607,24 +658,59 @@ def issue_statement_invoice(session, *, club_id, user_id, period_label=None, due
     keeps the original behaviour: bill everything currently owed, because that is exactly what an
     owner asking for a balance invoice mid-month means.
 
+    ONE INVOICE PER COACH at month-end when the club has `club.policy.invoice_per_coach` on: each
+    coach's lessons, classes and packs on their own invoice, the club's own charges on another, each
+    with its own brought-forward — so a coach chases only his own and a payment says whose money it
+    is. The result's `invoices` lists every document issued; `invoice_id` is the first.
+
     Orders already on an active invoice are skipped (no double-issue). Returns issue_invoice()'s
-    result, or {ok:False, error:'NOTHING_OWED'}."""
+    result (+ `invoices`), or {ok:False, error:'NOTHING_OWED' | 'ALL_ALREADY_INVOICED'}."""
     oids = open_order_ids(session, club_id=club_id, user_id=user_id,
                           period_label=(period_label if scope_to_period else None))
     if not oids:
         return {"ok": False, "error": "NOTHING_OWED"}
-    res = issue_invoice(session, club_id=club_id, user_id=user_id, order_ids=oids,
-                        kind="statement", period_label=period_label, due_date=due_date,
-                        created_by_user_id=created_by_user_id, skip_already_invoiced=True)
-    if res.get("ok") and scope_to_period and period_label:
-        bf = brought_forward_minor(session, club_id=club_id, user_id=user_id,
-                                   period_label=period_label)
-        if bf:
-            session.execute(
-                text("UPDATE billing.invoice SET brought_forward_minor = :bf WHERE id = :i"),
-                {"bf": bf, "i": res["invoice_id"]})
-            res["brought_forward_minor"] = bf
-    return res
+
+    split = bool(scope_to_period and period_label and invoice_per_coach(session, club_id))
+    if split:
+        owner = order_owners(session, club_id=club_id, order_ids=oids)
+        groups: Dict[Optional[str], List[str]] = {}
+        for o in oids:                                   # oids are oldest first; keep that order
+            groups.setdefault(owner.get(o), []).append(o)
+        # Coaches first (by name), the club's own charges last.
+        keys = sorted(groups, key=lambda k: (k is None, _coach_label(session, k) or ""))
+        terms = (resolve_seller(session, club_id) or {}).get("terms")
+    else:
+        groups, keys, terms = {None: oids}, [None], None
+
+    issued: List[Dict[str, Any]] = []
+    last_err = None
+    for k in keys:
+        label = None
+        if split:
+            label = ("Coaching with " + (_coach_label(session, k) or "your coach")) if k else "Club charges"
+        res = issue_invoice(session, club_id=club_id, user_id=user_id, order_ids=groups[k],
+                            kind="statement", period_label=period_label, due_date=due_date,
+                            created_by_user_id=created_by_user_id, skip_already_invoiced=True,
+                            notes=((label + (". " + terms if terms else "")) if label else None))
+        if not res.get("ok"):
+            last_err = res
+            continue
+        if scope_to_period and period_label:
+            bf = brought_forward_minor(session, club_id=club_id, user_id=user_id,
+                                       period_label=period_label, owner=(k if split else _ANY))
+            if bf:
+                session.execute(
+                    text("UPDATE billing.invoice SET brought_forward_minor = :bf WHERE id = :i"),
+                    {"bf": bf, "i": res["invoice_id"]})
+                res["brought_forward_minor"] = bf
+        res["label"] = label
+        res["coach_user_id"] = k
+        issued.append(res)
+    if not issued:
+        return last_err or {"ok": False, "error": "NOTHING_OWED"}
+    out = dict(issued[0])
+    out["invoices"] = issued
+    return out
 
 
 def mark_invoice_paid(session, *, club_id, invoice_id, provider="eft", reference=None,

@@ -84,14 +84,14 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 833 / billing 807 / statement 67**. Each uses its own scratch club and always rolls back.
+   **booking 833 / billing 812 / statement 67**. Each uses its own scratch club and always rolls back.
    **In the last 3 days of a month ~30 billing checks fail on correct code** (settlement and statement
    figures reading R0): the harness books 3 days ahead, so its sessions land in NEXT month while those
    checks read this one. Compare the failures against the untouched code before believing them.
    Run one lane's harness standalone while iterating (each needs `DATABASE_URL` = a local sandbox):
    `python -m scripts.test_booking_scenarios` (diary) · `python -m scripts.test_billing_scenarios` (billing) ·
    `python -m scripts.test_statement_reconciliation`.
-   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (105/104/12 `sc_*`
+   **There is no per-test filter** — each harness runs its whole `SCENARIOS` list (105/105/12 `sc_*`
    functions, each in its own SAVEPOINT). To iterate on ONE scenario, temporarily narrow that list;
    don't commit the narrowing. **When the numbers move, run `python -m scripts.audit_docs` and update
    EVERY doc it names** — the baseline is repeated in ~7 files and the gate fails unless they all
@@ -673,6 +673,7 @@ looks like a harmless simplification until you read what it cost.
 - AN INVOICE COVERS ITS OWN MONTH, or no month can ever be closed — `sc_an_invoice_covers_its_own_month`
 - BILL THE MONTH AFTER IT ENDS, and let a month swept early be closed — `sc_a_month_swept_early_can_still_be_closed`
 - ONE PAYMENT IS ONE RECEIPT, however many lines it settles — `sc_one_payment_one_receipt`
+- ONE MONTH-END INVOICE PER COACH + one for the club, when `club.policy.invoice_per_coach` is on (NextPoint, from the 2026-12-01 run) — `sc_month_end_splits_the_invoice_by_coach`
 - A PART PAYMENT SETTLES WHOLE LINES, oldest first — it never part-settles an order — `sc_partial_payment_leaves_the_invoice_open`
 
 **Refunds & the Yoco gateway** — [GOTCHAS.md#refunds--the-yoco-gateway](docs/specs/GOTCHAS.md#refunds--the-yoco-gateway)
