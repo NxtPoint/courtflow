@@ -4901,6 +4901,15 @@ def sc_over_the_hours_bar_the_commission_drops(s, fx):
     after = settle(prev_m)["outstanding_total_minor"]
     check("an unpaid NO-SHOW stays in the card's invoices outstanding",
           after == before and before >= 30000, f"{after} vs {before}")
+    # ...and next month's card says where its total comes from: last month's unpaid sessions are
+    # listed as EARLIER debt, and the parts add back up to the total.
+    nxt = settle(this_m)
+    b = nxt.get("outstanding_breakdown") or {}
+    check("the outstanding total splits into this month + earlier months + packs, and adds up",
+          b.get("this_month_minor", 0) + b.get("earlier_minor", 0) + b.get("packs_minor", 0)
+          == nxt["outstanding_total_minor"]
+          and any(e["month"] == prev_m and e["amount_minor"] >= 30000 for e in b.get("earlier") or []),
+          str(b))
 
 
 def sc_coach_earnings_carries_the_settlement(s, fx):

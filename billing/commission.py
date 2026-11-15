@@ -2193,6 +2193,32 @@ def coach_settlement(session, *, club_id, coach_user_id, month=None) -> Dict[str
         future = int(owed * Decimal(rate) / 100)
         pay_now = st["closing_minor"] if st["closing_minor"] is not None else st["due_now_minor"]
         st["outstanding_total_minor"] = owed
+        # WHERE THE TOTAL COMES FROM. The card's client list is THIS month only, so without this the
+        # total looked like it did not reconcile (Allon, 2026-11-15: R14,900 against a list adding
+        # to R12,420 — the rest was July and August). Earlier months' unpaid sessions are listed by
+        # client and month so the card adds up on one screen.
+        earlier: Dict[tuple, Dict[str, Any]] = {}
+        this_month = 0
+        for c in thru.get("clients") or []:
+            for r in c.get("rows") or []:
+                if r.get("custody") != "outstanding":
+                    continue
+                amt = int(r.get("amount_minor") or 0)
+                m = (r.get("date") or "")[:7]
+                if m >= ym:
+                    this_month += amt
+                    continue
+                e = earlier.setdefault((c.get("client_user_id"), m), {
+                    "client_user_id": c.get("client_user_id"), "client_name": c.get("client_name"),
+                    "month": m, "sessions": 0, "amount_minor": 0})
+                e["sessions"] += 1
+                e["amount_minor"] += amt
+        st["outstanding_breakdown"] = {
+            "this_month_minor": this_month,
+            "earlier_minor": sum(e["amount_minor"] for e in earlier.values()),
+            "packs_minor": unpaid_packs,
+            "earlier": sorted(earlier.values(), key=lambda e: (e["month"], e["client_name"] or "")),
+        }
         st["outstanding_total_commission_minor"] = future
         st["outstanding_total_net_minor"] = owed - future
         st["coach_collects_invoices"] = collects_own

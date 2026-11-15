@@ -84,7 +84,7 @@ no ruff/black/mypy/pytest config exists, by choice. Deps: `pip install -r requir
    construction cannot see it. `--strict` exits 1 for a pre-merge gate.
 5. `python -m scripts.test_all` — the JS parse gate (first, no DB) then three rollback-only
    scratch-DB harnesses. Current green baseline:
-   **booking 833 / billing 805 / statement 67**. Each uses its own scratch club and always rolls back.
+   **booking 833 / billing 806 / statement 67**. Each uses its own scratch club and always rolls back.
    **In the last 3 days of a month ~30 billing checks fail on correct code** (settlement and statement
    figures reading R0): the harness books 3 days ahead, so its sessions land in NEXT month while those
    checks read this one. Compare the failures against the untouched code before believing them.

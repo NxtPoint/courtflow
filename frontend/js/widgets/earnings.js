@@ -174,7 +174,7 @@
         // total: only the club's commission on it is still to come.
         var direct = !!st.coach_collects_invoices, future = st.outstanding_total_commission_minor;
         box.appendChild(stmtLine("Invoices outstanding", money(st.outstanding_total_minor), { border: true,
-          sub: direct ? "clients pay " + who + " directly, so this is not added" : "not yet paid by clients, this month and earlier" }));
+          sub: direct ? "clients pay " + who + " directly, so this is not added" : outstandingSub(st) }));
         if (future || !direct) {
           box.appendChild(stmtLine(direct ? "Commission still to come" : "Less future commission", "− " + money(future),
                                    { sub: pct + "%" + (direct ? " of those invoices" : "") }));
@@ -193,6 +193,30 @@
       return box;
     }
 
+
+    // Where "Invoices outstanding" comes from. The By-client list below is THIS month only, so the
+    // total has to say how much of it is earlier months — or it reads as not reconciling.
+    function outstandingSub(st) {
+      var b = st.outstanding_breakdown;
+      if (!b) return "not yet paid by clients, this month and earlier";
+      var parts = [money(b.this_month_minor) + " this month"];
+      if (b.earlier_minor) parts.push(money(b.earlier_minor) + " from earlier months (listed below)");
+      if (b.packs_minor) parts.push(money(b.packs_minor) + " unpaid packs");
+      return parts.join(" + ");
+    }
+
+    // The earlier months' unpaid sessions, by client and month — the part of "Invoices outstanding"
+    // the This-month client list cannot show.
+    function earlierCard(p) {
+      var b = p.settlement && p.settlement.outstanding_breakdown;
+      if (!b || !b.earlier || !b.earlier.length) return null;
+      var box = UI.card([CRMUI.sectionHead("Still unpaid from earlier months · " + money(b.earlier_minor))]);
+      b.earlier.forEach(function (e) {
+        box.appendChild(stmtLine(e.client_name || "Client", money(e.amount_minor), {
+          sub: monthLabel(e.month) + " · " + e.sessions + " session" + (e.sessions === 1 ? "" : "s") }));
+      });
+      return box;
+    }
 
     // THE WORK LOG — sessions by the day they RAN, which is the other question a coach asks and the
     // P&L cannot answer ("what did I teach in July"). Deliberately a different date basis again.
@@ -293,6 +317,7 @@
           if (!clients.length) cc.appendChild(el("div", { class: "cf-empty", text: "No clients this month." }));
           else { var cl = el("div", { class: "cf-list" }); clients.forEach(function (x) { cl.appendChild(clientRow(x, { earned_by: q.earned_by, backLabel: p.name, onBack: function () { renderCoach(coachId, isL0); } })); }); cc.appendChild(cl); }
           wrap.appendChild(cc);
+          var ec = earlierCard(p); if (ec) wrap.appendChild(ec);
           if (isL0 && typeof cfg.homeExtra === "function") { try { var extra = cfg.homeExtra(p); if (extra) wrap.appendChild(extra); } catch (e) {} }
           show(wrap);
         }, function () { show(wrap); });
