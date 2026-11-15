@@ -503,9 +503,9 @@
         discount: { manual: true, run: function (it) { arr(it.id, "discount", function () { renderClient(userId); }, it); } },
         arrears_write_off: { manual: true, run: function (it) { arr(it.id, "writeoff", function () { renderClient(userId); }); } },
         send_reminder: {
-          confirm: "Email this client what they owe you, with a link to pay online?",
+          confirm: "Email this client what they still owe you from EARLIER months (this month is invoiced on the 1st), with a link to pay online?",
           run: function () { return window.CoachAPI.issueInvoice(userId); },
-          done: function (_c, res) { return (res && res.notified) ? "Reminder sent." : "Nothing owed — no reminder sent."; },
+          done: function (_c, res) { return (res && res.notified) ? "Reminder sent." : "Nothing overdue from earlier months — no reminder sent."; },
         },
       },
     });

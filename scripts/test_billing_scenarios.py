@@ -716,18 +716,24 @@ def sc_client_month_end(s, fx):
                         order_ref=r["booking"]["order_id"], provider_payment_id="p_inv_1",
                         amount_minor=40000, currency="ZAR", status="succeeded", direction="charge",
                         club_id=str(fx.club_id), user_id=str(fx.member), raw={"t": 40}), session=s)
-    # An OWED off-platform lesson on the tab.
+    # An OWED off-platform lesson on the tab from LAST month (invoiced, so overdue) and one from
+    # THIS month (not invoiced until the 1st).
     s.execute(text("INSERT INTO billing.coach_arrears (club_id, coach_user_id, client_user_id, "
-                   "gross_minor, currency, status) VALUES (:c,:coach,:u,40000,'ZAR','owed')"),
+                   "gross_minor, currency, status, created_at) "
+                   "VALUES (:c,:coach,:u,40000,'ZAR','owed', date_trunc('month', now()) - interval '5 days')"),
+              {"c": fx.club_id, "coach": fx.coach_uid, "u": fx.member})
+    s.execute(text("INSERT INTO billing.coach_arrears (club_id, coach_user_id, client_user_id, "
+                   "gross_minor, currency, status) VALUES (:c,:coach,:u,25000,'ZAR','owed')"),
               {"c": fx.club_id, "coach": fx.coach_uid, "u": fx.member})
 
     inv = CM.client_invoice_data(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
                                  client_user_id=fx.member, month=ym)
-    check("invoice shows a PAID line + an OWED line",
-          inv["totals"]["paid_minor"] > 0 and inv["totals"]["owed_minor"] == 40000, str(inv["totals"]))
+    check("invoice shows a PAID line + both OWED lines",
+          inv["totals"]["paid_minor"] > 0 and inv["totals"]["owed_minor"] == 65000, str(inv["totals"]))
     res = CM.issue_client_invoice(s, club_id=fx.club_id, coach_user_id=fx.coach_uid,
                                   client_user_id=fx.member, month=ym)
-    check("issue-invoice reports owed + notifies", res["owed_minor"] == 40000 and res["notified"], str(res))
+    check("a payment reminder chases only EARLIER months' debt, not this month's (not yet invoiced)",
+          res["owed_minor"] == 40000 and res["notified"], str(res))
 
     # The coach's per-client month view is now a view off the ONE composer (scope='coach', month=ym):
     # coaching totals + arrears + the per-service breakdown (month → client → service → transaction).
@@ -736,7 +742,7 @@ def sc_client_month_end(s, fx):
                        coach_user_id=fx.coach_uid, month=ym)
     tot = (c or {}).get("coaching", {}).get("totals", {})
     check("coach 360 merges month money (paid + owed)",
-          bool(c) and tot.get("owed_minor") == 40000 and tot.get("paid_minor") > 0, str(tot))
+          bool(c) and tot.get("owed_minor") == 65000 and tot.get("paid_minor") > 0, str(tot))
     check("coach 360 lists this client's owed arrears line",
           any(a.get("status") == "owed" for a in c.get("coaching", {}).get("arrears_items", [])),
           str(len(c.get("coaching", {}).get("arrears_items", []))))

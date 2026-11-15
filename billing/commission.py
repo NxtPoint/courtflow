@@ -879,7 +879,23 @@ def issue_client_invoice(session, *, club_id, coach_user_id, client_user_id, mon
     zero). Returns {invoice, owed_minor, notified}. Notify is best-effort — never raises."""
     inv = client_invoice_data(session, club_id=club_id, coach_user_id=coach_user_id,
                               client_user_id=client_user_id, month=month)
-    owed = int(inv["totals"]["owed_minor"] or 0)
+    # A REMINDER CHASES ONLY WHAT IS OVERDUE — lessons from BEFORE this month, which have been
+    # invoiced. This month's are not billed until the 1st, so nudging a client about them asks for
+    # money they have not been invoiced for (owner, 2026-11-15). Month boundary in the club's time.
+    from datetime import datetime as _dtm
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(_club_tz(session, club_id))
+    this_month = _dtm.now(tz).strftime("%Y-%m")
+    owed = 0
+    for ln in inv.get("lines") or []:
+        if ln.get("status") != "owed" or not ln.get("at"):
+            continue
+        try:
+            m = _dtm.fromisoformat(ln["at"]).astimezone(tz).strftime("%Y-%m")
+        except Exception:
+            continue
+        if m < this_month:
+            owed += int(ln.get("gross_minor") or 0)
     notified = False
     if owed > 0:
         try:
